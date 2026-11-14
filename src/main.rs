@@ -1,4 +1,5 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod banking;
 mod batch;
 mod engine;
@@ -204,7 +205,6 @@ pub struct MicroParquetApp {
     active_tool: ActiveToolModal,
     status_message: String,
 
-    // Tool Form States
     filter_col: String,
     filter_op: FilterOp,
     filter_val: String,
@@ -279,7 +279,6 @@ pub struct MicroParquetApp {
     audit_key_col: String,
     audit_only_exceptions: bool,
 
-    // v1.1 IRRBB Duration & Loans Suite States
     dur_bal_col: String,
     dur_rate_col: String,
     dur_mat_col: String,
@@ -297,7 +296,6 @@ pub struct MicroParquetApp {
     lim_bal_col: String,
     lim_ccf_pct: f64,
 
-    // Milestone 3 States: Macros, Python Code, Multi-Tab Export, Split & Chart
     macro_name: String,
     macro_desc: String,
     macro_enforce_ctrl: bool,
@@ -1424,10 +1422,10 @@ impl MicroParquetApp {
                                         if ui.small_button("⬇").clicked() && i + 1 < len {
                                             swap_pair = Some((i, i + 1));
                                         }
-                                        ui.checkbox(
-                                            &mut self.col_mgr_list[i].1,
-                                            &self.col_mgr_list[i].0,
-                                        );
+                                        // Fixed E0502 borrow checker error by destructuring tuple
+                                        let (ref col_name, ref mut is_checked) =
+                                            self.col_mgr_list[i];
+                                        ui.checkbox(is_checked, col_name.as_str());
                                     });
                                 }
                                 if let Some((a, b)) = swap_pair {
@@ -2296,36 +2294,38 @@ impl MicroParquetApp {
                         if self.tabs.len() < 2 {
                             ui.label("Please open at least 2 tabs to perform a join.");
                         } else {
+                            let left_title = self.tabs[self.join_left_tab.min(self.tabs.len() - 1)]
+                                .title
+                                .clone();
+                            let right_title = self.tabs
+                                [self.join_right_tab.min(self.tabs.len() - 1)]
+                                .title
+                                .clone();
+                            let tab_titles: Vec<(usize, String)> = self
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .map(|(i, t)| (i, t.title.clone()))
+                                .collect();
+
                             ui.horizontal(|ui| {
                                 ui.label("Left Tab:");
                                 egui::ComboBox::from_id_salt("jn_l")
-                                    .selected_text(
-                                        &self.tabs
-                                            [self.join_left_tab.min(self.tabs.len() - 1)]
-                                        .title,
-                                    )
+                                    .selected_text(&left_title)
                                     .show_ui(ui, |ui| {
-                                        for (i, t) in self.tabs.iter().enumerate() {
-                                            ui.selectable_value(
-                                                &mut self.join_left_tab,
-                                                i,
-                                                &t.title,
-                                            );
+                                        for (i, title) in &tab_titles {
+                                            ui.selectable_value(&mut self.join_left_tab, *i, title);
                                         }
                                     });
                                 ui.label("Right Tab:");
                                 egui::ComboBox::from_id_salt("jn_r")
-                                    .selected_text(
-                                        &self.tabs
-                                            [self.join_right_tab.min(self.tabs.len() - 1)]
-                                        .title,
-                                    )
+                                    .selected_text(&right_title)
                                     .show_ui(ui, |ui| {
-                                        for (i, t) in self.tabs.iter().enumerate() {
+                                        for (i, title) in &tab_titles {
                                             ui.selectable_value(
                                                 &mut self.join_right_tab,
-                                                i,
-                                                &t.title,
+                                                *i,
+                                                title,
                                             );
                                         }
                                     });
@@ -2393,25 +2393,34 @@ impl MicroParquetApp {
                             "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
                         );
                     } else {
+                        let prev_title = self.tabs[self.rec_prev_tab.min(self.tabs.len() - 1)]
+                            .title
+                            .clone();
+                        let curr_title = self.tabs[self.rec_curr_tab.min(self.tabs.len() - 1)]
+                            .title
+                            .clone();
+                        let tab_titles: Vec<(usize, String)> = self
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| (i, t.title.clone()))
+                            .collect();
+
                         ui.horizontal(|ui| {
                             ui.label("Previous Period Tab:");
                             egui::ComboBox::from_id_salt("rec_p")
-                                .selected_text(
-                                    &self.tabs[self.rec_prev_tab.min(self.tabs.len() - 1)].title,
-                                )
+                                .selected_text(&prev_title)
                                 .show_ui(ui, |ui| {
-                                    for (i, t) in self.tabs.iter().enumerate() {
-                                        ui.selectable_value(&mut self.rec_prev_tab, i, &t.title);
+                                    for (i, title) in &tab_titles {
+                                        ui.selectable_value(&mut self.rec_prev_tab, *i, title);
                                     }
                                 });
                             ui.label("Current Period Tab:");
                             egui::ComboBox::from_id_salt("rec_c")
-                                .selected_text(
-                                    &self.tabs[self.rec_curr_tab.min(self.tabs.len() - 1)].title,
-                                )
+                                .selected_text(&curr_title)
                                 .show_ui(ui, |ui| {
-                                    for (i, t) in self.tabs.iter().enumerate() {
-                                        ui.selectable_value(&mut self.rec_curr_tab, i, &t.title);
+                                    for (i, title) in &tab_titles {
+                                        ui.selectable_value(&mut self.rec_curr_tab, *i, title);
                                     }
                                 });
                         });
@@ -2588,8 +2597,9 @@ impl MicroParquetApp {
                         self.multi_export_checks = vec![true; self.tabs.len()];
                     }
                     for (i, tab) in self.tabs.iter().enumerate() {
+                        let ref mut is_checked = self.multi_export_checks[i];
                         ui.checkbox(
-                            &mut self.multi_export_checks[i],
+                            is_checked,
                             format!("Tab {}: {} ({} rows)", i + 1, tab.title, tab.total_rows),
                         );
                     }
