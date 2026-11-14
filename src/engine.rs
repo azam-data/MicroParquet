@@ -388,7 +388,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(lf.select(exprs))
         }
         TransformStep::RenameColumn { old_name, new_name } => {
-            Ok(lf.rename([old_name.as_str()], [new_name.as_str()], true))
+            Ok(lf.rename([old_name.as_str()], [new_name.as_str()]))
         }
         TransformStep::FilterRows {
             column,
@@ -409,19 +409,13 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             if rules.is_empty() {
                 return Ok(lf);
             }
-            let first_cond =
-                build_filter_expr(&rules[0].col_name, rules[0].op, &rules[0].compare_val);
-            let first_out = parse_val_expr(&rules[0].output_val, *output_as_float);
-            let mut chain = when(first_cond).then(first_out);
-
-            for r in rules.iter().skip(1) {
+            let mut expr: Expr = parse_val_expr(fallback, *output_as_float);
+            for r in rules.iter().rev() {
                 let c = build_filter_expr(&r.col_name, r.op, &r.compare_val);
                 let o = parse_val_expr(&r.output_val, *output_as_float);
-                chain = chain.when(c).then(o);
+                expr = when(c).then(o).otherwise(expr);
             }
-
-            let fb = parse_val_expr(fallback, *output_as_float);
-            Ok(lf.with_column(chain.otherwise(fb).alias(new_col)))
+            Ok(lf.with_column(expr.alias(new_col)))
         }
         TransformStep::MathFormula {
             new_col,
@@ -745,7 +739,6 @@ pub fn compute_control_totals(
     Ok((row_count, control_sum))
 }
 
-/// Exports a LazyFrame to Parquet using Zstd or Power BI Safe Snappy
 pub fn export_to_parquet_stream(
     lf: LazyFrame,
     out_path: &Path,
@@ -756,26 +749,38 @@ pub fn export_to_parquet_stream(
         ParquetDialect::PowerBiSnappy => ParquetCompression::Snappy,
     };
 
-    let mut df = lf.collect().context("Failed to evaluate pipeline for Parquet export")?;
-    let file = File::create(out_path).context("Failed to create output Parquet file")?;
-    ParquetWriter::new(BufWriter::new(file))
-        .with_compression(compression)
-        .finish(&mut df)
-        .context("Failed to write Parquet file")?;
+    let options = ParquetWriteOptions {
+        compression,
+        statistics: StatisticsOptions::full(),
+        row_group_size: Some(122_880),
+        data_page_size: None,
+        maintain_order: true,
+    };
+
+    lf.sink_parquet(out_path, options)
+        .context("Failed to stream LazyFrame to Parquet")?;
     Ok(())
 }
 
-/// Exports a LazyFrame to CSV (no scientific notation, optional US M/D/YYYY dates)
 pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> Result<()> {
-    let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
+    let date_fmt = if mdy_dates {
+        Some("%m/%d/%Y".to_string())
+    } else {
+        Some("%Y-%m-%d".to_string())
+    };
 
-    let mut df = lf.collect().context("Failed to evaluate pipeline for CSV export")?;
-    let file = File::create(out_path).context("Failed to create output CSV file")?;
-    CsvWriter::new(BufWriter::new(file))
-        .include_header(true)
-        .with_date_format(Some(date_fmt.to_string()))
-        .with_float_scientific(Some(false))
-        .finish(&mut df)
-        .context("Failed to write CSV file")?;
+    let options = CsvWriterOptions {
+        include_header: true,
+        maintain_order: true,
+        serialize_options: SerializeOptions {
+            date_format: date_fmt,
+            float_scientific: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    lf.sink_csv(out_path, options)
+        .context("Failed to stream LazyFrame to CSV")?;
     Ok(())
 }
