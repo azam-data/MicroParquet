@@ -1,9 +1,9 @@
-﻿use crate::models::{BucketPreset, FtpPoint};
+use crate::models::{BucketPreset, FtpPoint};
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
 
-/// Feature B8: Standardizes corporate & counterparty names (e.g. "SPECTRA ENGINEERS LIMITED" -> "SPECTRA ENGINEERS LTD")
+/// Feature B8: Standardizes corporate & counterparty names
 pub fn apply_entity_normalizer(lf: LazyFrame, source_col: &str, new_col: &str) -> LazyFrame {
     let norm_expr = col(source_col)
         .cast(DataType::String)
@@ -65,21 +65,21 @@ pub fn apply_maturity_bucket(
             .then(lit(null_label))
             .when(d.clone().lt(lit(0)))
             .then(lit("10. Overdue / Matured Unencashed"))
-            .when(d.clone().lte(lit(1)))
+            .when(d.clone().lt_eq(lit(1)))
             .then(lit("01. Overnight / 1 Day"))
-            .when(d.clone().lte(lit(7)))
+            .when(d.clone().lt_eq(lit(7)))
             .then(lit("02. 2 to 7 Days"))
-            .when(d.clone().lte(lit(30)))
+            .when(d.clone().lt_eq(lit(30)))
             .then(lit("03. 8 to 30 Days"))
-            .when(d.clone().lte(lit(90)))
+            .when(d.clone().lt_eq(lit(90)))
             .then(lit("04. 1 to 3 Months (31-90d)"))
-            .when(d.clone().lte(lit(180)))
+            .when(d.clone().lt_eq(lit(180)))
             .then(lit("05. 3 to 6 Months (91-180d)"))
-            .when(d.clone().lte(lit(365)))
+            .when(d.clone().lt_eq(lit(365)))
             .then(lit("06. 6 to 12 Months (181-365d)"))
-            .when(d.clone().lte(lit(1095)))
+            .when(d.clone().lt_eq(lit(1095)))
             .then(lit("07. 1 to 3 Years"))
-            .when(d.lte(lit(1825)))
+            .when(d.lt_eq(lit(1825)))
             .then(lit("08. 3 to 5 Years"))
             .otherwise(lit("09. Over 5 Years"))
             .alias(new_col),
@@ -88,13 +88,13 @@ pub fn apply_maturity_bucket(
             .then(lit("01. Sight / Open Maturity"))
             .when(d.clone().lt(lit(0)))
             .then(lit("06. Overdue / Past Maturity"))
-            .when(d.clone().lte(lit(30)))
+            .when(d.clone().lt_eq(lit(30)))
             .then(lit("01. Within 30 Days (LCR Window)"))
-            .when(d.clone().lte(lit(90)))
+            .when(d.clone().lt_eq(lit(90)))
             .then(lit("02. 31 to 90 Days"))
-            .when(d.clone().lte(lit(180)))
+            .when(d.clone().lt_eq(lit(180)))
             .then(lit("03. 91 to 180 Days"))
-            .when(d.lte(lit(365)))
+            .when(d.lt_eq(lit(365)))
             .then(lit("04. 181 to 365 Days"))
             .otherwise(lit("05. Over 1 Year (NSFR Stable)"))
             .alias(new_col),
@@ -123,15 +123,14 @@ pub fn apply_rate_shock_sim(
 
     let rem_days = col(mat_col).cast(DataType::Int32).cast(DataType::Int64) - lit(cutoff_days);
 
-    let repricing_weight = when(col(mat_col).is_null().or(rem_days.clone().lte(lit(0))))
+    let repricing_weight = when(col(mat_col).is_null().or(rem_days.clone().lt_eq(lit(0))))
         .then(lit(1.0))
         .when(rem_days.clone().gt(lit(365)))
         .then(lit(0.0))
         .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0));
 
     let current_int = (bal.clone() * (rate / lit(100.0))).alias("Current_Annual_Int");
-    let nii_impact =
-        (bal * repricing_weight * lit(shock_pct / 100.0)).alias("NII_Impact_BDT");
+    let nii_impact = (bal * repricing_weight * lit(shock_pct / 100.0)).alias("NII_Impact_BDT");
     let shocked_int =
         (col("Current_Annual_Int") + col("NII_Impact_BDT")).alias("Shocked_Annual_Int");
 
@@ -152,11 +151,17 @@ pub fn apply_ftp_curve_map(
 ) -> Result<LazyFrame> {
     let opn_days = col(opndat_col).cast(DataType::Int32).cast(DataType::Int64);
     let mat_days = col(matdat_col).cast(DataType::Int32).cast(DataType::Int64);
+    let raw_diff = mat_days - opn_days;
 
-    let tenor_expr = when(col(matdat_col).is_null().or(col(opndat_col).is_null()))
-        .then(lit(1i64))
-        .otherwise((mat_days - opn_days).clip(lit(1i64), lit(36500i64)))
-        .alias("Tenor_Days");
+    let tenor_expr = when(
+        col(matdat_col)
+            .is_null()
+            .or(col(opndat_col).is_null())
+            .or(raw_diff.clone().lt(lit(1i64))),
+    )
+    .then(lit(1i64))
+    .otherwise(raw_diff)
+    .alias("Tenor_Days");
 
     let mut sorted_curve = curve.to_vec();
     sorted_curve.sort_by_key(|p| p.tenor_days);
@@ -164,11 +169,11 @@ pub fn apply_ftp_curve_map(
     let ftp_rate_expr = if sorted_curve.is_empty() {
         lit(0.0).alias("Benchmark_FTP_Rate")
     } else {
-        let mut chain = when(col("Tenor_Days").lte(lit(sorted_curve[0].tenor_days)))
+        let mut chain = when(col("Tenor_Days").lt_eq(lit(sorted_curve[0].tenor_days)))
             .then(lit(sorted_curve[0].ftp_rate));
         for pt in sorted_curve.iter().skip(1) {
             chain = chain
-                .when(col("Tenor_Days").lte(lit(pt.tenor_days)))
+                .when(col("Tenor_Days").lt_eq(lit(pt.tenor_days)))
                 .then(lit(pt.ftp_rate));
         }
         let last_rate = sorted_curve.last().unwrap().ftp_rate;
@@ -342,7 +347,7 @@ pub fn build_period_reconcile_lazy(
     if cl_status_col.is_some() {
         let p_cl = col("Prev_CL").fill_null(lit("NEW"));
         let c_cl = col("Curr_CL").fill_null(lit("CLOSED"));
-        let cl_mig = (p_cl + lit(" -> ") + c_cl).alias("CL_Migration_Matrix");
+        let cl_mig = concat_str([p_cl, c_cl], " -> ", false).alias("CL_Migration_Matrix");
         final_lf = final_lf.with_column(cl_mig);
     }
 
@@ -366,8 +371,11 @@ pub fn apply_duration_analysis(
     let cutoff_days = (cutoff - epoch).num_days();
 
     let bal = col(bal_col).cast(DataType::Float64).fill_null(lit(0.0));
-    let rate_dec = (col(rate_col).cast(DataType::Float64).fill_null(lit(0.0)) / lit(100.0))
-        .clip(lit(0.0001), lit(1.0));
+    let raw_rate_dec = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0)) / lit(100.0);
+    let rate_dec = when(raw_rate_dec.clone().lt(lit(0.0001)))
+        .then(lit(0.0001))
+        .otherwise(raw_rate_dec);
+
     let k = (compounding_freq.max(1)) as f64;
     let shock_dec = shock_bps / 10_000.0;
 
@@ -375,7 +383,7 @@ pub fn apply_duration_analysis(
 
     let tenor_years = when(col(mat_col).is_null())
         .then(lit(default_sight_years))
-        .when(rem_days.clone().lte(lit(1)))
+        .when(rem_days.clone().lt_eq(lit(1)))
         .then(lit(1.0 / 365.0))
         .otherwise(rem_days.cast(DataType::Float64) / lit(365.0))
         .alias("Residual_Years_T");
@@ -383,14 +391,15 @@ pub fn apply_duration_analysis(
     let y_per_k = rate_dec.clone() / lit(k);
     let total_periods = col("Residual_Years_T") * lit(k);
 
-    let pv_factor = (lit(0.0)
-        - total_periods * (lit(1.0) + y_per_k.clone()).log(std::f64::consts::E))
-    .exp();
+    let pv_factor =
+        (lit(0.0) - total_periods * (lit(1.0) + y_per_k.clone()).log(std::f64::consts::E)).exp();
     let annuity_mac = ((lit(1.0) + y_per_k.clone()) / rate_dec) * (lit(1.0) - pv_factor);
 
-    let mac_dur = when(col("Residual_Years_T").lte(lit(0.5)))
+    let mac_dur = when(col("Residual_Years_T").lt_eq(lit(0.5)))
         .then(col("Residual_Years_T"))
-        .otherwise(annuity_mac.clip(lit(0.0027), col("Residual_Years_T")))
+        .when(annuity_mac.clone().gt(col("Residual_Years_T")))
+        .then(col("Residual_Years_T"))
+        .otherwise(annuity_mac)
         .round(4)
         .alias("Macaulay_Duration_Yrs");
 
@@ -461,10 +470,15 @@ pub fn apply_loan_classification_provision(
         .otherwise(lit("Performing (UC/SMA)"))
         .alias("NPL_Category");
 
-    let net_bfp = (bal.clone() - susp - sec).clip_min(lit(0.0));
+    let raw_net = bal.clone() - susp - sec;
+    let net_bfp = when(raw_net.clone().gt(lit(0.0)))
+        .then(raw_net)
+        .otherwise(lit(0.0));
+    let pos_bal = when(bal.clone().gt(lit(0.0))).then(bal).otherwise(lit(0.0));
+
     let bfp_expr = when(is_npl)
         .then(net_bfp)
-        .otherwise(bal.clip_min(lit(0.0)))
+        .otherwise(pos_bal)
         .round(2)
         .alias("Base_For_Provision_BDT");
 
@@ -519,13 +533,17 @@ pub fn apply_loan_limit_utilization(
         .round(2)
         .alias("Limit_Utilization_Pct");
 
-    let undrawn = (limit.clone() - bal.clone())
-        .clip_min(lit(0.0))
+    let raw_undrawn = limit.clone() - bal.clone();
+    let undrawn = when(raw_undrawn.clone().gt(lit(0.0)))
+        .then(raw_undrawn)
+        .otherwise(lit(0.0))
         .round(2)
         .alias("Undrawn_Commitment_BDT");
 
-    let over_limit = (bal - limit)
-        .clip_min(lit(0.0))
+    let raw_over = bal - limit;
+    let over_limit = when(raw_over.clone().gt(lit(0.0)))
+        .then(raw_over)
+        .otherwise(lit(0.0))
         .round(2)
         .alias("Over_Limit_Violation_BDT");
 
