@@ -77,7 +77,10 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "MicroParquet",
         native_options,
-        Box::new(|_cc| Ok(Box::new(MicroParquetApp::new(paths)))),
+        Box::new(|cc| {
+            MicroParquetApp::apply_ui_theme(&cc.egui_ctx, false, 1.10);
+            Ok(Box::new(MicroParquetApp::new(paths)))
+        }),
     )
 }
 
@@ -200,6 +203,8 @@ pub struct MicroParquetApp {
     export_csv_mdy: bool,
     show_sql_bar: bool,
     show_chart_drawer: bool,
+    dark_mode: bool,
+    ui_zoom: f32,
     pending_csv_modal: Option<PendingCsvModal>,
     batch_modal: BatchModalState,
     active_tool: ActiveToolModal,
@@ -310,6 +315,57 @@ pub struct MicroParquetApp {
 }
 
 impl MicroParquetApp {
+    /// Configures a crisp, high-contrast Daylight theme (or high-contrast Dark theme)
+    /// and bumps up default font sizes so financial tables are effortless to read.
+    pub fn apply_ui_theme(ctx: &egui::Context, dark_mode: bool, zoom: f32) {
+        ctx.set_zoom_factor(zoom);
+
+        let mut style = (*ctx.style()).clone();
+        style.text_styles.insert(
+            egui::TextStyle::Body,
+            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Button,
+            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Monospace,
+            egui::FontId::new(13.5, egui::FontFamily::Monospace),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Heading,
+            egui::FontId::new(18.5, egui::FontFamily::Proportional),
+        );
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        ctx.set_style(style);
+
+        let mut visuals = if dark_mode {
+            let mut v = egui::Visuals::dark();
+            // Sharpen dark mode contrast so text is bright white instead of muddy gray
+            v.override_text_color = Some(egui::Color32::from_rgb(240, 244, 248));
+            v.panel_fill = egui::Color32::from_rgb(22, 27, 34);
+            v.faint_bg_color = egui::Color32::from_rgb(33, 38, 45); // Alternating table stripe
+            v
+        } else {
+            let mut v = egui::Visuals::light();
+            // Crisp Daylight Paper / Spreadsheet palette
+            v.override_text_color = Some(egui::Color32::from_rgb(15, 23, 42)); // Deep Slate Black
+            v.panel_fill = egui::Color32::from_rgb(248, 250, 252);              // Soft Alabaster (no harsh glare)
+            v.window_fill = egui::Color32::from_rgb(255, 255, 255);             // Pure White modals
+            v.faint_bg_color = egui::Color32::from_rgb(236, 242, 249);          // Crisp Excel-blue alternating row stripe
+            v.extreme_bg_color = egui::Color32::from_rgb(255, 255, 255);        // Text input boxes
+            v.selection.bg_fill = egui::Color32::from_rgb(2, 132, 199);         // Banking Blue selection
+            v.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+            v.widgets.noninteractive.bg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(203, 213, 225)); // Clean grid borders
+            v
+        };
+
+        visuals.striped = true;
+        ctx.set_visuals(visuals);
+    }
     pub fn new(paths: PortablePaths) -> Self {
         Self {
             paths,
@@ -320,6 +376,8 @@ impl MicroParquetApp {
             export_csv_mdy: false,
             show_sql_bar: false,
             show_chart_drawer: false,
+            dark_mode: false, // Default to crisp Light Mode
+            ui_zoom: 1.10,    // Default to 110% high-legibility scale
             pending_csv_modal: None,
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
@@ -866,6 +924,26 @@ impl eframe::App for MicroParquetApp {
                             ui.selectable_value(&mut self.num_format, fmt, fmt.label());
                         }
                     });
+                ui.separator();
+                let theme_label = if self.dark_mode { "☀ Light" } else { "🌙 Dark" };
+                if ui
+                    .button(theme_label)
+                    .on_hover_text("Switch between High-Contrast Daylight and Dark Theme")
+                    .clicked()
+                {
+                    self.dark_mode = !self.dark_mode;
+                    Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+                }
+
+                if ui.small_button("🔍-").on_hover_text("Zoom Out UI").clicked() {
+                    self.ui_zoom = (self.ui_zoom - 0.10).clamp(0.85, 1.60);
+                    Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+                }
+                ui.label(format!("{:.0}%", self.ui_zoom * 100.0));
+                if ui.small_button("🔍+").on_hover_text("Zoom In UI").clicked() {
+                    self.ui_zoom = (self.ui_zoom + 0.10).clamp(0.85, 1.60);
+                    Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+                }
             });
         });
 
@@ -1278,7 +1356,7 @@ impl MicroParquetApp {
             }
 
             builder
-                .header(28.0, |mut header| {
+                .header(32.0, |mut header| {
                     header.col(|ui| {
                         ui.strong("#");
                     });
@@ -1289,7 +1367,7 @@ impl MicroParquetApp {
                     }
                 })
                 .body(|body| {
-                    body.rows(22.0, num_rows, |mut row| {
+                    body.rows(25.0, num_rows, |mut row| {
                         let r_idx = row.index();
                         row.col(|ui| {
                             ui.label((row_offset + r_idx + 1).to_string());
