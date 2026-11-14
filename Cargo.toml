@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "micro_parquet"
 version = "1.1.0"
 edition = "2021"
@@ -40,6 +40,9 @@ features = [
     "asof_join",
     "partition_by",
     "log",
+    "round_series",
+    "is_in",
+    "concat_str",
 ]
 
 [profile.release]
