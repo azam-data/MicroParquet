@@ -20,12 +20,12 @@ impl PortablePaths {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         let root_dir = exe_dir.join("portable_data");
-        let macro_folder = root_dir.join("macros");
+        let recipes_folder = root_dir.join("macros");
         let schema_folder = root_dir.join("schemas");
         let curve_folder = root_dir.join("curves");
         let temp_folder = root_dir.join("temp_scratch");
 
-        let _ = std::fs::create_dir_all(¯o_folder);
+        let _ = std::fs::create_dir_all(&recipes_folder);
         let _ = std::fs::create_dir_all(&schema_folder);
         let _ = std::fs::create_dir_all(&curve_folder);
         let _ = std::fs::create_dir_all(&temp_folder);
@@ -34,7 +34,7 @@ impl PortablePaths {
 
         Self {
             root_dir,
-            macros_dir: macro_folder,
+            macros_dir: recipes_folder,
             schemas_dir: schema_folder,
             curves_dir: curve_folder,
             temp_dir: temp_folder,
