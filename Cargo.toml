@@ -38,6 +38,7 @@ features = [
     "fmt",
     "sql",
     "asof_join",
+    "semi_anti_join",
     "partition_by",
     "log",
     "round_series",
