@@ -1,4 +1,4 @@
-﻿use crate::banking::{
+use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
@@ -663,7 +663,7 @@ fn apply_groupby_pivot(
                     .round(2)
                     .alias(final_alias),
             )
-            .drop([temp_sum]);
+            .drop([temp_sum.as_str()]);
     }
 
     if let Some(sc) = sort_by_col {
@@ -745,6 +745,7 @@ pub fn compute_control_totals(
     Ok((row_count, control_sum))
 }
 
+/// Exports a LazyFrame to Parquet using Zstd or Power BI Safe Snappy
 pub fn export_to_parquet_stream(
     lf: LazyFrame,
     out_path: &Path,
@@ -755,38 +756,26 @@ pub fn export_to_parquet_stream(
         ParquetDialect::PowerBiSnappy => ParquetCompression::Snappy,
     };
 
-    let options = ParquetWriteOptions {
-        compression,
-        statistics: StatisticsOptions::full(),
-        row_group_size: Some(122_880),
-        data_page_size: None,
-        maintain_order: true,
-    };
-
-    lf.sink_parquet(out_path, options, None)
-        .context("Failed to stream LazyFrame to Parquet")?;
+    let mut df = lf.collect().context("Failed to evaluate pipeline for Parquet export")?;
+    let file = File::create(out_path).context("Failed to create output Parquet file")?;
+    ParquetWriter::new(BufWriter::new(file))
+        .with_compression(compression)
+        .finish(&mut df)
+        .context("Failed to write Parquet file")?;
     Ok(())
 }
 
+/// Exports a LazyFrame to CSV (no scientific notation, optional US M/D/YYYY dates)
 pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> Result<()> {
-    let date_fmt = if mdy_dates {
-        Some("%m/%d/%Y".to_string())
-    } else {
-        Some("%Y-%m-%d".to_string())
-    };
+    let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
 
-    let options = CsvWriterOptions {
-        include_header: true,
-        maintain_order: true,
-        serialize_options: SerializeOptions {
-            date_format: date_fmt,
-            float_scientific: Some(false),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    lf.sink_csv(out_path, options, None)
-        .context("Failed to stream LazyFrame to CSV")?;
+    let mut df = lf.collect().context("Failed to evaluate pipeline for CSV export")?;
+    let file = File::create(out_path).context("Failed to create output CSV file")?;
+    CsvWriter::new(BufWriter::new(file))
+        .include_header(true)
+        .with_date_format(Some(date_fmt.to_string()))
+        .with_float_scientific(Some(false))
+        .finish(&mut df)
+        .context("Failed to write CSV file")?;
     Ok(())
 }
