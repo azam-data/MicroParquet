@@ -1,4 +1,4 @@
-﻿use crate::engine::{export_to_csv_stream, export_to_parquet_stream};
+use crate::engine::{export_to_csv_stream, export_to_parquet_stream};
 use crate::models::{NumberDisplayFormat, ParquetDialect, SplitExportFormat};
 use anyhow::{Context, Result};
 use polars::datatypes::AnyValue;
@@ -31,7 +31,7 @@ pub fn export_tabs_to_xlsx(tabs: Vec<(String, DataFrame)>, out_path: &Path) -> R
         let row_limit = df.height().min(EXCEL_MAX_ROWS);
 
         for (c_idx, series) in cols.iter().enumerate() {
-            worksheet.write_string_with_format(0, c_idx as u16, series.name(), &header_fmt)?;
+            worksheet.write_string_with_format(0, c_idx as u16, series.name().as_str(), &header_fmt)?;
             worksheet.set_column_width(c_idx as u16, 18.0)?;
         }
         worksheet.set_freeze_panes(1, 0)?;
@@ -144,7 +144,7 @@ pub fn export_tabs_to_pdf(
 
         for (c_idx, series) in cols.iter().enumerate() {
             let x_mm = 12.0 + (c_idx as f32 * col_width_mm);
-            let hdr: String = series.name().chars().take(18).collect();
+            let hdr: String = series.name().as_str().chars().take(18).collect();
             layer_ref.use_text(hdr, 8.5, Mm(x_mm), Mm(y_mm), &font_bold);
         }
         y_mm -= 5.5;
@@ -159,7 +159,7 @@ pub fn export_tabs_to_pdf(
                 let new_layer = doc.get_page(current_page).get_layer(current_layer);
                 for (c_idx, series) in cols.iter().enumerate() {
                     let x_mm = 12.0 + (c_idx as f32 * col_width_mm);
-                    let hdr: String = series.name().chars().take(18).collect();
+                    let hdr: String = series.name().as_str().chars().take(18).collect();
                     new_layer.use_text(hdr, 8.5, Mm(x_mm), Mm(y_mm), &font_bold);
                 }
                 y_mm -= 5.5;
