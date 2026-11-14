@@ -24,7 +24,7 @@ jobs:
             archive_name: MicroParquet-Windows-x64-Portable.zip
 
           - os_name: macOS-Apple-Silicon-M4-App
-            runner: macos-14 # Native Apple Silicon ARM64 runner
+            runner: macos-latest # Uses GitHub's active Apple Silicon ARM64 runner
             target: aarch64-apple-darwin
             bin_name: MicroParquet
             archive_name: MicroParquet-macOS-AppleSilicon-App.zip
