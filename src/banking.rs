@@ -166,18 +166,18 @@ pub fn apply_ftp_curve_map(
     let mut sorted_curve = curve.to_vec();
     sorted_curve.sort_by_key(|p| p.tenor_days);
 
+    // Fold from fallback upwards so every step returns a unified Polars `Expr`
     let ftp_rate_expr = if sorted_curve.is_empty() {
         lit(0.0).alias("Benchmark_FTP_Rate")
     } else {
-        let mut chain = when(col("Tenor_Days").lt_eq(lit(sorted_curve[0].tenor_days)))
-            .then(lit(sorted_curve[0].ftp_rate));
-        for pt in sorted_curve.iter().skip(1) {
-            chain = chain
-                .when(col("Tenor_Days").lt_eq(lit(pt.tenor_days)))
-                .then(lit(pt.ftp_rate));
-        }
         let last_rate = sorted_curve.last().unwrap().ftp_rate;
-        chain.otherwise(lit(last_rate)).alias("Benchmark_FTP_Rate")
+        let mut expr: Expr = lit(last_rate);
+        for pt in sorted_curve.iter().rev() {
+            expr = when(col("Tenor_Days").lt_eq(lit(pt.tenor_days)))
+                .then(lit(pt.ftp_rate))
+                .otherwise(expr);
+        }
+        expr.alias("Benchmark_FTP_Rate")
     };
 
     let acct_rate = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0));
@@ -463,7 +463,7 @@ pub fn apply_loan_classification_provision(
         .eq(lit("SS"))
         .or(cl_upper.clone().eq(lit("DF")))
         .or(cl_upper.clone().eq(lit("BL")))
-        .or(cl_upper.clone().contains(lit("SUB|DOUBT|BAD|LOSS"), false));
+        .or(cl_upper.clone().str().contains(lit("SUB|DOUBT|BAD|LOSS"), false));
 
     let npl_flag = when(is_npl.clone())
         .then(lit("NPL (Classified)"))
@@ -486,21 +486,21 @@ pub fn apply_loan_classification_provision(
         cl_upper
             .clone()
             .eq(lit("BL"))
-            .or(cl_upper.clone().contains(lit("BAD|LOSS"), false)),
+            .or(cl_upper.clone().str().contains(lit("BAD|LOSS"), false)),
     )
     .then(lit(100.0))
     .when(
         cl_upper
             .clone()
             .eq(lit("DF"))
-            .or(cl_upper.clone().contains(lit("DOUBT"), false)),
+            .or(cl_upper.clone().str().contains(lit("DOUBT"), false)),
     )
     .then(when(is_cmsme.clone()).then(lit(20.0)).otherwise(lit(50.0)))
     .when(
         cl_upper
             .clone()
             .eq(lit("SS"))
-            .or(cl_upper.clone().contains(lit("SUB"), false)),
+            .or(cl_upper.clone().str().contains(lit("SUB"), false)),
     )
     .then(when(is_cmsme.clone()).then(lit(5.0)).otherwise(lit(20.0)))
     .when(cl_upper.eq(lit("SMA")))
