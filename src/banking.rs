@@ -32,12 +32,12 @@ pub fn apply_entity_normalizer(lf: LazyFrame, source_col: &str, new_col: &str) -
     lf.with_column(norm_expr)
 }
 
-/// Feature A5: Regulatory Maturity Bucketer (Bangladesh Bank SLP & Basel III LCR/NSFR)
+/// Feature A5 (v1.2): Regulatory & Custom Maturity Bucketer (BB SLP, Basel III LCR, or Custom `c-m-b-1`)
 pub fn apply_maturity_bucket(
     lf: LazyFrame,
     mat_col: &str,
     cutoff_date: &str,
-    preset: BucketPreset,
+    preset: &BucketPreset,
     null_as_sight: bool,
     new_col: &str,
 ) -> Result<LazyFrame> {
@@ -98,6 +98,25 @@ pub fn apply_maturity_bucket(
             .then(lit("04. 181 to 365 Days"))
             .otherwise(lit("05. Over 1 Year (NSFR Stable)"))
             .alias(new_col),
+
+        BucketPreset::Custom(custom) => {
+            let mut sorted_rules = custom.rules.clone();
+            sorted_rules.sort_by_key(|r| r.max_days);
+
+            let mut expr: Expr = lit(custom.overflow_label.clone());
+            for rule in sorted_rules.iter().rev() {
+                expr = when(d.clone().lt_eq(lit(rule.max_days)))
+                    .then(lit(rule.label.clone()))
+                    .otherwise(expr);
+            }
+            expr = when(d.lt(lit(0)))
+                .then(lit(custom.overdue_label.clone()))
+                .otherwise(expr);
+            expr = when(col(mat_col).is_null())
+                .then(lit(null_label))
+                .otherwise(expr);
+            expr.alias(new_col)
+        }
     };
 
     Ok(lf_with_days.with_column(bucket_expr).drop([rem_days_col]))
@@ -166,7 +185,6 @@ pub fn apply_ftp_curve_map(
     let mut sorted_curve = curve.to_vec();
     sorted_curve.sort_by_key(|p| p.tenor_days);
 
-    // Fold from fallback upwards so every step returns a unified Polars `Expr`
     let ftp_rate_expr = if sorted_curve.is_empty() {
         lit(0.0).alias("Benchmark_FTP_Rate")
     } else {
