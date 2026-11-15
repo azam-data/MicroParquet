@@ -1,6 +1,6 @@
 [package]
 name = "micro_parquet"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 description = "Ultra-Low-RAM Portable CSV/Parquet Workstation & Banking Analytics Engine"
 
@@ -28,6 +28,7 @@ printpdf = "0.7"
 version = "0.43"
 features = [
     "lazy",
+    "streaming",
     "csv",
     "parquet",
     "strings",
@@ -50,5 +51,4 @@ features = [
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = "symbols"
