@@ -357,9 +357,9 @@ impl MicroParquetApp {
             v.faint_bg_color = egui::Color32::from_rgb(236, 242, 249);          // Crisp Excel-blue alternating row stripe
             v.extreme_bg_color = egui::Color32::from_rgb(255, 255, 255);        // Text input boxes
             v.selection.bg_fill = egui::Color32::from_rgb(2, 132, 199);         // Banking Blue selection
-            v.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+            v.selection.stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
             v.widgets.noninteractive.bg_stroke =
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(203, 213, 225)); // Clean grid borders
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(203, 213, 225)); // Clean grid borders
             v
         };
 
