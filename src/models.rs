@@ -1,7 +1,7 @@
 use polars::prelude::DataFrame;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Automatically initializes the zero-registry portable directory next to the executable
 #[derive(Clone, Debug)]
@@ -10,8 +10,8 @@ pub struct PortablePaths {
     pub macros_dir: PathBuf,
     pub schemas_dir: PathBuf,
     pub curves_dir: PathBuf,
-    pub temp_dir: PathBuf,
     pub buckets_file: PathBuf,
+    pub temp_dir: PathBuf,
 }
 
 impl PortablePaths {
@@ -40,8 +40,8 @@ impl PortablePaths {
             macros_dir: recipes_folder,
             schemas_dir: schema_folder,
             curves_dir: curve_folder,
-            temp_dir: temp_folder,
             buckets_file,
+            temp_dir: temp_folder,
         }
     }
 }
@@ -135,119 +135,162 @@ pub enum ParquetDialect {
 impl ParquetDialect {
     pub fn label(&self) -> &'static str {
         match self {
-            ParquetDialect::ArchiveZstd => "Archive / Zstd (Smallest Size - Python/DuckDB)",
-            ParquetDialect::PowerBiSnappy => "Power BI Safe / Snappy (100% PBI Compatible)",
+            ParquetDialect::ArchiveZstd => "Archive / Zstd (Smallest Size)",
+            ParquetDialect::PowerBiSnappy => "Power BI Safe / Snappy (100% PBI)",
         }
     }
 }
 
-/// v1.2 Expanded Numeric & Percentage Display Formatter with Smart Auto-Detection
+/// Global Monetary Scale for Balance/Amount columns
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumberDisplayFormat {
-    AutoSmart,      // Balances in Cr/Lakh, Rates/Pct in %, Duration/Tenor in Decimals
-    BdtCrore,       // Divide by 10,000,000 + "Cr"
-    BdtLakh,        // Divide by 100,000 + "L"
-    StandardCommas, // Commas with N decimals
-    PercentAsIs,    // 8.5 -> 8.50%
-    PercentDiv100,  // 0.085 -> 8.50% (Multiply by 100 + "%")
-    IntegerCommas,  // Whole integer with commas
-    Raw,            // Unformatted float
+    Raw,
+    StandardCommas,
+    BdtLakh,
+    BdtCrore,
 }
 
 impl NumberDisplayFormat {
-    pub fn all() -> &'static [NumberDisplayFormat] {
+    pub fn label(&self) -> &'static str {
+        match self {
+            NumberDisplayFormat::Raw => "Raw Numbers",
+            NumberDisplayFormat::StandardCommas => "Commas (1,234.56)",
+            NumberDisplayFormat::BdtLakh => "BDT Lakh (÷ 100,000)",
+            NumberDisplayFormat::BdtCrore => "BDT Crore (÷ 10,000,000)",
+        }
+    }
+}
+
+/// Per-Column & Per-Metric Display Format Type (v1.2)
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MetricFormatType {
+    Auto,            // Smart-detects Monetary vs Rate (%) vs Duration/Count
+    BdtCrore,        // Divide by 10,000,000 + " Cr"
+    BdtLakh,         // Divide by 100,000 + " L"
+    StandardCommas,  // 1,234.56
+    Raw,             // Unformatted float
+    PercentAsIs,     // e.g. 8.5 -> "8.50%"
+    PercentDiv100,   // e.g. 0.085 -> "8.50%"
+}
+
+impl MetricFormatType {
+    pub fn all() -> &'static [MetricFormatType] {
         &[
-            NumberDisplayFormat::AutoSmart,
-            NumberDisplayFormat::BdtCrore,
-            NumberDisplayFormat::BdtLakh,
-            NumberDisplayFormat::StandardCommas,
-            NumberDisplayFormat::PercentAsIs,
-            NumberDisplayFormat::PercentDiv100,
-            NumberDisplayFormat::IntegerCommas,
-            NumberDisplayFormat::Raw,
+            MetricFormatType::Auto,
+            MetricFormatType::BdtCrore,
+            MetricFormatType::BdtLakh,
+            MetricFormatType::StandardCommas,
+            MetricFormatType::PercentAsIs,
+            MetricFormatType::PercentDiv100,
+            MetricFormatType::Raw,
         ]
     }
 
     pub fn label(&self) -> &'static str {
         match self {
-            NumberDisplayFormat::AutoSmart => "Auto (Balances=Cr, Rates=%, Duration=Dec)",
-            NumberDisplayFormat::BdtCrore => "BDT Crore (÷ 10,000,000 Cr)",
-            NumberDisplayFormat::BdtLakh => "BDT Lakh (÷ 100,000 L)",
-            NumberDisplayFormat::StandardCommas => "Decimal with Commas (1,234.56)",
-            NumberDisplayFormat::PercentAsIs => "Percentage As-Is (8.5 -> 8.50%)",
-            NumberDisplayFormat::PercentDiv100 => "Decimal to Percentage (0.085 -> 8.50%)",
-            NumberDisplayFormat::IntegerCommas => "Whole Integer (1,235)",
-            NumberDisplayFormat::Raw => "Raw Unformatted",
+            MetricFormatType::Auto => "Auto (Smart Detect)",
+            MetricFormatType::BdtCrore => "BDT Crore (Cr)",
+            MetricFormatType::BdtLakh => "BDT Lakh (L)",
+            MetricFormatType::StandardCommas => "Decimal / Commas",
+            MetricFormatType::PercentAsIs => "Percent (% as-is, e.g. 8.5%)",
+            MetricFormatType::PercentDiv100 => "Percent (÷100 & %, e.g. 0.085 -> 8.5%)",
+            MetricFormatType::Raw => "Raw Number",
         }
     }
+}
 
-    pub fn format_value_for_col(&self, col_name: &str, val: f64, decimals: usize) -> String {
-        let effective = if *self == NumberDisplayFormat::AutoSmart {
-            Self::infer_smart_format_for_column(col_name)
-        } else {
-            *self
-        };
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnFormatSpec {
+    pub fmt_type: MetricFormatType,
+    pub decimals: usize,
+}
 
-        let dec = if *self == NumberDisplayFormat::AutoSmart
-            && Self::is_duration_or_factor_col(col_name)
-        {
-            decimals.max(4)
-        } else {
-            decimals
-        };
+impl Default for ColumnFormatSpec {
+    fn default() -> Self {
+        Self {
+            fmt_type: MetricFormatType::Auto,
+            decimals: 2,
+        }
+    }
+}
 
-        match effective {
+/// Formats any f64 value respecting per-column format overrides, smart column name detection,
+/// global monetary scale, and adjustable decimal precision (0..=6).
+pub fn format_metric_value(
+    val: f64,
+    col_name: &str,
+    col_spec: Option<&ColumnFormatSpec>,
+    global_monetary_fmt: NumberDisplayFormat,
+    global_decimals: usize,
+) -> String {
+    let (fmt_type, dec) = match col_spec {
+        Some(spec) => (spec.fmt_type, spec.decimals),
+        None => (MetricFormatType::Auto, global_decimals),
+    };
+
+    let resolved_type = if fmt_type == MetricFormatType::Auto {
+        classify_column_auto_format(col_name)
+    } else {
+        fmt_type
+    };
+
+    match resolved_type {
+        MetricFormatType::BdtCrore => {
+            format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
+        }
+        MetricFormatType::BdtLakh => {
+            format!("{} L", format_with_commas(val / 100_000.0, dec))
+        }
+        MetricFormatType::StandardCommas => format_with_commas(val, dec),
+        MetricFormatType::PercentAsIs => format!("{}%", format_with_commas(val, dec)),
+        MetricFormatType::PercentDiv100 => format!("{}%", format_with_commas(val * 100.0, dec)),
+        MetricFormatType::Raw => format!("{}", val),
+        MetricFormatType::Auto => match global_monetary_fmt {
             NumberDisplayFormat::Raw => format!("{}", val),
-            NumberDisplayFormat::StandardCommas | NumberDisplayFormat::AutoSmart => {
-                format_with_commas(val, dec)
-            }
-            NumberDisplayFormat::IntegerCommas => format_with_commas(val, 0),
+            NumberDisplayFormat::StandardCommas => format_with_commas(val, dec),
             NumberDisplayFormat::BdtLakh => {
                 format!("{} L", format_with_commas(val / 100_000.0, dec))
             }
             NumberDisplayFormat::BdtCrore => {
                 format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
             }
-            NumberDisplayFormat::PercentAsIs => {
-                format!("{}%", format_with_commas(val, dec))
-            }
-            NumberDisplayFormat::PercentDiv100 => {
-                format!("{}%", format_with_commas(val * 100.0, dec))
-            }
-        }
-    }
-
-    pub fn infer_smart_format_for_column(col_name: &str) -> NumberDisplayFormat {
-        let lower = col_name.to_lowercase();
-        if lower.contains("rate")
-            || lower.contains("pct")
-            || lower.contains("percent")
-            || lower.contains("spread")
-            || lower.contains("yield")
-            || lower.contains("wavg")
-            || lower.contains("util")
-        {
-            NumberDisplayFormat::PercentAsIs
-        } else if lower.contains("count")
-            || lower.contains("days")
-            || lower.contains("tenor")
-            || lower.contains("bps")
-        {
-            NumberDisplayFormat::IntegerCommas
-        } else if Self::is_duration_or_factor_col(&lower) {
-            NumberDisplayFormat::StandardCommas
-        } else {
-            NumberDisplayFormat::BdtCrore
-        }
-    }
-
-    fn is_duration_or_factor_col(col_name: &str) -> bool {
-        let lower = col_name.to_lowercase();
-        lower.contains("duration") || lower.contains("years") || lower.contains("weight")
+        },
     }
 }
 
+fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
+    let lower = col_name.to_lowercase();
+    // Rate / Percentage columns should NEVER be divided by 10,000,000 (Crore)
+    if lower.contains("rate")
+        || lower.contains("pct")
+        || lower.contains("percent")
+        || lower.contains("yield")
+        || lower.contains("spread")
+        || lower.contains("util")
+        || lower.contains("ratio")
+        || lower.contains("wavg")
+    {
+        return MetricFormatType::PercentAsIs;
+    }
+    // Duration / Tenor / Days / Count columns should display as clean decimals/numbers
+    if lower.contains("duration")
+        || lower.contains("years")
+        || lower.contains("tenor")
+        || lower.contains("days")
+        || lower.contains("count")
+        || lower.contains("freq")
+        || lower.contains("bps")
+    {
+        return MetricFormatType::StandardCommas;
+    }
+    // Everything else (Balance, Amount, BFP, Provision, NII, EVE, DV01, Limit) uses global monetary format
+    MetricFormatType::Auto
+}
+
 pub fn format_with_commas(val: f64, decimals: usize) -> String {
+    if val.is_nan() || val.is_infinite() {
+        return "0.00".to_string();
+    }
     let sign = if val < 0.0 { "-" } else { "" };
     let abs_val = val.abs();
     let formatted = format!("{:.*}", decimals, abs_val);
@@ -360,67 +403,81 @@ impl MathOp {
     }
 }
 
-/// v1.2 Custom Maturity Bucketing Rule & Preset System (`c-m-b-1`, etc.)
+/// Custom Maturity Bucket Rule & Preset Definition (v1.2 — Saved to ./portable_data/buckets.json)
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct CustomBucketRule {
+pub struct BucketRuleItem {
     pub max_days: i64,
     pub label: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct CustomBucketPreset {
+pub struct CustomBucketDef {
     pub name: String,
-    pub rules: Vec<CustomBucketRule>,
+    pub rules: Vec<BucketRuleItem>,
     pub overflow_label: String,
     pub overdue_label: String,
+    pub null_sight_label: String,
+    pub null_long_label: String,
 }
 
-impl Default for CustomBucketPreset {
-    fn default() -> Self {
-        Self {
-            name: "c-m-b-1".to_string(),
-            rules: vec![
-                CustomBucketRule {
-                    max_days: 7,
-                    label: "01. Up to 7 Days".to_string(),
-                },
-                CustomBucketRule {
-                    max_days: 30,
-                    label: "02. 8 to 30 Days".to_string(),
-                },
-                CustomBucketRule {
-                    max_days: 90,
-                    label: "03. 31 to 90 Days".to_string(),
-                },
-                CustomBucketRule {
-                    max_days: 180,
-                    label: "04. 91 to 180 Days".to_string(),
-                },
-                CustomBucketRule {
-                    max_days: 365,
-                    label: "05. 181 to 365 Days".to_string(),
-                },
-            ],
-            overflow_label: "06. Over 1 Year".to_string(),
-            overdue_label: "07. Overdue / Matured".to_string(),
-        }
+impl CustomBucketDef {
+    pub fn default_presets() -> Vec<CustomBucketDef> {
+        vec![
+            CustomBucketDef {
+                name: "Bangladesh Bank SLP (9 Liquidity Buckets)".to_string(),
+                rules: vec![
+                    BucketRuleItem { max_days: 1, label: "01. Overnight / 1 Day".to_string() },
+                    BucketRuleItem { max_days: 7, label: "02. 2 to 7 Days".to_string() },
+                    BucketRuleItem { max_days: 30, label: "03. 8 to 30 Days".to_string() },
+                    BucketRuleItem { max_days: 90, label: "04. 1 to 3 Months (31-90d)".to_string() },
+                    BucketRuleItem { max_days: 180, label: "05. 3 to 6 Months (91-180d)".to_string() },
+                    BucketRuleItem { max_days: 365, label: "06. 6 to 12 Months (181-365d)".to_string() },
+                    BucketRuleItem { max_days: 1095, label: "07. 1 to 3 Years".to_string() },
+                    BucketRuleItem { max_days: 1825, label: "08. 3 to 5 Years".to_string() },
+                ],
+                overflow_label: "09. Over 5 Years".to_string(),
+                overdue_label: "10. Overdue / Matured Unencashed".to_string(),
+                null_sight_label: "01. Overnight / Sight (Non-Maturing)".to_string(),
+                null_long_label: "09. Over 5 Years (Core)".to_string(),
+            },
+            CustomBucketDef {
+                name: "Basel III LCR / NSFR (5 Buckets)".to_string(),
+                rules: vec![
+                    BucketRuleItem { max_days: 30, label: "01. Within 30 Days (LCR Window)".to_string() },
+                    BucketRuleItem { max_days: 90, label: "02. 31 to 90 Days".to_string() },
+                    BucketRuleItem { max_days: 180, label: "03. 91 to 180 Days".to_string() },
+                    BucketRuleItem { max_days: 365, label: "04. 181 to 365 Days".to_string() },
+                ],
+                overflow_label: "05. Over 1 Year (NSFR Stable)".to_string(),
+                overdue_label: "06. Overdue / Past Maturity".to_string(),
+                null_sight_label: "01. Sight / Open Maturity".to_string(),
+                null_long_label: "05. Over 1 Year (Non-Maturing)".to_string(),
+            },
+        ]
     }
-}
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub enum BucketPreset {
-    BangladeshBankSlp,
-    BaselLcrNsfr,
-    Custom(CustomBucketPreset),
-}
-
-impl BucketPreset {
-    pub fn label(&self) -> String {
-        match self {
-            BucketPreset::BangladeshBankSlp => "Bangladesh Bank SLP (9 Liquidity Buckets)".to_string(),
-            BucketPreset::BaselLcrNsfr => "Basel III LCR / NSFR (5 Buckets)".to_string(),
-            BucketPreset::Custom(c) => format!("Custom: {} ({} Buckets)", c.name, c.rules.len() + 1),
+    pub fn load_all_presets(buckets_file: &Path) -> Vec<CustomBucketDef> {
+        let mut presets = Self::default_presets();
+        if let Ok(txt) = std::fs::read_to_string(buckets_file) {
+            if let Ok(customs) = serde_json::from_str::<Vec<CustomBucketDef>>(&txt) {
+                presets.extend(customs);
+            }
         }
+        presets
+    }
+
+    pub fn save_custom_preset(buckets_file: &Path, new_preset: CustomBucketDef) -> anyhow::Result<()> {
+        let mut customs: Vec<CustomBucketDef> = std::fs::read_to_string(buckets_file)
+            .ok()
+            .and_then(|txt| serde_json::from_str(&txt).ok())
+            .unwrap_or_default();
+
+        customs.retain(|p| !p.name.eq_ignore_ascii_case(&new_preset.name));
+        customs.push(new_preset);
+
+        let json = serde_json::to_string_pretty(&customs)?;
+        std::fs::write(buckets_file, json)?;
+        Ok(())
     }
 }
 
@@ -468,9 +525,7 @@ pub struct AggSpec {
     pub weight_col: Option<String>,
     pub alias: String,
     #[serde(default)]
-    pub display_format: Option<NumberDisplayFormat>,
-    #[serde(default)]
-    pub decimals: Option<usize>,
+    pub format_spec: ColumnFormatSpec,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -522,6 +577,7 @@ impl SqlJoinKind {
     }
 }
 
+/// Serializable transformation step stored in a Tab's Applied Steps & .mpq.json Macros
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum TransformStep {
     SelectAndReorderColumns {
@@ -557,7 +613,7 @@ pub enum TransformStep {
     MaturityBucket {
         mat_col: String,
         cutoff_date: String,
-        preset: BucketPreset,
+        bucket_def: CustomBucketDef,
         null_as_sight: bool,
         new_col: String,
     },
@@ -657,8 +713,12 @@ impl TransformStep {
             TransformStep::NormalizeEntity { new_col, .. } => {
                 format!("+Normalize Entity: {}", new_col)
             }
-            TransformStep::MaturityBucket { new_col, .. } => {
-                format!("+ALM Bucket: {}", new_col)
+            TransformStep::MaturityBucket {
+                new_col,
+                bucket_def,
+                ..
+            } => {
+                format!("+Bucket ({}): {}", bucket_def.name, new_col)
             }
             TransformStep::RateShockSim { shock_bps, .. } => {
                 format!("+ΔNII Shock ({:+.0} bps)", shock_bps)
@@ -727,6 +787,7 @@ pub struct TabState {
     pub title: String,
     pub source: TabSource,
     pub steps: Vec<TransformStep>,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
     pub total_rows: usize,
     pub control_col: Option<String>,
     pub control_sum: Option<f64>,
@@ -735,8 +796,6 @@ pub struct TabState {
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
-    /// Per-column display format & decimal override (e.g. Balance -> BdtCrore (2), WAVG_Rate -> PercentAsIs (2))
-    pub col_formats: HashMap<String, (NumberDisplayFormat, usize)>,
 }
 
 impl TabState {
