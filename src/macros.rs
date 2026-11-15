@@ -1,7 +1,4 @@
-use crate::models::{
-    AggFunc, BucketPreset, CustomBucketPreset, FilterOp, IngestionConfig, MacroRecipe,
-    TransformStep,
-};
+use crate::models::{AggFunc, FilterOp, IngestionConfig, MacroRecipe, TransformStep};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -16,21 +13,6 @@ pub fn load_macro_from_file(path: &Path) -> Result<MacroRecipe> {
     let recipe: MacroRecipe =
         serde_json::from_str(&raw).context("Failed to parse .mpq.json structure")?;
     Ok(recipe)
-}
-
-pub fn load_custom_buckets(path: &Path) -> Vec<CustomBucketPreset> {
-    if let Ok(raw) = std::fs::read_to_string(path) {
-        if let Ok(list) = serde_json::from_str::<Vec<CustomBucketPreset>>(&raw) {
-            return list;
-        }
-    }
-    vec![CustomBucketPreset::default()]
-}
-
-pub fn save_custom_buckets(path: &Path, presets: &[CustomBucketPreset]) -> Result<()> {
-    let json = serde_json::to_string_pretty(presets)?;
-    std::fs::write(path, json)?;
-    Ok(())
 }
 
 pub fn generate_python_polars_code(
@@ -52,22 +34,18 @@ pub fn generate_python_polars_code(
     if is_parquet {
         py.push_str("lf = pl.scan_parquet(source_path)\n\n");
     } else {
-        py.push_str(
-            "# 1. Lock Strict Schema Overrides (Preserves Leading Zeros on Banking IDs)\n",
-        );
+        py.push_str("# 1. Lock Strict Schema Overrides (Preserves Leading Zeros on Banking IDs)\n");
         py.push_str("custom_schema = {\n");
         for c in &ingestion.columns {
             py.push_str(&format!("    \"{}\": pl.Utf8,\n", c.name));
         }
         py.push_str("}\n\n");
         py.push_str(
-            "lf = pl.scan_csv(source_path, schema_overrides=custom_schema, try_parse_dates=False, ignore_errors=True)\n\n",
+            "lf = pl.scan_csv(source_path, schema_overrides=custom_schema, try_parse_dates=False)\n\n",
         );
 
         if ingestion.sanitize_linebreaks {
-            py.push_str(
-                "# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n",
-            );
+            py.push_str("# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n");
             py.push_str("lf = lf.with_columns(\n    pl.col(pl.Utf8).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars()\n)\n\n");
         }
     }
@@ -163,46 +141,32 @@ pub fn generate_python_polars_code(
             TransformStep::MaturityBucket {
                 mat_col,
                 cutoff_date,
-                preset,
+                bucket_def,
                 new_col,
                 ..
             } => {
                 py.push_str(&format!(
+                    "# Custom Maturity Bucketing ({}) relative to {}\n",
+                    bucket_def.name, cutoff_date
+                ));
+                py.push_str(&format!(
                     "rem_days = (pl.col(\"{}\") - pl.lit(\"{}\").str.to_date(\"%Y-%m-%d\")).dt.total_days()\n",
                     mat_col, cutoff_date
                 ));
-                match preset {
-                    BucketPreset::BangladeshBankSlp => {
-                        py.push_str(&format!(
-                            "lf = lf.with_columns(\n    pl.when(pl.col(\"{}\").is_null()).then(pl.lit(\"01. Overnight / Sight\"))\n      .when(rem_days < 0).then(pl.lit(\"10. Overdue / Matured\"))\n      .when(rem_days <= 1).then(pl.lit(\"01. Overnight / 1 Day\"))\n      .when(rem_days <= 7).then(pl.lit(\"02. 2 to 7 Days\"))\n      .when(rem_days <= 30).then(pl.lit(\"03. 8 to 30 Days\"))\n      .when(rem_days <= 90).then(pl.lit(\"04. 1 to 3 Months\"))\n      .when(rem_days <= 180).then(pl.lit(\"05. 3 to 6 Months\"))\n      .when(rem_days <= 365).then(pl.lit(\"06. 6 to 12 Months\"))\n      .when(rem_days <= 1095).then(pl.lit(\"07. 1 to 3 Years\"))\n      .when(rem_days <= 1825).then(pl.lit(\"08. 3 to 5 Years\"))\n      .otherwise(pl.lit(\"09. Over 5 Years\"))\n      .alias(\"{}\")\n)\n\n",
-                            mat_col, new_col
-                        ));
-                    }
-                    BucketPreset::BaselLcrNsfr => {
-                        py.push_str(&format!(
-                            "lf = lf.with_columns(\n    pl.when(rem_days <= 30).then(pl.lit(\"01. Within 30 Days (LCR)\"))\n      .when(rem_days <= 365).then(pl.lit(\"02. 31 to 365 Days\"))\n      .otherwise(pl.lit(\"03. Over 1 Year (NSFR)\"))\n      .alias(\"{}\")\n)\n\n",
-                            new_col
-                        ));
-                    }
-                    BucketPreset::Custom(custom) => {
-                        py.push_str(&format!(
-                            "# Custom Maturity Preset: {}\nlf = lf.with_columns(\n    pl.when(pl.col(\"{}\").is_null()).then(pl.lit(\"01. Sight / Non-Maturing\"))\n      .when(rem_days < 0).then(pl.lit(\"{}\"))\n",
-                            custom.name, mat_col, custom.overdue_label
-                        ));
-                        let mut sorted = custom.rules.clone();
-                        sorted.sort_by_key(|r| r.max_days);
-                        for r in &sorted {
-                            py.push_str(&format!(
-                                "      .when(rem_days <= {}).then(pl.lit(\"{}\"))\n",
-                                r.max_days, r.label
-                            ));
-                        }
-                        py.push_str(&format!(
-                            "      .otherwise(pl.lit(\"{}\"))\n      .alias(\"{}\")\n)\n\n",
-                            custom.overflow_label, new_col
-                        ));
-                    }
+                py.push_str(&format!(
+                    "lf = lf.with_columns(\n    pl.when(pl.col(\"{}\").is_null()).then(pl.lit(\"{}\"))\n      .when(rem_days < 0).then(pl.lit(\"{}\"))",
+                    mat_col, bucket_def.null_sight_label, bucket_def.overdue_label
+                ));
+                for r in &bucket_def.rules {
+                    py.push_str(&format!(
+                        "\n      .when(rem_days <= {}).then(pl.lit(\"{}\"))",
+                        r.max_days, r.label
+                    ));
                 }
+                py.push_str(&format!(
+                    "\n      .otherwise(pl.lit(\"{}\"))\n      .alias(\"{}\")\n)\n\n",
+                    bucket_def.overflow_label, new_col
+                ));
             }
             TransformStep::DurationAnalysis {
                 bal_col,
