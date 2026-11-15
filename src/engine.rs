@@ -103,7 +103,7 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
 
         // Normalize separators and strip trailing timestamps for date detection
         let date_part = trimmed.split_whitespace().next().unwrap_or(trimmed);
-        let norm_slash = date_part.replace(['-', '.'], "/");
+        let norm_slash = date_part.replace('-', "/").replace('.', "/");
 
         if chrono::NaiveDate::parse_from_str(&norm_slash, "%m/%d/%Y").is_err()
             && chrono::NaiveDate::parse_from_str(&norm_slash, "%m/%d/%y").is_err()
@@ -120,7 +120,7 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
         }
     }
 
-    if non_empty == 0 {
+    if non_empty == 0 || has_leading_zero {
         return ColDataType::Utf8;
     }
     if all_iso_date {
@@ -132,56 +132,11 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
     if all_dmy_date {
         return ColDataType::DateDMY;
     }
-    if has_leading_zero {
-        return ColDataType::Utf8;
-    }
     if all_float {
         return ColDataType::Float64;
     }
 
     ColDataType::Utf8
-}
-
-/// Issue #2 Fix: Resilient Multi-Format Date Normalizer & Coalescer
-/// Strips trailing timestamps (" 00:00:00", "T..."), unifies `-`, `.`, and `/` separators,
-/// and coalesces 4-digit year, 2-digit year, and ISO date formats so legacy columns like `Opndat` never drop to null.
-fn build_resilient_date_expr(e: Expr, dtype: ColDataType) -> Expr {
-    let cleaned = e
-        .str()
-        .strip_chars(lit(" "))
-        // Strip trailing time part like " 00:00:00" or "T00:00:00"
-        .str()
-        .replace(lit(r"[T\s]+.*$"), lit(""), false)
-        // Unify all '-', '.', and '/' into '/'
-        .str()
-        .replace_all(lit(r"[-.]"), lit("/"), false);
-
-    let parse_fmt = |base: Expr, fmt: &str| {
-        base.str().to_date(StrptimeOptions {
-            format: Some(fmt.into()),
-            strict: false,
-            exact: true,
-            cache: true,
-        })
-    };
-
-    match dtype {
-        ColDataType::DateMDY => parse_fmt(cleaned.clone(), "%m/%d/%Y")
-            .fill_null(parse_fmt(cleaned.clone(), "%m/%d/%y"))
-            .fill_null(parse_fmt(cleaned.clone(), "%Y/%m/%d"))
-            .fill_null(parse_fmt(cleaned, "%d/%m/%Y")),
-
-        ColDataType::DateDMY => parse_fmt(cleaned.clone(), "%d/%m/%Y")
-            .fill_null(parse_fmt(cleaned.clone(), "%d/%m/%y"))
-            .fill_null(parse_fmt(cleaned.clone(), "%Y/%m/%d"))
-            .fill_null(parse_fmt(cleaned, "%m/%d/%Y")),
-
-        ColDataType::DateISO => parse_fmt(cleaned.clone(), "%Y/%m/%d")
-            .fill_null(parse_fmt(cleaned.clone(), "%m/%d/%Y"))
-            .fill_null(parse_fmt(cleaned, "%d/%m/%Y")),
-
-        _ => cleaned,
-    }
 }
 
 pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
@@ -315,8 +270,70 @@ pub fn build_lazy_pipeline(
                 }
                 e.cast(DataType::Int64)
             }
-            ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
-                build_resilient_date_expr(e, col_cfg.dtype)
+            ColDataType::DateMDY => {
+                let norm = e
+                    .str()
+                    .replace(lit(r"[\sT].*$"), lit(""), false)
+                    .str()
+                    .replace_all(lit(r"[-.]"), lit("/"), false);
+                let d4 = norm.clone().str().to_date(StrptimeOptions {
+                    format: Some("%m/%d/%Y".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                });
+                let d2 = norm.clone().str().to_date(StrptimeOptions {
+                    format: Some("%m/%d/%y".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                });
+                let diso = norm.str().to_date(StrptimeOptions {
+                    format: Some("%Y/%m/%d".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                });
+                d4.fill_null(d2).fill_null(diso)
+            }
+            ColDataType::DateDMY => {
+                let norm = e
+                    .str()
+                    .replace(lit(r"[\sT].*$"), lit(""), false)
+                    .str()
+                    .replace_all(lit(r"[-.]"), lit("/"), false);
+                let d4 = norm.clone().str().to_date(StrptimeOptions {
+                    format: Some("%d/%m/%Y".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                });
+                let d2 = norm.clone().str().to_date(StrptimeOptions {
+                    format: Some("%d/%m/%y".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                });
+                let diso = norm.str().to_date(StrptimeOptions {
+                    format: Some("%Y/%m/%d".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                });
+                d4.fill_null(d2).fill_null(diso)
+            }
+            ColDataType::DateISO => {
+                let norm = e
+                    .str()
+                    .replace(lit(r"[\sT].*$"), lit(""), false)
+                    .str()
+                    .replace_all(lit(r"[/.]"), lit("-"), false);
+                norm.str().to_date(StrptimeOptions {
+                    format: Some("%Y-%m-%d".into()),
+                    strict: false,
+                    exact: false,
+                    cache: true,
+                })
             }
         };
 
@@ -496,10 +513,10 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
         TransformStep::MaturityBucket {
             mat_col,
             cutoff_date,
-            preset,
+            bucket_def,
             null_as_sight,
             new_col,
-        } => apply_maturity_bucket(lf, mat_col, cutoff_date, preset, *null_as_sight, new_col),
+        } => apply_maturity_bucket(lf, mat_col, cutoff_date, bucket_def, *null_as_sight, new_col),
         TransformStep::RateShockSim {
             bal_col,
             rate_col,
@@ -704,7 +721,7 @@ fn apply_groupby_pivot(
         out_lf = out_lf
             .with_column(
                 (col(temp_sum) / col(temp_sum).sum() * lit(100.0))
-                    .round(4)
+                    .round(2)
                     .alias(final_alias),
             )
             .drop([temp_sum.as_str()]);
@@ -769,7 +786,7 @@ pub fn compute_control_totals(
         aggs.push(col(c).cast(DataType::Float64).sum().alias("__control_sum"));
     }
 
-    let res = lf.select(aggs).collect()?;
+    let res = lf.with_streaming(true).select(aggs).collect()?;
     let row_count = res
         .column("__row_count")
         .ok()
