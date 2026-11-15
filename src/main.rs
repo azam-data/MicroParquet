@@ -3026,9 +3026,27 @@ impl MicroParquetApp {
                     is_parquet: false,
                     config: modal.config,
                 };
-                if let Ok(lf) = compile_tab_lazy(&src, &[], &self.paths.temp_dir) {
-                    let _ = export_to_parquet_stream(lf, &out_path, self.parquet_dialect);
-                    self.status_message = format!("Converted directly to {:?}", out_path);
+                match compile_tab_lazy(&src, &[], &self.paths.temp_dir)
+                    .and_then(|lf| export_to_parquet_stream(lf, &out_path, self.parquet_dialect))
+                {
+                    Ok(_) => {
+                        let orig_mb = modal
+                            .csv_path
+                            .metadata()
+                            .map(|m| m.len() as f64 / 1_048_576.0)
+                            .unwrap_or(0.0);
+                        let new_mb = out_path
+                            .metadata()
+                            .map(|m| m.len() as f64 / 1_048_576.0)
+                            .unwrap_or(0.0);
+                        self.status_message = format!(
+                            "✅ Converted to {:?}! ({:.1} MB -> {:.1} MB)",
+                            out_path, orig_mb, new_mb
+                        );
+                    }
+                    Err(e) => {
+                        self.status_message = format!("❌ Direct conversion error: {:#}", e);
+                    }
                 }
             }
         } else if keep_open {
