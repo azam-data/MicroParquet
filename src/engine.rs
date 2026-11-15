@@ -255,7 +255,7 @@ pub fn build_lazy_pipeline(
                         .str()
                         .replace(lit(r"^\((.*)\)$"), lit("-${1}"), false);
                 }
-                e.strict_cast(DataType::Float64).otherwise(e.cast(DataType::Float64))
+                e.cast(DataType::Float64)
             }
             ColDataType::Int64 => {
                 if config.parse_accounting_negatives {
