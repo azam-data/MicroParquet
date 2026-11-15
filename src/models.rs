@@ -1,5 +1,6 @@
 use polars::prelude::DataFrame;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Automatically initializes the zero-registry portable directory next to the executable
@@ -10,6 +11,7 @@ pub struct PortablePaths {
     pub schemas_dir: PathBuf,
     pub curves_dir: PathBuf,
     pub temp_dir: PathBuf,
+    pub buckets_file: PathBuf,
 }
 
 impl PortablePaths {
@@ -24,6 +26,7 @@ impl PortablePaths {
         let schema_folder = root_dir.join("schemas");
         let curve_folder = root_dir.join("curves");
         let temp_folder = root_dir.join("temp_scratch");
+        let buckets_file = root_dir.join("buckets.json");
 
         let _ = std::fs::create_dir_all(&recipes_folder);
         let _ = std::fs::create_dir_all(&schema_folder);
@@ -38,6 +41,7 @@ impl PortablePaths {
             schemas_dir: schema_folder,
             curves_dir: curve_folder,
             temp_dir: temp_folder,
+            buckets_file,
         }
     }
 }
@@ -69,8 +73,8 @@ impl ColDataType {
             ColDataType::Utf8 => "Text / ID (Utf8 - Keeps Zeros)",
             ColDataType::Float64 => "Decimal / Balance (Float64)",
             ColDataType::Int64 => "Whole Integer (Int64)",
-            ColDataType::DateMDY => "Date (M/D/YYYY)",
-            ColDataType::DateDMY => "Date (D/M/YYYY)",
+            ColDataType::DateMDY => "Date (M/D/YYYY or M-D-YYYY)",
+            ColDataType::DateDMY => "Date (D/M/YYYY or D-M-YYYY)",
             ColDataType::DateISO => "Date (YYYY-MM-DD)",
         }
     }
@@ -137,33 +141,109 @@ impl ParquetDialect {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// v1.2 Expanded Numeric & Percentage Display Formatter with Smart Auto-Detection
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumberDisplayFormat {
-    Raw,
-    StandardCommas,
-    BdtLakh,
-    BdtCrore,
+    AutoSmart,      // Balances in Cr/Lakh, Rates/Pct in %, Duration/Tenor in Decimals
+    BdtCrore,       // Divide by 10,000,000 + "Cr"
+    BdtLakh,        // Divide by 100,000 + "L"
+    StandardCommas, // Commas with N decimals
+    PercentAsIs,    // 8.5 -> 8.50%
+    PercentDiv100,  // 0.085 -> 8.50% (Multiply by 100 + "%")
+    IntegerCommas,  // Whole integer with commas
+    Raw,            // Unformatted float
 }
 
 impl NumberDisplayFormat {
+    pub fn all() -> &'static [NumberDisplayFormat] {
+        &[
+            NumberDisplayFormat::AutoSmart,
+            NumberDisplayFormat::BdtCrore,
+            NumberDisplayFormat::BdtLakh,
+            NumberDisplayFormat::StandardCommas,
+            NumberDisplayFormat::PercentAsIs,
+            NumberDisplayFormat::PercentDiv100,
+            NumberDisplayFormat::IntegerCommas,
+            NumberDisplayFormat::Raw,
+        ]
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
-            NumberDisplayFormat::Raw => "Raw Numbers",
-            NumberDisplayFormat::StandardCommas => "Commas (1,234.56)",
-            NumberDisplayFormat::BdtLakh => "BDT Lakh (÷ 100,000)",
-            NumberDisplayFormat::BdtCrore => "BDT Crore (÷ 10,000,000)",
+            NumberDisplayFormat::AutoSmart => "Auto (Balances=Cr, Rates=%, Duration=Dec)",
+            NumberDisplayFormat::BdtCrore => "BDT Crore (÷ 10,000,000 Cr)",
+            NumberDisplayFormat::BdtLakh => "BDT Lakh (÷ 100,000 L)",
+            NumberDisplayFormat::StandardCommas => "Decimal with Commas (1,234.56)",
+            NumberDisplayFormat::PercentAsIs => "Percentage As-Is (8.5 -> 8.50%)",
+            NumberDisplayFormat::PercentDiv100 => "Decimal to Percentage (0.085 -> 8.50%)",
+            NumberDisplayFormat::IntegerCommas => "Whole Integer (1,235)",
+            NumberDisplayFormat::Raw => "Raw Unformatted",
         }
     }
 
-    pub fn format_f64(&self, val: f64) -> String {
-        match self {
+    pub fn format_value_for_col(&self, col_name: &str, val: f64, decimals: usize) -> String {
+        let effective = if *self == NumberDisplayFormat::AutoSmart {
+            Self::infer_smart_format_for_column(col_name)
+        } else {
+            *self
+        };
+
+        let dec = if *self == NumberDisplayFormat::AutoSmart
+            && Self::is_duration_or_factor_col(col_name)
+        {
+            decimals.max(4)
+        } else {
+            decimals
+        };
+
+        match effective {
             NumberDisplayFormat::Raw => format!("{}", val),
-            NumberDisplayFormat::StandardCommas => format_with_commas(val, 2),
-            NumberDisplayFormat::BdtLakh => format!("{} L", format_with_commas(val / 100_000.0, 2)),
+            NumberDisplayFormat::StandardCommas | NumberDisplayFormat::AutoSmart => {
+                format_with_commas(val, dec)
+            }
+            NumberDisplayFormat::IntegerCommas => format_with_commas(val, 0),
+            NumberDisplayFormat::BdtLakh => {
+                format!("{} L", format_with_commas(val / 100_000.0, dec))
+            }
             NumberDisplayFormat::BdtCrore => {
-                format!("{} Cr", format_with_commas(val / 10_000_000.0, 2))
+                format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
+            }
+            NumberDisplayFormat::PercentAsIs => {
+                format!("{}%", format_with_commas(val, dec))
+            }
+            NumberDisplayFormat::PercentDiv100 => {
+                format!("{}%", format_with_commas(val * 100.0, dec))
             }
         }
+    }
+
+    pub fn infer_smart_format_for_column(col_name: &str) -> NumberDisplayFormat {
+        let lower = col_name.to_lowercase();
+        if lower.contains("rate")
+            || lower.contains("pct")
+            || lower.contains("percent")
+            || lower.contains("spread")
+            || lower.contains("yield")
+            || lower.contains("wavg")
+            || lower.contains("util")
+        {
+            NumberDisplayFormat::PercentAsIs
+        } else if lower.contains("count")
+            || lower.contains("days")
+            || lower.contains("tenor")
+            || lower.contains("bps")
+        {
+            NumberDisplayFormat::IntegerCommas
+        } else if Self::is_duration_or_factor_col(&lower) {
+            NumberDisplayFormat::StandardCommas
+        } else {
+            NumberDisplayFormat::BdtCrore
+        }
+    }
+
+    fn is_duration_or_factor_col(col_name: &str) -> bool {
+        let lower = col_name.to_lowercase();
+        lower.contains("duration") || lower.contains("years") || lower.contains("weight")
     }
 }
 
@@ -280,17 +360,66 @@ impl MathOp {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+/// v1.2 Custom Maturity Bucketing Rule & Preset System (`c-m-b-1`, etc.)
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CustomBucketRule {
+    pub max_days: i64,
+    pub label: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CustomBucketPreset {
+    pub name: String,
+    pub rules: Vec<CustomBucketRule>,
+    pub overflow_label: String,
+    pub overdue_label: String,
+}
+
+impl Default for CustomBucketPreset {
+    fn default() -> Self {
+        Self {
+            name: "c-m-b-1".to_string(),
+            rules: vec![
+                CustomBucketRule {
+                    max_days: 7,
+                    label: "01. Up to 7 Days".to_string(),
+                },
+                CustomBucketRule {
+                    max_days: 30,
+                    label: "02. 8 to 30 Days".to_string(),
+                },
+                CustomBucketRule {
+                    max_days: 90,
+                    label: "03. 31 to 90 Days".to_string(),
+                },
+                CustomBucketRule {
+                    max_days: 180,
+                    label: "04. 91 to 180 Days".to_string(),
+                },
+                CustomBucketRule {
+                    max_days: 365,
+                    label: "05. 181 to 365 Days".to_string(),
+                },
+            ],
+            overflow_label: "06. Over 1 Year".to_string(),
+            overdue_label: "07. Overdue / Matured".to_string(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum BucketPreset {
     BangladeshBankSlp,
     BaselLcrNsfr,
+    Custom(CustomBucketPreset),
 }
 
 impl BucketPreset {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            BucketPreset::BangladeshBankSlp => "Bangladesh Bank SLP (9 Liquidity Buckets)",
-            BucketPreset::BaselLcrNsfr => "Basel III LCR / NSFR (5 Buckets)",
+            BucketPreset::BangladeshBankSlp => "Bangladesh Bank SLP (9 Liquidity Buckets)".to_string(),
+            BucketPreset::BaselLcrNsfr => "Basel III LCR / NSFR (5 Buckets)".to_string(),
+            BucketPreset::Custom(c) => format!("Custom: {} ({} Buckets)", c.name, c.rules.len() + 1),
         }
     }
 }
@@ -338,6 +467,10 @@ pub struct AggSpec {
     pub func: AggFunc,
     pub weight_col: Option<String>,
     pub alias: String,
+    #[serde(default)]
+    pub display_format: Option<NumberDisplayFormat>,
+    #[serde(default)]
+    pub decimals: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -389,7 +522,6 @@ impl SqlJoinKind {
     }
 }
 
-/// Serializable transformation step stored in a Tab's Applied Steps & .mpq.json Macros
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum TransformStep {
     SelectAndReorderColumns {
@@ -603,6 +735,8 @@ pub struct TabState {
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
+    /// Per-column display format & decimal override (e.g. Balance -> BdtCrore (2), WAVG_Rate -> PercentAsIs (2))
+    pub col_formats: HashMap<String, (NumberDisplayFormat, usize)>,
 }
 
 impl TabState {
