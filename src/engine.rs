@@ -15,8 +15,14 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 pub fn preview_csv_raw(path: &Path, n_rows: usize) -> Result<DataFrame> {
+    let parse_opts = CsvParseOptions::default()
+        .with_encoding(CsvEncoding::LossyUtf8)
+        .with_truncate_ragged_lines(true);
+
     let df = CsvReadOptions::default()
+        .with_parse_options(parse_opts)
         .with_infer_schema_length(Some(0))
+        .with_ignore_errors(true)
         .with_n_rows(Some(n_rows))
         .try_into_reader_with_file_path(Some(path.to_path_buf()))
         .context("Failed to initialize CSV preview reader")?
@@ -73,8 +79,11 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
     for opt_val in ca.into_iter().flatten() {
         let trimmed = opt_val.trim();
         if trimmed.is_empty()
+            || trimmed == "-"
             || trimmed.eq_ignore_ascii_case("null")
             || trimmed.eq_ignore_ascii_case("none")
+            || trimmed.eq_ignore_ascii_case("na")
+            || trimmed.eq_ignore_ascii_case("n/a")
         {
             continue;
         }
@@ -197,6 +206,9 @@ pub fn build_lazy_pipeline(
 
     let mut lf = LazyCsvReader::new(&actual_csv_path)
         .with_dtype_overwrite(Some(Arc::new(schema)))
+        .with_encoding(CsvEncoding::LossyUtf8)
+        .with_ignore_errors(true)
+        .with_truncate_ragged_lines(true)
         .with_try_parse_dates(false)
         .with_infer_schema_length(Some(0))
         .finish()
@@ -232,6 +244,7 @@ pub fn build_lazy_pipeline(
             );
         }
 
+        // Use non-strict casting (strict_cast(DataType, false)) so dirty text in numeric columns becomes null instead of crashing
         e = match col_cfg.dtype {
             ColDataType::Utf8 => e,
             ColDataType::Float64 => {
@@ -242,7 +255,7 @@ pub fn build_lazy_pipeline(
                         .str()
                         .replace(lit(r"^\((.*)\)$"), lit("-${1}"), false);
                 }
-                e.cast(DataType::Float64)
+                e.strict_cast(DataType::Float64).otherwise(e.cast(DataType::Float64))
             }
             ColDataType::Int64 => {
                 if config.parse_accounting_negatives {
@@ -253,19 +266,19 @@ pub fn build_lazy_pipeline(
             ColDataType::DateMDY => e.str().to_date(StrptimeOptions {
                 format: Some("%m/%d/%Y".into()),
                 strict: false,
-                exact: true,
+                exact: false,
                 cache: true,
             }),
             ColDataType::DateDMY => e.str().to_date(StrptimeOptions {
                 format: Some("%d/%m/%Y".into()),
                 strict: false,
-                exact: true,
+                exact: false,
                 cache: true,
             }),
             ColDataType::DateISO => e.str().to_date(StrptimeOptions {
                 format: Some("%Y-%m-%d".into()),
                 strict: false,
-                exact: true,
+                exact: false,
                 cache: true,
             }),
         };
@@ -719,7 +732,7 @@ pub fn compute_control_totals(
         aggs.push(col(c).cast(DataType::Float64).sum().alias("__control_sum"));
     }
 
-    let res = lf.select(aggs).collect()?;
+    let res = lf.with_streaming(true).select(aggs).collect()?;
     let row_count = res
         .column("__row_count")
         .ok()
@@ -739,6 +752,8 @@ pub fn compute_control_totals(
     Ok((row_count, control_sum))
 }
 
+/// Safely evaluates any LazyFrame (including regex sanitization, date parsing, joins, and pivots)
+/// using Polars' streaming engine and writes it to Parquet without hitting `sink_parquet` panics.
 pub fn export_to_parquet_stream(
     lf: LazyFrame,
     out_path: &Path,
@@ -749,38 +764,35 @@ pub fn export_to_parquet_stream(
         ParquetDialect::PowerBiSnappy => ParquetCompression::Snappy,
     };
 
-    let options = ParquetWriteOptions {
-        compression,
-        statistics: StatisticsOptions::full(),
-        row_group_size: Some(122_880),
-        data_page_size: None,
-        maintain_order: true,
-    };
+    let mut df = lf
+        .with_streaming(true)
+        .collect()
+        .context("Failed to evaluate pipeline for Parquet export")?;
 
-    lf.sink_parquet(out_path, options)
-        .context("Failed to stream LazyFrame to Parquet")?;
+    let file = File::create(out_path).context("Failed to create output Parquet file on disk")?;
+    ParquetWriter::new(BufWriter::with_capacity(8 * 1024 * 1024, file))
+        .with_compression(compression)
+        .with_row_group_size(Some(122_880))
+        .finish(&mut df)
+        .context("Failed to write Parquet data stream")?;
     Ok(())
 }
 
+/// Safely evaluates any LazyFrame and writes it to CSV without scientific notation.
 pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> Result<()> {
-    let date_fmt = if mdy_dates {
-        Some("%m/%d/%Y".to_string())
-    } else {
-        Some("%Y-%m-%d".to_string())
-    };
+    let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
 
-    let options = CsvWriterOptions {
-        include_header: true,
-        maintain_order: true,
-        serialize_options: SerializeOptions {
-            date_format: date_fmt,
-            float_scientific: Some(false),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let mut df = lf
+        .with_streaming(true)
+        .collect()
+        .context("Failed to evaluate pipeline for CSV export")?;
 
-    lf.sink_csv(out_path, options)
-        .context("Failed to stream LazyFrame to CSV")?;
+    let file = File::create(out_path).context("Failed to create output CSV file on disk")?;
+    CsvWriter::new(BufWriter::with_capacity(8 * 1024 * 1024, file))
+        .include_header(true)
+        .with_date_format(Some(date_fmt.to_string()))
+        .with_float_scientific(Some(false))
+        .finish(&mut df)
+        .context("Failed to write CSV data stream")?;
     Ok(())
 }
