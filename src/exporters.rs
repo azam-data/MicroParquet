@@ -5,6 +5,7 @@ use polars::datatypes::AnyValue;
 use polars::prelude::*;
 use printpdf::*;
 use rust_xlsxwriter::{Format, Workbook};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -31,7 +32,12 @@ pub fn export_tabs_to_xlsx(tabs: Vec<(String, DataFrame)>, out_path: &Path) -> R
         let row_limit = df.height().min(EXCEL_MAX_ROWS);
 
         for (c_idx, series) in cols.iter().enumerate() {
-            worksheet.write_string_with_format(0, c_idx as u16, series.name().as_str(), &header_fmt)?;
+            worksheet.write_string_with_format(
+                0,
+                c_idx as u16,
+                series.name().as_str(),
+                &header_fmt,
+            )?;
             worksheet.set_column_width(c_idx as u16, 18.0)?;
         }
         worksheet.set_freeze_panes(1, 0)?;
@@ -46,7 +52,12 @@ pub fn export_tabs_to_xlsx(tabs: Vec<(String, DataFrame)>, out_path: &Path) -> R
                         worksheet.write_number_with_format(xls_row, xls_col, v, &num_fmt)?;
                     }
                     Ok(AnyValue::Float32(v)) => {
-                        worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
+                        worksheet.write_number_with_format(
+                            xls_row,
+                            xls_col,
+                            v as f64,
+                            &num_fmt,
+                        )?;
                     }
                     Ok(AnyValue::Int64(v)) => {
                         worksheet.write_number(xls_row, xls_col, v as f64)?;
@@ -95,9 +106,10 @@ fn sanitize_sheet_name(name: &str, fallback_idx: usize) -> String {
 }
 
 pub fn export_tabs_to_pdf(
-    tabs: Vec<(String, DataFrame)>,
+    tabs: Vec<(String, DataFrame, HashMap<String, (NumberDisplayFormat, usize)>)>,
     out_path: &Path,
-    num_format: NumberDisplayFormat,
+    default_format: NumberDisplayFormat,
+    default_decimals: usize,
 ) -> Result<()> {
     let (doc, page1, layer1) = PdfDocument::new(
         "MicroParquet Banking & ALCO Report",
@@ -113,7 +125,7 @@ pub fn export_tabs_to_pdf(
     let mut current_layer = layer1;
     let mut first_section = true;
 
-    for (title, df) in tabs {
+    for (title, df, col_formats) in tabs {
         if !first_section {
             let (p, l) = doc.add_page(Mm(297.0), Mm(210.0), "Layer");
             current_page = p;
@@ -131,9 +143,9 @@ pub fn export_tabs_to_pdf(
         let layer_ref = doc.get_page(current_page).get_layer(current_layer);
         layer_ref.use_text(
             format!(
-                "MicroParquet Report — {} (Display: {})",
+                "MicroParquet Report — {} (Default: {})",
                 title,
-                num_format.label()
+                default_format.label()
             ),
             12.0,
             Mm(12.0),
@@ -168,14 +180,13 @@ pub fn export_tabs_to_pdf(
             let active_layer = doc.get_page(current_page).get_layer(current_layer);
             for (c_idx, series) in cols.iter().enumerate() {
                 let x_mm = 12.0 + (c_idx as f32 * col_width_mm);
-                let cell_str = match series.get(r_idx) {
-                    Ok(AnyValue::Null) => "-".to_string(),
-                    Ok(AnyValue::Float64(v)) => num_format.format_f64(v),
-                    Ok(AnyValue::Float32(v)) => num_format.format_f64(v as f64),
-                    Ok(AnyValue::String(s)) => s.to_string(),
-                    Ok(other) => format!("{}", other),
-                    Err(_) => String::new(),
-                };
+                let cname = series.name().as_str();
+                let (fmt, dec) = col_formats
+                    .get(cname)
+                    .copied()
+                    .unwrap_or((default_format, default_decimals));
+
+                let cell_str = format_cell_val(cname, series.get(r_idx).ok(), fmt, dec);
                 let truncated: String = cell_str.chars().take(20).collect();
                 active_layer.use_text(truncated, 8.0, Mm(x_mm), Mm(y_mm), &font_reg);
             }
@@ -251,7 +262,9 @@ pub fn split_and_export_by_column(
 
 pub fn format_df_for_clipboard(
     df: &DataFrame,
-    num_format: NumberDisplayFormat,
+    col_formats: &HashMap<String, (NumberDisplayFormat, usize)>,
+    default_format: NumberDisplayFormat,
+    default_decimals: usize,
     as_markdown: bool,
 ) -> String {
     let cols = df.get_columns();
@@ -272,7 +285,14 @@ pub fn format_df_for_clipboard(
             out.push_str("| ");
             let vals: Vec<String> = cols
                 .iter()
-                .map(|c| format_cell_val(c.get(r).ok(), num_format))
+                .map(|c| {
+                    let cname = c.name().as_str();
+                    let (fmt, dec) = col_formats
+                        .get(cname)
+                        .copied()
+                        .unwrap_or((default_format, default_decimals));
+                    format_cell_val(cname, c.get(r).ok(), fmt, dec)
+                })
                 .collect();
             out.push_str(&vals.join(" | "));
             out.push_str(" |\n");
@@ -285,7 +305,14 @@ pub fn format_df_for_clipboard(
         for r in 0..rows {
             let vals: Vec<String> = cols
                 .iter()
-                .map(|c| format_cell_val(c.get(r).ok(), num_format))
+                .map(|c| {
+                    let cname = c.name().as_str();
+                    let (fmt, dec) = col_formats
+                        .get(cname)
+                        .copied()
+                        .unwrap_or((default_format, default_decimals));
+                    format_cell_val(cname, c.get(r).ok(), fmt, dec)
+                })
                 .collect();
             out.push_str(&vals.join("\t"));
             out.push('\n');
@@ -295,11 +322,18 @@ pub fn format_df_for_clipboard(
     out
 }
 
-fn format_cell_val(val: Option<AnyValue>, num_format: NumberDisplayFormat) -> String {
+pub fn format_cell_val(
+    col_name: &str,
+    val: Option<AnyValue>,
+    num_format: NumberDisplayFormat,
+    decimals: usize,
+) -> String {
     match val {
         None | Some(AnyValue::Null) => "".to_string(),
-        Some(AnyValue::Float64(v)) => num_format.format_f64(v),
-        Some(AnyValue::Float32(v)) => num_format.format_f64(v as f64),
+        Some(AnyValue::Float64(v)) => num_format.format_value_for_col(col_name, v, decimals),
+        Some(AnyValue::Float32(v)) => {
+            num_format.format_value_for_col(col_name, v as f64, decimals)
+        }
         Some(AnyValue::String(s)) => s.to_string(),
         Some(other) => format!("{}", other),
     }
