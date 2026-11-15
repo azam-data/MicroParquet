@@ -21,13 +21,15 @@ use exporters::{
 };
 use macros::{generate_python_polars_code, load_macro_from_file, save_macro_to_file};
 use models::{
-    default_bd_ftp_curve, format_with_commas, AggFunc, AggSpec, BatchDirection,
-    BatchSchemaStrategy, BucketPreset, ColDataType, CondRule, FilterOp, FtpPoint, IngestionConfig,
-    MacroRecipe, MathOp, NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths,
-    SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
+    default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
+    BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
+    CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
+    NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths, SplitExportFormat,
+    SqlJoinKind, TabSource, TabState, TransformStep,
 };
 use polars::datatypes::AnyValue;
 use polars::prelude::DataFrame;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -67,10 +69,10 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(
-                "MicroParquet v1.1 — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
+                "MicroParquet v1.2 — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
             )
-            .with_inner_size([1440.0, 880.0])
-            .with_min_inner_size([1024.0, 640.0]),
+            .with_inner_size([1320.0, 740.0])
+            .with_min_inner_size([800.0, 560.0]),
         ..Default::default()
     };
 
@@ -78,7 +80,7 @@ fn main() -> eframe::Result<()> {
         "MicroParquet",
         native_options,
         Box::new(|cc| {
-            MicroParquetApp::apply_ui_theme(&cc.egui_ctx, false, 1.10);
+            MicroParquetApp::apply_ui_theme(&cc.egui_ctx, false, 1.05);
             Ok(Box::new(MicroParquetApp::new(paths)))
         }),
     )
@@ -139,9 +141,10 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
     if let Some(out_pdf) = &args.export_pdf {
         let df = lf.collect()?;
         export_tabs_to_pdf(
-            vec![("Headless_Report".to_string(), df)],
+            vec![("Headless_Report".to_string(), df, HashMap::new())],
             out_pdf,
             NumberDisplayFormat::BdtCrore,
+            2,
         )?;
         println!("Exported PDF: {:?}", out_pdf);
     }
@@ -199,8 +202,10 @@ pub struct MicroParquetApp {
     tabs: Vec<TabState>,
     active_tab: usize,
     num_format: NumberDisplayFormat,
+    global_decimals: usize,
     parquet_dialect: ParquetDialect,
     export_csv_mdy: bool,
+    show_steps_sidebar: bool,
     show_sql_bar: bool,
     show_chart_drawer: bool,
     dark_mode: bool,
@@ -215,7 +220,7 @@ pub struct MicroParquetApp {
     filter_val: String,
     filter_keep: bool,
 
-    col_mgr_list: Vec<(String, bool)>,
+    col_mgr_list: Vec<(String, bool, ColumnFormatSpec)>,
     rename_old: String,
     rename_new: String,
 
@@ -239,6 +244,7 @@ pub struct MicroParquetApp {
     pivot_new_func: AggFunc,
     pivot_new_weight: String,
     pivot_new_alias: String,
+    pivot_new_fmt: ColumnFormatSpec,
     pivot_top_n: usize,
     pivot_open_in_new_tab: bool,
 
@@ -257,11 +263,15 @@ pub struct MicroParquetApp {
     rec_rate_col: String,
     rec_cl_col: String,
 
+    // Maturity Bucketer & Custom Preset Creator (v1.2)
     alm_mat_col: String,
     alm_cutoff: String,
-    alm_preset: BucketPreset,
+    alm_presets: Vec<CustomBucketDef>,
+    alm_selected_preset_idx: usize,
     alm_null_sight: bool,
     alm_new_col: String,
+    alm_show_custom_creator: bool,
+    custom_bucket_draft: CustomBucketDef,
 
     shock_bal_col: String,
     shock_rate_col: String,
@@ -315,69 +325,69 @@ pub struct MicroParquetApp {
 }
 
 impl MicroParquetApp {
-    /// Configures a crisp, high-contrast Daylight theme (or high-contrast Dark theme)
-    /// and bumps up default font sizes so financial tables are effortless to read.
     pub fn apply_ui_theme(ctx: &egui::Context, dark_mode: bool, zoom: f32) {
         ctx.set_zoom_factor(zoom);
 
         let mut style = (*ctx.style()).clone();
         style.text_styles.insert(
             egui::TextStyle::Body,
-            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+            egui::FontId::new(13.5, egui::FontFamily::Proportional),
         );
         style.text_styles.insert(
             egui::TextStyle::Button,
-            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+            egui::FontId::new(13.5, egui::FontFamily::Proportional),
         );
         style.text_styles.insert(
             egui::TextStyle::Monospace,
-            egui::FontId::new(13.5, egui::FontFamily::Monospace),
+            egui::FontId::new(13.0, egui::FontFamily::Monospace),
         );
         style.text_styles.insert(
             egui::TextStyle::Heading,
-            egui::FontId::new(18.5, egui::FontFamily::Proportional),
+            egui::FontId::new(17.5, egui::FontFamily::Proportional),
         );
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        style.spacing.item_spacing = egui::vec2(7.0, 5.0);
+        style.spacing.button_padding = egui::vec2(7.0, 3.5);
         ctx.set_style(style);
 
         let mut visuals = if dark_mode {
             let mut v = egui::Visuals::dark();
-            // Sharpen dark mode contrast so text is bright white instead of muddy gray
             v.override_text_color = Some(egui::Color32::from_rgb(240, 244, 248));
             v.panel_fill = egui::Color32::from_rgb(22, 27, 34);
-            v.faint_bg_color = egui::Color32::from_rgb(33, 38, 45); // Alternating table stripe
+            v.faint_bg_color = egui::Color32::from_rgb(33, 38, 45);
             v
         } else {
             let mut v = egui::Visuals::light();
-            // Crisp Daylight Paper / Spreadsheet palette
-            v.override_text_color = Some(egui::Color32::from_rgb(15, 23, 42)); // Deep Slate Black
-            v.panel_fill = egui::Color32::from_rgb(248, 250, 252);              // Soft Alabaster (no harsh glare)
-            v.window_fill = egui::Color32::from_rgb(255, 255, 255);             // Pure White modals
-            v.faint_bg_color = egui::Color32::from_rgb(236, 242, 249);          // Crisp Excel-blue alternating row stripe
-            v.extreme_bg_color = egui::Color32::from_rgb(255, 255, 255);        // Text input boxes
-            v.selection.bg_fill = egui::Color32::from_rgb(2, 132, 199);         // Banking Blue selection
+            v.override_text_color = Some(egui::Color32::from_rgb(15, 23, 42));
+            v.panel_fill = egui::Color32::from_rgb(248, 250, 252);
+            v.window_fill = egui::Color32::from_rgb(255, 255, 255);
+            v.faint_bg_color = egui::Color32::from_rgb(236, 242, 249);
+            v.extreme_bg_color = egui::Color32::from_rgb(255, 255, 255);
+            v.selection.bg_fill = egui::Color32::from_rgb(2, 132, 199);
             v.selection.stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
             v.widgets.noninteractive.bg_stroke =
-                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(203, 213, 225)); // Clean grid borders
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(203, 213, 225));
             v
         };
 
         visuals.striped = true;
         ctx.set_visuals(visuals);
     }
+
     pub fn new(paths: PortablePaths) -> Self {
+        let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
         Self {
             paths,
             tabs: Vec::new(),
             active_tab: 0,
             num_format: NumberDisplayFormat::BdtCrore,
+            global_decimals: 2,
             parquet_dialect: ParquetDialect::ArchiveZstd,
             export_csv_mdy: false,
+            show_steps_sidebar: false, // Hidden by default for maximum 720p table width; toggle in View menu
             show_sql_bar: false,
             show_chart_drawer: false,
-            dark_mode: false, // Default to crisp Light Mode
-            ui_zoom: 1.10,    // Default to 110% high-legibility scale
+            dark_mode: false,
+            ui_zoom: 1.05,
             pending_csv_modal: None,
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
@@ -419,6 +429,10 @@ impl MicroParquetApp {
             pivot_new_func: AggFunc::Sum,
             pivot_new_weight: "Balance".to_string(),
             pivot_new_alias: "Total_Balance".to_string(),
+            pivot_new_fmt: ColumnFormatSpec {
+                fmt_type: MetricFormatType::Auto,
+                decimals: 2,
+            },
             pivot_top_n: 0,
             pivot_open_in_new_tab: true,
 
@@ -439,9 +453,24 @@ impl MicroParquetApp {
 
             alm_mat_col: "Matdat".to_string(),
             alm_cutoff: "2026-10-31".to_string(),
-            alm_preset: BucketPreset::BangladeshBankSlp,
+            alm_presets: presets,
+            alm_selected_preset_idx: 0,
             alm_null_sight: true,
-            alm_new_col: "SLP_Maturity_Bucket".to_string(),
+            alm_new_col: "Maturity_Bucket".to_string(),
+            alm_show_custom_creator: false,
+            custom_bucket_draft: CustomBucketDef {
+                name: "c-m-b-1".to_string(),
+                rules: vec![
+                    BucketRuleItem { max_days: 7, label: "01. 1-7 Days".to_string() },
+                    BucketRuleItem { max_days: 30, label: "02. 8-30 Days".to_string() },
+                    BucketRuleItem { max_days: 90, label: "03. 31-90 Days".to_string() },
+                    BucketRuleItem { max_days: 365, label: "04. 91-365 Days".to_string() },
+                ],
+                overflow_label: "05. Over 1 Year".to_string(),
+                overdue_label: "06. Overdue / Matured".to_string(),
+                null_sight_label: "01. Sight / Open".to_string(),
+                null_long_label: "05. Non-Maturing Core".to_string(),
+            },
 
             shock_bal_col: "Balance".to_string(),
             shock_rate_col: "Int Rate".to_string(),
@@ -482,7 +511,7 @@ impl MicroParquetApp {
             lim_ccf_pct: 20.0,
 
             macro_name: "Monthly_WB_ALCO_Pipeline".to_string(),
-            macro_desc: "Sanitizes dump, buckets SLP maturities, and computes WAVG/Duration."
+            macro_desc: "Sanitizes dump, buckets maturities, and computes WAVG/Duration."
                 .to_string(),
             macro_enforce_ctrl: true,
             macro_include_schema: true,
@@ -522,6 +551,7 @@ impl MicroParquetApp {
                     config: IngestionConfig::default(),
                 },
                 Vec::new(),
+                HashMap::new(),
             );
         } else {
             match (preview_csv_raw(&path, 5), auto_detect_smart_schema(&path)) {
@@ -545,6 +575,7 @@ impl MicroParquetApp {
         title: String,
         source: TabSource,
         steps: Vec<TransformStep>,
+        col_formats: HashMap<String, ColumnFormatSpec>,
     ) {
         match compile_tab_lazy(&source, &steps, &self.paths.temp_dir) {
             Ok(lf) => {
@@ -553,14 +584,27 @@ impl MicroParquetApp {
                 let (total_rows, control_sum) =
                     compute_control_totals(lf, default_ctrl.as_deref()).unwrap_or((0, None));
 
+                // Baseline control sum is always computed from the raw source (0 steps)
+                let baseline_sum = if steps.is_empty() {
+                    control_sum
+                } else {
+                    compile_tab_lazy(&source, &[], &self.paths.temp_dir)
+                        .ok()
+                        .and_then(|base_lf| {
+                            compute_control_totals(base_lf, default_ctrl.as_deref()).ok()
+                        })
+                        .and_then(|(_, s)| s)
+                };
+
                 self.tabs.push(TabState {
                     title,
                     source,
                     steps,
+                    col_formats,
                     total_rows,
                     control_col: default_ctrl,
                     control_sum,
-                    baseline_control_sum: control_sum,
+                    baseline_control_sum: baseline_sum,
                     viewport_offset: 0,
                     viewport_limit: 100,
                     cached_slice: slice,
@@ -591,7 +635,20 @@ impl MicroParquetApp {
         if let Some(second) = cols.get(1) {
             self.chart_y_col = second.clone();
         }
-        self.col_mgr_list = cols.iter().map(|c| (c.clone(), true)).collect();
+        self.col_mgr_list = cols
+            .iter()
+            .map(|c| {
+                let spec = tab
+                    .col_formats
+                    .get(c)
+                    .copied()
+                    .unwrap_or(ColumnFormatSpec {
+                        fmt_type: MetricFormatType::Auto,
+                        decimals: self.global_decimals,
+                    });
+                (c.clone(), true, spec)
+            })
+            .collect();
         self.pivot_group_cols = cols.iter().map(|c| (c.clone(), false)).collect();
         self.multi_export_checks = vec![true; self.tabs.len()];
     }
@@ -601,21 +658,36 @@ impl MicroParquetApp {
             return;
         };
 
+        // Inherit per-metric format specifications if this is a Pivot step
+        let mut updated_formats = curr.col_formats.clone();
+        if let TransformStep::GroupByPivot { ref aggs, .. } = step {
+            for a in aggs {
+                updated_formats.insert(a.alias.clone(), a.format_spec);
+            }
+        }
+
         if open_new_tab {
             let mut new_steps = curr.steps.clone();
             let title = format!("{} - {}", curr.title, step.short_label());
             new_steps.push(step);
-            self.create_tab_from_source(title, curr.source, new_steps);
+            self.create_tab_from_source(title, curr.source, new_steps, updated_formats);
         } else {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.steps.push(step);
+                tab.col_formats = updated_formats;
                 tab.viewport_offset = 0;
             }
-            self.refresh_active_tab();
+            self.refresh_active_tab(false);
         }
     }
 
     fn guess_balance_column(df: &DataFrame) -> Option<String> {
+        // Prefer exact "balance" column before partial matches
+        for col in df.get_columns() {
+            if col.name().eq_ignore_ascii_case("balance") {
+                return Some(col.name().to_string());
+            }
+        }
         for col in df.get_columns() {
             let lower = col.name().to_lowercase();
             if lower.contains("balance") || lower.contains("amount") || lower.contains("delta") {
@@ -625,7 +697,7 @@ impl MicroParquetApp {
         None
     }
 
-    fn refresh_active_tab(&mut self) {
+    fn refresh_active_tab(&mut self, recalculate_baseline: bool) {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
@@ -639,6 +711,16 @@ impl MicroParquetApp {
                 if let Ok((rows, sum)) = compute_control_totals(lf, tab.control_col.as_deref()) {
                     tab.total_rows = rows;
                     tab.control_sum = sum;
+                }
+                if recalculate_baseline {
+                    // Recompute baseline from the base source (0 steps) for the newly selected control column
+                    let base_sum = compile_tab_lazy(&tab.source, &[], &self.paths.temp_dir)
+                        .ok()
+                        .and_then(|base_lf| {
+                            compute_control_totals(base_lf, tab.control_col.as_deref()).ok()
+                        })
+                        .and_then(|(_, s)| s);
+                    tab.baseline_control_sum = base_sum;
                 }
                 self.init_tool_defaults_from_active_tab();
             }
@@ -670,6 +752,7 @@ impl MicroParquetApp {
                         format!("Macro: {}", recipe.name),
                         curr.source,
                         recipe.steps,
+                        curr.col_formats,
                     );
                 } else {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -678,7 +761,7 @@ impl MicroParquetApp {
                             tab.control_col = recipe.control_column;
                         }
                     }
-                    self.refresh_active_tab();
+                    self.refresh_active_tab(true);
                 }
                 self.status_message = format!("Loaded and executed macro '{}'.", recipe.name);
             }
@@ -717,7 +800,7 @@ impl MicroParquetApp {
 
 impl eframe::App for MicroParquetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1. Top Menu Bar
+        // 1. Compact 720p-Friendly Top Menu Bar with Sub-Menus
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("📂 File", |ui| {
@@ -730,32 +813,111 @@ impl eframe::App for MicroParquetApp {
                         self.initiate_file_open(true);
                     }
                     ui.separator();
+                    if ui.button("🔄 Recursive Batch Folder Mirror...").clicked() {
+                        ui.close_menu();
+                        self.batch_modal.open = true;
+                    }
+                    ui.separator();
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
 
-                if ui.button("🔄 Batch Folder Mirror").clicked() {
-                    self.batch_modal.open = true;
-                }
+                // NEW: View & Display Menu (Accommodates 720p screens cleanly)
+                ui.menu_button("👁 View", |ui| {
+                    ui.checkbox(
+                        &mut self.show_steps_sidebar,
+                        "📋 Show Applied Steps (Macro) Sidebar",
+                    );
+                    ui.checkbox(&mut self.show_sql_bar, "💻 Show SQL Scratchpad Bar");
+                    ui.checkbox(&mut self.show_chart_drawer, "📈 Show ALCO Visual Bar Chart");
+                    ui.separator();
 
-                ui.menu_button("🔗 Merge & SQL Join", |ui| {
-                    if ui
-                        .button("📚 Vertical Stack / Merge Multiple Files (Req #11)...")
-                        .clicked()
-                    {
+                    ui.menu_button("🔢 Default Monetary Scale", |ui| {
+                        for fmt in [
+                            NumberDisplayFormat::BdtCrore,
+                            NumberDisplayFormat::BdtLakh,
+                            NumberDisplayFormat::StandardCommas,
+                            NumberDisplayFormat::Raw,
+                        ] {
+                            ui.selectable_value(&mut self.num_format, fmt, fmt.label());
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Decimal Places:");
+                        if ui.small_button(" - ").clicked() && self.global_decimals > 0 {
+                            self.global_decimals -= 1;
+                        }
+                        ui.strong(format!("{}", self.global_decimals));
+                        if ui.small_button(" + ").clicked() && self.global_decimals < 6 {
+                            self.global_decimals += 1;
+                        }
+                    });
+
+                    ui.separator();
+                    let theme_label = if self.dark_mode {
+                        "☀ Switch to Daylight Light Theme"
+                    } else {
+                        "🌙 Switch to High-Contrast Dark Theme"
+                    };
+                    if ui.button(theme_label).clicked() {
+                        self.dark_mode = !self.dark_mode;
+                        Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.label("UI Scale:");
+                        if ui.small_button("🔍-").clicked() {
+                            self.ui_zoom = (self.ui_zoom - 0.10).clamp(0.80, 1.50);
+                            Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+                        }
+                        ui.strong(format!("{:.0}%", self.ui_zoom * 100.0));
+                        if ui.small_button("🔍+").clicked() {
+                            self.ui_zoom = (self.ui_zoom + 0.10).clamp(0.80, 1.50);
+                            Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+                        }
+                    });
+                });
+
+                ui.menu_button("🛠 Transform", |ui| {
+                    if ui.button("🔍 Filter / Delete Rows...").clicked() {
+                        ui.close_menu();
+                        self.init_tool_defaults_from_active_tab();
+                        self.active_tool = ActiveToolModal::FilterRows;
+                    }
+                    if ui.button("📐 Columns (Drop / Order / Rename / Format)...").clicked() {
+                        ui.close_menu();
+                        self.init_tool_defaults_from_active_tab();
+                        self.active_tool = ActiveToolModal::ManageColumns;
+                    }
+                    if ui.button("➕ Add Conditional Column (IF/ELSE)...").clicked() {
+                        ui.close_menu();
+                        self.active_tool = ActiveToolModal::ConditionalCol;
+                    }
+                    if ui.button("🧮 Add Calculated Math Column...").clicked() {
+                        ui.close_menu();
+                        self.active_tool = ActiveToolModal::MathFormula;
+                    }
+                    ui.separator();
+                    if ui.button("📊 Pivot & WAVG Aggregation Builder...").clicked() {
+                        ui.close_menu();
+                        self.init_tool_defaults_from_active_tab();
+                        self.active_tool = ActiveToolModal::GroupByPivot;
+                    }
+                });
+
+                ui.menu_button("🔗 Merge & Join", |ui| {
+                    if ui.button("📚 Vertical Stack / Merge Multiple Files...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::StackFiles;
                     }
-                    if ui
-                        .button("🔗 SQL Join Two Open Tabs (Req #12)...")
-                        .clicked()
-                    {
+                    if ui.button("🔗 SQL Join Two Open Tabs...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::JoinTabs;
                     }
                     if ui
-                        .button("⚖ Two-Period Variance & CL Migration Reconciler (A6/C2)...")
+                        .button("⚖ Two-Period Variance & CL Migration Reconciler...")
                         .clicked()
                     {
                         ui.close_menu();
@@ -763,143 +925,74 @@ impl eframe::App for MicroParquetApp {
                     }
                 });
 
-                ui.menu_button("🏦 Banking, ALM & Loans Suite", |ui| {
-                    ui.strong("Treasury & ALM (Liquidity / IRRBB):");
+                ui.menu_button("🏦 Banking & Loans", |ui| {
+                    ui.strong("Treasury & ALM:");
                     if ui
-                        .button("📅 Regulatory Maturity Bucketer (BB SLP / LCR) (A5)...")
+                        .button("📅 Maturity Bucketer (SLP / LCR / Custom)...")
                         .clicked()
                     {
                         ui.close_menu();
+                        self.alm_presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
                         self.active_tool = ActiveToolModal::MaturityBucket;
                     }
-                    if ui
-                        .button("📈 Interest Rate Shock / ΔNII Simulator (B1)...")
-                        .clicked()
-                    {
+                    if ui.button("📈 Interest Rate Shock / ΔNII Simulator...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::RateShockSim;
                     }
-                    if ui
-                        .button("⏱ Duration, DV01 & ΔEVE Sensitivity Engine (IRRBB)...")
-                        .clicked()
-                    {
+                    if ui.button("⏱ Duration, DV01 & ΔEVE Engine...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::DurationAnalysis;
                     }
-                    if ui
-                        .button("🧮 Automated FTP Yield Curve Mapper (B2)...")
-                        .clicked()
-                    {
+                    if ui.button("🧮 FTP Yield Curve Mapper...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::FtpCurveMap;
                     }
                     ui.separator();
-                    ui.strong("Loans & Advances (Credit / CL Suite):");
-                    if ui
-                        .button("🏦 Bangladesh Bank CL Provision & BFP Calculator (C1)...")
-                        .clicked()
-                    {
+                    ui.strong("Loans & Credit Risk:");
+                    if ui.button("🏦 BB CL Provision & BFP Calculator...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::LoanProvision;
                     }
                     if ui
-                        .button("💳 Loan Limit Utilization, Over-Limit & Undrawn CCF (C5)...")
+                        .button("💳 Limit Utilization, Over-Limit & Undrawn CCF...")
                         .clicked()
                     {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::LoanLimitUtil;
                     }
                     ui.separator();
-                    ui.strong("Hygiene & Counterparty Grouping:");
-                    if ui
-                        .button("🛡 Core Banking Dirty Data & Ghost Auditor (B3)...")
-                        .clicked()
-                    {
+                    if ui.button("🛡 Core Banking Dirty Data & Ghost Auditor...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::BankingAudit;
                     }
-                    if ui
-                        .button("🏢 Counterparty Entity Name Normalizer (B8)...")
-                        .clicked()
-                    {
+                    if ui.button("🏢 Counterparty Entity Name Normalizer...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::NormalizeEntity;
                     }
                 });
 
-                ui.menu_button("⚙ Macros & Python", |ui| {
-                    if ui
-                        .button("💾 Save Active Tab Steps as Macro (.mpq.json)...")
-                        .clicked()
-                    {
+                ui.menu_button("⚙ Macros", |ui| {
+                    if ui.button("💾 Save Active Tab as Macro (.mpq.json)...").clicked() {
                         ui.close_menu();
                         self.active_tool = ActiveToolModal::SaveMacro;
                     }
-                    if ui
-                        .button("▶ Load & Replay Macro on Current Tab...")
-                        .clicked()
-                    {
+                    if ui.button("▶ Load & Replay Macro on Current Tab...").clicked() {
                         ui.close_menu();
                         self.load_and_apply_macro_interactive(false);
                     }
-                    if ui
-                        .button("➕ Load & Replay Macro into New View Tab...")
-                        .clicked()
-                    {
+                    if ui.button("➕ Load & Replay Macro into New Tab...").clicked() {
                         ui.close_menu();
                         self.load_and_apply_macro_interactive(true);
                     }
                     ui.separator();
-                    if ui
-                        .button("🐍 View / Export Pipeline as Python Polars Code (.py)...")
-                        .clicked()
-                    {
+                    if ui.button("🐍 Export Pipeline as Python Polars (.py)...").clicked() {
                         ui.close_menu();
                         self.prepare_python_preview_for_active_tab();
                     }
                 });
 
-                ui.menu_button("📤 Export & Reports", |ui| {
-                    if ui.button("Export Active Tab to Parquet (.parquet)...").clicked() {
-                        ui.close_menu();
-                        self.export_active_tab_parquet();
-                    }
-                    if ui.button("Export Active Tab to CSV (.csv)...").clicked() {
-                        ui.close_menu();
-                        self.export_active_tab_csv();
-                    }
-                    ui.separator();
-                    if ui
-                        .button("📊 Export Multiple Tabs to Single Excel Workbook (.xlsx)...")
-                        .clicked()
-                    {
-                        ui.close_menu();
-                        self.multi_export_checks = vec![true; self.tabs.len()];
-                        self.active_tool = ActiveToolModal::MultiTabExport;
-                    }
-                    if ui
-                        .button("📄 Export Multiple Tabs to Single Landscape PDF Report (.pdf)...")
-                        .clicked()
-                    {
-                        ui.close_menu();
-                        self.multi_export_checks = vec![true; self.tabs.len()];
-                        self.active_tool = ActiveToolModal::MultiTabExport;
-                    }
-                    ui.separator();
-                    if ui
-                        .button("🗂 Smart Partitioned Split Export by Column (Brancd/Glcode)...")
-                        .clicked()
-                    {
-                        ui.close_menu();
-                        self.init_tool_defaults_from_active_tab();
-                        self.active_tool = ActiveToolModal::SplitByColumn;
-                    }
-                });
-
-                ui.separator();
-                egui::ComboBox::from_id_salt("parquet_dialect_combo")
-                    .selected_text(self.parquet_dialect.label())
-                    .show_ui(ui, |ui| {
+                ui.menu_button("📤 Export", |ui| {
+                    ui.menu_button("⚙ Parquet Compression Mode", |ui| {
                         ui.selectable_value(
                             &mut self.parquet_dialect,
                             ParquetDialect::ArchiveZstd,
@@ -911,44 +1004,39 @@ impl eframe::App for MicroParquetApp {
                             ParquetDialect::PowerBiSnappy.label(),
                         );
                     });
-
-                egui::ComboBox::from_id_salt("num_fmt_combo")
-                    .selected_text(self.num_format.label())
-                    .show_ui(ui, |ui| {
-                        for fmt in [
-                            NumberDisplayFormat::BdtCrore,
-                            NumberDisplayFormat::BdtLakh,
-                            NumberDisplayFormat::StandardCommas,
-                            NumberDisplayFormat::Raw,
-                        ] {
-                            ui.selectable_value(&mut self.num_format, fmt, fmt.label());
-                        }
-                    });
-                ui.separator();
-                let theme_label = if self.dark_mode { "☀ Light" } else { "🌙 Dark" };
-                if ui
-                    .button(theme_label)
-                    .on_hover_text("Switch between High-Contrast Daylight and Dark Theme")
-                    .clicked()
-                {
-                    self.dark_mode = !self.dark_mode;
-                    Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
-
-                if ui.small_button("🔍-").on_hover_text("Zoom Out UI").clicked() {
-                    self.ui_zoom = (self.ui_zoom - 0.10).clamp(0.85, 1.60);
-                    Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
-                ui.label(format!("{:.0}%", self.ui_zoom * 100.0));
-                if ui.small_button("🔍+").on_hover_text("Zoom In UI").clicked() {
-                    self.ui_zoom = (self.ui_zoom + 0.10).clamp(0.85, 1.60);
-                    Self::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
+                    ui.separator();
+                    if ui.button("Export Active Tab to Parquet (.parquet)...").clicked() {
+                        ui.close_menu();
+                        self.export_active_tab_parquet();
+                    }
+                    if ui.button("Export Active Tab to CSV (.csv)...").clicked() {
+                        ui.close_menu();
+                        self.export_active_tab_csv();
+                    }
+                    ui.separator();
+                    if ui.button("📊 Multi-Tab Consolidated Excel (.xlsx)...").clicked() {
+                        ui.close_menu();
+                        self.multi_export_checks = vec![true; self.tabs.len()];
+                        self.active_tool = ActiveToolModal::MultiTabExport;
+                    }
+                    if ui.button("📄 Multi-Tab Consolidated PDF (.pdf)...").clicked() {
+                        ui.close_menu();
+                        self.multi_export_checks = vec![true; self.tabs.len()];
+                        self.active_tool = ActiveToolModal::MultiTabExport;
+                    }
+                    ui.separator();
+                    if ui.button("🗂 Partitioned Split Export by Column...").clicked() {
+                        ui.close_menu();
+                        self.init_tool_defaults_from_active_tab();
+                        self.active_tool = ActiveToolModal::SplitByColumn;
+                    }
+                });
             });
         });
 
         // 2. Bottom Pinned Control Total & Reconciliation Bar
         egui::TopBottomPanel::bottom("status_reconciliation_bar").show(ctx, |ui| {
+            let mut reset_baseline_clicked = false;
             ui.horizontal(|ui| {
                 if let Some(tab) = self.tabs.get(self.active_tab) {
                     ui.strong(format!(
@@ -972,8 +1060,15 @@ impl eframe::App for MicroParquetApp {
                             if diff.abs() > 0.01 {
                                 ui.colored_label(
                                     egui::Color32::from_rgb(210, 70, 0),
-                                    format!("⚠ Δ vs Source: {:+.2} Cr", diff / 10_000_000.0),
+                                    format!("Δ vs Source: {:+.2} Cr", diff / 10_000_000.0),
                                 );
+                                if ui
+                                    .small_button("🔄 Reset Baseline")
+                                    .on_hover_text("Pin current total as the new 0.00 Cr baseline")
+                                    .clicked()
+                                {
+                                    reset_baseline_clicked = true;
+                                }
                             }
                         }
                         ui.separator();
@@ -981,15 +1076,26 @@ impl eframe::App for MicroParquetApp {
                 }
                 ui.label(&self.status_message);
             });
+
+            if reset_baseline_clicked {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    tab.baseline_control_sum = tab.control_sum;
+                }
+            }
         });
 
-        // 3. Right Side Panel: Applied Pipeline Steps & Macro Controls
-        if !self.tabs.is_empty() {
+        // 3. Toggleable Right Side Panel: Applied Pipeline Steps (Hidden by default on 720p)
+        if !self.tabs.is_empty() && self.show_steps_sidebar {
             egui::SidePanel::right("applied_steps_sidebar")
                 .resizable(true)
-                .default_width(265.0)
+                .default_width(255.0)
                 .show(ctx, |ui| {
-                    ui.heading("📋 Applied Steps (Macro)");
+                    ui.horizontal(|ui| {
+                        ui.heading("📋 Applied Steps");
+                        if ui.small_button("✖ Hide").clicked() {
+                            self.show_steps_sidebar = false;
+                        }
+                    });
                     ui.horizontal(|ui| {
                         if ui.small_button("💾 Save .mpq").clicked() {
                             self.active_tool = ActiveToolModal::SaveMacro;
@@ -1030,12 +1136,12 @@ impl eframe::App for MicroParquetApp {
                         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                             tab.steps.remove(idx);
                         }
-                        self.refresh_active_tab();
+                        self.refresh_active_tab(false);
                     } else if clear_all {
                         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                             tab.steps.clear();
                         }
-                        self.refresh_active_tab();
+                        self.refresh_active_tab(false);
                     }
                 });
         }
@@ -1044,11 +1150,11 @@ impl eframe::App for MicroParquetApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.tabs.is_empty() {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(100.0);
+                    ui.add_space(90.0);
                     ui.heading(
-                        "MicroParquet v1.1: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
+                        "MicroParquet v1.2: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
                     );
-                    ui.label("Out-of-Core Polars Engine • Multi-Tab Views • Duration & ΔEVE • BB CL Provisioning • Macros");
+                    ui.label("Out-of-Core Polars Engine • Multi-Tab Views • Custom Maturity Buckets • Per-Metric Formats");
                     ui.add_space(20.0);
                     if ui.button("📂 Open CSV or Parquet File...").clicked() {
                         self.initiate_file_open(false);
@@ -1110,24 +1216,24 @@ impl eframe::App for MicroParquetApp {
 
             // Quick Transformation & Clipboard Action Bar
             ui.horizontal_wrapped(|ui| {
-                ui.strong("Transform:");
-                if ui.button("🔍 Filter/Delete").clicked() {
+                if ui.button("🔍 Filter").clicked() {
                     self.init_tool_defaults_from_active_tab();
                     self.active_tool = ActiveToolModal::FilterRows;
                 }
-                if ui.button("📐 Columns").clicked() {
+                if ui.button("📐 Columns/Fmt").clicked() {
                     self.init_tool_defaults_from_active_tab();
                     self.active_tool = ActiveToolModal::ManageColumns;
                 }
                 if ui.button("➕ Cond Col").clicked() {
                     self.active_tool = ActiveToolModal::ConditionalCol;
                 }
-                if ui.button("🧮 Math Col").clicked() {
-                    self.active_tool = ActiveToolModal::MathFormula;
-                }
-                if ui.button("📊 Pivot / WAVG").clicked() {
+                if ui.button("📊 Pivot/WAVG").clicked() {
                     self.init_tool_defaults_from_active_tab();
                     self.active_tool = ActiveToolModal::GroupByPivot;
+                }
+                if ui.button("📅 Buckets").clicked() {
+                    self.alm_presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
+                    self.active_tool = ActiveToolModal::MaturityBucket;
                 }
                 if ui.button("⏱ Duration").clicked() {
                     self.active_tool = ActiveToolModal::DurationAnalysis;
@@ -1135,42 +1241,31 @@ impl eframe::App for MicroParquetApp {
                 if ui.button("🏦 CL Prov").clicked() {
                     self.active_tool = ActiveToolModal::LoanProvision;
                 }
+                if ui
+                    .selectable_label(self.show_steps_sidebar, "📋 Steps")
+                    .on_hover_text("Toggle Applied Steps (Macro) Sidebar")
+                    .clicked()
+                {
+                    self.show_steps_sidebar = !self.show_steps_sidebar;
+                }
                 if ui.selectable_label(self.show_sql_bar, "💻 SQL").clicked() {
                     self.show_sql_bar = !self.show_sql_bar;
                 }
                 if ui
-                    .selectable_label(self.show_chart_drawer, "📈 ALCO Chart")
-                    .clicked()
-                {
-                    self.init_tool_defaults_from_active_tab();
-                    self.show_chart_drawer = !self.show_chart_drawer;
-                }
-                ui.separator();
-                if ui
-                    .button("📋 Copy for Slide/Excel")
-                    .on_hover_text(
-                        "Copies visible slice/pivot as Tab-Delimited table in current Crore/Lakh format",
-                    )
+                    .button("📋 Copy Table")
+                    .on_hover_text("Copies visible table formatted for Excel / PowerPoint")
                     .clicked()
                 {
                     if let Some(tab) = self.tabs.get(self.active_tab) {
-                        let txt =
-                            format_df_for_clipboard(&tab.cached_slice, self.num_format, false);
+                        let txt = format_df_for_clipboard(
+                            &tab.cached_slice,
+                            &tab.col_formats,
+                            self.num_format,
+                            self.global_decimals,
+                            false,
+                        );
                         ctx.copy_text(txt);
-                        self.status_message =
-                            "Copied formatted table to clipboard (ready to paste into PowerPoint/Excel)."
-                                .to_string();
-                    }
-                }
-                if ui
-                    .button("📋 Copy Markdown")
-                    .on_hover_text("Copies visible slice/pivot as a Markdown table")
-                    .clicked()
-                {
-                    if let Some(tab) = self.tabs.get(self.active_tab) {
-                        let txt = format_df_for_clipboard(&tab.cached_slice, self.num_format, true);
-                        ctx.copy_text(txt);
-                        self.status_message = "Copied Markdown table to clipboard.".to_string();
+                        self.status_message = "Copied formatted table to clipboard.".to_string();
                     }
                 }
             });
@@ -1183,7 +1278,7 @@ impl eframe::App for MicroParquetApp {
                         ui.strong("SQL (`self`):");
                         ui.add(
                             egui::TextEdit::singleline(&mut tab.sql_scratchpad)
-                                .desired_width(600.0),
+                                .desired_width(520.0),
                         );
                         if ui.button("▶ Apply Here").clicked() {
                             sql_to_run = Some((tab.sql_scratchpad.clone(), false));
@@ -1234,10 +1329,11 @@ impl eframe::App for MicroParquetApp {
             ui.separator();
 
             let mut needs_refresh = false;
+            let mut ctrl_col_changed = false;
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 ui.horizontal(|ui| {
                     ui.label(format!(
-                        "Showing rows {} – {} of {}",
+                        "Rows {} – {} of {}",
                         tab.viewport_offset + 1,
                         (tab.viewport_offset + tab.cached_slice.height()).min(tab.total_rows),
                         tab.total_rows
@@ -1279,17 +1375,25 @@ impl eframe::App for MicroParquetApp {
                                     .clicked()
                                 {
                                     needs_refresh = true;
+                                    ctrl_col_changed = true;
                                 }
                             }
                         });
                 });
 
                 ui.separator();
-                Self::render_data_grid(ui, &tab.cached_slice, tab.viewport_offset, self.num_format);
+                Self::render_data_grid(
+                    ui,
+                    &tab.cached_slice,
+                    &tab.col_formats,
+                    tab.viewport_offset,
+                    self.num_format,
+                    self.global_decimals,
+                );
             }
 
             if needs_refresh {
-                self.refresh_active_tab();
+                self.refresh_active_tab(ctrl_col_changed);
             }
         });
 
@@ -1338,8 +1442,10 @@ impl MicroParquetApp {
     fn render_data_grid(
         ui: &mut egui::Ui,
         df: &DataFrame,
+        col_formats: &HashMap<String, ColumnFormatSpec>,
         row_offset: usize,
         num_format: NumberDisplayFormat,
+        global_decimals: usize,
     ) {
         let cols = df.get_columns();
         let num_rows = df.height();
@@ -1374,10 +1480,24 @@ impl MicroParquetApp {
                         });
                         for c in cols {
                             row.col(|ui| {
+                                let cname = c.name().as_str();
+                                let spec = col_formats.get(cname);
                                 let cell_text = match c.get(r_idx) {
                                     Ok(AnyValue::Null) => "null".to_string(),
-                                    Ok(AnyValue::Float64(v)) => num_format.format_f64(v),
-                                    Ok(AnyValue::Float32(v)) => num_format.format_f64(v as f64),
+                                    Ok(AnyValue::Float64(v)) => format_metric_value(
+                                        v,
+                                        cname,
+                                        spec,
+                                        num_format,
+                                        global_decimals,
+                                    ),
+                                    Ok(AnyValue::Float32(v)) => format_metric_value(
+                                        v as f64,
+                                        cname,
+                                        spec,
+                                        num_format,
+                                        global_decimals,
+                                    ),
                                     Ok(AnyValue::String(s)) => s.to_string(),
                                     Ok(other) => format!("{}", other),
                                     Err(_) => "".to_string(),
@@ -1406,7 +1526,7 @@ impl MicroParquetApp {
 
         match self.active_tool {
             ActiveToolModal::FilterRows => {
-                egui::Window::new("🔍 Filter Rows / Delete Filtered Rows (Req #6)")
+                egui::Window::new("🔍 Filter Rows / Delete Filtered Rows")
                     .collapsible(false)
                     .show(ctx, |ui| {
                         ui.horizontal(|ui| {
@@ -1483,12 +1603,13 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::ManageColumns => {
-                egui::Window::new("📐 Manage Columns: Drop, Rearrange & Rename (Req #6)")
+                egui::Window::new("📐 Columns: Drop, Order, Rename & Number Format (v1.2)")
                     .collapsible(false)
+                    .default_width(680.0)
                     .show(ctx, |ui| {
-                        ui.strong("1. Check Columns to Keep & Use ⬆/⬇ to Rearrange Order:");
+                        ui.strong("1. Keep/Drop, Reorder & Set Per-Column Display Format:");
                         egui::ScrollArea::vertical()
-                            .max_height(220.0)
+                            .max_height(240.0)
                             .show(ui, |ui| {
                                 let len = self.col_mgr_list.len();
                                 let mut swap_pair: Option<(usize, usize)> = None;
@@ -1500,10 +1621,25 @@ impl MicroParquetApp {
                                         if ui.small_button("⬇").clicked() && i + 1 < len {
                                             swap_pair = Some((i, i + 1));
                                         }
-                                        // Fixed E0502 borrow checker error by destructuring tuple
-                                        let (ref col_name, ref mut is_checked) =
+                                        let (ref col_name, ref mut is_checked, ref mut spec) =
                                             self.col_mgr_list[i];
                                         ui.checkbox(is_checked, col_name.as_str());
+
+                                        egui::ComboBox::from_id_salt(format!("col_fmt_{}", i))
+                                            .selected_text(spec.fmt_type.label())
+                                            .show_ui(ui, |ui| {
+                                                for ft in MetricFormatType::all() {
+                                                    ui.selectable_value(
+                                                        &mut spec.fmt_type,
+                                                        *ft,
+                                                        ft.label(),
+                                                    );
+                                                }
+                                            });
+                                        ui.label("Dec:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut spec.decimals).range(0..=6),
+                                        );
                                     });
                                 }
                                 if let Some((a, b)) = swap_pair {
@@ -1511,12 +1647,17 @@ impl MicroParquetApp {
                                 }
                             });
 
-                        if ui.button("✅ Apply Column Selection & Order").clicked() {
+                        if ui.button("✅ Apply Column Selection, Order & Formats").clicked() {
+                            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                                for (cname, _, spec) in &self.col_mgr_list {
+                                    tab.col_formats.insert(cname.clone(), *spec);
+                                }
+                            }
                             let kept: Vec<String> = self
                                 .col_mgr_list
                                 .iter()
-                                .filter(|(_, k)| *k)
-                                .map(|(n, _)| n.clone())
+                                .filter(|(_, k, _)| *k)
+                                .map(|(n, _, _)| n.clone())
                                 .collect();
                             step_to_apply = Some((
                                 TransformStep::SelectAndReorderColumns { cols: kept },
@@ -1697,7 +1838,7 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::NormalizeEntity => {
-                egui::Window::new("🏢 Counterparty Entity Name Normalizer (Feature B8)")
+                egui::Window::new("🏢 Counterparty Entity Name Normalizer")
                     .collapsible(false)
                     .show(ctx, |ui| {
                         ui.label(
@@ -1742,14 +1883,12 @@ impl MicroParquetApp {
 
             ActiveToolModal::GroupByPivot => {
                 egui::Window::new(
-                    "📊 Pivot & Aggregation Builder (with Weighted Average WAVG & % of Total)",
+                    "📊 Pivot & WAVG Builder (with Per-Metric Format & Decimal Precision)",
                 )
                 .collapsible(false)
-                .default_width(680.0)
+                .default_width(720.0)
                 .show(ctx, |ui| {
-                    ui.strong(
-                        "1. Select Row Grouping Columns (e.g. Glcode, Sector, SLP_Maturity_Bucket):",
-                    );
+                    ui.strong("1. Select Row Grouping Columns:");
                     ui.horizontal_wrapped(|ui| {
                         for (cname, checked) in &mut self.pivot_group_cols {
                             ui.checkbox(checked, cname.as_str());
@@ -1757,9 +1896,7 @@ impl MicroParquetApp {
                     });
 
                     ui.separator();
-                    ui.strong(
-                        "2. Add Value Aggregations (Sum, Count, Weighted Average, % of Total):",
-                    );
+                    ui.strong("2. Configure Value Metric & Display Format (Crore vs % vs Decimals):");
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_id_salt("piv_func")
                             .selected_text(self.pivot_new_func.label())
@@ -1768,7 +1905,7 @@ impl MicroParquetApp {
                                     ui.selectable_value(&mut self.pivot_new_func, *f, f.label());
                                 }
                             });
-                        ui.label("Target Col:");
+                        ui.label("Target:");
                         egui::ComboBox::from_id_salt("piv_tgt")
                             .selected_text(&self.pivot_new_target)
                             .show_ui(ui, |ui| {
@@ -1777,7 +1914,7 @@ impl MicroParquetApp {
                                 }
                             });
                         if self.pivot_new_func == AggFunc::WeightedAvg {
-                            ui.label("Weight Col:");
+                            ui.label("Weight:");
                             egui::ComboBox::from_id_salt("piv_wgt")
                                 .selected_text(&self.pivot_new_weight)
                                 .show_ui(ui, |ui| {
@@ -1792,9 +1929,28 @@ impl MicroParquetApp {
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Output Alias:");
-                        ui.text_edit_singleline(&mut self.pivot_new_alias);
-                        if ui.button("➕ Add Metric to Pivot").clicked() {
+                        ui.label("Alias:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.pivot_new_alias)
+                                .desired_width(130.0),
+                        );
+                        ui.label("Format:");
+                        egui::ComboBox::from_id_salt("piv_fmt")
+                            .selected_text(self.pivot_new_fmt.fmt_type.label())
+                            .show_ui(ui, |ui| {
+                                for ft in MetricFormatType::all() {
+                                    ui.selectable_value(
+                                        &mut self.pivot_new_fmt.fmt_type,
+                                        *ft,
+                                        ft.label(),
+                                    );
+                                }
+                            });
+                        ui.label("Decimals:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.pivot_new_fmt.decimals).range(0..=6),
+                        );
+                        if ui.button("➕ Add Metric").clicked() {
                             self.pivot_aggs.push(AggSpec {
                                 target_col: self.pivot_new_target.clone(),
                                 func: self.pivot_new_func,
@@ -1804,12 +1960,20 @@ impl MicroParquetApp {
                                     None
                                 },
                                 alias: self.pivot_new_alias.clone(),
+                                format_spec: self.pivot_new_fmt,
                             });
                         }
                     });
 
                     for a in &self.pivot_aggs {
-                        ui.label(format!("  • {}: {:?}({})", a.alias, a.func, a.target_col));
+                        ui.label(format!(
+                            "  • {}: {:?}({}) — Format: {} ({} dec)",
+                            a.alias,
+                            a.func,
+                            a.target_col,
+                            a.format_spec.fmt_type.label(),
+                            a.format_spec.decimals
+                        ));
                     }
                     if !self.pivot_aggs.is_empty() && ui.small_button("Clear Metrics").clicked() {
                         self.pivot_aggs.clear();
@@ -1856,8 +2020,9 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::MaturityBucket => {
-                egui::Window::new("📅 Regulatory Maturity Bucketer (Feature A5)")
+                egui::Window::new("📅 Maturity Bucketer & Custom Preset Creator (v1.2)")
                     .collapsible(false)
+                    .default_width(680.0)
                     .show(ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Maturity Date Column:");
@@ -1868,31 +2033,132 @@ impl MicroParquetApp {
                                         ui.selectable_value(&mut self.alm_mat_col, c.clone(), c);
                                     }
                                 });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Reporting / Cutoff Date (YYYY-MM-DD):");
+                            ui.label("Cutoff Date (YYYY-MM-DD):");
                             ui.text_edit_singleline(&mut self.alm_cutoff);
                         });
+
+                        let selected_name = self
+                            .alm_presets
+                            .get(self.alm_selected_preset_idx)
+                            .map(|p| p.name.clone())
+                            .unwrap_or_else(|| "Select Preset".to_string());
+
                         ui.horizontal(|ui| {
-                            ui.label("Regulatory Preset:");
-                            egui::ComboBox::from_id_salt("alm_preset")
-                                .selected_text(self.alm_preset.label())
+                            ui.label("Bucketing Preset:");
+                            egui::ComboBox::from_id_salt("alm_preset_combo")
+                                .selected_text(&selected_name)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.alm_preset,
-                                        BucketPreset::BangladeshBankSlp,
-                                        BucketPreset::BangladeshBankSlp.label(),
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.alm_preset,
-                                        BucketPreset::BaselLcrNsfr,
-                                        BucketPreset::BaselLcrNsfr.label(),
+                                    for (idx, preset) in self.alm_presets.iter().enumerate() {
+                                        ui.selectable_value(
+                                            &mut self.alm_selected_preset_idx,
+                                            idx,
+                                            &preset.name,
+                                        );
+                                    }
+                                });
+
+                            if ui
+                                .button(if self.alm_show_custom_creator {
+                                    "▲ Hide Custom Creator"
+                                } else {
+                                    "➕ Create Custom Preset (e.g. c-m-b-1)"
+                                })
+                                .clicked()
+                            {
+                                self.alm_show_custom_creator = !self.alm_show_custom_creator;
+                            }
+                        });
+
+                        // Custom Maturity Bucket Preset Creator Drawer (v1.2)
+                        if self.alm_show_custom_creator {
+                            ui.separator();
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.strong("🛠 Custom Maturity Bucket Preset Creator");
+                                ui.horizontal(|ui| {
+                                    ui.label("Custom Preset Name:");
+                                    ui.text_edit_singleline(&mut self.custom_bucket_draft.name);
+                                });
+
+                                let mut remove_rule = None;
+                                for (r_idx, rule) in
+                                    self.custom_bucket_draft.rules.iter_mut().enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Up to Days:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut rule.max_days)
+                                                .range(1..=36500),
+                                        );
+                                        ui.label("Bucket Label:");
+                                        ui.text_edit_singleline(&mut rule.label);
+                                        if ui.small_button("✖").clicked() {
+                                            remove_rule = Some(r_idx);
+                                        }
+                                    });
+                                }
+                                if let Some(ri) = remove_rule {
+                                    if self.custom_bucket_draft.rules.len() > 1 {
+                                        self.custom_bucket_draft.rules.remove(ri);
+                                    }
+                                }
+                                if ui.small_button("➕ Add Day Threshold Row").clicked() {
+                                    let next_days = self
+                                        .custom_bucket_draft
+                                        .rules
+                                        .last()
+                                        .map(|r| r.max_days + 30)
+                                        .unwrap_or(30);
+                                    self.custom_bucket_draft.rules.push(BucketRuleItem {
+                                        max_days: next_days,
+                                        label: format!("Up to {} Days", next_days),
+                                    });
+                                }
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Above Max Days Label:");
+                                    ui.text_edit_singleline(
+                                        &mut self.custom_bucket_draft.overflow_label,
                                     );
                                 });
-                        });
+                                ui.horizontal(|ui| {
+                                    ui.label("Overdue (<0 Days) Label:");
+                                    ui.text_edit_singleline(
+                                        &mut self.custom_bucket_draft.overdue_label,
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Null Matdat (Sight) Label:");
+                                    ui.text_edit_singleline(
+                                        &mut self.custom_bucket_draft.null_sight_label,
+                                    );
+                                });
+
+                                if ui.button("💾 Save Custom Preset to Dropdown").clicked()
+                                    && !self.custom_bucket_draft.name.trim().is_empty()
+                                {
+                                    if let Ok(_) = CustomBucketDef::save_custom_preset(
+                                        &self.paths.buckets_file,
+                                        self.custom_bucket_draft.clone(),
+                                    ) {
+                                        self.alm_presets = CustomBucketDef::load_all_presets(
+                                            &self.paths.buckets_file,
+                                        );
+                                        self.alm_selected_preset_idx =
+                                            self.alm_presets.len().saturating_sub(1);
+                                        self.alm_show_custom_creator = false;
+                                        self.status_message = format!(
+                                            "Saved custom bucket preset '{}'.",
+                                            self.custom_bucket_draft.name
+                                        );
+                                    }
+                                }
+                            });
+                            ui.separator();
+                        }
+
                         ui.checkbox(
                             &mut self.alm_null_sight,
-                            "Treat Null Maturity Dates (e.g. Current/Savings C01) as Sight/Overnight",
+                            "Treat Null Maturity Dates (e.g. Current/Savings) as Sight/Overnight",
                         );
                         ui.horizontal(|ui| {
                             ui.label("Output Bucket Column Name:");
@@ -1901,13 +2167,147 @@ impl MicroParquetApp {
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Generate Maturity Buckets").clicked() {
+                                if let Some(chosen_def) =
+                                    self.alm_presets.get(self.alm_selected_preset_idx).cloned()
+                                {
+                                    step_to_apply = Some((
+                                        TransformStep::MaturityBucket {
+                                            mat_col: self.alm_mat_col.clone(),
+                                            cutoff_date: self.alm_cutoff.clone(),
+                                            bucket_def: chosen_def,
+                                            null_as_sight: self.alm_null_sight,
+                                            new_col: self.alm_new_col.clone(),
+                                        },
+                                        false,
+                                    ));
+                                }
+                                close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close_modal = true;
+                            }
+                        });
+                    });
+            }
+
+            ActiveToolModal::RateShockSim => {
+                egui::Window::new("📈 Interest Rate Shock / ΔNII Sensitivity Simulator")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
+                        ui.horizontal(|ui| {
+                            ui.label("Balance Col:");
+                            egui::ComboBox::from_id_salt("shk_bal")
+                                .selected_text(&self.shock_bal_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.shock_bal_col, c.clone(), c);
+                                    }
+                                });
+                            ui.label("Int Rate Col:");
+                            egui::ComboBox::from_id_salt("shk_rt")
+                                .selected_text(&self.shock_rate_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.shock_rate_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Maturity Date Col:");
+                            egui::ComboBox::from_id_salt("shk_mat")
+                                .selected_text(&self.shock_mat_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.shock_mat_col, c.clone(), c);
+                                    }
+                                });
+                            ui.label("Cutoff Date (YYYY-MM-DD):");
+                            ui.text_edit_singleline(&mut self.alm_cutoff);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
+                            ui.add(egui::DragValue::new(&mut self.shock_bps).speed(5.0));
+                        });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("✅ Run Rate Shock Simulation").clicked() {
                                 step_to_apply = Some((
-                                    TransformStep::MaturityBucket {
-                                        mat_col: self.alm_mat_col.clone(),
+                                    TransformStep::RateShockSim {
+                                        bal_col: self.shock_bal_col.clone(),
+                                        rate_col: self.shock_rate_col.clone(),
+                                        mat_col: self.shock_mat_col.clone(),
                                         cutoff_date: self.alm_cutoff.clone(),
-                                        preset: self.alm_preset,
-                                        null_as_sight: self.alm_null_sight,
-                                        new_col: self.alm_new_col.clone(),
+                                        shock_bps: self.shock_bps,
+                                    },
+                                    true,
+                                ));
+                                close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close_modal = true;
+                            }
+                        });
+                    });
+            }
+
+            ActiveToolModal::DurationAnalysis => {
+                egui::Window::new("⏱ IRRBB Duration, DV01 & ΔEVE Sensitivity Engine")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.label("Computes Residual Years (T), Macaulay Duration, Modified Duration, DV01, and ΔEVE.");
+                        ui.horizontal(|ui| {
+                            ui.label("Balance Col:");
+                            egui::ComboBox::from_id_salt("dur_bal")
+                                .selected_text(&self.dur_bal_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.dur_bal_col, c.clone(), c);
+                                    }
+                                });
+                            ui.label("Int Rate / Yield Col (%):");
+                            egui::ComboBox::from_id_salt("dur_rt")
+                                .selected_text(&self.dur_rate_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.dur_rate_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Maturity Date Col:");
+                            egui::ComboBox::from_id_salt("dur_mat")
+                                .selected_text(&self.dur_mat_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.dur_mat_col, c.clone(), c);
+                                    }
+                                });
+                            ui.label("Cutoff Date (YYYY-MM-DD):");
+                            ui.text_edit_singleline(&mut self.alm_cutoff);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Compounding Frequency per Year (1=Ann, 2=Semi, 4=Qtr, 12=Mo):");
+                            ui.add(egui::DragValue::new(&mut self.dur_freq).range(1..=12));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Parallel Rate Shock for ΔEVE (bps):");
+                            ui.add(egui::DragValue::new(&mut self.dur_shock_bps).speed(10.0));
+                            ui.label("Null Matdat Tenor (Yrs):");
+                            ui.add(egui::DragValue::new(&mut self.dur_sight_yrs).speed(0.05));
+                        });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("✅ Compute Duration & ΔEVE Columns").clicked() {
+                                step_to_apply = Some((
+                                    TransformStep::DurationAnalysis {
+                                        bal_col: self.dur_bal_col.clone(),
+                                        rate_col: self.dur_rate_col.clone(),
+                                        mat_col: self.dur_mat_col.clone(),
+                                        cutoff_date: self.alm_cutoff.clone(),
+                                        compounding_freq: self.dur_freq,
+                                        shock_bps: self.dur_shock_bps,
+                                        default_sight_years: self.dur_sight_yrs,
                                     },
                                     false,
                                 ));
@@ -1920,260 +2320,120 @@ impl MicroParquetApp {
                     });
             }
 
-            ActiveToolModal::RateShockSim => {
-                egui::Window::new(
-                    "📈 Interest Rate Shock / ΔNII Sensitivity Simulator (Feature B1)",
-                )
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
-                    ui.horizontal(|ui| {
-                        ui.label("Balance Col:");
-                        egui::ComboBox::from_id_salt("shk_bal")
-                            .selected_text(&self.shock_bal_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.shock_bal_col, c.clone(), c);
-                                }
-                            });
-                        ui.label("Int Rate Col:");
-                        egui::ComboBox::from_id_salt("shk_rt")
-                            .selected_text(&self.shock_rate_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.shock_rate_col, c.clone(), c);
-                                }
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Maturity Date Col:");
-                        egui::ComboBox::from_id_salt("shk_mat")
-                            .selected_text(&self.shock_mat_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.shock_mat_col, c.clone(), c);
-                                }
-                            });
-                        ui.label("Cutoff Date (YYYY-MM-DD):");
-                        ui.text_edit_singleline(&mut self.alm_cutoff);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
-                        ui.add(egui::DragValue::new(&mut self.shock_bps).speed(5.0));
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Run Rate Shock Simulation").clicked() {
-                            step_to_apply = Some((
-                                TransformStep::RateShockSim {
-                                    bal_col: self.shock_bal_col.clone(),
-                                    rate_col: self.shock_rate_col.clone(),
-                                    mat_col: self.shock_mat_col.clone(),
-                                    cutoff_date: self.alm_cutoff.clone(),
-                                    shock_bps: self.shock_bps,
-                                },
-                                true,
-                            ));
-                            close_modal = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close_modal = true;
-                        }
-                    });
-                });
-            }
-
-            ActiveToolModal::DurationAnalysis => {
-                egui::Window::new(
-                    "⏱ IRRBB Duration, DV01 & ΔEVE Sensitivity Engine (Macaulay & Modified)",
-                )
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label("Computes Residual Years (T), Macaulay Duration, Modified Duration, DV01, and ΔEVE under rate shocks.");
-                    ui.horizontal(|ui| {
-                        ui.label("Balance Col:");
-                        egui::ComboBox::from_id_salt("dur_bal")
-                            .selected_text(&self.dur_bal_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.dur_bal_col, c.clone(), c);
-                                }
-                            });
-                        ui.label("Int Rate / Yield Col (%):");
-                        egui::ComboBox::from_id_salt("dur_rt")
-                            .selected_text(&self.dur_rate_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.dur_rate_col, c.clone(), c);
-                                }
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Maturity Date Col:");
-                        egui::ComboBox::from_id_salt("dur_mat")
-                            .selected_text(&self.dur_mat_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.dur_mat_col, c.clone(), c);
-                                }
-                            });
-                        ui.label("Cutoff Date (YYYY-MM-DD):");
-                        ui.text_edit_singleline(&mut self.alm_cutoff);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Compounding Frequency per Year (1=Ann, 2=Semi, 4=Qtr, 12=Mo):");
-                        ui.add(egui::DragValue::new(&mut self.dur_freq).range(1..=12));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Parallel Rate Shock for ΔEVE (bps, e.g. +200):");
-                        ui.add(egui::DragValue::new(&mut self.dur_shock_bps).speed(10.0));
-                        ui.label("Behavioral Tenor for Null Matdat (Yrs):");
-                        ui.add(egui::DragValue::new(&mut self.dur_sight_yrs).speed(0.05));
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Compute Duration & ΔEVE Columns").clicked() {
-                            step_to_apply = Some((
-                                TransformStep::DurationAnalysis {
-                                    bal_col: self.dur_bal_col.clone(),
-                                    rate_col: self.dur_rate_col.clone(),
-                                    mat_col: self.dur_mat_col.clone(),
-                                    cutoff_date: self.alm_cutoff.clone(),
-                                    compounding_freq: self.dur_freq,
-                                    shock_bps: self.dur_shock_bps,
-                                    default_sight_years: self.dur_sight_yrs,
-                                },
-                                false,
-                            ));
-                            close_modal = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close_modal = true;
-                        }
-                    });
-                });
-            }
-
             ActiveToolModal::LoanProvision => {
-                egui::Window::new(
-                    "🏦 Loans & Advances: Bangladesh Bank CL Provision & BFP Calculator (C1)",
-                )
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label("Computes NPL Category, Base For Provision (BFP), Statutory Rate %, and Required Provision BDT.");
-                    ui.horizontal(|ui| {
-                        ui.label("Outstanding Balance Col:");
-                        egui::ComboBox::from_id_salt("ln_bal")
-                            .selected_text(&self.loan_bal_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.loan_bal_col, c.clone(), c);
-                                }
-                            });
-                        ui.label("CL Status Col (UC/SMA/SS/DF/BL):");
-                        egui::ComboBox::from_id_salt("ln_cl")
-                            .selected_text(&self.loan_cl_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.loan_cl_col, c.clone(), c);
-                                }
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Optional Segment/Sector Col (detects CMSME/Agri):");
-                        ui.text_edit_singleline(&mut self.loan_seg_col);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Optional Interest Suspense Col:");
-                        ui.text_edit_singleline(&mut self.loan_susp_col);
-                        ui.label("Optional Eligible Security Col:");
-                        ui.text_edit_singleline(&mut self.loan_sec_col);
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Calculate CL Provision & BFP").clicked() {
-                            step_to_apply = Some((
-                                TransformStep::LoanClassificationProvision {
-                                    bal_col: self.loan_bal_col.clone(),
-                                    cl_status_col: self.loan_cl_col.clone(),
-                                    segment_col: if self.loan_seg_col.trim().is_empty() {
-                                        None
-                                    } else {
-                                        Some(self.loan_seg_col.trim().to_string())
+                egui::Window::new("🏦 Bangladesh Bank CL Provision & BFP Calculator")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Outstanding Balance Col:");
+                            egui::ComboBox::from_id_salt("ln_bal")
+                                .selected_text(&self.loan_bal_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.loan_bal_col, c.clone(), c);
+                                    }
+                                });
+                            ui.label("CL Status Col (UC/SMA/SS/DF/BL):");
+                            egui::ComboBox::from_id_salt("ln_cl")
+                                .selected_text(&self.loan_cl_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.loan_cl_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Optional Segment/Sector Col:");
+                            ui.text_edit_singleline(&mut self.loan_seg_col);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Optional Interest Suspense Col:");
+                            ui.text_edit_singleline(&mut self.loan_susp_col);
+                            ui.label("Optional Eligible Security Col:");
+                            ui.text_edit_singleline(&mut self.loan_sec_col);
+                        });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("✅ Calculate CL Provision & BFP").clicked() {
+                                step_to_apply = Some((
+                                    TransformStep::LoanClassificationProvision {
+                                        bal_col: self.loan_bal_col.clone(),
+                                        cl_status_col: self.loan_cl_col.clone(),
+                                        segment_col: if self.loan_seg_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.loan_seg_col.trim().to_string())
+                                        },
+                                        suspense_col: if self.loan_susp_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.loan_susp_col.trim().to_string())
+                                        },
+                                        security_col: if self.loan_sec_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.loan_sec_col.trim().to_string())
+                                        },
                                     },
-                                    suspense_col: if self.loan_susp_col.trim().is_empty() {
-                                        None
-                                    } else {
-                                        Some(self.loan_susp_col.trim().to_string())
-                                    },
-                                    security_col: if self.loan_sec_col.trim().is_empty() {
-                                        None
-                                    } else {
-                                        Some(self.loan_sec_col.trim().to_string())
-                                    },
-                                },
-                                false,
-                            ));
-                            close_modal = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close_modal = true;
-                        }
+                                    false,
+                                ));
+                                close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close_modal = true;
+                            }
+                        });
                     });
-                });
             }
 
             ActiveToolModal::LoanLimitUtil => {
-                egui::Window::new(
-                    "💳 Loans & Advances: Limit Utilization, Over-Limit Audit & Undrawn CCF (C5)",
-                )
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label("Computes Utilization %, Undrawn Commitment, Over-Limit Breach, and CRAR/LCR Credit Equivalent.");
-                    ui.horizontal(|ui| {
-                        ui.label("Sanctioned Limit Col:");
-                        egui::ComboBox::from_id_salt("lm_lim")
-                            .selected_text(&self.lim_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.lim_col, c.clone(), c);
-                                }
-                            });
-                        ui.label("Outstanding Balance Col:");
-                        egui::ComboBox::from_id_salt("lm_bal")
-                            .selected_text(&self.lim_bal_col)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut self.lim_bal_col, c.clone(), c);
-                                }
-                            });
+                egui::Window::new("💳 Loan Limit Utilization, Over-Limit Audit & Undrawn CCF")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Sanctioned Limit Col:");
+                            egui::ComboBox::from_id_salt("lm_lim")
+                                .selected_text(&self.lim_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.lim_col, c.clone(), c);
+                                    }
+                                });
+                            ui.label("Outstanding Balance Col:");
+                            egui::ComboBox::from_id_salt("lm_bal")
+                                .selected_text(&self.lim_bal_col)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.lim_bal_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Credit Conversion Factor (CCF % for Undrawn Portion):");
+                            ui.add(egui::DragValue::new(&mut self.lim_ccf_pct).speed(1.0));
+                        });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("✅ Calculate Limit Utilization & Undrawn CCF").clicked() {
+                                step_to_apply = Some((
+                                    TransformStep::LoanLimitUtilization {
+                                        limit_col: self.lim_col.clone(),
+                                        bal_col: self.lim_bal_col.clone(),
+                                        ccf_pct: self.lim_ccf_pct,
+                                    },
+                                    false,
+                                ));
+                                close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close_modal = true;
+                            }
+                        });
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("Credit Conversion Factor (CCF % for Undrawn Portion, e.g. 20%):");
-                        ui.add(egui::DragValue::new(&mut self.lim_ccf_pct).speed(1.0));
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Calculate Limit Utilization & Undrawn CCF").clicked() {
-                            step_to_apply = Some((
-                                TransformStep::LoanLimitUtilization {
-                                    limit_col: self.lim_col.clone(),
-                                    bal_col: self.lim_bal_col.clone(),
-                                    ccf_pct: self.lim_ccf_pct,
-                                },
-                                false,
-                            ));
-                            close_modal = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close_modal = true;
-                        }
-                    });
-                });
             }
 
             ActiveToolModal::FtpCurveMap => {
-                egui::Window::new("🧮 Automated FTP Yield Curve Tenor Mapper (Feature B2)")
+                egui::Window::new("🧮 Automated FTP Yield Curve Tenor Mapper")
                     .collapsible(false)
                     .show(ctx, |ui| {
                         ui.horizontal(|ui| {
@@ -2250,10 +2510,9 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::BankingAudit => {
-                egui::Window::new("🛡 Core Banking Dirty Data & Ghost Account Auditor (Feature B3)")
+                egui::Window::new("🛡 Core Banking Dirty Data & Ghost Account Auditor")
                     .collapsible(false)
                     .show(ctx, |ui| {
-                        ui.label("Scans for Matured-but-Active Ghosts, Backwards Dates, Rate Outliers, and Negative Balances.");
                         ui.horizontal(|ui| {
                             ui.label("Open Date:");
                             ui.text_edit_singleline(&mut self.audit_opn_col);
@@ -2307,10 +2566,9 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::StackFiles => {
-                egui::Window::new("📚 Vertical Multi-File Merger / Stacker (Req #11)")
+                egui::Window::new("📚 Vertical Multi-File Merger / Stacker")
                     .collapsible(false)
                     .show(ctx, |ui| {
-                        ui.label("Combines multiple CSV/Parquet files with automatic linebreak sanitization & schema alignment.");
                         if ui.button("➕ Add Files to Stack...").clicked() {
                             if let Some(files) = rfd::FileDialog::new()
                                 .add_filter("Data Files", &["csv", "parquet"])
@@ -2352,6 +2610,7 @@ impl MicroParquetApp {
                                         include_source_col: self.stack_include_source,
                                     },
                                     Vec::new(),
+                                    HashMap::new(),
                                 );
                                 close_modal = true;
                             }
@@ -2366,7 +2625,7 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::JoinTabs => {
-                egui::Window::new("🔗 SQL-Style Multi-Tab Joiner (Req #12)")
+                egui::Window::new("🔗 SQL-Style Multi-Tab Joiner")
                     .collapsible(false)
                     .show(ctx, |ui| {
                         if self.tabs.len() < 2 {
@@ -2425,7 +2684,7 @@ impl MicroParquetApp {
                                     });
                             });
                             ui.horizontal(|ui| {
-                                ui.label("Join Key Column(s) (comma-separated, e.g. Actnum):");
+                                ui.label("Join Key Column(s) (e.g. Actnum):");
                                 ui.text_edit_singleline(&mut self.join_keys_input);
                             });
                             ui.separator();
@@ -2450,6 +2709,7 @@ impl MicroParquetApp {
                                         right_cols_to_keep: Vec::new(),
                                     },
                                     Vec::new(),
+                                    l_tab.col_formats,
                                 );
                                 close_modal = true;
                             }
@@ -2461,101 +2721,99 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::ReconcilePeriods => {
-                egui::Window::new(
-                    "⚖ Two-Period Variance & Loan CL Migration Reconciler (Feature A6 / C2)",
-                )
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    if self.tabs.len() < 2 {
-                        ui.label(
-                            "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
-                        );
-                    } else {
-                        let prev_title = self.tabs[self.rec_prev_tab.min(self.tabs.len() - 1)]
-                            .title
-                            .clone();
-                        let curr_title = self.tabs[self.rec_curr_tab.min(self.tabs.len() - 1)]
-                            .title
-                            .clone();
-                        let tab_titles: Vec<(usize, String)> = self
-                            .tabs
-                            .iter()
-                            .enumerate()
-                            .map(|(i, t)| (i, t.title.clone()))
-                            .collect();
-
-                        ui.horizontal(|ui| {
-                            ui.label("Previous Period Tab:");
-                            egui::ComboBox::from_id_salt("rec_p")
-                                .selected_text(&prev_title)
-                                .show_ui(ui, |ui| {
-                                    for (i, title) in &tab_titles {
-                                        ui.selectable_value(&mut self.rec_prev_tab, *i, title);
-                                    }
-                                });
-                            ui.label("Current Period Tab:");
-                            egui::ComboBox::from_id_salt("rec_c")
-                                .selected_text(&curr_title)
-                                .show_ui(ui, |ui| {
-                                    for (i, title) in &tab_titles {
-                                        ui.selectable_value(&mut self.rec_curr_tab, *i, title);
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Primary Key (e.g. Actnum):");
-                            ui.text_edit_singleline(&mut self.rec_key_col);
-                            ui.label("Balance Col:");
-                            ui.text_edit_singleline(&mut self.rec_bal_col);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Optional Rate Col (Int Rate):");
-                            ui.text_edit_singleline(&mut self.rec_rate_col);
-                            ui.label("Optional Loan CL Col (CL_Status):");
-                            ui.text_edit_singleline(&mut self.rec_cl_col);
-                        });
-                        ui.separator();
-                        if ui.button("🚀 Reconcile Periods into New Tab").clicked() {
-                            let p_tab = self.tabs[self.rec_prev_tab].clone();
-                            let c_tab = self.tabs[self.rec_curr_tab].clone();
-                            let r_col = if self.rec_rate_col.trim().is_empty() {
-                                None
-                            } else {
-                                Some(self.rec_rate_col.trim().to_string())
-                            };
-                            let cl_col = if self.rec_cl_col.trim().is_empty() {
-                                None
-                            } else {
-                                Some(self.rec_cl_col.trim().to_string())
-                            };
-                            self.create_tab_from_source(
-                                format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
-                                TabSource::PeriodReconcile {
-                                    prev_source: Box::new(p_tab.source),
-                                    prev_steps: p_tab.steps,
-                                    curr_source: Box::new(c_tab.source),
-                                    curr_steps: c_tab.steps,
-                                    key_col: self.rec_key_col.trim().to_string(),
-                                    bal_col: self.rec_bal_col.trim().to_string(),
-                                    rate_col: r_col,
-                                    cl_status_col: cl_col,
-                                },
-                                Vec::new(),
+                egui::Window::new("⚖ Two-Period Variance & Loan CL Migration Reconciler")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        if self.tabs.len() < 2 {
+                            ui.label(
+                                "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
                             );
+                        } else {
+                            let prev_title = self.tabs[self.rec_prev_tab.min(self.tabs.len() - 1)]
+                                .title
+                                .clone();
+                            let curr_title = self.tabs[self.rec_curr_tab.min(self.tabs.len() - 1)]
+                                .title
+                                .clone();
+                            let tab_titles: Vec<(usize, String)> = self
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .map(|(i, t)| (i, t.title.clone()))
+                                .collect();
+
+                            ui.horizontal(|ui| {
+                                ui.label("Previous Period Tab:");
+                                egui::ComboBox::from_id_salt("rec_p")
+                                    .selected_text(&prev_title)
+                                    .show_ui(ui, |ui| {
+                                        for (i, title) in &tab_titles {
+                                            ui.selectable_value(&mut self.rec_prev_tab, *i, title);
+                                        }
+                                    });
+                                ui.label("Current Period Tab:");
+                                egui::ComboBox::from_id_salt("rec_c")
+                                    .selected_text(&curr_title)
+                                    .show_ui(ui, |ui| {
+                                        for (i, title) in &tab_titles {
+                                            ui.selectable_value(&mut self.rec_curr_tab, *i, title);
+                                        }
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Primary Key (e.g. Actnum):");
+                                ui.text_edit_singleline(&mut self.rec_key_col);
+                                ui.label("Balance Col:");
+                                ui.text_edit_singleline(&mut self.rec_bal_col);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Optional Rate Col (Int Rate):");
+                                ui.text_edit_singleline(&mut self.rec_rate_col);
+                                ui.label("Optional Loan CL Col (CL_Status):");
+                                ui.text_edit_singleline(&mut self.rec_cl_col);
+                            });
+                            ui.separator();
+                            if ui.button("🚀 Reconcile Periods into New Tab").clicked() {
+                                let p_tab = self.tabs[self.rec_prev_tab].clone();
+                                let c_tab = self.tabs[self.rec_curr_tab].clone();
+                                let r_col = if self.rec_rate_col.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(self.rec_rate_col.trim().to_string())
+                                };
+                                let cl_col = if self.rec_cl_col.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(self.rec_cl_col.trim().to_string())
+                                };
+                                self.create_tab_from_source(
+                                    format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
+                                    TabSource::PeriodReconcile {
+                                        prev_source: Box::new(p_tab.source),
+                                        prev_steps: p_tab.steps,
+                                        curr_source: Box::new(c_tab.source),
+                                        curr_steps: c_tab.steps,
+                                        key_col: self.rec_key_col.trim().to_string(),
+                                        bal_col: self.rec_bal_col.trim().to_string(),
+                                        rate_col: r_col,
+                                        cl_status_col: cl_col,
+                                    },
+                                    Vec::new(),
+                                    HashMap::new(),
+                                );
+                                close_modal = true;
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
                             close_modal = true;
                         }
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
-                });
+                    });
             }
 
             ActiveToolModal::SaveMacro => {
-                egui::Window::new("💾 Save Portable Macro Recipe (.mpq.json) (Req #8, #9)")
+                egui::Window::new("💾 Save Portable Macro Recipe (.mpq.json)")
                     .collapsible(false)
                     .show(ctx, |ui| {
-                        ui.label("Saves all Applied Steps into ./portable_data/macros/ so you can replay them on any PC.");
                         ui.horizontal(|ui| {
                             ui.label("Macro Name:");
                             ui.text_edit_singleline(&mut self.macro_name);
@@ -2566,7 +2824,7 @@ impl MicroParquetApp {
                         });
                         ui.checkbox(
                             &mut self.macro_enforce_ctrl,
-                            "Enforce Control Column Reconciliation Check during replay (Feature A3)",
+                            "Enforce Control Column Reconciliation Check during replay",
                         );
                         ui.checkbox(
                             &mut self.macro_include_schema,
@@ -2624,151 +2882,155 @@ impl MicroParquetApp {
             }
 
             ActiveToolModal::PythonCodePreview => {
-                egui::Window::new(
-                    "🐍 Export GUI Pipeline as Python Polars Jupyter Code (Feature A8)",
-                )
-                .collapsible(false)
-                .default_width(760.0)
-                .show(ctx, |ui| {
-                    ui.label("Copy and paste this script directly into your Jupyter Notebook:");
-                    egui::ScrollArea::vertical()
-                        .max_height(360.0)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.generated_python_code)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(18),
-                            );
-                        });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("📋 Copy Python Code to Clipboard").clicked() {
-                            ctx.copy_text(self.generated_python_code.clone());
-                            self.status_message =
-                                "Copied Python Polars code to clipboard!".to_string();
-                        }
-                        if ui.button("💾 Save as .py Script...").clicked() {
-                            if let Some(p) = rfd::FileDialog::new()
-                                .set_file_name("micro_parquet_pipeline.py")
-                                .save_file()
-                            {
-                                let _ = std::fs::write(&p, &self.generated_python_code);
-                                self.status_message = format!("Saved Python script to {:?}", p);
+                egui::Window::new("🐍 Export GUI Pipeline as Python Polars Jupyter Code")
+                    .collapsible(false)
+                    .default_width(760.0)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(360.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.generated_python_code)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(18),
+                                );
+                            });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("📋 Copy Python Code to Clipboard").clicked() {
+                                ctx.copy_text(self.generated_python_code.clone());
+                                self.status_message =
+                                    "Copied Python Polars code to clipboard!".to_string();
                             }
-                        }
-                        if ui.button("Close").clicked() {
-                            close_modal = true;
-                        }
+                            if ui.button("💾 Save as .py Script...").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_file_name("micro_parquet_pipeline.py")
+                                    .save_file()
+                                {
+                                    let _ = std::fs::write(&p, &self.generated_python_code);
+                                    self.status_message = format!("Saved Python script to {:?}", p);
+                                }
+                            }
+                            if ui.button("Close").clicked() {
+                                close_modal = true;
+                            }
+                        });
                     });
-                });
             }
 
             ActiveToolModal::MultiTabExport => {
-                egui::Window::new(
-                    "📊 Consolidated Multi-Tab Exporter (Excel Workbook .xlsx / Landscape PDF .pdf)",
-                )
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.strong("Select Open Tabs / Views to Include in Consolidated File:");
-                    if self.multi_export_checks.len() != self.tabs.len() {
-                        self.multi_export_checks = vec![true; self.tabs.len()];
-                    }
-                    for (i, tab) in self.tabs.iter().enumerate() {
-                        let ref mut is_checked = self.multi_export_checks[i];
-                        ui.checkbox(
-                            is_checked,
-                            format!("Tab {}: {} ({} rows)", i + 1, tab.title, tab.total_rows),
-                        );
-                    }
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button("📊 Export Selected Tabs to Single .xlsx Workbook...")
-                            .clicked()
-                        {
-                            if let Some(out_path) = rfd::FileDialog::new()
-                                .set_file_name("Consolidated_ALCO_Views.xlsx")
-                                .save_file()
-                            {
-                                let mut collected_tabs = Vec::new();
-                                for (i, tab) in self.tabs.iter().enumerate() {
-                                    if self.multi_export_checks[i] {
-                                        if let Ok(lf) = compile_tab_lazy(
-                                            &tab.source,
-                                            &tab.steps,
-                                            &self.paths.temp_dir,
-                                        ) {
-                                            if let Ok(df) = lf.limit(1_048_500).collect() {
-                                                collected_tabs.push((tab.title.clone(), df));
-                                            }
-                                        }
-                                    }
-                                }
-                                match export_tabs_to_xlsx(collected_tabs, &out_path) {
-                                    Ok(_) => {
-                                        self.status_message = format!(
-                                            "Exported multi-tab Excel workbook to {:?}",
-                                            out_path
-                                        );
-                                    }
-                                    Err(e) => {
-                                        self.status_message = format!("Excel export error: {}", e);
-                                    }
-                                }
-                            }
-                            close_modal = true;
+                egui::Window::new("📊 Consolidated Multi-Tab Exporter (.xlsx / .pdf)")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.strong("Select Open Tabs / Views to Include:");
+                        if self.multi_export_checks.len() != self.tabs.len() {
+                            self.multi_export_checks = vec![true; self.tabs.len()];
                         }
-
-                        if ui
-                            .button("📄 Export Selected Tabs to Single Landscape .pdf...")
-                            .clicked()
-                        {
-                            if let Some(out_path) = rfd::FileDialog::new()
-                                .set_file_name("Consolidated_ALCO_Report.pdf")
-                                .save_file()
+                        for (i, tab) in self.tabs.iter().enumerate() {
+                            let ref mut is_checked = self.multi_export_checks[i];
+                            ui.checkbox(
+                                is_checked,
+                                format!("Tab {}: {} ({} rows)", i + 1, tab.title, tab.total_rows),
+                            );
+                        }
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("📊 Export Selected Tabs to Single .xlsx...")
+                                .clicked()
                             {
-                                let mut collected_tabs = Vec::new();
-                                for (i, tab) in self.tabs.iter().enumerate() {
-                                    if self.multi_export_checks[i] {
-                                        if let Ok(lf) = compile_tab_lazy(
-                                            &tab.source,
-                                            &tab.steps,
-                                            &self.paths.temp_dir,
-                                        ) {
-                                            if let Ok(df) = lf.limit(5_000).collect() {
-                                                collected_tabs.push((tab.title.clone(), df));
-                                            }
-                                        }
-                                    }
-                                }
-                                match export_tabs_to_pdf(collected_tabs, &out_path, self.num_format)
+                                if let Some(out_path) = rfd::FileDialog::new()
+                                    .set_file_name("Consolidated_ALCO_Views.xlsx")
+                                    .save_file()
                                 {
-                                    Ok(_) => {
-                                        self.status_message = format!(
-                                            "Exported multi-tab PDF report to {:?}",
-                                            out_path
-                                        );
+                                    let mut collected_tabs = Vec::new();
+                                    for (i, tab) in self.tabs.iter().enumerate() {
+                                        if self.multi_export_checks[i] {
+                                            if let Ok(lf) = compile_tab_lazy(
+                                                &tab.source,
+                                                &tab.steps,
+                                                &self.paths.temp_dir,
+                                            ) {
+                                                if let Ok(df) = lf.limit(1_048_500).collect() {
+                                                    collected_tabs.push((tab.title.clone(), df));
+                                                }
+                                            }
+                                        }
                                     }
-                                    Err(e) => {
-                                        self.status_message = format!("PDF export error: {}", e);
+                                    match export_tabs_to_xlsx(collected_tabs, &out_path) {
+                                        Ok(_) => {
+                                            self.status_message = format!(
+                                                "Exported multi-tab Excel workbook to {:?}",
+                                                out_path
+                                            );
+                                        }
+                                        Err(e) => {
+                                            self.status_message =
+                                                format!("Excel export error: {}", e);
+                                        }
                                     }
                                 }
+                                close_modal = true;
                             }
-                            close_modal = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close_modal = true;
-                        }
+
+                            if ui
+                                .button("📄 Export Selected Tabs to Single Landscape .pdf...")
+                                .clicked()
+                            {
+                                if let Some(out_path) = rfd::FileDialog::new()
+                                    .set_file_name("Consolidated_ALCO_Report.pdf")
+                                    .save_file()
+                                {
+                                    let mut collected_tabs = Vec::new();
+                                    for (i, tab) in self.tabs.iter().enumerate() {
+                                        if self.multi_export_checks[i] {
+                                            if let Ok(lf) = compile_tab_lazy(
+                                                &tab.source,
+                                                &tab.steps,
+                                                &self.paths.temp_dir,
+                                            ) {
+                                                if let Ok(df) = lf.limit(5_000).collect() {
+                                                    collected_tabs.push((
+                                                        tab.title.clone(),
+                                                        df,
+                                                        tab.col_formats.clone(),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    match export_tabs_to_pdf(
+                                        collected_tabs,
+                                        &out_path,
+                                        self.num_format,
+                                        self.global_decimals,
+                                    ) {
+                                        Ok(_) => {
+                                            self.status_message = format!(
+                                                "Exported multi-tab PDF report to {:?}",
+                                                out_path
+                                            );
+                                        }
+                                        Err(e) => {
+                                            self.status_message =
+                                                format!("PDF export error: {}", e);
+                                        }
+                                    }
+                                }
+                                close_modal = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close_modal = true;
+                            }
+                        });
                     });
-                });
             }
 
             ActiveToolModal::SplitByColumn => {
-                egui::Window::new("🗂 Smart Partitioned Split Exporter (Feature B6)")
+                egui::Window::new("🗂 Smart Partitioned Split Exporter")
                     .collapsible(false)
                     .show(ctx, |ui| {
-                        ui.label("Splits the active tab into separate files for each unique value in a column (e.g. Brancd, Glcode, Bank).");
                         ui.horizontal(|ui| {
                             ui.label("Partition / Split Column:");
                             egui::ComboBox::from_id_salt("splt_col")
@@ -2854,15 +3116,15 @@ impl MicroParquetApp {
         egui::Window::new("🔍 CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock")
             .collapsible(false)
             .resizable(true)
-            .default_width(1050.0)
+            .default_width(980.0)
             .show(ctx, |ui| {
                 ui.label(format!("File: {:?}", modal.csv_path));
                 ui.separator();
 
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.checkbox(
                         &mut modal.config.sanitize_linebreaks,
-                        "Sanitize Linebreaks (\\r, \\n) & Trim Whitespace (Default ON)",
+                        "Sanitize Linebreaks (\\r, \\n) & Trim Whitespace",
                     );
                     ui.checkbox(
                         &mut modal.config.parse_accounting_negatives,
@@ -2907,13 +3169,15 @@ impl MicroParquetApp {
                 ui.strong("1. Raw 5-Row Text Preview:");
                 egui::ScrollArea::vertical()
                     .id_salt("raw_preview_scroll")
-                    .max_height(140.0)
+                    .max_height(130.0)
                     .show(ui, |ui| {
                         Self::render_data_grid(
                             ui,
                             &modal.raw_preview_df,
+                            &HashMap::new(),
                             0,
                             NumberDisplayFormat::Raw,
+                            2,
                         );
                     });
 
@@ -2922,7 +3186,7 @@ impl MicroParquetApp {
 
                 egui::ScrollArea::vertical()
                     .id_salt("schema_override_scroll")
-                    .max_height(250.0)
+                    .max_height(240.0)
                     .show(ui, |ui| {
                         egui::Grid::new("schema_grid")
                             .striped(true)
@@ -3012,6 +3276,7 @@ impl MicroParquetApp {
                     config: modal.config,
                 },
                 Vec::new(),
+                HashMap::new(),
             );
         } else if action_direct_convert {
             if let Some(out_dir) = rfd::FileDialog::new().pick_folder() {
@@ -3070,7 +3335,7 @@ impl MicroParquetApp {
         let mut close_clicked = false;
         egui::Window::new("🔄 Recursive Folder-Tree Mirror Batch Converter")
             .collapsible(false)
-            .default_width(700.0)
+            .default_width(680.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("📂 1. Input Root Folder...").clicked() {
@@ -3164,8 +3429,8 @@ impl MicroParquetApp {
         match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
             .and_then(|lf| export_to_parquet_stream(lf, &out_path, self.parquet_dialect))
         {
-            Ok(_) => self.status_message = format!("Exported view to {:?}", out_path),
-            Err(e) => self.status_message = format!("Parquet export failed: {}", e),
+            Ok(_) => self.status_message = format!("✅ Exported view to {:?}", out_path),
+            Err(e) => self.status_message = format!("❌ Parquet export failed: {:#}", e),
         }
     }
 
@@ -3183,8 +3448,8 @@ impl MicroParquetApp {
         match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
             .and_then(|lf| export_to_csv_stream(lf, &out_path, self.export_csv_mdy))
         {
-            Ok(_) => self.status_message = format!("Exported view to {:?}", out_path),
-            Err(e) => self.status_message = format!("CSV export failed: {}", e),
+            Ok(_) => self.status_message = format!("✅ Exported view to {:?}", out_path),
+            Err(e) => self.status_message = format!("❌ CSV export failed: {:#}", e),
         }
     }
 }
