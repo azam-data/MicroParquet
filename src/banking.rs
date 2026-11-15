@@ -1,4 +1,4 @@
-use crate::models::{BucketPreset, FtpPoint};
+use crate::models::{CustomBucketDef, FtpPoint};
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
@@ -32,12 +32,12 @@ pub fn apply_entity_normalizer(lf: LazyFrame, source_col: &str, new_col: &str) -
     lf.with_column(norm_expr)
 }
 
-/// Feature A5 (v1.2): Regulatory & Custom Maturity Bucketer (BB SLP, Basel III LCR, or Custom `c-m-b-1`)
+/// Feature A5 + v1.2 Custom Presets: Regulatory & Custom Maturity Bucketer
 pub fn apply_maturity_bucket(
     lf: LazyFrame,
     mat_col: &str,
     cutoff_date: &str,
-    preset: &BucketPreset,
+    bucket_def: &CustomBucketDef,
     null_as_sight: bool,
     new_col: &str,
 ) -> Result<LazyFrame> {
@@ -54,72 +54,33 @@ pub fn apply_maturity_bucket(
     );
 
     let null_label = if null_as_sight {
-        "01. Overnight / Sight (Non-Maturing)"
+        bucket_def.null_sight_label.as_str()
     } else {
-        "09. Over 5 Years (Core)"
+        bucket_def.null_long_label.as_str()
     };
 
+    let mut sorted_rules = bucket_def.rules.clone();
+    sorted_rules.sort_by_key(|r| r.max_days);
+
+    // Fold rules in reverse so every step produces a clean Polars `Expr`
     let d = col(rem_days_col);
-    let bucket_expr = match preset {
-        BucketPreset::BangladeshBankSlp => when(col(mat_col).is_null())
-            .then(lit(null_label))
-            .when(d.clone().lt(lit(0)))
-            .then(lit("10. Overdue / Matured Unencashed"))
-            .when(d.clone().lt_eq(lit(1)))
-            .then(lit("01. Overnight / 1 Day"))
-            .when(d.clone().lt_eq(lit(7)))
-            .then(lit("02. 2 to 7 Days"))
-            .when(d.clone().lt_eq(lit(30)))
-            .then(lit("03. 8 to 30 Days"))
-            .when(d.clone().lt_eq(lit(90)))
-            .then(lit("04. 1 to 3 Months (31-90d)"))
-            .when(d.clone().lt_eq(lit(180)))
-            .then(lit("05. 3 to 6 Months (91-180d)"))
-            .when(d.clone().lt_eq(lit(365)))
-            .then(lit("06. 6 to 12 Months (181-365d)"))
-            .when(d.clone().lt_eq(lit(1095)))
-            .then(lit("07. 1 to 3 Years"))
-            .when(d.lt_eq(lit(1825)))
-            .then(lit("08. 3 to 5 Years"))
-            .otherwise(lit("09. Over 5 Years"))
-            .alias(new_col),
+    let mut expr: Expr = lit(bucket_def.overflow_label.as_str());
+    for rule in sorted_rules.iter().rev() {
+        expr = when(d.clone().lt_eq(lit(rule.max_days)))
+            .then(lit(rule.label.as_str()))
+            .otherwise(expr);
+    }
 
-        BucketPreset::BaselLcrNsfr => when(col(mat_col).is_null())
-            .then(lit("01. Sight / Open Maturity"))
-            .when(d.clone().lt(lit(0)))
-            .then(lit("06. Overdue / Past Maturity"))
-            .when(d.clone().lt_eq(lit(30)))
-            .then(lit("01. Within 30 Days (LCR Window)"))
-            .when(d.clone().lt_eq(lit(90)))
-            .then(lit("02. 31 to 90 Days"))
-            .when(d.clone().lt_eq(lit(180)))
-            .then(lit("03. 91 to 180 Days"))
-            .when(d.lt_eq(lit(365)))
-            .then(lit("04. 181 to 365 Days"))
-            .otherwise(lit("05. Over 1 Year (NSFR Stable)"))
-            .alias(new_col),
+    let final_bucket_expr = when(col(mat_col).is_null())
+        .then(lit(null_label))
+        .when(d.lt(lit(0)))
+        .then(lit(bucket_def.overdue_label.as_str()))
+        .otherwise(expr)
+        .alias(new_col);
 
-        BucketPreset::Custom(custom) => {
-            let mut sorted_rules = custom.rules.clone();
-            sorted_rules.sort_by_key(|r| r.max_days);
-
-            let mut expr: Expr = lit(custom.overflow_label.clone());
-            for rule in sorted_rules.iter().rev() {
-                expr = when(d.clone().lt_eq(lit(rule.max_days)))
-                    .then(lit(rule.label.clone()))
-                    .otherwise(expr);
-            }
-            expr = when(d.lt(lit(0)))
-                .then(lit(custom.overdue_label.clone()))
-                .otherwise(expr);
-            expr = when(col(mat_col).is_null())
-                .then(lit(null_label))
-                .otherwise(expr);
-            expr.alias(new_col)
-        }
-    };
-
-    Ok(lf_with_days.with_column(bucket_expr).drop([rem_days_col]))
+    Ok(lf_with_days
+        .with_column(final_bucket_expr)
+        .drop([rem_days_col]))
 }
 
 /// Feature B1: Interest Rate Shock / ΔNII Sensitivity Simulator (1-Year Repricing Horizon)
