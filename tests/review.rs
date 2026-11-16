@@ -2227,3 +2227,57 @@ fn t26c_excel_long_whole_numbers_as_text() {
     assert!(!cell("A3").contains("t=\"s\"") && cell("A3").contains("<v>42</v>"));
     assert!(!cell("B2").contains("t=\"s\"") && cell("B2").contains("<v>999999999999999</v>"), "{}", cell("B2"));
 }
+
+#[test]
+fn t27b_row_count_warnings() {
+    use micro_parquet::batch::*;
+    // Single loads: an unclosed quote swallows the following lines.
+    let p = write_csv("t27b_quote.csv", "Actnum,Balance\n\"A1,100\nA2,200\nA3,300\n\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    let src = TabSource::SingleFile { path: p.clone(), is_parquet: false, config: cfg };
+    let c = source_row_check(&src, &tmpdir()).unwrap().expect("CSV source");
+    assert_eq!((c.nonempty_lines, c.data_lines(), c.parsed_rows), (4, 3, 1));
+    let w = c.warning().expect("short");
+    assert!(w.contains("Read 1 rows") && w.contains("3 data lines"), "{w}");
+    // Title lines are not data; a clean file gives no warning.
+    let p2 = write_csv("t27b_title.csv", "Branch report Oct 2026\nActnum,Balance\nA1,1\nA2,2\n");
+    let mut cfg2 = auto_detect_smart_schema(&p2).unwrap();
+    cfg2.skip_rows = 1;
+    let cfg2 = auto_detect_smart_schema_with(&p2, &cfg2).unwrap();
+    let c2 = source_row_check(&TabSource::SingleFile { path: p2, is_parquet: false, config: cfg2 }, &tmpdir()).unwrap().unwrap();
+    assert_eq!((c2.data_lines(), c2.parsed_rows, c2.warning()), (2, 2, None));
+    // 0 rows from a non-empty file.
+    let zero = RowCountCheck { nonempty_lines: 1, skip_rows: 0, parsed_rows: 0 };
+    assert!(zero.warning().unwrap().starts_with("0 rows read"));
+    // Parquet sources are not checked.
+    let pq = write_parquet("t27b.parquet", &df!("A" => [1]).unwrap());
+    assert!(source_row_check(&TabSource::SingleFile { path: pq, is_parquet: true, config: IngestionConfig::default() }, &tmpdir()).unwrap().is_none());
+
+    // Batch: a WARNING row (converted) with both counts in batch_log.csv.
+    let base = tmpdir().join("t27b");
+    let _ = std::fs::remove_dir_all(&base);
+    let inp = base.join("in");
+    std::fs::create_dir_all(&inp).unwrap();
+    std::fs::write(inp.join("good.csv"), "Actnum,Balance\nA1,1\nA2,2\n").unwrap();
+    std::fs::write(inp.join("quote.csv"), "Actnum,Balance\n\"A1,100\nA2,200\nA3,300\n").unwrap();
+    let out = base.join("out");
+    let rep = run_folder_mirror_batch(&inp, &out, BatchDirection::CsvToParquet, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+        .unwrap();
+    assert_eq!(rep.files_converted, 2);
+    assert!(rep.errors.is_empty());
+    assert_eq!(rep.warnings.len(), 1);
+    assert!(rep.warnings[0].starts_with("quote.csv"), "{:?}", rep.warnings);
+    let log = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(out.join("batch_log.csv")))
+        .unwrap()
+        .finish()
+        .unwrap()
+        .sort(["file"], Default::default())
+        .unwrap();
+    assert_eq!(str_col(&log, "file"), vec![Some("good.csv".to_string()), Some("quote.csv".to_string())]);
+    assert_eq!(str_col(&log, "status"), vec![Some("OK".to_string()), Some("WARNING".to_string())]);
+    assert_eq!(str_col(&log, "rows"), vec![Some("2".to_string()), Some("1".to_string())]);
+    assert_eq!(str_col(&log, "data_lines"), vec![Some("2".to_string()), Some("3".to_string())]);
+    assert!(str_col(&log, "error")[1].as_deref().unwrap().contains("unclosed quotes"));
+}

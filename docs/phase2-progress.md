@@ -54,7 +54,7 @@ contain its own hash).
 (Each one is also recorded in `<accepted_deviations>` in `docs/phase2-spec.md`.)
 - Q1 (P6): joins are not saved in macros (`TabSource` is not serialised); should "Keep first row per key" also be saved once joins become part of a macro? **Answered:** yes, with `#[serde(default)]` false, when joins become saveable (recorded only).
 - Q2 (P9): Int64 values with more than 15 significant digits lose digits in Excel (Excel numbers are doubles). Write such values as text, or error? **Answered:** write them as text, with a status warning naming the column (done).
-- Q3 (P10): Polars reads some broken CSVs without an error (an unclosed quote swallows later lines into one field; binary junk becomes a header with 0 rows). Should the batch run flag files whose row count looks wrong (e.g. 0 rows, or far fewer rows than lines)?
+- Q3 (P10): Polars reads some broken CSVs without an error (an unclosed quote swallows later lines into one field; binary junk becomes a header with 0 rows). Should the batch run flag files whose row count looks wrong (e.g. 0 rows, or far fewer rows than lines)? **Answered:** warn (not error) on single and batch loads, both counts shown (done).
 - Q4 (P12): the Python export still keeps the original values in masked columns (blake3 is not in the Python standard library). Generate code that needs `pip install blake3` and reads the key file, or make masked columns stop the Python export?
 - Q5 (P13): old macros' FTP steps load as Linear (the spec's default), so their FTP rates change on re-run. Keep that, or load old steps as NextPointUp to reproduce earlier ALCO numbers?
 - Q6 (P15): old macros' hygiene audits now treat ACTIVE, A and OPEN as active (the spec's default), so they can flag more rows on re-run. Keep?

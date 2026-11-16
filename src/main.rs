@@ -8,7 +8,7 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    blank_balance_notes, control_totals_state, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
+    blank_balance_notes, control_totals_state, source_row_check, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
     pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
@@ -184,6 +184,9 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         eprintln!("[MicroParquet] {}", note);
     }
     let lf = compile_tab_lazy(&source, &steps, &paths.temp_dir)?;
+    if let Some(w) = source_row_check(&source, &paths.temp_dir)?.and_then(|c| c.warning()) {
+        eprintln!("[MicroParquet] WARNING: {}", w);
+    }
     for note in blank_balance_notes(&source, &steps, &paths.temp_dir)? {
         eprintln!("[MicroParquet] {}", note);
     }
@@ -762,6 +765,16 @@ impl MicroParquetApp {
                             format!(" ⚠ Could not count parse failures: {:#}", e),
                         ),
                     };
+                let row_check = match source_row_check(&source, &self.paths.temp_dir) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        count_note.push_str(&format!(" ⚠ Could not compare rows with the file's lines: {:#}", e));
+                        None
+                    }
+                };
+                if let Some(w) = row_check.as_ref().and_then(|c| c.warning()) {
+                    count_note.push_str(&format!(" ⚠ {}", w));
+                }
                 let join_stat = match join_status(
                     &source,
                     &steps,
@@ -790,6 +803,7 @@ impl MicroParquetApp {
                     parse_failures,
                     join_status: join_stat,
                     totals,
+                    row_check,
                 });
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
@@ -1322,6 +1336,20 @@ impl eframe::App for MicroParquetApp {
                                 }
                             }
                         }
+                        ui.separator();
+                    }
+                }
+                if let Some(rc) = self.tabs.get(self.active_tab).and_then(|t| t.row_check.as_ref()) {
+                    if rc.warning().is_some() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!(
+                                "⚠ Rows read {} vs file data lines {}",
+                                format_with_commas(rc.parsed_rows as f64, 0),
+                                format_with_commas(rc.data_lines() as f64, 0)
+                            ),
+                        )
+                        .on_hover_text(rc.warning().unwrap_or_default());
                         ui.separator();
                     }
                 }
@@ -4085,6 +4113,20 @@ impl MicroParquetApp {
                             format!("⚠ {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
                         );
                     }
+                    if !rep.warnings.is_empty() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("⚠ {} file(s) with fewer rows than data lines (status WARNING in the log):", rep.warnings.len()),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("batch_warnings")
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for w in &rep.warnings {
+                                    ui.label(format!("• {}", w));
+                                }
+                            });
+                    }
                     if !rep.errors.is_empty() {
                         ui.colored_label(egui::Color32::from_rgb(200, 30, 30), "Errors:");
                         egui::ScrollArea::vertical()
@@ -4462,10 +4504,24 @@ impl MicroParquetApp {
                 self.status_message = format!("⚠ Could not count parse failures: {:#}", e);
             }
         }
+        let row_check = source_row_check(&new_source, &self.paths.temp_dir);
         tab.source = new_source;
+        let mut row_note = String::new();
+        match row_check {
+            Ok(c) => {
+                if let Some(w) = c.as_ref().and_then(|c| c.warning()) {
+                    row_note = format!(" ⚠ {}", w);
+                }
+                tab.row_check = c;
+            }
+            Err(e) => {
+                tab.row_check = None;
+                row_note = format!(" ⚠ Could not compare rows with the file's lines: {:#}", e);
+            }
+        }
         self.active_tab = idx;
         self.refresh_active_tab(true);
-        self.status_message = "Schema applied and tab reloaded.".into();
+        self.status_message = format!("Schema applied and tab reloaded.{}", row_note);
         if let Some(n) = key_note {
             self.status_message.push_str(&format!(" 🔑 {}", n));
         }

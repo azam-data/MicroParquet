@@ -5,7 +5,7 @@ use crate::banking::{
 };
 use crate::models::{
     column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
-    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, FilterOp, IngestionConfig, JoinStatus, MathOp,
+    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, RowCountCheck, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -2305,6 +2305,50 @@ pub fn parse_math_scalar(new_col: &str, value: &str) -> Result<f64> {
             value
         ),
     }
+}
+
+/// Lines of a file that hold anything other than whitespace (CR/LF or LF line ends).
+pub fn count_nonempty_lines(path: &Path) -> Result<usize> {
+    let mut reader = BufReader::new(
+        File::open(path).with_context(|| format!("Failed to open {:?}", path))?,
+    );
+    let mut buf = Vec::new();
+    let mut n = 0usize;
+    loop {
+        buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut buf)
+            .with_context(|| format!("Failed to read {:?}", path))?;
+        if read == 0 {
+            break;
+        }
+        // A UTF-8 byte-order mark alone does not make a line non-empty.
+        let body = buf.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&buf);
+        if body.iter().any(|b| !b.is_ascii_whitespace()) {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// For a CSV source (single file, no steps): rows read against the file's data lines.
+/// `None` for other sources.
+pub fn source_row_check(source: &TabSource, temp_dir: &Path) -> Result<Option<RowCountCheck>> {
+    let TabSource::SingleFile {
+        path,
+        is_parquet: false,
+        config,
+    } = source
+    else {
+        return Ok(None);
+    };
+    let lf = build_lazy_pipeline(path, false, config, temp_dir)?;
+    let (parsed_rows, _) = compute_control_totals(lf, None)?;
+    Ok(Some(RowCountCheck {
+        nonempty_lines: count_nonempty_lines(path)?,
+        skip_rows: config.skip_rows,
+        parsed_rows,
+    }))
 }
 
 /// Rows where `column` is blank (null, or text that is not a number).

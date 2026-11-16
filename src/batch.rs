@@ -1,8 +1,10 @@
 ﻿use crate::engine::{
     auto_detect_smart_schema, build_lazy_pipeline, compute_control_totals,
-    compute_parse_failures, export_to_csv_stream, export_to_parquet_stream,
+    compute_parse_failures, count_nonempty_lines, export_to_csv_stream, export_to_parquet_stream,
 };
-use crate::models::{BatchDirection, BatchSchemaStrategy, IngestionConfig, ParquetDialect};
+use crate::models::{
+    BatchDirection, BatchSchemaStrategy, IngestionConfig, ParquetDialect, RowCountCheck,
+};
 use anyhow::{Context, Result};
 use polars::prelude::*;
 use std::path::{Path, PathBuf};
@@ -13,10 +15,12 @@ use walkdir::WalkDir;
 pub struct BatchLogRow {
     pub file: String,
     pub rows: Option<usize>,
+    /// CSV inputs: non-empty lines minus the header and title lines (compare with `rows`).
+    pub data_lines: Option<usize>,
     pub control_sum: Option<f64>,
     /// Values that could not be converted and became null (CSV -> Parquet only).
     pub parse_failures: Option<usize>,
-    /// OK, COPIED or ERROR.
+    /// OK, WARNING (converted, but fewer rows than data lines), COPIED or ERROR.
     pub status: String,
     pub error: String,
 }
@@ -27,6 +31,8 @@ pub struct BatchReport {
     pub files_converted: usize,
     pub companion_files_copied: usize,
     pub errors: Vec<String>,
+    /// Converted files whose row count looks short (see `RowCountCheck::warning`).
+    pub warnings: Vec<String>,
     pub bytes_before: u64,
     pub bytes_after: u64,
     pub log: Vec<BatchLogRow>,
@@ -107,6 +113,10 @@ pub fn write_batch_log(path: &Path, rows: &[BatchLogRow]) -> Result<()> {
     let mut df = DataFrame::new(vec![
         Series::new("file".into(), rows.iter().map(|r| r.file.clone()).collect::<Vec<_>>()),
         Series::new("rows".into(), rows.iter().map(|r| r.rows.map(|v| v as u64)).collect::<Vec<_>>()),
+        Series::new(
+            "data_lines".into(),
+            rows.iter().map(|r| r.data_lines.map(|v| v as u64)).collect::<Vec<_>>(),
+        ),
         Series::new("control_sum".into(), rows.iter().map(|r| r.control_sum).collect::<Vec<_>>()),
         Series::new(
             "parse_failures".into(),
@@ -154,6 +164,7 @@ pub fn run_folder_mirror_batch(
                 report.log.push(BatchLogRow {
                     file: err.path().map(|p| p.display().to_string()).unwrap_or_default(),
                     rows: None,
+                    data_lines: None,
                     control_sum: None,
                     parse_failures: None,
                     status: "ERROR".into(),
@@ -186,6 +197,7 @@ pub fn run_folder_mirror_batch(
             report.log.push(BatchLogRow {
                 file: rel_path.display().to_string(),
                 rows: None,
+                data_lines: None,
                 control_sum: None,
                 parse_failures: None,
                 status: "ERROR".into(),
@@ -206,7 +218,8 @@ pub fn run_folder_mirror_batch(
             .to_lowercase();
         let file = rel_path.display().to_string();
 
-        let outcome: Option<Result<(usize, Option<f64>, Option<usize>)>> = match (direction, ext.as_str()) {
+        type Converted = (usize, Option<f64>, Option<usize>, Option<RowCountCheck>);
+        let outcome: Option<Result<Converted>> = match (direction, ext.as_str()) {
             (BatchDirection::CsvToParquet, "csv") => {
                 let out_parquet = target_base_path.with_extension("parquet");
                 let src_size = src_path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -225,7 +238,12 @@ pub fn run_folder_mirror_batch(
                         .sum();
                     let written = LazyFrame::scan_parquet(&out_parquet, ScanArgsParquet::default())?;
                     let (rows, sum) = totals_of(written)?;
-                    Ok((rows, sum, Some(fails)))
+                    let check = RowCountCheck {
+                        nonempty_lines: count_nonempty_lines(src_path)?,
+                        skip_rows: cfg.skip_rows,
+                        parsed_rows: rows,
+                    };
+                    Ok((rows, sum, Some(fails), Some(check)))
                 });
                 if res.is_ok() {
                     report.bytes_before += src_size;
@@ -242,7 +260,7 @@ pub fn run_folder_mirror_batch(
                 let res = build_lazy_pipeline(src_path, true, &dummy_cfg, temp_dir).and_then(|lf| {
                     export_to_csv_stream(lf.clone(), &out_csv, mdy_dates_on_csv_export)?;
                     let (rows, sum) = totals_of(lf)?;
-                    Ok((rows, sum, None))
+                    Ok((rows, sum, None, None))
                 });
                 if res.is_ok() {
                     report.bytes_before += src_size;
@@ -257,6 +275,7 @@ pub fn run_folder_mirror_batch(
                     report.log.push(BatchLogRow {
                         file: file.clone(),
                         rows: None,
+                        data_lines: None,
                         control_sum: None,
                         parse_failures: None,
                         status: "COPIED".into(),
@@ -270,15 +289,20 @@ pub fn run_folder_mirror_batch(
 
         match outcome {
             None => {}
-            Some(Ok((rows, sum, fails))) => {
+            Some(Ok((rows, sum, fails, check))) => {
                 report.files_converted += 1;
+                let warning = check.as_ref().and_then(|c| c.warning());
+                if let Some(w) = &warning {
+                    report.warnings.push(format!("{}: {}", file, w));
+                }
                 report.log.push(BatchLogRow {
                     file,
                     rows: Some(rows),
+                    data_lines: check.as_ref().map(|c| c.data_lines()),
                     control_sum: sum,
                     parse_failures: fails,
-                    status: "OK".into(),
-                    error: String::new(),
+                    status: if warning.is_some() { "WARNING" } else { "OK" }.into(),
+                    error: warning.unwrap_or_default(),
                 });
             }
             Some(Err(e)) => {
@@ -287,6 +311,7 @@ pub fn run_folder_mirror_batch(
                 report.log.push(BatchLogRow {
                     file,
                     rows: None,
+                    data_lines: None,
                     control_sum: None,
                     parse_failures: None,
                     status: "ERROR".into(),

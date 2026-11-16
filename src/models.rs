@@ -997,6 +997,45 @@ pub struct TabState {
     pub join_status: Option<JoinStatus>,
     /// What the status bar shows for rows and control sum (None = "—", with the reason).
     pub totals: ControlTotals,
+    /// CSV sources: rows read against the file's data lines (status-bar warning when short).
+    pub row_check: Option<RowCountCheck>,
+}
+
+/// Rows read from a CSV against its non-empty lines (minus the header and title lines).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RowCountCheck {
+    pub nonempty_lines: usize,
+    pub skip_rows: usize,
+    pub parsed_rows: usize,
+}
+
+impl RowCountCheck {
+    /// Non-empty lines minus the header line and the title lines above it.
+    pub fn data_lines(&self) -> usize {
+        self.nonempty_lines.saturating_sub(1 + self.skip_rows)
+    }
+
+    /// A warning when fewer rows were read than the file has data lines, or none at all from a
+    /// non-empty file. Not an error: quoted values may legitimately span lines.
+    pub fn warning(&self) -> Option<String> {
+        if self.nonempty_lines > 0 && self.parsed_rows == 0 {
+            return Some(format!(
+                "0 rows read from a file with {} non-empty lines ({} data lines). Check the separator, title lines and encoding.",
+                self.nonempty_lines,
+                self.data_lines()
+            ));
+        }
+        if self.parsed_rows < self.data_lines() {
+            return Some(format!(
+                "Read {} rows but the file has {} data lines ({} non-empty lines − 1 header − {} title lines). Check for unclosed quotes or broken lines.",
+                self.parsed_rows,
+                self.data_lines(),
+                self.nonempty_lines,
+                self.skip_rows
+            ));
+        }
+        None
+    }
 }
 
 /// Rows and control sum for the status bar. `None` is shown as "—"; `note` says why.
