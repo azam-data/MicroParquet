@@ -11,6 +11,26 @@ pub struct ExportState {
     pub guard: Option<GuardedExport>,
     /// The user chose "Export anyway" for this export.
     pub override_: Option<GuardedExport>,
+    /// An export waiting for the Text-column check job (token of that job).
+    pub pending: Option<PendingExport>,
+    /// Question shown when a Text column of the export looks like numbers.
+    pub text_guard: Option<TextGuard>,
+    pub check_token: u64,
+}
+
+/// An export that starts when its Text-column check finds nothing (or the user decides).
+#[derive(Clone)]
+pub struct PendingExport {
+    pub token: u64,
+    pub kind: GuardedExport,
+    pub sidecar: Option<Vec<ParseFailure>>,
+}
+
+/// The pre-export question about Text columns that look like numbers.
+pub struct TextGuard {
+    pub kind: GuardedExport,
+    pub sidecar: Option<Vec<ParseFailure>>,
+    pub findings: Vec<TabTextFindings>,
 }
 
 impl Default for ExportState {
@@ -21,6 +41,9 @@ impl Default for ExportState {
             split_format: SplitExportFormat::Parquet,
             guard: None,
             override_: None,
+            pending: None,
+            text_guard: None,
+            check_token: 0,
         }
     }
 }
@@ -152,12 +175,121 @@ impl MicroParquetApp {
         }
         // "Export anyway": the parse failures are listed next to the file by the export job.
         let sidecar = if forced { Some(self.failure_sidecar_rows(&tabs)) } else { None };
+        self.start_text_check(kind, &tabs, sidecar);
+    }
+
+    /// Looks for Text columns that are mostly numbers before the export starts (a background
+    /// job); `apply_text_check` continues with the export or asks.
+    fn start_text_check(&mut self, kind: GuardedExport, tabs: &[usize], sidecar: Option<Vec<ParseFailure>>) {
+        let list: Vec<(u64, String, TabSource, Vec<TransformStep>)> = tabs
+            .iter()
+            .filter_map(|i| self.tabs.get(*i))
+            .map(|t| (t.id, t.title.clone(), t.source.clone(), t.steps.clone()))
+            .collect();
+        if list.is_empty() {
+            self.perform_export(kind, sidecar);
+            return;
+        }
+        self.export.check_token += 1;
+        let token = self.export.check_token;
+        self.export.pending = Some(PendingExport { token, kind, sidecar });
+        let req = TextCheckRequest { token, tabs: list, temp_dir: self.paths.temp_dir.clone() };
+        self.jobs.submit(JobKey::unique(JobKind::Stats), "Checking Text columns", true, move |ctx| {
+            check_text_columns(req, ctx).map(|r| JobOutput::TextCheck(Box::new(r)))
+        });
+        self.status_message = "Checking Text columns before the export…".to_string();
+    }
+
+    /// The check finished: export, or ask about the columns that look like numbers.
+    pub(crate) fn apply_text_check(&mut self, result: TextCheckResult) {
+        let Some(p) = self.export.pending.take() else {
+            return;
+        };
+        if p.token != result.token {
+            self.export.pending = Some(p);
+            return;
+        }
+        if result.findings.is_empty() {
+            self.perform_export(p.kind, p.sidecar);
+        } else {
+            self.status_message = "Export paused: a Text column looks like numbers.".to_string();
+            self.export.text_guard = Some(TextGuard { kind: p.kind, sidecar: p.sidecar, findings: result.findings });
+        }
+    }
+
+    /// A failed or cancelled check stops the export (the reason is in the status bar).
+    pub(crate) fn drop_pending_export(&mut self) {
+        self.export.pending = None;
+    }
+
+    fn perform_export(&mut self, kind: GuardedExport, sidecar: Option<Vec<ParseFailure>>) {
         match kind {
             GuardedExport::Parquet => self.export_active_tab_parquet(sidecar),
             GuardedExport::Csv => self.export_active_tab_csv(sidecar),
             GuardedExport::MultiXlsx => self.export_multi_tab_xlsx(sidecar),
             GuardedExport::MultiPdf => self.export_multi_tab_pdf(sidecar),
             GuardedExport::Split => self.export_split_by_column(sidecar),
+        }
+    }
+
+    /// The question: "<col> is Text, but 98% of its values look like numbers. Set it to Number
+    /// before exporting?" with Set to Number / Export as is.
+    pub(crate) fn render_text_number_guard(&mut self, ctx: &egui::Context) {
+        let Some(g) = &self.export.text_guard else {
+            return;
+        };
+        let mut lines: Vec<(String, String)> = Vec::new();
+        for f in &g.findings {
+            for c in &f.columns {
+                lines.push((f.title.clone(), c.message()));
+            }
+        }
+        let multi = g.findings.len() > 1;
+        let mut set_number = false;
+        let mut as_is = false;
+        let mut cancel = false;
+        theme::modal("\u{E4E0}  Text column that looks like numbers").show(ctx, |ui| {
+            for (title, msg) in &lines {
+                if multi {
+                    ui.label(format!("{}: {}", title, msg));
+                } else {
+                    ui.label(msg.as_str());
+                }
+            }
+            ui.add_space(theme::SPACE_S);
+            ui.label("Numbers stored as Text sort wrongly, cannot be summed in Excel and show as text in Power BI.");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if theme::primary_button(ui, "Set to Number").clicked() {
+                    set_number = true;
+                }
+                if ui.button("Export as is").clicked() {
+                    as_is = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if set_number || as_is {
+            if let Some(g) = self.export.text_guard.take() {
+                if set_number {
+                    let keep = self.active_tab;
+                    for f in &g.findings {
+                        let Some(idx) = self.tabs.iter().position(|t| t.id == f.tab_id) else {
+                            continue;
+                        };
+                        self.active_tab = idx;
+                        let columns = f.columns.iter().map(|c| c.column.clone()).collect();
+                        self.push_step_to_active_tab(TransformStep::ConvertToNumber { columns }, false);
+                    }
+                    self.active_tab = keep.min(self.tabs.len().saturating_sub(1));
+                }
+                self.perform_export(g.kind, g.sidecar);
+            }
+        } else if cancel {
+            self.export.text_guard = None;
+            self.status_message = "Export cancelled: a Text column looks like numbers.".into();
         }
     }
 

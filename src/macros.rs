@@ -61,6 +61,8 @@ def _mp_amount(v, col, sign, acc, as_int=False):
     if v is None:
         return None
     s = v.strip()
+    if s.startswith("'"):
+        s = s[1:].strip()
     if s == "" or s.lower() in ("na", "n/a", "null"):
         return None
     s = _mp_strip_currency(s)
@@ -361,6 +363,19 @@ pub fn generate_python_polars_code(
                     "lf = lf.rename({{\"{}\": \"{}\"}})\n\n",
                     old_name, new_name
                 ));
+            }
+            TransformStep::ConvertToNumber { columns } => {
+                py.push_str("# Amount parsing rules (same as MicroParquet)\n");
+                py.push_str(PY_AMOUNT_HELPER);
+                let casts: Vec<String> = columns
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "pl.col(\"{c}\").cast(pl.Utf8).map_elements(lambda v: _mp_amount(v, \"{c}\", \"Unset\", True), return_dtype=pl.Float64)"
+                        )
+                    })
+                    .collect();
+                py.push_str(&format!("lf = lf.with_columns([\n    {},\n])\n\n", casts.join(",\n    ")));
             }
             TransformStep::FilterRows {
                 column,

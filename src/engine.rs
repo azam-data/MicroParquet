@@ -248,11 +248,19 @@ enum DrCr {
 
 /// Blank, NA, N/A or NULL (any case) after trimming.
 pub fn is_blank_amount_token(s: &str) -> bool {
-    let s = s.trim();
+    let s = strip_leading_apostrophe(s);
     s.is_empty()
         || s.eq_ignore_ascii_case("na")
         || s.eq_ignore_ascii_case("n/a")
         || s.eq_ignore_ascii_case("null")
+}
+
+/// CBS exports put one apostrophe in front of a value to protect it from Excel ("'0012",
+/// "'1,234.50"). Number and date parsing drops that one apostrophe; text columns are never
+/// touched. Returns the trimmed value without it.
+fn strip_leading_apostrophe(s: &str) -> &str {
+    let s = s.trim();
+    s.strip_prefix('\'').unwrap_or(s).trim()
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -307,7 +315,7 @@ fn split_dr_cr(s: &str) -> (Option<DrCr>, &str) {
 
 /// True when the value carries a Dr/Cr marker (after any currency prefix).
 pub fn amount_has_dr_cr(raw: &str) -> bool {
-    split_dr_cr(strip_currency_prefix(raw.trim())).0.is_some()
+    split_dr_cr(strip_currency_prefix(strip_leading_apostrophe(raw))).0.is_some()
 }
 
 /// Cleans an amount down to an unsigned digit string and its sign.
@@ -317,7 +325,7 @@ fn clean_amount(
     sign: SignConvention,
     accounting_negatives: bool,
 ) -> std::result::Result<(String, bool), AmountCell> {
-    let s = raw.trim();
+    let s = strip_leading_apostrophe(raw);
     if is_blank_amount_token(s) {
         return Err(AmountCell::Blank);
     }
@@ -579,6 +587,105 @@ fn check_dr_cr_conventions(path: &Path, is_parquet: bool, config: &IngestionConf
         anyhow::bail!(dr_cr_unset_message(c));
     }
     Ok(())
+}
+
+// ------------------------------------------------------------ Text columns of numbers (L4)
+
+/// A share of non-blank values at or above this makes a Text column "look like numbers".
+pub const TEXT_NUMBER_SHARE: f64 = 0.95;
+
+/// A Text column in an export whose values mostly parse as numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericLookingColumn {
+    pub column: String,
+    /// Non-blank values.
+    pub non_blank: usize,
+    /// Of those, values that parse as numbers (the amount rules, incl. a leading apostrophe).
+    pub numeric: usize,
+}
+
+impl NumericLookingColumn {
+    /// Whole percent, rounded.
+    pub fn percent(&self) -> usize {
+        if self.non_blank == 0 {
+            0
+        } else {
+            ((self.numeric as f64 * 100.0) / self.non_blank as f64).round() as usize
+        }
+    }
+
+    /// The question shown before an export.
+    pub fn message(&self) -> String {
+        format!(
+            "{} is Text, but {}% of its values look like numbers. Set it to Number before exporting?",
+            self.column,
+            self.percent()
+        )
+    }
+}
+
+/// Text columns of the result where at least 95% of the non-blank values parse as numbers. ID
+/// columns (Phase 1 name tokens: account numbers, branch codes, CIF ...) are left out: their
+/// leading zeros are meaningful. One aggregation pass over the Text columns.
+pub fn text_columns_that_look_numeric(lf: LazyFrame) -> Result<Vec<NumericLookingColumn>> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the column types for the Text check")?;
+    let text_cols: Vec<String> = schema
+        .iter()
+        .filter(|(n, dt)| **dt == DataType::String && !TabState::is_likely_id_column(n.as_str()))
+        .map(|(n, _)| n.to_string())
+        .collect();
+    if text_cols.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut exprs: Vec<Expr> = Vec::with_capacity(text_cols.len() * 2);
+    for (i, name) in text_cols.iter().enumerate() {
+        let counted = |numeric: bool| {
+            col(name.as_str()).map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let flags: UInt32Chunked = ca
+                        .into_iter()
+                        .map(|v| {
+                            Some(match v {
+                                None => 0u32,
+                                Some(v) if is_blank_amount_token(v) => 0,
+                                Some(v) => {
+                                    if numeric {
+                                        matches!(
+                                            parse_banking_amount(v, SignConvention::Unset, true),
+                                            AmountCell::Value(_)
+                                        ) as u32
+                                    } else {
+                                        1
+                                    }
+                                }
+                            })
+                        })
+                        .collect();
+                    Ok(Some(flags.into_series()))
+                },
+                GetOutput::from_type(DataType::UInt32),
+            )
+        };
+        exprs.push(counted(false).sum().cast(DataType::UInt64).alias(format!("__tn_b_{i}")));
+        exprs.push(counted(true).sum().cast(DataType::UInt64).alias(format!("__tn_n_{i}")));
+    }
+    let df = lf.select(exprs).collect().context("Failed to check the Text columns for numbers")?;
+    let mut out = Vec::new();
+    for (i, name) in text_cols.iter().enumerate() {
+        let get = |p: &str| {
+            df.column(&format!("{p}{i}"))
+                .ok()
+                .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
+                .unwrap_or(0) as usize
+        };
+        let (non_blank, numeric) = (get("__tn_b_"), get("__tn_n_"));
+        if non_blank > 0 && (numeric as f64) >= TEXT_NUMBER_SHARE * non_blank as f64 {
+            out.push(NumericLookingColumn { column: name.clone(), non_blank, numeric });
+        }
+    }
+    Ok(out)
 }
 
 // ------------------------------------------------------------------------ baseline control sum
@@ -2110,6 +2217,44 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
         }
         TransformStep::RenameColumn { old_name, new_name } => {
             Ok(lf.rename([old_name.as_str()], [new_name.as_str()]))
+        }
+        TransformStep::ConvertToNumber { columns } => {
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for Set to Number")?;
+            let mut exprs: Vec<Expr> = Vec::with_capacity(columns.len());
+            for c in columns {
+                if schema.get(c.as_str()).is_none() {
+                    anyhow::bail!("Set to Number: column '{}' does not exist at this step.", c);
+                }
+                let name = c.clone();
+                exprs.push(
+                    col(c.as_str())
+                        .cast(DataType::String)
+                        .map(
+                            move |s: Series| {
+                                let ca = s.str()?;
+                                let mut out: Vec<Option<f64>> = Vec::with_capacity(ca.len());
+                                for v in ca.into_iter() {
+                                    out.push(match v.map(|v| parse_banking_amount(v, SignConvention::Unset, true)) {
+                                        Some(AmountCell::Value(x)) => Some(x),
+                                        Some(AmountCell::NeedsSignConvention) => {
+                                            return Err(PolarsError::ComputeError(
+                                                dr_cr_unset_message(&name).into(),
+                                            ))
+                                        }
+                                        _ => None,
+                                    });
+                                }
+                                Ok(Some(Float64Chunked::from_iter(out).into_series()))
+                            },
+                            GetOutput::from_type(DataType::Float64),
+                        )
+                        .alias(c.as_str()),
+                );
+            }
+            Ok(lf.with_columns(exprs))
         }
         TransformStep::FilterRows {
             column,

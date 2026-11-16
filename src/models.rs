@@ -843,6 +843,11 @@ pub enum TransformStep {
         old_name: String,
         new_name: String,
     },
+    /// Text columns read as numbers (Float64) with the rules of a Float64 schema column: the
+    /// pre-export warning offers it ("Set to Number").
+    ConvertToNumber {
+        columns: Vec<String>,
+    },
     FilterRows {
         column: String,
         operator: FilterOp,
@@ -964,6 +969,9 @@ impl TransformStep {
             }
             TransformStep::RenameColumn { old_name, new_name } => {
                 format!("Rename {} -> {}", old_name, new_name)
+            }
+            TransformStep::ConvertToNumber { columns } => {
+                format!("Set to Number: {}", columns.join(", "))
             }
             TransformStep::FilterRows {
                 column,

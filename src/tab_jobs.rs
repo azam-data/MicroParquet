@@ -7,8 +7,8 @@ use crate::engine::{
     blank_balance_notes, compile_tab_lazy, control_totals_state, remember_baseline,
     source_baseline_sum,
     ensure_pii_key_for, export_to_csv, export_to_parquet, fetch_viewport_slice, ExportMode, ExportPath,
-    join_status, source_parse_failures, source_row_check, weighted_mixed_sign_notes,
-    write_parse_failures_csv,
+    join_status, source_parse_failures, source_row_check, text_columns_that_look_numeric,
+    weighted_mixed_sign_notes, write_parse_failures_csv, NumericLookingColumn,
 };
 use crate::exporters::{
     export_selected_tabs_to_xlsx_scaled, export_tabs_to_pdf, split_and_export_by_column_ctx,
@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 /// What a finished job hands back to the UI.
 pub enum JobOutput {
+    TextCheck(Box<TextCheckResult>),
     Loaded(Box<LoadedTab>),
     Refreshed(Box<Refreshed>),
     Schema(Box<SchemaApplied>),
@@ -505,4 +506,43 @@ pub fn convert_csv_to_parquet(
         path_used: Some(how),
         written: Some(out_path.to_path_buf()),
     })
+}
+
+// -------------------------------------------------------------------- Text columns of numbers
+
+pub struct TextCheckRequest {
+    pub token: u64,
+    /// (tab id, title, source, steps) of every tab the export reads.
+    pub tabs: Vec<(u64, String, TabSource, Vec<TransformStep>)>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct TabTextFindings {
+    pub tab_id: u64,
+    pub title: String,
+    pub columns: Vec<NumericLookingColumn>,
+}
+
+pub struct TextCheckResult {
+    pub token: u64,
+    /// Tabs with at least one Text column that looks like numbers.
+    pub findings: Vec<TabTextFindings>,
+}
+
+/// Before an export: which Text columns of the exported tabs are mostly numbers.
+pub fn check_text_columns(req: TextCheckRequest, ctx: &JobCtx) -> Result<TextCheckResult> {
+    let mut findings = Vec::new();
+    for (i, (tab_id, title, source, steps)) in req.tabs.iter().enumerate() {
+        ctx.check()?;
+        ctx.set_progress(
+            format!("Checking Text columns of '{}' ({} of {})…", title, i + 1, req.tabs.len()),
+            None,
+        );
+        let lf = compile_tab_lazy(source, steps, &req.temp_dir)?;
+        let columns = text_columns_that_look_numeric(lf)?;
+        if !columns.is_empty() {
+            findings.push(TabTextFindings { tab_id: *tab_id, title: title.clone(), columns });
+        }
+    }
+    Ok(TextCheckResult { token: req.token, findings })
 }

@@ -23,6 +23,10 @@ impl MicroParquetApp {
             match r.outcome {
                 Outcome::Done(out) => self.apply_job_output(out),
                 Outcome::Failed(msg) => match kind {
+                    JobKind::Stats if self.export.pending.is_some() => {
+                        self.drop_pending_export();
+                        self.status_message = format!("Export stopped: could not check the Text columns: {}", msg);
+                    }
                     JobKind::Load => self.status_message = format!("Pipeline error: {}", msg),
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
                     JobKind::Batch => {
@@ -39,6 +43,9 @@ impl MicroParquetApp {
                     }
                 },
                 Outcome::Cancelled => {
+                    if kind == JobKind::Stats {
+                        self.drop_pending_export();
+                    }
                     if let Some(l) = line {
                         self.status_message = l;
                     }
@@ -107,6 +114,7 @@ impl MicroParquetApp {
                 self.refresh_tab_at(idx, true, None);
                 self.status_message = status;
             }
+            JobOutput::TextCheck(r) => self.apply_text_check(*r),
             JobOutput::Exported(o) => {
                 self.status_message = o.message;
             }
