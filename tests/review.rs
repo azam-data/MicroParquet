@@ -2203,3 +2203,27 @@ fn t29_pii_key_file() {
     assert_eq!(std::fs::read(&key_path).unwrap(), b"short".to_vec());
     assert_eq!(pii_key_fingerprint(&k).len(), 8);
 }
+
+#[test]
+fn t26c_excel_long_whole_numbers_as_text() {
+    use micro_parquet::exporters::*;
+    let df = df!(
+        "Actnum" => [1_234_567_890_123_456_i64, 42],
+        "Small" => [999_999_999_999_999_i64, -999_999_999_999_999],
+        "Neg" => [-1_000_000_000_000_000_i64, 1]
+    )
+    .unwrap();
+    let p = tmpdir().join("t26c.xlsx");
+    let rep = export_tabs_to_xlsx(vec![("Loans".into(), df)], Vec::new(), &p).unwrap();
+    assert_eq!(rep.text_columns, vec![("Loans".to_string(), "Actnum".to_string()), ("Loans".to_string(), "Neg".to_string())]);
+    let s = rep.summary();
+    assert!(s.contains("'Actnum' in 'Loans'") && s.contains("'Neg' in 'Loans'") && !s.contains("Small"), "{s}");
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+    let cell = |r: &str| sheet.split(&format!("<c r=\"{r}\"")).nth(1).unwrap().split("</c>").next().unwrap().to_string();
+    // 16 digits: text with every digit kept; 15 digits and small values stay numbers.
+    assert!(cell("A2").contains("t=\"s\"") && strings.contains("1234567890123456"), "{}", cell("A2"));
+    assert!(cell("C2").contains("t=\"s\"") && strings.contains("-1000000000000000"));
+    assert!(!cell("A3").contains("t=\"s\"") && cell("A3").contains("<v>42</v>"));
+    assert!(!cell("B2").contains("t=\"s\"") && cell("B2").contains("<v>999999999999999</v>"), "{}", cell("B2"));
+}

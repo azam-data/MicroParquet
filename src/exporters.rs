@@ -15,6 +15,15 @@ use std::path::Path;
 /// Data rows per Excel sheet: 1,048,576 rows minus the header row.
 pub const EXCEL_MAX_DATA_ROWS: usize = 1_048_575;
 pub const PDF_MAX_ROWS_PER_TAB: usize = 5_000;
+/// Whole numbers from here up (16+ digits) are written as text: Excel keeps 15 significant digits.
+const EXCEL_EXACT_INT_LIMIT: u64 = 1_000_000_000_000_000;
+
+fn note_text_column(report: &mut XlsxExportReport, tab: &str, column: &str) {
+    if !report.text_columns.iter().any(|(t, c)| t == tab && c == column) {
+        report.text_columns.push((tab.to_string(), column.to_string()));
+    }
+}
+
 /// Excel serial number of 1970-01-01.
 const EXCEL_EPOCH_OFFSET_DAYS: f64 = 25_569.0;
 
@@ -25,6 +34,9 @@ pub struct XlsxExportReport {
     pub sheets: Vec<(String, usize)>,
     /// Tabs that could not be exported: (tab title, error). Written to the `Export_Errors` sheet.
     pub errors: Vec<(String, String)>,
+    /// (tab title, column) of whole-number columns written as text because a value has more
+    /// than 15 digits (Excel keeps only 15 significant digits of a number).
+    pub text_columns: Vec<(String, String)>,
 }
 
 impl XlsxExportReport {
@@ -37,6 +49,17 @@ impl XlsxExportReport {
             if *n > 1 {
                 parts.push(format!("'{}' has more than {} rows and continues over {} sheets", t, EXCEL_MAX_DATA_ROWS, n));
             }
+        }
+        if !self.text_columns.is_empty() {
+            let cols: Vec<String> = self
+                .text_columns
+                .iter()
+                .map(|(t, c)| format!("'{}' in '{}'", c, t))
+                .collect();
+            parts.push(format!(
+                "⚠ whole numbers with more than 15 digits written as text (Excel would round them): {}",
+                cols.join(", ")
+            ));
         }
         if !self.errors.is_empty() {
             let names: Vec<&str> = self.errors.iter().map(|(t, _)| t.as_str()).collect();
@@ -122,6 +145,17 @@ pub fn write_xlsx_workbook(
                         }
                         Ok(AnyValue::Float32(v)) => {
                             worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
+                        }
+                        Ok(AnyValue::Int64(v)) if v.unsigned_abs() >= EXCEL_EXACT_INT_LIMIT => {
+                            worksheet.write_string(xls_row, xls_col, v.to_string())?;
+                            note_text_column(&mut report, &raw_title, series.name().as_str());
+                        }
+                        Ok(AnyValue::UInt64(v)) if v >= EXCEL_EXACT_INT_LIMIT => {
+                            worksheet.write_string(xls_row, xls_col, v.to_string())?;
+                            note_text_column(&mut report, &raw_title, series.name().as_str());
+                        }
+                        Ok(AnyValue::UInt64(v)) => {
+                            worksheet.write_number(xls_row, xls_col, v as f64)?;
                         }
                         Ok(AnyValue::Int64(v)) => {
                             worksheet.write_number(xls_row, xls_col, v as f64)?;
