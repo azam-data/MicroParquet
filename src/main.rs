@@ -56,9 +56,10 @@ fn main() -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(
-                "MicroParquet v1.2 — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
-            )
+            .with_title(format!(
+                "MicroParquet v{} — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
+                env!("CARGO_PKG_VERSION")
+            ))
             .with_inner_size([1320.0, 740.0])
             .with_min_inner_size([800.0, 560.0]),
         ..Default::default()

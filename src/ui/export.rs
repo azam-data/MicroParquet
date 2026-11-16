@@ -399,7 +399,7 @@ impl MicroParquetApp {
             return;
         };
         let Some(out_path) = rfd::FileDialog::new()
-            .set_file_name(format!("{}.parquet", tab.title))
+            .set_file_name(micro_parquet::paths::default_export_file_name(&tab.title, "parquet"))
             .save_file()
         else {
             return;
@@ -417,7 +417,7 @@ impl MicroParquetApp {
             return;
         };
         let Some(out_path) = rfd::FileDialog::new()
-            .set_file_name(format!("{}.csv", tab.title))
+            .set_file_name(micro_parquet::paths::default_export_file_name(&tab.title, "csv"))
             .save_file()
         else {
             return;

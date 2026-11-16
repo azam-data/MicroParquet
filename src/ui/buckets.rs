@@ -46,7 +46,7 @@ impl MicroParquetApp {
     pub(crate) fn render_buckets_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        theme::modal("\u{E108} Maturity Bucketer & Custom Preset Creator (v1.2)")
+        theme::modal("\u{E108} Maturity Bucketer & Custom Preset Creator")
             .collapsible(false)
             .default_width(680.0)
             .show(ctx, |ui| {
@@ -95,7 +95,7 @@ impl MicroParquetApp {
                     }
                 });
 
-                // Custom Maturity Bucket Preset Creator Drawer (v1.2)
+                // Custom Maturity Bucket Preset Creator Drawer
                 if self.buckets.show_custom_creator {
                     ui.separator();
                     egui::Frame::group(ui.style()).show(ui, |ui| {

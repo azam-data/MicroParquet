@@ -24,7 +24,7 @@ impl MicroParquetApp {
     pub(crate) fn render_columns_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        theme::modal("\u{E546} Columns: Drop, Order, Rename & Number Format (v1.2)")
+        theme::modal("\u{E546} Columns: Drop, Order, Rename & Number Format")
             .collapsible(false)
             .default_width(680.0)
             .show(ctx, |ui| {

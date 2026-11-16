@@ -77,7 +77,7 @@ impl MicroParquetApp {
                             };
                             if let Some(save_path) = rfd::FileDialog::new()
                                 .set_directory(&self.paths.macros_dir)
-                                .set_file_name(format!("{}.mpq.json", self.macros.name))
+                                .set_file_name(micro_parquet::paths::default_export_file_name(&self.macros.name, "mpq.json"))
                                 .save_file()
                             {
                                 match save_macro_to_file(&recipe, &save_path) {

@@ -14,13 +14,20 @@ pub struct PortablePaths {
     pub temp_dir: PathBuf,
 }
 
-/// `portable_data/` next to the executable (falls back to the working directory).
+/// The data folder (`portable_data`): next to the executable, or on macOS next to the `.app`
+/// bundle (with `~/Library/Application Support/MicroParquet` as the fallback). Falls back to
+/// the working directory when the executable path is unknown. See `paths::choose_portable_root`.
 pub fn portable_root_dir() -> PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    exe_dir.join("portable_data")
+    let exe = std::env::current_exe().unwrap_or_else(|_| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join("MicroParquet")
+    });
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    crate::paths::choose_portable_root(
+        &exe,
+        cfg!(target_os = "macos"),
+        home.as_deref(),
+        &crate::paths::dir_is_writable,
+    )
 }
 
 impl PortablePaths {
