@@ -97,6 +97,15 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+/// Where a stored tab index points after the tab at `closed` is removed, leaving `new_len` tabs.
+/// Indices after the closed tab shift down so they keep pointing at the same tab. An index at
+/// the closed tab moves to the tab that took its place (or the new last tab). Any result is
+/// clamped to 0..new_len, and is 0 when no tabs are left.
+fn tab_index_after_close(sel: usize, closed: usize, new_len: usize) -> usize {
+    let shifted = if sel > closed { sel - 1 } else { sel };
+    shifted.min(new_len.saturating_sub(1))
+}
+
 /// Default for the asset/liability side picker: the first column with a "side" or "direction"
 /// name token. "type" is not used: Account_Type or Collateral_Type are not sides.
 fn default_side_column(cols: &[String]) -> String {
@@ -1256,25 +1265,16 @@ impl eframe::App for MicroParquetApp {
             if let Some(idx) = tab_to_close {
                 if idx < self.tabs.len() {
                     self.tabs.remove(idx);
-                }
-                if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
-                    self.active_tab = self.tabs.len() - 1;
-                }
-                // Keep join/reconcile selections pointing at the same tab, or reset them to 0
-                let new_len = self.tabs.len();
-                for sel in [
-                    &mut self.join_left_tab,
-                    &mut self.join_right_tab,
-                    &mut self.rec_prev_tab,
-                    &mut self.rec_curr_tab,
-                ] {
-                    if *sel > idx {
-                        *sel -= 1;
-                    } else if *sel == idx {
-                        *sel = 0;
-                    }
-                    if *sel >= new_len {
-                        *sel = 0;
+                    // Every stored tab index must stay valid (see tab_index_after_close)
+                    let new_len = self.tabs.len();
+                    for sel in [
+                        &mut self.active_tab,
+                        &mut self.join_left_tab,
+                        &mut self.join_right_tab,
+                        &mut self.rec_prev_tab,
+                        &mut self.rec_curr_tab,
+                    ] {
+                        *sel = tab_index_after_close(*sel, idx, new_len);
                     }
                 }
                 return;
@@ -3640,5 +3640,29 @@ mod tests {
         assert_eq!(default_side_column(&cols(&["Collateral_Type", "Balance"])), "");
         assert_eq!(default_side_column(&cols(&["Direction", "Side"])), "Direction");
         assert_eq!(default_side_column(&cols(&["BalanceSide"])), "BalanceSide");
+    }
+
+    #[test]
+    fn tab_indices_stay_valid_after_close() {
+        // 4 tabs [0,1,2,3]; close tab 1 -> 3 tabs left
+        assert_eq!(tab_index_after_close(0, 1, 3), 0, "before the closed tab: unchanged");
+        assert_eq!(tab_index_after_close(2, 1, 3), 1, "after: same tab, shifted down");
+        assert_eq!(tab_index_after_close(3, 1, 3), 2, "last tab stays last");
+        assert_eq!(tab_index_after_close(1, 1, 3), 1, "closed tab: the tab that took its place");
+        // Closing the selected last tab moves to the new last tab
+        assert_eq!(tab_index_after_close(3, 3, 3), 2);
+        // Stale index beyond the list is clamped
+        assert_eq!(tab_index_after_close(9, 0, 3), 2);
+        // Closing the only tab
+        assert_eq!(tab_index_after_close(0, 0, 0), 0);
+        // Exhaustive: every result is a valid index (or 0 when empty)
+        for len in 1..6usize {
+            for closed in 0..len {
+                for sel in 0..len + 2 {
+                    let r = tab_index_after_close(sel, closed, len - 1);
+                    assert!(r < (len - 1).max(1), "sel {sel} closed {closed} len {len} -> {r}");
+                }
+            }
+        }
     }
 }
