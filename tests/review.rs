@@ -2464,3 +2464,61 @@ fn t29c_key_backups_are_never_overwritten_and_export_is_private() {
         assert_eq!(mode(&bak1), 0o600);
     }
 }
+
+#[test]
+fn t12b_weighted_rate_with_mixed_sign_weights() {
+    // +1000 @ 9% and -999 @ 5% do not average to a rate (the weights nearly cancel): null + flag.
+    // All-negative weights (-100 @ 5%, -900 @ 10%) are a normal 9.5%.
+    let prev = df!(
+        "Actnum" => ["M1", "M1", "N1", "N1", "P1", "P1"],
+        "Balance" => [1000.0, -999.0, -100.0, -900.0, 100.0, 900.0],
+        "Rate" => [9.0, 5.0, 5.0, 10.0, 5.0, 10.0]
+    )
+    .unwrap();
+    let curr = df!(
+        "Actnum" => ["M1", "N1", "P1"],
+        "Balance" => [1.0, -1000.0, 1000.0],
+        "Rate" => [9.0, 9.5, 9.5]
+    )
+    .unwrap();
+    let rec = build_period_reconcile_lazy(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None).unwrap();
+    assert_eq!(reconcile_mixed_sign_keys(rec.clone()).unwrap(), (1, 0));
+    let out = rec.sort(["Actnum"], Default::default()).collect().unwrap();
+    assert_eq!(str_col(&out, "Actnum"), vec![Some("M1".into()), Some("N1".into()), Some("P1".into())]);
+    assert_eq!(f64_col(&out, "Prev_Rate")[0], None);
+    assert_close(f64_col(&out, "Prev_Rate")[1].unwrap(), 9.5, "all-negative weights");
+    assert_close(f64_col(&out, "Prev_Rate")[2].unwrap(), 9.5, "all-positive weights");
+    // A null rate gives a null rate change, never a made-up one.
+    let bps = f64_col(&out, "Rate_Delta_Bps");
+    assert_eq!(bps[0], None);
+    assert_close(bps[1].unwrap(), 0.0, "N1 rate change");
+    let flags: Vec<Option<bool>> = out.column("Prev_Rate_Mixed_Sign").unwrap().bool().unwrap().into_iter().collect();
+    assert_eq!(flags, vec![Some(true), Some(false), Some(false)]);
+
+    // Group-by WAVG: same rule, and the note counts the groups.
+    let df = df!(
+        "Grp" => ["M", "M", "N", "N", "P"],
+        "Rate" => [9.0, 5.0, 5.0, 10.0, 7.0],
+        "Balance" => [1000.0, -999.0, -100.0, -900.0, 50.0]
+    )
+    .unwrap();
+    let p = write_parquet("wavg_mixed.parquet", &df);
+    let src = TabSource::SingleFile { path: p, is_parquet: true, config: IngestionConfig::default() };
+    let steps = vec![wavg_step(Some("Balance"))];
+    let out = compile_tab_lazy(&src, &steps, &tmpdir())
+        .unwrap()
+        .sort(["Grp"], Default::default())
+        .collect()
+        .unwrap();
+    let w = f64_col(&out, "WAVG_Rate");
+    assert_eq!(w[0], None);
+    assert_close(w[1].unwrap(), 9.5, "all-negative group");
+    assert_close(w[2].unwrap(), 7.0, "single positive row");
+    let notes = weighted_mixed_sign_notes(&src, &steps, &tmpdir()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("WAVG_Rate is null for 1 group"), "{notes:?}");
+    // No mixed groups, no note.
+    let df = df!("Grp" => ["N", "N"], "Rate" => [5.0, 10.0], "Balance" => [-100.0, -900.0]).unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("wavg_neg.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    assert!(weighted_mixed_sign_notes(&src, &steps, &tmpdir()).unwrap().is_empty());
+}

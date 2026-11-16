@@ -538,14 +538,17 @@ pub fn generate_python_polars_code(
                             format!("pl.col(\"{}\").max().alias(\"{}\")", a.target_col, a.alias)
                         }
                         AggFunc::WeightedAvg => {
-                            // Null-safe: only rows with both value and weight count; zero weight -> null
+                            // Null-safe: only rows with both value and weight count; zero weight -> null;
+                            // weights of mixed sign (positive and negative) -> null
                             let w = a.weight_col.as_deref().unwrap_or("").trim();
                             let v_py = format!("pl.col(\"{}\").cast(pl.Float64)", a.target_col);
                             let w_py = format!("pl.col(\"{}\").cast(pl.Float64)", w);
                             let mask = format!("({v_py}.is_not_null() & {w_py}.is_not_null())");
                             let den = format!("{w_py}.filter({mask}).sum()");
+                            let pos = format!("(({w_py} > 0) & {mask}).cast(pl.Int64).sum()");
+                            let neg = format!("(({w_py} < 0) & {mask}).cast(pl.Int64).sum()");
                             format!(
-                                "pl.when({den} == 0).then(None).otherwise(({v_py} * {w_py}).filter({mask}).sum() / {den}).alias(\"{}\")",
+                                "pl.when(({pos} > 0) & ({neg} > 0)).then(None).when({den} == 0).then(None).otherwise(({v_py} * {w_py}).filter({mask}).sum() / {den}).alias(\"{}\")",
                                 a.alias
                             )
                         }

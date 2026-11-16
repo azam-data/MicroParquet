@@ -13,6 +13,7 @@ use micro_parquet::engine::{
     pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv, take_pii_key_created_note,
+    weighted_mixed_sign_notes,
 };
 use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
@@ -189,6 +190,9 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         eprintln!("[MicroParquet] WARNING: {}", w);
     }
     for note in blank_balance_notes(&source, &steps, &paths.temp_dir)? {
+        eprintln!("[MicroParquet] {}", note);
+    }
+    for note in weighted_mixed_sign_notes(&source, &steps, &paths.temp_dir)? {
         eprintln!("[MicroParquet] {}", note);
     }
 
@@ -910,7 +914,11 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        match blank_balance_notes(&tab.source, &tab.steps, &self.paths.temp_dir) {
+        let notes = blank_balance_notes(&tab.source, &tab.steps, &self.paths.temp_dir).and_then(|mut n| {
+            n.extend(weighted_mixed_sign_notes(&tab.source, &tab.steps, &self.paths.temp_dir)?);
+            Ok(n)
+        });
+        match notes {
             Ok(notes) if !notes.is_empty() => {
                 self.status_message = format!("{} ⚠ {}", self.status_message, notes.join("; "));
             }
@@ -3307,6 +3315,7 @@ impl MicroParquetApp {
                                     Some(self.rec_cl_col.trim().to_string())
                                 };
                                 let tabs_before = self.tabs.len();
+                                let r_col_used = r_col.is_some();
                                 self.create_tab_from_source(
                                     format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
                                     TabSource::PeriodReconcile {
@@ -3327,6 +3336,23 @@ impl MicroParquetApp {
                                         compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
                                             .and_then(micro_parquet::banking::reconcile_multi_row_keys)
                                     });
+                                    let mixed = self.tabs.last().and_then(|t| {
+                                        r_col_used.then(|| {
+                                            compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
+                                                .and_then(micro_parquet::banking::reconcile_mixed_sign_keys)
+                                        })
+                                    });
+                                    match mixed {
+                                        Some(Ok((p, c))) if p + c > 0 => self.status_message.push_str(&format!(
+                                            " ⚠ Rate is null for {} key(s) in the previous period and {} in the current: their balances mix positive and negative (see Prev_Rate_Mixed_Sign / Curr_Rate_Mixed_Sign).",
+                                            p, c
+                                        )),
+                                        Some(Err(e)) => self.status_message.push_str(&format!(
+                                            " ⚠ Could not check balances for mixed signs: {:#}",
+                                            e
+                                        )),
+                                        _ => {}
+                                    }
                                     match multi {
                                         Some(Ok((p, c))) => self.status_message.push_str(&format!(
                                             " Keys with more than one row: {} in the previous period, {} in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count).",

@@ -2,6 +2,7 @@ use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
+    weighted_rate_exprs,
 };
 use crate::models::{
     column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
@@ -928,9 +929,9 @@ pub fn pii_key_path() -> PathBuf {
         .unwrap_or_else(|| portable_root_dir().join(PII_KEY_FILE))
 }
 
-/// Set when a pipeline created the key without going through `ensure_pii_key_for`; the app
-/// shows it in the status bar so a new key is never created unannounced.
-/// (Per thread: pipelines are built on the thread that shows the status bar.)
+// Set when a pipeline created the key without going through `ensure_pii_key_for`; the app
+// shows it in the status bar so a new key is never created unannounced.
+// (Per thread: pipelines are built on the thread that shows the status bar.)
 thread_local! {
     static PII_KEY_PENDING_NOTE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
@@ -2296,14 +2297,9 @@ fn apply_groupby_pivot(
                     })?;
                 let w = col(w_name).cast(DataType::Float64);
                 let v = tc.cast(DataType::Float64);
-                // Only rows where both value and weight are known count, in numerator and denominator
-                let mask = v.clone().is_not_null().and(w.clone().is_not_null());
-                let num = (v * w.clone()).filter(mask.clone()).sum();
-                let den = w.filter(mask).sum();
-                when(den.clone().eq(lit(0.0)))
-                    .then(lit(NULL).cast(DataType::Float64))
-                    .otherwise(num / den)
-                    .alias(&spec.alias)
+                // Only rows where both value and weight are known count; weights of mixed sign
+                // give a null rate (counted by `weighted_mixed_sign_notes`)
+                weighted_rate_exprs(v, w).0.alias(&spec.alias)
             }
             AggFunc::PctOfTotal => {
                 let temp_sum_name = format!("__sum_for_{}", spec.alias);
@@ -2501,6 +2497,61 @@ pub fn blank_balance_notes(
                 step.short_label(),
                 n
             ));
+        }
+    }
+    Ok(notes)
+}
+
+/// Group-by steps with a weighted average: one note per step with groups whose weights mix
+/// positive and negative, e.g. "Group/Pivot by [\"Grp\"]: WAVG_Rate is null for 2 groups (balances
+/// of mixed sign)".
+pub fn weighted_mixed_sign_notes(
+    source: &TabSource,
+    steps: &[TransformStep],
+    temp_dir: &Path,
+) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        let TransformStep::GroupByPivot { group_cols, aggs, .. } = step else {
+            continue;
+        };
+        let weighted: Vec<(&AggSpec, &str)> = aggs
+            .iter()
+            .filter(|a| a.func == AggFunc::WeightedAvg)
+            .filter_map(|a| a.weight_col.as_deref().map(str::trim).map(|w| (a, w)))
+            .filter(|(_, w)| !w.is_empty())
+            .collect();
+        if group_cols.is_empty() || weighted.is_empty() {
+            continue;
+        }
+        let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+        for (a, w) in weighted {
+            let (_, mixed) = weighted_rate_exprs(
+                col(&a.target_col).cast(DataType::Float64),
+                col(w).cast(DataType::Float64),
+            );
+            let df = input
+                .clone()
+                .group_by(group_cols.iter().map(|c| col(c)).collect::<Vec<_>>())
+                .agg([mixed.alias("__mp_mixed")])
+                .select([col("__mp_mixed").cast(DataType::Int64).sum().alias("n")])
+                .collect()
+                .with_context(|| format!("Could not check the weights of '{}' for mixed signs", a.alias))?;
+            let n = df
+                .column("n")
+                .ok()
+                .and_then(|c| c.i64().ok())
+                .and_then(|ca| ca.get(0))
+                .unwrap_or(0);
+            if n > 0 {
+                notes.push(format!(
+                    "{}: {} is null for {} group(s) whose '{}' values mix positive and negative",
+                    step.short_label(),
+                    a.alias,
+                    n,
+                    w
+                ));
+            }
         }
     }
     Ok(notes)

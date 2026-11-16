@@ -451,8 +451,30 @@ pub fn build_period_reconcile_lazy(
     build_period_reconcile_lazy_with(prev_lf, curr_lf, key_col, bal_col, rate_col, cl_status_col, &cl_map)
 }
 
+/// Weighted average of `v` by `w` for use inside an aggregation: only rows where both are known
+/// count. Returns `(rate, mixed_sign)`. When those weights are a mix of positive and negative
+/// (e.g. +1000 and -999) the ratio is not a meaningful rate, so `rate` is null and `mixed_sign`
+/// is true. Groups whose weights all have one sign (all positive, or all negative) compute
+/// normally; zero weights have no sign. `rate` is also null when the weights sum to 0.
+pub fn weighted_rate_exprs(v: Expr, w: Expr) -> (Expr, Expr) {
+    let mask = v.clone().is_not_null().and(w.clone().is_not_null());
+    let num = (v * w.clone()).filter(mask.clone()).sum();
+    let den = w.clone().filter(mask.clone()).sum();
+    let count_where = |cond: Expr| cond.and(mask.clone()).cast(DataType::Int64).sum();
+    let mixed = count_where(w.clone().gt(lit(0.0)))
+        .gt(lit(0i64))
+        .and(count_where(w.lt(lit(0.0))).gt(lit(0i64)));
+    let rate = when(mixed.clone())
+        .then(lit(NULL).cast(DataType::Float64))
+        .when(den.clone().eq(lit(0.0)))
+        .then(lit(NULL).cast(DataType::Float64))
+        .otherwise(num / den);
+    (rate, mixed)
+}
+
 /// Per key and period: balance sum, balance-weighted rate (rows where rate and balance are both
-/// known; null when their balances sum to 0), row count, and the CL code of the worst-graded row
+/// known; null when their balances sum to 0 or are a mix of positive and negative, which is
+/// flagged in `Prev_Rate_Mixed_Sign` / `Curr_Rate_Mixed_Sign`), row count, and the CL code of the worst-graded row
 /// (grade order STD < SMA < SS < DF < BL via `cl_map`; ties and unmapped codes go to the row with
 /// the largest balance).
 pub fn build_period_reconcile_lazy_with(
@@ -482,17 +504,9 @@ pub fn build_period_reconcile_lazy_with(
         }
         let mut agg = vec![col(bal_name).sum(), len().cast(DataType::Int64).alias(count_name)];
         if rate_col.is_some() {
-            let v = col(rate_name);
-            let w = col(bal_name);
-            let mask = v.clone().is_not_null().and(w.clone().is_not_null());
-            let num = (v * w.clone()).filter(mask.clone()).sum();
-            let den = w.filter(mask).sum();
-            agg.push(
-                when(den.clone().eq(lit(0.0)))
-                    .then(lit(NULL).cast(DataType::Float64))
-                    .otherwise(num / den)
-                    .alias(rate_name),
-            );
+            let (rate, mixed) = weighted_rate_exprs(col(rate_name), col(bal_name));
+            agg.push(rate.alias(rate_name));
+            agg.push(mixed.alias(format!("{}_Mixed_Sign", rate_name)));
         }
         if cl_status_col.is_some() {
             agg.push(
@@ -551,7 +565,10 @@ pub fn build_period_reconcile_lazy_with(
         let rate_delta_bps = ((col("Curr_Rate") - col("Prev_Rate")) * lit(100.0))
             .round(2)
             .alias("Rate_Delta_Bps");
-        final_lf = final_lf.with_column(rate_delta_bps);
+        final_lf = final_lf.with_column(rate_delta_bps).with_columns([
+            col("Prev_Rate_Mixed_Sign").fill_null(lit(false)),
+            col("Curr_Rate_Mixed_Sign").fill_null(lit(false)),
+        ]);
     }
 
     if cl_status_col.is_some() {
@@ -574,6 +591,26 @@ pub fn reconcile_multi_row_keys(reconciled: LazyFrame) -> Result<(usize, usize)>
         ])
         .collect()
         .context("Could not count keys with more than one row")?;
+    let get = |name: &str| -> usize {
+        df.column(name)
+            .ok()
+            .and_then(|c| c.i64().ok())
+            .and_then(|ca| ca.get(0))
+            .unwrap_or(0) as usize
+    };
+    Ok((get("p"), get("c")))
+}
+
+/// Keys whose previous / current rate is null because their balances mix positive and negative
+/// (from a reconcile result with a rate column; for the status message).
+pub fn reconcile_mixed_sign_keys(reconciled: LazyFrame) -> Result<(usize, usize)> {
+    let df = reconciled
+        .select([
+            col("Prev_Rate_Mixed_Sign").cast(DataType::Int64).sum().alias("p"),
+            col("Curr_Rate_Mixed_Sign").cast(DataType::Int64).sum().alias("c"),
+        ])
+        .collect()
+        .context("Could not count keys with mixed-sign balances")?;
     let get = |name: &str| -> usize {
         df.column(name)
             .ok()
