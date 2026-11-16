@@ -173,7 +173,6 @@ fn t04_numeric_parsing_silent_nulls() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T1"]
 fn t05_parquet_datetime_maturity_bucket() {
     // Parquet written by pandas / Power BI usually stores dates as Datetime(ns/us/ms), not Date
     let mut df = df!(
@@ -241,7 +240,6 @@ fn t05_parquet_datetime_maturity_bucket() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T1"]
 fn t05b_other_date_inputs_reject_strings() {
     let df = df!(
         "Opndat" => ["2026-01-01"],

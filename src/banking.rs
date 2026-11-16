@@ -1,7 +1,31 @@
 use crate::models::{CustomBucketDef, FtpPoint};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
+
+/// Checks that a date input is a real Date column before any day-difference maths.
+/// Date passes through, Datetime is cast to Date, anything else (text, numbers) is an error,
+/// so a wrongly typed column can never be silently bucketed.
+fn ensure_date(mut lf: LazyFrame, col_name: &str) -> Result<LazyFrame> {
+    let schema = lf
+        .collect_schema()
+        .context("Could not read the column types of this table")?;
+    let dtype = schema.get(col_name).cloned().ok_or_else(|| {
+        anyhow!(
+            "Column '{}' was not found. Check the date column chosen in this step.",
+            col_name
+        )
+    })?;
+    match dtype {
+        DataType::Date => Ok(lf),
+        DataType::Datetime(_, _) => Ok(lf.with_column(col(col_name).cast(DataType::Date))),
+        other => bail!(
+            "Column '{}' is {}, not a date. Set it to a Date type in the Schema & Ingestion settings.",
+            col_name,
+            other
+        ),
+    }
+}
 
 /// Feature B8: Standardizes corporate & counterparty names
 pub fn apply_entity_normalizer(lf: LazyFrame, source_col: &str, new_col: &str) -> LazyFrame {
@@ -43,6 +67,7 @@ pub fn apply_maturity_bucket(
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be in YYYY-MM-DD format (e.g., 2026-10-31)")?;
+    let lf = ensure_date(lf, mat_col)?;
 
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days_since_epoch = (cutoff - epoch).num_days();
@@ -71,7 +96,8 @@ pub fn apply_maturity_bucket(
             .otherwise(expr);
     }
 
-    let final_bucket_expr = when(col(mat_col).is_null())
+    // Null label from the computed remaining days, so a failed conversion can't reach overflow
+    let final_bucket_expr = when(d.clone().is_null())
         .then(lit(null_label))
         .when(d.lt(lit(0)))
         .then(lit(bucket_def.overdue_label.as_str()))
@@ -94,6 +120,7 @@ pub fn apply_rate_shock_sim(
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, mat_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -129,6 +156,8 @@ pub fn apply_ftp_curve_map(
     curve: &[FtpPoint],
     is_liability: bool,
 ) -> Result<LazyFrame> {
+    let lf = ensure_date(lf, opndat_col)?;
+    let lf = ensure_date(lf, matdat_col)?;
     let opn_days = col(opndat_col).cast(DataType::Int32).cast(DataType::Int64);
     let mat_days = col(matdat_col).cast(DataType::Int32).cast(DataType::Int64);
     let raw_diff = mat_days - opn_days;
@@ -191,6 +220,9 @@ pub fn apply_banking_hygiene_audit(
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, opndat_col)?;
+    let lf = ensure_date(lf, matdat_col)?;
+    let lf = ensure_date(lf, clsdat_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -346,6 +378,7 @@ pub fn apply_duration_analysis(
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, mat_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
