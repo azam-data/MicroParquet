@@ -11,8 +11,8 @@ use crate::engine::{
     write_parse_failures_csv,
 };
 use crate::exporters::{
-    export_selected_tabs_to_xlsx, export_tabs_to_pdf, split_and_export_by_column_ctx, TabToExport,
-    PDF_MAX_ROWS_PER_TAB,
+    export_selected_tabs_to_xlsx_scaled, export_tabs_to_pdf, split_and_export_by_column_ctx,
+    ScaledTabToExport, XlsxScale, PDF_MAX_ROWS_PER_TAB,
 };
 use crate::jobs::{write_atomic, JobCtx};
 use crate::models::{
@@ -378,18 +378,30 @@ pub struct ExportTab {
     pub col_formats: HashMap<String, ColumnFormatSpec>,
 }
 
+/// Excel workbook of the ticked tabs. Money columns are written in the chosen scale with the
+/// scale in their header ("Balance (BDT M)"); Parquet and CSV exports keep raw values.
 pub fn export_tabs_xlsx(
     tabs: &[ExportTab],
     temp_dir: &Path,
     out_path: &Path,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
     sidecar: Option<&[ParseFailure]>,
     ctx: &JobCtx,
 ) -> Result<ExportOutcome> {
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
-    let selected: Vec<TabToExport> =
-        tabs.iter().map(|t| (t.title.clone(), &t.source, t.steps.as_slice())).collect();
+    let selected: Vec<ScaledTabToExport> = tabs
+        .iter()
+        .map(|t| ScaledTabToExport {
+            title: t.title.clone(),
+            source: &t.source,
+            steps: t.steps.as_slice(),
+            col_formats: &t.col_formats,
+        })
+        .collect();
+    let scale = XlsxScale { num_format, decimals: global_decimals };
     let rep = write_atomic(out_path, ctx, |tmp| {
-        export_selected_tabs_to_xlsx(&selected, tmp, temp_dir)
+        export_selected_tabs_to_xlsx_scaled(&selected, tmp, temp_dir, scale)
     })?;
     let mut message =
         format!("Exported multi-tab Excel workbook to {:?}: {}", out_path, rep.summary());

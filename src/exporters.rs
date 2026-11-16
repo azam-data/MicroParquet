@@ -2,8 +2,8 @@ use crate::engine::{
     compile_tab_lazy, compute_control_totals, export_to_csv_stream, export_to_parquet_stream,
 };
 use crate::models::{
-    format_metric_value, ColumnFormatSpec, NumberDisplayFormat, ParquetDialect, SplitExportFormat,
-    TabSource, TransformStep,
+    format_metric_value, resolved_scale, ColumnFormatSpec, MoneyScale, NumberDisplayFormat,
+    ParquetDialect, SplitExportFormat, TabSource, TransformStep,
 };
 use crate::jobs::{Cancelled, JobCtx, TempOutput};
 use anyhow::{Context, Result};
@@ -116,12 +116,74 @@ pub fn export_tabs_to_xlsx(
     write_xlsx_workbook(tabs, errors, out_path, EXCEL_MAX_DATA_ROWS)
 }
 
+/// A tab for the scaled Excel export: its data and the per-column formats it is shown with.
+pub struct XlsxTab {
+    pub title: String,
+    pub df: DataFrame,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
+}
+
+/// The scale the workbook is written in: money columns hold value ÷ divisor and say so in their
+/// header ("Balance (BDT M)"). Data files (Parquet, CSV) never use it; they keep raw values.
+#[derive(Clone, Copy, Debug)]
+pub struct XlsxScale {
+    pub num_format: NumberDisplayFormat,
+    pub decimals: usize,
+}
+
+/// `export_selected_tabs_to_xlsx` for tabs that carry column formats.
+pub struct ScaledTabToExport<'a> {
+    pub title: String,
+    pub source: &'a TabSource,
+    pub steps: &'a [TransformStep],
+    pub col_formats: &'a HashMap<String, ColumnFormatSpec>,
+}
+
+pub fn export_selected_tabs_to_xlsx_scaled(
+    tabs: &[ScaledTabToExport],
+    out_path: &Path,
+    temp_dir: &Path,
+    scale: XlsxScale,
+) -> Result<XlsxExportReport> {
+    let mut ok = Vec::new();
+    let mut errors = Vec::new();
+    for t in tabs {
+        match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
+            Ok(df) => ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone() }),
+            Err(e) => errors.push((t.title.clone(), format!("{:#}", e))),
+        }
+    }
+    write_xlsx_tabs(ok, errors, out_path, EXCEL_MAX_DATA_ROWS, Some(scale))
+}
+
 /// `export_tabs_to_xlsx` with the rows-per-sheet limit as a parameter (tests use a small one).
 pub fn write_xlsx_workbook(
     tabs: Vec<(String, DataFrame)>,
     errors: Vec<(String, String)>,
     out_path: &Path,
     rows_per_sheet: usize,
+) -> Result<XlsxExportReport> {
+    let tabs = tabs
+        .into_iter()
+        .map(|(title, df)| XlsxTab { title, df, col_formats: HashMap::new() })
+        .collect();
+    write_xlsx_tabs(tabs, errors, out_path, rows_per_sheet, None)
+}
+
+fn xlsx_decimals_format(decimals: usize) -> String {
+    if decimals == 0 {
+        "#,##0".to_string()
+    } else {
+        format!("#,##0.{}", "0".repeat(decimals.min(6)))
+    }
+}
+
+pub fn write_xlsx_tabs(
+    tabs: Vec<XlsxTab>,
+    errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
 ) -> Result<XlsxExportReport> {
     let rows_per_sheet = rows_per_sheet.max(1);
     let mut workbook = Workbook::new();
@@ -136,10 +198,25 @@ pub fn write_xlsx_workbook(
     let date_fmt = Format::new().set_num_format("dd-mmm-yyyy");
     let datetime_fmt = Format::new().set_num_format("dd-mmm-yyyy hh:mm:ss");
 
-    for (idx, (raw_title, df)) in tabs.into_iter().enumerate() {
+    for (idx, tab) in tabs.into_iter().enumerate() {
+        let XlsxTab { title: raw_title, df, col_formats } = tab;
         let base_name = sanitize_sheet_name(&raw_title, idx + 1);
         let cols = df.get_columns();
         let height = df.height();
+        // Money columns in the chosen scale: (scale, number format) per column.
+        let col_scales: Vec<Option<(MoneyScale, Format)>> = cols
+            .iter()
+            .map(|c| {
+                let sc = scale?;
+                if !matches!(c.dtype(), DataType::Float64 | DataType::Float32) {
+                    return None;
+                }
+                let spec = col_formats.get(c.name().as_str());
+                let ms = resolved_scale(c.name().as_str(), spec, sc.num_format)?;
+                let dec = spec.map(|s| s.decimals).unwrap_or(sc.decimals);
+                Some((ms, Format::new().set_num_format(xlsx_decimals_format(dec))))
+            })
+            .collect();
         let sheet_count = height.div_ceil(rows_per_sheet).max(1);
 
         for part in 0..sheet_count {
@@ -157,12 +234,11 @@ pub fn write_xlsx_workbook(
                 .with_context(|| format!("Excel: invalid sheet name '{}'", name))?;
 
             for (c_idx, series) in cols.iter().enumerate() {
-                worksheet.write_string_with_format(
-                    0,
-                    c_idx as u16,
-                    series.name().as_str(),
-                    &header_fmt,
-                )?;
+                let header_text = match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                    Some((ms, _)) => format!("{} ({})", series.name().as_str(), ms.unit),
+                    None => series.name().to_string(),
+                };
+                worksheet.write_string_with_format(0, c_idx as u16, &header_text, &header_fmt)?;
                 worksheet.set_column_width(c_idx as u16, 18.0)?;
             }
             worksheet.set_freeze_panes(1, 0)?;
@@ -175,12 +251,22 @@ pub fn write_xlsx_workbook(
                     let xls_col = c_idx as u16;
                     match series.get(r_idx) {
                         Ok(AnyValue::Null) => {}
-                        Ok(AnyValue::Float64(v)) => {
-                            worksheet.write_number_with_format(xls_row, xls_col, v, &num_fmt)?;
-                        }
-                        Ok(AnyValue::Float32(v)) => {
-                            worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
-                        }
+                        Ok(AnyValue::Float64(v)) => match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                            Some((ms, f)) => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v / ms.divisor, f)?;
+                            }
+                            None => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v, &num_fmt)?;
+                            }
+                        },
+                        Ok(AnyValue::Float32(v)) => match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                            Some((ms, f)) => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v as f64 / ms.divisor, f)?;
+                            }
+                            None => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
+                            }
+                        },
                         Ok(AnyValue::Int64(v)) if v.unsigned_abs() >= EXCEL_EXACT_INT_LIMIT => {
                             worksheet.write_string(xls_row, xls_col, v.to_string())?;
                             note_text_column(&mut report, &raw_title, series.name().as_str());
@@ -450,7 +536,12 @@ pub fn export_tabs_to_pdf(
             y -= 2.0;
             for (c_idx, series) in cols.iter().enumerate() {
                 let x_mm = PDF_LEFT_MM + (c_idx as f32 * col_width_mm);
-                let hdr: String = series.name().as_str().chars().take(18).collect();
+                let hdr = pdf_column_header(
+                    series.name().as_str(),
+                    matches!(series.dtype(), DataType::Float64 | DataType::Float32),
+                    col_formats.get(series.name().as_str()),
+                    num_format,
+                );
                 layer.use_text(hdr, 8.5, Mm(x_mm), Mm(y), &font_bold);
             }
             y - 5.5
@@ -744,6 +835,23 @@ pub fn format_df_for_clipboard(
     }
 
     out
+}
+
+/// The PDF column header: the name (cut to 18 characters) and, for money columns, the scale in
+/// brackets ("Balance (BDT M)"). The unit is never cut off.
+pub fn pdf_column_header(
+    name: &str,
+    is_float: bool,
+    spec: Option<&ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+) -> String {
+    let unit = if is_float {
+        resolved_scale(name, spec, num_format).map(|m| format!(" ({})", m.unit)).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let keep = 18usize.saturating_sub(unit.chars().count()).max(6);
+    name.chars().take(keep).chain(unit.chars()).collect()
 }
 
 fn format_cell_val(

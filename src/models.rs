@@ -260,6 +260,29 @@ pub enum NumberDisplayFormat {
     StandardCommas,
     BdtLakh,
     BdtCrore,
+    BdtThousand,
+    BdtMillion,
+}
+
+/// A money scale: the value is divided by `divisor` and shown with `suffix`
+/// ("2.50 Cr"); reports name it in the header with `unit` ("Balance (BDT Cr)").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoneyScale {
+    pub divisor: f64,
+    pub suffix: &'static str,
+    pub unit: &'static str,
+}
+
+pub const SCALE_THOUSAND: MoneyScale = MoneyScale { divisor: 1_000.0, suffix: "K", unit: "BDT K" };
+pub const SCALE_MILLION: MoneyScale = MoneyScale { divisor: 1_000_000.0, suffix: "M", unit: "BDT M" };
+pub const SCALE_LAKH: MoneyScale = MoneyScale { divisor: 100_000.0, suffix: "L", unit: "BDT L" };
+pub const SCALE_CRORE: MoneyScale = MoneyScale { divisor: 10_000_000.0, suffix: "Cr", unit: "BDT Cr" };
+
+impl MoneyScale {
+    /// `value` divided by the scale, with thousands separators and the suffix: "25.00 M".
+    pub fn format(&self, value: f64, decimals: usize) -> String {
+        format!("{} {}", format_with_commas(value / self.divisor, decimals), self.suffix)
+    }
 }
 
 impl NumberDisplayFormat {
@@ -267,9 +290,34 @@ impl NumberDisplayFormat {
         match self {
             NumberDisplayFormat::Raw => "Raw Numbers",
             NumberDisplayFormat::StandardCommas => "Commas (1,234.56)",
+            NumberDisplayFormat::BdtThousand => "BDT Thousand (÷ 1,000)",
+            NumberDisplayFormat::BdtMillion => "BDT Million (÷ 1,000,000)",
             NumberDisplayFormat::BdtLakh => "BDT Lakh (÷ 100,000)",
             NumberDisplayFormat::BdtCrore => "BDT Crore (÷ 10,000,000)",
         }
+    }
+
+    /// The scale this format divides by, or `None` for plain numbers.
+    pub fn scale(&self) -> Option<MoneyScale> {
+        match self {
+            NumberDisplayFormat::BdtThousand => Some(SCALE_THOUSAND),
+            NumberDisplayFormat::BdtMillion => Some(SCALE_MILLION),
+            NumberDisplayFormat::BdtLakh => Some(SCALE_LAKH),
+            NumberDisplayFormat::BdtCrore => Some(SCALE_CRORE),
+            NumberDisplayFormat::Raw | NumberDisplayFormat::StandardCommas => None,
+        }
+    }
+
+    /// Every scale in menu order: Crore, Lakh, Million, Thousand, then plain.
+    pub fn all() -> &'static [NumberDisplayFormat] {
+        &[
+            NumberDisplayFormat::BdtCrore,
+            NumberDisplayFormat::BdtLakh,
+            NumberDisplayFormat::BdtMillion,
+            NumberDisplayFormat::BdtThousand,
+            NumberDisplayFormat::StandardCommas,
+            NumberDisplayFormat::Raw,
+        ]
     }
 }
 
@@ -279,6 +327,8 @@ pub enum MetricFormatType {
     Auto,            // Smart-detects Monetary vs Rate (%) vs Duration/Count
     BdtCrore,        // Divide by 10,000,000 + " Cr"
     BdtLakh,         // Divide by 100,000 + " L"
+    BdtThousand,     // Divide by 1,000 + " K"
+    BdtMillion,      // Divide by 1,000,000 + " M"
     StandardCommas,  // 1,234.56
     Raw,             // Unformatted float
     PercentAsIs,     // e.g. 8.5 -> "8.50%"
@@ -291,6 +341,8 @@ impl MetricFormatType {
             MetricFormatType::Auto,
             MetricFormatType::BdtCrore,
             MetricFormatType::BdtLakh,
+            MetricFormatType::BdtMillion,
+            MetricFormatType::BdtThousand,
             MetricFormatType::StandardCommas,
             MetricFormatType::PercentAsIs,
             MetricFormatType::PercentDiv100,
@@ -298,11 +350,24 @@ impl MetricFormatType {
         ]
     }
 
+    /// The money scale of this format, or `None` (percent, plain numbers, Auto).
+    pub fn scale(&self) -> Option<MoneyScale> {
+        match self {
+            MetricFormatType::BdtCrore => Some(SCALE_CRORE),
+            MetricFormatType::BdtLakh => Some(SCALE_LAKH),
+            MetricFormatType::BdtThousand => Some(SCALE_THOUSAND),
+            MetricFormatType::BdtMillion => Some(SCALE_MILLION),
+            _ => None,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             MetricFormatType::Auto => "Auto (Smart Detect)",
             MetricFormatType::BdtCrore => "BDT Crore (Cr)",
             MetricFormatType::BdtLakh => "BDT Lakh (L)",
+            MetricFormatType::BdtThousand => "BDT Thousand (K)",
+            MetricFormatType::BdtMillion => "BDT Million (M)",
             MetricFormatType::StandardCommas => "Decimal / Commas",
             MetricFormatType::PercentAsIs => "Percent (% as-is, e.g. 8.5%)",
             MetricFormatType::PercentDiv100 => "Percent (÷100 & %, e.g. 0.085 -> 8.5%)",
@@ -347,26 +412,43 @@ pub fn format_metric_value(
     };
 
     match resolved_type {
-        MetricFormatType::BdtCrore => {
-            format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
-        }
-        MetricFormatType::BdtLakh => {
-            format!("{} L", format_with_commas(val / 100_000.0, dec))
-        }
+        MetricFormatType::BdtCrore
+        | MetricFormatType::BdtLakh
+        | MetricFormatType::BdtThousand
+        | MetricFormatType::BdtMillion => match resolved_type.scale() {
+            Some(sc) => sc.format(val, dec),
+            None => format_with_commas(val, dec),
+        },
         MetricFormatType::StandardCommas => format_with_commas(val, dec),
         MetricFormatType::PercentAsIs => format!("{}%", format_with_commas(val, dec)),
         MetricFormatType::PercentDiv100 => format!("{}%", format_with_commas(val * 100.0, dec)),
         MetricFormatType::Raw => format!("{}", val),
-        MetricFormatType::Auto => match global_monetary_fmt {
-            NumberDisplayFormat::Raw => format!("{}", val),
-            NumberDisplayFormat::StandardCommas => format_with_commas(val, dec),
-            NumberDisplayFormat::BdtLakh => {
-                format!("{} L", format_with_commas(val / 100_000.0, dec))
-            }
-            NumberDisplayFormat::BdtCrore => {
-                format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
-            }
+        MetricFormatType::Auto => match global_monetary_fmt.scale() {
+            Some(sc) => sc.format(val, dec),
+            None => match global_monetary_fmt {
+                NumberDisplayFormat::StandardCommas => format_with_commas(val, dec),
+                _ => format!("{}", val),
+            },
         },
+    }
+}
+
+/// The money scale a column is shown in: its own format, or for Auto money columns the global
+/// scale. `None` for percentages, durations, counts and plain-number settings.
+pub fn resolved_scale(
+    col_name: &str,
+    col_spec: Option<&ColumnFormatSpec>,
+    global_monetary_fmt: NumberDisplayFormat,
+) -> Option<MoneyScale> {
+    let fmt_type = col_spec.map(|s| s.fmt_type).unwrap_or(MetricFormatType::Auto);
+    let resolved = if fmt_type == MetricFormatType::Auto {
+        classify_column_auto_format(col_name)
+    } else {
+        fmt_type
+    };
+    match resolved {
+        MetricFormatType::Auto => global_monetary_fmt.scale(),
+        other => other.scale(),
     }
 }
 

@@ -316,9 +316,10 @@ impl MicroParquetApp {
         };
         let tabs = self.ticked_export_tabs();
         let temp = self.paths.temp_dir.clone();
+        let (fmt, dec) = (self.num_format, self.global_decimals);
         let label = format!("Excel export {}", file_label(&out_path));
         self.submit_export(label, move |ctx| {
-            export_tabs_xlsx(&tabs, &temp, &out_path, sidecar.as_deref(), ctx)
+            export_tabs_xlsx(&tabs, &temp, &out_path, fmt, dec, sidecar.as_deref(), ctx)
         });
     }
 

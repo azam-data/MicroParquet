@@ -345,13 +345,8 @@ impl MicroParquetApp {
             });
             ui.separator();
             ui.menu_button("Default Monetary Scale", |ui| {
-                for fmt in [
-                    NumberDisplayFormat::BdtCrore,
-                    NumberDisplayFormat::BdtLakh,
-                    NumberDisplayFormat::StandardCommas,
-                    NumberDisplayFormat::Raw,
-                ] {
-                    ui.selectable_value(&mut self.num_format, fmt, fmt.label());
+                for fmt in NumberDisplayFormat::all() {
+                    ui.selectable_value(&mut self.num_format, *fmt, fmt.label());
                 }
             });
             ui.horizontal(|ui| {
