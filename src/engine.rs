@@ -4,7 +4,8 @@ use crate::banking::{
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
 };
 use crate::models::{
-    column_name_tokens, AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, FilterOp, IngestionConfig, MathOp,
+    column_name_tokens, AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, CsvTextEncoding,
+    FilterOp, IngestionConfig, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -13,28 +14,100 @@ use chrono::NaiveDate;
 use polars::prelude::*;
 use polars::sql::SQLContext;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+/// First rows of a CSV as text, read with the separator, title-line skip and encoding that
+/// auto-detection picks for the file.
 pub fn preview_csv_raw(path: &Path, n_rows: usize) -> Result<DataFrame> {
+    let settings = detect_csv_read_settings(path)?;
+    preview_csv_with(path, n_rows, &settings)
+}
+
+/// First `n_rows` data rows as text, read with `config`'s separator, skip_rows and encoding.
+pub fn preview_csv_with(path: &Path, n_rows: usize, config: &IngestionConfig) -> Result<DataFrame> {
+    let sep = separator_byte(config.separator)?;
+    // Only the head of the file is read: title lines, header and n_rows lines (a quoted field
+    // spanning lines can make the preview a little shorter).
+    let lines = read_head_lines(path, config.skip_rows + 1 + n_rows)?;
+    let mut text = String::new();
+    for raw in lines.iter().skip(config.skip_rows) {
+        text.push_str(&decode_line(raw, config.encoding));
+        text.push('\n');
+    }
+    if text.is_empty() {
+        anyhow::bail!(
+            "The file has no header row after skipping {} title line(s).",
+            config.skip_rows
+        );
+    }
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+
     let parse_opts = CsvParseOptions::default()
+        .with_separator(sep)
         .with_encoding(CsvEncoding::LossyUtf8)
         .with_truncate_ragged_lines(true);
 
-    let df = CsvReadOptions::default()
+    let mut df = CsvReadOptions::default()
         .with_parse_options(parse_opts)
         .with_infer_schema_length(Some(0))
         .with_ignore_errors(true)
         .with_n_rows(Some(n_rows))
-        .try_into_reader_with_file_path(Some(path.to_path_buf()))
-        .context("Failed to initialize CSV preview reader")?
+        .into_reader_with_file_handle(std::io::Cursor::new(text.into_bytes()))
         .finish()
         .context("Failed to read CSV preview rows")?;
+    strip_bom_from_first_name(&mut df);
     Ok(df)
 }
 
+/// Separator, title lines (0) and encoding for a file: Windows-1252 when the head of the file
+/// is not valid UTF-8, and the most frequent of , | ; tab outside quotes in the header line.
+pub fn detect_csv_read_settings(path: &Path) -> Result<IngestionConfig> {
+    let mut head = Vec::new();
+    File::open(path)
+        .with_context(|| format!("Failed to open {:?}", path))?
+        .take(64 * 1024)
+        .read_to_end(&mut head)
+        .with_context(|| format!("Failed to read {:?}", path))?;
+    let encoding = match std::str::from_utf8(&head) {
+        Ok(_) => CsvTextEncoding::Utf8,
+        // Cut off in the middle of a character at the 64 KB mark: still UTF-8.
+        Err(e) if e.error_len().is_none() => CsvTextEncoding::Utf8,
+        Err(_) => CsvTextEncoding::Windows1252,
+    };
+    let header = read_head_lines(path, 1)?
+        .first()
+        .map(|l| decode_line(l, encoding))
+        .unwrap_or_default();
+    Ok(IngestionConfig {
+        separator: detect_separator(&header),
+        encoding,
+        ..Default::default()
+    })
+}
+
+/// The candidate (, | ; tab) that occurs most often outside quotes; ',' when none does.
+pub fn detect_separator(header_line: &str) -> char {
+    let mut best = (',', 0usize);
+    for cand in [',', '|', ';', '\t'] {
+        let n = count_unquoted(header_line, cand);
+        if n > best.1 {
+            best = (cand, n);
+        }
+    }
+    best.0
+}
+
+/// `auto_detect_smart_schema` with the separator, skip_rows and encoding detected for the file.
 pub fn auto_detect_smart_schema(path: &Path) -> Result<IngestionConfig> {
-    let sample_df = preview_csv_raw(path, 200)?;
+    let settings = detect_csv_read_settings(path)?;
+    auto_detect_smart_schema_with(path, &settings)
+}
+
+/// Infers column types from the first 200 rows, read with `base`'s separator, skip_rows and
+/// encoding. The other settings of `base` are kept; its columns are replaced.
+pub fn auto_detect_smart_schema_with(path: &Path, base: &IngestionConfig) -> Result<IngestionConfig> {
+    let sample_df = preview_csv_with(path, 200, base)?;
     let preview_5 = sample_df.head(Some(5));
     let mut columns = Vec::with_capacity(sample_df.width());
 
@@ -65,7 +138,7 @@ pub fn auto_detect_smart_schema(path: &Path) -> Result<IngestionConfig> {
 
     Ok(IngestionConfig {
         columns,
-        ..Default::default()
+        ..base.clone()
     })
 }
 
@@ -560,19 +633,27 @@ fn parse_month_name(s: &str) -> Option<u32> {
     }
 }
 
-pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
+/// Joins physical lines until each record has as many unquoted separators as the header.
+/// The first `skip_rows` lines (titles above the header) are dropped.
+pub fn heal_broken_csv_file(
+    input_path: &Path,
+    temp_dir: &Path,
+    separator: u8,
+    skip_rows: usize,
+) -> Result<PathBuf> {
     let healed_path = temp_dir.join(format!(
         "healed_{}",
         input_path.file_name().unwrap_or_default().to_string_lossy()
     ));
     let reader = BufReader::new(File::open(input_path)?);
     let mut writer = BufWriter::new(File::create(&healed_path)?);
+    let sep = separator as char;
 
-    let mut lines = reader.lines();
+    let mut lines = reader.lines().skip(skip_rows);
     let Some(Ok(header)) = lines.next() else {
         anyhow::bail!("CSV file is empty");
     };
-    let expected_commas = count_unquoted_commas(&header);
+    let expected = count_unquoted(&header, sep);
     writeln!(writer, "{}", header)?;
 
     let mut pending_line = String::new();
@@ -585,7 +666,7 @@ pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBu
             pending_line.push_str(line.trim());
         }
 
-        if count_unquoted_commas(&pending_line) >= expected_commas {
+        if count_unquoted(&pending_line, sep) >= expected {
             writeln!(writer, "{}", pending_line)?;
             pending_line.clear();
         }
@@ -597,17 +678,105 @@ pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBu
     Ok(healed_path)
 }
 
-fn count_unquoted_commas(s: &str) -> usize {
+fn count_unquoted(s: &str, sep: char) -> usize {
     let mut in_quotes = false;
     let mut count = 0;
     for c in s.chars() {
         if c == '"' {
             in_quotes = !in_quotes;
-        } else if c == ',' && !in_quotes {
+        } else if c == sep && !in_quotes {
             count += 1;
         }
     }
     count
+}
+
+/// The separator as a byte; only , | ; and tab are accepted.
+fn separator_byte(sep: char) -> Result<u8> {
+    match sep {
+        ',' | '|' | ';' | '\t' => Ok(sep as u8),
+        other => anyhow::bail!(
+            "Separator {:?} is not supported. Choose comma, pipe, semicolon or tab in Schema & Ingestion.",
+            other
+        ),
+    }
+}
+
+/// Up to `n` raw lines from the start of a file (line endings removed).
+fn read_head_lines(path: &Path, n: usize) -> Result<Vec<Vec<u8>>> {
+    let mut reader =
+        BufReader::new(File::open(path).with_context(|| format!("Failed to open {:?}", path))?);
+    let mut out = Vec::new();
+    while out.len() < n {
+        let mut buf = Vec::new();
+        if reader.read_until(b'\n', &mut buf)? == 0 {
+            break;
+        }
+        while matches!(buf.last(), Some(b'\n' | b'\r')) {
+            buf.pop();
+        }
+        out.push(buf);
+    }
+    Ok(out)
+}
+
+fn decode_line(raw: &[u8], encoding: CsvTextEncoding) -> String {
+    match encoding {
+        CsvTextEncoding::Utf8 => String::from_utf8_lossy(raw).into_owned(),
+        CsvTextEncoding::Windows1252 => decode_windows_1252(raw),
+    }
+}
+
+/// Windows-1252 to text: 0x00-0x7F and 0xA0-0xFF are the same code points; 0x80-0x9F use the
+/// Windows-1252 table (the five unassigned bytes map to the C1 code point of the same value).
+pub fn decode_windows_1252(bytes: &[u8]) -> String {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x8D, 0x017D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
+        0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9F => char::from_u32(HIGH[(b - 0x80) as usize]).unwrap_or('\u{FFFD}'),
+            _ => b as char,
+        })
+        .collect()
+}
+
+/// Writes a Windows-1252 file as UTF-8 into the temp folder and returns the copy's path.
+fn transcode_windows_1252(input_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
+    let out_path = temp_dir.join(format!(
+        "utf8_{}",
+        input_path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let mut reader = BufReader::new(
+        File::open(input_path).with_context(|| format!("Failed to open {:?}", input_path))?,
+    );
+    let mut writer = BufWriter::new(
+        File::create(&out_path).with_context(|| format!("Failed to create {:?}", out_path))?,
+    );
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(decode_windows_1252(&buf[..n]).as_bytes())?;
+    }
+    writer.flush()?;
+    Ok(out_path)
+}
+
+/// Removes a UTF-8 byte-order mark left on the first column name.
+fn strip_bom_from_first_name(df: &mut DataFrame) {
+    let first = df.get_column_names().first().map(|n| n.to_string());
+    if let Some(name) = first {
+        if let Some(clean) = name.strip_prefix('\u{feff}') {
+            let clean = clean.to_string();
+            let _ = df.rename(&name, clean.into());
+        }
+    }
 }
 
 pub fn build_lazy_pipeline(
@@ -639,18 +808,26 @@ pub fn build_lazy_pipeline(
 
 /// Reads a CSV with every configured column as text (no typing yet).
 fn scan_csv_text(path: &Path, config: &IngestionConfig, temp_dir: &Path) -> Result<LazyFrame> {
-    let actual_csv_path = if config.heal_broken_csv_lines {
-        heal_broken_csv_file(path, temp_dir)?
-    } else {
-        path.to_path_buf()
+    let sep = separator_byte(config.separator)?;
+    let mut actual_csv_path = match config.encoding {
+        CsvTextEncoding::Utf8 => path.to_path_buf(),
+        CsvTextEncoding::Windows1252 => transcode_windows_1252(path, temp_dir)?,
     };
+    let mut skip_rows = config.skip_rows;
+    if config.heal_broken_csv_lines {
+        // The healer drops the title lines itself.
+        actual_csv_path = heal_broken_csv_file(&actual_csv_path, temp_dir, sep, skip_rows)?;
+        skip_rows = 0;
+    }
 
     let mut schema = Schema::with_capacity(config.columns.len());
     for col_cfg in &config.columns {
         schema.with_column(col_cfg.name.clone().into(), DataType::String);
     }
 
-    LazyCsvReader::new(&actual_csv_path)
+    let mut lf = LazyCsvReader::new(&actual_csv_path)
+        .with_separator(sep)
+        .with_skip_rows(skip_rows)
         .with_dtype_overwrite(Some(Arc::new(schema)))
         .with_encoding(CsvEncoding::LossyUtf8)
         .with_ignore_errors(true)
@@ -658,7 +835,21 @@ fn scan_csv_text(path: &Path, config: &IngestionConfig, temp_dir: &Path) -> Resu
         .with_try_parse_dates(false)
         .with_infer_schema_length(Some(0))
         .finish()
-        .context("Failed to build LazyCsvReader")
+        .context("Failed to build LazyCsvReader")?;
+
+    // A UTF-8 byte-order mark must not stay on the first column name.
+    let first = lf
+        .collect_schema()
+        .context("Failed to read the CSV header")?
+        .iter_names()
+        .next()
+        .map(|n| n.to_string());
+    if let Some(name) = first {
+        if let Some(clean) = name.strip_prefix('\u{feff}') {
+            lf = lf.rename([name.as_str()], [clean]);
+        }
+    }
+    Ok(lf)
 }
 
 /// The text a column holds just before typing: linebreaks sanitised, then the PII mask.

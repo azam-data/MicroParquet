@@ -406,6 +406,78 @@ fn t22b_headless_stops_on_control_column_failures() {
     assert!(out.exists());
 }
 
+fn write_bytes(name: &str, body: &[u8]) -> PathBuf {
+    let p = tmpdir().join(name);
+    std::fs::write(&p, body).unwrap();
+    p
+}
+
+#[test]
+fn t23_csv_reading_options() {
+    // P4: pipe separator, auto-detected from the header.
+    let p = write_csv("pipe.csv", "Actnum|Balance|Matdat\n0012345|\"1,000.50\"|05/11/2026\n0012346|200|06/11/2026\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(cfg.separator, '|');
+    let names: Vec<&str> = cfg.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["Actnum", "Balance", "Matdat"]);
+    assert_eq!(dtype_of(&cfg, "Balance"), ColDataType::Float64);
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "Actnum")[0].as_deref(), Some("0012345"));
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1000.5), Some(200.0)]);
+    assert_eq!(detect_separator("a;b;c"), ';');
+    assert_eq!(detect_separator("a\tb\tc"), '\t');
+    assert_eq!(detect_separator("\"x,y\"|b|c"), '|', "commas inside quotes do not count");
+    assert_eq!(detect_separator("single"), ',');
+
+    // Three title lines above the header.
+    let body = "Bank Ltd - Loan book\nAs of 31/10/2026, BDT\n\nActnum,Balance\n001,100\n002,200\n";
+    let p = write_csv("titles.csv", body);
+    let base = IngestionConfig { skip_rows: 3, ..Default::default() };
+    let cfg = auto_detect_smart_schema_with(&p, &base).unwrap();
+    assert_eq!(cfg.skip_rows, 3);
+    let names: Vec<&str> = cfg.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["Actnum", "Balance"]);
+    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let (rows, sum) = compute_control_totals(lf, Some("Balance")).unwrap();
+    assert_eq!((rows, sum), (2, Some(300.0)));
+    // The line healer honours skip_rows and the separator too.
+    let p = write_csv("titles_pipe.csv", "Title\nA|B|C\n1|multi\nline|5\n2|z|6\n");
+    let cfg = IngestionConfig {
+        skip_rows: 1,
+        separator: '|',
+        heal_broken_csv_lines: true,
+        columns: vec![
+            ColumnSchemaConfig { name: "A".into(), dtype: ColDataType::Int64, ..Default::default() },
+            ColumnSchemaConfig { name: "B".into(), ..Default::default() },
+            ColumnSchemaConfig { name: "C".into(), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "B"), vec![Some("multi line".to_string()), Some("z".to_string())]);
+    assert_eq!(f64_col(&df, "A"), vec![Some(1.0), Some(2.0)]);
+
+    // Windows-1252: é is 0xE9, € is 0x80.
+    let p = write_bytes("cp1252.csv", b"Name,Amount\nCaf\xe9,100\n\x80 Bond,200\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(cfg.encoding, CsvTextEncoding::Windows1252);
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "Name"), vec![Some("Café".to_string()), Some("€ Bond".to_string())]);
+    assert_eq!(f64_col(&df, "Amount"), vec![Some(100.0), Some(200.0)]);
+    assert_eq!(decode_windows_1252(b"\x93x\x94 \x96 \xa0"), "\u{201c}x\u{201d} \u{2013} \u{a0}");
+
+    // A UTF-8 BOM never stays on the first column name.
+    let p = write_bytes("bom.csv", b"\xef\xbb\xbfBalance,Name\n1,a\n2,b\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(cfg.columns[0].name, "Balance");
+    assert_eq!(preview_csv_raw(&p, 5).unwrap().get_column_names()[0].as_str(), "Balance");
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1.0), Some(2.0)]);
+    // Same when the user loads the file with no columns configured.
+    let raw = build_lazy_pipeline(&p, false, &IngestionConfig::default(), &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(raw.get_column_names()[0].as_str(), "Balance");
+}
+
 #[test]
 fn t05_parquet_datetime_maturity_bucket() {
     // Parquet written by pandas / Power BI usually stores dates as Datetime(ns/us/ms), not Date
@@ -1221,6 +1293,9 @@ fn t20b_phase1_schema_json_still_loads() {
     assert_eq!(bal.dtype, ColDataType::Float64);
     assert_eq!(bal.sign_convention, SignConvention::Unset);
     assert!(!bal.has_dr_cr);
+    assert_eq!(cfg.separator, ',');
+    assert_eq!(cfg.skip_rows, 0);
+    assert_eq!(cfg.encoding, CsvTextEncoding::Utf8);
 }
 
 #[test]

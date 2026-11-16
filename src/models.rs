@@ -154,6 +154,27 @@ pub struct ParseFailure {
     pub examples: Vec<String>,
 }
 
+/// Text encoding of a CSV file.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CsvTextEncoding {
+    #[default]
+    Utf8,
+    Windows1252,
+}
+
+impl CsvTextEncoding {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CsvTextEncoding::Utf8 => "UTF-8",
+            CsvTextEncoding::Windows1252 => "Windows-1252 (ANSI)",
+        }
+    }
+}
+
+pub fn default_csv_separator() -> char {
+    ','
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IngestionConfig {
     pub columns: Vec<ColumnSchemaConfig>,
@@ -161,6 +182,14 @@ pub struct IngestionConfig {
     pub parse_accounting_negatives: bool,
     pub heal_broken_csv_lines: bool,
     pub pii_salt: String,
+    /// Column separator: ',', '|', ';' or tab.
+    #[serde(default = "default_csv_separator")]
+    pub separator: char,
+    /// Title lines above the header row.
+    #[serde(default)]
+    pub skip_rows: usize,
+    #[serde(default)]
+    pub encoding: CsvTextEncoding,
 }
 
 impl Default for IngestionConfig {
@@ -171,6 +200,9 @@ impl Default for IngestionConfig {
             parse_accounting_negatives: true,
             heal_broken_csv_lines: false,
             pii_salt: "BANK_ASIA_ALM_2026".to_string(),
+            separator: default_csv_separator(),
+            skip_rows: 0,
+            encoding: CsvTextEncoding::Utf8,
         }
     }
 }

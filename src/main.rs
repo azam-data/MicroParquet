@@ -7,7 +7,8 @@ use egui_extras::{Column, TableBuilder};
 use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
-    export_to_parquet_stream, fetch_viewport_slice, parse_failure_summary, preview_csv_raw,
+    auto_detect_smart_schema_with, export_to_parquet_stream, fetch_viewport_slice,
+    parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
 };
 use micro_parquet::exporters::{
@@ -20,6 +21,7 @@ use micro_parquet::macros::{
 use micro_parquet::models::{
     column_name_tokens, default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
+    CsvTextEncoding,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
     NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths, SignConvention,
     SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
@@ -3289,6 +3291,7 @@ impl MicroParquetApp {
         let mut action_open_tab = false;
         let mut action_apply_to_tab = false;
         let mut action_direct_convert = false;
+        let mut action_reread = false;
 
         egui::Window::new("🔍 CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock")
             .collapsible(false)
@@ -3311,6 +3314,41 @@ impl MicroParquetApp {
                         &mut modal.config.heal_broken_csv_lines,
                         "Pre-Heal Broken Unquoted CSV Lines",
                     );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Separator:");
+                    let sep_label = |c: char| match c {
+                        ',' => "Comma ,",
+                        '|' => "Pipe |",
+                        ';' => "Semicolon ;",
+                        '\t' => "Tab",
+                        _ => "Other",
+                    };
+                    egui::ComboBox::from_id_salt("csv_separator")
+                        .selected_text(sep_label(modal.config.separator))
+                        .show_ui(ui, |ui| {
+                            for c in [',', '|', ';', '\t'] {
+                                ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
+                            }
+                        });
+                    ui.label("Title lines above header:");
+                    ui.add(egui::DragValue::new(&mut modal.config.skip_rows).range(0..=100));
+                    ui.label("Encoding:");
+                    egui::ComboBox::from_id_salt("csv_encoding")
+                        .selected_text(modal.config.encoding.label())
+                        .show_ui(ui, |ui| {
+                            for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
+                                ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
+                            }
+                        });
+                    if ui
+                        .button("🔄 Re-read with these settings")
+                        .on_hover_text("Reloads the preview and re-detects the columns and their types")
+                        .clicked()
+                    {
+                        action_reread = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
@@ -3491,7 +3529,23 @@ impl MicroParquetApp {
                 });
             });
 
-        if action_apply_to_tab {
+        if action_reread {
+            match (
+                preview_csv_with(&modal.csv_path, 5, &modal.config),
+                auto_detect_smart_schema_with(&modal.csv_path, &modal.config),
+            ) {
+                (Ok(preview), Ok(cfg)) => {
+                    modal.raw_preview_df = preview;
+                    modal.config = cfg;
+                    modal.parse_failures.clear();
+                    self.status_message = "Re-read the file with the new settings.".into();
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    self.status_message = format!("Could not re-read the file: {:#}", e);
+                }
+            }
+            self.pending_csv_modal = Some(modal);
+        } else if action_apply_to_tab {
             if let Some(idx) = modal.target_tab {
                 self.apply_schema_to_tab(idx, modal.config);
             }
@@ -3916,7 +3970,7 @@ impl MicroParquetApp {
             self.status_message = "Schema for Parquet sources is not available yet.".into();
             return;
         }
-        match preview_csv_raw(path, 5) {
+        match preview_csv_with(path, 5, config) {
             Ok(preview) => {
                 self.pending_csv_modal = Some(PendingCsvModal {
                     csv_path: path.clone(),

@@ -1,5 +1,5 @@
 use crate::models::{
-    AggFunc, ColDataType, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
+    AggFunc, ColDataType, CsvTextEncoding, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -214,9 +214,22 @@ pub fn generate_python_polars_code(
             py.push_str(&format!("    \"{}\": pl.Utf8,\n", c.name));
         }
         py.push_str("}\n\n");
-        py.push_str(
-            "lf = pl.scan_csv(source_path, schema_overrides=custom_schema, try_parse_dates=False)\n\n",
+        // Same read settings as the app: separator, title lines above the header, encoding.
+        let read_args = format!(
+            "schema_overrides=custom_schema, try_parse_dates=False, separator={:?}, skip_rows={}",
+            ingestion.separator, ingestion.skip_rows
         );
+        match ingestion.encoding {
+            CsvTextEncoding::Utf8 => py.push_str(&format!(
+                "lf = pl.scan_csv(source_path, {}, encoding=\"utf8-lossy\")\n\n",
+                read_args
+            )),
+            CsvTextEncoding::Windows1252 => py.push_str(&format!(
+                "# Windows-1252 file: decoded while reading (scan_csv reads UTF-8 only)\n\
+                 lf = pl.read_csv(source_path, {}, encoding=\"cp1252\", infer_schema_length=0).lazy()\n\n",
+                read_args
+            )),
+        }
 
         if ingestion.sanitize_linebreaks {
             py.push_str("# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n");
