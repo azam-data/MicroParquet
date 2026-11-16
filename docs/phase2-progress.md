@@ -15,7 +15,7 @@ contain its own hash).
 | P12 | DONE | 454184a | t13 un-ignored (1,000,000 distinct CLIENT_ tokens; same key same token; different keys differ; no 3-digit run of 2,000 account numbers); t29 (create, reuse, 0600, concurrent first use, export/import with backup, junk import refused, damaged key error); t24 updated for ACCT_ format | account mask re-derives to avoid digit runs; fingerprint, backup on import | Q4 |
 | P13 | DONE | 45e7728 | t11 un-ignored (100d 9.559, 31d 8.762; NextPointUp 10.10/9.50; 10d → 30d rate on a curve starting at 30d; 20y → last point; FTP_Method; unsorted curve; empty/duplicate curve errors; old macro loads as Linear) | 10-day case needs a curve starting at 30d (default curve has 1d/7d points) | Q5 |
 | P14 | DONE | cf15d2b | t12 un-ignored (A1 prev rate 9.5, delta 0 bps; A2/A3 delta null; A1 Prev_Row_Count 2; multi-row key count; null-safe weights; CL worst grade / unmapped → largest balance) | CL output is the chosen row's code; row counts 0 for missing keys |  |
-| P15 | DONE | (this commit) | t19 (Active/' open ' flagged; matured-active + outlier both in Audit_All_Flags; settings; bad settings error; old macro defaults); t19b (provisioning with 2 blank balances reports 2) | settings stored in the step; note names the step | Q6 |
+| P15 | DONE | 3c88622 | t19 (Active/' open ' flagged; matured-active + outlier both in Audit_All_Flags; settings; bad settings error; old macro defaults); t19b (provisioning with 2 blank balances reports 2) | settings stored in the step; note names the step | Q6 |
 
 ## P12 design: per-install PII key
 
@@ -60,3 +60,6 @@ contain its own hash).
 - Q6 (P15): old macros' hygiene audits now treat ACTIVE, A and OPEN as active (the spec's default), so they can flag more rows on re-run. Keep?
 
 ## Notes
+- All ten tasks DONE; none BLOCKED. `tests/review.rs` has no `#[ignore]` left (t04, t11, t12, t13, t16, t17 run).
+- Final `cargo test` (review): 47 passed; 0 failed; 0 ignored. Bin tests: 2 passed.
+- Next step: PR `phase2-rest` → `main`; the owner merges.
