@@ -199,6 +199,7 @@ fn t03c_blank_date_column_and_hygiene_audit() {
     let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
     let out = apply_banking_hygiene_audit(
         lf, "Opndat", "Matdat", "Closure_Date", "Acstat", "Balance", "Rate", "2026-10-31", false,
+        &default_active_statuses(), 0.0, default_rate_max_pct(),
     )
     .unwrap()
     .collect()
@@ -527,8 +528,7 @@ fn t24_parquet_schema() {
     );
     let acct = str_col(&out, "Actnum");
     let a0 = acct[0].clone().unwrap();
-    assert!(a0.starts_with("001") && a0.ends_with("678") && a0 != "0012345678", "{a0}");
-    assert_eq!(a0.len(), 11, "3 + 5 hex + 3: {a0}");
+    assert!(a0.starts_with("ACCT_") && a0.len() == 21 && !a0.contains("001"), "ACCT_ + 16 hex: {a0}");
     assert_eq!(f64_col(&out, "Rate"), vec![Some(9.5), Some(10.0), Some(11.0)]);
     assert_eq!(out.column("Flag").unwrap().dtype(), &DataType::Boolean);
 
@@ -695,8 +695,8 @@ fn t05b_other_date_inputs_reject_strings() {
     )
     .unwrap();
     let e1 = apply_rate_shock_sim(df.clone().lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, None).err();
-    let e2 = apply_ftp_curve_map(df.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true).err();
-    let e3 = apply_banking_hygiene_audit(df.clone().lazy(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false).err();
+    let e2 = apply_ftp_curve_map(df.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear).err();
+    let e3 = apply_banking_hygiene_audit(df.clone().lazy(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false, &default_active_statuses(), 0.0, 25.0).err();
     let e4 = apply_duration_analysis(df.lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 1, 200.0, 0.0833, None).err();
     for (name, e) in [("shock", e1), ("ftp", e2), ("hygiene", e3), ("duration", e4)] {
         let e = e.unwrap_or_else(|| panic!("{name}: string date column must be rejected"));
@@ -1038,7 +1038,7 @@ fn t11a_ftp_tenor_days() {
     .unwrap()
     .lazy()
     .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
-    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true)
+    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear)
         .unwrap()
         .collect()
         .unwrap();
@@ -1046,7 +1046,6 @@ fn t11a_ftp_tenor_days() {
 }
 
 #[test]
-#[ignore = "Phase 2: FTP curve linear interpolation between tenor points"]
 fn t11_ftp_step_vs_interpolation() {
     // Target: linear interpolation on the default curve (30d 8.75, 91d 9.50, 182d 10.10).
     // 100d = 9.50 + 9/91 × 0.60 = 9.5593…; 31d = 8.75 + 1/61 × 0.75 = 8.7623…
@@ -1061,13 +1060,103 @@ fn t11_ftp_step_vs_interpolation() {
     .unwrap()
     .lazy()
     .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
-    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true)
-        .unwrap()
-        .collect()
-        .unwrap();
+    let run = |lf: LazyFrame, curve: &[FtpPoint], m: FtpInterpolation| {
+        apply_ftp_curve_map(lf, "Opndat", "Matdat", "Balance", "Rate", curve, true, m).unwrap().collect().unwrap()
+    };
+    let out = run(df.clone(), &default_bd_ftp_curve(), FtpInterpolation::Linear);
     let ftp = f64_col(&out, "Benchmark_FTP_Rate");
     assert_close(ftp[0].unwrap(), 9.50 + 9.0 / 91.0 * 0.60, "100-day FTP");
     assert_close(ftp[1].unwrap(), 8.75 + 1.0 / 61.0 * 0.75, "31-day FTP");
+    assert!((ftp[0].unwrap() - 9.559).abs() < 0.001 && (ftp[1].unwrap() - 8.762).abs() < 0.001);
+    assert_eq!(str_col(&out, "FTP_Method"), vec![Some("Linear 91d-182d".to_string()), Some("Linear 30d-91d".to_string())]);
+    // Liability spread uses the interpolated rate.
+    assert_close(f64_col(&out, "FTP_Spread_Pct")[0].unwrap(), 9.50 + 9.0 / 91.0 * 0.60 - 9.0, "spread");
+
+    let out = run(df.clone(), &default_bd_ftp_curve(), FtpInterpolation::NextPointUp);
+    assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), vec![Some(10.10), Some(9.50)]);
+    assert_eq!(str_col(&out, "FTP_Method"), vec![Some("Next point up 182d".to_string()), Some("Next point up 91d".to_string())]);
+
+    // Outside the curve: flat. 10 days on a curve starting at 30d -> the 30-day rate;
+    // 20 years -> the last point (both methods).
+    let edge = df!(
+        "Opndat" => [o, o, o],
+        "Matdat" => [o + 10, o + 7300, o + 30],
+        "Balance" => [1.0, 1.0, 1.0],
+        "Rate" => [9.0, 9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let from_30: Vec<FtpPoint> = default_bd_ftp_curve().into_iter().filter(|p| p.tenor_days >= 30).collect();
+    for m in [FtpInterpolation::Linear, FtpInterpolation::NextPointUp] {
+        let out = run(edge.clone(), &from_30, m);
+        assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), vec![Some(8.75), Some(11.75), Some(8.75)], "{m:?}");
+    }
+    let out = run(edge.clone(), &from_30, FtpInterpolation::Linear);
+    let methods = str_col(&out, "FTP_Method");
+    assert!(methods[0].as_deref().unwrap().starts_with("First point 30d"), "{methods:?}");
+    assert!(methods[1].as_deref().unwrap().starts_with("Last point 1825d"), "{methods:?}");
+    // On the full default curve (1d, 7d, 30d …) a 10-day deal lies between 7d and 30d.
+    let out = run(edge.clone(), &default_bd_ftp_curve(), FtpInterpolation::Linear);
+    assert_close(f64_col(&out, "Benchmark_FTP_Rate")[0].unwrap(), 8.25 + 3.0 / 23.0 * 0.50, "10-day on default curve");
+    // Unsorted input curve gives the same result.
+    let mut shuffled = default_bd_ftp_curve();
+    shuffled.reverse();
+    let out2 = run(edge.clone(), &shuffled, FtpInterpolation::Linear);
+    assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), f64_col(&out2, "Benchmark_FTP_Rate"));
+
+    // Bad curves fail loudly.
+    let err = apply_ftp_curve_map(edge.clone(), "Opndat", "Matdat", "Balance", "Rate", &[], true, FtpInterpolation::Linear).err().expect("empty");
+    assert!(format!("{err:#}").contains("no points"));
+    let dup = vec![FtpPoint { tenor_days: 30, ftp_rate: 8.0 }, FtpPoint { tenor_days: 30, ftp_rate: 9.0 }];
+    let err = apply_ftp_curve_map(edge, "Opndat", "Matdat", "Balance", "Rate", &dup, true, FtpInterpolation::Linear).err().expect("dup");
+    assert!(format!("{err:#}").contains("two points at 30 days"), "{err:#}");
+
+    // A step that names its interpolation keeps it.
+    let json = r#"{"FtpCurveMap":{"opndat_col":"Opndat","matdat_col":"Matdat","bal_col":"Balance","rate_col":"Rate","curve":[{"tenor_days":30,"ftp_rate":8.75}],"is_liability":true,"interpolation":"Linear"}}"#;
+    let step: TransformStep = serde_json::from_str(json).unwrap();
+    assert!(matches!(step, TransformStep::FtpCurveMap { interpolation: FtpInterpolation::Linear, .. }));
+    // New steps (the FTP modal's default) are Linear.
+    assert_eq!(FtpInterpolation::default(), FtpInterpolation::Linear);
+}
+
+#[test]
+fn t11b_old_ftp_macro_reproduces_step_rates() {
+    // A macro saved before Phase 2: its FTP step has no "interpolation" field.
+    let json = r#"{
+        "name": "FTP monthly",
+        "description": "v1.1.1 recipe",
+        "created_at": "2026-10-31 10:00:00",
+        "enforce_balance_control": true,
+        "control_column": "Balance",
+        "optional_ingestion_schema": null,
+        "steps": [
+            {"FtpCurveMap": {"opndat_col": "Opndat", "matdat_col": "Matdat", "bal_col": "Balance",
+                             "rate_col": "Rate", "is_liability": true,
+                             "curve": [{"tenor_days": 30, "ftp_rate": 8.75}, {"tenor_days": 91, "ftp_rate": 9.5},
+                                       {"tenor_days": 182, "ftp_rate": 10.1}]}}
+        ]
+    }"#;
+    let path = tmpdir().join("t11b_old_ftp.mpq.json");
+    std::fs::write(&path, json).unwrap();
+    let recipe = micro_parquet::macros::load_macro_from_file(&path).expect("old FTP macro must load");
+    assert!(matches!(recipe.steps[0], TransformStep::FtpCurveMap { interpolation: FtpInterpolation::NextPointUp, .. }));
+    // Running it gives the past (step) rates: 100 days -> 10.10, 31 days -> 9.50.
+    let o = days(2026, 1, 1);
+    let df = df!(
+        "Opndat" => [o, o],
+        "Matdat" => [o + 100, o + 31],
+        "Balance" => [1_000_000.0, 1_000_000.0],
+        "Rate" => [9.0, 9.0]
+    )
+    .unwrap();
+    let mut df = df;
+    df.with_column(df.column("Opndat").unwrap().cast(&DataType::Date).unwrap()).unwrap();
+    df.with_column(df.column("Matdat").unwrap().cast(&DataType::Date).unwrap()).unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("t11b.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let out = compile_tab_lazy(&src, &recipe.steps, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), vec![Some(10.10), Some(9.50)]);
+    assert_eq!(str_col(&out, "FTP_Method")[0].as_deref(), Some("Next point up 182d"));
 }
 
 fn reconcile_frames() -> (DataFrame, DataFrame) {
@@ -1107,7 +1196,6 @@ fn t12a_reconcile_status_and_balances() {
 }
 
 #[test]
-#[ignore = "Phase 2: balance-weighted rates in period reconcile"]
 fn t12_reconcile() {
     // Target: A1's two previous rows (100 @ 5%, 900 @ 10%) give a balance-weighted 9.5%,
     // not the simple mean 7.5%, so the rate change to 9.5% is 0 bps.
@@ -1119,10 +1207,57 @@ fn t12_reconcile() {
         .unwrap();
     assert_close(f64_col(&out, "Prev_Rate")[0].unwrap(), 9.5, "A1 previous WAVG rate");
     assert_close(f64_col(&out, "Rate_Delta_Bps")[0].unwrap(), 0.0, "A1 rate change (bps)");
+    // A2 (closed) and A3 (new): no rate change (null, not ±rate × 100).
+    let bps = f64_col(&out, "Rate_Delta_Bps");
+    assert_eq!((bps[1], bps[2]), (None, None));
+    assert_eq!(f64_col(&out, "Prev_Row_Count"), vec![Some(2.0), Some(1.0), Some(0.0)]);
+    assert_eq!(f64_col(&out, "Curr_Row_Count"), vec![Some(1.0), Some(0.0), Some(1.0)]);
+    let rec = build_period_reconcile_lazy(reconcile_frames().0.lazy(), reconcile_frames().1.lazy(), "Actnum", "Balance", Some("Rate"), None).unwrap();
+    assert_eq!(reconcile_multi_row_keys(rec).unwrap(), (1, 0));
+
+    // Null-safe weighting: a row without a rate (or balance) is left out of both sums;
+    // a key whose known rows have zero balance has no rate.
+    let prev = df!(
+        "Actnum" => ["B1", "B1", "B1", "B2"],
+        "Balance" => [Some(300.0), Some(100.0), None, Some(0.0)],
+        "Rate" => [None, Some(8.0), Some(99.0), Some(7.0)]
+    )
+    .unwrap();
+    let curr = df!("Actnum" => ["B1", "B2"], "Balance" => [100.0, 50.0], "Rate" => [8.0, 7.0]).unwrap();
+    let out = build_period_reconcile_lazy(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None)
+        .unwrap()
+        .sort(["Actnum"], Default::default())
+        .collect()
+        .unwrap();
+    assert_eq!(f64_col(&out, "Prev_Rate"), vec![Some(8.0), None]);
+    assert_eq!(f64_col(&out, "Rate_Delta_Bps"), vec![Some(0.0), None]);
+
+    // CL per key: the worst grade by the CL map (STD < SMA < SS < DF < BL); unmapped codes ->
+    // the code of the largest-balance row.
+    let cl_map: Vec<(String, String)> = [("STD", "STD"), ("SMA", "SMA"), ("SS", "SS"), ("DF", "DF"), ("BL", "BL"), ("UC", "STD")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    let prev = df!(
+        "Actnum" => ["C1", "C1", "C1", "C2", "C2", "C3"],
+        "Balance" => [900.0, 50.0, 50.0, 10.0, 500.0, 1.0],
+        "CL" => ["UC", "ss", "SMA", "X9", "Y7", "BL"]
+    )
+    .unwrap();
+    let curr = df!("Actnum" => ["C1", "C2", "C3"], "Balance" => [1.0, 1.0, 1.0], "CL" => ["DF", "Y7", "BL"]).unwrap();
+    let out = build_period_reconcile_lazy_with(prev.lazy(), curr.lazy(), "Actnum", "Balance", None, Some("CL"), &cl_map)
+        .unwrap()
+        .sort(["Actnum"], Default::default())
+        .collect()
+        .unwrap();
+    assert_eq!(
+        str_col(&out, "Prev_CL"),
+        vec![Some("ss".to_string()), Some("Y7".to_string()), Some("BL".to_string())]
+    );
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[0].as_deref(), Some("ss -> DF"));
 }
 
 #[test]
-#[ignore = "Phase 2: wider PII name hash (CLIENT_ token has 8 hex characters = 32 bits)"]
 fn t13_pii_hash_collisions() {
     // Target: 1,000,000 distinct customer names give 1,000,000 distinct CLIENT_ tokens through
     // the real ingestion mask. With 32 bits about 116 collisions are expected.
@@ -1147,6 +1282,31 @@ fn t13_pii_hash_collisions() {
     let names = df.column("Name").unwrap();
     assert_eq!(names.len(), n);
     assert_eq!(names.n_unique().unwrap(), n, "masked names must stay distinct");
+    let first = names.str().unwrap().get(0).unwrap().to_string();
+    assert!(first.starts_with("CLIENT_") && first.len() == 7 + 16, "{first}");
+
+    // Same input + same key = same token; different keys = different tokens.
+    let k1 = [7u8; 32];
+    let mut k2 = [7u8; 32];
+    k2[31] = 8;
+    let m = |v: &str, mode, k: &[u8; 32]| mask_pii_value(v, mode, k);
+    assert_eq!(m("RAHIM UDDIN", PiiMaskMode::ClientNameHash, &k1), m(" RAHIM UDDIN ", PiiMaskMode::ClientNameHash, &k1));
+    assert_ne!(m("RAHIM UDDIN", PiiMaskMode::ClientNameHash, &k1), m("RAHIM UDDIN", PiiMaskMode::ClientNameHash, &k2));
+    assert_eq!(m("   ", PiiMaskMode::AccountNumber, &k1), "");
+    // Account tokens keep no run of 3+ digits of the original.
+    for i in 0..2000u64 {
+        let acct = format!("{:013}", 1_234_567_000_000u64 + i * 7_919);
+        for k in [&k1, &k2] {
+            let t = m(&acct, PiiMaskMode::AccountNumber, k);
+            assert!(t.starts_with("ACCT_") && t.len() == 21, "{t}");
+            assert!(t[5..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()), "{t}");
+            let digits: Vec<char> = acct.chars().collect();
+            for w in digits.windows(3) {
+                let run: String = w.iter().collect();
+                assert!(!t.contains(&run), "{t} contains {run} of {acct}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -1240,7 +1400,7 @@ fn t15_python_codegen_drops_banking_steps() {
     };
     let cfg = IngestionConfig {
         columns: vec![
-            col_cfg("Balance", ColDataType::Float64, PiiMaskMode::AccountNumber),
+            col_cfg("Balance", ColDataType::Float64, PiiMaskMode::None),
             col_cfg("Matdat", ColDataType::DateDMY, PiiMaskMode::None),
             col_cfg("Opndat", ColDataType::DateMDY, PiiMaskMode::None),
             col_cfg("Valdat", ColDataType::DateISO, PiiMaskMode::None),
@@ -1253,11 +1413,11 @@ fn t15_python_codegen_drops_banking_steps() {
         &cfg,
         &steps,
         None,
-    );
+    )
+    .unwrap();
     assert!(!py.contains("Specialized Banking Step Executed"), "placeholder still emitted:\n{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 1 '+BB CL Provision & BFP' has no Python translation"), "{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 2 '+ΔNII Shock (+100 bps)' has no Python translation"), "{py}");
-    assert!(py.contains("# WARNING: PII masking not reproduced"), "{py}");
     // Amounts go through the same parsing rules as the app (P1), with the column's sign setting.
     assert!(py.contains("def _mp_amount(v, col, sign, acc, as_int=False):"), "{py}");
     assert!(
@@ -1279,7 +1439,6 @@ fn t15_python_codegen_drops_banking_steps() {
 }
 
 #[test]
-#[ignore = "Phase 2: stacking files whose columns differ"]
 fn t16_stack_schema_drift() {
     // Target: October's extra Branch column does not break the stack; September rows get null.
     let a = write_csv("sep.csv", "Actnum,Balance\n001,100\n");
@@ -1295,10 +1454,61 @@ fn t16_stack_schema_drift() {
     assert_eq!(df.height(), 2);
     assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), Some(200.0)]);
     assert_eq!(str_col(&df, "Branch"), vec![None, Some("DHK".to_string())]);
+    assert_eq!(str_col(&df, "Source_File"), vec![Some("sep.csv".to_string()), Some("oct.csv".to_string())]);
+    let names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+    assert_eq!(names, vec!["Actnum", "Balance", "Branch", "Source_File"]);
 }
 
 #[test]
-#[ignore = "Phase 2: join validation (duplicate keys on the right side)"]
+fn t16b_stack_type_mismatch_and_shared_schema() {
+    let a = write_csv("sep_t.csv", "Actnum,Balance\n001,100\n");
+    let b = write_csv("oct_t.csv", "Actnum,Balance\n002,abc\n");
+    let files = vec![a.clone(), b.clone()];
+    let (specs, notes) = stack_file_configs(&files, None).unwrap();
+    assert!(notes.is_empty());
+    assert_eq!(dtype_of(&specs[1].2, "Balance"), ColDataType::Utf8);
+    let src = TabSource::VerticalStack { files: specs, include_source_col: true };
+    let err = compile_tab_lazy(&src, &[], &tmpdir()).err().expect("types differ: error");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("Balance") && msg.contains("sep_t.csv") && msg.contains("oct_t.csv"), "{msg}");
+    assert!(msg.contains("Float64") && msg.contains("String"), "{msg}");
+
+    // The first file's schema applied to both: loads, "abc" is a counted parse failure.
+    let shared = detect_file_schema(&a).unwrap();
+    let (specs, _) = stack_file_configs(&files, Some(&shared)).unwrap();
+    let src = TabSource::VerticalStack { files: specs, include_source_col: true };
+    let df = compile_tab_lazy(&src, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 2);
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), None]);
+    let fails = source_parse_failures(&src, &tmpdir()).unwrap();
+    assert!(fails.iter().any(|f| f.column == "Balance" && f.count == 1), "{fails:?}");
+
+    // A saved schema with a column a file lacks: a note, and the column is null there.
+    let mut saved = shared.clone();
+    let mut extra = saved.columns[0].clone();
+    extra.name = "Branch".into();
+    saved.columns.push(extra);
+    let c = write_csv("nov_t.csv", "Actnum,Balance,Branch\n003,300,CTG\n");
+    let (specs, notes) = stack_file_configs(&[a.clone(), c.clone()], Some(&saved)).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("sep_t.csv") && notes[0].contains("Branch"), "{notes:?}");
+    let src = TabSource::VerticalStack { files: specs, include_source_col: false };
+    let df = compile_tab_lazy(&src, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "Branch"), vec![None, Some("CTG".to_string())]);
+
+    // A Parquet file with Float64 Balance stacks with a CSV of the same column.
+    let p = write_parquet("dec_t.parquet", &df!("Actnum" => ["004"], "Balance" => [400.0]).unwrap());
+    let (specs, _) = stack_file_configs(&[a.clone(), p.clone()], None).unwrap();
+    let src = TabSource::VerticalStack { files: specs, include_source_col: false };
+    let df = compile_tab_lazy(&src, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), Some(400.0)]);
+
+    // An unreadable file is an error, not an empty schema.
+    let err = stack_file_configs(&[tmpdir().join("no_such_file.csv")], None).err().expect("missing file");
+    assert!(format!("{err:#}").contains("no_such_file.csv"));
+}
+
+#[test]
 fn t17_join_duplicates_inflate() {
     let left = df!("Actnum" => ["A1"], "Balance" => [1_000_000.0]).unwrap();
     let right = df!("Actnum" => ["A1", "A1"], "Sector" => ["RMG", "RMG (dup row)"]).unwrap();
@@ -1312,6 +1522,7 @@ fn t17_join_duplicates_inflate() {
         join_kind: SqlJoinKind::Left,
         join_keys: vec!["Actnum".into()],
         right_cols_to_keep: vec![],
+        keep_first_duplicate_right: false,
     };
     // Target: a right side with a repeated key fails loudly, naming the key, instead of
     // doubling the left row (BDT 1,000,000 would become 2,000,000).
@@ -1321,6 +1532,54 @@ fn t17_join_duplicates_inflate() {
         .expect("duplicate right-side keys must be an error");
     let msg = format!("{err:#}");
     assert!(msg.contains("A1") && msg.to_lowercase().contains("duplicate"), "{msg}");
+    assert!(msg.contains("Actnum") && msg.contains("Keep first row per key"), "{msg}");
+
+    // Semi/anti joins never repeat a left row: no check.
+    let mut semi = src.clone();
+    if let TabSource::JoinedTabs { join_kind, .. } = &mut semi {
+        *join_kind = SqlJoinKind::Semi;
+    }
+    let (rows, _) = compile_tab_lazy(&semi, &[], &tmpdir())
+        .and_then(|lf| compute_control_totals(lf, Some("Balance")))
+        .unwrap();
+    assert_eq!(rows, 1);
+
+    // "Keep first row per key": 1 row, sum unchanged, the first right row is used, warning count 1.
+    let mut keep = src.clone();
+    if let TabSource::JoinedTabs { keep_first_duplicate_right, .. } = &mut keep {
+        *keep_first_duplicate_right = true;
+    }
+    let df = compile_tab_lazy(&keep, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 1);
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1_000_000.0)]);
+    assert_eq!(str_col(&df, "Sector"), vec![Some("RMG".to_string())]);
+    let js = join_status(&keep, &[], Some("Balance"), &tmpdir()).unwrap().expect("join status");
+    assert_eq!((js.rows, js.left_rows), (1, 1));
+    assert_eq!(js.sum, Some(1_000_000.0));
+    assert_eq!(js.left_sum, Some(1_000_000.0));
+    assert_eq!((js.duplicate_keys, js.dropped_rows), (1, 1));
+    let s = js.summary();
+    assert!(s.contains("1 duplicated right key") && s.contains("1 right row(s) dropped"), "{s}");
+
+    // Null keys on the right are not duplicates (they never match) and survive "keep first".
+    let right_nulls = df!("Actnum" => [None::<&str>, None, Some("A1")], "Sector" => ["x", "y", "RMG"]).unwrap();
+    let prn = write_parquet("r_nulls.parquet", &right_nulls);
+    let mut nulls = src.clone();
+    if let TabSource::JoinedTabs { right_source, join_kind, .. } = &mut nulls {
+        *right_source = Box::new(TabSource::SingleFile { path: prn, is_parquet: true, config: IngestionConfig::default() });
+        *join_kind = SqlJoinKind::Full;
+    }
+    let df = compile_tab_lazy(&nulls, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 3);
+    if let TabSource::JoinedTabs { keep_first_duplicate_right, .. } = &mut nulls {
+        *keep_first_duplicate_right = true;
+    }
+    let df = compile_tab_lazy(&nulls, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 3);
+
+    // Not a join: no join status.
+    let single = TabSource::SingleFile { path: write_parquet("l2.parquet", &left), is_parquet: true, config: IngestionConfig::default() };
+    assert!(join_status(&single, &[], Some("Balance"), &tmpdir()).unwrap().is_none());
 }
 
 #[test]
@@ -1351,16 +1610,17 @@ fn t18_segment_and_status_edge_cases() {
 
 #[test]
 fn t19_hygiene_case_sensitivity() {
-    // Status-code mapping is not a part-1 task; the exact-code row is asserted.
+    // Active statuses are a setting (default ACT, ACTIVE, A, OPEN), trimmed and case-insensitive.
     let past = days(2025, 1, 1);
     let open = days(2024, 1, 1);
+    let future = days(2027, 1, 1);
     let df = df!(
-        "Opndat" => [open, open],
-        "Matdat" => [past, past],
-        "Clsdat" => [None::<i32>, None],
-        "Acstat" => ["ACT", "Active"],
-        "Balance" => [500.0, 500.0],
-        "Rate" => [9.0, 9.0]
+        "Opndat" => [open, open, open, open, open, open],
+        "Matdat" => [past, past, past, future, past, future],
+        "Clsdat" => [None::<i32>, None, None, None, None, None],
+        "Acstat" => ["ACT", "Active", " open ", "A", "CLOSED", "ACT"],
+        "Balance" => [500.0, 500.0, 500.0, 500.0, 500.0, 500.0],
+        "Rate" => [9.0, 30.0, 9.0, 9.0, 9.0, 9.0]
     )
     .unwrap()
     .lazy()
@@ -1369,13 +1629,77 @@ fn t19_hygiene_case_sensitivity() {
         col("Matdat").cast(DataType::Date),
         col("Clsdat").cast(DataType::Date),
     ]);
-    let out = apply_banking_hygiene_audit(df, "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false)
-        .unwrap()
-        .collect()
-        .unwrap();
+    let run = |statuses: &[String], lo: f64, hi: f64| {
+        apply_banking_hygiene_audit(df.clone(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false, statuses, lo, hi)
+            .unwrap()
+            .collect()
+            .unwrap()
+    };
+    let out = run(&default_active_statuses(), 0.0, 25.0);
     let flags = str_col(&out, "Audit_Exception_Flag");
+    let all = str_col(&out, "Audit_All_Flags");
     assert_eq!(flags[0].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
-    println!("HYGIENE:\n{}", out.select(["Acstat", "Audit_Exception_Flag"]).unwrap());
+    // "Active" with a past maturity and positive balance is flagged; its 30% rate is also listed.
+    assert_eq!(flags[1].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
+    assert_eq!(all[1].as_deref(), Some("1. GHOST_MATURED_ACTIVE; 3. INTEREST_RATE_OUTLIER"));
+    assert_eq!(flags[2].as_deref(), Some("1. GHOST_MATURED_ACTIVE"), "' open ' is active");
+    assert_eq!(flags[3].as_deref(), Some("OK"), "not matured");
+    assert_eq!(flags[4].as_deref(), Some("OK"), "CLOSED is not active");
+    assert_eq!(all[0].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
+    assert_eq!(all[5].as_deref(), Some("OK"));
+
+    // Settings: only ACT is active; outliers above 8%.
+    let out = run(&["act".to_string()], 0.0, 8.0);
+    let flags = str_col(&out, "Audit_Exception_Flag");
+    assert_eq!(flags[1].as_deref(), Some("3. INTEREST_RATE_OUTLIER"));
+    assert_eq!(flags[5].as_deref(), Some("3. INTEREST_RATE_OUTLIER"));
+    // Bad settings fail loudly.
+    let bad = |s: &[String], lo: f64, hi: f64| {
+        apply_banking_hygiene_audit(df.clone(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false, s, lo, hi).is_err()
+    };
+    assert!(bad(&[" ".to_string()], 0.0, 25.0));
+    assert!(bad(&default_active_statuses(), 30.0, 25.0));
+
+    // A v1.1.1 macro's audit step loads with the defaults.
+    let json = r#"{"BankingHygieneAudit":{"opndat_col":"O","matdat_col":"M","clsdat_col":"C","acstat_col":"S","bal_col":"B","rate_col":"R","actnum_col":"A","cutoff_date":"2026-10-31","only_exceptions":false}}"#;
+    match serde_json::from_str::<TransformStep>(json).unwrap() {
+        TransformStep::BankingHygieneAudit { active_statuses, rate_min_pct, rate_max_pct, .. } => {
+            assert_eq!(active_statuses, default_active_statuses());
+            assert_eq!((rate_min_pct, rate_max_pct), (0.0, 25.0));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn t19b_blank_balances_reported() {
+    let df = df!(
+        "Actnum" => ["L1", "L2", "L3", "L4"],
+        "Balance" => [Some(1_000_000.0), None, None, Some(500.0)],
+        "CL" => ["STD", "SS", "BL", "STD"]
+    )
+    .unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("t19b.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let prov = TransformStep::LoanClassificationProvision {
+        bal_col: "Balance".into(),
+        cl_status_col: "CL".into(),
+        segment_col: None,
+        suspense_col: None,
+        security_col: None,
+        cutoff_date: "2026-10-31".into(),
+        collateral_type_col: None,
+    };
+    let steps = vec![prov];
+    // The treatment does not change (the step still runs) ...
+    let out = compile_tab_lazy(&src, &steps, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(out.height(), 4);
+    // ... and the blank balances are reported.
+    let notes = blank_balance_notes(&src, &steps, &tmpdir()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].ends_with("Balance blank on 2 rows; treated as 0"), "{notes:?}");
+    // No banking step, or no blanks: no note.
+    assert!(blank_balance_notes(&src, &[], &tmpdir()).unwrap().is_empty());
+    assert_eq!(count_blank_values(df.lazy(), "Actnum").unwrap(), 4, "text is not a balance");
 }
 
 #[test]
@@ -1457,7 +1781,8 @@ fn t08b_wavg_python_is_null_safe() {
         &IngestionConfig::default(),
         &[wavg_step(Some("Balance"))],
         None,
-    );
+    )
+    .unwrap();
     assert!(py.contains("pl.col(\"Rate\").cast(pl.Float64).is_not_null() & pl.col(\"Balance\").cast(pl.Float64).is_not_null()"), "{py}");
     assert!(py.contains(".then(None)"), "{py}");
     let py = micro_parquet::macros::generate_python_polars_code(
@@ -1466,7 +1791,8 @@ fn t08b_wavg_python_is_null_safe() {
         &IngestionConfig::default(),
         &[wavg_step(None)],
         None,
-    );
+    )
+    .unwrap();
     assert!(py.contains("raise ValueError(\"Weighted average needs a weight column"), "{py}");
 }
 
@@ -1484,7 +1810,7 @@ fn t09b_duration_python_is_signed() {
         side_col: side.map(str::to_string),
     };
     let cfg = IngestionConfig { columns: vec![], ..Default::default() };
-    let gen = |s| micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.csv"), false, &cfg, &[s], None);
+    let gen = |s| micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.csv"), false, &cfg, &[s], None).unwrap();
     let signed = gen(step(Some("Side")));
     assert!(signed.contains("_sign = pl.when"), "{signed}");
     assert!(signed.contains("* _sign).round(2).alias(\"Delta_EVE_Impact_BDT\")"), "{signed}");
@@ -1609,4 +1935,871 @@ fn t07d_rule_files_v2_to_v3() {
     assert_eq!(std::fs::read_to_string(dir.join("provision_rules.json")).unwrap(), before);
     assert_eq!(cfg.rules, edited);
     assert!(std::fs::read_to_string(dir.join("segment_map.json")).unwrap().contains("\"defaults_version\": 3"));
+}
+
+#[test]
+fn t25_split_export_keeps_every_row() {
+    use micro_parquet::exporters::split_and_export_by_column;
+    let df = df!(
+        "Branch" => [Some("DHK"), Some("dhk"), None, Some("A/B"), Some("A_B"), Some("  "), Some("DHK")],
+        "Balance" => [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]
+    )
+    .unwrap();
+    let out = tmpdir().join("split_t25");
+    let _ = std::fs::remove_dir_all(&out);
+    let n = split_and_export_by_column(df.clone().lazy(), "Branch", &out, SplitExportFormat::Csv, ParquetDialect::ArchiveZstd, false, Some("Balance"))
+        .unwrap();
+    assert_eq!(n, 5);
+    let mut files: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(files, vec!["A_B.csv", "A_B_2.csv", "BLANK_KEY.csv", "DHK.csv", "dhk_2.csv", "split_manifest.csv"]);
+    let man = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(out.join("split_manifest.csv")))
+        .unwrap()
+        .finish()
+        .unwrap();
+    assert_eq!(man.height(), 5);
+    let rows: usize = str_col(&man, "rows").iter().map(|r| r.as_deref().unwrap().parse::<usize>().unwrap()).sum();
+    assert_eq!(rows, df.height());
+    // Null and whitespace-only keys share BLANK_KEY (rows 4 + 32).
+    let blank_row = str_col(&man, "file").iter().position(|f| f.as_deref() == Some("BLANK_KEY.csv")).unwrap();
+    assert_eq!(str_col(&man, "rows")[blank_row].as_deref(), Some("2"));
+    assert_eq!(str_col(&man, "control_sum")[blank_row].as_deref(), Some("36.0"));
+    assert_eq!(str_col(&man, "key")[blank_row], None);
+    let dhk = str_col(&man, "key").iter().position(|k| k.as_deref() == Some("DHK")).unwrap();
+    assert_eq!(str_col(&man, "rows")[dhk].as_deref(), Some("2"));
+    let body = std::fs::read_to_string(out.join("dhk_2.csv")).unwrap();
+    assert!(body.contains("dhk") && !body.contains("DHK"), "{body}");
+
+    // Parquet: same partition.
+    let outp = tmpdir().join("split_t25p");
+    let _ = std::fs::remove_dir_all(&outp);
+    let n = split_and_export_by_column(df.lazy(), "Branch", &outp, SplitExportFormat::Parquet, ParquetDialect::ArchiveZstd, false, None).unwrap();
+    assert_eq!(n, 5);
+    let total: usize = ["A_B", "A_B_2", "BLANK_KEY", "DHK", "dhk_2"]
+        .iter()
+        .map(|s| {
+            LazyFrame::scan_parquet(outp.join(format!("{s}.parquet")), Default::default()).unwrap().collect().unwrap().height()
+        })
+        .sum();
+    assert_eq!(total, 7);
+}
+
+fn unzip_entry(zip: &std::path::Path, entry: &str) -> String {
+    let out = std::process::Command::new("unzip").arg("-p").arg(zip).arg(entry).output().expect("unzip must be installed");
+    assert!(out.status.success(), "unzip {entry}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn t26_excel_dates_sheets_and_errors() {
+    use micro_parquet::exporters::*;
+    let d = days(2026, 10, 31);
+    let df = df!("Actnum" => ["A1", "A2", "A3", "A4", "A5"], "Balance" => [1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    let mut df = df;
+    df.with_column(Series::new("Matdat".into(), vec![d, d, d, d, d]).cast(&DataType::Date).unwrap()).unwrap();
+    // 2026-10-31 12:00:00 in microseconds
+    let us = (d as i64) * 86_400_000_000 + 43_200_000_000;
+    df.with_column(
+        Series::new("Stamp".into(), vec![us; 5]).cast(&DataType::Datetime(TimeUnit::Microseconds, None)).unwrap(),
+    )
+    .unwrap();
+
+    let p = tmpdir().join("t26.xlsx");
+    let rep = export_tabs_to_xlsx(vec![("Loans".into(), df.clone())], Vec::new(), &p).unwrap();
+    assert_eq!(rep.sheets, vec![("Loans".to_string(), 1)]);
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let styles = unzip_entry(&p, "xl/styles.xml");
+    let serial = d + 25_569;
+    // Matdat is column C: a number cell (no t="s"/"str") holding the date serial, with a style.
+    let c2 = sheet.split("<c r=\"C2\"").nth(1).expect("C2 cell").split("</c>").next().unwrap().to_string();
+    assert!(c2.contains(&format!("<v>{serial}</v>")) && c2.contains(" s=\"") && !c2.contains("t=\""), "{c2}");
+    assert!(styles.contains("formatCode=\"dd-mmm-yyyy\""), "{styles}");
+    assert!(styles.contains("formatCode=\"dd-mmm-yyyy hh:mm:ss\""), "{styles}");
+    let d2 = sheet.split("<c r=\"D2\"").nth(1).expect("D2 cell").split("</c>").next().unwrap().to_string();
+    assert!(d2.contains(&format!("<v>{serial}.5</v>")), "{d2}");
+
+    // More rows than a sheet holds: continues on "<sheet> (2)", "(3)" instead of truncating.
+    let p2 = tmpdir().join("t26_spill.xlsx");
+    let failing = vec![("Broken tab".to_string(), "Column 'X' not found".to_string())];
+    let rep = write_xlsx_workbook(vec![("Loans".into(), df.clone())], failing, &p2, 2).unwrap();
+    assert_eq!(rep.sheets, vec![("Loans".to_string(), 3)]);
+    let wb = unzip_entry(&p2, "xl/workbook.xml");
+    for name in ["1_Loans\"", "1_Loans (2)\"", "1_Loans (3)\"", "Export_Errors\""] {
+        assert!(wb.contains(&format!("name=\"{name}")), "{name} in {wb}");
+    }
+    let s3 = unzip_entry(&p2, "xl/worksheets/sheet3.xml");
+    assert!(s3.contains("<c r=\"B2\"") && !s3.contains("<c r=\"B3\""), "last sheet holds row 5 only: {s3}");
+    let strings = unzip_entry(&p2, "xl/sharedStrings.xml");
+    assert!(strings.contains("Broken tab") && strings.contains("Column 'X' not found"), "{strings}");
+    let summary = rep.summary();
+    assert!(summary.contains("Export_Errors") && summary.contains("Broken tab") && summary.contains("3 sheets"), "{summary}");
+
+    // Nothing to export at all is an error, not an empty workbook.
+    assert!(export_tabs_to_xlsx(vec![], vec![], &tmpdir().join("t26_empty.xlsx")).is_err());
+}
+
+#[test]
+fn t26b_pdf_omitted_columns_and_rows() {
+    use micro_parquet::exporters::*;
+    assert_eq!(pdf_column_layout(4).0, 4);
+    let (shown, w) = pdf_column_layout(20);
+    assert_eq!(shown, 15);
+    assert!(w >= 18.0 && shown as f32 * w <= 273.0 + 0.01);
+    let cols: Vec<Series> = (0..20).map(|i| Series::new(format!("C{i:02}").into(), vec![1.0f64, 2.0])).collect();
+    let df = DataFrame::new(cols).unwrap();
+    let p = tmpdir().join("t26b.pdf");
+    let rep = export_tabs_to_pdf(vec![("Wide".into(), df, Default::default())], &p, NumberDisplayFormat::Raw, 2).unwrap();
+    assert_eq!(rep.omitted_columns, vec![("Wide".to_string(), (15..20).map(|i| format!("C{i:02}")).collect::<Vec<_>>())]);
+    assert!(rep.summary().contains("C15, C16, C17, C18, C19 omitted"), "{}", rep.summary());
+    assert!(rep.truncated_tabs.is_empty());
+
+    let long = df!("Balance" => vec![1.0f64; PDF_MAX_ROWS_PER_TAB + 1]).unwrap();
+    let rep = export_tabs_to_pdf(vec![("Long".into(), long, Default::default())], &tmpdir().join("t26c.pdf"), NumberDisplayFormat::Raw, 2).unwrap();
+    assert_eq!(rep.truncated_tabs, vec!["Long".to_string()]);
+    assert!(rep.omitted_columns.is_empty());
+}
+
+#[test]
+fn t27_batch_log_and_folder_checks() {
+    use micro_parquet::batch::*;
+    let base = tmpdir().join("t27");
+    let _ = std::fs::remove_dir_all(&base);
+    let inp = base.join("in");
+    std::fs::create_dir_all(inp.join("branch")).unwrap();
+    std::fs::write(inp.join("good.csv"), "Actnum,Balance\n001,100.5\n002,200\n").unwrap();
+    std::fs::write(inp.join("branch").join("malformed.csv"), "").unwrap();
+    let out = base.join("out");
+    let rep = run_folder_mirror_batch(&inp, &out, BatchDirection::CsvToParquet, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+        .unwrap();
+    assert_eq!(rep.files_converted, 1);
+    assert_eq!(rep.errors.len(), 1);
+    assert!(rep.errors[0].contains("malformed.csv"), "{:?}", rep.errors);
+    let log = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(out.join("batch_log.csv")))
+        .unwrap()
+        .finish()
+        .unwrap();
+    assert_eq!(log.height(), 2);
+    let status = str_col(&log, "status");
+    let file = str_col(&log, "file");
+    let ok = status.iter().position(|s| s.as_deref() == Some("OK")).expect("one OK row");
+    let bad = status.iter().position(|s| s.as_deref() == Some("ERROR")).expect("one ERROR row");
+    assert_eq!(file[ok].as_deref(), Some("good.csv"));
+    assert_eq!(str_col(&log, "rows")[ok].as_deref(), Some("2"));
+    assert_eq!(str_col(&log, "control_sum")[ok].as_deref(), Some("300.5"));
+    assert_eq!(str_col(&log, "parse_failures")[ok].as_deref(), Some("0"));
+    assert!(file[bad].as_deref().unwrap().contains("malformed.csv"));
+    assert!(str_col(&log, "error")[bad].as_deref().unwrap().contains("no header row"));
+    assert!(out.join("good.parquet").exists());
+
+    // Output folder inside the input folder (or equal to it) is refused before anything is written.
+    for o in [inp.join("converted"), inp.clone(), inp.join("branch").join("..").join("x")] {
+        let err = run_folder_mirror_batch(&inp, &o, BatchDirection::CsvToParquet, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+            .err()
+            .expect("output inside input");
+        assert!(format!("{err:#}").contains("inside the input folder"), "{err:#}");
+    }
+    assert!(!inp.join("converted").exists());
+    // A sibling folder whose name starts with the input's name is not inside it.
+    assert!(check_batch_folders(&inp, &base.join("in_out")).is_ok());
+
+    // Template mode without a template is an error, not a silent auto-detect.
+    let err = run_folder_mirror_batch(&inp, &base.join("out2"), BatchDirection::CsvToParquet, BatchSchemaStrategy::MasterSchemaTemplate, None, ParquetDialect::ArchiveZstd, false, &base)
+        .err()
+        .expect("no template");
+    assert!(format!("{err:#}").contains("no template"), "{err:#}");
+
+    // Parquet -> CSV: companion files are copied and logged; rows and sum come from the source.
+    let pin = base.join("pin");
+    std::fs::create_dir_all(&pin).unwrap();
+    let mut df = df!("Actnum" => ["A1", "A2"], "Balance" => [1.0, 2.0]).unwrap();
+    ParquetWriter::new(std::fs::File::create(pin.join("m.parquet")).unwrap()).finish(&mut df).unwrap();
+    std::fs::write(pin.join("readme.txt"), "notes").unwrap();
+    let rep = run_folder_mirror_batch(&pin, &base.join("pout"), BatchDirection::ParquetToCsv, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+        .unwrap();
+    let mut log = rep.log.clone();
+    log.sort_by(|a, b| a.file.cmp(&b.file));
+    assert_eq!(log.len(), 2);
+    assert_eq!((log[0].file.as_str(), log[0].status.as_str(), log[0].rows, log[0].control_sum), ("m.parquet", "OK", Some(2), Some(3.0)));
+    assert_eq!((log[1].file.as_str(), log[1].status.as_str()), ("readme.txt", "COPIED"));
+}
+
+#[test]
+fn t28_control_totals_state_and_math_scalar() {
+    let df = df!("Branch" => ["DHK", "CTG", "DHK"], "Balance" => [1.0, 2.0, 4.0], "Name" => ["a", "b", "c"]).unwrap();
+    let st = control_totals_state(Ok(df.clone().lazy()), Some("Balance"));
+    assert_eq!(st, ControlTotals { rows: Some(3), sum: Some(7.0), note: None });
+    let st = control_totals_state(Ok(df.clone().lazy()), None);
+    assert_eq!((st.rows, st.sum, st.note), (Some(3), None, None));
+
+    // After a pivot the control column is gone: sum "—" with the reason (rows still known).
+    let pivot = df.clone().lazy().group_by([col("Branch")]).agg([col("Balance").sum().alias("Total")]);
+    let st = control_totals_state(Ok(pivot), Some("Balance"));
+    assert_eq!((st.rows, st.sum), (Some(2), None));
+    assert!(st.note.as_deref().unwrap().contains("'Balance' no longer exists"), "{st:?}");
+
+    // A text control column has no sum.
+    let st = control_totals_state(Ok(df.clone().lazy()), Some("Name"));
+    assert_eq!((st.rows, st.sum), (Some(3), None));
+    assert!(st.note.as_deref().unwrap().contains("not a number"), "{st:?}");
+
+    // A failing pipeline: "—" for rows and sum, with the error, never the previous values.
+    let st = control_totals_state(Err(anyhow::anyhow!("Column 'X' not found")), Some("Balance"));
+    assert_eq!((st.rows, st.sum), (None, None));
+    assert!(st.note.as_deref().unwrap().contains("Column 'X' not found"));
+    let bad = df.clone().lazy().select([col("Missing")]);
+    let st = control_totals_state(Ok(bad), Some("Balance"));
+    assert_eq!((st.rows, st.sum), (None, None));
+    assert!(st.note.is_some());
+
+    // Math column scalar.
+    assert_eq!(parse_math_scalar("x", " 10,000,000 ").unwrap(), 10_000_000.0);
+    assert_eq!(parse_math_scalar("x", "0.5").unwrap(), 0.5);
+    for v in ["abc", "", "1.2.3", "NaN", "inf"] {
+        let err = parse_math_scalar("Bal_Cr", v).err().expect("not a number");
+        let msg = format!("{err:#}");
+        assert!(msg.contains(&format!("'{v}'")) && msg.contains("Bal_Cr"), "{msg}");
+    }
+    let src = TabSource::SingleFile { path: write_parquet("t28.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let step = |v: &str| TransformStep::MathFormula {
+        new_col: "Bal_Cr".into(),
+        left_col: "Balance".into(),
+        op: MathOp::Div,
+        right_is_col: false,
+        right_val_or_col: v.into(),
+    };
+    let err = compile_tab_lazy(&src, &[step("ten million")], &tmpdir()).err().expect("bad scalar");
+    assert!(format!("{err:#}").contains("'ten million' is not a number"), "{err:#}");
+    let out = compile_tab_lazy(&src, &[step("2")], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Bal_Cr"), vec![Some(0.5), Some(1.0), Some(2.0)]);
+
+    // Python export: the parsed number, or the same error raised (never 1.0).
+    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("1,000")], None).unwrap();
+    assert!(py.contains("/ 1000.0)"), "{py}");
+    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("abc")], None).unwrap();
+    assert!(py.contains("raise ValueError(\"Math column 'Bal_Cr': the value 'abc' is not a number"), "{py}");
+}
+
+#[test]
+fn t29_pii_key_file() {
+    let dir = tmpdir().join("t29_key");
+    let _ = std::fs::remove_dir_all(&dir);
+    let key_path = dir.join("portable_data").join("pii_key.bin");
+    assert_eq!(read_pii_key(&key_path).unwrap(), None);
+
+    // First use creates 32 random bytes; later uses read the same key.
+    let (k, created) = load_or_create_pii_key(&key_path).unwrap();
+    assert!(created);
+    assert_eq!(std::fs::read(&key_path).unwrap(), k.to_vec());
+    let (k_again, created) = load_or_create_pii_key(&key_path).unwrap();
+    assert!(!created);
+    assert_eq!(k, k_again);
+    assert_ne!(k, [0u8; 32]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    // Concurrent first use: every thread gets the same key.
+    let race_path = dir.join("race").join("pii_key.bin");
+    let keys: Vec<[u8; 32]> = (0..8)
+        .map(|_| {
+            let p = race_path.clone();
+            std::thread::spawn(move || load_or_create_pii_key(&p).unwrap().0)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(keys.iter().all(|x| *x == keys[0]));
+    let leftovers = std::fs::read_dir(race_path.parent().unwrap()).unwrap().count();
+    assert_eq!(leftovers, 1, "temporary key files are removed");
+
+    // Export, then import into another install: same fingerprint; the old key is backed up.
+    let exported = dir.join("backup_key.bin");
+    assert!(!export_pii_key(&key_path, &exported).unwrap());
+    let other = dir.join("other").join("pii_key.bin");
+    let (k_other, _) = load_or_create_pii_key(&other).unwrap();
+    assert_ne!(pii_key_fingerprint(&k_other), pii_key_fingerprint(&k));
+    let bak = import_pii_key(&other, &exported).unwrap().expect("backup of the replaced key");
+    assert_eq!(std::fs::read(&bak).unwrap(), k_other.to_vec());
+    assert_eq!(read_pii_key(&other).unwrap(), Some(k));
+
+    // A file that is not a key is refused and changes nothing.
+    let junk = dir.join("junk.bin");
+    std::fs::write(&junk, b"not a key").unwrap();
+    let err = import_pii_key(&other, &junk).err().expect("wrong size");
+    assert!(format!("{err:#}").contains("expected 32"), "{err:#}");
+    assert_eq!(read_pii_key(&other).unwrap(), Some(k));
+
+    // A damaged key file is an error (never silently replaced).
+    std::fs::write(&key_path, b"short").unwrap();
+    let err = load_or_create_pii_key(&key_path).err().expect("damaged key");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("damaged") && msg.contains("5 bytes"), "{msg}");
+    assert_eq!(std::fs::read(&key_path).unwrap(), b"short".to_vec());
+    assert_eq!(pii_key_fingerprint(&k).len(), 8);
+}
+
+#[test]
+fn t26c_excel_long_whole_numbers_as_text() {
+    use micro_parquet::exporters::*;
+    let df = df!(
+        "Actnum" => [1_234_567_890_123_456_i64, 42],
+        "Small" => [999_999_999_999_999_i64, -999_999_999_999_999],
+        "Neg" => [-1_000_000_000_000_000_i64, 1]
+    )
+    .unwrap();
+    let p = tmpdir().join("t26c.xlsx");
+    let rep = export_tabs_to_xlsx(vec![("Loans".into(), df)], Vec::new(), &p).unwrap();
+    assert_eq!(rep.text_columns, vec![("Loans".to_string(), "Actnum".to_string()), ("Loans".to_string(), "Neg".to_string())]);
+    let s = rep.summary();
+    assert!(s.contains("'Actnum' in 'Loans'") && s.contains("'Neg' in 'Loans'") && !s.contains("Small"), "{s}");
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+    let cell = |r: &str| sheet.split(&format!("<c r=\"{r}\"")).nth(1).unwrap().split("</c>").next().unwrap().to_string();
+    // 16 digits: text with every digit kept; 15 digits and small values stay numbers.
+    assert!(cell("A2").contains("t=\"s\"") && strings.contains("1234567890123456"), "{}", cell("A2"));
+    assert!(cell("C2").contains("t=\"s\"") && strings.contains("-1000000000000000"));
+    assert!(!cell("A3").contains("t=\"s\"") && cell("A3").contains("<v>42</v>"));
+    assert!(!cell("B2").contains("t=\"s\"") && cell("B2").contains("<v>999999999999999</v>"), "{}", cell("B2"));
+}
+
+#[test]
+fn t27b_row_count_warnings() {
+    use micro_parquet::batch::*;
+    // Single loads: an unclosed quote swallows the following lines.
+    let p = write_csv("t27b_quote.csv", "Actnum,Balance\n\"A1,100\nA2,200\nA3,300\n\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    let src = TabSource::SingleFile { path: p.clone(), is_parquet: false, config: cfg };
+    let c = source_row_check(&src, &tmpdir()).unwrap().expect("CSV source");
+    assert_eq!((c.nonempty_lines, c.data_lines(), c.parsed_rows), (4, 3, 1));
+    let w = c.warning().expect("short");
+    assert!(w.contains("Read 1 rows") && w.contains("3 data lines"), "{w}");
+    // Title lines are not data; a clean file gives no warning.
+    let p2 = write_csv("t27b_title.csv", "Branch report Oct 2026\nActnum,Balance\nA1,1\nA2,2\n");
+    let mut cfg2 = auto_detect_smart_schema(&p2).unwrap();
+    cfg2.skip_rows = 1;
+    let cfg2 = auto_detect_smart_schema_with(&p2, &cfg2).unwrap();
+    let c2 = source_row_check(&TabSource::SingleFile { path: p2, is_parquet: false, config: cfg2 }, &tmpdir()).unwrap().unwrap();
+    assert_eq!((c2.data_lines(), c2.parsed_rows, c2.warning()), (2, 2, None));
+    // 0 rows from a non-empty file.
+    let zero = RowCountCheck { nonempty_lines: 1, skip_rows: 0, parsed_rows: 0 };
+    assert!(zero.warning().unwrap().starts_with("0 rows read"));
+    // Parquet sources are not checked.
+    let pq = write_parquet("t27b.parquet", &df!("A" => [1]).unwrap());
+    assert!(source_row_check(&TabSource::SingleFile { path: pq, is_parquet: true, config: IngestionConfig::default() }, &tmpdir()).unwrap().is_none());
+
+    // Batch: a WARNING row (converted) with both counts in batch_log.csv.
+    let base = tmpdir().join("t27b");
+    let _ = std::fs::remove_dir_all(&base);
+    let inp = base.join("in");
+    std::fs::create_dir_all(&inp).unwrap();
+    std::fs::write(inp.join("good.csv"), "Actnum,Balance\nA1,1\nA2,2\n").unwrap();
+    std::fs::write(inp.join("quote.csv"), "Actnum,Balance\n\"A1,100\nA2,200\nA3,300\n").unwrap();
+    let out = base.join("out");
+    let rep = run_folder_mirror_batch(&inp, &out, BatchDirection::CsvToParquet, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+        .unwrap();
+    assert_eq!(rep.files_converted, 2);
+    assert!(rep.errors.is_empty());
+    assert_eq!(rep.warnings.len(), 1);
+    assert!(rep.warnings[0].starts_with("quote.csv"), "{:?}", rep.warnings);
+    let log = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(out.join("batch_log.csv")))
+        .unwrap()
+        .finish()
+        .unwrap()
+        .sort(["file"], Default::default())
+        .unwrap();
+    assert_eq!(str_col(&log, "file"), vec![Some("good.csv".to_string()), Some("quote.csv".to_string())]);
+    assert_eq!(str_col(&log, "status"), vec![Some("OK".to_string()), Some("WARNING".to_string())]);
+    assert_eq!(str_col(&log, "rows"), vec![Some("2".to_string()), Some("1".to_string())]);
+    assert_eq!(str_col(&log, "data_lines"), vec![Some("2".to_string()), Some("3".to_string())]);
+    assert!(str_col(&log, "error")[1].as_deref().unwrap().contains("unclosed quotes"));
+}
+
+#[test]
+fn t15b_python_export_refuses_pii_masks() {
+    let col = |name: &str, pii_mask| ColumnSchemaConfig {
+        name: name.into(),
+        dtype: ColDataType::Utf8,
+        pii_mask,
+        sample_values: vec![],
+        ..Default::default()
+    };
+    let cfg = IngestionConfig {
+        columns: vec![
+            col("Actnum", PiiMaskMode::AccountNumber),
+            col("Name", PiiMaskMode::ClientNameHash),
+            col("Branch", PiiMaskMode::None),
+        ],
+        ..Default::default()
+    };
+    let err = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("x.csv"), false, &cfg, &[], None)
+        .err()
+        .expect("masked columns must refuse the export");
+    let msg = format!("{err:#}");
+    assert!(msg.starts_with("Python export refused: column(s) Actnum, Name are PII-masked"), "{msg}");
+    assert!(msg.contains("cannot reproduce") && msg.contains("real names and account numbers"), "{msg}");
+    // Without masks the script is produced.
+    let mut plain = cfg.clone();
+    plain.columns.iter_mut().for_each(|c| c.pii_mask = PiiMaskMode::None);
+    assert!(micro_parquet::macros::generate_python_polars_code(std::path::Path::new("x.csv"), false, &plain, &[], None).is_ok());
+    // Masks inside a stack or join are found too (the app checks these before exporting).
+    let src = TabSource::JoinedTabs {
+        left_source: Box::new(TabSource::SingleFile { path: "l.csv".into(), is_parquet: false, config: plain.clone() }),
+        left_steps: vec![],
+        right_source: Box::new(TabSource::VerticalStack { files: vec![("r.csv".into(), false, cfg.clone())], include_source_col: false }),
+        right_steps: vec![],
+        join_kind: SqlJoinKind::Left,
+        join_keys: vec!["Actnum".into()],
+        right_cols_to_keep: vec![],
+        keep_first_duplicate_right: false,
+    };
+    assert!(source_masks_pii(&src));
+    let mut masked = Vec::new();
+    collect_masked_columns(&src, &mut masked);
+    assert_eq!(masked, vec!["Actnum".to_string(), "Name".to_string()]);
+}
+
+#[test]
+fn t29b_batch_announces_new_pii_key() {
+    use micro_parquet::batch::*;
+    let base = tmpdir().join("t29b");
+    let _ = std::fs::remove_dir_all(&base);
+    let inp = base.join("in");
+    std::fs::create_dir_all(&inp).unwrap();
+    let csv = inp.join("a.csv");
+    std::fs::write(&csv, "Actnum,Balance\n0012345,100\n0067890,200\n").unwrap();
+    std::fs::write(inp.join("b.csv"), "Actnum,Balance\n0012345,50\n").unwrap();
+    let mut tpl = auto_detect_smart_schema(&csv).unwrap();
+    tpl.columns.iter_mut().find(|c| c.name == "Actnum").unwrap().pii_mask = PiiMaskMode::AccountNumber;
+
+    // Point the key at a fresh folder for this thread: the batch run creates it.
+    let key_path = base.join("keys").join("pii_key.bin");
+    set_pii_key_path_override(Some(key_path.clone()));
+    let run = |out: &str| {
+        run_folder_mirror_batch(&inp, &base.join(out), BatchDirection::CsvToParquet, BatchSchemaStrategy::MasterSchemaTemplate, Some(&tpl), ParquetDialect::ArchiveZstd, false, &base).unwrap()
+    };
+    let rep = run("out1");
+    assert!(key_path.exists());
+    assert_eq!(rep.files_converted, 2);
+    assert_eq!(rep.notices, vec!["New masking key created — export a backup".to_string()]);
+    let log = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(base.join("out1").join("batch_log.csv")))
+        .unwrap()
+        .finish()
+        .unwrap();
+    let status = str_col(&log, "status");
+    let error = str_col(&log, "error");
+    let notice = status.iter().position(|s| s.as_deref() == Some("NOTICE")).expect("one NOTICE line");
+    assert_eq!(error[notice].as_deref(), Some("New masking key created — export a backup"));
+    assert_eq!(status.iter().filter(|s| s.as_deref() == Some("NOTICE")).count(), 1);
+    // The files were masked with the new key.
+    let out = LazyFrame::scan_parquet(base.join("out1").join("a.parquet"), Default::default()).unwrap().collect().unwrap();
+    assert!(str_col(&out, "Actnum")[0].clone().unwrap().starts_with("ACCT_"));
+
+    // A second run finds the key: no notice, no NOTICE line.
+    let rep2 = run("out2");
+    assert!(rep2.notices.is_empty());
+    assert!(rep2.log.iter().all(|r| r.status != "NOTICE"));
+    set_pii_key_path_override(None);
+}
+
+#[test]
+fn t29c_key_backups_are_never_overwritten_and_export_is_private() {
+    let dir = tmpdir().join("t29c_key");
+    let _ = std::fs::remove_dir_all(&dir);
+    let key_path = dir.join("portable_data").join("pii_key.bin");
+    let (first, _) = load_or_create_pii_key(&key_path).unwrap();
+
+    // Two key files to import, then three imports back to back (the same second).
+    let src_a = dir.join("a.bin");
+    let src_b = dir.join("b.bin");
+    std::fs::write(&src_a, [0xAAu8; 32]).unwrap();
+    std::fs::write(&src_b, [0xBBu8; 32]).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    // A backup that already exists under the name of this second (and the next) must survive.
+    for s in [now, now + 1] {
+        std::fs::write(key_path.with_file_name(format!("pii_key.bin.bak-{s}")), b"older backup").unwrap();
+    }
+    let bak1 = import_pii_key(&key_path, &src_a).unwrap().expect("backup 1");
+    let bak2 = import_pii_key(&key_path, &src_b).unwrap().expect("backup 2");
+    let bak3 = import_pii_key(&key_path, &src_a).unwrap().expect("backup 3");
+    assert!(bak1 != bak2 && bak2 != bak3 && bak1 != bak3, "{bak1:?} {bak2:?} {bak3:?}");
+    // Each backup holds the key that was replaced; the pre-existing files are untouched.
+    assert_eq!(std::fs::read(&bak1).unwrap(), first.to_vec());
+    assert_eq!(std::fs::read(&bak2).unwrap(), vec![0xAAu8; 32]);
+    assert_eq!(std::fs::read(&bak3).unwrap(), vec![0xBBu8; 32]);
+    for s in [now, now + 1] {
+        assert_eq!(std::fs::read(key_path.with_file_name(format!("pii_key.bin.bak-{s}"))).unwrap(), b"older backup");
+    }
+    let names: Vec<String> = [&bak1, &bak2, &bak3]
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(names.iter().any(|n| n.ends_with("_2")), "{names:?}");
+    assert_eq!(std::fs::read(&key_path).unwrap(), vec![0xAAu8; 32]);
+
+    // The exported key is readable by its owner only (Unix), also when the file existed already.
+    let dest = dir.join("exported_key.bin");
+    export_pii_key(&key_path, &dest).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), vec![0xAAu8; 32]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dest), 0o600);
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644)).unwrap();
+        export_pii_key(&key_path, &dest).unwrap();
+        assert_eq!(mode(&dest), 0o600);
+        assert_eq!(mode(&bak1), 0o600);
+    }
+}
+
+#[test]
+fn t12b_weighted_rate_with_mixed_sign_weights() {
+    // +1000 @ 9% and -999 @ 5% do not average to a rate (the weights nearly cancel): null + flag.
+    // All-negative weights (-100 @ 5%, -900 @ 10%) are a normal 9.5%.
+    let prev = df!(
+        "Actnum" => ["M1", "M1", "N1", "N1", "P1", "P1"],
+        "Balance" => [1000.0, -999.0, -100.0, -900.0, 100.0, 900.0],
+        "Rate" => [9.0, 5.0, 5.0, 10.0, 5.0, 10.0]
+    )
+    .unwrap();
+    let curr = df!(
+        "Actnum" => ["M1", "N1", "P1"],
+        "Balance" => [1.0, -1000.0, 1000.0],
+        "Rate" => [9.0, 9.5, 9.5]
+    )
+    .unwrap();
+    let rec = build_period_reconcile_lazy(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None).unwrap();
+    assert_eq!(reconcile_mixed_sign_keys(rec.clone()).unwrap(), (1, 0));
+    let out = rec.sort(["Actnum"], Default::default()).collect().unwrap();
+    assert_eq!(str_col(&out, "Actnum"), vec![Some("M1".into()), Some("N1".into()), Some("P1".into())]);
+    assert_eq!(f64_col(&out, "Prev_Rate")[0], None);
+    assert_close(f64_col(&out, "Prev_Rate")[1].unwrap(), 9.5, "all-negative weights");
+    assert_close(f64_col(&out, "Prev_Rate")[2].unwrap(), 9.5, "all-positive weights");
+    // A null rate gives a null rate change, never a made-up one.
+    let bps = f64_col(&out, "Rate_Delta_Bps");
+    assert_eq!(bps[0], None);
+    assert_close(bps[1].unwrap(), 0.0, "N1 rate change");
+    let flags: Vec<Option<bool>> = out.column("Prev_Rate_Mixed_Sign").unwrap().bool().unwrap().into_iter().collect();
+    assert_eq!(flags, vec![Some(true), Some(false), Some(false)]);
+
+    // Group-by WAVG: same rule, and the note counts the groups.
+    let df = df!(
+        "Grp" => ["M", "M", "N", "N", "P"],
+        "Rate" => [9.0, 5.0, 5.0, 10.0, 7.0],
+        "Balance" => [1000.0, -999.0, -100.0, -900.0, 50.0]
+    )
+    .unwrap();
+    let p = write_parquet("wavg_mixed.parquet", &df);
+    let src = TabSource::SingleFile { path: p, is_parquet: true, config: IngestionConfig::default() };
+    let steps = vec![wavg_step(Some("Balance"))];
+    let out = compile_tab_lazy(&src, &steps, &tmpdir())
+        .unwrap()
+        .sort(["Grp"], Default::default())
+        .collect()
+        .unwrap();
+    let w = f64_col(&out, "WAVG_Rate");
+    assert_eq!(w[0], None);
+    assert_close(w[1].unwrap(), 9.5, "all-negative group");
+    assert_close(w[2].unwrap(), 7.0, "single positive row");
+    let notes = weighted_mixed_sign_notes(&src, &steps, &tmpdir()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("WAVG_Rate is null for 1 group"), "{notes:?}");
+    // No mixed groups, no note.
+    let df = df!("Grp" => ["N", "N"], "Rate" => [5.0, 10.0], "Balance" => [-100.0, -900.0]).unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("wavg_neg.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    assert!(weighted_mixed_sign_notes(&src, &steps, &tmpdir()).unwrap().is_empty());
+}
+
+#[test]
+fn t11c_ftp_missing_date_is_not_a_one_day_tenor() {
+    let o = days(2026, 1, 1);
+    let df = df!(
+        "Opndat" => [Some(o), Some(o), None, Some(o)],
+        "Matdat" => [Some(o + 100), None, Some(o + 100), Some(o + 31)],
+        "Balance" => [1_000_000.0, 1_000_000.0, 1_000_000.0, 1_000_000.0],
+        "Rate" => [9.0, 9.0, 9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear)
+        .unwrap()
+        .collect()
+        .unwrap();
+    assert_eq!(f64_col(&out, "Tenor_Days"), vec![Some(100.0), None, None, Some(31.0)]);
+    let rate = f64_col(&out, "Benchmark_FTP_Rate");
+    assert_eq!((rate[1], rate[2]), (None, None));
+    assert!((rate[0].unwrap() - 9.559).abs() < 0.001, "100-day FTP rate {:?}", rate[0]);
+    let spread = f64_col(&out, "FTP_Spread_Pct");
+    assert_eq!((spread[1], spread[2]), (None, None));
+    assert!(spread[0].is_some() && spread[3].is_some());
+    let margin = f64_col(&out, "Annual_FTP_Margin_BDT");
+    assert_eq!((margin[1], margin[2]), (None, None));
+    let method = str_col(&out, "FTP_Method");
+    assert_eq!(method[1].as_deref(), Some("MISSING_DATE"));
+    assert_eq!(method[2].as_deref(), Some("MISSING_DATE"));
+    assert!(method[0].as_deref().unwrap().starts_with("Linear"), "{method:?}");
+    // NextPointUp treats a missing date the same way.
+    let df2 = df!("Opndat" => [Some(o)], "Matdat" => [None::<i32>], "Balance" => [1.0], "Rate" => [9.0])
+        .unwrap()
+        .lazy()
+        .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let out2 = apply_ftp_curve_map(df2, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::NextPointUp)
+        .unwrap()
+        .collect()
+        .unwrap();
+    assert_eq!(f64_col(&out2, "Benchmark_FTP_Rate"), vec![None]);
+    assert_eq!(str_col(&out2, "FTP_Method")[0].as_deref(), Some("MISSING_DATE"));
+
+    // The status note counts them.
+    let raw = df!(
+        "Opndat" => [Some(o), Some(o), None],
+        "Matdat" => [Some(o + 100), None, Some(o + 100)],
+        "Balance" => [1.0, 2.0, 3.0],
+        "Rate" => [9.0, 9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)])
+    .collect()
+    .unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("ftp_missing.parquet", &raw), is_parquet: true, config: IngestionConfig::default() };
+    let step = TransformStep::FtpCurveMap {
+        opndat_col: "Opndat".into(),
+        matdat_col: "Matdat".into(),
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        curve: default_bd_ftp_curve(),
+        is_liability: true,
+        interpolation: FtpInterpolation::Linear,
+    };
+    let notes = blank_balance_notes(&src, &[step], &tmpdir()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("missing on 2 rows") && notes[0].contains("MISSING_DATE"), "{notes:?}");
+}
+
+/// The number-format code the cell `cell` (e.g. "C2") actually uses: its `s="N"` style index,
+/// looked up in styles.xml `cellXfs` -> `numFmtId` -> `<numFmt formatCode>`.
+fn xlsx_cell_format_code(sheet: &str, styles: &str, cell: &str) -> String {
+    let tag = sheet.split(&format!("<c r=\"{cell}\"")).nth(1).unwrap_or_else(|| panic!("no cell {cell}"));
+    let tag = tag.split('>').next().unwrap();
+    let idx: usize = tag
+        .split(" s=\"")
+        .nth(1)
+        .unwrap_or_else(|| panic!("cell {cell} has no style: {tag}"))
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let xfs = styles.split("<cellXfs").nth(1).expect("cellXfs").split("</cellXfs>").next().unwrap();
+    let xf = xfs.split("<xf ").nth(idx + 1).unwrap_or_else(|| panic!("cellXfs has no entry {idx}"));
+    let fmt_id = xf.split("numFmtId=\"").nth(1).expect("numFmtId").split('"').next().unwrap().to_string();
+    let after = styles
+        .split(&format!("<numFmt numFmtId=\"{fmt_id}\""))
+        .nth(1)
+        .unwrap_or_else(|| panic!("numFmtId {fmt_id} is not a custom format in {styles}"));
+    after.split("formatCode=\"").nth(1).expect("formatCode").split('"').next().unwrap().to_string()
+}
+
+#[test]
+fn t26d_excel_date_cell_uses_the_date_style_and_failing_tab_reaches_export_errors() {
+    use micro_parquet::exporters::*;
+    let d = days(2026, 10, 31);
+    let mut df = df!("Actnum" => ["A1", "A2"], "Balance" => [1.0, 2.0]).unwrap();
+    df.with_column(Series::new("Matdat".into(), vec![d, d]).cast(&DataType::Date).unwrap()).unwrap();
+    let us = (d as i64) * 86_400_000_000 + 43_200_000_000;
+    df.with_column(Series::new("Stamp".into(), vec![us; 2]).cast(&DataType::Datetime(TimeUnit::Microseconds, None)).unwrap()).unwrap();
+
+    // The real tab path: one good tab, one tab whose SQL step names a column that does not exist.
+    let src = TabSource::SingleFile { path: write_parquet("t26d.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let bad_steps = vec![TransformStep::SqlQuery { query: "SELECT NoSuchColumn FROM self".into() }];
+    let tabs: Vec<TabToExport> = vec![
+        ("Loans".to_string(), &src, &[][..]),
+        ("Broken tab".to_string(), &src, &bad_steps[..]),
+    ];
+    let p = tmpdir().join("t26d.xlsx");
+    let rep = export_selected_tabs_to_xlsx(&tabs, &p, &tmpdir()).unwrap();
+    assert_eq!(rep.sheets, vec![("Loans".to_string(), 1)]);
+    let wb = unzip_entry(&p, "xl/workbook.xml");
+    assert!(wb.contains("name=\"1_Loans\"") && wb.contains("name=\"Export_Errors\""), "{wb}");
+    assert!(!wb.contains("Broken tab"), "a failed tab has no data sheet: {wb}");
+    let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+    assert!(strings.contains("Broken tab") && strings.contains("NoSuchColumn"), "{strings}");
+    let summary = rep.summary();
+    assert!(summary.contains("Export_Errors") && summary.contains("Broken tab"), "{summary}");
+
+    // Cell C2 (Matdat) and D2 (Stamp): the style each cell uses carries the date format.
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let styles = unzip_entry(&p, "xl/styles.xml");
+    assert_eq!(xlsx_cell_format_code(&sheet, &styles, "C2"), "dd-mmm-yyyy");
+    assert_eq!(xlsx_cell_format_code(&sheet, &styles, "D2"), "dd-mmm-yyyy hh:mm:ss");
+    // The balance cell does not use a date style.
+    assert_ne!(xlsx_cell_format_code(&sheet, &styles, "C2"), xlsx_cell_format_code(&sheet, &styles, "D2"));
+}
+
+#[test]
+fn t12c_reconcile_status_message_and_current_period_worst_grade() {
+    let cl_map: Vec<(String, String)> = [("STD", "STD"), ("SMA", "SMA"), ("SS", "SS"), ("DF", "DF"), ("BL", "BL")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    let prev = df!(
+        "Actnum" => ["C1", "C1", "C2", "C3", "C3"],
+        "Balance" => [100.0, 50.0, 10.0, 5.0, -4.0],
+        "Rate" => [9.0, 9.0, 8.0, 9.0, 5.0],
+        "CL" => ["STD", "STD", "SMA", "STD", "STD"]
+    )
+    .unwrap();
+    // Current period: C1 has three rows; the worst grade is BL even though the largest balance is STD.
+    let curr = df!(
+        "Actnum" => ["C1", "C1", "C1", "C2"],
+        "Balance" => [900.0, 20.0, 5.0, 10.0],
+        "Rate" => [9.0, 9.0, 9.0, 8.0],
+        "CL" => ["STD", "SS", "BL", "SMA"]
+    )
+    .unwrap();
+    let rec = build_period_reconcile_lazy_with(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), Some("CL"), &cl_map).unwrap();
+    let out = rec.clone().sort(["Actnum"], Default::default()).collect().unwrap();
+    assert_eq!(str_col(&out, "Curr_CL")[0].as_deref(), Some("BL"));
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[0].as_deref(), Some("STD -> BL"));
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[1].as_deref(), Some("SMA -> SMA"));
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[2].as_deref(), Some("STD -> CLOSED"));
+
+    // Status message: C1 has 2 rows before and 3 now (1 key each), C3's rate is null (+5 and -4).
+    let note = reconcile_status_note(rec.clone(), true).unwrap();
+    assert_eq!(
+        note,
+        " ⚠ Rate is null for 1 key(s) in the previous period and 0 in the current: their balances mix positive and negative (see Prev_Rate_Mixed_Sign / Curr_Rate_Mixed_Sign). Keys with more than one row: 2 in the previous period, 1 in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count)."
+    );
+    // Nothing mixed: only the multi-row sentence.
+    let prev = df!("Actnum" => ["A", "A"], "Balance" => [1.0, 2.0], "Rate" => [5.0, 5.0]).unwrap();
+    let curr = df!("Actnum" => ["A"], "Balance" => [3.0], "Rate" => [5.0]).unwrap();
+    let rec = build_period_reconcile_lazy_with(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None, &cl_map).unwrap();
+    assert_eq!(
+        reconcile_status_note(rec, true).unwrap(),
+        " Keys with more than one row: 1 in the previous period, 0 in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count)."
+    );
+}
+
+#[test]
+fn t12d_two_loads_through_the_key_file_give_identical_tokens() {
+    let dir = tmpdir().join("t12d");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = write_csv("t12d.csv", "Name,Actnum\nRAHIM UDDIN,0012345678901\nKARIM,0098765432109\n");
+    let cfg = IngestionConfig {
+        columns: vec![
+            ColumnSchemaConfig { name: "Name".into(), dtype: ColDataType::Utf8, pii_mask: PiiMaskMode::ClientNameHash, ..Default::default() },
+            ColumnSchemaConfig { name: "Actnum".into(), dtype: ColDataType::Utf8, pii_mask: PiiMaskMode::AccountNumber, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let load = || build_lazy_pipeline(&csv, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+
+    let key_path = dir.join("keys_a").join("pii_key.bin");
+    set_pii_key_path_override(Some(key_path.clone()));
+    let first = load(); // creates the key file
+    let key_after_first = std::fs::read(&key_path).unwrap();
+    assert_eq!(key_after_first.len(), 32);
+    let second = load(); // reads it again
+    assert_eq!(std::fs::read(&key_path).unwrap(), key_after_first, "the key file does not change");
+    for c in ["Name", "Actnum"] {
+        assert_eq!(str_col(&first, c), str_col(&second, c), "{c}: same key file, same tokens");
+        assert!(str_col(&first, c)[0].as_deref().unwrap().contains('_'));
+    }
+    assert_ne!(str_col(&first, "Name")[0], str_col(&first, "Name")[1]);
+
+    // Another install (another key file) gives other tokens.
+    set_pii_key_path_override(Some(dir.join("keys_b").join("pii_key.bin")));
+    let other = load();
+    assert_ne!(str_col(&first, "Name"), str_col(&other, "Name"));
+    assert_ne!(str_col(&first, "Actnum"), str_col(&other, "Actnum"));
+    set_pii_key_path_override(None);
+}
+
+#[test]
+fn t17b_duplicate_key_error_lists_at_most_ten_keys() {
+    let keys: Vec<String> = (1..=12).map(|i| format!("K{i:02}")).collect();
+    let left = df!("Actnum" => keys.clone(), "Balance" => vec![1.0; 12]).unwrap();
+    let mut rk = keys.clone();
+    rk.extend(keys.clone());
+    let right = df!("Actnum" => rk, "Sector" => vec!["x"; 24]).unwrap();
+    let src = TabSource::JoinedTabs {
+        left_source: Box::new(TabSource::SingleFile { path: write_parquet("l12.parquet", &left), is_parquet: true, config: IngestionConfig::default() }),
+        left_steps: vec![],
+        right_source: Box::new(TabSource::SingleFile { path: write_parquet("r12.parquet", &right), is_parquet: true, config: IngestionConfig::default() }),
+        right_steps: vec![],
+        join_kind: SqlJoinKind::Left,
+        join_keys: vec!["Actnum".into()],
+        right_cols_to_keep: vec![],
+        keep_first_duplicate_right: false,
+    };
+    let msg = format!("{:#}", compile_tab_lazy(&src, &[], &tmpdir()).err().expect("12 duplicated keys"));
+    assert!(msg.contains("Right table has 12 duplicated keys on Actnum"), "{msg}");
+    let listed = msg.split("e.g. ").nth(1).unwrap().split(". Fix").next().unwrap();
+    let listed: Vec<&str> = listed.split(", ").collect();
+    assert_eq!(listed.len(), 10, "{listed:?}");
+    assert_eq!(listed[0], "K01");
+    assert_eq!(listed[9], "K10");
+    assert!(!msg.contains("K11") && !msg.contains("K12"), "{msg}");
+}
+
+#[test]
+fn t19c_blank_balance_notes_for_limit_nii_and_duration() {
+    let df = df!(
+        "Actnum" => ["L1", "L2", "L3", "L4"],
+        "Balance" => [Some(1_000_000.0), None, None, None],
+        "Limit" => [2_000_000.0, 1.0, 1.0, 1.0],
+        "Rate" => [9.0, 9.0, 9.0, 9.0],
+        "Matdat" => [days(2027, 10, 31); 4]
+    )
+    .unwrap()
+    .lazy()
+    .with_column(col("Matdat").cast(DataType::Date))
+    .collect()
+    .unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("t19c.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let limit = TransformStep::LoanLimitUtilization { limit_col: "Limit".into(), bal_col: "Balance".into(), ccf_pct: 50.0 };
+    let nii = TransformStep::RateShockSim {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        shock_bps: 200.0,
+        side_col: None,
+    };
+    let dur = TransformStep::DurationAnalysis {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        compounding_freq: 2,
+        shock_bps: 200.0,
+        default_sight_years: 0.25,
+        side_col: None,
+    };
+    for step in [limit, nii, dur] {
+        let label = step.short_label();
+        let steps = vec![step];
+        // The step still runs (blank = 0) ...
+        assert_eq!(compile_tab_lazy(&src, &steps, &tmpdir()).unwrap().collect().unwrap().height(), 4, "{label}");
+        // ... and says how many balances were blank.
+        let notes = blank_balance_notes(&src, &steps, &tmpdir()).unwrap();
+        assert_eq!(notes.len(), 1, "{label}: {notes:?}");
+        assert_eq!(notes[0], format!("{label}: Balance blank on 3 rows; treated as 0"));
+    }
 }

@@ -8,22 +8,26 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    fetch_viewport_slice, preview_parquet_raw,
+    blank_balance_notes, collect_masked_columns, control_totals_state, source_masks_pii,
+    source_row_check, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
+    pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
-    source_parse_failures, write_parse_failures_csv,
+    source_parse_failures, write_parse_failures_csv, take_pii_key_created_note,
+    weighted_mixed_sign_notes,
 };
 use micro_parquet::exporters::{
-    export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
+    export_selected_tabs_to_xlsx, export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
+    PDF_MAX_ROWS_PER_TAB,
 };
 use micro_parquet::macros::{
-    generate_python_polars_code, load_macro_from_file, python_untranslated_steps,
+    generate_python_polars_code, load_macro_from_file, python_pii_refusal, python_untranslated_steps,
     save_macro_to_file,
 };
 use micro_parquet::models::{
-    column_name_tokens, default_bd_ftp_curve, parquet_native_type, format_metric_value, format_with_commas, AggFunc, AggSpec,
+    column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct, parquet_native_type, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CsvTextEncoding,
-    CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
+    CustomBucketDef, FilterOp, FtpInterpolation, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
     NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths, SignConvention,
     SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };
@@ -178,7 +182,19 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         config: cfg,
     };
 
+    if let Some(note) = ensure_pii_key_for(&source)? {
+        eprintln!("[MicroParquet] {}", note);
+    }
     let lf = compile_tab_lazy(&source, &steps, &paths.temp_dir)?;
+    if let Some(w) = source_row_check(&source, &paths.temp_dir)?.and_then(|c| c.warning()) {
+        eprintln!("[MicroParquet] WARNING: {}", w);
+    }
+    for note in blank_balance_notes(&source, &steps, &paths.temp_dir)? {
+        eprintln!("[MicroParquet] {}", note);
+    }
+    for note in weighted_mixed_sign_notes(&source, &steps, &paths.temp_dir)? {
+        eprintln!("[MicroParquet] {}", note);
+    }
 
     // Values that could not be converted: always reported, and they stop the run when the
     // control column has any (unless --allow-parse-failures).
@@ -219,18 +235,22 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
     }
     if let Some(out_xlsx) = &args.export_xlsx {
         let df = lf.clone().collect()?;
-        export_tabs_to_xlsx(vec![("Headless_Output".to_string(), df)], out_xlsx)?;
-        println!("Exported Excel: {:?}", out_xlsx);
+        let rep = export_tabs_to_xlsx(vec![("Headless_Output".to_string(), df)], Vec::new(), out_xlsx)?;
+        println!("Exported Excel: {:?} ({})", out_xlsx, rep.summary());
     }
     if let Some(out_pdf) = &args.export_pdf {
         let df = lf.collect()?;
-        export_tabs_to_pdf(
+        let rep = export_tabs_to_pdf(
             vec![("Headless_Report".to_string(), df, HashMap::new())],
             out_pdf,
             NumberDisplayFormat::BdtCrore,
             2,
         )?;
         println!("Exported PDF: {:?}", out_pdf);
+        let s = rep.summary();
+        if !s.is_empty() {
+            eprintln!("WARNING (PDF): {}", s);
+        }
     }
 
     Ok(())
@@ -270,6 +290,8 @@ struct BatchModalState {
     loaded_template: Option<IngestionConfig>,
     mdy_dates_on_csv: bool,
     last_report: Option<BatchReport>,
+    /// Error of the last run as a whole (bad folders, missing template), or of loading the template.
+    last_error: Option<String>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -354,11 +376,15 @@ pub struct MicroParquetApp {
 
     stack_files_list: Vec<PathBuf>,
     stack_include_source: bool,
+    /// 0 = each file's own schema, 1 = first file's schema for all, 2 = a saved .schema.json for all.
+    stack_schema_mode: u8,
+    stack_schema_path: Option<PathBuf>,
 
     join_left_tab: usize,
     join_right_tab: usize,
     join_kind: SqlJoinKind,
     join_keys_input: String,
+    join_keep_first: bool,
 
     rec_prev_tab: usize,
     rec_curr_tab: usize,
@@ -392,6 +418,7 @@ pub struct MicroParquetApp {
     ftp_rate_col: String,
     ftp_is_liability: bool,
     ftp_curve: Vec<FtpPoint>,
+    ftp_interpolation: FtpInterpolation,
 
     audit_opn_col: String,
     audit_mat_col: String,
@@ -401,6 +428,10 @@ pub struct MicroParquetApp {
     audit_rate_col: String,
     audit_key_col: String,
     audit_only_exceptions: bool,
+    /// Comma-separated status codes that mean active (hygiene audit).
+    audit_active_statuses: String,
+    audit_rate_min: f64,
+    audit_rate_max: f64,
 
     dur_bal_col: String,
     dur_rate_col: String,
@@ -551,11 +582,14 @@ impl MicroParquetApp {
 
             stack_files_list: Vec::new(),
             stack_include_source: true,
+            stack_schema_mode: 0,
+            stack_schema_path: None,
 
             join_left_tab: 0,
             join_right_tab: 0,
             join_kind: SqlJoinKind::Left,
             join_keys_input: "Actnum".to_string(),
+            join_keep_first: false,
 
             rec_prev_tab: 0,
             rec_curr_tab: 0,
@@ -598,6 +632,7 @@ impl MicroParquetApp {
             ftp_rate_col: "Int Rate".to_string(),
             ftp_is_liability: true,
             ftp_curve: default_bd_ftp_curve(),
+            ftp_interpolation: FtpInterpolation::Linear,
 
             audit_opn_col: "Opndat".to_string(),
             audit_mat_col: "Matdat".to_string(),
@@ -607,6 +642,9 @@ impl MicroParquetApp {
             audit_rate_col: "Int Rate".to_string(),
             audit_key_col: "Actnum".to_string(),
             audit_only_exceptions: true,
+            audit_active_statuses: default_active_statuses().join(", "),
+            audit_rate_min: 0.0,
+            audit_rate_max: default_rate_max_pct(),
 
             dur_bal_col: "Balance".to_string(),
             dur_rate_col: "Int Rate".to_string(),
@@ -698,12 +736,19 @@ impl MicroParquetApp {
         steps: Vec<TransformStep>,
         col_formats: HashMap<String, ColumnFormatSpec>,
     ) {
+        let key_note = match ensure_pii_key_for(&source) {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Pipeline error: {:#}", e);
+                return;
+            }
+        };
         match compile_tab_lazy(&source, &steps, &self.paths.temp_dir) {
             Ok(lf) => {
                 let slice = fetch_viewport_slice(lf.clone(), 0, 100).unwrap_or_default();
                 let default_ctrl = Self::guess_balance_column(&slice);
-                let (total_rows, control_sum) =
-                    compute_control_totals(lf, default_ctrl.as_deref()).unwrap_or((0, None));
+                let totals = control_totals_state(Ok(lf), default_ctrl.as_deref());
+                let (total_rows, control_sum) = (totals.rows.unwrap_or(0), totals.sum);
 
                 // Baseline control sum is always computed from the raw source (0 steps)
                 let baseline_sum = if steps.is_empty() {
@@ -717,7 +762,7 @@ impl MicroParquetApp {
                         .and_then(|(_, s)| s)
                 };
 
-                let (parse_failures, count_note) =
+                let (parse_failures, mut count_note) =
                     match source_parse_failures(&source, &self.paths.temp_dir) {
                         Ok(f) => (f, String::new()),
                         Err(e) => (
@@ -725,6 +770,28 @@ impl MicroParquetApp {
                             format!(" ⚠ Could not count parse failures: {:#}", e),
                         ),
                     };
+                let row_check = match source_row_check(&source, &self.paths.temp_dir) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        count_note.push_str(&format!(" ⚠ Could not compare rows with the file's lines: {:#}", e));
+                        None
+                    }
+                };
+                if let Some(w) = row_check.as_ref().and_then(|c| c.warning()) {
+                    count_note.push_str(&format!(" ⚠ {}", w));
+                }
+                let join_stat = match join_status(
+                    &source,
+                    &steps,
+                    default_ctrl.as_deref(),
+                    &self.paths.temp_dir,
+                ) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        count_note.push_str(&format!(" ⚠ Could not compare the join with its left table: {:#}", e));
+                        None
+                    }
+                };
                 self.tabs.push(TabState {
                     title,
                     source,
@@ -739,11 +806,18 @@ impl MicroParquetApp {
                     cached_slice: slice,
                     sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
                     parse_failures,
+                    join_status: join_stat,
+                    totals,
+                    row_check,
                 });
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
                 self.status_message =
                     format!("Tab created and evaluated out-of-core.{}", count_note);
+                if let Some(n) = key_note {
+                    self.status_message.push_str(&format!(" 🔑 {}", n));
+                }
+                self.append_blank_balance_notes();
             }
             Err(e) => {
                 self.status_message = format!("Pipeline error: {}", e);
@@ -797,6 +871,7 @@ impl MicroParquetApp {
             }
         }
 
+        let step_label = step.short_label();
         if open_new_tab {
             let mut new_steps = curr.steps.clone();
             let title = format!("{} - {}", curr.title, step.short_label());
@@ -808,7 +883,13 @@ impl MicroParquetApp {
                 tab.col_formats = updated_formats;
                 tab.viewport_offset = 0;
             }
+            // A failed refresh replaces this message with the error.
+            let added = format!("Step added: {}.", step_label);
+            self.status_message = added.clone();
             self.refresh_active_tab(false);
+            if self.status_message == added {
+                self.append_blank_balance_notes();
+            }
         }
     }
 
@@ -828,6 +909,29 @@ impl MicroParquetApp {
         None
     }
 
+    /// Adds "Balance blank on N rows; treated as 0" for the active tab's banking steps.
+    fn append_blank_balance_notes(&mut self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let notes = blank_balance_notes(&tab.source, &tab.steps, &self.paths.temp_dir).and_then(|mut n| {
+            n.extend(weighted_mixed_sign_notes(&tab.source, &tab.steps, &self.paths.temp_dir)?);
+            Ok(n)
+        });
+        match notes {
+            Ok(notes) if !notes.is_empty() => {
+                self.status_message = format!("{} ⚠ {}", self.status_message, notes.join("; "));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.status_message = format!(
+                    "{} ⚠ Could not count blank balances: {:#}",
+                    self.status_message, e
+                );
+            }
+        }
+    }
+
     fn refresh_active_tab(&mut self, recalculate_baseline: bool) {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
@@ -839,10 +943,10 @@ impl MicroParquetApp {
                 {
                     tab.cached_slice = slice;
                 }
-                if let Ok((rows, sum)) = compute_control_totals(lf, tab.control_col.as_deref()) {
-                    tab.total_rows = rows;
-                    tab.control_sum = sum;
-                }
+                // A failure shows "—" and the reason instead of keeping the previous totals.
+                tab.totals = control_totals_state(Ok(lf), tab.control_col.as_deref());
+                tab.total_rows = tab.totals.rows.unwrap_or(0);
+                tab.control_sum = tab.totals.sum;
                 if recalculate_baseline {
                     // Recompute baseline from the base source (0 steps) for the newly selected control column
                     let base_sum = compile_tab_lazy(&tab.source, &[], &self.paths.temp_dir)
@@ -853,10 +957,23 @@ impl MicroParquetApp {
                         .and_then(|(_, s)| s);
                     tab.baseline_control_sum = base_sum;
                 }
+                if tab.join_status.is_some() {
+                    tab.join_status = join_status(
+                        &tab.source,
+                        &tab.steps,
+                        tab.control_col.as_deref(),
+                        &self.paths.temp_dir,
+                    )
+                    .ok()
+                    .flatten();
+                }
                 self.init_tool_defaults_from_active_tab();
             }
             Err(e) => {
-                self.status_message = format!("Step execution failed: {}", e);
+                let msg = format!("{:#}", e);
+                tab.totals = control_totals_state(Err(e), tab.control_col.as_deref());
+                tab.control_sum = None;
+                self.status_message = format!("Step execution failed: {}", msg);
             }
         }
     }
@@ -918,13 +1035,26 @@ impl MicroParquetApp {
                 IngestionConfig::default(),
             ),
         };
-        self.generated_python_code = generate_python_polars_code(
+        // Masked columns anywhere in the source (also inside stacks and joins) refuse the export.
+        if source_masks_pii(&tab.source) {
+            let mut masked: Vec<String> = Vec::new();
+            collect_masked_columns(&tab.source, &mut masked);
+            self.status_message = python_pii_refusal(&masked);
+            return;
+        }
+        self.generated_python_code = match generate_python_polars_code(
             &path,
             is_parq,
             &cfg,
             &tab.steps,
             tab.control_col.as_deref(),
-        );
+        ) {
+            Ok(py) => py,
+            Err(e) => {
+                self.status_message = format!("{:#}", e);
+                return;
+            }
+        };
         let missing = python_untranslated_steps(&tab.steps);
         self.python_export_warning = if missing.is_empty() {
             String::new()
@@ -943,6 +1073,10 @@ impl MicroParquetApp {
 
 impl eframe::App for MicroParquetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A PII key created by a pipeline nobody announced it for is never silent.
+        if let Some(note) = take_pii_key_created_note() {
+            self.status_message = note;
+        }
         // 1. Compact 720p-Friendly Top Menu Bar with Sub-Menus
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -1184,9 +1318,23 @@ impl eframe::App for MicroParquetApp {
                 if let Some(tab) = self.tabs.get(self.active_tab) {
                     ui.strong(format!(
                         "Rows: {}",
-                        format_with_commas(tab.total_rows as f64, 0)
+                        tab.totals
+                            .rows
+                            .map(|r| format_with_commas(r as f64, 0))
+                            .unwrap_or_else(|| "—".to_string())
                     ));
                     ui.separator();
+                    if let (Some(col_name), None) = (&tab.control_col, tab.control_sum) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("Control [{}]: —", col_name),
+                        );
+                        ui.separator();
+                    }
+                    if let Some(note) = &tab.totals.note {
+                        ui.colored_label(egui::Color32::from_rgb(210, 70, 0), format!("⚠ {}", note));
+                        ui.separator();
+                    }
 
                     if let (Some(col_name), Some(sum_val)) = (&tab.control_col, tab.control_sum) {
                         ui.colored_label(
@@ -1216,6 +1364,30 @@ impl eframe::App for MicroParquetApp {
                         }
                         ui.separator();
                     }
+                }
+                if let Some(rc) = self.tabs.get(self.active_tab).and_then(|t| t.row_check.as_ref()) {
+                    if rc.warning().is_some() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!(
+                                "⚠ Rows read {} vs file data lines {}",
+                                format_with_commas(rc.parsed_rows as f64, 0),
+                                format_with_commas(rc.data_lines() as f64, 0)
+                            ),
+                        )
+                        .on_hover_text(rc.warning().unwrap_or_default());
+                        ui.separator();
+                    }
+                }
+                if let Some(js) = self.tabs.get(self.active_tab).and_then(|t| t.join_status.as_ref()) {
+                    let warn = js.duplicate_keys > 0 || js.rows != js.left_rows;
+                    let color = if warn {
+                        egui::Color32::from_rgb(210, 70, 0)
+                    } else {
+                        egui::Color32::from_rgb(0, 110, 200)
+                    };
+                    ui.colored_label(color, js.summary());
+                    ui.separator();
                 }
                 if let Some(tab) = self.tabs.get(self.active_tab) {
                     if !tab.parse_failures.is_empty() {
@@ -2741,10 +2913,17 @@ impl MicroParquetApp {
                             "Liability Book (Deposits/Borrowings: Spread = FTP Rate - Account Rate)",
                         );
                         ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Rate between tenor points:");
+                            for m in [FtpInterpolation::Linear, FtpInterpolation::NextPointUp] {
+                                ui.radio_value(&mut self.ftp_interpolation, m, m.label());
+                            }
+                        });
+                        ui.label("Below the first point the first rate applies; beyond the last point the last rate. The FTP_Method column shows which rule each row used.");
                         ui.strong("Benchmark Yield Curve (Tenor Days -> FTP Rate %):");
                         for pt in &mut self.ftp_curve {
                             ui.horizontal(|ui| {
-                                ui.label("Up to Days:");
+                                ui.label("Tenor Days:");
                                 ui.add(egui::DragValue::new(&mut pt.tenor_days));
                                 ui.label("FTP %:");
                                 ui.add(egui::DragValue::new(&mut pt.ftp_rate).speed(0.05));
@@ -2761,6 +2940,7 @@ impl MicroParquetApp {
                                         rate_col: self.ftp_rate_col.clone(),
                                         curve: self.ftp_curve.clone(),
                                         is_liability: self.ftp_is_liability,
+                                        interpolation: self.ftp_interpolation,
                                     },
                                     false,
                                 ));
@@ -2799,6 +2979,17 @@ impl MicroParquetApp {
                             ui.label("Reporting Cutoff Date (YYYY-MM-DD):");
                             ui.text_edit_singleline(&mut self.alm_cutoff);
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Active status codes (comma-separated, any case):");
+                            ui.text_edit_singleline(&mut self.audit_active_statuses);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Rate outlier below %:");
+                            ui.add(egui::DragValue::new(&mut self.audit_rate_min).speed(0.1));
+                            ui.label("or above %:");
+                            ui.add(egui::DragValue::new(&mut self.audit_rate_max).speed(0.1));
+                        });
+                        ui.label("Audit_Exception_Flag shows the first flag; Audit_All_Flags lists every flag that applies.");
                         ui.checkbox(
                             &mut self.audit_only_exceptions,
                             "Show Exception Rows Only (Filter out 'OK' accounts)",
@@ -2817,6 +3008,14 @@ impl MicroParquetApp {
                                         actnum_col: self.audit_key_col.clone(),
                                         cutoff_date: self.alm_cutoff.clone(),
                                         only_exceptions: self.audit_only_exceptions,
+                                        active_statuses: self
+                                            .audit_active_statuses
+                                            .split(',')
+                                            .map(|s| s.trim().to_string())
+                                            .filter(|s| !s.is_empty())
+                                            .collect(),
+                                        rate_min_pct: self.audit_rate_min,
+                                        rate_max_pct: self.audit_rate_max,
                                     },
                                     true,
                                 ));
@@ -2848,35 +3047,78 @@ impl MicroParquetApp {
                             &mut self.stack_include_source,
                             "Append 'Source_File' Column to identify origin month/file",
                         );
+                        ui.label("Column types (a column missing from a file is null for its rows):");
+                        ui.radio_value(&mut self.stack_schema_mode, 0, "Each file's own detected types (types must agree)");
+                        ui.radio_value(&mut self.stack_schema_mode, 1, "Apply one schema to every file: the first file's");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.stack_schema_mode, 2, "Apply one schema to every file: saved .schema.json");
+                            if ui.button("📂 Pick...").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_directory(&self.paths.schemas_dir)
+                                    .add_filter("Schema JSON", &["json"])
+                                    .pick_file()
+                                {
+                                    self.stack_schema_path = Some(p);
+                                    self.stack_schema_mode = 2;
+                                }
+                            }
+                            if let Some(p) = &self.stack_schema_path {
+                                ui.label(p.file_name().unwrap_or_default().to_string_lossy().to_string());
+                            }
+                        });
                         ui.separator();
                         ui.horizontal(|ui| {
-                            if ui.button("🚀 Stack & Open as Unified Tab").clicked()
-                                && !self.stack_files_list.is_empty()
-                            {
-                                let mut specs = Vec::new();
-                                for p in &self.stack_files_list {
-                                    let is_parq = p
-                                        .extension()
-                                        .and_then(|e| e.to_str())
-                                        .unwrap_or("")
-                                        .eq_ignore_ascii_case("parquet");
-                                    let cfg = if is_parq {
-                                        IngestionConfig::default()
-                                    } else {
-                                        auto_detect_smart_schema(p).unwrap_or_default()
+                            let needs_template =
+                                self.stack_schema_mode == 2 && self.stack_schema_path.is_none();
+                            let run = ui
+                                .add_enabled(
+                                    !needs_template,
+                                    egui::Button::new("🚀 Stack & Open as Unified Tab"),
+                                )
+                                .on_disabled_hover_text("Pick the .schema.json to apply first");
+                            if run.clicked() && !self.stack_files_list.is_empty() {
+                                let shared: anyhow::Result<Option<IngestionConfig>> =
+                                    match (self.stack_schema_mode, &self.stack_schema_path) {
+                                        (1, _) => self
+                                            .stack_files_list
+                                            .first()
+                                            .map(|p| detect_file_schema(p))
+                                            .transpose(),
+                                        (2, Some(p)) => std::fs::read_to_string(p)
+                                            .map_err(anyhow::Error::from)
+                                            .and_then(|t| {
+                                                serde_json::from_str::<IngestionConfig>(&t)
+                                                    .map_err(anyhow::Error::from)
+                                            })
+                                            .map(Some)
+                                            .map_err(|e| {
+                                                anyhow::anyhow!("Could not load the schema file {:?}: {}", p, e)
+                                            }),
+                                        _ => Ok(None),
                                     };
-                                    specs.push((p.clone(), is_parq, cfg));
+                                match shared.and_then(|s| {
+                                    stack_file_configs(&self.stack_files_list, s.as_ref())
+                                }) {
+                                    Err(e) => {
+                                        self.status_message = format!("Stack failed: {:#}", e);
+                                    }
+                                    Ok((specs, notes)) => {
+                                        self.create_tab_from_source(
+                                            format!("Stacked ({} files)", specs.len()),
+                                            TabSource::VerticalStack {
+                                                files: specs,
+                                                include_source_col: self.stack_include_source,
+                                            },
+                                            Vec::new(),
+                                            HashMap::new(),
+                                        );
+                                        if !notes.is_empty() {
+                                            self.status_message
+                                                .push_str(&format!(" ⚠ {}", notes.join("; ")));
+                                        }
+                                        close_modal = true;
+                                    }
                                 }
-                                self.create_tab_from_source(
-                                    format!("Stacked ({} files)", specs.len()),
-                                    TabSource::VerticalStack {
-                                        files: specs,
-                                        include_source_col: self.stack_include_source,
-                                    },
-                                    Vec::new(),
-                                    HashMap::new(),
-                                );
-                                close_modal = true;
                             }
                             if ui.button("Clear List").clicked() {
                                 self.stack_files_list.clear();
@@ -2954,6 +3196,8 @@ impl MicroParquetApp {
                                 ui.label("Join Key Column(s) (e.g. Actnum):");
                                 ui.text_edit_singleline(&mut self.join_keys_input);
                             });
+                            ui.checkbox(&mut self.join_keep_first, "Keep first row per key")
+                                .on_hover_text("Off: a key repeated in the right table is an error. On: the first right row per key is used and the status bar shows how many were dropped.");
                             ui.separator();
                             if ui.button("🚀 Execute Join into New Tab").clicked() {
                                 let (Some(l_tab), Some(r_tab)) = (
@@ -2980,6 +3224,7 @@ impl MicroParquetApp {
                                         join_kind: self.join_kind,
                                         join_keys: keys,
                                         right_cols_to_keep: Vec::new(),
+                                        keep_first_duplicate_right: self.join_keep_first,
                                     },
                                     Vec::new(),
                                     l_tab.col_formats,
@@ -3069,6 +3314,8 @@ impl MicroParquetApp {
                                 } else {
                                     Some(self.rec_cl_col.trim().to_string())
                                 };
+                                let tabs_before = self.tabs.len();
+                                let r_col_used = r_col.is_some();
                                 self.create_tab_from_source(
                                     format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
                                     TabSource::PeriodReconcile {
@@ -3084,6 +3331,22 @@ impl MicroParquetApp {
                                     Vec::new(),
                                     HashMap::new(),
                                 );
+                                if self.tabs.len() > tabs_before {
+                                    let note = self.tabs.last().map(|t| {
+                                        compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
+                                            .and_then(|lf| {
+                                                micro_parquet::banking::reconcile_status_note(lf, r_col_used)
+                                            })
+                                    });
+                                    match note {
+                                        Some(Ok(n)) => self.status_message.push_str(&n),
+                                        Some(Err(e)) => self.status_message.push_str(&format!(
+                                            " ⚠ Could not summarise the reconcile (keys with several rows, mixed-sign balances): {:#}",
+                                            e
+                                        )),
+                                        None => {}
+                                    }
+                                }
                                 close_modal = true;
                             }
                         }
@@ -3415,6 +3678,56 @@ impl MicroParquetApp {
                     }
                 });
 
+                // PII masks use the per-install key (the schema's old salt is not used).
+                let key_path = pii_key_path();
+                ui.horizontal(|ui| {
+                    ui.label("🔑 Mask Name / Mask Acct use this install's secret key (not a salt in the schema).");
+                    match read_pii_key(&key_path) {
+                        Ok(Some(k)) => {
+                            ui.label(format!("Key fingerprint: {}", pii_key_fingerprint(&k)));
+                        }
+                        Ok(None) => {
+                            ui.label("No key yet: it is created the first time a column is masked.");
+                        }
+                        Err(e) => {
+                            ui.colored_label(egui::Color32::from_rgb(200, 30, 30), format!("{:#}", e));
+                        }
+                    }
+                    if ui
+                        .button("📤 Export key...")
+                        .on_hover_text("Saves the 32-byte key file. Keep it as safe as the data: anyone with it can check guesses against the masks.")
+                        .clicked()
+                    {
+                        if let Some(dest) = rfd::FileDialog::new().set_file_name("pii_key.bin").save_file() {
+                            self.status_message = match export_pii_key(&key_path, &dest) {
+                                Ok(_) => format!("Exported the PII key to {:?}. Keep it safe.", dest),
+                                Err(e) => format!("Key export failed: {:#}", e),
+                            };
+                        }
+                    }
+                    if ui
+                        .button("📥 Import key...")
+                        .on_hover_text("Replaces this install's key (the current one is backed up next to it).")
+                        .clicked()
+                    {
+                        if let Some(src) = rfd::FileDialog::new().pick_file() {
+                            self.status_message = match import_pii_key(&key_path, &src) {
+                                Ok(bak) => format!(
+                                    "Imported the PII key from {:?}.{} Open tabs use it on their next refresh.",
+                                    src,
+                                    bak.map(|b| format!(" The previous key was saved as {:?}.", b))
+                                        .unwrap_or_default()
+                                ),
+                                Err(e) => format!("Key import failed: {:#}", e),
+                            };
+                        }
+                    }
+                });
+                ui.colored_label(
+                    egui::Color32::from_rgb(210, 70, 0),
+                    "⚠ Masks made with different keys don't match. To get the same masks on another PC, export the key here and import it there.",
+                );
+
                 ui.separator();
                 ui.strong(if modal.is_parquet {
                     "1. First 5 Rows:"
@@ -3708,16 +4021,70 @@ impl MicroParquetApp {
                         "Apply Saved .schema.json Template",
                     );
                     self.batch_modal.schema_strategy = Some(s);
+                    if s == BatchSchemaStrategy::MasterSchemaTemplate {
+                        ui.horizontal(|ui| {
+                            if ui.button("📂 Pick .schema.json...").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_directory(&self.paths.schemas_dir)
+                                    .add_filter("Schema JSON", &["json"])
+                                    .pick_file()
+                                {
+                                    match std::fs::read_to_string(&p)
+                                        .map_err(anyhow::Error::from)
+                                        .and_then(|t| {
+                                            serde_json::from_str::<IngestionConfig>(&t)
+                                                .map_err(anyhow::Error::from)
+                                        }) {
+                                        Ok(cfg) => {
+                                            self.batch_modal.loaded_template = Some(cfg);
+                                            self.batch_modal.template_path = Some(p);
+                                            self.batch_modal.last_error = None;
+                                        }
+                                        Err(e) => {
+                                            self.batch_modal.loaded_template = None;
+                                            self.batch_modal.template_path = None;
+                                            self.batch_modal.last_error = Some(format!(
+                                                "Could not load the template {:?}: {}",
+                                                p, e
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            match &self.batch_modal.template_path {
+                                Some(p) => ui.label(format!("{:?}", p)),
+                                None => ui.colored_label(
+                                    egui::Color32::from_rgb(210, 70, 0),
+                                    "No template chosen",
+                                ),
+                            };
+                        });
+                    }
                 }
 
                 ui.separator();
+                let needs_template = d == BatchDirection::CsvToParquet
+                    && s == BatchSchemaStrategy::MasterSchemaTemplate
+                    && self.batch_modal.loaded_template.is_none();
+                let have_folders = self.batch_modal.input_folder.is_some()
+                    && self.batch_modal.output_folder.is_some();
                 ui.horizontal(|ui| {
-                    if ui.button("🚀 Start Mirror Batch").clicked() {
+                    let run = ui
+                        .add_enabled(
+                            !needs_template && have_folders,
+                            egui::Button::new("🚀 Start Mirror Batch"),
+                        )
+                        .on_disabled_hover_text(if needs_template {
+                            "Pick the .schema.json template first"
+                        } else {
+                            "Choose the input and output folders first"
+                        });
+                    if run.clicked() {
                         if let (Some(in_dir), Some(out_dir)) = (
                             self.batch_modal.input_folder.clone(),
                             self.batch_modal.output_folder.clone(),
                         ) {
-                            if let Ok(rep) = run_folder_mirror_batch(
+                            match run_folder_mirror_batch(
                                 &in_dir,
                                 &out_dir,
                                 d,
@@ -3727,7 +4094,14 @@ impl MicroParquetApp {
                                 self.batch_modal.mdy_dates_on_csv,
                                 &self.paths.temp_dir,
                             ) {
-                                self.batch_modal.last_report = Some(rep);
+                                Ok(rep) => {
+                                    self.batch_modal.last_report = Some(rep);
+                                    self.batch_modal.last_error = None;
+                                }
+                                Err(e) => {
+                                    self.batch_modal.last_report = None;
+                                    self.batch_modal.last_error = Some(format!("{:#}", e));
+                                }
                             }
                         }
                     }
@@ -3736,15 +4110,62 @@ impl MicroParquetApp {
                     }
                 });
 
+                if needs_template {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(210, 70, 0),
+                        "Pick a .schema.json template, or choose Smart Safe Auto-Detect.",
+                    );
+                }
+                if let Some(err) = &self.batch_modal.last_error {
+                    ui.colored_label(egui::Color32::from_rgb(200, 30, 30), format!("❌ {}", err));
+                }
                 if let Some(rep) = &self.batch_modal.last_report {
                     ui.separator();
                     ui.label(format!(
-                        "Converted: {} | Companion Copied: {} | Size: {:.1} MB -> {:.1} MB",
+                        "Converted: {} | Companion Copied: {} | Errors: {} | Size: {:.1} MB -> {:.1} MB",
                         rep.files_converted,
                         rep.companion_files_copied,
+                        rep.errors.len(),
                         rep.bytes_before as f64 / 1_048_576.0,
                         rep.bytes_after as f64 / 1_048_576.0
                     ));
+                    if let Some(p) = &rep.log_path {
+                        ui.label(format!("Log: {:?}", p));
+                    }
+                    let fails: usize = rep.log.iter().filter_map(|r| r.parse_failures).sum();
+                    if fails > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("⚠ {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
+                        );
+                    }
+                    for n in &rep.notices {
+                        ui.colored_label(egui::Color32::from_rgb(210, 70, 0), format!("⚠ {}", n));
+                    }
+                    if !rep.warnings.is_empty() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("⚠ {} file(s) with fewer rows than data lines (status WARNING in the log):", rep.warnings.len()),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("batch_warnings")
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for w in &rep.warnings {
+                                    ui.label(format!("• {}", w));
+                                }
+                            });
+                    }
+                    if !rep.errors.is_empty() {
+                        ui.colored_label(egui::Color32::from_rgb(200, 30, 30), "Errors:");
+                        egui::ScrollArea::vertical()
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                for e in &rep.errors {
+                                    ui.label(format!("• {}", e));
+                                }
+                            });
+                    }
                 }
             });
 
@@ -3922,24 +4343,24 @@ impl MicroParquetApp {
         let out_path = rfd::FileDialog::new()
             .set_file_name("Consolidated_ALCO_Views.xlsx")
             .save_file()?;
-        let mut collected_tabs = Vec::new();
-        for (i, tab) in self.tabs.iter().enumerate() {
-            if self.multi_export_checks.get(i).copied().unwrap_or(false) {
-                if let Ok(lf) = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
-                    if let Ok(df) = lf.limit(1_048_500).collect() {
-                        collected_tabs.push((tab.title.clone(), df));
-                    }
-                }
-            }
-        }
-        match export_tabs_to_xlsx(collected_tabs, &out_path) {
-            Ok(_) => {
-                self.status_message =
-                    format!("Exported multi-tab Excel workbook to {:?}", out_path);
+        let selected: Vec<micro_parquet::exporters::TabToExport> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.multi_export_checks.get(*i).copied().unwrap_or(false))
+            .map(|(_, t)| (t.title.clone(), &t.source, t.steps.as_slice()))
+            .collect();
+        match export_selected_tabs_to_xlsx(&selected, &out_path, &self.paths.temp_dir) {
+            Ok(rep) => {
+                self.status_message = format!(
+                    "Exported multi-tab Excel workbook to {:?}: {}",
+                    out_path,
+                    rep.summary()
+                );
                 Some(out_path)
             }
             Err(e) => {
-                self.status_message = format!("Excel export error: {}", e);
+                self.status_message = format!("Excel export error: {:#}", e);
                 None
             }
         }
@@ -3950,12 +4371,15 @@ impl MicroParquetApp {
             .set_file_name("Consolidated_ALCO_Report.pdf")
             .save_file()?;
         let mut collected_tabs = Vec::new();
+        let mut failed = Vec::new();
         for (i, tab) in self.tabs.iter().enumerate() {
             if self.multi_export_checks.get(i).copied().unwrap_or(false) {
-                if let Ok(lf) = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
-                    if let Ok(df) = lf.limit(5_000).collect() {
-                        collected_tabs.push((tab.title.clone(), df, tab.col_formats.clone()));
-                    }
+                // One row past the limit, so the export can say the tab was cut.
+                match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir).and_then(
+                    |lf| Ok(lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?),
+                ) {
+                    Ok(df) => collected_tabs.push((tab.title.clone(), df, tab.col_formats.clone())),
+                    Err(e) => failed.push(format!("'{}' ({:#})", tab.title, e)),
                 }
             }
         }
@@ -3965,12 +4389,20 @@ impl MicroParquetApp {
             self.num_format,
             self.global_decimals,
         ) {
-            Ok(_) => {
-                self.status_message = format!("Exported multi-tab PDF report to {:?}", out_path);
+            Ok(rep) => {
+                let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
+                let s = rep.summary();
+                if !s.is_empty() {
+                    msg.push_str(&format!(" ⚠ {}", s));
+                }
+                if !failed.is_empty() {
+                    msg.push_str(&format!(" ⚠ Not exported (failed): {}", failed.join("; ")));
+                }
+                self.status_message = msg;
                 Some(out_path)
             }
             Err(e) => {
-                self.status_message = format!("PDF export error: {}", e);
+                self.status_message = format!("PDF export error: {:#}", e);
                 None
             }
         }
@@ -3980,7 +4412,14 @@ impl MicroParquetApp {
     fn export_split_by_column(&mut self) -> Option<PathBuf> {
         let tab = self.tabs.get(self.active_tab)?;
         let out_dir = rfd::FileDialog::new().pick_folder()?;
-        let lf = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir).ok()?;
+        let control_col = tab.control_col.clone();
+        let lf = match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
+            Ok(lf) => lf,
+            Err(e) => {
+                self.status_message = format!("Split export failed: {:#}", e);
+                return None;
+            }
+        };
         match split_and_export_by_column(
             lf,
             &self.split_col_name,
@@ -3988,16 +4427,17 @@ impl MicroParquetApp {
             self.split_format,
             self.parquet_dialect,
             self.export_csv_mdy,
+            control_col.as_deref(),
         ) {
             Ok(cnt) => {
                 self.status_message = format!(
-                    "Split & exported {} individual files into {:?}",
+                    "Split & exported {} individual files into {:?} (rows and control sums in split_manifest.csv)",
                     cnt, out_dir
                 );
                 Some(out_dir.join("split_export"))
             }
             Err(e) => {
-                self.status_message = format!("Split export failed: {}", e);
+                self.status_message = format!("Split export failed: {:#}", e);
                 None
             }
         }
@@ -4070,6 +4510,13 @@ impl MicroParquetApp {
             is_parquet: *is_parquet,
             config,
         };
+        let key_note = match ensure_pii_key_for(&new_source) {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Schema not applied: {:#}", e);
+                return;
+            }
+        };
         if let Err(e) = compile_tab_lazy(&new_source, &tab.steps, &self.paths.temp_dir) {
             self.status_message = format!("Schema not applied: {:#}", e);
             return;
@@ -4081,10 +4528,27 @@ impl MicroParquetApp {
                 self.status_message = format!("⚠ Could not count parse failures: {:#}", e);
             }
         }
+        let row_check = source_row_check(&new_source, &self.paths.temp_dir);
         tab.source = new_source;
+        let mut row_note = String::new();
+        match row_check {
+            Ok(c) => {
+                if let Some(w) = c.as_ref().and_then(|c| c.warning()) {
+                    row_note = format!(" ⚠ {}", w);
+                }
+                tab.row_check = c;
+            }
+            Err(e) => {
+                tab.row_check = None;
+                row_note = format!(" ⚠ Could not compare rows with the file's lines: {:#}", e);
+            }
+        }
         self.active_tab = idx;
         self.refresh_active_tab(true);
-        self.status_message = "Schema applied and tab reloaded.".into();
+        self.status_message = format!("Schema applied and tab reloaded.{}", row_note);
+        if let Some(n) = key_note {
+            self.status_message.push_str(&format!(" 🔑 {}", n));
+        }
     }
 }
 

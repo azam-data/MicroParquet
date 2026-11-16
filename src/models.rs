@@ -98,7 +98,7 @@ impl PiiMaskMode {
         match self {
             PiiMaskMode::None => "No Masking",
             PiiMaskMode::ClientNameHash => "Mask Name (CLIENT_XXXX)",
-            PiiMaskMode::AccountNumber => "Mask Acct (629***042)",
+            PiiMaskMode::AccountNumber => "Mask Acct (ACCT_XXXX)",
         }
     }
 }
@@ -683,6 +683,40 @@ impl Default for FtpPoint {
     }
 }
 
+/// How a tenor between two curve points gets its FTP rate.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FtpInterpolation {
+    /// Straight line on days between the two surrounding points (flat outside the curve).
+    #[default]
+    Linear,
+    /// The rate of the next tenor point at or above the deal's tenor (Phase 1 behaviour).
+    NextPointUp,
+}
+
+impl FtpInterpolation {
+    pub fn label(&self) -> &'static str {
+        match self {
+            FtpInterpolation::Linear => "Linear between tenor points",
+            FtpInterpolation::NextPointUp => "Next tenor point up (step)",
+        }
+    }
+}
+
+/// Hygiene audit: status codes that mean "active" by default.
+pub fn default_active_statuses() -> Vec<String> {
+    ["ACT", "ACTIVE", "A", "OPEN"].iter().map(|s| s.to_string()).collect()
+}
+
+/// Hygiene audit: rates above this (percent) are outliers by default.
+pub fn default_rate_max_pct() -> f64 {
+    25.0
+}
+
+/// Interpolation of an FTP step saved without the field (before Phase 2): the old step lookup.
+pub fn legacy_ftp_interpolation() -> FtpInterpolation {
+    FtpInterpolation::NextPointUp
+}
+
 pub fn default_bd_ftp_curve() -> Vec<FtpPoint> {
     vec![
         FtpPoint { tenor_days: 1, ftp_rate: 8.00 },
@@ -774,6 +808,10 @@ pub enum TransformStep {
         rate_col: String,
         curve: Vec<FtpPoint>,
         is_liability: bool,
+        /// Steps saved before Phase 2 (no field) load as NextPointUp, so old macros reproduce
+        /// their past results; new steps from the FTP modal default to Linear.
+        #[serde(default = "legacy_ftp_interpolation")]
+        interpolation: FtpInterpolation,
     },
     BankingHygieneAudit {
         opndat_col: String,
@@ -785,6 +823,14 @@ pub enum TransformStep {
         actnum_col: String,
         cutoff_date: String,
         only_exceptions: bool,
+        /// Status codes that mean "active", matched trimmed and case-insensitive.
+        #[serde(default = "default_active_statuses")]
+        active_statuses: Vec<String>,
+        /// Rates outside [rate_min_pct, rate_max_pct] are flagged as outliers.
+        #[serde(default)]
+        rate_min_pct: f64,
+        #[serde(default = "default_rate_max_pct")]
+        rate_max_pct: f64,
     },
     DurationAnalysis {
         bal_col: String,
@@ -921,6 +967,9 @@ pub enum TabSource {
         join_kind: SqlJoinKind,
         join_keys: Vec<String>,
         right_cols_to_keep: Vec<String>,
+        /// Keep the first right-side row per key instead of failing on duplicated keys.
+        /// (TabSource is not serialised, so there is no serde attribute to add.)
+        keep_first_duplicate_right: bool,
     },
     PeriodReconcile {
         prev_source: Box<TabSource>,
@@ -950,6 +999,93 @@ pub struct TabState {
     pub sql_scratchpad: String,
     /// Values of the tab's source that could not be converted to their column type.
     pub parse_failures: Vec<ParseFailure>,
+    /// For a joined tab: rows and control sum against the left table, and dropped duplicates.
+    pub join_status: Option<JoinStatus>,
+    /// What the status bar shows for rows and control sum (None = "—", with the reason).
+    pub totals: ControlTotals,
+    /// CSV sources: rows read against the file's data lines (status-bar warning when short).
+    pub row_check: Option<RowCountCheck>,
+}
+
+/// Rows read from a CSV against its non-empty lines (minus the header and title lines).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RowCountCheck {
+    pub nonempty_lines: usize,
+    pub skip_rows: usize,
+    pub parsed_rows: usize,
+}
+
+impl RowCountCheck {
+    /// Non-empty lines minus the header line and the title lines above it.
+    pub fn data_lines(&self) -> usize {
+        self.nonempty_lines.saturating_sub(1 + self.skip_rows)
+    }
+
+    /// A warning when fewer rows were read than the file has data lines, or none at all from a
+    /// non-empty file. Not an error: quoted values may legitimately span lines.
+    pub fn warning(&self) -> Option<String> {
+        if self.nonempty_lines > 0 && self.parsed_rows == 0 {
+            return Some(format!(
+                "0 rows read from a file with {} non-empty lines ({} data lines). Check the separator, title lines and encoding.",
+                self.nonempty_lines,
+                self.data_lines()
+            ));
+        }
+        if self.parsed_rows < self.data_lines() {
+            return Some(format!(
+                "Read {} rows but the file has {} data lines ({} non-empty lines − 1 header − {} title lines). Check for unclosed quotes or broken lines.",
+                self.parsed_rows,
+                self.data_lines(),
+                self.nonempty_lines,
+                self.skip_rows
+            ));
+        }
+        None
+    }
+}
+
+/// Rows and control sum for the status bar. `None` is shown as "—"; `note` says why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ControlTotals {
+    pub rows: Option<usize>,
+    pub sum: Option<f64>,
+    pub note: Option<String>,
+}
+
+/// Rows and control sum of a join next to the left table's, for the status bar.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct JoinStatus {
+    pub left_rows: usize,
+    pub left_sum: Option<f64>,
+    pub rows: usize,
+    pub sum: Option<f64>,
+    /// Key combinations that appeared more than once on the right side ("Keep first row per key").
+    pub duplicate_keys: usize,
+    /// Right-side rows dropped by "Keep first row per key".
+    pub dropped_rows: usize,
+}
+
+impl JoinStatus {
+    pub fn summary(&self) -> String {
+        let fmt_sum = |s: Option<f64>| match s {
+            Some(v) => format!("{:.2} Cr", v / 10_000_000.0),
+            None => "—".to_string(),
+        };
+        let mut out = format!(
+            "Join: {} rows (left {}), control {} (left {})",
+            self.rows,
+            self.left_rows,
+            fmt_sum(self.sum),
+            fmt_sum(self.left_sum)
+        );
+        if self.duplicate_keys > 0 {
+            out.push_str(&format!(
+                " ⚠ kept first row for {} duplicated right key(s), {} right row(s) dropped",
+                self.duplicate_keys, self.dropped_rows
+            ));
+        }
+        out
+    }
 }
 
 impl TabState {

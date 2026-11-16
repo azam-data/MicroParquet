@@ -2,10 +2,11 @@ use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
+    ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
-    column_name_tokens, parquet_native_type, parquet_needs_conversion, AggFunc, AggSpec,
-    ColDataType, ColumnSchemaConfig, CsvTextEncoding, FilterOp, IngestionConfig, MathOp,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
+    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, RowCountCheck, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -881,21 +882,314 @@ fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionC
     }
 
     if col_cfg.pii_mask != PiiMaskMode::None {
-        let salt = config.pii_salt.clone();
+        // The old `config.pii_salt` is no longer used: masks use the per-install key.
         let mode = col_cfg.pii_mask;
-        e = e.map(
-            move |s: Series| {
-                let ca = s.str()?;
-                let out: StringChunked = ca
-                    .into_iter()
-                    .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &salt)))
-                    .collect();
-                Ok(Some(out.into_series()))
-            },
-            GetOutput::from_type(DataType::String),
-        );
+        e = match pii_key_for_pipeline() {
+            Ok(key) => e.map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let out: StringChunked = ca
+                        .into_iter()
+                        .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &key)))
+                        .collect();
+                    Ok(Some(out.into_series()))
+                },
+                GetOutput::from_type(DataType::String),
+            ),
+            Err(err) => {
+                let msg = format!("{:#}", err);
+                e.map(
+                    move |_s: Series| Err(polars_err!(ComputeError: "{}", msg)),
+                    GetOutput::from_type(DataType::String),
+                )
+            }
+        };
     }
     e
+}
+
+/// Name of the per-install PII key file inside `portable_data/`.
+pub const PII_KEY_FILE: &str = "pii_key.bin";
+
+thread_local! {
+    /// Lets a test point the key at a temporary folder (the key is read while the pipeline is
+    /// built, on the calling thread).
+    static PII_KEY_PATH_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Uses `path` as the PII key file on this thread (`None` restores the default). For tests.
+pub fn set_pii_key_path_override(path: Option<PathBuf>) {
+    PII_KEY_PATH_OVERRIDE.with(|p| *p.borrow_mut() = path);
+}
+
+/// `portable_data/pii_key.bin` next to the executable.
+pub fn pii_key_path() -> PathBuf {
+    PII_KEY_PATH_OVERRIDE
+        .with(|p| p.borrow().clone())
+        .unwrap_or_else(|| portable_root_dir().join(PII_KEY_FILE))
+}
+
+// Set when a pipeline created the key without going through `ensure_pii_key_for`; the app
+// shows it in the status bar so a new key is never created unannounced.
+// (Per thread: pipelines are built on the thread that shows the status bar.)
+thread_local! {
+    static PII_KEY_PENDING_NOTE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn pii_key_created_note(path: &Path, key: &[u8; 32]) -> String {
+    format!(
+        "Created a new PII key (fingerprint {}) at {:?}. Export it (Schema & Ingestion) to keep masks reproducible on another PC or after reinstalling.",
+        pii_key_fingerprint(key),
+        path
+    )
+}
+
+/// The one place that reads (or creates) the key for masking. Returns the key and, when it was
+/// just created, the notice to show.
+fn pii_key_and_note() -> Result<([u8; 32], Option<String>)> {
+    let path = pii_key_path();
+    let (key, created) = load_or_create_pii_key(&path)?;
+    Ok((key, created.then(|| pii_key_created_note(&path, &key))))
+}
+
+/// Key for building a masking expression. A key created here (no caller announced it first) is
+/// remembered for `take_pii_key_created_note`.
+fn pii_key_for_pipeline() -> Result<[u8; 32]> {
+    let (key, note) = pii_key_and_note()?;
+    if let Some(n) = note {
+        PII_KEY_PENDING_NOTE.with(|slot| *slot.borrow_mut() = Some(n));
+    }
+    Ok(key)
+}
+
+/// A notice for a key that a pipeline created on its own, once.
+pub fn take_pii_key_created_note() -> Option<String> {
+    PII_KEY_PENDING_NOTE.with(|slot| slot.borrow_mut().take())
+}
+
+fn pii_key_from_bytes(path: &Path, bytes: &[u8]) -> Result<[u8; 32]> {
+    <[u8; 32]>::try_from(bytes).map_err(|_| {
+        anyhow::anyhow!(
+            "The PII key file {:?} is damaged ({} bytes, expected 32). Import your exported key in Schema & Ingestion, or delete the file to create a new key (masks made with a new key will not match earlier ones).",
+            path,
+            bytes.len()
+        )
+    })
+}
+
+/// Writes a new file that only the current user can read (Unix); fails if it exists.
+fn write_new_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// Writes (or replaces) a file that only the current user can read on Unix. On Windows this is
+/// an ordinary write.
+fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    // `mode` only applies to a new file; tighten one that already existed.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+fn pii_key_temp_path(path: &Path) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.with_file_name(format!("{}.tmp-{}-{}-{}", PII_KEY_FILE, std::process::id(), nanos, n))
+}
+
+/// Reads the PII key, creating it with 32 random bytes when the file does not exist.
+/// Returns the key and whether it was just created. A damaged file is an error, never replaced.
+pub fn load_or_create_pii_key(path: &Path) -> Result<([u8; 32], bool)> {
+    match std::fs::read(path) {
+        Ok(bytes) => return Ok((pii_key_from_bytes(path, &bytes)?, false)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => anyhow::bail!(
+            "Could not read the PII key file {:?}: {}. Check the file's permissions, or import your exported key in Schema & Ingestion.",
+            path,
+            e
+        ),
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Could not create the folder {:?} for the PII key", dir))?;
+    }
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key)
+        .map_err(|e| anyhow::anyhow!("Could not get random bytes for a new PII key: {}", e))?;
+    // Write a temporary file, then hard-link it into place: a link never replaces an existing
+    // file, so two processes creating the key at once end up with the same key.
+    let tmp = pii_key_temp_path(path);
+    write_new_private_file(&tmp, &key)
+        .with_context(|| format!("Could not write a new PII key next to {:?}", path))?;
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok((key, true)),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("Could not read the PII key file {:?}", path))?;
+            Ok((pii_key_from_bytes(path, &bytes)?, false))
+        }
+        // File systems without hard links (e.g. FAT on a USB stick): exclusive create instead.
+        Err(_) => match write_new_private_file(path, &key) {
+            Ok(()) => Ok((key, true)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let bytes = std::fs::read(path)
+                    .with_context(|| format!("Could not read the PII key file {:?}", path))?;
+                Ok((pii_key_from_bytes(path, &bytes)?, false))
+            }
+            Err(e) => anyhow::bail!("Could not create the PII key file {:?}: {}", path, e),
+        },
+    }
+}
+
+/// First 8 hex characters of blake3 of the key: shows whether two installs share a key.
+pub fn pii_key_fingerprint(key: &[u8; 32]) -> String {
+    blake3::hash(key).to_hex()[..8].to_uppercase()
+}
+
+/// Copies the install key (created first if missing) to `dest`. Returns whether it was created.
+pub fn export_pii_key(key_path: &Path, dest: &Path) -> Result<bool> {
+    let (key, created) = load_or_create_pii_key(key_path)?;
+    write_private_file(dest, &key).with_context(|| format!("Could not write the key to {:?}", dest))?;
+    Ok(created)
+}
+
+/// Replaces the install key with the 32-byte key in `src`. The current key is first copied to
+/// `pii_key.bin.bak-<unix seconds>`; that path is returned.
+pub fn import_pii_key(key_path: &Path, src: &Path) -> Result<Option<PathBuf>> {
+    let bytes = std::fs::read(src).with_context(|| format!("Could not read the key file {:?}", src))?;
+    let key = <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+        anyhow::anyhow!(
+            "{:?} is not a MicroParquet PII key ({} bytes, expected 32). Nothing was changed.",
+            src,
+            bytes.len()
+        )
+    })?;
+    if let Some(dir) = key_path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Could not create the folder {:?}", dir))?;
+    }
+    let mut backup = None;
+    if key_path.exists() {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let current = std::fs::read(key_path)
+            .with_context(|| format!("Could not read the current key {:?}; nothing was changed", key_path))?;
+        // Never overwrite an earlier backup: a second import in the same second gets `_2`, `_3` ...
+        let mut n = 1u32;
+        let bak = loop {
+            let name = if n == 1 {
+                format!("{}.bak-{}", PII_KEY_FILE, secs)
+            } else {
+                format!("{}.bak-{}_{}", PII_KEY_FILE, secs, n)
+            };
+            let candidate = key_path.with_file_name(name);
+            match write_new_private_file(&candidate, &current) {
+                Ok(()) => break candidate,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(e) => anyhow::bail!(
+                    "Could not back up the current key to {:?}: {}. Nothing was changed.",
+                    candidate,
+                    e
+                ),
+            }
+        };
+        backup = Some(bak);
+    }
+    let tmp = pii_key_temp_path(key_path);
+    write_new_private_file(&tmp, &key)
+        .with_context(|| format!("Could not write the new key next to {:?}", key_path))?;
+    if let Err(e) = std::fs::rename(&tmp, key_path) {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("Could not replace the PII key {:?}: {}", key_path, e);
+    }
+    Ok(backup)
+}
+
+/// The key in `path`: `Ok(None)` when there is no key file yet. Never creates one.
+pub fn read_pii_key(path: &Path) -> Result<Option<[u8; 32]>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(pii_key_from_bytes(path, &bytes)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => anyhow::bail!("Could not read the PII key file {:?}: {}", path, e),
+    }
+}
+
+/// Creates the key when `source` masks a column and there is no key file yet. Returns a note
+/// for the user when a key was created (here or by an earlier pipeline build that nobody
+/// announced), or the error (missing permissions, damaged file).
+pub fn ensure_pii_key_for(source: &TabSource) -> Result<Option<String>> {
+    if !source_masks_pii(source) {
+        return Ok(take_pii_key_created_note());
+    }
+    let (_, note) = pii_key_and_note()?;
+    Ok(note.or_else(take_pii_key_created_note))
+}
+
+/// Names of the PII-masked columns of every file in `source` (no duplicates).
+pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
+    let mut add = |c: &IngestionConfig| {
+        for col in c.columns.iter().filter(|c| c.pii_mask != PiiMaskMode::None) {
+            if !out.contains(&col.name) {
+                out.push(col.name.clone());
+            }
+        }
+    };
+    match source {
+        TabSource::SingleFile { config, .. } => add(config),
+        TabSource::VerticalStack { files, .. } => files.iter().for_each(|(_, _, c)| add(c)),
+        TabSource::JoinedTabs { left_source, right_source, .. } => {
+            collect_masked_columns(left_source, out);
+            collect_masked_columns(right_source, out);
+        }
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+            collect_masked_columns(prev_source, out);
+            collect_masked_columns(curr_source, out);
+        }
+    }
+}
+
+/// Whether building this source masks any column (and so needs the PII key).
+pub fn source_masks_pii(source: &TabSource) -> bool {
+    let cfg_masks = |c: &IngestionConfig| c.columns.iter().any(|col| col.pii_mask != PiiMaskMode::None);
+    match source {
+        TabSource::SingleFile { config, .. } => cfg_masks(config),
+        TabSource::VerticalStack { files, .. } => files.iter().any(|(_, _, c)| cfg_masks(c)),
+        TabSource::JoinedTabs { left_source, right_source, .. } => {
+            source_masks_pii(left_source) || source_masks_pii(right_source)
+        }
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+            source_masks_pii(prev_source) || source_masks_pii(curr_source)
+        }
+    }
 }
 
 /// Converts a text expression to the column's configured type (P1 amount and date rules).
@@ -1303,6 +1597,283 @@ fn parquet_conversion_plan<'a>(
     Ok((lf, plan))
 }
 
+/// Stacks files on top of each other. A column missing from a file is null for that file's rows
+/// (diagonal concatenation). A column whose type differs between files is an error.
+fn stack_lazy(
+    files: &[(PathBuf, bool, IngestionConfig)],
+    include_source_col: bool,
+    temp_dir: &Path,
+) -> Result<LazyFrame> {
+    if files.is_empty() {
+        anyhow::bail!("Stack: no files to stack. Add at least one file.");
+    }
+    let mut parts = Vec::with_capacity(files.len());
+    for (path, is_parq, cfg) in files {
+        let fname = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let mut sub_lf = build_lazy_pipeline(path, *is_parq, cfg, temp_dir)
+            .with_context(|| format!("Stack: could not read {}", fname))?;
+        let schema = sub_lf
+            .collect_schema()
+            .with_context(|| format!("Stack: could not read the columns of {}", fname))?;
+        parts.push((fname, sub_lf, schema));
+    }
+
+    // Union of columns in order of first appearance, with the type each column has.
+    let mut order: Vec<(PlSmallStr, DataType, String)> = Vec::new();
+    for (fname, _, schema) in &parts {
+        for (name, dt) in schema.iter() {
+            match order.iter_mut().find(|(n, _, _)| n == name) {
+                None => order.push((name.clone(), dt.clone(), fname.clone())),
+                Some((_, seen, seen_file)) => {
+                    if *seen == DataType::Null {
+                        *seen = dt.clone();
+                        *seen_file = fname.clone();
+                    } else if dt != seen && *dt != DataType::Null {
+                        anyhow::bail!(
+                            "Stack: column '{}' is {:?} in {} but {:?} in {}. Use 'Apply one schema to every file' in the Stack dialog (first file's schema or a saved .schema.json), or fix the files.",
+                            name,
+                            seen,
+                            seen_file,
+                            dt,
+                            fname
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let source_col = PlSmallStr::from("Source_File");
+    let mut lfs = Vec::with_capacity(parts.len());
+    for (fname, sub_lf, schema) in parts {
+        let mut exprs: Vec<Expr> = Vec::with_capacity(order.len() + 1);
+        for (name, dt, _) in &order {
+            if include_source_col && *name == source_col {
+                continue;
+            }
+            match schema.get(name) {
+                Some(own) if own == dt => exprs.push(col(name.clone())),
+                Some(_) => exprs.push(col(name.clone()).cast(dt.clone())),
+                None => exprs.push(lit(NULL).cast(dt.clone()).alias(name.clone())),
+            }
+        }
+        if include_source_col {
+            exprs.push(lit(fname).alias(source_col.clone()));
+        }
+        lfs.push(sub_lf.select(exprs));
+    }
+    concat(&lfs, UnionArgs::default()).context("Failed to stack files vertically")
+}
+
+/// Applies one schema to a file of a stack. CSV: the file's own separator, title lines and
+/// encoding are detected; a column the schema names takes the schema's settings, other columns
+/// keep their detected type. Parquet: as `adapt_schema_to_parquet`.
+/// Returns the file's config and the schema columns the file does not have.
+pub fn apply_shared_schema(
+    path: &Path,
+    is_parquet: bool,
+    shared: &IngestionConfig,
+) -> Result<(IngestionConfig, Vec<String>)> {
+    if is_parquet {
+        return adapt_schema_to_parquet(path, shared);
+    }
+    let own = auto_detect_smart_schema(path)?;
+    let columns: Vec<ColumnSchemaConfig> = own
+        .columns
+        .iter()
+        .map(|c| {
+            shared
+                .columns
+                .iter()
+                .find(|s| s.name == c.name)
+                .cloned()
+                .unwrap_or_else(|| c.clone())
+        })
+        .collect();
+    let missing: Vec<String> = shared
+        .columns
+        .iter()
+        .filter(|s| !own.columns.iter().any(|c| c.name == s.name))
+        .map(|s| s.name.clone())
+        .collect();
+    Ok((
+        IngestionConfig {
+            columns,
+            separator: own.separator,
+            skip_rows: own.skip_rows,
+            encoding: own.encoding,
+            ..shared.clone()
+        },
+        missing,
+    ))
+}
+
+fn path_is_parquet(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .eq_ignore_ascii_case("parquet")
+}
+
+/// The schema a file opens with: detected column types for a CSV, native types for Parquet.
+pub fn detect_file_schema(path: &Path) -> Result<IngestionConfig> {
+    if path_is_parquet(path) {
+        auto_detect_parquet_schema(path)
+    } else {
+        auto_detect_smart_schema(path)
+    }
+}
+
+/// Configs for the files of a stack. Without a shared schema each CSV gets its own detected
+/// schema and each Parquet file its native types; with one, `apply_shared_schema` is used.
+/// Also returns one note per file that lacks columns of the shared schema.
+pub fn stack_file_configs(
+    files: &[PathBuf],
+    shared: Option<&IngestionConfig>,
+) -> Result<(Vec<(PathBuf, bool, IngestionConfig)>, Vec<String>)> {
+    let mut specs = Vec::with_capacity(files.len());
+    let mut notes = Vec::new();
+    for p in files {
+        let is_parq = path_is_parquet(p);
+        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let (cfg, missing) = match shared {
+            Some(s) => apply_shared_schema(p, is_parq, s)
+                .with_context(|| format!("Stack: could not apply the schema to {}", name))?,
+            None if is_parq => (IngestionConfig::default(), Vec::new()),
+            None => (
+                auto_detect_smart_schema(p)
+                    .with_context(|| format!("Stack: could not read {}", name))?,
+                Vec::new(),
+            ),
+        };
+        if !missing.is_empty() {
+            notes.push(format!("{} has no column {} (null for its rows)", name, missing.join(", ")));
+        }
+        specs.push((p.clone(), is_parq, cfg));
+    }
+    Ok((specs, notes))
+}
+
+/// Key combinations (all key columns non-null) that occur more than once in `lf`:
+/// (number of such combinations, extra rows beyond the first per key, up to 10 examples).
+pub fn duplicate_key_report(lf: LazyFrame, keys: &[String]) -> Result<(usize, usize, Vec<String>)> {
+    if keys.is_empty() {
+        anyhow::bail!("Join: no key column given. Enter at least one key column (e.g. Actnum).");
+    }
+    let not_null = keys
+        .iter()
+        .fold(lit(true), |acc, k| acc.and(col(k).is_not_null()));
+    let key_exprs: Vec<Expr> = keys.iter().map(|k| col(k)).collect();
+    let dup = lf
+        .filter(not_null)
+        .group_by_stable(key_exprs)
+        .agg([len().alias("__mp_key_rows")])
+        .filter(col("__mp_key_rows").gt(lit(1)))
+        .collect()
+        .context("Join: could not check the right table for duplicated keys")?;
+    let n = dup.height();
+    let mut extra = 0usize;
+    if let Ok(c) = dup.column("__mp_key_rows").and_then(|c| c.cast(&DataType::UInt64)) {
+        if let Ok(ca) = c.u64() {
+            extra = ca.into_iter().flatten().map(|v| v.saturating_sub(1) as usize).sum();
+        }
+    }
+    let mut key_text = Vec::with_capacity(keys.len());
+    for k in keys {
+        key_text.push(dup.column(k)?.cast(&DataType::String)?);
+    }
+    let mut examples = Vec::new();
+    for i in 0..n.min(10) {
+        let parts: Vec<String> = key_text
+            .iter()
+            .map(|s| {
+                s.str()
+                    .ok()
+                    .and_then(|ca| ca.get(i))
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        examples.push(parts.join(" / "));
+    }
+    Ok((n, extra, examples))
+}
+
+/// Keeps the first right-side row per non-null key; rows with a null key are kept as they are
+/// (they never match, and a full join must still show them).
+fn keep_first_per_key(lf: LazyFrame, keys: &[String]) -> Result<LazyFrame> {
+    let any_null = keys
+        .iter()
+        .fold(lit(false), |acc, k| acc.or(col(k).is_null()));
+    let subset: Vec<PlSmallStr> = keys.iter().map(|k| PlSmallStr::from(k.as_str())).collect();
+    let deduped = lf
+        .clone()
+        .filter(any_null.clone().not())
+        .unique_stable(Some(subset), UniqueKeepStrategy::First);
+    let null_keys = lf.filter(any_null);
+    concat(&[deduped, null_keys], UnionArgs::default())
+        .context("Join: could not keep the first row per key")
+}
+
+/// Rows and control sum of a joined tab next to its left table's. `None` for other sources.
+pub fn join_status(
+    source: &TabSource,
+    steps: &[TransformStep],
+    control_col: Option<&str>,
+    temp_dir: &Path,
+) -> Result<Option<JoinStatus>> {
+    let TabSource::JoinedTabs {
+        left_source,
+        left_steps,
+        right_source,
+        right_steps,
+        join_kind,
+        join_keys,
+        keep_first_duplicate_right,
+        ..
+    } = source
+    else {
+        return Ok(None);
+    };
+    let left_lf = compile_tab_lazy(left_source, left_steps, temp_dir)?;
+    let left_has_ctrl = control_col
+        .map(|c| {
+            left_lf
+                .clone()
+                .collect_schema()
+                .map(|s| s.contains(c))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let (left_rows, left_sum) =
+        compute_control_totals(left_lf, if left_has_ctrl { control_col } else { None })?;
+    let joined = compile_tab_lazy(source, steps, temp_dir)?;
+    let (rows, sum) = compute_control_totals(joined, control_col)?;
+    let (mut duplicate_keys, mut dropped_rows) = (0, 0);
+    if *keep_first_duplicate_right && join_inflates_left(*join_kind) {
+        let right_lf = compile_tab_lazy(right_source, right_steps, temp_dir)?;
+        let (n, extra, _) = duplicate_key_report(right_lf, join_keys)?;
+        duplicate_keys = n;
+        dropped_rows = extra;
+    }
+    Ok(Some(JoinStatus {
+        left_rows,
+        left_sum,
+        rows,
+        sum,
+        duplicate_keys,
+        dropped_rows,
+    }))
+}
+
+/// Semi and anti joins never repeat a left row, so right-side duplicates do not matter there.
+fn join_inflates_left(kind: SqlJoinKind) -> bool {
+    !matches!(kind, SqlJoinKind::Semi | SqlJoinKind::Anti)
+}
+
 pub fn compile_tab_lazy(
     source: &TabSource,
     steps: &[TransformStep],
@@ -1318,22 +1889,7 @@ pub fn compile_tab_lazy(
         TabSource::VerticalStack {
             files,
             include_source_col,
-        } => {
-            let mut lfs = Vec::with_capacity(files.len());
-            for (path, is_parq, cfg) in files {
-                let mut sub_lf = build_lazy_pipeline(path, *is_parq, cfg, temp_dir)?;
-                if *include_source_col {
-                    let fname = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    sub_lf = sub_lf.with_column(lit(fname).alias("Source_File"));
-                }
-                lfs.push(sub_lf);
-            }
-            concat(&lfs, UnionArgs::default()).context("Failed to stack files vertically")?
-        }
+        } => stack_lazy(files, *include_source_col, temp_dir)?,
 
         TabSource::JoinedTabs {
             left_source,
@@ -1343,9 +1899,26 @@ pub fn compile_tab_lazy(
             join_kind,
             join_keys,
             right_cols_to_keep,
+            keep_first_duplicate_right,
         } => {
             let left_lf = compile_tab_lazy(left_source, left_steps, temp_dir)?;
             let mut right_lf = compile_tab_lazy(right_source, right_steps, temp_dir)?;
+
+            if join_inflates_left(*join_kind) {
+                if *keep_first_duplicate_right {
+                    right_lf = keep_first_per_key(right_lf, join_keys)?;
+                } else {
+                    let (n, _, examples) = duplicate_key_report(right_lf.clone(), join_keys)?;
+                    if n > 0 {
+                        anyhow::bail!(
+                            "Right table has {} duplicated keys on {}, e.g. {}. Fix the mapping table, or switch on 'Keep first row per key' for this join.",
+                            n,
+                            join_keys.join(", "),
+                            examples.join(", ")
+                        );
+                    }
+                }
+            }
 
             if !right_cols_to_keep.is_empty() {
                 let mut select_cols: Vec<Expr> = join_keys.iter().map(|k| col(k)).collect();
@@ -1459,8 +2032,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             let r = if *right_is_col {
                 col(right_val_or_col).cast(DataType::Float64)
             } else {
-                let scalar = right_val_or_col.trim().parse::<f64>().unwrap_or(1.0);
-                lit(scalar)
+                lit(parse_math_scalar(new_col, right_val_or_col)?)
             };
             let res = match op {
                 MathOp::Add => l + r,
@@ -1504,6 +2076,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             curve,
             is_liability,
+            interpolation,
         } => apply_ftp_curve_map(
             lf,
             opndat_col,
@@ -1512,6 +2085,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             curve,
             *is_liability,
+            *interpolation,
         ),
         TransformStep::BankingHygieneAudit {
             opndat_col,
@@ -1522,6 +2096,9 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             cutoff_date,
             only_exceptions,
+            active_statuses,
+            rate_min_pct,
+            rate_max_pct,
             ..
         } => apply_banking_hygiene_audit(
             lf,
@@ -1533,6 +2110,9 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             cutoff_date,
             *only_exceptions,
+            active_statuses,
+            *rate_min_pct,
+            *rate_max_pct,
         ),
         TransformStep::DurationAnalysis {
             bal_col,
@@ -1717,14 +2297,9 @@ fn apply_groupby_pivot(
                     })?;
                 let w = col(w_name).cast(DataType::Float64);
                 let v = tc.cast(DataType::Float64);
-                // Only rows where both value and weight are known count, in numerator and denominator
-                let mask = v.clone().is_not_null().and(w.clone().is_not_null());
-                let num = (v * w.clone()).filter(mask.clone()).sum();
-                let den = w.filter(mask).sum();
-                when(den.clone().eq(lit(0.0)))
-                    .then(lit(NULL).cast(DataType::Float64))
-                    .otherwise(num / den)
-                    .alias(&spec.alias)
+                // Only rows where both value and weight are known count; weights of mixed sign
+                // give a null rate (counted by `weighted_mixed_sign_notes`)
+                weighted_rate_exprs(v, w).0.alias(&spec.alias)
             }
             AggFunc::PctOfTotal => {
                 let temp_sum_name = format!("__sum_for_{}", spec.alias);
@@ -1763,28 +2338,52 @@ fn apply_groupby_pivot(
     Ok(out_lf)
 }
 
-fn mask_pii_value(val: &str, mode: PiiMaskMode, salt: &str) -> String {
+/// Keyed blake3 mask of one value: `CLIENT_` or `ACCT_` + 16 upper-case hex characters
+/// (64 bits). Nothing of the original value is kept. Blank stays blank.
+pub fn mask_pii_value(val: &str, mode: PiiMaskMode, key: &[u8; 32]) -> String {
     let trimmed = val.trim();
     if trimmed.is_empty() {
         return String::new();
     }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(salt.as_bytes());
-    hasher.update(trimmed.as_bytes());
-    let hex = hasher.finalize().to_hex().to_string().to_uppercase();
-
+    let token = |round: u32| -> String {
+        let hash = if round == 0 {
+            blake3::keyed_hash(key, trimmed.as_bytes())
+        } else {
+            let mut h = blake3::Hasher::new_keyed(key);
+            h.update(trimmed.as_bytes());
+            h.update(&[0]);
+            h.update(&round.to_le_bytes());
+            h.finalize()
+        };
+        hash.to_hex()[..16].to_uppercase()
+    };
     match mode {
         PiiMaskMode::None => trimmed.to_string(),
-        PiiMaskMode::ClientNameHash => format!("CLIENT_{}", &hex[..8]),
+        PiiMaskMode::ClientNameHash => format!("CLIENT_{}", token(0)),
         PiiMaskMode::AccountNumber => {
-            let chars: Vec<char> = trimmed.chars().collect();
-            if chars.len() >= 7 {
-                let prefix: String = chars[..3].iter().collect();
-                let suffix: String = chars[chars.len() - 3..].iter().collect();
-                format!("{}{}{}", prefix, &hex[..5], suffix)
-            } else {
-                format!("ACCT_{}", &hex[..6])
+            // Hex digits can repeat 3 digits of the account number by chance; the next round of
+            // the keyed hash is taken until they don't (deterministic for a value and key).
+            let digits: Vec<char> = trimmed.chars().collect();
+            let leaks = |t: &str| {
+                digits.windows(3).any(|w| {
+                    w.iter().all(|c| c.is_ascii_digit()) && t.contains(&w.iter().collect::<String>())
+                })
+            };
+            for round in 0..256 {
+                let t = token(round);
+                if !leaks(&t) {
+                    return format!("ACCT_{}", t);
+                }
             }
+            // Not reachable in practice; never return digits of the original.
+            let safe: String = token(0)
+                .chars()
+                .map(|c| match c.to_digit(10) {
+                    Some(d) => char::from(b'G' + d as u8),
+                    None => c,
+                })
+                .collect();
+            format!("ACCT_{}", safe)
         }
     }
 }
@@ -1795,6 +2394,247 @@ pub fn fetch_viewport_slice(lf: LazyFrame, offset: usize, limit: usize) -> Resul
         .collect()
         .context("Failed to collect viewport slice")?;
     Ok(df)
+}
+
+/// The number a math column uses as its right-hand side. Thousands commas are allowed;
+/// anything else that is not a finite number is an error naming the value.
+pub fn parse_math_scalar(new_col: &str, value: &str) -> Result<f64> {
+    let cleaned = value.trim().replace(',', "");
+    match cleaned.parse::<f64>() {
+        Ok(v) if v.is_finite() => Ok(v),
+        _ => anyhow::bail!(
+            "Math column '{}': the value '{}' is not a number. Enter a number such as 10000000 or 0.5.",
+            new_col,
+            value
+        ),
+    }
+}
+
+/// Lines of a file that hold anything other than whitespace (CR/LF or LF line ends).
+pub fn count_nonempty_lines(path: &Path) -> Result<usize> {
+    let mut reader = BufReader::new(
+        File::open(path).with_context(|| format!("Failed to open {:?}", path))?,
+    );
+    let mut buf = Vec::new();
+    let mut n = 0usize;
+    loop {
+        buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut buf)
+            .with_context(|| format!("Failed to read {:?}", path))?;
+        if read == 0 {
+            break;
+        }
+        // A UTF-8 byte-order mark alone does not make a line non-empty.
+        let body = buf.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&buf);
+        if body.iter().any(|b| !b.is_ascii_whitespace()) {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// For a CSV source (single file, no steps): rows read against the file's data lines.
+/// `None` for other sources.
+pub fn source_row_check(source: &TabSource, temp_dir: &Path) -> Result<Option<RowCountCheck>> {
+    let TabSource::SingleFile {
+        path,
+        is_parquet: false,
+        config,
+    } = source
+    else {
+        return Ok(None);
+    };
+    let lf = build_lazy_pipeline(path, false, config, temp_dir)?;
+    let (parsed_rows, _) = compute_control_totals(lf, None)?;
+    Ok(Some(RowCountCheck {
+        nonempty_lines: count_nonempty_lines(path)?,
+        skip_rows: config.skip_rows,
+        parsed_rows,
+    }))
+}
+
+/// Rows where the open or the maturity date is missing (after conversion to a date).
+pub fn count_missing_ftp_dates(lf: LazyFrame, opndat_col: &str, matdat_col: &str) -> Result<usize> {
+    let lf = ensure_date(lf, opndat_col)?;
+    let lf = ensure_date(lf, matdat_col)?;
+    let df = lf
+        .select([col(opndat_col)
+            .is_null()
+            .or(col(matdat_col).is_null())
+            .cast(DataType::Int64)
+            .sum()
+            .alias("__mp_missing")])
+        .collect()
+        .context("Could not count rows with a missing open or maturity date")?;
+    Ok(df
+        .column("__mp_missing")
+        .ok()
+        .and_then(|c| c.i64().ok())
+        .and_then(|ca| ca.get(0))
+        .unwrap_or(0) as usize)
+}
+
+/// Rows where `column` is blank (null, or text that is not a number).
+pub fn count_blank_values(lf: LazyFrame, column: &str) -> Result<usize> {
+    let df = lf
+        .select([col(column)
+            .cast(DataType::Float64)
+            .is_null()
+            .sum()
+            .cast(DataType::Int64)
+            .alias("__mp_blank")])
+        .collect()
+        .with_context(|| format!("Could not count blank values in '{}'", column))?;
+    Ok(df
+        .column("__mp_blank")
+        .ok()
+        .and_then(|c| c.i64().ok())
+        .and_then(|ca| ca.get(0))
+        .unwrap_or(0) as usize)
+}
+
+/// Provisioning, limit utilisation, ΔNII and duration treat a blank balance as 0. One note per
+/// such step whose input has blank balances: "<step>: Balance blank on N rows; treated as 0".
+/// An FTP step also gets a note when rows lack an open or maturity date (no FTP rate for them).
+pub fn blank_balance_notes(
+    source: &TabSource,
+    steps: &[TransformStep],
+    temp_dir: &Path,
+) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        if let TransformStep::FtpCurveMap { opndat_col, matdat_col, .. } = step {
+            let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+            let n = count_missing_ftp_dates(input, opndat_col, matdat_col)?;
+            if n > 0 {
+                notes.push(format!(
+                    "{}: open or maturity date missing on {} rows; FTP rate and spread left blank (FTP_Method {})",
+                    step.short_label(),
+                    n,
+                    FTP_MISSING_DATE
+                ));
+            }
+        }
+        let bal = match step {
+            TransformStep::LoanClassificationProvision { bal_col, .. }
+            | TransformStep::LoanLimitUtilization { bal_col, .. }
+            | TransformStep::RateShockSim { bal_col, .. }
+            | TransformStep::DurationAnalysis { bal_col, .. } => bal_col,
+            _ => continue,
+        };
+        let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+        let n = count_blank_values(input, bal)?;
+        if n > 0 {
+            notes.push(format!(
+                "{}: Balance blank on {} rows; treated as 0",
+                step.short_label(),
+                n
+            ));
+        }
+    }
+    Ok(notes)
+}
+
+/// Group-by steps with a weighted average: one note per step with groups whose weights mix
+/// positive and negative, e.g. "Group/Pivot by [\"Grp\"]: WAVG_Rate is null for 2 groups (balances
+/// of mixed sign)".
+pub fn weighted_mixed_sign_notes(
+    source: &TabSource,
+    steps: &[TransformStep],
+    temp_dir: &Path,
+) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        let TransformStep::GroupByPivot { group_cols, aggs, .. } = step else {
+            continue;
+        };
+        let weighted: Vec<(&AggSpec, &str)> = aggs
+            .iter()
+            .filter(|a| a.func == AggFunc::WeightedAvg)
+            .filter_map(|a| a.weight_col.as_deref().map(str::trim).map(|w| (a, w)))
+            .filter(|(_, w)| !w.is_empty())
+            .collect();
+        if group_cols.is_empty() || weighted.is_empty() {
+            continue;
+        }
+        let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+        for (a, w) in weighted {
+            let (_, mixed) = weighted_rate_exprs(
+                col(&a.target_col).cast(DataType::Float64),
+                col(w).cast(DataType::Float64),
+            );
+            let df = input
+                .clone()
+                .group_by(group_cols.iter().map(|c| col(c)).collect::<Vec<_>>())
+                .agg([mixed.alias("__mp_mixed")])
+                .select([col("__mp_mixed").cast(DataType::Int64).sum().alias("n")])
+                .collect()
+                .with_context(|| format!("Could not check the weights of '{}' for mixed signs", a.alias))?;
+            let n = df
+                .column("n")
+                .ok()
+                .and_then(|c| c.i64().ok())
+                .and_then(|ca| ca.get(0))
+                .unwrap_or(0);
+            if n > 0 {
+                notes.push(format!(
+                    "{}: {} is null for {} group(s) whose '{}' values mix positive and negative",
+                    step.short_label(),
+                    a.alias,
+                    n,
+                    w
+                ));
+            }
+        }
+    }
+    Ok(notes)
+}
+
+/// Rows and control sum for the status bar, or "—" with the reason. The pipeline result is
+/// passed in so a failed step also shows "—" instead of the previous step's totals.
+pub fn control_totals_state(lf: Result<LazyFrame>, control_col: Option<&str>) -> ControlTotals {
+    let unavailable = |why: String| ControlTotals {
+        rows: None,
+        sum: None,
+        note: Some(why),
+    };
+    let mut lf = match lf {
+        Ok(lf) => lf,
+        Err(e) => return unavailable(format!("Totals unavailable: {:#}", e)),
+    };
+    let schema = match lf.collect_schema() {
+        Ok(s) => s,
+        Err(e) => return unavailable(format!("Totals unavailable: {}", e)),
+    };
+    let (sum_col, note) = match control_col {
+        None => (None, None),
+        Some(c) => match schema.get(c) {
+            None => (
+                None,
+                Some(format!(
+                    "Control column '{}' no longer exists (for example after a pivot or column selection). Choose another control column.",
+                    c
+                )),
+            ),
+            Some(dt) if !dt.is_numeric() => (
+                None,
+                Some(format!(
+                    "Control column '{}' is {:?}, not a number, so it has no sum. Choose a numeric control column.",
+                    c, dt
+                )),
+            ),
+            Some(_) => (Some(c), None),
+        },
+    };
+    match compute_control_totals(lf, sum_col) {
+        Ok((rows, sum)) => ControlTotals {
+            rows: Some(rows),
+            sum,
+            note,
+        },
+        Err(e) => unavailable(format!("Totals unavailable: {}", e)),
+    }
 }
 
 pub fn compute_control_totals(
