@@ -590,6 +590,52 @@ fn check_dr_cr_conventions(path: &Path, is_parquet: bool, config: &IngestionConf
     Ok(())
 }
 
+// ------------------------------------------------------------------- step validation (T4)
+
+/// A step that cannot run against the columns it would see.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepIssue {
+    /// Position in the steps list (0-based).
+    pub index: usize,
+    /// What is wrong, in words that name the column.
+    pub reason: String,
+}
+
+/// Polars says `unable to find column "X"; valid columns: [...]`: keep the part that matters.
+fn friendly_step_error(e: &anyhow::Error) -> String {
+    let full = format!("{:#}", e);
+    if let Some(i) = full.find("unable to find column \"") {
+        let rest = &full[i + "unable to find column \"".len()..];
+        if let Some(j) = rest.find('"') {
+            return format!("Column '{}' does not exist at this step.", &rest[..j]);
+        }
+    }
+    full.lines().next().unwrap_or("").to_string()
+}
+
+/// Checks every step against the columns it would see, in order. A broken step does not change
+/// the columns for the steps after it, so each later step is judged on its own (a step that needs
+/// a column the broken one would have made is reported too). Turned-off steps are not checked.
+/// Fails only when the source itself cannot be read.
+pub fn validate_steps(source: &TabSource, steps: &[TransformStep], temp_dir: &Path) -> Result<Vec<StepIssue>> {
+    let mut lf = compile_tab_lazy(source, &[], temp_dir)?;
+    let mut issues = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        if step.is_skipped() {
+            continue;
+        }
+        let attempt = apply_single_step(lf.clone(), step).and_then(|next| {
+            let mut probe = next.clone();
+            probe.collect_schema().map(|_| next).map_err(anyhow::Error::from)
+        });
+        match attempt {
+            Ok(next) => lf = next,
+            Err(e) => issues.push(StepIssue { index: i, reason: friendly_step_error(&e) }),
+        }
+    }
+    Ok(issues)
+}
+
 // ------------------------------------------------------------ Text columns of numbers (L4)
 
 /// A share of non-blank values at or above this makes a Text column "look like numbers".
@@ -2212,6 +2258,7 @@ pub fn compile_tab_lazy(
 
 fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
     match step {
+        TransformStep::Skipped { .. } => Ok(lf),
         TransformStep::SelectAndReorderColumns { cols } => {
             let exprs: Vec<Expr> = cols.iter().map(|c| col(c)).collect();
             Ok(lf.select(exprs))

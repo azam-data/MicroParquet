@@ -94,6 +94,8 @@ impl MicroParquetApp {
         }
         if outcome.close {
             self.active_tool = ActiveToolModal::None;
+            // "Insert after" applies to the step this modal produced, never to a later one.
+            self.insert_after = None;
         }
     }
 }

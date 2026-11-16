@@ -22,8 +22,13 @@ impl MicroParquetApp {
     /// Opens the sort editor on the tab's sort (the last sort step), or on a new one. `column`
     /// adds that column as a new level.
     pub(crate) fn open_sort_editor(&mut self, column: Option<&str>) {
-        self.init_tool_defaults_from_active_tab();
         let idx = self.last_sort_step();
+        self.open_sort_editor_at(idx, column);
+    }
+
+    /// Opens the sort editor on the sort step `idx` (or a new sort when `None`).
+    pub(crate) fn open_sort_editor_at(&mut self, idx: Option<usize>, column: Option<&str>) {
+        self.init_tool_defaults_from_active_tab();
         let existing = idx.and_then(|i| {
             self.tabs
                 .get(self.active_tab)
@@ -69,6 +74,7 @@ impl MicroParquetApp {
     pub(crate) fn clear_sort(&mut self) {
         if let Some(i) = self.last_sort_step() {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                tab.history.record(&tab.steps);
                 tab.steps.remove(i);
                 tab.viewport_offset = 0;
             }

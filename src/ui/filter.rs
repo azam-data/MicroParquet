@@ -127,6 +127,7 @@ impl MicroParquetApp {
         if cond_idx >= conds.len() {
             return;
         }
+        tab.history.record(&tab.steps);
         conds.remove(cond_idx);
         if conds.is_empty() {
             tab.steps.remove(step_idx);

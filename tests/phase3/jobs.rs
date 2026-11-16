@@ -285,6 +285,8 @@ mod functions {
                 check_join: false,
                 added_status: Some("Step added: Filter.".into()),
                 temp_dir: d.clone(),
+                validate: true,
+                exec_steps: 0,
             },
             &JobCtx::inert(),
         )
@@ -319,6 +321,8 @@ mod functions {
                 check_join: false,
                 added_status: None,
                 temp_dir: d.clone(),
+                validate: true,
+                exec_steps: 0,
             },
             &JobCtx::inert(),
         )

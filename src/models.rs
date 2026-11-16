@@ -1064,6 +1064,10 @@ pub enum TransformStep {
         value: String,
         keep_matching: bool,
     },
+    /// A step that is turned off: it stays in the list and in macros but changes nothing (T4).
+    Skipped {
+        step: Box<TransformStep>,
+    },
     /// Sort by several columns, blanks always last, ties keep their earlier order (T2).
     SortRows {
         #[serde(default)]
@@ -1189,6 +1193,43 @@ pub enum TransformStep {
 impl TransformStep {
     /// A filter step as conditions, for the chip bar and the editor: a `FilterGroup`, or an old
     /// single `FilterRows` shown as a one-condition group. `None` for every other step.
+    /// The step with a "turned off" wrapper removed.
+    pub fn inner(&self) -> &TransformStep {
+        match self {
+            TransformStep::Skipped { step } => step.inner(),
+            other => other,
+        }
+    }
+
+    /// True for a step that is turned off.
+    pub fn is_skipped(&self) -> bool {
+        matches!(self, TransformStep::Skipped { .. })
+    }
+
+    /// The name of the kind of step ("Filter", "Sort", "Calc column"), for the timeline.
+    pub fn title(&self) -> &'static str {
+        match self.inner() {
+            TransformStep::SelectAndReorderColumns { .. } => "Columns",
+            TransformStep::RenameColumn { .. } => "Rename",
+            TransformStep::ConvertToNumber { .. } => "Set to Number",
+            TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } => "Filter",
+            TransformStep::SortRows { .. } => "Sort",
+            TransformStep::ConditionalColumn { .. } => "Conditional column",
+            TransformStep::MathFormula { .. } => "Calc column",
+            TransformStep::NormalizeEntity { .. } => "Normalise names",
+            TransformStep::MaturityBucket { .. } => "Maturity buckets",
+            TransformStep::RateShockSim { .. } => "Rate shock",
+            TransformStep::FtpCurveMap { .. } => "FTP",
+            TransformStep::BankingHygieneAudit { .. } => "Hygiene audit",
+            TransformStep::DurationAnalysis { .. } => "Duration / \u{394}EVE",
+            TransformStep::LoanClassificationProvision { .. } => "Provision",
+            TransformStep::LoanLimitUtilization { .. } => "Limits",
+            TransformStep::GroupByPivot { .. } => "Pivot",
+            TransformStep::SqlQuery { .. } => "SQL",
+            TransformStep::Skipped { .. } => "Off",
+        }
+    }
+
     /// The sort levels of a `SortRows` step.
     pub fn sort_levels(&self) -> Option<&[SortLevel]> {
         match self {
@@ -1227,6 +1268,7 @@ impl TransformStep {
             TransformStep::ConvertToNumber { columns } => {
                 format!("Set to Number: {}", columns.join(", "))
             }
+            TransformStep::Skipped { step } => format!("Off: {}", step.short_label()),
             TransformStep::SortRows { levels } => {
                 let parts: Vec<String> = levels
                     .iter()
@@ -1369,6 +1411,16 @@ pub struct TabState {
     pub summary: HashMap<String, SummarySpec>,
     /// The computed summary of the whole result (empty until the background job finishes).
     pub summary_cells: Vec<crate::summary::SummaryCell>,
+    /// Steps that cannot run against the columns they would see (T4).
+    pub issues: Vec<crate::engine::StepIssue>,
+    /// How many steps the table runs: all of them, or those before the first broken one.
+    pub exec_steps: usize,
+    /// Undo / redo of changes to the steps.
+    pub history: crate::steps_edit::StepHistory,
+    /// Rows after each step: index 0 is the source, index i is after step i. `None` = not counted yet.
+    pub step_counts: Vec<Option<usize>>,
+    /// Fingerprint of the steps up to each position (see `steps_edit::prefix_hashes`).
+    pub step_hashes: Vec<u64>,
 }
 
 /// Rows read from a CSV against its non-empty lines (minus the header and title lines).

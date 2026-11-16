@@ -126,6 +126,11 @@ pub struct MicroParquetApp {
     /// Right panel: which tab is shown, and the column the Column tab describes.
     pub right_tab: RightTab,
     pub selected_column: Option<String>,
+    /// Steps panel: the selected step, a delete waiting for confirmation, and where the next
+    /// added step goes (after this step instead of at the end).
+    pub selected_step: Option<usize>,
+    pub confirm_delete_step: Option<usize>,
+    pub insert_after: Option<usize>,
     show_about: bool,
     /// Command search overlay (Ctrl K).
     pub command_open: bool,
@@ -179,6 +184,9 @@ impl MicroParquetApp {
             show_chart_drawer: false,
             right_tab: RightTab::Steps,
             selected_column: None,
+            selected_step: None,
+            confirm_delete_step: None,
+            insert_after: None,
             show_about: false,
             command_open: false,
             dark_mode: false,
@@ -221,6 +229,7 @@ impl eframe::App for MicroParquetApp {
             self.status_message = note;
         }
         self.poll_jobs(ctx);
+        self.handle_step_shortcuts(ctx);
         self.render_title_bar(ctx);
         self.render_toolbar_panel(ctx);
         self.render_tab_strip_panel(ctx);

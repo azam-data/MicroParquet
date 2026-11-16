@@ -6,7 +6,8 @@ use crate::batch::BatchReport;
 use crate::engine::{
     blank_balance_notes, compile_tab_lazy, control_totals_state, remember_baseline,
     source_baseline_sum,
-    ensure_pii_key_for, export_to_csv, export_to_parquet, fetch_viewport_slice, ExportMode, ExportPath,
+    ensure_pii_key_for, export_to_csv, export_to_parquet, fetch_viewport_slice, validate_steps, ExportMode,
+    ExportPath, StepIssue,
     join_status, source_parse_failures, source_row_check, text_columns_that_look_numeric,
     weighted_mixed_sign_notes, write_parse_failures_csv, NumericLookingColumn,
 };
@@ -27,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 /// What a finished job hands back to the UI.
 pub enum JobOutput {
+    StepCounts(Box<StepCountsResult>),
     TextCheck(Box<TextCheckResult>),
     Summary(Box<SummaryResult>),
     Loaded(Box<LoadedTab>),
@@ -95,7 +97,10 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     ctx.set_progress(format!("Opening {}…", title), None);
     let key_note = ensure_pii_key_for(&source)?;
     ctx.check()?;
-    let lf = compile_tab_lazy(&source, &steps, &temp_dir)?;
+    // Steps that cannot run (a column they need is gone) stop the table before them.
+    let issues = validate_steps(&source, &steps, &temp_dir).unwrap_or_default();
+    let exec_steps = issues.first().map(|i| i.index).unwrap_or(steps.len());
+    let lf = compile_tab_lazy(&source, &steps[..exec_steps], &temp_dir)?;
     let slice = fetch_viewport_slice(lf.clone(), 0, 100).unwrap_or_default();
     let default_ctrl = guess_balance_column(&slice);
     ctx.check()?;
@@ -177,6 +182,11 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         row_check,
         summary: Default::default(),
         summary_cells: Vec::new(),
+        issues,
+        exec_steps,
+        history: Default::default(),
+        step_counts: Vec::new(),
+        step_hashes: Vec::new(),
     };
     Ok(LoadedTab { tab, status })
 }
@@ -196,6 +206,10 @@ pub struct RefreshRequest {
     /// "Step added: …" text; when set, the result carries a status with the balance notes.
     pub added_status: Option<String>,
     pub temp_dir: PathBuf,
+    /// Check every step against the columns it would see (false when only the page changed).
+    pub validate: bool,
+    /// With `validate` false: how many steps run (the last result's).
+    pub exec_steps: usize,
 }
 
 pub struct Refreshed {
@@ -211,6 +225,9 @@ pub struct Refreshed {
     pub error: Option<String>,
     /// Status text to show on success (step added + notes).
     pub status: Option<String>,
+    /// Steps that cannot run, and how many steps the table ran.
+    pub issues: Vec<StepIssue>,
+    pub exec_steps: usize,
 }
 
 /// Rebuilds a tab's page and totals. A pipeline error is a normal result (`error`), not a failed
@@ -218,7 +235,16 @@ pub struct Refreshed {
 pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
     let ctrl = req.control_col.as_deref();
     ctx.check()?;
-    match compile_tab_lazy(&req.source, &req.steps, &req.temp_dir) {
+    // Steps that cannot run stop the table before them; the rest of the list is kept and shown.
+    let (issues, exec_steps) = if req.validate {
+        let issues = validate_steps(&req.source, &req.steps, &req.temp_dir).unwrap_or_default();
+        let n = issues.first().map(|i| i.index).unwrap_or(req.steps.len());
+        (issues, n)
+    } else {
+        (Vec::new(), req.exec_steps.min(req.steps.len()))
+    };
+    let steps = &req.steps[..exec_steps];
+    match compile_tab_lazy(&req.source, steps, &req.temp_dir) {
         Ok(lf) => {
             let slice = fetch_viewport_slice(lf.clone(), req.offset, req.limit).ok();
             ctx.check()?;
@@ -231,14 +257,14 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
                 None
             };
             let join = if req.check_join {
-                Some(join_status(&req.source, &req.steps, ctrl, &req.temp_dir).ok().flatten())
+                Some(join_status(&req.source, steps, ctrl, &req.temp_dir).ok().flatten())
             } else {
                 None
             };
             let status = req
                 .added_status
                 .as_deref()
-                .map(|added| with_balance_notes(added, &req.source, &req.steps, &req.temp_dir));
+                .map(|added| with_balance_notes(added, &req.source, steps, &req.temp_dir));
             Ok(Refreshed {
                 tab_id: req.tab_id,
                 offset: req.offset,
@@ -248,6 +274,8 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
                 join_status: join,
                 error: None,
                 status,
+                issues,
+                exec_steps,
             })
         }
         Err(e) => {
@@ -261,6 +289,8 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
                 join_status: None,
                 error: Some(msg),
                 status: None,
+                issues,
+                exec_steps,
             })
         }
     }
@@ -593,4 +623,46 @@ pub fn compute_tab_summary(req: SummaryRequest, ctx: &JobCtx) -> Result<SummaryR
     let cells = summary_of_lazy(lf, &req.overrides)?;
     ctx.check()?;
     Ok(SummaryResult { tab_id: req.tab_id, steps_len: req.steps.len(), cells })
+}
+
+// ----------------------------------------------------------------------------- step row counts
+
+pub struct StepCountsRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    /// The steps the table runs (those before the first broken one).
+    pub steps: Vec<TransformStep>,
+    /// Counts already known (same length as `steps` + 1; index 0 = the source). `None` = to do.
+    pub known: Vec<Option<usize>>,
+    pub hashes: Vec<u64>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct StepCountsResult {
+    pub tab_id: u64,
+    pub hashes: Vec<u64>,
+    pub counts: Vec<Option<usize>>,
+}
+
+/// Rows after each step (index 0 = the source). Only the missing ones are computed; a turned-off
+/// step has the count of the step before it.
+pub fn compute_step_counts(req: StepCountsRequest, ctx: &JobCtx) -> Result<StepCountsResult> {
+    use polars::prelude::*;
+    let mut counts = req.known.clone();
+    counts.resize(req.steps.len() + 1, None);
+    for i in 0..=req.steps.len() {
+        ctx.check()?;
+        if counts[i].is_some() {
+            continue;
+        }
+        if i > 0 && req.steps[i - 1].is_skipped() {
+            counts[i] = counts[i - 1];
+            continue;
+        }
+        ctx.set_progress(format!("Counting rows after step {} of {}…", i, req.steps.len()), Some(i as f32 / (req.steps.len() + 1) as f32));
+        let lf = compile_tab_lazy(&req.source, &req.steps[..i], &req.temp_dir)?;
+        let df = lf.select([len().alias("n")]).collect()?;
+        counts[i] = df.column("n").ok().and_then(|s| s.u32().ok().and_then(|c| c.get(0))).map(|n| n as usize);
+    }
+    Ok(StepCountsResult { tab_id: req.tab_id, hashes: req.hashes, counts })
 }

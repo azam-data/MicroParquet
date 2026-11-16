@@ -406,6 +406,9 @@ pub fn generate_python_polars_code(
                     py.push_str(&format!("lf = lf.filter(~({}))\n\n", cond_py));
                 }
             }
+            TransformStep::Skipped { .. } => {
+                py.push_str("# (turned off in MicroParquet: this step is skipped)\n\n");
+            }
             TransformStep::SortRows { levels } => {
                 if !levels.is_empty() {
                     // Blank text counts as blank (last), like the app.

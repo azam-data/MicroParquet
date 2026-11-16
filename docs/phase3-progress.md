@@ -16,8 +16,8 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 | L5 | DONE | be38e37 | tests/phase3/l5.rs: 10 tests (forbidden characters; 120-char cap keeps extension; macOS folder beside the .app, Library fallback when not writable, bare binary, Windows/Linux next to exe; writability probe; one version number in macro files, Python header, sources and the workflow; Phase 1, 2 and 3 macros load; old schema, preset and rule files load). New tests moved into one binary `tests/phase3/` to save disk | no Info.plist in repo (workflow writes it, now from Cargo.toml); app_version is a JSON key | |
 | T1 | DONE | 67c3f12 | tests/phase3/t1.rs: 8 tests (AND / OR rows; delete keeps unknown rows; between on dates, numbers, text and a bad date bound; in list with numeric-looking text IDs; contains / starts / ends / blank; v1.2 FilterRows macro gives the same rows and shows as a group; serde defaults and chip text; Python translation) | own operator set; old FilterRows untouched; unknown test = no match | |
 | T2 | DONE | 3348edf | tests/phase3/t2.rs: 6 tests (3-level text asc / number desc / date asc with ties, blanks and a stable tie; blanks last both directions and "" counts as blank; stability and two sorts in a row; empty levels and a missing column; header marks "1 ↑" / "2 ↓"; serde defaults and Python) | byte-order text sort; right-click header menu | Q4 |
-| T3 | DONE | (next commit) | tests/phase3/t3.rs: 10 tests (every aggregation on a frame with nulls; W.Avg Phase 2 rule and mixed-sign null with reason; unfit choices say why; defaults; value formatting with separators and scale; macro save and old-macro load; Excel totals row values, labels and colour; scale and last-sheet placement; PDF band; export job computes on the whole result) | ID-like numbers default to Count; weight pre-selected; exports always carry the summary; MacroRecipe.summary (2 test literals got one line) | Q5 |
-| T4 | TODO | | | | |
+| T3 | DONE | 1121b29 | tests/phase3/t3.rs: 10 tests (every aggregation on a frame with nulls; W.Avg Phase 2 rule and mixed-sign null with reason; unfit choices say why; defaults; value formatting with separators and scale; macro save and old-macro load; Excel totals row values, labels and colour; scale and last-sheet placement; PDF band; export job computes on the whole result) | ID-like numbers default to Count; weight pre-selected; exports always carry the summary; MacroRecipe.summary (2 test literals got one line) | Q5 |
+| T4 | DONE | (next commit) | tests/phase3/t4.rs: 11 tests (move, delete, duplicate, insert; turn off and on; off step changes no rows and leaves a script comment; deleting a Calc column marks the later filter invalid naming Balance_Cr; reorder / turn-off revalidate; table runs up to the last valid step; row counts per step and reuse; counts stay valid until an earlier step changes; undo / redo 100 levels; edit-undo round trip) | Edit only for filters and sorts; Skipped wrapper; counts re-run prefixes; undo only for the steps list | Q6 |
 | T5 | TODO | | | | |
 | T6 | TODO | | | | |
 
@@ -31,6 +31,8 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 - Q4 (T2): should text sort ignore case ("ctg" next to "CTG")? It is byte order now.
 
 - Q5 (T3): numeric columns that hold rates ("Int Rate") default to Sum as the spec says; a weighted average or no summary would be more useful. Should rate columns default to Average?
+
+- Q6 (T4): Edit works for filters and sorts only. Do you want every step type editable in place (the Banking tools included)?
 
 ## Notes
 - Disk: the test binaries are ~1.5 GB each (debug info). If a build fails with "No space left on device", delete executables in `target/debug/deps` (not rlibs) and `target/debug/incremental`; never `cargo clean`.

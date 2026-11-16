@@ -71,7 +71,11 @@ impl MicroParquetApp {
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
                 self.status_message = status;
+                if let Some(msg) = self.tabs.get(self.active_tab).and_then(broken_step_message) {
+                    self.status_message = msg;
+                }
                 self.submit_summary(self.active_tab);
+                self.submit_step_counts(self.active_tab);
             }
             JobOutput::Refreshed(r) => {
                 let Some(idx) = self.tab_position(r.tab_id) else {
@@ -79,6 +83,8 @@ impl MicroParquetApp {
                 };
                 self.pending_refresh.remove(&r.tab_id);
                 if let Some(tab) = self.tabs.get_mut(idx) {
+                    tab.issues = r.issues.clone();
+                    tab.exec_steps = r.exec_steps;
                     if let Some(slice) = r.slice {
                         tab.cached_slice = slice;
                         tab.slice_offset = r.offset;
@@ -98,16 +104,29 @@ impl MicroParquetApp {
                     (None, Some(s)) => self.status_message = s,
                     (None, None) => {}
                 }
+                // A broken step is always said, whatever else the status was.
+                if let Some(msg) = self.tabs.get(idx).and_then(broken_step_message) {
+                    self.status_message = msg;
+                }
                 if idx == self.active_tab {
                     self.init_tool_defaults_from_active_tab();
                 }
                 // The summary row is of the whole result, so it follows every refresh.
                 self.submit_summary(idx);
+                self.submit_step_counts(idx);
+            }
+            JobOutput::StepCounts(r) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
+                    // Counts for steps that have changed since are dropped.
+                    if tab.step_hashes == r.hashes {
+                        tab.step_counts = r.counts;
+                    }
+                }
             }
             JobOutput::Summary(r) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
                     // A result for an older pipeline is dropped; the newer job follows.
-                    if tab.steps.len() == r.steps_len {
+                    if tab.exec_steps == r.steps_len {
                         tab.summary_cells = r.cells;
                     }
                 }
@@ -143,4 +162,17 @@ impl MicroParquetApp {
             }
         }
     }
+}
+
+/// The status-bar text for a tab whose steps cannot all run: which step, why, and what is shown.
+pub fn broken_step_message(tab: &TabState) -> Option<String> {
+    let first = tab.issues.first()?;
+    let step = tab.steps.get(first.index)?;
+    Some(format!(
+        "Step {} '{}' is broken: {} The table shows the result up to step {}.",
+        first.index + 1,
+        step.short_label(),
+        first.reason,
+        first.index
+    ))
 }

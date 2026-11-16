@@ -136,10 +136,11 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
-        let Some(slot) = tab.steps.get_mut(idx) else {
+        if idx >= tab.steps.len() {
             return;
-        };
-        *slot = step;
+        }
+        tab.history.record(&tab.steps);
+        tab.steps[idx] = step;
         tab.viewport_offset = 0;
         self.status_message = status.to_string();
         self.refresh_tab_at(self.active_tab, false, Some(status.to_string()));
@@ -165,10 +166,13 @@ impl MicroParquetApp {
             new_steps.push(step);
             self.create_tab_from_source(title, curr.source, new_steps, updated_formats);
         } else {
+            let after = self.insert_after.take();
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                tab.steps.push(step);
+                tab.history.record(&tab.steps);
+                let at = micro_parquet::steps_edit::insert_after(&mut tab.steps, after, step);
                 tab.col_formats = updated_formats;
                 tab.viewport_offset = 0;
+                self.selected_step = Some(at);
             }
             // The job's result replaces this message: with the notes, or with the error.
             self.status_message = format!("Step added: {}.", step_label);
@@ -199,6 +203,8 @@ impl MicroParquetApp {
             pend.added_status = added_status;
         }
         let req = RefreshRequest {
+            validate: true,
+            exec_steps: tab.exec_steps,
             tab_id: tab.id,
             source: tab.source.clone(),
             steps: tab.steps.clone(),
@@ -221,16 +227,49 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(idx) else {
             return;
         };
+        let exec = tab.exec_steps.min(tab.steps.len());
         let req = SummaryRequest {
             tab_id: tab.id,
             source: tab.source.clone(),
-            steps: tab.steps.clone(),
+            steps: tab.steps[..exec].to_vec(),
             overrides: tab.summary.clone(),
             temp_dir: self.paths.temp_dir.clone(),
         };
         let key = JobKey::tab(JobKind::Summary, tab.id);
         self.jobs.submit(key, "Summary row", false, move |ctx| {
             compute_tab_summary(req, ctx).map(|r| JobOutput::Summary(Box::new(r)))
+        });
+    }
+
+    /// Counts the rows after each step of tab `idx` on the worker thread. Counts of steps whose
+    /// earlier steps did not change are kept.
+    pub(crate) fn submit_step_counts(&mut self, idx: usize) {
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        let exec = tab.exec_steps.min(tab.steps.len());
+        let hashes = micro_parquet::steps_edit::prefix_hashes(&tab.steps[..exec]);
+        // Keep a count when the steps up to it are the same as when it was counted.
+        let mut known: Vec<Option<usize>> = vec![None; exec + 1];
+        known[0] = tab.step_counts.first().copied().flatten();
+        for i in 0..exec {
+            if tab.step_hashes.get(i) == Some(&hashes[i]) {
+                known[i + 1] = tab.step_counts.get(i + 1).copied().flatten();
+            }
+        }
+        tab.step_hashes = hashes.clone();
+        tab.step_counts = known.clone();
+        let req = StepCountsRequest {
+            tab_id: tab.id,
+            source: tab.source.clone(),
+            steps: tab.steps[..exec].to_vec(),
+            known,
+            hashes,
+            temp_dir: self.paths.temp_dir.clone(),
+        };
+        let key = JobKey::tab(JobKind::StepCounts, tab.id);
+        self.jobs.submit(key, "Row counts per step", false, move |ctx| {
+            compute_step_counts(req, ctx).map(|r| JobOutput::StepCounts(Box::new(r)))
         });
     }
 
