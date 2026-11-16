@@ -8,5 +8,6 @@ pub mod jobs;
 pub mod macros;
 pub mod models;
 pub mod paths;
+pub mod summary;
 pub mod table_layout;
 pub mod tab_jobs;

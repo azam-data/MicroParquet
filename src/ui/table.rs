@@ -1,6 +1,7 @@
 //! Screen module `table` (moved out of main.rs by Phase 3 R1).
 
 use crate::ui::prelude::*;
+use micro_parquet::summary::{default_agg_for, format_summary_value};
 
 /// Text widths measured with the fonts egui has loaded.
 struct EguiMetrics<'a> {
@@ -34,8 +35,16 @@ impl micro_parquet::table_layout::FontMetrics for EguiMetrics<'_> {
     }
 }
 
+/// The summary row's data for the grid: the computed cells and the user's choices.
+pub struct SummaryView<'a> {
+    pub cells: &'a [micro_parquet::summary::SummaryCell],
+    pub overrides: &'a HashMap<String, SummarySpec>,
+}
+
 /// What the user did in the grid's header.
 pub enum GridAction {
+    /// Chose a summary (or its weight column) in the selector row.
+    SetSummary(String, SummarySpec),
     /// Clicked the header: select the column.
     Select(String),
     /// Chose a sort from the header menu: (column, highest first, add as a further level).
@@ -86,6 +95,102 @@ fn cell_text(
     }
 }
 
+/// The summary choice shown for a column: the user's, else the default for its type.
+fn effective_spec(c: &polars::prelude::Series, overrides: &HashMap<String, SummarySpec>) -> SummarySpec {
+    overrides
+        .get(c.name().as_str())
+        .cloned()
+        .unwrap_or_else(|| SummarySpec { agg: default_agg_for(c.dtype(), c.name().as_str()), weight_col: None })
+}
+
+/// The selector (a small menu button) and the dark summary value under one column.
+#[allow(clippy::too_many_arguments)]
+fn draw_summary_cell(
+    ui: &mut egui::Ui,
+    c: &polars::prelude::Series,
+    kind: CellKind,
+    sv: &SummaryView,
+    sel_rect: egui::Rect,
+    band_rect: egui::Rect,
+    tk: &theme::Tokens,
+    spec_fmt: Option<&ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    decimals: usize,
+    weight_guess: Option<&str>,
+    action: &mut Option<GridAction>,
+) {
+    let name = c.name().to_string();
+    let spec = effective_spec(c, sv.overrides);
+    // selector row background and the selector chip
+    ui.painter().rect_filled(sel_rect, 0.0, tk.bg);
+    ui.painter().hline(sel_rect.x_range(), sel_rect.top() + 0.5, egui::Stroke::new(1.0_f32, tk.border));
+    let on = spec.agg != SummaryAgg::None;
+    let (fg, bg, stroke) = if on {
+        (tk.selector_on_fg, tk.selector_on_bg, tk.selector_on_border)
+    } else {
+        (tk.selector_off_fg, egui::Color32::TRANSPARENT, tk.border)
+    };
+    let inner = sel_rect.shrink2(egui::vec2(8.0, 4.0));
+    let layout = if kind == CellKind::Number {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(layout), |ui| {
+        ui.spacing_mut().button_padding = egui::vec2(8.0, 1.0);
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = bg;
+        ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, stroke);
+        ui.visuals_mut().widgets.inactive.rounding = egui::Rounding::same(4.0);
+        let label = format!("{} {}", spec.agg.label(), theme::ph::CARET_DOWN);
+        ui.menu_button(theme::semibold(label).size(theme::TEXT_LABEL).color(fg), |ui| {
+            let numeric = c.dtype().is_numeric();
+            for agg in SummaryAgg::all() {
+                let needs_numbers = matches!(agg, SummaryAgg::Sum | SummaryAgg::Average | SummaryAgg::WeightedAvg);
+                let enabled = !needs_numbers || numeric;
+                let resp = ui.add_enabled(enabled, egui::SelectableLabel::new(spec.agg == *agg, agg.label()));
+                let resp = if enabled { resp } else { resp.on_disabled_hover_text(format!("{} needs a number column.", agg.label())) };
+                if resp.clicked() {
+                    let mut next = SummarySpec { agg: *agg, weight_col: spec.weight_col.clone() };
+                    if *agg == SummaryAgg::WeightedAvg && next.weight_col.is_none() {
+                        // weights are usually balances: the first column named like one
+                        next.weight_col = weight_guess.filter(|w| *w != name).map(str::to_string);
+                    }
+                    *action = Some(GridAction::SetSummary(name.clone(), next));
+                    ui.close_menu();
+                }
+            }
+        });
+    });
+
+    // summary band
+    ui.painter().rect_filled(band_rect, 0.0, tk.summary_bg);
+    ui.painter().vline(band_rect.right() - 0.5, band_rect.y_range(), egui::Stroke::new(1.0_f32, tk.summary_divider));
+    let cell = sv.cells.iter().find(|x| x.column == name);
+    let (text, note) = match cell {
+        Some(cell) if cell.agg != SummaryAgg::None => (
+            format_summary_value(cell, spec_fmt, num_format, decimals),
+            cell.note.clone(),
+        ),
+        Some(_) => (String::new(), None),
+        None if on && sv.cells.is_empty() => ("\u{2026}".to_string(), None),
+        None => (String::new(), None),
+    };
+    let layout = if kind == CellKind::Number {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    let inner = band_rect.shrink2(egui::vec2(12.0, 0.0));
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(layout), |ui| {
+        let r = ui.add(
+            egui::Label::new(theme::mono_semibold(text).color(tk.summary_fg)).truncate(),
+        );
+        if let Some(n) = note {
+            r.on_hover_text(n);
+        }
+    });
+}
+
 impl MicroParquetApp {
     /// Draws the page. Returns what the user did in the header, if anything.
     #[allow(clippy::too_many_arguments)]
@@ -99,6 +204,7 @@ impl MicroParquetApp {
         tab_id: u64,
         selected: Option<&str>,
         sort_marks: &HashMap<String, (usize, bool)>,
+        summary: Option<&SummaryView>,
     ) -> Option<GridAction> {
         use micro_parquet::table_layout::{column_min_width, MAX_COLUMN_WIDTH, SAMPLE_ROWS};
         let tk = *theme::tokens(ui.visuals().dark_mode);
@@ -106,6 +212,7 @@ impl MicroParquetApp {
         let num_rows = df.height();
         let ctx = ui.ctx().clone();
         let mut action: Option<GridAction> = None;
+        let weight_guess = micro_parquet::tab_jobs::guess_balance_column(df);
 
         // Minimum widths: header, selector, summary and the first 100 rows' texts.
         let kinds: Vec<CellKind> = cols.iter().map(cell_kind).collect();
@@ -117,13 +224,34 @@ impl MicroParquetApp {
                 let samples: Vec<String> = (0..num_rows.min(SAMPLE_ROWS))
                     .map(|r| cell_text(c, r, col_formats, num_format, global_decimals))
                     .collect();
-                column_min_width(c.name().as_str(), "", "", &samples, &m)
+                let (sel, sum) = match summary {
+                    Some(sv) => {
+                        let spec = effective_spec(c, sv.overrides);
+                        let text = sv
+                            .cells
+                            .iter()
+                            .find(|x| x.column == c.name().as_str())
+                            .map(|x| format_summary_value(x, col_formats.get(c.name().as_str()), num_format, global_decimals))
+                            .unwrap_or_default();
+                        (spec.agg.label().to_string(), text)
+                    }
+                    None => (String::new(), String::new()),
+                };
+                column_min_width(c.name().as_str(), &sel, &sum, &samples, &m)
             })
             .collect();
         let row_no_width = EguiMetrics { ctx: &ctx, mono_cells: true };
         let row_no_min = {
             use micro_parquet::table_layout::FontMetrics;
             row_no_width.cell(&format_with_commas((row_offset + num_rows.max(1)) as f64, 0)) + 24.0
+        };
+
+        // One tall header row holds three bands: names (38), the summary selectors (30) and the
+        // summary values (38), so every column's three cells line up.
+        let head_height = if summary.is_some() {
+            theme::HEADER_ROW_H + theme::SELECTOR_ROW_H + theme::SUMMARY_BAND_H
+        } else {
+            theme::HEADER_ROW_H
         };
 
         egui::Frame::none()
@@ -148,14 +276,19 @@ impl MicroParquetApp {
                         );
                     }
                     builder
-                        .header(theme::HEADER_ROW_H, |mut header| {
+                        .header(head_height, |mut header| {
                             header.col(|ui| {
                                 ui.label(theme::label_text("#").color(tk.muted));
                             });
                             for (c, kind) in cols.iter().zip(&kinds) {
                                 header.col(|ui| {
-                                    let rect = ui.max_rect();
+                                    let cell_rect = ui.max_rect();
                                     let name = c.name().to_string();
+                                    // The name band is the top 38 px of the cell.
+                                    let rect = egui::Rect::from_min_size(
+                                        cell_rect.min,
+                                        egui::vec2(cell_rect.width(), theme::HEADER_ROW_H),
+                                    );
                                     let is_sel = selected == Some(name.as_str());
                                     let resp = ui.interact(rect, ui.id().with(("hdr", name.as_str())), egui::Sense::click());
                                     if is_sel {
@@ -167,7 +300,7 @@ impl MicroParquetApp {
                                     } else {
                                         egui::Layout::left_to_right(egui::Align::Center)
                                     };
-                                    ui.with_layout(layout, |ui| {
+                                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
                                         // The sort mark ("1 up-arrow") sits at the cell's edge.
                                         if let Some((level, desc)) = sort_marks.get(&name) {
                                             ui.label(
@@ -208,6 +341,18 @@ impl MicroParquetApp {
                                             ui.close_menu();
                                         }
                                     });
+
+                                    if let Some(sv) = summary {
+                                        let sel_rect = egui::Rect::from_min_size(
+                                            egui::pos2(cell_rect.min.x, cell_rect.min.y + theme::HEADER_ROW_H),
+                                            egui::vec2(cell_rect.width(), theme::SELECTOR_ROW_H),
+                                        );
+                                        let band_rect = egui::Rect::from_min_size(
+                                            egui::pos2(cell_rect.min.x, sel_rect.max.y),
+                                            egui::vec2(cell_rect.width(), theme::SUMMARY_BAND_H),
+                                        );
+                                        draw_summary_cell(ui, c, *kind, sv, sel_rect, band_rect, &tk, col_formats.get(&name), num_format, global_decimals, weight_guess.as_deref(), &mut action);
+                                    }
                                 });
                             }
                         })
@@ -368,6 +513,7 @@ impl MicroParquetApp {
         let mut action: Option<GridAction> = None;
         if let Some(tab) = self.tabs.get(self.active_tab) {
             let marks = sort_marks(&tab.steps);
+            let view = SummaryView { cells: &tab.summary_cells, overrides: &tab.summary };
             ui.scope(|ui| {
                 if updating {
                     ui.set_opacity(0.45);
@@ -382,6 +528,7 @@ impl MicroParquetApp {
                     tab.id,
                     self.selected_column.as_deref(),
                     &marks,
+                    Some(&view),
                 );
             });
         }
@@ -394,6 +541,7 @@ impl MicroParquetApp {
             }
             Some(GridAction::Sort(c, desc, add)) => self.sort_from_header(&c, desc, add),
             Some(GridAction::ClearSort) => self.clear_sort(),
+            Some(GridAction::SetSummary(col, spec)) => self.set_summary(&col, spec),
             None => {}
         }
     }

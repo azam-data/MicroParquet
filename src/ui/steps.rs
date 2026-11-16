@@ -74,6 +74,7 @@ impl MicroParquetApp {
                                 control_column: tab.control_col.clone(),
                                 optional_ingestion_schema: opt_schema,
                                 steps: tab.steps.clone(),
+                                summary: tab.summary.clone(),
                             };
                             if let Some(save_path) = rfd::FileDialog::new()
                                 .set_directory(&self.paths.macros_dir)
@@ -173,14 +174,19 @@ impl MicroParquetApp {
                 };
 
                 if into_new_tab {
-                    self.create_tab_from_source(
+                    let id = self.create_tab_from_source_with(
                         format!("Macro: {}", recipe.name),
                         curr.source,
                         recipe.steps,
                         curr.col_formats,
+                        None,
                     );
+                    if !recipe.summary.is_empty() {
+                        self.pending_summary.insert(id, recipe.summary.clone());
+                    }
                 } else {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.summary.extend(recipe.summary.clone());
                         tab.steps.extend(recipe.steps);
                         if recipe.enforce_balance_control && recipe.control_column.is_some() {
                             tab.control_col = recipe.control_column;

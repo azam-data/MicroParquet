@@ -111,6 +111,8 @@ pub struct MicroParquetApp {
     pub jobs: JobQueue<JobOutput>,
     tab_id_counter: u64,
     pending_refresh: HashMap<u64, PendingRefresh>,
+    /// Summary choices of a macro replayed into a tab that is still loading (by tab id).
+    pending_summary: HashMap<u64, HashMap<String, SummarySpec>>,
     paths: PortablePaths,
     tabs: Vec<TabState>,
     active_tab: usize,
@@ -164,6 +166,7 @@ impl MicroParquetApp {
             jobs: JobQueue::new(move || egui_ctx.request_repaint()),
             tab_id_counter: 0,
             pending_refresh: HashMap::new(),
+            pending_summary: HashMap::new(),
             paths,
             tabs: Vec::new(),
             active_tab: 0,

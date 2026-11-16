@@ -24,16 +24,16 @@ pub use micro_parquet::models::{
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
     format_metric_value, format_with_commas, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
-    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
+    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
     SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };
 pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
 pub use micro_parquet::tab_jobs::{
-    check_schema_for_tab, check_text_columns, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
+    check_schema_for_tab, check_text_columns, compute_tab_summary, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
     export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
     LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest, TabTextFindings, TextCheckRequest,
-    TextCheckResult,
+    TextCheckResult, SummaryRequest,
 };
 pub use polars::datatypes::AnyValue;
 pub use polars::prelude::DataFrame;

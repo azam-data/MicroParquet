@@ -79,7 +79,7 @@ impl MicroParquetApp {
         steps: Vec<TransformStep>,
         col_formats: HashMap<String, ColumnFormatSpec>,
         reconcile_rate_used: Option<bool>,
-    ) {
+    ) -> u64 {
         let tab_id = self.next_tab_id();
         let label = format!("Opening '{}'", title);
         let req = LoadRequest {
@@ -95,6 +95,7 @@ impl MicroParquetApp {
             load_tab(req, ctx).map(|t| JobOutput::Loaded(Box::new(t)))
         });
         self.status_message = "Loading…".to_string();
+        tab_id
     }
 
     pub(crate) fn init_tool_defaults_from_active_tab(&mut self) {
@@ -213,6 +214,34 @@ impl MicroParquetApp {
         self.jobs.submit(key, "Refreshing view", false, move |ctx| {
             refresh_tab(req, ctx).map(|r| JobOutput::Refreshed(Box::new(r)))
         });
+    }
+
+    /// Recomputes the summary row of tab `idx` on the worker thread.
+    pub(crate) fn submit_summary(&mut self, idx: usize) {
+        let Some(tab) = self.tabs.get(idx) else {
+            return;
+        };
+        let req = SummaryRequest {
+            tab_id: tab.id,
+            source: tab.source.clone(),
+            steps: tab.steps.clone(),
+            overrides: tab.summary.clone(),
+            temp_dir: self.paths.temp_dir.clone(),
+        };
+        let key = JobKey::tab(JobKind::Summary, tab.id);
+        self.jobs.submit(key, "Summary row", false, move |ctx| {
+            compute_tab_summary(req, ctx).map(|r| JobOutput::Summary(Box::new(r)))
+        });
+    }
+
+    /// The user picked a summary (or a weight column) for a column of the active tab.
+    pub(crate) fn set_summary(&mut self, column: &str, spec: SummarySpec) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            tab.summary.insert(column.to_string(), spec);
+            // The old values no longer match the choice; the job replaces them.
+            tab.summary_cells.retain(|c| c.column != column);
+        }
+        self.submit_summary(self.active_tab);
     }
 
     /// A tab id nobody has used (ids are never reused, unlike positions).

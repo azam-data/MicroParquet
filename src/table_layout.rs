@@ -14,6 +14,10 @@ pub const MIN_COLUMN_WIDTH: f32 = 56.0;
 pub const SORT_MARK_WIDTH: f32 = 30.0;
 /// The aggregation selector is a chip: its padding and the dropdown arrow.
 pub const SELECTOR_CHIP_EXTRA: f32 = 28.0;
+/// The summary band's colours (RGB hex); the UI's `summary_bg` / `summary_fg` tokens and the
+/// totals row of Excel and PDF exports use these.
+pub const SUMMARY_BG: u32 = 0x1F3A5F;
+pub const SUMMARY_FG: u32 = 0xFFFFFF;
 /// How many visible rows are measured.
 pub const SAMPLE_ROWS: usize = 100;
 

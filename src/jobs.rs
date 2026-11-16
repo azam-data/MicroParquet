@@ -28,6 +28,8 @@ pub enum JobKind {
     Refresh,
     /// Column statistics for the inspector.
     Stats,
+    /// The summary row of a tab.
+    Summary,
     /// Row counts after each step.
     StepCounts,
     /// Writes an output file or folder.

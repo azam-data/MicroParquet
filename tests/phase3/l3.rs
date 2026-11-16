@@ -95,7 +95,7 @@ fn frame() -> DataFrame {
 fn l3_excel_headers_name_the_scale_and_values_are_in_that_scale() {
     let d = tmpdir("l3_excel_headers_name_the_scale_and_values_are_in_that_scale");
     let p = d.join("scaled.xlsx");
-    let tab = XlsxTab { title: "Loans".into(), df: frame(), col_formats: HashMap::new() };
+    let tab = XlsxTab { title: "Loans".into(), df: frame(), col_formats: HashMap::new(), summary: Vec::new() };
     write_xlsx_tabs(vec![tab], vec![], &p, 1000, Some(XlsxScale { num_format: NumberDisplayFormat::BdtMillion, decimals: 2 })).unwrap();
     let strings = unzip_entry(&p, "xl/sharedStrings.xml");
     let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
@@ -111,7 +111,7 @@ fn l3_excel_headers_name_the_scale_and_values_are_in_that_scale() {
     formats.insert("Balance".to_string(), spec(MetricFormatType::BdtCrore));
     let p2 = d.join("per_column.xlsx");
     write_xlsx_tabs(
-        vec![XlsxTab { title: "Loans".into(), df: frame(), col_formats: formats }],
+        vec![XlsxTab { title: "Loans".into(), df: frame(), col_formats: formats, summary: Vec::new() }],
         vec![],
         &p2,
         1000,
@@ -135,7 +135,7 @@ fn l3_plain_scale_and_the_old_export_keep_raw_values_and_names() {
     // plain commas in the scaled export: nothing is divided
     let p2 = d.join("plain.xlsx");
     write_xlsx_tabs(
-        vec![XlsxTab { title: "Loans".into(), df: frame(), col_formats: HashMap::new() }],
+        vec![XlsxTab { title: "Loans".into(), df: frame(), col_formats: HashMap::new(), summary: Vec::new() }],
         vec![],
         &p2,
         1000,

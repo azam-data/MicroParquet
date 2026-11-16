@@ -11,13 +11,13 @@ use crate::engine::{
     weighted_mixed_sign_notes, write_parse_failures_csv, NumericLookingColumn,
 };
 use crate::exporters::{
-    export_selected_tabs_to_xlsx_scaled, export_tabs_to_pdf, split_and_export_by_column_ctx,
+    export_pdf_tabs, export_selected_tabs_to_xlsx_scaled, split_and_export_by_column_ctx, PdfTab,
     ScaledTabToExport, XlsxScale, PDF_MAX_ROWS_PER_TAB,
 };
 use crate::jobs::{write_atomic, JobCtx};
 use crate::models::{
     ColumnFormatSpec, ControlTotals, IngestionConfig, JoinStatus, NumberDisplayFormat,
-    ParquetDialect, ParseFailure, RowCountCheck, SplitExportFormat, TabSource, TabState,
+    ParquetDialect, ParseFailure, RowCountCheck, SplitExportFormat, SummarySpec, TabSource, TabState,
     TransformStep,
 };
 use anyhow::Result;
@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 /// What a finished job hands back to the UI.
 pub enum JobOutput {
     TextCheck(Box<TextCheckResult>),
+    Summary(Box<SummaryResult>),
     Loaded(Box<LoadedTab>),
     Refreshed(Box<Refreshed>),
     Schema(Box<SchemaApplied>),
@@ -174,6 +175,8 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         join_status: join_stat,
         totals,
         row_check,
+        summary: Default::default(),
+        summary_cells: Vec::new(),
     };
     Ok(LoadedTab { tab, status })
 }
@@ -377,6 +380,8 @@ pub struct ExportTab {
     pub source: TabSource,
     pub steps: Vec<TransformStep>,
     pub col_formats: HashMap<String, ColumnFormatSpec>,
+    /// The tab's summary choices; Excel and PDF add them as a totals row.
+    pub summary: HashMap<String, SummarySpec>,
 }
 
 /// Excel workbook of the ticked tabs. Money columns are written in the chosen scale with the
@@ -398,6 +403,7 @@ pub fn export_tabs_xlsx(
             source: &t.source,
             steps: t.steps.as_slice(),
             col_formats: &t.col_formats,
+            summary: Some(&t.summary),
         })
         .collect();
     let scale = XlsxScale { num_format, decimals: global_decimals };
@@ -427,17 +433,20 @@ pub fn export_tabs_pdf(
             format!("Reading '{}' ({} of {})…", tab.title, i + 1, tabs.len()),
             Some(i as f32 / tabs.len().max(1) as f32),
         );
-        // One row past the limit, so the export can say the tab was cut.
-        match compile_tab_lazy(&tab.source, &tab.steps, temp_dir)
-            .and_then(|lf| Ok(lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?))
-        {
-            Ok(df) => collected.push((tab.title.clone(), df, tab.col_formats.clone())),
+        // The summary is of the whole result; the page shows only the first rows (one past the
+        // limit, so the export can say the tab was cut).
+        match compile_tab_lazy(&tab.source, &tab.steps, temp_dir).and_then(|lf| {
+            let summary = summary_of_lazy(lf.clone(), &tab.summary)?;
+            let df = lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?;
+            Ok((df, summary))
+        }) {
+            Ok((df, summary)) => collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary }),
             Err(e) => failed.push(format!("'{}' ({:#})", tab.title, e)),
         }
     }
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
     let rep = write_atomic(out_path, ctx, |tmp| {
-        export_tabs_to_pdf(collected, tmp, num_format, global_decimals)
+        export_pdf_tabs(collected, tmp, num_format, global_decimals)
     })?;
     let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
     let s = rep.summary();
@@ -477,6 +486,19 @@ pub fn export_split(
     );
     message.push_str(&sidecar_note(&base, sidecar));
     Ok(ExportOutcome { message, path_used: None, written: Some(base) })
+}
+
+/// The summary cells of a lazy result: the user's choices where there are some, else defaults.
+pub fn summary_of_lazy(
+    lf: polars::prelude::LazyFrame,
+    overrides: &HashMap<String, SummarySpec>,
+) -> Result<Vec<crate::summary::SummaryCell>> {
+    use polars::prelude::*;
+    let mut lf = lf;
+    let schema = lf.collect_schema()?;
+    let cols: Vec<(String, DataType)> = schema.iter().map(|(n, d)| (n.to_string(), d.clone())).collect();
+    let specs = crate::summary::effective_specs(&cols, overrides);
+    crate::summary::compute_summary(lf, &specs)
 }
 
 fn display_name(p: &Path) -> String {
@@ -545,4 +567,30 @@ pub fn check_text_columns(req: TextCheckRequest, ctx: &JobCtx) -> Result<TextChe
         }
     }
     Ok(TextCheckResult { token: req.token, findings })
+}
+
+// ------------------------------------------------------------------------------ summary row
+
+pub struct SummaryRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub overrides: HashMap<String, SummarySpec>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct SummaryResult {
+    pub tab_id: u64,
+    /// The pipeline's steps when the job started (a result for older steps is ignored).
+    pub steps_len: usize,
+    pub cells: Vec<crate::summary::SummaryCell>,
+}
+
+/// The summary row of the whole result after all steps, in one aggregation pass.
+pub fn compute_tab_summary(req: SummaryRequest, ctx: &JobCtx) -> Result<SummaryResult> {
+    ctx.check()?;
+    let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
+    let cells = summary_of_lazy(lf, &req.overrides)?;
+    ctx.check()?;
+    Ok(SummaryResult { tab_id: req.tab_id, steps_len: req.steps.len(), cells })
 }

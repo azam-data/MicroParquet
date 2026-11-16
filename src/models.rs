@@ -747,6 +747,58 @@ pub fn sort_mark_label(level: usize, descending: bool) -> String {
     format!("{} {}", level, if descending { "\u{2193}" } else { "\u{2191}" })
 }
 
+/// What a column's summary cell computes (T3).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SummaryAgg {
+    #[default]
+    None,
+    Count,
+    CountDistinct,
+    Sum,
+    Average,
+    Min,
+    Max,
+    WeightedAvg,
+}
+
+impl SummaryAgg {
+    pub fn all() -> &'static [SummaryAgg] {
+        &[
+            SummaryAgg::None,
+            SummaryAgg::Count,
+            SummaryAgg::CountDistinct,
+            SummaryAgg::Sum,
+            SummaryAgg::Average,
+            SummaryAgg::Min,
+            SummaryAgg::Max,
+            SummaryAgg::WeightedAvg,
+        ]
+    }
+
+    /// The label in the selector row and on exported totals rows.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SummaryAgg::None => "None",
+            SummaryAgg::Count => "Count",
+            SummaryAgg::CountDistinct => "Count distinct",
+            SummaryAgg::Sum => "Sum",
+            SummaryAgg::Average => "Average",
+            SummaryAgg::Min => "Min",
+            SummaryAgg::Max => "Max",
+            SummaryAgg::WeightedAvg => "W.Avg",
+        }
+    }
+}
+
+/// A column's summary choice. `weight_col` is the weight of a weighted average.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct SummarySpec {
+    #[serde(default)]
+    pub agg: SummaryAgg,
+    #[serde(default)]
+    pub weight_col: Option<String>,
+}
+
 /// One level of a multi-level sort.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SortLevel {
@@ -1313,6 +1365,10 @@ pub struct TabState {
     pub totals: ControlTotals,
     /// CSV sources: rows read against the file's data lines (status-bar warning when short).
     pub row_check: Option<RowCountCheck>,
+    /// The summary choices the user made per column (saved with the tab and in macros).
+    pub summary: HashMap<String, SummarySpec>,
+    /// The computed summary of the whole result (empty until the background job finishes).
+    pub summary_cells: Vec<crate::summary::SummaryCell>,
 }
 
 /// Rows read from a CSV against its non-empty lines (minus the header and title lines).
@@ -1433,6 +1489,9 @@ pub struct MacroRecipe {
     pub control_column: Option<String>,
     pub optional_ingestion_schema: Option<IngestionConfig>,
     pub steps: Vec<TransformStep>,
+    /// The tab's summary choices per column (columns left out use their default).
+    #[serde(default)]
+    pub summary: HashMap<String, SummarySpec>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

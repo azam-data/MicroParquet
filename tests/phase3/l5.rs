@@ -114,6 +114,7 @@ fn l5_one_version_number_everywhere() {
         control_column: None,
         optional_ingestion_schema: None,
         steps: vec![],
+        summary: Default::default(),
     };
     save_macro_to_file(&recipe, &p).unwrap();
     assert_eq!(macro_file_version(&p).as_deref(), Some(env!("CARGO_PKG_VERSION")));
@@ -184,6 +185,7 @@ fn rich_recipe() -> MacroRecipe {
                 interpolation: FtpInterpolation::Linear,
             },
         ],
+        summary: Default::default(),
     }
 }
 

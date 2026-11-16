@@ -62,11 +62,16 @@ impl MicroParquetApp {
     fn apply_job_output(&mut self, out: JobOutput) {
         match out {
             JobOutput::Loaded(l) => {
-                let LoadedTab { tab, status } = *l;
+                let LoadedTab { mut tab, status } = *l;
+                // A macro replayed into a new tab brings its summary choices.
+                if let Some(sum) = self.pending_summary.remove(&tab.id) {
+                    tab.summary = sum;
+                }
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
                 self.status_message = status;
+                self.submit_summary(self.active_tab);
             }
             JobOutput::Refreshed(r) => {
                 let Some(idx) = self.tab_position(r.tab_id) else {
@@ -95,6 +100,16 @@ impl MicroParquetApp {
                 }
                 if idx == self.active_tab {
                     self.init_tool_defaults_from_active_tab();
+                }
+                // The summary row is of the whole result, so it follows every refresh.
+                self.submit_summary(idx);
+            }
+            JobOutput::Summary(r) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
+                    // A result for an older pipeline is dropped; the newer job follows.
+                    if tab.steps.len() == r.steps_len {
+                        tab.summary_cells = r.cells;
+                    }
                 }
             }
             JobOutput::Schema(s) => {
