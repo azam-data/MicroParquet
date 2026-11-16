@@ -586,7 +586,11 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             value,
             keep_matching,
         } => {
-            let cond = build_filter_expr(column, *operator, value);
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this filter")?;
+            let cond = build_filter_expr(column, *operator, value, &schema)?;
             let final_cond = if *keep_matching { cond } else { cond.not() };
             Ok(lf.filter(final_cond))
         }
@@ -599,9 +603,13 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             if rules.is_empty() {
                 return Ok(lf);
             }
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this conditional column")?;
             let mut expr: Expr = parse_val_expr(fallback, *output_as_float);
             for r in rules.iter().rev() {
-                let c = build_filter_expr(&r.col_name, r.op, &r.compare_val);
+                let c = build_filter_expr(&r.col_name, r.op, &r.compare_val, &schema)?;
                 let o = parse_val_expr(&r.output_val, *output_as_float);
                 expr = when(c).then(o).otherwise(expr);
             }
@@ -739,11 +747,14 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
     }
 }
 
-fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str) -> Expr {
+/// Builds a filter condition that compares by the column's real type: text columns compare
+/// as text (so 17-digit account numbers stay exact), numeric columns as numbers and date
+/// columns as dates. A value that doesn't fit the column type is an error, not a silent miss.
+fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schema) -> Result<Expr> {
     let c = col(col_name);
     let trimmed = raw_val.trim();
 
-    match op {
+    Ok(match op {
         FilterOp::IsNull => c.is_null(),
         FilterOp::IsNotNull => c.is_not_null(),
         FilterOp::Contains => c
@@ -763,32 +774,53 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str) -> Expr {
             }
             expr
         }
-        _ => {
-            if let Ok(num) = trimmed.parse::<f64>() {
-                let cf = c.cast(DataType::Float64);
-                match op {
-                    FilterOp::Eq => cf.eq(lit(num)),
-                    FilterOp::NotEq => cf.neq(lit(num)),
-                    FilterOp::Gt => cf.gt(lit(num)),
-                    FilterOp::Gte => cf.gt_eq(lit(num)),
-                    FilterOp::Lt => cf.lt(lit(num)),
-                    FilterOp::Lte => cf.lt_eq(lit(num)),
-                    _ => unreachable!(),
-                }
+        FilterOp::Eq | FilterOp::NotEq | FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
+            let dtype = schema.get(col_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Column '{}' was not found. Check the column chosen in this filter.",
+                    col_name
+                )
+            })?;
+            let (lhs, rhs) = if dtype.is_string() || dtype.is_categorical() {
+                (c.cast(DataType::String), lit(trimmed.to_string()))
+            } else if dtype.is_numeric() {
+                let num = trimmed.parse::<f64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "'{}' is not a number for numeric column '{}'",
+                        trimmed,
+                        col_name
+                    )
+                })?;
+                (c.cast(DataType::Float64), lit(num))
+            } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
+                let d = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
+                    anyhow::anyhow!(
+                        "'{}' is not a date for date column '{}'. Enter it as YYYY-MM-DD (e.g. 2026-10-31).",
+                        trimmed,
+                        col_name
+                    )
+                })?;
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .context("Internal date error (epoch)")?;
+                let days = (d - epoch).num_days() as i32;
+                (c.cast(DataType::Date), lit(days).cast(DataType::Date))
             } else {
-                let cs = c.cast(DataType::String);
-                match op {
-                    FilterOp::Eq => cs.eq(lit(trimmed)),
-                    FilterOp::NotEq => cs.neq(lit(trimmed)),
-                    FilterOp::Gt => cs.gt(lit(trimmed)),
-                    FilterOp::Gte => cs.gt_eq(lit(trimmed)),
-                    FilterOp::Lt => cs.lt(lit(trimmed)),
-                    FilterOp::Lte => cs.lt_eq(lit(trimmed)),
-                    _ => unreachable!(),
-                }
+                anyhow::bail!(
+                    "Column '{}' is {}; comparison filters work on text, number and date columns only",
+                    col_name,
+                    dtype
+                );
+            };
+            match op {
+                FilterOp::Eq => lhs.eq(rhs),
+                FilterOp::NotEq => lhs.neq(rhs),
+                FilterOp::Gt => lhs.gt(rhs),
+                FilterOp::Gte => lhs.gt_eq(rhs),
+                FilterOp::Lt => lhs.lt(rhs),
+                _ => lhs.lt_eq(rhs),
             }
         }
-    }
+    })
 }
 
 fn parse_val_expr(val: &str, as_float: bool) -> Expr {

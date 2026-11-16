@@ -466,7 +466,6 @@ fn t13_pii_hash_collisions() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T6"]
 fn t14_filter_big_account_numbers() {
     // 17-digit IDs lose precision when the filter compares as f64
     let df = df!("Actnum" => ["12345678901234567", "12345678901234568"]).unwrap();
