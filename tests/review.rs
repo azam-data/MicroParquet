@@ -1279,7 +1279,6 @@ fn t15_python_codegen_drops_banking_steps() {
 }
 
 #[test]
-#[ignore = "Phase 2: stacking files whose columns differ"]
 fn t16_stack_schema_drift() {
     // Target: October's extra Branch column does not break the stack; September rows get null.
     let a = write_csv("sep.csv", "Actnum,Balance\n001,100\n");
@@ -1295,6 +1294,58 @@ fn t16_stack_schema_drift() {
     assert_eq!(df.height(), 2);
     assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), Some(200.0)]);
     assert_eq!(str_col(&df, "Branch"), vec![None, Some("DHK".to_string())]);
+    assert_eq!(str_col(&df, "Source_File"), vec![Some("sep.csv".to_string()), Some("oct.csv".to_string())]);
+    let names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+    assert_eq!(names, vec!["Actnum", "Balance", "Branch", "Source_File"]);
+}
+
+#[test]
+fn t16b_stack_type_mismatch_and_shared_schema() {
+    let a = write_csv("sep_t.csv", "Actnum,Balance\n001,100\n");
+    let b = write_csv("oct_t.csv", "Actnum,Balance\n002,abc\n");
+    let files = vec![a.clone(), b.clone()];
+    let (specs, notes) = stack_file_configs(&files, None).unwrap();
+    assert!(notes.is_empty());
+    assert_eq!(dtype_of(&specs[1].2, "Balance"), ColDataType::Utf8);
+    let src = TabSource::VerticalStack { files: specs, include_source_col: true };
+    let err = compile_tab_lazy(&src, &[], &tmpdir()).err().expect("types differ: error");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("Balance") && msg.contains("sep_t.csv") && msg.contains("oct_t.csv"), "{msg}");
+    assert!(msg.contains("Float64") && msg.contains("String"), "{msg}");
+
+    // The first file's schema applied to both: loads, "abc" is a counted parse failure.
+    let shared = detect_file_schema(&a).unwrap();
+    let (specs, _) = stack_file_configs(&files, Some(&shared)).unwrap();
+    let src = TabSource::VerticalStack { files: specs, include_source_col: true };
+    let df = compile_tab_lazy(&src, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 2);
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), None]);
+    let fails = source_parse_failures(&src, &tmpdir()).unwrap();
+    assert!(fails.iter().any(|f| f.column == "Balance" && f.count == 1), "{fails:?}");
+
+    // A saved schema with a column a file lacks: a note, and the column is null there.
+    let mut saved = shared.clone();
+    let mut extra = saved.columns[0].clone();
+    extra.name = "Branch".into();
+    saved.columns.push(extra);
+    let c = write_csv("nov_t.csv", "Actnum,Balance,Branch\n003,300,CTG\n");
+    let (specs, notes) = stack_file_configs(&[a.clone(), c.clone()], Some(&saved)).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("sep_t.csv") && notes[0].contains("Branch"), "{notes:?}");
+    let src = TabSource::VerticalStack { files: specs, include_source_col: false };
+    let df = compile_tab_lazy(&src, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "Branch"), vec![None, Some("CTG".to_string())]);
+
+    // A Parquet file with Float64 Balance stacks with a CSV of the same column.
+    let p = write_parquet("dec_t.parquet", &df!("Actnum" => ["004"], "Balance" => [400.0]).unwrap());
+    let (specs, _) = stack_file_configs(&[a.clone(), p.clone()], None).unwrap();
+    let src = TabSource::VerticalStack { files: specs, include_source_col: false };
+    let df = compile_tab_lazy(&src, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), Some(400.0)]);
+
+    // An unreadable file is an error, not an empty schema.
+    let err = stack_file_configs(&[tmpdir().join("no_such_file.csv")], None).err().expect("missing file");
+    assert!(format!("{err:#}").contains("no_such_file.csv"));
 }
 
 #[test]

@@ -1303,6 +1303,166 @@ fn parquet_conversion_plan<'a>(
     Ok((lf, plan))
 }
 
+/// Stacks files on top of each other. A column missing from a file is null for that file's rows
+/// (diagonal concatenation). A column whose type differs between files is an error.
+fn stack_lazy(
+    files: &[(PathBuf, bool, IngestionConfig)],
+    include_source_col: bool,
+    temp_dir: &Path,
+) -> Result<LazyFrame> {
+    if files.is_empty() {
+        anyhow::bail!("Stack: no files to stack. Add at least one file.");
+    }
+    let mut parts = Vec::with_capacity(files.len());
+    for (path, is_parq, cfg) in files {
+        let fname = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let mut sub_lf = build_lazy_pipeline(path, *is_parq, cfg, temp_dir)
+            .with_context(|| format!("Stack: could not read {}", fname))?;
+        let schema = sub_lf
+            .collect_schema()
+            .with_context(|| format!("Stack: could not read the columns of {}", fname))?;
+        parts.push((fname, sub_lf, schema));
+    }
+
+    // Union of columns in order of first appearance, with the type each column has.
+    let mut order: Vec<(PlSmallStr, DataType, String)> = Vec::new();
+    for (fname, _, schema) in &parts {
+        for (name, dt) in schema.iter() {
+            match order.iter_mut().find(|(n, _, _)| n == name) {
+                None => order.push((name.clone(), dt.clone(), fname.clone())),
+                Some((_, seen, seen_file)) => {
+                    if *seen == DataType::Null {
+                        *seen = dt.clone();
+                        *seen_file = fname.clone();
+                    } else if dt != seen && *dt != DataType::Null {
+                        anyhow::bail!(
+                            "Stack: column '{}' is {:?} in {} but {:?} in {}. Use 'Apply one schema to every file' in the Stack dialog (first file's schema or a saved .schema.json), or fix the files.",
+                            name,
+                            seen,
+                            seen_file,
+                            dt,
+                            fname
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let source_col = PlSmallStr::from("Source_File");
+    let mut lfs = Vec::with_capacity(parts.len());
+    for (fname, sub_lf, schema) in parts {
+        let mut exprs: Vec<Expr> = Vec::with_capacity(order.len() + 1);
+        for (name, dt, _) in &order {
+            if include_source_col && *name == source_col {
+                continue;
+            }
+            match schema.get(name) {
+                Some(own) if own == dt => exprs.push(col(name.clone())),
+                Some(_) => exprs.push(col(name.clone()).cast(dt.clone())),
+                None => exprs.push(lit(NULL).cast(dt.clone()).alias(name.clone())),
+            }
+        }
+        if include_source_col {
+            exprs.push(lit(fname).alias(source_col.clone()));
+        }
+        lfs.push(sub_lf.select(exprs));
+    }
+    concat(&lfs, UnionArgs::default()).context("Failed to stack files vertically")
+}
+
+/// Applies one schema to a file of a stack. CSV: the file's own separator, title lines and
+/// encoding are detected; a column the schema names takes the schema's settings, other columns
+/// keep their detected type. Parquet: as `adapt_schema_to_parquet`.
+/// Returns the file's config and the schema columns the file does not have.
+pub fn apply_shared_schema(
+    path: &Path,
+    is_parquet: bool,
+    shared: &IngestionConfig,
+) -> Result<(IngestionConfig, Vec<String>)> {
+    if is_parquet {
+        return adapt_schema_to_parquet(path, shared);
+    }
+    let own = auto_detect_smart_schema(path)?;
+    let columns: Vec<ColumnSchemaConfig> = own
+        .columns
+        .iter()
+        .map(|c| {
+            shared
+                .columns
+                .iter()
+                .find(|s| s.name == c.name)
+                .cloned()
+                .unwrap_or_else(|| c.clone())
+        })
+        .collect();
+    let missing: Vec<String> = shared
+        .columns
+        .iter()
+        .filter(|s| !own.columns.iter().any(|c| c.name == s.name))
+        .map(|s| s.name.clone())
+        .collect();
+    Ok((
+        IngestionConfig {
+            columns,
+            separator: own.separator,
+            skip_rows: own.skip_rows,
+            encoding: own.encoding,
+            ..shared.clone()
+        },
+        missing,
+    ))
+}
+
+fn path_is_parquet(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .eq_ignore_ascii_case("parquet")
+}
+
+/// The schema a file opens with: detected column types for a CSV, native types for Parquet.
+pub fn detect_file_schema(path: &Path) -> Result<IngestionConfig> {
+    if path_is_parquet(path) {
+        auto_detect_parquet_schema(path)
+    } else {
+        auto_detect_smart_schema(path)
+    }
+}
+
+/// Configs for the files of a stack. Without a shared schema each CSV gets its own detected
+/// schema and each Parquet file its native types; with one, `apply_shared_schema` is used.
+/// Also returns one note per file that lacks columns of the shared schema.
+pub fn stack_file_configs(
+    files: &[PathBuf],
+    shared: Option<&IngestionConfig>,
+) -> Result<(Vec<(PathBuf, bool, IngestionConfig)>, Vec<String>)> {
+    let mut specs = Vec::with_capacity(files.len());
+    let mut notes = Vec::new();
+    for p in files {
+        let is_parq = path_is_parquet(p);
+        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let (cfg, missing) = match shared {
+            Some(s) => apply_shared_schema(p, is_parq, s)
+                .with_context(|| format!("Stack: could not apply the schema to {}", name))?,
+            None if is_parq => (IngestionConfig::default(), Vec::new()),
+            None => (
+                auto_detect_smart_schema(p)
+                    .with_context(|| format!("Stack: could not read {}", name))?,
+                Vec::new(),
+            ),
+        };
+        if !missing.is_empty() {
+            notes.push(format!("{} has no column {} (null for its rows)", name, missing.join(", ")));
+        }
+        specs.push((p.clone(), is_parq, cfg));
+    }
+    Ok((specs, notes))
+}
+
 /// Key combinations (all key columns non-null) that occur more than once in `lf`:
 /// (number of such combinations, extra rows beyond the first per key, up to 10 examples).
 pub fn duplicate_key_report(lf: LazyFrame, keys: &[String]) -> Result<(usize, usize, Vec<String>)> {
@@ -1435,22 +1595,7 @@ pub fn compile_tab_lazy(
         TabSource::VerticalStack {
             files,
             include_source_col,
-        } => {
-            let mut lfs = Vec::with_capacity(files.len());
-            for (path, is_parq, cfg) in files {
-                let mut sub_lf = build_lazy_pipeline(path, *is_parq, cfg, temp_dir)?;
-                if *include_source_col {
-                    let fname = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    sub_lf = sub_lf.with_column(lit(fname).alias("Source_File"));
-                }
-                lfs.push(sub_lf);
-            }
-            concat(&lfs, UnionArgs::default()).context("Failed to stack files vertically")?
-        }
+        } => stack_lazy(files, *include_source_col, temp_dir)?,
 
         TabSource::JoinedTabs {
             left_source,

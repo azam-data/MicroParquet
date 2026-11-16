@@ -6,8 +6,8 @@ contain its own hash).
 
 | Task | Status | Commit | Tests added | Deviations | Open questions |
 |---|---|---|---|---|---|
-| P6 | DONE | (this commit) | t17 un-ignored and extended (error names Actnum/A1; semi join; keep-first → 1 row, sum 1,000,000, warning count 1; null keys) | TabSource not serialised, so no serde attribute; null keys and semi/anti joins exempt | Q1 |
-| P7 | todo | | | | |
+| P6 | DONE | 8a87d0c | t17 un-ignored and extended (error names Actnum/A1; semi join; keep-first → 1 row, sum 1,000,000, warning count 1; null keys) | TabSource not serialised, so no serde attribute; null keys and semi/anti joins exempt | Q1 |
+| P7 | DONE | (this commit) | t16 un-ignored (+Source_File, column order); t16b (type mismatch error names Balance/files/types; first-file schema loads both with 1 parse failure; saved schema with missing column; CSV+Parquet; unreadable file) | manual diagonal concat (feature not enabled); per-file read settings kept |  |
 | P8 | todo | | | | |
 | P9 | todo | | | | |
 | P10 | todo | | | | |

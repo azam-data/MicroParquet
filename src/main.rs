@@ -8,7 +8,7 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    fetch_viewport_slice, join_status, preview_parquet_raw,
+    detect_file_schema, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
 };
@@ -354,6 +354,9 @@ pub struct MicroParquetApp {
 
     stack_files_list: Vec<PathBuf>,
     stack_include_source: bool,
+    /// 0 = each file's own schema, 1 = first file's schema for all, 2 = a saved .schema.json for all.
+    stack_schema_mode: u8,
+    stack_schema_path: Option<PathBuf>,
 
     join_left_tab: usize,
     join_right_tab: usize,
@@ -552,6 +555,8 @@ impl MicroParquetApp {
 
             stack_files_list: Vec::new(),
             stack_include_source: true,
+            stack_schema_mode: 0,
+            stack_schema_path: None,
 
             join_left_tab: 0,
             join_right_tab: 0,
@@ -2883,35 +2888,78 @@ impl MicroParquetApp {
                             &mut self.stack_include_source,
                             "Append 'Source_File' Column to identify origin month/file",
                         );
+                        ui.label("Column types (a column missing from a file is null for its rows):");
+                        ui.radio_value(&mut self.stack_schema_mode, 0, "Each file's own detected types (types must agree)");
+                        ui.radio_value(&mut self.stack_schema_mode, 1, "Apply one schema to every file: the first file's");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.stack_schema_mode, 2, "Apply one schema to every file: saved .schema.json");
+                            if ui.button("📂 Pick...").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_directory(&self.paths.schemas_dir)
+                                    .add_filter("Schema JSON", &["json"])
+                                    .pick_file()
+                                {
+                                    self.stack_schema_path = Some(p);
+                                    self.stack_schema_mode = 2;
+                                }
+                            }
+                            if let Some(p) = &self.stack_schema_path {
+                                ui.label(p.file_name().unwrap_or_default().to_string_lossy().to_string());
+                            }
+                        });
                         ui.separator();
                         ui.horizontal(|ui| {
-                            if ui.button("🚀 Stack & Open as Unified Tab").clicked()
-                                && !self.stack_files_list.is_empty()
-                            {
-                                let mut specs = Vec::new();
-                                for p in &self.stack_files_list {
-                                    let is_parq = p
-                                        .extension()
-                                        .and_then(|e| e.to_str())
-                                        .unwrap_or("")
-                                        .eq_ignore_ascii_case("parquet");
-                                    let cfg = if is_parq {
-                                        IngestionConfig::default()
-                                    } else {
-                                        auto_detect_smart_schema(p).unwrap_or_default()
+                            let needs_template =
+                                self.stack_schema_mode == 2 && self.stack_schema_path.is_none();
+                            let run = ui
+                                .add_enabled(
+                                    !needs_template,
+                                    egui::Button::new("🚀 Stack & Open as Unified Tab"),
+                                )
+                                .on_disabled_hover_text("Pick the .schema.json to apply first");
+                            if run.clicked() && !self.stack_files_list.is_empty() {
+                                let shared: anyhow::Result<Option<IngestionConfig>> =
+                                    match (self.stack_schema_mode, &self.stack_schema_path) {
+                                        (1, _) => self
+                                            .stack_files_list
+                                            .first()
+                                            .map(|p| detect_file_schema(p))
+                                            .transpose(),
+                                        (2, Some(p)) => std::fs::read_to_string(p)
+                                            .map_err(anyhow::Error::from)
+                                            .and_then(|t| {
+                                                serde_json::from_str::<IngestionConfig>(&t)
+                                                    .map_err(anyhow::Error::from)
+                                            })
+                                            .map(Some)
+                                            .map_err(|e| {
+                                                anyhow::anyhow!("Could not load the schema file {:?}: {}", p, e)
+                                            }),
+                                        _ => Ok(None),
                                     };
-                                    specs.push((p.clone(), is_parq, cfg));
+                                match shared.and_then(|s| {
+                                    stack_file_configs(&self.stack_files_list, s.as_ref())
+                                }) {
+                                    Err(e) => {
+                                        self.status_message = format!("Stack failed: {:#}", e);
+                                    }
+                                    Ok((specs, notes)) => {
+                                        self.create_tab_from_source(
+                                            format!("Stacked ({} files)", specs.len()),
+                                            TabSource::VerticalStack {
+                                                files: specs,
+                                                include_source_col: self.stack_include_source,
+                                            },
+                                            Vec::new(),
+                                            HashMap::new(),
+                                        );
+                                        if !notes.is_empty() {
+                                            self.status_message
+                                                .push_str(&format!(" ⚠ {}", notes.join("; ")));
+                                        }
+                                        close_modal = true;
+                                    }
                                 }
-                                self.create_tab_from_source(
-                                    format!("Stacked ({} files)", specs.len()),
-                                    TabSource::VerticalStack {
-                                        files: specs,
-                                        include_source_col: self.stack_include_source,
-                                    },
-                                    Vec::new(),
-                                    HashMap::new(),
-                                );
-                                close_modal = true;
                             }
                             if ui.button("Clear List").clicked() {
                                 self.stack_files_list.clear();

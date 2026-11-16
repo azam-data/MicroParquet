@@ -155,6 +155,9 @@ Recorded during P6–P15 (sessions 2–3, unattended run; not yet confirmed by t
 - P6: `TabSource` is not serialised (joins are not saved in macros), so `keep_first_duplicate_right` is a plain field without `#[serde(default)]`. The toggle is the "Keep first row per key" checkbox in the Join dialog.
 - P6: rows whose key has a null in any key column are not counted as duplicates (they never match) and are kept as they are by "Keep first row per key". Semi and anti joins skip the check (they never repeat a left row).
 - P6: <n> in the error is the number of distinct key combinations that repeat; the status bar shows that number and the number of right rows dropped. The left-side control sum uses the joined tab's control column when the left table has it, otherwise "—".
+- P7: the `diagonal_concat` Polars feature is not enabled and enabling it would change Cargo.toml, so the diagonal stack is built by hand: each file is selected onto the union of columns (first-appearance order, `Source_File` last) with missing columns as typed nulls, then concatenated. Same result as `concat_lf_diagonal`.
+- P7: "Apply one schema to every file" keeps each CSV's own detected separator, title-line count and encoding (only column settings and the other flags come from the shared schema); a file's columns that the schema does not name keep their detected type. Files lacking a schema column get a status-bar note. Type check: any dtype difference is an error except a column that is all-null (Null type) in one file.
+- P7: a CSV whose schema detection fails is now an error naming the file (it used to stack with an empty schema).
 </accepted_deviations>
 
 <constraints>
