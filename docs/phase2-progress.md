@@ -57,9 +57,10 @@ contain its own hash).
 - Q3 (P10): Polars reads some broken CSVs without an error (an unclosed quote swallows later lines into one field; binary junk becomes a header with 0 rows). Should the batch run flag files whose row count looks wrong (e.g. 0 rows, or far fewer rows than lines)? **Answered:** warn (not error) on single and batch loads, both counts shown (done).
 - Q4 (P12): the Python export still keeps the original values in masked columns (blake3 is not in the Python standard library). Generate code that needs `pip install blake3` and reads the key file, or make masked columns stop the Python export? **Answered:** refuse the export with a plain message (done).
 - Q5 (P13): old macros' FTP steps load as Linear (the spec's default), so their FTP rates change on re-run. Keep that, or load old steps as NextPointUp to reproduce earlier ALCO numbers? **Answered:** old steps load as NextPointUp; new UI steps default to Linear (done).
-- Q6 (P15): old macros' hygiene audits now treat ACTIVE, A and OPEN as active (the spec's default), so they can flag more rows on re-run. Keep?
+- Q6 (P15): old macros' hygiene audits now treat ACTIVE, A and OPEN as active (the spec's default), so they can flag more rows on re-run. Keep? **Answered:** keep the new defaults (recorded).
 
 ## Notes
 - All ten tasks DONE; none BLOCKED. `tests/review.rs` has no `#[ignore]` left (t04, t11, t12, t13, t16, t17 run).
-- Final `cargo test` (review): 47 passed; 0 failed; 0 ignored. Bin tests: 2 passed.
+- Final `cargo test` (review): 51 passed; 0 failed; 0 ignored. Bin tests: 2 passed.
+- Owner answers Q1–Q6 applied (one commit each); see `<accepted_deviations>`.
 - Next step: PR `phase2-rest` → `main`; the owner merges.
