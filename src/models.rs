@@ -50,8 +50,9 @@ impl PortablePaths {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ColDataType {
+    #[default]
     Utf8,
     Float64,
     Int64,
@@ -84,8 +85,9 @@ impl ColDataType {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PiiMaskMode {
+    #[default]
     None,
     ClientNameHash,
     AccountNumber,
@@ -101,12 +103,107 @@ impl PiiMaskMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Which side of a Dr/Cr marked amount is positive. `Unset` refuses to load a column whose
+/// values carry Dr/Cr, so the sign is never guessed.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SignConvention {
+    #[default]
+    Unset,
+    DrPositive,
+    CrPositive,
+}
+
+impl SignConvention {
+    pub fn all() -> &'static [SignConvention] {
+        &[
+            SignConvention::Unset,
+            SignConvention::DrPositive,
+            SignConvention::CrPositive,
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SignConvention::Unset => "Dr/Cr: not set",
+            SignConvention::DrPositive => "Dr is +",
+            SignConvention::CrPositive => "Cr is +",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ColumnSchemaConfig {
     pub name: String,
     pub dtype: ColDataType,
     pub pii_mask: PiiMaskMode,
     pub sample_values: Vec<String>,
+    /// Sign of Dr/Cr marked amounts in a Float64 column.
+    #[serde(default)]
+    pub sign_convention: SignConvention,
+    /// Auto-detect saw Dr/Cr markers in this column's sample (the schema modal highlights it).
+    #[serde(default)]
+    pub has_dr_cr: bool,
+    /// Parquet sources: the column's type in the file ("String", "Float64", "Date", ...).
+    /// Empty for CSV.
+    #[serde(default)]
+    pub source_dtype: String,
+}
+
+/// The column type a Parquet column already has, from its `source_dtype` label; `None` for
+/// types that cannot be converted here (Boolean, List, ...).
+pub fn parquet_native_type(source_dtype: &str) -> Option<ColDataType> {
+    match source_dtype {
+        "String" => Some(ColDataType::Utf8),
+        "Float32" | "Float64" | "Decimal" => Some(ColDataType::Float64),
+        "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32" | "UInt64" => {
+            Some(ColDataType::Int64)
+        }
+        "Date" | "Datetime" => Some(ColDataType::DateISO),
+        _ => None,
+    }
+}
+
+/// True when a Parquet column must be read as text and converted: its type was changed from
+/// the file's own, or it has a PII mask. A type with no counterpart here (Boolean, List...)
+/// shown as Text counts as unchanged.
+pub fn parquet_needs_conversion(c: &ColumnSchemaConfig) -> bool {
+    if c.pii_mask != PiiMaskMode::None {
+        return true;
+    }
+    match parquet_native_type(&c.source_dtype) {
+        Some(native) => native != c.dtype,
+        None => c.dtype != ColDataType::Utf8,
+    }
+}
+
+/// Non-blank values of one typed column that could not be converted and became null.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParseFailure {
+    pub column: String,
+    pub count: usize,
+    /// Up to 5 raw values, as read.
+    pub examples: Vec<String>,
+}
+
+/// Text encoding of a CSV file.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CsvTextEncoding {
+    #[default]
+    Utf8,
+    Windows1252,
+}
+
+impl CsvTextEncoding {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CsvTextEncoding::Utf8 => "UTF-8",
+            CsvTextEncoding::Windows1252 => "Windows-1252 (ANSI)",
+        }
+    }
+}
+
+pub fn default_csv_separator() -> char {
+    ','
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -116,6 +213,14 @@ pub struct IngestionConfig {
     pub parse_accounting_negatives: bool,
     pub heal_broken_csv_lines: bool,
     pub pii_salt: String,
+    /// Column separator: ',', '|', ';' or tab.
+    #[serde(default = "default_csv_separator")]
+    pub separator: char,
+    /// Title lines above the header row.
+    #[serde(default)]
+    pub skip_rows: usize,
+    #[serde(default)]
+    pub encoding: CsvTextEncoding,
 }
 
 impl Default for IngestionConfig {
@@ -126,6 +231,9 @@ impl Default for IngestionConfig {
             parse_accounting_negatives: true,
             heal_broken_csv_lines: false,
             pii_salt: "BANK_ASIA_ALM_2026".to_string(),
+            separator: default_csv_separator(),
+            skip_rows: 0,
+            encoding: CsvTextEncoding::Utf8,
         }
     }
 }
@@ -840,6 +948,8 @@ pub struct TabState {
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
+    /// Values of the tab's source that could not be converted to their column type.
+    pub parse_failures: Vec<ParseFailure>,
 }
 
 impl TabState {

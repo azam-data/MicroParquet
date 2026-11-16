@@ -4,36 +4,110 @@ use crate::banking::{
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
 };
 use crate::models::{
-    AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, FilterOp, IngestionConfig, MathOp,
-    ParquetDialect, PiiMaskMode, SqlJoinKind, TabSource, TabState, TransformStep,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, AggFunc, AggSpec,
+    ColDataType, ColumnSchemaConfig, CsvTextEncoding, FilterOp, IngestionConfig, MathOp,
+    ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
+    TransformStep,
 };
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
 use polars::sql::SQLContext;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+/// First rows of a CSV as text, read with the separator, title-line skip and encoding that
+/// auto-detection picks for the file.
 pub fn preview_csv_raw(path: &Path, n_rows: usize) -> Result<DataFrame> {
+    let settings = detect_csv_read_settings(path)?;
+    preview_csv_with(path, n_rows, &settings)
+}
+
+/// First `n_rows` data rows as text, read with `config`'s separator, skip_rows and encoding.
+pub fn preview_csv_with(path: &Path, n_rows: usize, config: &IngestionConfig) -> Result<DataFrame> {
+    let sep = separator_byte(config.separator)?;
+    // Only the head of the file is read: title lines, header and n_rows lines (a quoted field
+    // spanning lines can make the preview a little shorter).
+    let lines = read_head_lines(path, config.skip_rows + 1 + n_rows)?;
+    let mut text = String::new();
+    for raw in lines.iter().skip(config.skip_rows) {
+        text.push_str(&decode_line(raw, config.encoding));
+        text.push('\n');
+    }
+    if text.is_empty() {
+        anyhow::bail!(
+            "The file has no header row after skipping {} title line(s).",
+            config.skip_rows
+        );
+    }
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+
     let parse_opts = CsvParseOptions::default()
+        .with_separator(sep)
         .with_encoding(CsvEncoding::LossyUtf8)
         .with_truncate_ragged_lines(true);
 
-    let df = CsvReadOptions::default()
+    let mut df = CsvReadOptions::default()
         .with_parse_options(parse_opts)
         .with_infer_schema_length(Some(0))
         .with_ignore_errors(true)
         .with_n_rows(Some(n_rows))
-        .try_into_reader_with_file_path(Some(path.to_path_buf()))
-        .context("Failed to initialize CSV preview reader")?
+        .into_reader_with_file_handle(std::io::Cursor::new(text.into_bytes()))
         .finish()
         .context("Failed to read CSV preview rows")?;
+    strip_bom_from_first_name(&mut df);
     Ok(df)
 }
 
+/// Separator, title lines (0) and encoding for a file: Windows-1252 when the head of the file
+/// is not valid UTF-8, and the most frequent of , | ; tab outside quotes in the header line.
+pub fn detect_csv_read_settings(path: &Path) -> Result<IngestionConfig> {
+    let mut head = Vec::new();
+    File::open(path)
+        .with_context(|| format!("Failed to open {:?}", path))?
+        .take(64 * 1024)
+        .read_to_end(&mut head)
+        .with_context(|| format!("Failed to read {:?}", path))?;
+    let encoding = match std::str::from_utf8(&head) {
+        Ok(_) => CsvTextEncoding::Utf8,
+        // Cut off in the middle of a character at the 64 KB mark: still UTF-8.
+        Err(e) if e.error_len().is_none() => CsvTextEncoding::Utf8,
+        Err(_) => CsvTextEncoding::Windows1252,
+    };
+    let header = read_head_lines(path, 1)?
+        .first()
+        .map(|l| decode_line(l, encoding))
+        .unwrap_or_default();
+    Ok(IngestionConfig {
+        separator: detect_separator(&header),
+        encoding,
+        ..Default::default()
+    })
+}
+
+/// The candidate (, | ; tab) that occurs most often outside quotes; ',' when none does.
+pub fn detect_separator(header_line: &str) -> char {
+    let mut best = (',', 0usize);
+    for cand in [',', '|', ';', '\t'] {
+        let n = count_unquoted(header_line, cand);
+        if n > best.1 {
+            best = (cand, n);
+        }
+    }
+    best.0
+}
+
+/// `auto_detect_smart_schema` with the separator, skip_rows and encoding detected for the file.
 pub fn auto_detect_smart_schema(path: &Path) -> Result<IngestionConfig> {
-    let sample_df = preview_csv_raw(path, 200)?;
+    let settings = detect_csv_read_settings(path)?;
+    auto_detect_smart_schema_with(path, &settings)
+}
+
+/// Infers column types from the first 200 rows, read with `base`'s separator, skip_rows and
+/// encoding. The other settings of `base` are kept; its columns are replaced.
+pub fn auto_detect_smart_schema_with(path: &Path, base: &IngestionConfig) -> Result<IngestionConfig> {
+    let sample_df = preview_csv_with(path, 200, base)?;
     let preview_5 = sample_df.head(Some(5));
     let mut columns = Vec::with_capacity(sample_df.width());
 
@@ -47,17 +121,25 @@ pub fn auto_detect_smart_schema(path: &Path) -> Result<IngestionConfig> {
         }
 
         let dtype = infer_safe_column_type(&col_name, series);
+        let has_dr_cr = dtype == ColDataType::Float64
+            && series
+                .str()
+                .map(|ca| ca.into_iter().flatten().any(amount_has_dr_cr))
+                .unwrap_or(false);
         columns.push(ColumnSchemaConfig {
             name: col_name,
             dtype,
             pii_mask: PiiMaskMode::None,
             sample_values: samples,
+            sign_convention: SignConvention::Unset,
+            has_dr_cr,
+            source_dtype: String::new(),
         });
     }
 
     Ok(IngestionConfig {
         columns,
-        ..Default::default()
+        ..base.clone()
     })
 }
 
@@ -97,11 +179,11 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
             has_leading_zero = true;
         }
 
-        let cleaned_num = trimmed
-            .trim_start_matches('(')
-            .trim_end_matches(')')
-            .replace(',', "");
-        if cleaned_num.parse::<f64>().is_err() {
+        // Any sign convention will do here: only "is this a number" matters.
+        if !matches!(
+            parse_banking_amount(trimmed, SignConvention::CrPositive, true),
+            AmountCell::Value(_)
+        ) {
             all_float = false;
         }
 
@@ -113,6 +195,15 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
 
     // Order: empty -> ISO date -> D/M/Y vs M/D/Y -> float -> text
     if non_empty == 0 {
+        // Blank in every sampled row: a date by name (Closure_Date, Expiry_Dt, Open...),
+        // otherwise text.
+        const DATE_TOKENS: &[&str] = &[
+            "date", "dt", "dat", "maturity", "expiry", "closure", "close", "open",
+        ];
+        let tokens = column_name_tokens(col_name);
+        if tokens.iter().any(|t| DATE_TOKENS.contains(&t.as_str())) {
+            return ColDataType::DateDMY;
+        }
         return ColDataType::Utf8;
     }
     if all_iso_date {
@@ -136,21 +227,242 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
     ColDataType::Utf8
 }
 
+/// One amount cell after parsing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AmountCell {
+    Value(f64),
+    /// Blank, NA, N/A or NULL: a genuine null, not a parse failure.
+    Blank,
+    /// Not a number under the parsing rules; it becomes null and counts as a parse failure.
+    Invalid,
+    /// Carries Dr/Cr but the column's sign convention is not set.
+    NeedsSignConvention,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DrCr {
+    Dr,
+    Cr,
+}
+
+/// Blank, NA, N/A or NULL (any case) after trimming.
+pub fn is_blank_amount_token(s: &str) -> bool {
+    let s = s.trim();
+    s.is_empty()
+        || s.eq_ignore_ascii_case("na")
+        || s.eq_ignore_ascii_case("n/a")
+        || s.eq_ignore_ascii_case("null")
+}
+
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        s.get(prefix.len()..)
+    } else {
+        None
+    }
+}
+
+fn strip_suffix_ci<'a>(s: &'a str, suffix: &str) -> Option<&'a str> {
+    let cut = s.len().checked_sub(suffix.len())?;
+    let tail = s.get(cut..)?;
+    if tail.eq_ignore_ascii_case(suffix) {
+        s.get(..cut)
+    } else {
+        None
+    }
+}
+
+/// Removes one currency prefix: BDT, TK, Tk. or ৳ (any case, optional space after it).
+fn strip_currency_prefix(s: &str) -> &str {
+    for p in ["৳", "bdt", "tk.", "tk"] {
+        if let Some(rest) = strip_prefix_ci(s, p) {
+            return rest.trim_start();
+        }
+    }
+    s
+}
+
+/// Splits off a Dr/Cr marker (Dr, Dr., CR, any case, optional space) at either end.
+fn split_dr_cr(s: &str) -> (Option<DrCr>, &str) {
+    const MARKERS: [(&str, DrCr); 4] = [
+        ("dr.", DrCr::Dr),
+        ("cr.", DrCr::Cr),
+        ("dr", DrCr::Dr),
+        ("cr", DrCr::Cr),
+    ];
+    for (m, kind) in MARKERS {
+        if let Some(rest) = strip_suffix_ci(s, m) {
+            return (Some(kind), rest.trim());
+        }
+    }
+    for (m, kind) in MARKERS {
+        if let Some(rest) = strip_prefix_ci(s, m) {
+            return (Some(kind), rest.trim());
+        }
+    }
+    (None, s)
+}
+
+/// True when the value carries a Dr/Cr marker (after any currency prefix).
+pub fn amount_has_dr_cr(raw: &str) -> bool {
+    split_dr_cr(strip_currency_prefix(raw.trim())).0.is_some()
+}
+
+/// Cleans an amount down to an unsigned digit string and its sign.
+/// Order: currency prefix, Dr/Cr marker, thousands commas, brackets, trailing minus, lone "-".
+fn clean_amount(
+    raw: &str,
+    sign: SignConvention,
+    accounting_negatives: bool,
+) -> std::result::Result<(String, bool), AmountCell> {
+    let s = raw.trim();
+    if is_blank_amount_token(s) {
+        return Err(AmountCell::Blank);
+    }
+    let s = strip_currency_prefix(s);
+    let (marker, s) = split_dr_cr(s);
+    if marker.is_some() && sign == SignConvention::Unset {
+        return Err(AmountCell::NeedsSignConvention);
+    }
+    let s = strip_currency_prefix(s.trim());
+    if s == "-" {
+        return Ok(("0".to_string(), false));
+    }
+    let s = s.replace(',', "");
+    let mut body = s.trim();
+    let mut negative = false;
+    if accounting_negatives {
+        if let Some(inner) = body.strip_prefix('(').and_then(|b| b.strip_suffix(')')) {
+            body = strip_currency_prefix(inner.trim());
+            negative = true;
+        } else if body.len() > 1 {
+            if let Some(inner) = body.strip_suffix('-') {
+                body = inner.trim();
+                negative = true;
+            }
+        }
+    }
+    if let Some(rest) = body.strip_prefix('-') {
+        if negative {
+            return Err(AmountCell::Invalid);
+        }
+        negative = true;
+        body = rest;
+    } else if let Some(rest) = body.strip_prefix('+') {
+        body = rest;
+    }
+    let digits = body.bytes().filter(|b| b.is_ascii_digit()).count();
+    let dots = body.bytes().filter(|b| *b == b'.').count();
+    if digits == 0 || dots > 1 || digits + dots != body.len() {
+        return Err(AmountCell::Invalid);
+    }
+    match marker {
+        None => Ok((body.to_string(), negative)),
+        // A Dr/Cr marker on a value that already has a minus or brackets is ambiguous.
+        Some(_) if negative => Err(AmountCell::Invalid),
+        Some(m) => {
+            let positive_side = match sign {
+                SignConvention::DrPositive => DrCr::Dr,
+                _ => DrCr::Cr,
+            };
+            Ok((body.to_string(), m != positive_side))
+        }
+    }
+}
+
+/// Parses one amount: currency prefix (BDT, TK, Tk., ৳), thousands commas, brackets and a
+/// trailing minus (when `accounting_negatives`), Dr/Cr per `sign`, "-" = 0, and blank / NA /
+/// N/A / NULL = blank. Anything else is `Invalid`.
+pub fn parse_banking_amount(
+    raw: &str,
+    sign: SignConvention,
+    accounting_negatives: bool,
+) -> AmountCell {
+    match clean_amount(raw, sign, accounting_negatives) {
+        Ok((body, negative)) => match body.parse::<f64>() {
+            Ok(v) if v.is_finite() => AmountCell::Value(if negative { -v } else { v }),
+            _ => AmountCell::Invalid,
+        },
+        Err(cell) => cell,
+    }
+}
+
+/// Whole-number version of `parse_banking_amount` (a decimal point makes it `Invalid`).
+fn parse_banking_int(raw: &str, sign: SignConvention, accounting_negatives: bool) -> Option<i64> {
+    let (body, negative) = clean_amount(raw, sign, accounting_negatives).ok()?;
+    let v: i64 = body.parse().ok()?;
+    Some(if negative { -v } else { v })
+}
+
+fn dr_cr_unset_message(col_name: &str) -> String {
+    format!(
+        "Column '{}' has Dr/Cr amounts. Choose 'Dr is +' or 'Cr is +' for it in Schema & Ingestion.",
+        col_name
+    )
+}
+
+/// Scans every value of each Float64 column whose sign convention is unset and fails when one
+/// carries Dr/Cr. `text_cols` pairs each column with an expression giving its raw text.
+fn check_dr_cr_conventions(
+    raw_lf: &LazyFrame,
+    text_cols: &[(&ColumnSchemaConfig, Expr)],
+) -> Result<()> {
+    let checked: Vec<(&str, Expr)> = text_cols
+        .iter()
+        .filter(|(c, _)| {
+            c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset
+        })
+        .map(|(c, e)| (c.name.as_str(), e.clone()))
+        .collect();
+    if checked.is_empty() {
+        return Ok(());
+    }
+    let cols: Vec<&str> = checked.iter().map(|(n, _)| *n).collect();
+    let exprs: Vec<Expr> = checked
+        .into_iter()
+        .map(|(c, text)| {
+            text.map(
+                    |s: Series| {
+                        let ca = s.str()?;
+                        let flags: BooleanChunked = ca
+                            .into_iter()
+                            .map(|v| Some(v.is_some_and(amount_has_dr_cr)))
+                            .collect();
+                        Ok(Some(flags.into_series()))
+                    },
+                    GetOutput::from_type(DataType::Boolean),
+                )
+                .any(true)
+                .alias(c)
+        })
+        .collect();
+    let flags = raw_lf
+        .clone()
+        .select(exprs)
+        .collect()
+        .context("Failed to scan amount columns for Dr/Cr markers")?;
+    for c in cols {
+        let found = flags
+            .column(c)
+            .ok()
+            .and_then(|s| s.bool().ok().and_then(|b| b.get(0)))
+            .unwrap_or(false);
+        if found {
+            anyhow::bail!(dr_cr_unset_message(c));
+        }
+    }
+    Ok(())
+}
+
 /// Ultra-fast native Rust date parser that handles single-digit or double-digit months/days
 /// (e.g., "2/8/2024", "02/08/2024", "11/8/2026", "11/30/2023", "31-Oct-2026", "2024-02-08",
 /// 2-digit years, and trailing timestamps) and returns days since 1970-01-01.
 pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> {
-    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
-    if s.is_empty()
-        || s == "-"
-        || s == "0"
-        || s.eq_ignore_ascii_case("null")
-        || s.eq_ignore_ascii_case("none")
-        || s.eq_ignore_ascii_case("na")
-        || s.eq_ignore_ascii_case("n/a")
-    {
+    if is_blank_date_token(raw) {
         return None;
     }
+    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
 
     // Strip trailing timestamp if present (e.g. "02/08/2024 00:00:00" or "2024-02-08T12:30:00")
     let date_part = strip_time_part(s);
@@ -159,42 +471,33 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     let p1_str = parts.next()?.trim();
     let p2_str = parts.next()?.trim();
     let p3_str = parts.next()?.trim();
+    if !all_ascii_digits(p1_str) || !all_ascii_digits(p3_str) {
+        return None;
+    }
 
     let p1: i32 = p1_str.parse().ok()?;
     let p2_month_name = parse_month_name(p2_str);
     let p2: u32 = match p2_month_name {
         Some(m) => m,
-        None => p2_str.parse().ok()?,
+        None if all_ascii_digits(p2_str) => p2_str.parse().ok()?,
+        None => return None,
     };
-    let p3: i32 = p3_str.parse().ok()?;
+    let p3: u32 = p3_str.parse().ok()?;
 
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
 
     // Case 1: First token is a 4-digit year (YYYY-MM-DD or YYYY/MM/DD)
-    if p1 >= 1900 && p1 <= 2200 {
-        let year = p1;
-        let (m, d) = if p2 <= 12 {
-            (p2, p3 as u32)
-        } else {
-            (p3 as u32, p2)
-        };
-        let dt = NaiveDate::from_ymd_opt(year, m, d)?;
+    if p1_str.len() == 4 {
+        if !(1900..=2200).contains(&p1) {
+            return None;
+        }
+        let (m, d) = if p2 <= 12 { (p2, p3) } else { (p3, p2) };
+        let dt = NaiveDate::from_ymd_opt(p1, m, d)?;
         return Some((dt - epoch).num_days() as i32);
     }
 
-    // Case 2: Third token is the year (2-digit or 4-digit)
-    let year = if p3 < 100 {
-        if p3 >= 50 {
-            1900 + p3
-        } else {
-            2000 + p3
-        }
-    } else {
-        p3
-    };
-    if year < 1900 || year > 2200 {
-        return None;
-    }
+    // Case 2: Third token is the year: two digits (00-69 -> 20xx, 70-99 -> 19xx) or four.
+    let year = year_from_token(p3_str)?;
 
     // If middle token was a text month (e.g. "08-Feb-2024"), p1 is always day and p2 is month
     if p2_month_name.is_some() {
@@ -221,6 +524,37 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     };
 
     Some((dt - epoch).num_days() as i32)
+}
+
+fn all_ascii_digits(t: &str) -> bool {
+    !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A trailing year token: two digits pivot at 70 (00-69 -> 2000-2069, 70-99 -> 1970-1999);
+/// four digits must be 1900-2200. Any other length is not a year.
+fn year_from_token(t: &str) -> Option<i32> {
+    if !all_ascii_digits(t) {
+        return None;
+    }
+    let y: i32 = t.parse().ok()?;
+    match t.len() {
+        2 if y < 70 => Some(2000 + y),
+        2 => Some(1900 + y),
+        4 if (1900..=2200).contains(&y) => Some(y),
+        _ => None,
+    }
+}
+
+/// A date cell that means "no date": blank, "-", "0", NULL, NONE, NA or N/A (any case).
+pub fn is_blank_date_token(raw: &str) -> bool {
+    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
+    s.is_empty()
+        || s == "-"
+        || s == "0"
+        || s.eq_ignore_ascii_case("null")
+        || s.eq_ignore_ascii_case("none")
+        || s.eq_ignore_ascii_case("na")
+        || s.eq_ignore_ascii_case("n/a")
 }
 
 /// Drops a trailing time: everything after a space, or after a 'T' between two digits
@@ -262,18 +596,10 @@ fn classify_date_value(raw: &str) -> DateFit {
     }
 
     // Year last: two or four digits
-    if !all_digits(c) || !(c.len() == 2 || c.len() == 4) {
-        return fit;
-    }
-    let Ok(y_raw) = c.parse::<i32>() else {
+    let Some(year) = year_from_token(c) else {
         return fit;
     };
-    let year = match c.len() {
-        2 if y_raw >= 50 => 1900 + y_raw,
-        2 => 2000 + y_raw,
-        _ => y_raw,
-    };
-    if !(1900..=2200).contains(&year) || !all_digits(a) {
+    if !all_digits(a) {
         return fit;
     }
     let Ok(p1) = a.parse::<u32>() else {
@@ -312,19 +638,27 @@ fn parse_month_name(s: &str) -> Option<u32> {
     }
 }
 
-pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
+/// Joins physical lines until each record has as many unquoted separators as the header.
+/// The first `skip_rows` lines (titles above the header) are dropped.
+pub fn heal_broken_csv_file(
+    input_path: &Path,
+    temp_dir: &Path,
+    separator: u8,
+    skip_rows: usize,
+) -> Result<PathBuf> {
     let healed_path = temp_dir.join(format!(
         "healed_{}",
         input_path.file_name().unwrap_or_default().to_string_lossy()
     ));
     let reader = BufReader::new(File::open(input_path)?);
     let mut writer = BufWriter::new(File::create(&healed_path)?);
+    let sep = separator as char;
 
-    let mut lines = reader.lines();
+    let mut lines = reader.lines().skip(skip_rows);
     let Some(Ok(header)) = lines.next() else {
         anyhow::bail!("CSV file is empty");
     };
-    let expected_commas = count_unquoted_commas(&header);
+    let expected = count_unquoted(&header, sep);
     writeln!(writer, "{}", header)?;
 
     let mut pending_line = String::new();
@@ -337,7 +671,7 @@ pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBu
             pending_line.push_str(line.trim());
         }
 
-        if count_unquoted_commas(&pending_line) >= expected_commas {
+        if count_unquoted(&pending_line, sep) >= expected {
             writeln!(writer, "{}", pending_line)?;
             pending_line.clear();
         }
@@ -349,17 +683,105 @@ pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBu
     Ok(healed_path)
 }
 
-fn count_unquoted_commas(s: &str) -> usize {
+fn count_unquoted(s: &str, sep: char) -> usize {
     let mut in_quotes = false;
     let mut count = 0;
     for c in s.chars() {
         if c == '"' {
             in_quotes = !in_quotes;
-        } else if c == ',' && !in_quotes {
+        } else if c == sep && !in_quotes {
             count += 1;
         }
     }
     count
+}
+
+/// The separator as a byte; only , | ; and tab are accepted.
+fn separator_byte(sep: char) -> Result<u8> {
+    match sep {
+        ',' | '|' | ';' | '\t' => Ok(sep as u8),
+        other => anyhow::bail!(
+            "Separator {:?} is not supported. Choose comma, pipe, semicolon or tab in Schema & Ingestion.",
+            other
+        ),
+    }
+}
+
+/// Up to `n` raw lines from the start of a file (line endings removed).
+fn read_head_lines(path: &Path, n: usize) -> Result<Vec<Vec<u8>>> {
+    let mut reader =
+        BufReader::new(File::open(path).with_context(|| format!("Failed to open {:?}", path))?);
+    let mut out = Vec::new();
+    while out.len() < n {
+        let mut buf = Vec::new();
+        if reader.read_until(b'\n', &mut buf)? == 0 {
+            break;
+        }
+        while matches!(buf.last(), Some(b'\n' | b'\r')) {
+            buf.pop();
+        }
+        out.push(buf);
+    }
+    Ok(out)
+}
+
+fn decode_line(raw: &[u8], encoding: CsvTextEncoding) -> String {
+    match encoding {
+        CsvTextEncoding::Utf8 => String::from_utf8_lossy(raw).into_owned(),
+        CsvTextEncoding::Windows1252 => decode_windows_1252(raw),
+    }
+}
+
+/// Windows-1252 to text: 0x00-0x7F and 0xA0-0xFF are the same code points; 0x80-0x9F use the
+/// Windows-1252 table (the five unassigned bytes map to the C1 code point of the same value).
+pub fn decode_windows_1252(bytes: &[u8]) -> String {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x8D, 0x017D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
+        0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9F => char::from_u32(HIGH[(b - 0x80) as usize]).unwrap_or('\u{FFFD}'),
+            _ => b as char,
+        })
+        .collect()
+}
+
+/// Writes a Windows-1252 file as UTF-8 into the temp folder and returns the copy's path.
+fn transcode_windows_1252(input_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
+    let out_path = temp_dir.join(format!(
+        "utf8_{}",
+        input_path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let mut reader = BufReader::new(
+        File::open(input_path).with_context(|| format!("Failed to open {:?}", input_path))?,
+    );
+    let mut writer = BufWriter::new(
+        File::create(&out_path).with_context(|| format!("Failed to create {:?}", out_path))?,
+    );
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(decode_windows_1252(&buf[..n]).as_bytes())?;
+    }
+    writer.flush()?;
+    Ok(out_path)
+}
+
+/// Removes a UTF-8 byte-order mark left on the first column name.
+fn strip_bom_from_first_name(df: &mut DataFrame) {
+    let first = df.get_column_names().first().map(|n| n.to_string());
+    if let Some(name) = first {
+        if let Some(clean) = name.strip_prefix('\u{feff}') {
+            let clean = clean.to_string();
+            let _ = df.rename(&name, clean.into());
+        }
+    }
 }
 
 pub fn build_lazy_pipeline(
@@ -369,16 +791,48 @@ pub fn build_lazy_pipeline(
     temp_dir: &Path,
 ) -> Result<LazyFrame> {
     if is_parquet {
-        let lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
-            .context("Failed to scan Parquet file")?;
-        return Ok(lf);
+        let (lf, plan) = parquet_conversion_plan(path, config)?;
+        if plan.is_empty() {
+            return Ok(lf);
+        }
+        check_dr_cr_conventions(&lf, &plan)?;
+        let exprs: Vec<Expr> = plan
+            .into_iter()
+            .map(|(c, text)| typed_expr(text, c, config).alias(&c.name))
+            .collect();
+        return Ok(lf.with_columns(exprs));
     }
 
-    let actual_csv_path = if config.heal_broken_csv_lines {
-        heal_broken_csv_file(path, temp_dir)?
-    } else {
-        path.to_path_buf()
+    let mut lf = scan_csv_text(path, config, temp_dir)?;
+    let text_cols: Vec<(&ColumnSchemaConfig, Expr)> =
+        config.columns.iter().map(|c| (c, col(&c.name))).collect();
+    check_dr_cr_conventions(&lf, &text_cols)?;
+
+    let exprs: Vec<Expr> = config
+        .columns
+        .iter()
+        .map(|c| typed_expr(raw_text_expr(c, config), c, config).alias(&c.name))
+        .collect();
+    if !exprs.is_empty() {
+        lf = lf.with_columns(exprs);
+    }
+
+    Ok(lf)
+}
+
+/// Reads a CSV with every configured column as text (no typing yet).
+fn scan_csv_text(path: &Path, config: &IngestionConfig, temp_dir: &Path) -> Result<LazyFrame> {
+    let sep = separator_byte(config.separator)?;
+    let mut actual_csv_path = match config.encoding {
+        CsvTextEncoding::Utf8 => path.to_path_buf(),
+        CsvTextEncoding::Windows1252 => transcode_windows_1252(path, temp_dir)?,
     };
+    let mut skip_rows = config.skip_rows;
+    if config.heal_broken_csv_lines {
+        // The healer drops the title lines itself.
+        actual_csv_path = heal_broken_csv_file(&actual_csv_path, temp_dir, sep, skip_rows)?;
+        skip_rows = 0;
+    }
 
     let mut schema = Schema::with_capacity(config.columns.len());
     for col_cfg in &config.columns {
@@ -386,6 +840,8 @@ pub fn build_lazy_pipeline(
     }
 
     let mut lf = LazyCsvReader::new(&actual_csv_path)
+        .with_separator(sep)
+        .with_skip_rows(skip_rows)
         .with_dtype_overwrite(Some(Arc::new(schema)))
         .with_encoding(CsvEncoding::LossyUtf8)
         .with_ignore_errors(true)
@@ -395,79 +851,456 @@ pub fn build_lazy_pipeline(
         .finish()
         .context("Failed to build LazyCsvReader")?;
 
-    let mut exprs: Vec<Expr> = Vec::with_capacity(config.columns.len());
-
-    for col_cfg in &config.columns {
-        let cname = &col_cfg.name;
-        let mut e = col(cname);
-
-        if config.sanitize_linebreaks {
-            e = e
-                .str()
-                .replace_all(lit(r"[\r\n]+"), lit(" "), false)
-                .str()
-                .strip_chars(lit(" "));
+    // A UTF-8 byte-order mark must not stay on the first column name.
+    let first = lf
+        .collect_schema()
+        .context("Failed to read the CSV header")?
+        .iter_names()
+        .next()
+        .map(|n| n.to_string());
+    if let Some(name) = first {
+        if let Some(clean) = name.strip_prefix('\u{feff}') {
+            lf = lf.rename([name.as_str()], [clean]);
         }
+    }
+    Ok(lf)
+}
 
-        if col_cfg.pii_mask != PiiMaskMode::None {
-            let salt = config.pii_salt.clone();
-            let mode = col_cfg.pii_mask;
-            e = e.map(
+/// The text a column holds just before typing: linebreaks sanitised, then the PII mask.
+fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+    text_expr_from(col(&col_cfg.name), col_cfg, config)
+}
+
+fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+    if config.sanitize_linebreaks {
+        e = e
+            .str()
+            .replace_all(lit(r"[\r\n]+"), lit(" "), false)
+            .str()
+            .strip_chars(lit(" "));
+    }
+
+    if col_cfg.pii_mask != PiiMaskMode::None {
+        let salt = config.pii_salt.clone();
+        let mode = col_cfg.pii_mask;
+        e = e.map(
+            move |s: Series| {
+                let ca = s.str()?;
+                let out: StringChunked = ca
+                    .into_iter()
+                    .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &salt)))
+                    .collect();
+                Ok(Some(out.into_series()))
+            },
+            GetOutput::from_type(DataType::String),
+        );
+    }
+    e
+}
+
+/// Converts a text expression to the column's configured type (P1 amount and date rules).
+fn typed_expr(e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+    match col_cfg.dtype {
+        ColDataType::Utf8 => e,
+        ColDataType::Float64 => {
+            let sign = col_cfg.sign_convention;
+            let acc = config.parse_accounting_negatives;
+            let name = col_cfg.name.clone();
+            e.map(
                 move |s: Series| {
                     let ca = s.str()?;
-                    let out: StringChunked = ca
+                    let mut out: Vec<Option<f64>> = Vec::with_capacity(ca.len());
+                    for v in ca.into_iter() {
+                        out.push(match v.map(|v| parse_banking_amount(v, sign, acc)) {
+                            Some(AmountCell::Value(x)) => Some(x),
+                            Some(AmountCell::NeedsSignConvention) => {
+                                return Err(PolarsError::ComputeError(
+                                    dr_cr_unset_message(&name).into(),
+                                ))
+                            }
+                            _ => None,
+                        });
+                    }
+                    Ok(Some(Float64Chunked::from_iter(out).into_series()))
+                },
+                GetOutput::from_type(DataType::Float64),
+            )
+        }
+        ColDataType::Int64 => {
+            let sign = col_cfg.sign_convention;
+            let acc = config.parse_accounting_negatives;
+            e.map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let out: Int64Chunked = ca
                         .into_iter()
-                        .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &salt)))
+                        .map(|v| v.and_then(|v| parse_banking_int(v, sign, acc)))
                         .collect();
                     Ok(Some(out.into_series()))
                 },
-                GetOutput::from_type(DataType::String),
+                GetOutput::from_type(DataType::Int64),
+            )
+        }
+        ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
+            let date_mode = col_cfg.dtype;
+            e.map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let days_ca: Int32Chunked = ca
+                        .into_iter()
+                        .map(|opt_v| opt_v.and_then(|v| parse_flexible_banking_date(v, date_mode)))
+                        .collect();
+                    let date_series = days_ca.into_series().cast(&DataType::Date)?;
+                    Ok(Some(date_series))
+                },
+                GetOutput::from_type(DataType::Date),
+            )
+        }
+    }
+}
+
+/// True when a non-blank raw value of a typed column does not convert (it would become null).
+pub fn is_parse_failure(
+    raw: &str,
+    dtype: ColDataType,
+    sign: SignConvention,
+    accounting_negatives: bool,
+) -> bool {
+    match dtype {
+        ColDataType::Utf8 => false,
+        ColDataType::Float64 => !matches!(
+            parse_banking_amount(raw, sign, accounting_negatives),
+            AmountCell::Value(_) | AmountCell::Blank
+        ),
+        ColDataType::Int64 => {
+            !is_blank_amount_token(raw) && parse_banking_int(raw, sign, accounting_negatives).is_none()
+        }
+        ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
+            !is_blank_date_token(raw) && parse_flexible_banking_date(raw, dtype).is_none()
+        }
+    }
+}
+
+/// Counts, per typed column, the non-blank raw values that become null, with up to 5 examples.
+/// Columns with no failures are left out.
+pub fn compute_parse_failures(
+    path: &Path,
+    is_parquet: bool,
+    config: &IngestionConfig,
+    temp_dir: &Path,
+) -> Result<Vec<ParseFailure>> {
+    if is_parquet {
+        let (lf, plan) = parquet_conversion_plan(path, config)?;
+        let typed: Vec<(&ColumnSchemaConfig, Expr)> = plan
+            .into_iter()
+            .filter(|(c, _)| c.dtype != ColDataType::Utf8)
+            .collect();
+        if typed.is_empty() {
+            return Ok(Vec::new());
+        }
+        return failures_from_text(lf, &typed, config.parse_accounting_negatives);
+    }
+    let typed: Vec<&ColumnSchemaConfig> = config
+        .columns
+        .iter()
+        .filter(|c| c.dtype != ColDataType::Utf8)
+        .collect();
+    if typed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let lf = scan_csv_text(path, config, temp_dir)?;
+    let pairs: Vec<(&ColumnSchemaConfig, Expr)> =
+        typed.into_iter().map(|c| (c, raw_text_expr(c, config))).collect();
+    failures_from_text(lf, &pairs, config.parse_accounting_negatives)
+}
+
+/// Shared by CSV and Parquet: `pairs` holds each typed column and its text expression.
+fn failures_from_text(
+    lf: LazyFrame,
+    pairs: &[(&ColumnSchemaConfig, Expr)],
+    accounting_negatives: bool,
+) -> Result<Vec<ParseFailure>> {
+    let mut exprs = Vec::with_capacity(pairs.len() * 2);
+    for (i, (c, text)) in pairs.iter().enumerate() {
+        let (dtype, sign) = (c.dtype, c.sign_convention);
+        let mask = text.clone().map(
+            move |s: Series| {
+                let ca = s.str()?;
+                let flags: BooleanChunked = ca
+                    .into_iter()
+                    .map(|v| Some(v.is_some_and(|v| is_parse_failure(v, dtype, sign, accounting_negatives))))
+                    .collect();
+                Ok(Some(flags.into_series()))
+            },
+            GetOutput::from_type(DataType::Boolean),
+        );
+        exprs.push(mask.clone().sum().cast(DataType::UInt64).alias(format!("__pf_n_{i}")));
+        exprs.push(text.clone().filter(mask).head(Some(5)).implode().alias(format!("__pf_x_{i}")));
+    }
+    let df = lf
+        .select(exprs)
+        .collect()
+        .context("Failed to count values that could not be converted")?;
+
+    let mut out = Vec::new();
+    for (i, (c, _)) in pairs.iter().enumerate() {
+        let count = df
+            .column(&format!("__pf_n_{i}"))
+            .ok()
+            .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
+            .unwrap_or(0) as usize;
+        if count == 0 {
+            continue;
+        }
+        let mut examples = Vec::new();
+        if let Some(list) = df
+            .column(&format!("__pf_x_{i}"))
+            .ok()
+            .and_then(|s| s.list().ok().and_then(|l| l.get_as_series(0)))
+        {
+            if let Ok(ca) = list.str() {
+                examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
+            }
+        }
+        out.push(ParseFailure {
+            column: c.name.clone(),
+            count,
+            examples,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse failures of everything a tab reads (stacked, joined and reconciled sources included),
+/// added up per column name.
+pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<ParseFailure>> {
+    let mut parts = Vec::new();
+    match source {
+        TabSource::SingleFile {
+            path,
+            is_parquet,
+            config,
+        } => parts.extend(compute_parse_failures(path, *is_parquet, config, temp_dir)?),
+        TabSource::VerticalStack { files, .. } => {
+            for (path, is_parquet, cfg) in files {
+                parts.extend(compute_parse_failures(path, *is_parquet, cfg, temp_dir)?);
+            }
+        }
+        TabSource::JoinedTabs {
+            left_source,
+            right_source,
+            ..
+        } => {
+            parts.extend(source_parse_failures(left_source, temp_dir)?);
+            parts.extend(source_parse_failures(right_source, temp_dir)?);
+        }
+        TabSource::PeriodReconcile {
+            prev_source,
+            curr_source,
+            ..
+        } => {
+            parts.extend(source_parse_failures(prev_source, temp_dir)?);
+            parts.extend(source_parse_failures(curr_source, temp_dir)?);
+        }
+    }
+    let mut merged: Vec<ParseFailure> = Vec::new();
+    for f in parts {
+        match merged.iter_mut().find(|m| m.column == f.column) {
+            Some(m) => {
+                m.count += f.count;
+                for ex in f.examples {
+                    if m.examples.len() < 5 {
+                        m.examples.push(ex);
+                    }
+                }
+            }
+            None => merged.push(f),
+        }
+    }
+    Ok(merged)
+}
+
+/// "Parse failures: Balance 3, Matdat 1", or "" when there are none.
+pub fn parse_failure_summary(failures: &[ParseFailure]) -> String {
+    if failures.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = failures
+        .iter()
+        .map(|f| format!("{} {}", f.column, f.count))
+        .collect();
+    format!("Parse failures: {}", parts.join(", "))
+}
+
+/// Writes `<output>.parse_failures.csv` next to an export (columns: column, count, examples)
+/// and returns its path.
+pub fn write_parse_failures_csv(output: &Path, failures: &[ParseFailure]) -> Result<PathBuf> {
+    let mut name = output.file_name().unwrap_or_default().to_os_string();
+    name.push(".parse_failures.csv");
+    let side = output.with_file_name(name);
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let mut body = String::from("column,count,examples\n");
+    for f in failures {
+        body.push_str(&format!(
+            "{},{},{}\n",
+            quote(&f.column),
+            f.count,
+            quote(&f.examples.join(" | "))
+        ));
+    }
+    std::fs::write(&side, body)
+        .with_context(|| format!("Failed to write the parse-failure list {:?}", side))?;
+    Ok(side)
+}
+
+/// Label of a Parquet column type, as stored in `ColumnSchemaConfig::source_dtype`.
+pub fn parquet_type_label(dt: &DataType) -> String {
+    match dt {
+        DataType::String => "String".into(),
+        DataType::Float32 => "Float32".into(),
+        DataType::Float64 => "Float64".into(),
+        DataType::Decimal(..) => "Decimal".into(),
+        DataType::Int8 => "Int8".into(),
+        DataType::Int16 => "Int16".into(),
+        DataType::Int32 => "Int32".into(),
+        DataType::Int64 => "Int64".into(),
+        DataType::UInt8 => "UInt8".into(),
+        DataType::UInt16 => "UInt16".into(),
+        DataType::UInt32 => "UInt32".into(),
+        DataType::UInt64 => "UInt64".into(),
+        DataType::Date => "Date".into(),
+        DataType::Datetime(..) => "Datetime".into(),
+        other => format!("{:?}", other),
+    }
+}
+
+/// First rows of a Parquet file as stored (for the schema modal preview).
+pub fn preview_parquet_raw(path: &Path, n_rows: usize) -> Result<DataFrame> {
+    LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?
+        .limit(n_rows as IdxSize)
+        .collect()
+        .context("Failed to read the first Parquet rows")
+}
+
+/// Schema of a Parquet file for the schema modal: every column keeps its own type (String
+/// columns are Text until the user changes them); sample values are the first 5 rows as text.
+pub fn auto_detect_parquet_schema(path: &Path) -> Result<IngestionConfig> {
+    let mut lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?;
+    let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
+    let head = lf
+        .limit(5)
+        .collect()
+        .context("Failed to read the first Parquet rows")?;
+    let mut columns = Vec::with_capacity(schema.len());
+    for (name, dt) in schema.iter() {
+        let label = parquet_type_label(dt);
+        let samples = head
+            .column(name)
+            .ok()
+            .and_then(|s| s.cast(&DataType::String).ok())
+            .map(|s| {
+                s.str()
+                    .map(|ca| {
+                        ca.into_iter()
+                            .map(|v| v.unwrap_or("null").to_string())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        columns.push(ColumnSchemaConfig {
+            name: name.to_string(),
+            dtype: parquet_native_type(&label).unwrap_or(ColDataType::Utf8),
+            sample_values: samples,
+            source_dtype: label,
+            ..Default::default()
+        });
+    }
+    Ok(IngestionConfig {
+        columns,
+        ..Default::default()
+    })
+}
+
+/// Fits a saved (macro) schema to a Parquet file: entries for columns that exist and are
+/// String in the file are kept (with that file type); columns of other types keep their own
+/// type. Returns the fitted schema and the names of schema columns absent from the file.
+pub fn adapt_schema_to_parquet(
+    path: &Path,
+    saved: &IngestionConfig,
+) -> Result<(IngestionConfig, Vec<String>)> {
+    let mut lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?;
+    let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
+    let mut missing = Vec::new();
+    let mut columns = Vec::new();
+    for c in &saved.columns {
+        match schema.get(&c.name) {
+            None => missing.push(c.name.clone()),
+            Some(DataType::String) => {
+                let mut c = c.clone();
+                c.source_dtype = "String".into();
+                columns.push(c);
+            }
+            Some(_) => {}
+        }
+    }
+    Ok((
+        IngestionConfig {
+            columns,
+            ..saved.clone()
+        },
+        missing,
+    ))
+}
+
+/// Scans a Parquet file and lists the configured columns that must be converted, each with an
+/// expression giving its text (String columns as they are; other types cast to text). Columns
+/// whose type is unchanged and unmasked are left as they are in the file.
+fn parquet_conversion_plan<'a>(
+    path: &Path,
+    config: &'a IngestionConfig,
+) -> Result<(LazyFrame, Vec<(&'a ColumnSchemaConfig, Expr)>)> {
+    let mut lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?;
+    if config.columns.is_empty() {
+        return Ok((lf, Vec::new()));
+    }
+    let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
+    let mut plan = Vec::new();
+    for c in &config.columns {
+        let Some(dt) = schema.get(&c.name) else {
+            anyhow::bail!(
+                "Column '{}' is in the schema but not in the Parquet file {:?}.",
+                c.name,
+                path
+            );
+        };
+        // Judge by the file's actual type, not a label saved earlier.
+        let label = parquet_type_label(dt);
+        let mut actual = c.clone();
+        actual.source_dtype = label.clone();
+        if !parquet_needs_conversion(&actual) {
+            continue;
+        }
+        if parquet_native_type(&label).is_none() {
+            anyhow::bail!(
+                "Column '{}' is {} in the Parquet file and cannot be converted or masked. \
+                 Set it back to Text with no mask in Schema & Ingestion.",
+                c.name,
+                label
             );
         }
-
-        e = match col_cfg.dtype {
-            ColDataType::Utf8 => e,
-            ColDataType::Float64 => {
-                if config.parse_accounting_negatives {
-                    e = e
-                        .str()
-                        .replace_all(lit(","), lit(""), true)
-                        .str()
-                        .replace(lit(r"^\((.*)\)$"), lit("-${1}"), false);
-                }
-                e.cast(DataType::Float64)
-            }
-            ColDataType::Int64 => {
-                if config.parse_accounting_negatives {
-                    e = e.str().replace_all(lit(","), lit(""), true);
-                }
-                e.cast(DataType::Int64)
-            }
-            ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
-                let date_mode = col_cfg.dtype;
-                e.map(
-                    move |s: Series| {
-                        let ca = s.str()?;
-                        let days_ca: Int32Chunked = ca
-                            .into_iter()
-                            .map(|opt_v| opt_v.and_then(|v| parse_flexible_banking_date(v, date_mode)))
-                            .collect();
-                        let date_series = days_ca.into_series().cast(&DataType::Date)?;
-                        Ok(Some(date_series))
-                    },
-                    GetOutput::from_type(DataType::Date),
-                )
-            }
+        let base = if *dt == DataType::String {
+            col(&c.name)
+        } else {
+            col(&c.name).cast(DataType::String)
         };
-
-        exprs.push(e.alias(cname));
+        plan.push((c, text_expr_from(base, c, config)));
     }
-
-    if !exprs.is_empty() {
-        lf = lf.with_columns(exprs);
-    }
-
-    Ok(lf)
+    Ok((lf, plan))
 }
 
 pub fn compile_tab_lazy(

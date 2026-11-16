@@ -126,6 +126,7 @@ fn t03_date_parsing_variants() {
             dtype: ColDataType::DateDMY,
             pii_mask: PiiMaskMode::None,
             sample_values: vec![],
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -143,11 +144,77 @@ fn t03_date_parsing_variants() {
 }
 
 #[test]
+fn t03b_date_formats_phase2() {
+    // P3: month names, "." separators and two-digit years (00-69 -> 20xx, 70-99 -> 19xx).
+    let d = |raw: &str, mode| parse_flexible_banking_date(raw, mode);
+    use ColDataType::*;
+    assert_eq!(d("5/11/26", DateDMY), Some(days(2026, 11, 5)));
+    assert_eq!(d("11/5/26", DateMDY), Some(days(2026, 11, 5)));
+    assert_eq!(d("31-OCT-2026", DateDMY), Some(days(2026, 10, 31)));
+    assert_eq!(d("31-Oct-26", DateDMY), Some(days(2026, 10, 31)));
+    assert_eq!(d("31-oct-26", DateMDY), Some(days(2026, 10, 31)));
+    assert_eq!(d("05.11.2026", DateDMY), Some(days(2026, 11, 5)));
+    assert_eq!(d("01/01/75", DateDMY), Some(days(1975, 1, 1)));
+    assert_eq!(d("01/01/69", DateDMY), Some(days(2069, 1, 1)));
+    assert_eq!(d("01/01/70", DateDMY), Some(days(1970, 1, 1)));
+    // A year that is neither two nor four digits is not a date.
+    for bad in ["5/11/026", "5/11/-5", "5/11/2O26", "31/02/2026", "5/11"] {
+        assert_eq!(d(bad, DateDMY), None, "{bad}");
+    }
+
+    // The same values through a CSV load.
+    let p = write_csv(
+        "dates_p3.csv",
+        "Matdat\n5/11/26\n31-OCT-2026\n31-Oct-26\n05.11.2026\n01/01/75\n",
+    );
+    let cfg = IngestionConfig {
+        columns: vec![ColumnSchemaConfig { name: "Matdat".into(), dtype: DateDMY, ..Default::default() }],
+        ..Default::default()
+    };
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(
+        date_days_col(&df, "Matdat"),
+        vec![
+            Some(days(2026, 11, 5)),
+            Some(days(2026, 10, 31)),
+            Some(days(2026, 10, 31)),
+            Some(days(2026, 11, 5)),
+            Some(days(1975, 1, 1)),
+        ]
+    );
+}
+
+#[test]
+fn t03c_blank_date_column_and_hygiene_audit() {
+    // P3: a column blank in every sampled row is a date when its name says so.
+    let p = write_csv(
+        "blank_close.csv",
+        "Opndat,Matdat,Closure_Date,Remarks,Acstat,Balance,Rate\n\
+         01/01/2024,01/01/2025,,,ACT,500,9\n\
+         01/06/2024,01/01/2027,,,ACT,700,9\n",
+    );
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(dtype_of(&cfg, "Closure_Date"), ColDataType::DateDMY);
+    assert_eq!(dtype_of(&cfg, "Remarks"), ColDataType::Utf8);
+    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let out = apply_banking_hygiene_audit(
+        lf, "Opndat", "Matdat", "Closure_Date", "Acstat", "Balance", "Rate", "2026-10-31", false,
+    )
+    .unwrap()
+    .collect()
+    .unwrap();
+    let flags = str_col(&out, "Audit_Exception_Flag");
+    assert_eq!(flags.len(), 2);
+    assert_eq!(flags[0].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
+}
+
+#[test]
 fn t04a_numeric_parsing_phase1() {
     // Phase 1 behaviour: comma thousands and bracket negatives parse; row count is kept.
+    // (Dr/Cr rows are covered by t04: without a sign convention they now stop the load.)
     let p = write_csv(
-        "nums.csv",
-        "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",
+        "nums_p1.csv",
+        "Balance\n\"1,234.50\"\n(500.00)\n1234.50\n-250.00\n-\n 99.5 \nBDT 10\n",
     );
     let cfg = IngestionConfig {
         columns: vec![ColumnSchemaConfig {
@@ -155,6 +222,7 @@ fn t04a_numeric_parsing_phase1() {
             dtype: ColDataType::Float64,
             pii_mask: PiiMaskMode::None,
             sample_values: vec![],
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -169,26 +237,23 @@ fn t04a_numeric_parsing_phase1() {
 }
 
 #[test]
-#[ignore = "Phase 2: Dr/Cr suffixes, currency prefix and dash-as-zero parsing; raw-vs-parsed control sums"]
 fn t04_numeric_parsing_silent_nulls() {
-    // Target: no value silently becomes null. Cr = +, Dr = −, "-" = 0,
+    // No value silently becomes null: Dr/Cr per the column's sign convention, "-" = 0,
     // "BDT 10" = 10. Parsed control sum = 1,828.50 with 0 nulls.
-    // Phase 2: set 'Cr is +' when the Dr/Cr setting exists; add a second case where a blank
-    // setting with Dr/Cr suffixes → error.
     let p = write_csv(
         "nums.csv",
         "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",
     );
-    let cfg = IngestionConfig {
+    let cfg_with = |sign| IngestionConfig {
         columns: vec![ColumnSchemaConfig {
             name: "Balance".into(),
             dtype: ColDataType::Float64,
-            pii_mask: PiiMaskMode::None,
-            sample_values: vec![],
+            sign_convention: sign,
+            ..Default::default()
         }],
         ..Default::default()
     };
-    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let lf = build_lazy_pipeline(&p, false, &cfg_with(SignConvention::CrPositive), &tmpdir()).unwrap();
     let vals = f64_col(&lf.clone().collect().unwrap(), "Balance");
     assert_eq!(
         vals,
@@ -197,6 +262,358 @@ fn t04_numeric_parsing_silent_nulls() {
     let (rows, sum) = compute_control_totals(lf, Some("Balance")).unwrap();
     assert_eq!(rows, 7);
     assert_close(sum.unwrap(), 1828.5, "parsed control sum");
+
+    // Dr is +: the Dr/Cr rows flip, everything else is unchanged.
+    let lf = build_lazy_pipeline(&p, false, &cfg_with(SignConvention::DrPositive), &tmpdir()).unwrap();
+    assert_eq!(
+        f64_col(&lf.collect().unwrap(), "Balance"),
+        vec![Some(1234.5), Some(-500.0), Some(-1234.5), Some(250.0), Some(0.0), Some(99.5), Some(10.0)]
+    );
+
+    // Sign convention not set: loading stops and names the column.
+    let err = build_lazy_pipeline(&p, false, &cfg_with(SignConvention::Unset), &tmpdir())
+        .err()
+        .expect("Dr/Cr amounts with no sign convention must not load");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("'Balance'") && msg.contains("Dr/Cr"), "{msg}");
+
+    // Auto-detect marks the column so the schema modal can highlight it.
+    let auto = auto_detect_smart_schema(&p).unwrap();
+    let bal = auto.columns.iter().find(|c| c.name == "Balance").unwrap();
+    assert_eq!(bal.dtype, ColDataType::Float64);
+    assert!(bal.has_dr_cr);
+    assert_eq!(bal.sign_convention, SignConvention::Unset);
+}
+
+#[test]
+fn t04b_amount_parsing_rules() {
+    use SignConvention::*;
+    let v = |raw: &str| parse_banking_amount(raw, CrPositive, true);
+    assert_eq!(v("500-"), AmountCell::Value(-500.0));
+    assert_eq!(v("Tk. 1,000"), AmountCell::Value(1000.0));
+    assert_eq!(v("tk1,000"), AmountCell::Value(1000.0));
+    assert_eq!(v("৳ 75"), AmountCell::Value(75.0));
+    assert_eq!(v("BDT(1,000.50)"), AmountCell::Value(-1000.5));
+    assert_eq!(v("1,000 dr."), AmountCell::Value(-1000.0));
+    assert_eq!(v("CR 20"), AmountCell::Value(20.0));
+    assert_eq!(v("Tk 5 Dr"), AmountCell::Value(-5.0));
+    assert_eq!(v("-"), AmountCell::Value(0.0));
+    for blank in ["", "  ", "NA", "n/a", "NULL"] {
+        assert_eq!(v(blank), AmountCell::Blank, "{blank:?}");
+    }
+    for bad in ["abc", "1.2.3", "1e5", "inf", "NaN", "(500) Dr", "--5", "Cr"] {
+        assert_eq!(v(bad), AmountCell::Invalid, "{bad:?}");
+    }
+    assert_eq!(parse_banking_amount("5 Dr", Unset, true), AmountCell::NeedsSignConvention);
+    // Accounting negatives switched off: brackets and a trailing minus are not numbers.
+    assert_eq!(parse_banking_amount("(5)", CrPositive, false), AmountCell::Invalid);
+    assert_eq!(parse_banking_amount("5-", CrPositive, false), AmountCell::Invalid);
+    assert_eq!(parse_banking_amount("1,234", CrPositive, false), AmountCell::Value(1234.0));
+}
+
+#[test]
+fn t22_parse_failure_counts() {
+    // P2: non-blank values that became null are counted per typed column, with examples.
+    let p = write_csv(
+        "pf.csv",
+        "Balance,Matdat,Name\n100,05/11/2026,a\nabc,31/02/2026,b\n200,,c\n,-,d\n",
+    );
+    let cfg = IngestionConfig {
+        columns: vec![
+            ColumnSchemaConfig { name: "Balance".into(), dtype: ColDataType::Float64, ..Default::default() },
+            ColumnSchemaConfig { name: "Matdat".into(), dtype: ColDataType::DateDMY, ..Default::default() },
+            ColumnSchemaConfig { name: "Name".into(), dtype: ColDataType::Utf8, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let f = compute_parse_failures(&p, false, &cfg, &tmpdir()).unwrap();
+    assert_eq!(
+        f,
+        vec![
+            ParseFailure { column: "Balance".into(), count: 1, examples: vec!["abc".into()] },
+            ParseFailure { column: "Matdat".into(), count: 1, examples: vec!["31/02/2026".into()] },
+        ]
+    );
+    assert_eq!(parse_failure_summary(&f), "Parse failures: Balance 1, Matdat 1");
+    assert_eq!(parse_failure_summary(&[]), "");
+
+    // A stack of the same file twice adds the counts up per column.
+    let stack = TabSource::VerticalStack {
+        files: vec![(p.clone(), false, cfg.clone()), (p.clone(), false, cfg.clone())],
+        include_source_col: false,
+    };
+    let sf = source_parse_failures(&stack, &tmpdir()).unwrap();
+    assert_eq!(sf[0].count, 2);
+    assert_eq!(sf[0].examples, vec!["abc".to_string(), "abc".to_string()]);
+
+    // "Export anyway" list: <output>.parse_failures.csv next to the export.
+    let out = tmpdir().join("pf_out.csv");
+    let side = write_parse_failures_csv(&out, &f).unwrap();
+    assert_eq!(side, tmpdir().join("pf_out.csv.parse_failures.csv"));
+    assert_eq!(
+        std::fs::read_to_string(&side).unwrap(),
+        "column,count,examples\n\"Balance\",1,\"abc\"\n\"Matdat\",1,\"31/02/2026\"\n"
+    );
+}
+
+#[test]
+fn t22b_headless_stops_on_control_column_failures() {
+    // Auto-detect would type this column as text ("abc"), so the schema comes from a macro.
+    let p = write_csv("pf_headless.csv", "Balance\n100\nabc\n200\n\n");
+    let recipe = MacroRecipe {
+        name: "pf".into(),
+        description: String::new(),
+        created_at: String::new(),
+        enforce_balance_control: true,
+        control_column: Some("Balance".into()),
+        optional_ingestion_schema: Some(IngestionConfig {
+            columns: vec![ColumnSchemaConfig {
+                name: "Balance".into(),
+                dtype: ColDataType::Float64,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        steps: vec![],
+    };
+    let m = tmpdir().join("pf_headless.mpq.json");
+    std::fs::write(&m, serde_json::to_string(&recipe).unwrap()).unwrap();
+    let out = tmpdir().join("pf_headless_out.csv");
+    let _ = std::fs::remove_file(&out);
+    let run = |extra: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_MicroParquet"))
+            .args(["--headless", "--input"])
+            .arg(&p)
+            .arg("--macro-file")
+            .arg(&m)
+            .arg("--export-csv")
+            .arg(&out)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let r = run(&[]);
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+    assert!(!r.status.success(), "must exit non-zero: {err}");
+    assert!(err.contains("Parse failures: Balance 1"), "{err}");
+    assert!(err.contains("--allow-parse-failures"), "{err}");
+    assert!(!out.exists(), "nothing is exported when the run stops");
+
+    let r = run(&["--allow-parse-failures"]);
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+    assert!(r.status.success(), "{err}");
+    assert!(err.contains("Parse failures: Balance 1"), "{err}");
+    assert!(out.exists());
+}
+
+fn write_bytes(name: &str, body: &[u8]) -> PathBuf {
+    let p = tmpdir().join(name);
+    std::fs::write(&p, body).unwrap();
+    p
+}
+
+#[test]
+fn t23_csv_reading_options() {
+    // P4: pipe separator, auto-detected from the header.
+    let p = write_csv("pipe.csv", "Actnum|Balance|Matdat\n0012345|\"1,000.50\"|05/11/2026\n0012346|200|06/11/2026\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(cfg.separator, '|');
+    let names: Vec<&str> = cfg.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["Actnum", "Balance", "Matdat"]);
+    assert_eq!(dtype_of(&cfg, "Balance"), ColDataType::Float64);
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "Actnum")[0].as_deref(), Some("0012345"));
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1000.5), Some(200.0)]);
+    assert_eq!(detect_separator("a;b;c"), ';');
+    assert_eq!(detect_separator("a\tb\tc"), '\t');
+    assert_eq!(detect_separator("\"x,y\"|b|c"), '|', "commas inside quotes do not count");
+    assert_eq!(detect_separator("single"), ',');
+
+    // Three title lines above the header.
+    let body = "Bank Ltd - Loan book\nAs of 31/10/2026, BDT\n\nActnum,Balance\n001,100\n002,200\n";
+    let p = write_csv("titles.csv", body);
+    let base = IngestionConfig { skip_rows: 3, ..Default::default() };
+    let cfg = auto_detect_smart_schema_with(&p, &base).unwrap();
+    assert_eq!(cfg.skip_rows, 3);
+    let names: Vec<&str> = cfg.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["Actnum", "Balance"]);
+    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let (rows, sum) = compute_control_totals(lf, Some("Balance")).unwrap();
+    assert_eq!((rows, sum), (2, Some(300.0)));
+    // The line healer honours skip_rows and the separator too.
+    let p = write_csv("titles_pipe.csv", "Title\nA|B|C\n1|multi\nline|5\n2|z|6\n");
+    let cfg = IngestionConfig {
+        skip_rows: 1,
+        separator: '|',
+        heal_broken_csv_lines: true,
+        columns: vec![
+            ColumnSchemaConfig { name: "A".into(), dtype: ColDataType::Int64, ..Default::default() },
+            ColumnSchemaConfig { name: "B".into(), ..Default::default() },
+            ColumnSchemaConfig { name: "C".into(), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "B"), vec![Some("multi line".to_string()), Some("z".to_string())]);
+    assert_eq!(f64_col(&df, "A"), vec![Some(1.0), Some(2.0)]);
+
+    // Windows-1252: é is 0xE9, € is 0x80.
+    let p = write_bytes("cp1252.csv", b"Name,Amount\nCaf\xe9,100\n\x80 Bond,200\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(cfg.encoding, CsvTextEncoding::Windows1252);
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&df, "Name"), vec![Some("Café".to_string()), Some("€ Bond".to_string())]);
+    assert_eq!(f64_col(&df, "Amount"), vec![Some(100.0), Some(200.0)]);
+    assert_eq!(decode_windows_1252(b"\x93x\x94 \x96 \xa0"), "\u{201c}x\u{201d} \u{2013} \u{a0}");
+
+    // A UTF-8 BOM never stays on the first column name.
+    let p = write_bytes("bom.csv", b"\xef\xbb\xbfBalance,Name\n1,a\n2,b\n");
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(cfg.columns[0].name, "Balance");
+    assert_eq!(preview_csv_raw(&p, 5).unwrap().get_column_names()[0].as_str(), "Balance");
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1.0), Some(2.0)]);
+    // Same when the user loads the file with no columns configured.
+    let raw = build_lazy_pipeline(&p, false, &IngestionConfig::default(), &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(raw.get_column_names()[0].as_str(), "Balance");
+}
+
+#[test]
+fn t24_parquet_schema() {
+    // P5: String columns of a Parquet file convert with the CSV rules; masks apply.
+    let df = df!(
+        "Actnum" => ["0012345678", "0098765432", "0011112222"],
+        "Balance" => ["1,000", "(50)", "abc"],
+        "Matdat" => ["05/11/2026", "31-Oct-26", ""],
+        "Rate" => [9.5, 10.0, 11.0],
+        "Flag" => [true, false, true]
+    )
+    .unwrap();
+    let p = write_parquet("p5.parquet", &df);
+
+    let mut cfg = auto_detect_parquet_schema(&p).unwrap();
+    let labels: Vec<(&str, &str, ColDataType)> = cfg
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.source_dtype.as_str(), c.dtype))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            ("Actnum", "String", ColDataType::Utf8),
+            ("Balance", "String", ColDataType::Utf8),
+            ("Matdat", "String", ColDataType::Utf8),
+            ("Rate", "Float64", ColDataType::Float64),
+            ("Flag", "Boolean", ColDataType::Utf8),
+        ]
+    );
+    assert_eq!(cfg.columns[1].sample_values, vec!["1,000", "(50)", "abc"]);
+
+    // The auto-detected schema changes nothing.
+    let same = build_lazy_pipeline(&p, true, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert!(same.equals_missing(&df));
+
+    let set = |cfg: &mut IngestionConfig, name: &str, f: &dyn Fn(&mut ColumnSchemaConfig)| {
+        f(cfg.columns.iter_mut().find(|c| c.name == name).unwrap())
+    };
+    set(&mut cfg, "Balance", &|c| c.dtype = ColDataType::Float64);
+    set(&mut cfg, "Matdat", &|c| c.dtype = ColDataType::DateDMY);
+    set(&mut cfg, "Actnum", &|c| c.pii_mask = PiiMaskMode::AccountNumber);
+    let out = build_lazy_pipeline(&p, true, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Balance"), vec![Some(1000.0), Some(-50.0), None]);
+    assert_eq!(
+        date_days_col(&out, "Matdat"),
+        vec![Some(days(2026, 11, 5)), Some(days(2026, 10, 31)), None]
+    );
+    let acct = str_col(&out, "Actnum");
+    let a0 = acct[0].clone().unwrap();
+    assert!(a0.starts_with("001") && a0.ends_with("678") && a0 != "0012345678", "{a0}");
+    assert_eq!(a0.len(), 11, "3 + 5 hex + 3: {a0}");
+    assert_eq!(f64_col(&out, "Rate"), vec![Some(9.5), Some(10.0), Some(11.0)]);
+    assert_eq!(out.column("Flag").unwrap().dtype(), &DataType::Boolean);
+
+    // P2 counts cover Parquet conversions ("abc"; the blank date is not a failure).
+    let f = compute_parse_failures(&p, true, &cfg, &tmpdir()).unwrap();
+    assert_eq!(f, vec![ParseFailure { column: "Balance".into(), count: 1, examples: vec!["abc".into()] }]);
+
+    // A numeric Parquet column changed to Text becomes text; a Boolean cannot become a number.
+    let mut c2 = cfg.clone();
+    set(&mut c2, "Rate", &|c| c.dtype = ColDataType::Utf8);
+    let out = build_lazy_pipeline(&p, true, &c2, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&out, "Rate")[0].as_deref(), Some("9.5"));
+    set(&mut c2, "Flag", &|c| c.dtype = ColDataType::Float64);
+    let err = build_lazy_pipeline(&p, true, &c2, &tmpdir()).err().expect("Boolean -> Float64 must fail");
+    assert!(format!("{err:#}").contains("'Flag' is Boolean"), "{err:#}");
+
+    // Dr/Cr in a Parquet String column with no sign convention stops the load too.
+    let p2 = write_parquet("p5_drcr.parquet", &df!("Balance" => ["100 Dr", "50 Cr"]).unwrap());
+    let mut c3 = auto_detect_parquet_schema(&p2).unwrap();
+    c3.columns[0].dtype = ColDataType::Float64;
+    let err = build_lazy_pipeline(&p2, true, &c3, &tmpdir()).err().expect("Dr/Cr with no sign must fail");
+    assert!(format!("{err:#}").contains("'Balance' has Dr/Cr"), "{err:#}");
+    c3.columns[0].sign_convention = SignConvention::DrPositive;
+    let out = build_lazy_pipeline(&p2, true, &c3, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Balance"), vec![Some(100.0), Some(-50.0)]);
+}
+
+#[test]
+fn t24b_headless_parquet_applies_macro_schema() {
+    // Macro schema on a Parquet input: String columns that exist are converted, a native
+    // column keeps its type, and absent columns are skipped with a warning on stderr.
+    let p = write_parquet(
+        "p5_headless.parquet",
+        &df!(
+            "Balance" => ["1,000", "(50)"],
+            "Matdat" => ["05/11/2026", "31-Oct-26"],
+            "Rate" => [9.5, 10.0]
+        )
+        .unwrap(),
+    );
+    let col = |name: &str, dtype| ColumnSchemaConfig { name: name.into(), dtype, ..Default::default() };
+    let saved = IngestionConfig {
+        columns: vec![
+            col("Balance", ColDataType::Float64),
+            col("Matdat", ColDataType::DateDMY),
+            col("Rate", ColDataType::Utf8),
+            col("Branch_Name", ColDataType::Utf8),
+            col("Old_Limit", ColDataType::Float64),
+        ],
+        ..Default::default()
+    };
+    let (fitted, missing) = adapt_schema_to_parquet(&p, &saved).unwrap();
+    assert_eq!(missing, vec!["Branch_Name".to_string(), "Old_Limit".to_string()]);
+    let kept: Vec<&str> = fitted.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(kept, vec!["Balance", "Matdat"]);
+
+    let recipe = MacroRecipe {
+        name: "pq".into(),
+        description: String::new(),
+        created_at: String::new(),
+        enforce_balance_control: true,
+        control_column: Some("Balance".into()),
+        optional_ingestion_schema: Some(saved),
+        steps: vec![],
+    };
+    let m = tmpdir().join("p5_headless.mpq.json");
+    std::fs::write(&m, serde_json::to_string(&recipe).unwrap()).unwrap();
+    let out = tmpdir().join("p5_headless_out.parquet");
+    let _ = std::fs::remove_file(&out);
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_MicroParquet"))
+        .args(["--headless", "--input"])
+        .arg(&p)
+        .arg("--macro-file")
+        .arg(&m)
+        .arg("--export-parquet")
+        .arg(&out)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+    assert!(r.status.success(), "{err}");
+    assert!(err.contains("not in the Parquet file, skipped: Branch_Name, Old_Limit"), "{err}");
+    let df = LazyFrame::scan_parquet(&out, ScanArgsParquet::default()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1000.0), Some(-50.0)]);
+    assert_eq!(date_days_col(&df, "Matdat"), vec![Some(days(2026, 11, 5)), Some(days(2026, 10, 31))]);
+    assert_eq!(df.column("Rate").unwrap().dtype(), &DataType::Float64, "native column keeps its type");
 }
 
 #[test]
@@ -722,6 +1139,7 @@ fn t13_pii_hash_collisions() {
             dtype: ColDataType::Utf8,
             pii_mask: PiiMaskMode::ClientNameHash,
             sample_values: vec![],
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -818,6 +1236,7 @@ fn t15_python_codegen_drops_banking_steps() {
         dtype,
         pii_mask,
         sample_values: vec![],
+        ..Default::default()
     };
     let cfg = IngestionConfig {
         columns: vec![
@@ -839,16 +1258,19 @@ fn t15_python_codegen_drops_banking_steps() {
     assert!(py.contains("raise NotImplementedError(\"Step 1 '+BB CL Provision & BFP' has no Python translation"), "{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 2 '+ΔNII Shock (+100 bps)' has no Python translation"), "{py}");
     assert!(py.contains("# WARNING: PII masking not reproduced"), "{py}");
+    // Amounts go through the same parsing rules as the app (P1), with the column's sign setting.
+    assert!(py.contains("def _mp_amount(v, col, sign, acc, as_int=False):"), "{py}");
     assert!(
-        py.contains("pl.col(\"Balance\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${1}\").cast(pl.Float64"),
-        "comma and bracket cleaning must come before the Float64 cast:\n{py}"
+        py.contains("pl.col(\"Balance\").map_elements(lambda v: _mp_amount(v, \"Balance\", \"Unset\", True), return_dtype=pl.Float64)"),
+        "Float64 columns must use the amount parser:\n{py}"
     );
-    assert!(py.contains("pl.col(\"Matdat\").str.to_date(\"%d/%m/%Y\""), "{py}");
-    assert!(py.contains("pl.col(\"Opndat\").str.to_date(\"%m/%d/%Y\""), "{py}");
-    assert!(py.contains("pl.col(\"Valdat\").str.to_date(\"%Y-%m-%d\""), "{py}");
+    // Dates go through the same parser as the app (P3), not a fixed strptime format.
+    assert!(py.contains("def _mp_date(v, mode):"), "{py}");
+    assert!(py.contains("pl.col(\"Matdat\").map_elements(lambda v: _mp_date(v, \"DateDMY\"), return_dtype=pl.Date)"), "{py}");
+    assert!(py.contains("pl.col(\"Opndat\").map_elements(lambda v: _mp_date(v, \"DateMDY\"), return_dtype=pl.Date)"), "{py}");
+    assert!(py.contains("pl.col(\"Valdat\").map_elements(lambda v: _mp_date(v, \"DateISO\"), return_dtype=pl.Date)"), "{py}");
+    assert!(!py.contains("str.to_date("), "{py}");
     // Casts are not strict (bad values become null, as in the app) and the null counts are printed
-    assert!(py.contains("\").cast(pl.Float64, strict=False)"), "{py}");
-    assert!(py.contains("str.to_date(\"%d/%m/%Y\", strict=False)"), "{py}");
     assert!(!py.contains("strict=True"), "{py}");
     assert!(py.contains("_cast_cols = [\"Balance\", \"Matdat\", \"Opndat\", \"Valdat\"]"), "{py}");
     assert!(py.contains("could not be converted and became null"), "{py}");
@@ -987,6 +1409,31 @@ fn t20_v111_macro_json_still_loads() {
         }
         other => panic!("unexpected step {other:?}"),
     }
+}
+
+#[test]
+fn t20b_phase1_schema_json_still_loads() {
+    // A .schema.json saved by a Phase 1 build (no Phase 2 fields)
+    let json = r#"{
+        "columns": [
+            {"name": "Actnum", "dtype": "Utf8", "pii_mask": "AccountNumber", "sample_values": ["0012345"]},
+            {"name": "Balance", "dtype": "Float64", "pii_mask": "None", "sample_values": ["1,234.50"]},
+            {"name": "Matdat", "dtype": "DateDMY", "pii_mask": "None", "sample_values": ["05/11/2026"]}
+        ],
+        "sanitize_linebreaks": true,
+        "parse_accounting_negatives": true,
+        "heal_broken_csv_lines": false,
+        "pii_salt": "BANK_ASIA_ALM_2026"
+    }"#;
+    let cfg: IngestionConfig = serde_json::from_str(json).expect("Phase 1 schema JSON must load");
+    assert_eq!(cfg.columns.len(), 3);
+    let bal = &cfg.columns[1];
+    assert_eq!(bal.dtype, ColDataType::Float64);
+    assert_eq!(bal.sign_convention, SignConvention::Unset);
+    assert!(!bal.has_dr_cr);
+    assert_eq!(cfg.separator, ',');
+    assert_eq!(cfg.skip_rows, 0);
+    assert_eq!(cfg.encoding, CsvTextEncoding::Utf8);
 }
 
 #[test]

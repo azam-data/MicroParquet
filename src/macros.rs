@@ -1,5 +1,6 @@
 use crate::models::{
-    AggFunc, ColDataType, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
+    parquet_native_type, parquet_needs_conversion, AggFunc, ColDataType, ColumnSchemaConfig,
+    CsvTextEncoding, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -39,6 +40,151 @@ pub fn python_untranslated_steps(steps: &[TransformStep]) -> Vec<String> {
         .collect()
 }
 
+/// Python mirror of `engine::parse_banking_amount` (P1 rules), emitted when a column is typed
+/// Float64 or Int64. Keep the two in step.
+const PY_AMOUNT_HELPER: &str = r#"import re as _re
+_MP_CURRENCY = ("\u09f3", "bdt", "tk.", "tk")
+_MP_MARKERS = (("dr.", "Dr"), ("cr.", "Cr"), ("dr", "Dr"), ("cr", "Cr"))
+
+
+def _mp_strip_currency(s):
+    low = s.lower()
+    for p in _MP_CURRENCY:
+        if low.startswith(p):
+            return s[len(p):].lstrip()
+    return s
+
+
+def _mp_amount(v, col, sign, acc, as_int=False):
+    """Same rules as MicroParquet: currency prefix, Dr/Cr per sign convention, commas,
+    (brackets) and trailing minus, "-" = 0, blank/NA/N/A/NULL = null. Anything else -> null."""
+    if v is None:
+        return None
+    s = v.strip()
+    if s == "" or s.lower() in ("na", "n/a", "null"):
+        return None
+    s = _mp_strip_currency(s)
+    marker = None
+    low = s.lower()
+    for m, kind in _MP_MARKERS:
+        if low.endswith(m):
+            marker, s = kind, s[: len(s) - len(m)].strip()
+            break
+    else:
+        for m, kind in _MP_MARKERS:
+            if low.startswith(m):
+                marker, s = kind, s[len(m):].strip()
+                break
+    if marker is not None and sign == "Unset":
+        raise ValueError(
+            f"Column '{col}' has Dr/Cr amounts. Choose 'Dr is +' or 'Cr is +' for it in Schema & Ingestion."
+        )
+    s = _mp_strip_currency(s.strip())
+    if s == "-":
+        return 0 if as_int else 0.0
+    body = s.replace(",", "").strip()
+    neg = False
+    if acc:
+        if body.startswith("(") and body.endswith(")"):
+            body, neg = _mp_strip_currency(body[1:-1].strip()), True
+        elif len(body) > 1 and body.endswith("-"):
+            body, neg = body[:-1].strip(), True
+    if body.startswith("-"):
+        if neg:
+            return None
+        neg, body = True, body[1:]
+    elif body.startswith("+"):
+        body = body[1:]
+    if not _re.fullmatch(r"[0-9]*\.?[0-9]*", body) or not _re.search(r"[0-9]", body):
+        return None
+    if marker is not None:
+        if neg:
+            return None
+        neg = marker != ("Dr" if sign == "DrPositive" else "Cr")
+    if as_int:
+        if "." in body:
+            return None
+        x = int(body)
+    else:
+        x = float(body)
+    return -x if neg else x
+
+
+"#;
+
+/// Python mirror of `engine::parse_flexible_banking_date` (P3 rules), emitted when a column is
+/// typed as a date. Keep the two in step.
+const PY_DATE_HELPER: &str = r#"import datetime as _dt
+import re as _re
+_MP_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _mp_digits(t):
+    return t != "" and all("0" <= ch <= "9" for ch in t)
+
+
+def _mp_ymd(y, m, d):
+    try:
+        return _dt.date(y, m, d)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _mp_date(v, mode):
+    """Same rules as MicroParquet: D/M/Y or M/D/Y (by mode, swapping when the other reading
+    is the only valid one), YYYY-MM-DD, month names (31-Oct-26), "." separators, trailing
+    times, two-digit years 00-69 -> 20xx and 70-99 -> 19xx. Blank, "-", "0", NA -> null."""
+    if v is None:
+        return None
+    s = v.strip().strip('"').strip("'").strip()
+    if s in ("", "-", "0") or s.lower() in ("null", "none", "na", "n/a"):
+        return None
+    s = s.split(" ")[0]
+    for i in range(1, len(s) - 1):
+        if s[i] in "Tt" and _mp_digits(s[i - 1]) and _mp_digits(s[i + 1]):
+            s = s[:i]
+            break
+    parts = _re.split(r"[/.\-]", s)
+    if len(parts) < 3:
+        return None
+    a, b, c = (p.strip() for p in parts[:3])
+    if not _mp_digits(a) or not _mp_digits(c):
+        return None
+    p1 = int(a)
+    month = _MP_MONTHS.get(b.lower())
+    if month is not None:
+        p2 = month
+    elif _mp_digits(b):
+        p2 = int(b)
+    else:
+        return None
+    p3 = int(c)
+    if len(a) == 4:
+        if not 1900 <= p1 <= 2200:
+            return None
+        m, d = (p2, p3) if p2 <= 12 else (p3, p2)
+        return _mp_ymd(p1, m, d)
+    y = int(c)
+    if len(c) == 2:
+        year = 2000 + y if y < 70 else 1900 + y
+    elif len(c) == 4 and 1900 <= y <= 2200:
+        year = y
+    else:
+        return None
+    if month is not None:
+        return _mp_ymd(year, p2, p1)
+    if mode == "DateDMY":
+        return _mp_ymd(year, p2, p1) or _mp_ymd(year, p1, p2)
+    return _mp_ymd(year, p1, p2) or _mp_ymd(year, p2, p1)
+
+
+"#;
+
 /// Escapes text for a double-quoted Python string literal.
 fn py_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -69,62 +215,113 @@ pub fn generate_python_polars_code(
             py.push_str(&format!("    \"{}\": pl.Utf8,\n", c.name));
         }
         py.push_str("}\n\n");
-        py.push_str(
-            "lf = pl.scan_csv(source_path, schema_overrides=custom_schema, try_parse_dates=False)\n\n",
+        // Same read settings as the app: separator, title lines above the header, encoding.
+        let read_args = format!(
+            "schema_overrides=custom_schema, try_parse_dates=False, separator={:?}, skip_rows={}",
+            ingestion.separator, ingestion.skip_rows
         );
+        match ingestion.encoding {
+            CsvTextEncoding::Utf8 => py.push_str(&format!(
+                "lf = pl.scan_csv(source_path, {}, encoding=\"utf8-lossy\")\n\n",
+                read_args
+            )),
+            CsvTextEncoding::Windows1252 => py.push_str(&format!(
+                "# Windows-1252 file: decoded while reading (scan_csv reads UTF-8 only)\n\
+                 lf = pl.read_csv(source_path, {}, encoding=\"cp1252\", infer_schema_length=0).lazy()\n\n",
+                read_args
+            )),
+        }
 
         if ingestion.sanitize_linebreaks {
             py.push_str("# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n");
             py.push_str("lf = lf.with_columns(\n    pl.col(pl.Utf8).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars()\n)\n\n");
         }
+    }
 
-        if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
-            py.push_str("# WARNING: PII masking not reproduced\n\n");
-        }
+    if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
+        py.push_str("# WARNING: PII masking not reproduced\n\n");
+    }
 
+    // Columns to type, each with the expression giving its text. CSV: every column (read as
+    // text). Parquet: only columns whose type was changed from the file's own; non-text
+    // columns are cast to text first, as in the app.
+    let typed: Vec<(&ColumnSchemaConfig, String)> = ingestion
+        .columns
+        .iter()
+        .filter_map(|c| {
+            let name = py_escape(&c.name);
+            if !is_parquet {
+                return Some((c, format!("pl.col(\"{}\")", name)));
+            }
+            if !parquet_needs_conversion(c) || parquet_native_type(&c.source_dtype).is_none() {
+                return None;
+            }
+            if c.source_dtype == "String" {
+                Some((c, format!("pl.col(\"{}\")", name)))
+            } else {
+                Some((c, format!("pl.col(\"{}\").cast(pl.Utf8)", name)))
+            }
+        })
+        .collect();
+    {
         // Same typing as MicroParquet's ingestion: casts are not strict, so a value that cannot
         // be converted becomes null (as in the app), and the script prints how many per column.
         let mut casts: Vec<String> = Vec::new();
         let mut cast_cols: Vec<String> = Vec::new();
-        for c in &ingestion.columns {
+        if typed
+            .iter()
+            .any(|(c, _)| matches!(c.dtype, ColDataType::Float64 | ColDataType::Int64))
+        {
+            py.push_str("# Amount parsing rules (same as MicroParquet)\n");
+            py.push_str(PY_AMOUNT_HELPER);
+        }
+        if typed.iter().any(|(c, _)| {
+            matches!(
+                c.dtype,
+                ColDataType::DateDMY | ColDataType::DateMDY | ColDataType::DateISO
+            )
+        }) {
+            py.push_str("# Date parsing rules (same as MicroParquet)\n");
+            py.push_str(PY_DATE_HELPER);
+        }
+        let acc = if ingestion.parse_accounting_negatives { "True" } else { "False" };
+        for (c, base) in &typed {
             let name = py_escape(&c.name);
-            let cleaned = if ingestion.parse_accounting_negatives {
-                format!(
-                    "pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${{1}}\")",
-                    name
-                )
-            } else {
-                format!("pl.col(\"{}\")", name)
-            };
+            let sign = format!("{:?}", c.sign_convention);
             if c.dtype != ColDataType::Utf8 {
                 cast_cols.push(format!("\"{}\"", name));
             }
             match c.dtype {
-                ColDataType::Utf8 => {}
-                ColDataType::Float64 => {
-                    casts.push(format!("{}.cast(pl.Float64, strict=False)", cleaned))
+                // CSV text stays as read; a Parquet column changed to Text is cast.
+                ColDataType::Utf8 => {
+                    if is_parquet && c.source_dtype != "String" {
+                        casts.push(base.clone());
+                    }
                 }
-                ColDataType::Int64 => {
-                    let int_cleaned = if ingestion.parse_accounting_negatives {
-                        format!("pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True)", name)
-                    } else {
-                        format!("pl.col(\"{}\")", name)
-                    };
-                    casts.push(format!("{}.cast(pl.Int64, strict=False)", int_cleaned))
-                }
-                ColDataType::DateDMY => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\", strict=False)", name))
-                }
-                ColDataType::DateMDY => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%m/%d/%Y\", strict=False)", name))
-                }
-                ColDataType::DateISO => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%Y-%m-%d\", strict=False)", name))
+                ColDataType::Float64 => casts.push(format!(
+                    "{b}.map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}), return_dtype=pl.Float64)",
+                    b = base,
+                    n = name,
+                    s = sign,
+                    a = acc
+                )),
+                ColDataType::Int64 => casts.push(format!(
+                    "{b}.map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}, as_int=True), return_dtype=pl.Int64)",
+                    b = base,
+                    n = name,
+                    s = sign,
+                    a = acc
+                )),
+                ColDataType::DateDMY | ColDataType::DateMDY | ColDataType::DateISO => {
+                    casts.push(format!(
+                        "{}.map_elements(lambda v: _mp_date(v, \"{:?}\"), return_dtype=pl.Date)",
+                        base, c.dtype
+                    ))
                 }
             }
         }
         if !casts.is_empty() {
-            py.push_str("# 2b. Apply Ingestion Column Types (numbers cleaned of commas and (brackets))\n");
+            py.push_str("# 2b. Apply Ingestion Column Types (amounts parsed by _mp_amount)\n");
             py.push_str("# Casts are not strict: a value that cannot be converted becomes null, as in MicroParquet.\n");
             py.push_str(&format!("_cast_cols = [{}]\n", cast_cols.join(", ")));
             py.push_str("_nulls_before = lf.select([pl.col(c).is_null().sum() for c in _cast_cols]).collect().row(0)\n");
