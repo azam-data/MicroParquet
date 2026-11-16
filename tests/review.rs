@@ -287,12 +287,12 @@ fn t07_provisioning() {
     assert_eq!(cfg.rules, ProvisionConfig::defaults().rules, "rule file round trip");
 
     let df = df!(
-        "Balance" => [1_000_000.0; 11],
-        "CL" => ["UC", "SMA", "SS", "DF", "B/L", "BL", "STD-1", "SS", "BL", "BL", "DF"],
-        "Seg" => ["CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "NON-CMSME", "CMSME", "CMSME", "CORPORATE", "CORPORATE", "AGRI TERM LOAN"],
-        "Susp" => [0.0, 0.0, 100_000.0, 100_000.0, 100_000.0, 100_000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "Sec" => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 950_000.0, 950_000.0, 0.0],
-        "Coll" => [None, None, None, None, None, None, None, None, None, Some(" deposit lien"), None]
+        "Balance" => [1_000_000.0; 13],
+        "CL" => ["UC", "SMA", "SS", "DF", "B/L", "BL", "STD-1", "SS", "BL", "BL", "DF", "SS", "STD"],
+        "Seg" => ["CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "NON-CMSME", "SMALL", "SMALL", "CORPORATE", "CORPORATE", "AGRI TERM LOAN", "CORPORATE", "MEDIUM"],
+        "Susp" => [0.0, 0.0, 100_000.0, 100_000.0, 100_000.0, 100_000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 900_000.0, 0.0],
+        "Sec" => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 950_000.0, 950_000.0, 0.0, 0.0, 0.0],
+        "Coll" => [None, None, None, None, None, None, None, None, None, Some(" deposit lien"), None, None, None]
     )
     .unwrap();
     let run = |df: DataFrame, coll: Option<&str>, cutoff: &str| {
@@ -300,21 +300,30 @@ fn t07_provisioning() {
     };
     let out = run(df.clone(), Some("Coll"), "2026-10-31").unwrap().collect().unwrap();
     let prov = f64_col(&out, "Required_Provision_BDT");
-    let expected = [10_000.0, 50_000.0, 180_000.0, 450_000.0, 900_000.0, 900_000.0, 5_000.0, 200_000.0, 150_000.0, 50_000.0, 500_000.0];
+    let expected = [
+        10_000.0, 50_000.0, 180_000.0, 450_000.0, 900_000.0, 900_000.0, 5_000.0, 200_000.0, 150_000.0, 50_000.0, 500_000.0,
+        20_000.0, // SS, suspense 900,000, no security: no 15% floor
+        10_000.0, // MEDIUM is not in the CMSME concession
+    ];
     for (i, e) in expected.iter().enumerate() {
         assert_close(prov[i].unwrap(), *e, &format!("row {} provision", i + 1));
     }
     let bfp = f64_col(&out, "Base_For_Provision_BDT");
     assert_close(bfp[2].unwrap(), 900_000.0, "SS BFP");
     assert_close(bfp[8].unwrap(), 150_000.0, "BL BFP with 15% floor");
+    assert_close(bfp[11].unwrap(), 100_000.0, "SS BFP, no security, no floor");
     assert_eq!(f64_col(&out, "Statutory_Prov_Rate_Pct")[10], Some(50.0));
     let cat = str_col(&out, "Reg_Category");
     assert_eq!(cat[5].as_deref(), Some("OTHER"), "NON-CMSME");
     assert_eq!(cat[6].as_deref(), Some("CMSME"));
     assert_eq!(cat[10].as_deref(), Some("OTHER"), "AGRI TERM LOAN is not an exact match");
+    assert_eq!(cat[12].as_deref(), Some("OTHER"), "MEDIUM");
     let unmapped: Vec<Option<bool>> = out.column("Segment_Unmapped").unwrap().bool().unwrap().into_iter().collect();
+    assert_eq!(unmapped[0], Some(false), "CORPORATE is listed as OTHER");
+    assert_eq!(unmapped[5], Some(false), "NON-CMSME is listed as OTHER");
     assert_eq!(unmapped[6], Some(false));
     assert_eq!(unmapped[10], Some(true));
+    assert_eq!(unmapped[12], Some(false), "MEDIUM is listed as OTHER");
     let grade = str_col(&out, "CL_Grade");
     assert_eq!(grade[0].as_deref(), Some("STD"));
     assert_eq!(grade[4].as_deref(), Some("BL"));
@@ -335,10 +344,14 @@ fn t07_provisioning() {
         assert_close(f64_col(&out, "Required_Provision_BDT")[0].unwrap(), 10_000.0, cutoff);
     }
 
-    // Unknown CL code: an error that names it, never a default rate
-    let bad = df!("Balance" => [1.0, 2.0, 3.0], "CL" => ["UC", "XYZ", "XYZ"], "Seg" => ["A", "B", "C"], "Susp" => [0.0; 3], "Sec" => [0.0; 3]).unwrap();
-    let err = run(bad, None, "2026-10-31").err().expect("XYZ must fail").to_string();
-    assert!(err.contains("XYZ") && !err.contains("'UC'"), "{err}");
+    // Unknown CL codes: an error that names them, never a default rate (BLW is not mapped)
+    let bad = df!("Balance" => [1.0, 2.0, 3.0], "CL" => ["UC", "XYZ", "BLW"], "Seg" => ["A", "B", "C"], "Susp" => [0.0; 3], "Sec" => [0.0; 3]).unwrap();
+    let err = run(bad, None, "2026-10-31").err().expect("XYZ and BLW must fail").to_string();
+    assert!(err.contains("XYZ") && err.contains("BLW") && !err.contains("'UC'"), "{err}");
+
+    // Cutoff before the first rule: the owner's message
+    let err = run(df.slice(0, 1), None, "2025-03-31").err().expect("no rule before 2025-04-01").to_string();
+    assert!(err.contains("No provisioning rule covers cutoff 2025-03-31; rules start 2025-04-01 (BRPD Circular 15/2024)"), "{err}");
 
     // Blank cutoff = today, flagged
     let out = run(df.slice(0, 1), None, "").unwrap().collect().unwrap();
@@ -349,14 +362,16 @@ fn t07_provisioning() {
 fn t07b_provision_rule_files() {
     let cutoff = |s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
     let mut cfg = ProvisionConfig::defaults();
-    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-11-15")).unwrap().rate_pct, 1.0);
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-10-12")).unwrap().rate_pct, 5.0);
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-10-13")).unwrap().rate_pct, 1.0);
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-12-20")).unwrap().rate_pct, 1.0);
     assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-12-21")).unwrap().rate_pct, 0.5);
     assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2026-12-31")).unwrap().rate_pct, 0.5);
     assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2027-01-01")).unwrap().rate_pct, 5.0);
     assert_eq!(cfg.lookup("SS", "CMSME", cutoff("2026-10-31")).unwrap().rate_pct, 20.0);
     // Before the first rule: no rate, error
     let err = cfg.lookup("STD", "OTHER", cutoff("2025-03-31")).unwrap_err().to_string();
-    assert!(err.contains("no rule"), "{err}");
+    assert!(err.contains("No provisioning rule covers cutoff 2025-03-31"), "{err}");
     // Overlap: a second ANY row in force on the same day is an error naming both
     let mut extra = cfg.rules[0].clone();
     extra.source = "duplicate row".into();
@@ -741,9 +756,9 @@ fn t17_join_duplicates_inflate() {
 fn t18_segment_and_status_edge_cases() {
     // T7: codes are normalised (case, spaces); segments match exactly, unmapped -> OTHER (flagged).
     let df = df!(
-        "Balance" => [1_000_000.0; 5],
-        "CL" => ["SS", "ss ", "Sub  Standard", "DF", "Sub-Standard"],
-        "Seg" => ["NON-CMSME", "CORPORATE", "CORPORATE", "AGRI TERM LOAN", " cmsme "]
+        "Balance" => [1_000_000.0; 6],
+        "CL" => ["SS", "ss ", "Sub  Standard", "DF", "Sub-Standard", "UC"],
+        "Seg" => ["NON-CMSME", "CORPORATE", "CORPORATE", "AGRI TERM LOAN", " small ", "CMSME"]
     )
     .unwrap();
     let cfg = ProvisionConfig::defaults();
@@ -751,11 +766,15 @@ fn t18_segment_and_status_edge_cases() {
         .unwrap()
         .collect()
         .unwrap();
-    assert_eq!(f64_col(&out, "Statutory_Prov_Rate_Pct"), vec![Some(20.0), Some(20.0), Some(20.0), Some(50.0), Some(20.0)]);
+    assert_eq!(f64_col(&out, "Statutory_Prov_Rate_Pct"), vec![Some(20.0), Some(20.0), Some(20.0), Some(50.0), Some(20.0), Some(1.0)]);
     let cat = str_col(&out, "Reg_Category");
     assert_eq!(cat[0].as_deref(), Some("OTHER"));
     assert_eq!(cat[3].as_deref(), Some("OTHER"));
     assert_eq!(cat[4].as_deref(), Some("CMSME"));
+    // A bare "CMSME" segment code may include medium loans, so it is not in the map: OTHER, flagged.
+    assert_eq!(cat[5].as_deref(), Some("OTHER"));
+    let unmapped: Vec<Option<bool>> = out.column("Segment_Unmapped").unwrap().bool().unwrap().into_iter().collect();
+    assert_eq!(unmapped[5], Some(true));
     println!("PROV-EDGE:\n{}", out.select(["CL", "Seg", "CL_Grade", "Reg_Category", "Segment_Unmapped", "Statutory_Prov_Rate_Pct"]).unwrap());
 }
 

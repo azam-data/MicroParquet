@@ -101,19 +101,19 @@ Replace the hard-coded rates in `apply_loan_classification_provision` with data 
    - SMA ← SMA
    - SS ← SS, SUB-STANDARD, SUBSTANDARD, SUB STANDARD
    - DF ← DF, DOUBTFUL
-   - BL ← BL, B/L, BLW, BAD/LOSS, BAD, LOSS
+   - BL ← BL, B/L, BAD/LOSS, BAD, LOSS (BLW is not mapped; owner decision)
    Any code not in the map → `Err` listing up to 20 distinct unmapped codes. Never default an unknown code to 1%.
-2. `segment_map.json`: normalised segment code → category, where category is one of SHORT_TERM_AGRI, CMSME, OTHER. Exact match only, no regex. Defaults map CMSME, SME, CMS, COTTAGE, MICRO, SMALL and MEDIUM → CMSME, and AGRI ST and SHORT TERM AGRI → SHORT_TERM_AGRI. Unmapped values → OTHER, and the step adds a column `Segment_Unmapped` = true so they can be reviewed. "NON-CMSME" must map to OTHER.
-3. `provision_rules.json`: a list of `{grade, category, rate_pct, effective_from, effective_to (nullable), source, verify}`. Rate lookup = the row matching grade and category (category "ANY" as fallback) where `effective_from ≤ cutoff ≤ effective_to`. Two matching rows, or none → `Err`. Seed these rows, keeping `"verify": true` on the ones marked so the owner checks them against the circular PDFs:
+2. `segment_map.json`: normalised segment code → category, where category is one of SHORT_TERM_AGRI, CMSME, OTHER. Exact match only, no regex. Defaults map CMS, COTTAGE, MICRO and SMALL (only) → CMSME, since the concession covers cottage, micro and small loans but not medium; AGRI ST and SHORT TERM AGRI → SHORT_TERM_AGRI; and CORPORATE, NON-CMSME and MEDIUM → OTHER explicitly. Unmapped values (including a bare "CMSME" or "SME" code) → OTHER, and the step adds a column `Segment_Unmapped` = true so they can be reviewed.
+3. `provision_rules.json`: a list of `{grade, category, rate_pct, effective_from, effective_to (nullable), source, verify}`. Rate lookup = the row matching grade and category (category "ANY" as fallback) where `effective_from ≤ cutoff ≤ effective_to`. Two matching rows, or none → `Err`. No rules exist before 2025-04-01; a cutoff before the first rule fails with "No provisioning rule covers cutoff <date>; rules start 2025-04-01 (BRPD Circular 15/2024)". Seed these rows, keeping `"verify": true` on the ones marked so the owner checks them against the circular PDFs:
    - ANY: STD 1%, SMA 5%, SS 20%, DF 50%, BL 100%, from 2025-04-01 (BRPD Circular 15, 27 Nov 2024).
-   - SHORT_TERM_AGRI and CMSME: STD 1% and SMA 1%, from the October 2025 BRPD circular letter (believed to be No. 22 of 2025) to the day before the December 2025 directive. Leave the exact dates as `"verify": true`.
+   - SHORT_TERM_AGRI and CMSME: STD 1% and SMA 1%, from 2025-10-13 to 2025-12-20, source "BRPD Circular Letter No. 22, 13 Oct 2025" (`"verify": true`).
    - SHORT_TERM_AGRI and CMSME: STD 0.5% and SMA 0.5%, from 2025-12-21 to 2026-12-31 (directive that replaced Circular Letter 22/2025; `"verify": true`).
    - SS, DF and BL for SHORT_TERM_AGRI and CMSME use the ANY rows. The concession covers only unclassified loans.
 4. Add `#[serde(default)]` fields to `TransformStep::LoanClassificationProvision`: `cutoff_date: String` (if empty, use today and add a column `Cutoff_Assumed`) and `collateral_type_col: Option<String>`.
 5. Base for provision:
    - STD and SMA: BFP = max(outstanding, 0).
    - SS, DF and BL: raw = max(outstanding − interest suspense − eligible security, 0).
-   - If the collateral type, normalised, is in {DEPOSIT_LIEN, GOVT_SECURITY, GOVT_GUARANTEE, BB_GUARANTEE, AAA_MDB_GUARANTEE}, then BFP = raw. Otherwise (including when there is no collateral-type column and security > 0), BFP = max(raw, 15% × outstanding).
+   - The 15% floor applies only when security > 0 and the collateral type is not exempt: BFP = max(raw, 15% × outstanding). Exempt types (normalised): {DEPOSIT_LIEN, GOVT_SECURITY, GOVT_GUARANTEE, BB_GUARANTEE, AAA_MDB_GUARANTEE}. A missing collateral-type column counts as not exempt. With no security, or exempt collateral, BFP = raw (so no security → BFP = max(outstanding − suspense, 0)).
    - Eligible-security haircuts are out of scope for Phase 1. The security column is taken as already eligible. Say so in a code comment.
 6. Output columns: `CL_Grade`, `Reg_Category`, `NPL_Category`, `Base_For_Provision_BDT`, `Statutory_Prov_Rate_Pct`, `Required_Provision_BDT`, `Rule_Source`.
 7. Acceptance at cutoff 2026-10-31, balance 1,000,000 per row (t07, t18 rewritten):
@@ -123,13 +123,17 @@ Replace the hard-coded rates in `apply_loan_classification_provision` with data 
    - DF CORPORATE, suspense 100,000 → 450,000
    - B/L CORPORATE, suspense 100,000 → 900,000
    - BL NON-CMSME, suspense 100,000 → 900,000
-   - STD-1 CMSME → 5,000
-   - SS CMSME → 200,000
+   - STD-1 SMALL → 5,000
+   - SS SMALL → 200,000
    - BL CORPORATE, security 950,000, no collateral type → BFP 150,000, provision 150,000
    - Same row with collateral type DEPOSIT_LIEN → 50,000
    - "AGRI TERM LOAN" DF → 50% (segment unmapped → OTHER)
    - Code "XYZ" → `Err` that mentions XYZ
-   - The same CMSME STD row at cutoff 2027-01-31 → 10,000, and at cutoff 2025-06-30 → 10,000
+   - Code "BLW" → `Err` that mentions BLW
+   - SS CORPORATE, suspense 900,000, no security → BFP 100,000, provision 20,000
+   - MEDIUM STD → 10,000 (MEDIUM is OTHER)
+   - The same SMALL STD row at cutoff 2027-01-31 → 10,000, and at cutoff 2025-06-30 → 10,000
+   - Cutoff 2025-03-31 → `Err` "No provisioning rule covers cutoff 2025-03-31; rules start 2025-04-01 (BRPD Circular 15/2024)"
 </task>
 
 <task id="T8" name="No panics on stale tab indices">

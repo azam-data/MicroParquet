@@ -548,22 +548,22 @@ const DEFAULT_CL_CODE_MAP: &[(&str, &str)] = &[
     ("DOUBTFUL", "DF"),
     ("BL", "BL"),
     ("B/L", "BL"),
-    ("BLW", "BL"),
     ("BAD/LOSS", "BL"),
     ("BAD", "BL"),
     ("LOSS", "BL"),
 ];
 
+/// CMSME concession covers cottage, micro and small loans only, not medium (owner decision).
 const DEFAULT_SEGMENT_MAP: &[(&str, &str)] = &[
-    ("CMSME", "CMSME"),
-    ("SME", "CMSME"),
     ("CMS", "CMSME"),
     ("COTTAGE", "CMSME"),
     ("MICRO", "CMSME"),
     ("SMALL", "CMSME"),
-    ("MEDIUM", "CMSME"),
     ("AGRI ST", "SHORT_TERM_AGRI"),
     ("SHORT TERM AGRI", "SHORT_TERM_AGRI"),
+    ("CORPORATE", "OTHER"),
+    ("NON-CMSME", "OTHER"),
+    ("MEDIUM", "OTHER"),
 ];
 
 /// One dated provisioning rate. `effective_to` = None means open-ended. Both ends inclusive.
@@ -761,7 +761,7 @@ fn pairs_to_json(pairs: &[(&str, &str)]) -> String {
 
 impl ProvisionConfig {
     /// Seed rules from the owner's review notes. Rows with `verify: true` must be checked
-    /// against the circular PDFs; the October 2025 start date is a placeholder.
+    /// against the circular PDFs.
     pub fn default_rules() -> Vec<ProvisionRule> {
         let rule = |grade: &str, category: &str, rate_pct: f64, from: &str, to: Option<&str>, source: &str, verify: bool| ProvisionRule {
             grade: grade.to_string(),
@@ -773,7 +773,7 @@ impl ProvisionConfig {
             verify,
         };
         let c15 = "BRPD Circular 15, 27 Nov 2024";
-        let oct25 = "BRPD circular letter Oct 2025 (believed No. 22 of 2025); start date is a placeholder";
+        let oct25 = "BRPD Circular Letter No. 22, 13 Oct 2025";
         let dec25 = "BB directive Dec 2025 replacing Circular Letter 22/2025";
         let mut rules = vec![
             rule("STD", "ANY", 1.0, "2025-04-01", None, c15, false),
@@ -784,7 +784,7 @@ impl ProvisionConfig {
         ];
         for cat in ["SHORT_TERM_AGRI", "CMSME"] {
             for grade in ["STD", "SMA"] {
-                rules.push(rule(grade, cat, 1.0, "2025-10-01", Some("2025-12-20"), oct25, true));
+                rules.push(rule(grade, cat, 1.0, "2025-10-13", Some("2025-12-20"), oct25, true));
             }
         }
         for cat in ["SHORT_TERM_AGRI", "CMSME"] {
@@ -846,6 +846,21 @@ impl ProvisionConfig {
             };
             matches!((from, to), (Some(f), Some(t)) if f <= cutoff && cutoff <= t)
         };
+        // No rules exist before the first one in the file (Circular 15/2024 regime start).
+        let earliest = self
+            .rules
+            .iter()
+            .filter_map(|r| NaiveDate::parse_from_str(&r.effective_from, "%Y-%m-%d").ok())
+            .min();
+        if let Some(first) = earliest {
+            if cutoff < first {
+                bail!(
+                    "No provisioning rule covers cutoff {}; rules start {} (BRPD Circular 15/2024)",
+                    cutoff,
+                    first
+                );
+            }
+        }
         for cat in [category, "ANY"] {
             let hits: Vec<&ProvisionRule> = self
                 .rules
@@ -1034,9 +1049,11 @@ pub fn apply_loan_classification_provision_with(
         None => lit(false),
     };
     let is_npl = col("CL_Grade").is_in(lit(Series::new("npl".into(), ["SS", "DF", "BL"])));
-    let raw_net = max_expr(bal.clone() - susp - sec, lit(0.0));
+    let raw_net = max_expr(bal.clone() - susp - sec.clone(), lit(0.0));
+    // 15%-of-outstanding floor only when security is deducted and the collateral is not exempt.
+    let floor_applies = sec.gt(lit(0.0)).and(floor_exempt.not());
     let floored = max_expr(raw_net.clone(), bal.clone() * lit(0.15));
-    let npl_bfp = when(floor_exempt).then(raw_net).otherwise(floored);
+    let npl_bfp = when(floor_applies).then(floored).otherwise(raw_net);
     let bfp_expr = when(is_npl.clone())
         .then(npl_bfp)
         .otherwise(max_expr(bal, lit(0.0)))
