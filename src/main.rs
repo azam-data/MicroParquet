@@ -275,6 +275,8 @@ struct BatchModalState {
     loaded_template: Option<IngestionConfig>,
     mdy_dates_on_csv: bool,
     last_report: Option<BatchReport>,
+    /// Error of the last run as a whole (bad folders, missing template), or of loading the template.
+    last_error: Option<String>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -3799,16 +3801,70 @@ impl MicroParquetApp {
                         "Apply Saved .schema.json Template",
                     );
                     self.batch_modal.schema_strategy = Some(s);
+                    if s == BatchSchemaStrategy::MasterSchemaTemplate {
+                        ui.horizontal(|ui| {
+                            if ui.button("📂 Pick .schema.json...").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_directory(&self.paths.schemas_dir)
+                                    .add_filter("Schema JSON", &["json"])
+                                    .pick_file()
+                                {
+                                    match std::fs::read_to_string(&p)
+                                        .map_err(anyhow::Error::from)
+                                        .and_then(|t| {
+                                            serde_json::from_str::<IngestionConfig>(&t)
+                                                .map_err(anyhow::Error::from)
+                                        }) {
+                                        Ok(cfg) => {
+                                            self.batch_modal.loaded_template = Some(cfg);
+                                            self.batch_modal.template_path = Some(p);
+                                            self.batch_modal.last_error = None;
+                                        }
+                                        Err(e) => {
+                                            self.batch_modal.loaded_template = None;
+                                            self.batch_modal.template_path = None;
+                                            self.batch_modal.last_error = Some(format!(
+                                                "Could not load the template {:?}: {}",
+                                                p, e
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            match &self.batch_modal.template_path {
+                                Some(p) => ui.label(format!("{:?}", p)),
+                                None => ui.colored_label(
+                                    egui::Color32::from_rgb(210, 70, 0),
+                                    "No template chosen",
+                                ),
+                            };
+                        });
+                    }
                 }
 
                 ui.separator();
+                let needs_template = d == BatchDirection::CsvToParquet
+                    && s == BatchSchemaStrategy::MasterSchemaTemplate
+                    && self.batch_modal.loaded_template.is_none();
+                let have_folders = self.batch_modal.input_folder.is_some()
+                    && self.batch_modal.output_folder.is_some();
                 ui.horizontal(|ui| {
-                    if ui.button("🚀 Start Mirror Batch").clicked() {
+                    let run = ui
+                        .add_enabled(
+                            !needs_template && have_folders,
+                            egui::Button::new("🚀 Start Mirror Batch"),
+                        )
+                        .on_disabled_hover_text(if needs_template {
+                            "Pick the .schema.json template first"
+                        } else {
+                            "Choose the input and output folders first"
+                        });
+                    if run.clicked() {
                         if let (Some(in_dir), Some(out_dir)) = (
                             self.batch_modal.input_folder.clone(),
                             self.batch_modal.output_folder.clone(),
                         ) {
-                            if let Ok(rep) = run_folder_mirror_batch(
+                            match run_folder_mirror_batch(
                                 &in_dir,
                                 &out_dir,
                                 d,
@@ -3818,7 +3874,14 @@ impl MicroParquetApp {
                                 self.batch_modal.mdy_dates_on_csv,
                                 &self.paths.temp_dir,
                             ) {
-                                self.batch_modal.last_report = Some(rep);
+                                Ok(rep) => {
+                                    self.batch_modal.last_report = Some(rep);
+                                    self.batch_modal.last_error = None;
+                                }
+                                Err(e) => {
+                                    self.batch_modal.last_report = None;
+                                    self.batch_modal.last_error = Some(format!("{:#}", e));
+                                }
                             }
                         }
                     }
@@ -3827,15 +3890,45 @@ impl MicroParquetApp {
                     }
                 });
 
+                if needs_template {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(210, 70, 0),
+                        "Pick a .schema.json template, or choose Smart Safe Auto-Detect.",
+                    );
+                }
+                if let Some(err) = &self.batch_modal.last_error {
+                    ui.colored_label(egui::Color32::from_rgb(200, 30, 30), format!("❌ {}", err));
+                }
                 if let Some(rep) = &self.batch_modal.last_report {
                     ui.separator();
                     ui.label(format!(
-                        "Converted: {} | Companion Copied: {} | Size: {:.1} MB -> {:.1} MB",
+                        "Converted: {} | Companion Copied: {} | Errors: {} | Size: {:.1} MB -> {:.1} MB",
                         rep.files_converted,
                         rep.companion_files_copied,
+                        rep.errors.len(),
                         rep.bytes_before as f64 / 1_048_576.0,
                         rep.bytes_after as f64 / 1_048_576.0
                     ));
+                    if let Some(p) = &rep.log_path {
+                        ui.label(format!("Log: {:?}", p));
+                    }
+                    let fails: usize = rep.log.iter().filter_map(|r| r.parse_failures).sum();
+                    if fails > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("⚠ {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
+                        );
+                    }
+                    if !rep.errors.is_empty() {
+                        ui.colored_label(egui::Color32::from_rgb(200, 30, 30), "Errors:");
+                        egui::ScrollArea::vertical()
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                for e in &rep.errors {
+                                    ui.label(format!("• {}", e));
+                                }
+                            });
+                    }
                 }
             });
 

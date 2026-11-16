@@ -1836,3 +1836,69 @@ fn t26b_pdf_omitted_columns_and_rows() {
     assert_eq!(rep.truncated_tabs, vec!["Long".to_string()]);
     assert!(rep.omitted_columns.is_empty());
 }
+
+#[test]
+fn t27_batch_log_and_folder_checks() {
+    use micro_parquet::batch::*;
+    let base = tmpdir().join("t27");
+    let _ = std::fs::remove_dir_all(&base);
+    let inp = base.join("in");
+    std::fs::create_dir_all(inp.join("branch")).unwrap();
+    std::fs::write(inp.join("good.csv"), "Actnum,Balance\n001,100.5\n002,200\n").unwrap();
+    std::fs::write(inp.join("branch").join("malformed.csv"), "").unwrap();
+    let out = base.join("out");
+    let rep = run_folder_mirror_batch(&inp, &out, BatchDirection::CsvToParquet, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+        .unwrap();
+    assert_eq!(rep.files_converted, 1);
+    assert_eq!(rep.errors.len(), 1);
+    assert!(rep.errors[0].contains("malformed.csv"), "{:?}", rep.errors);
+    let log = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(out.join("batch_log.csv")))
+        .unwrap()
+        .finish()
+        .unwrap();
+    assert_eq!(log.height(), 2);
+    let status = str_col(&log, "status");
+    let file = str_col(&log, "file");
+    let ok = status.iter().position(|s| s.as_deref() == Some("OK")).expect("one OK row");
+    let bad = status.iter().position(|s| s.as_deref() == Some("ERROR")).expect("one ERROR row");
+    assert_eq!(file[ok].as_deref(), Some("good.csv"));
+    assert_eq!(str_col(&log, "rows")[ok].as_deref(), Some("2"));
+    assert_eq!(str_col(&log, "control_sum")[ok].as_deref(), Some("300.5"));
+    assert_eq!(str_col(&log, "parse_failures")[ok].as_deref(), Some("0"));
+    assert!(file[bad].as_deref().unwrap().contains("malformed.csv"));
+    assert!(str_col(&log, "error")[bad].as_deref().unwrap().contains("no header row"));
+    assert!(out.join("good.parquet").exists());
+
+    // Output folder inside the input folder (or equal to it) is refused before anything is written.
+    for o in [inp.join("converted"), inp.clone(), inp.join("branch").join("..").join("x")] {
+        let err = run_folder_mirror_batch(&inp, &o, BatchDirection::CsvToParquet, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+            .err()
+            .expect("output inside input");
+        assert!(format!("{err:#}").contains("inside the input folder"), "{err:#}");
+    }
+    assert!(!inp.join("converted").exists());
+    // A sibling folder whose name starts with the input's name is not inside it.
+    assert!(check_batch_folders(&inp, &base.join("in_out")).is_ok());
+
+    // Template mode without a template is an error, not a silent auto-detect.
+    let err = run_folder_mirror_batch(&inp, &base.join("out2"), BatchDirection::CsvToParquet, BatchSchemaStrategy::MasterSchemaTemplate, None, ParquetDialect::ArchiveZstd, false, &base)
+        .err()
+        .expect("no template");
+    assert!(format!("{err:#}").contains("no template"), "{err:#}");
+
+    // Parquet -> CSV: companion files are copied and logged; rows and sum come from the source.
+    let pin = base.join("pin");
+    std::fs::create_dir_all(&pin).unwrap();
+    let mut df = df!("Actnum" => ["A1", "A2"], "Balance" => [1.0, 2.0]).unwrap();
+    ParquetWriter::new(std::fs::File::create(pin.join("m.parquet")).unwrap()).finish(&mut df).unwrap();
+    std::fs::write(pin.join("readme.txt"), "notes").unwrap();
+    let rep = run_folder_mirror_batch(&pin, &base.join("pout"), BatchDirection::ParquetToCsv, BatchSchemaStrategy::SmartSafeAutoDetect, None, ParquetDialect::ArchiveZstd, false, &base)
+        .unwrap();
+    let mut log = rep.log.clone();
+    log.sort_by(|a, b| a.file.cmp(&b.file));
+    assert_eq!(log.len(), 2);
+    assert_eq!((log[0].file.as_str(), log[0].status.as_str(), log[0].rows, log[0].control_sum), ("m.parquet", "OK", Some(2), Some(3.0)));
+    assert_eq!((log[1].file.as_str(), log[1].status.as_str()), ("readme.txt", "COPIED"));
+}
