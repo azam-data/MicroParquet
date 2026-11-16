@@ -336,7 +336,18 @@ fn t07_provisioning() {
 
     // No collateral-type column at all: the 15% floor applies
     let out = run(df.slice(8, 1), None, "2026-10-31").unwrap().collect().unwrap();
+    assert_close(f64_col(&out, "Base_For_Provision_BDT")[0].unwrap(), 150_000.0, "BL BFP, no collateral column");
     assert_close(f64_col(&out, "Required_Provision_BDT")[0].unwrap(), 150_000.0, "BL, no collateral column");
+
+    // Literal spec value DEPOSIT_LIEN: no floor, BFP 50,000, provision 50,000
+    let lien = df!(
+        "Balance" => [1_000_000.0], "CL" => ["BL"], "Seg" => ["CORPORATE"],
+        "Susp" => [0.0], "Sec" => [950_000.0], "Coll" => ["DEPOSIT_LIEN"]
+    )
+    .unwrap();
+    let out = run(lien, Some("Coll"), "2026-10-31").unwrap().collect().unwrap();
+    assert_close(f64_col(&out, "Base_For_Provision_BDT")[0].unwrap(), 50_000.0, "DEPOSIT_LIEN BFP");
+    assert_close(f64_col(&out, "Required_Provision_BDT")[0].unwrap(), 50_000.0, "DEPOSIT_LIEN provision");
 
     // CMSME STD outside the 0.5% window falls back to the ANY 1% row
     for cutoff in ["2027-01-31", "2025-06-30"] {
@@ -388,6 +399,12 @@ fn t07b_provision_rule_files() {
     let err = ProvisionConfig::load_or_create(&dir).unwrap_err().to_string();
     assert!(err.contains("provision_rules.json") && err.contains("line 3"), "{err}");
     std::fs::remove_file(dir.join("provision_rules.json")).unwrap();
+    for f in ["cl_code_map.json", "segment_map.json"] {
+        std::fs::write(dir.join(f), "{\n  \"STD\": \"STD\",\n  \"UC\" \"STD\"\n}").unwrap();
+        let err = ProvisionConfig::load_or_create(&dir).unwrap_err().to_string();
+        assert!(err.contains(f) && err.contains("line 3"), "{f}: {err}");
+        std::fs::remove_file(dir.join(f)).unwrap();
+    }
     // Same code listed twice (after normalising) is an error, not last-one-wins
     std::fs::write(dir.join("cl_code_map.json"), "{\"BL\": \"BL\", \" bl \": \"DF\"}").unwrap();
     let err = ProvisionConfig::load_or_create(&dir).unwrap_err().to_string();
@@ -525,6 +542,24 @@ fn t10_nii_shock_signs() {
     assert!(err.contains("'Term deposit'"), "{err}");
     assert!(!err.contains("'Loan'"), "'Loan' starts with L and is a liability: {err}");
 
+    // More than 10 distinct bad values: exactly 10 are listed
+    let bad_sides: Vec<String> = (1..=12).map(|i| format!("X{i:02}")).collect();
+    let many = df!(
+        "Side" => bad_sides.clone(),
+        "Balance" => [1.0; 12],
+        "Rate" => [9.0; 12],
+        "Matdat" => [days(2027, 1, 29); 12]
+    )
+    .unwrap()
+    .lazy()
+    .with_column(col("Matdat").cast(DataType::Date));
+    let err = apply_rate_shock_sim(many, "Balance", "Rate", "Matdat", "2026-10-31", 100.0, Some("Side"))
+        .err()
+        .expect("bad sides must fail")
+        .to_string();
+    let listed = bad_sides.iter().filter(|v| err.contains(&format!("'{v}'"))).count();
+    assert_eq!(listed, 10, "{err}");
+
     // Old macros (no side column): treated as assets, and the output says so
     let out = apply_rate_shock_sim(make(["x", "y"]), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, None)
         .unwrap()
@@ -652,6 +687,15 @@ fn t14_filter_big_account_numbers() {
         .unwrap();
     assert_eq!(date_days_col(&out, "Matdat"), vec![Some(days(2026, 10, 15))]);
 
+    // Text columns compare as text even when the value looks numeric: "9" > "50" > "100" > "10"
+    let codes = df!("Code" => ["9", "10", "100"]).unwrap();
+    let pc = write_parquet("codes.parquet", &codes);
+    let src_c = TabSource::SingleFile { path: pc, is_parquet: true, config: IngestionConfig::default() };
+    let out = compile_tab_lazy(&src_c, &[filt("Code", FilterOp::Gt, "50")], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&out, "Code"), vec![Some("9".to_string())], "text Gt");
+    let out = compile_tab_lazy(&src_c, &[filt("Code", FilterOp::Lt, "50")], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&out, "Code"), vec![Some("10".to_string()), Some("100".to_string())], "text Lt");
+
     // Bad values fail loudly
     let err = compile_tab_lazy(&src, &[filt("Balance", FilterOp::Gt, "abc")], &tmpdir()).err().expect("non-numeric");
     assert!(format!("{err:#}").contains("'abc' is not a number for numeric column 'Balance'"), "got {err:#}");
@@ -706,7 +750,10 @@ fn t15_python_codegen_drops_banking_steps() {
     assert!(py.contains("raise NotImplementedError(\"Step 1 '+BB CL Provision & BFP' has no Python translation"), "{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 2 '+ΔNII Shock (+100 bps)' has no Python translation"), "{py}");
     assert!(py.contains("# WARNING: PII masking not reproduced"), "{py}");
-    assert!(py.contains("pl.col(\"Balance\")") && py.contains(".cast(pl.Float64)"), "{py}");
+    assert!(
+        py.contains("pl.col(\"Balance\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${1}\").cast(pl.Float64"),
+        "comma and bracket cleaning must come before the Float64 cast:\n{py}"
+    );
     assert!(py.contains("pl.col(\"Matdat\").str.to_date(\"%d/%m/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Opndat\").str.to_date(\"%m/%d/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Valdat\").str.to_date(\"%Y-%m-%d\""), "{py}");
