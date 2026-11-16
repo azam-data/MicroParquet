@@ -144,6 +144,71 @@ fn t03_date_parsing_variants() {
 }
 
 #[test]
+fn t03b_date_formats_phase2() {
+    // P3: month names, "." separators and two-digit years (00-69 -> 20xx, 70-99 -> 19xx).
+    let d = |raw: &str, mode| parse_flexible_banking_date(raw, mode);
+    use ColDataType::*;
+    assert_eq!(d("5/11/26", DateDMY), Some(days(2026, 11, 5)));
+    assert_eq!(d("11/5/26", DateMDY), Some(days(2026, 11, 5)));
+    assert_eq!(d("31-OCT-2026", DateDMY), Some(days(2026, 10, 31)));
+    assert_eq!(d("31-Oct-26", DateDMY), Some(days(2026, 10, 31)));
+    assert_eq!(d("31-oct-26", DateMDY), Some(days(2026, 10, 31)));
+    assert_eq!(d("05.11.2026", DateDMY), Some(days(2026, 11, 5)));
+    assert_eq!(d("01/01/75", DateDMY), Some(days(1975, 1, 1)));
+    assert_eq!(d("01/01/69", DateDMY), Some(days(2069, 1, 1)));
+    assert_eq!(d("01/01/70", DateDMY), Some(days(1970, 1, 1)));
+    // A year that is neither two nor four digits is not a date.
+    for bad in ["5/11/026", "5/11/-5", "5/11/2O26", "31/02/2026", "5/11"] {
+        assert_eq!(d(bad, DateDMY), None, "{bad}");
+    }
+
+    // The same values through a CSV load.
+    let p = write_csv(
+        "dates_p3.csv",
+        "Matdat\n5/11/26\n31-OCT-2026\n31-Oct-26\n05.11.2026\n01/01/75\n",
+    );
+    let cfg = IngestionConfig {
+        columns: vec![ColumnSchemaConfig { name: "Matdat".into(), dtype: DateDMY, ..Default::default() }],
+        ..Default::default()
+    };
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(
+        date_days_col(&df, "Matdat"),
+        vec![
+            Some(days(2026, 11, 5)),
+            Some(days(2026, 10, 31)),
+            Some(days(2026, 10, 31)),
+            Some(days(2026, 11, 5)),
+            Some(days(1975, 1, 1)),
+        ]
+    );
+}
+
+#[test]
+fn t03c_blank_date_column_and_hygiene_audit() {
+    // P3: a column blank in every sampled row is a date when its name says so.
+    let p = write_csv(
+        "blank_close.csv",
+        "Opndat,Matdat,Closure_Date,Remarks,Acstat,Balance,Rate\n\
+         01/01/2024,01/01/2025,,,ACT,500,9\n\
+         01/06/2024,01/01/2027,,,ACT,700,9\n",
+    );
+    let cfg = auto_detect_smart_schema(&p).unwrap();
+    assert_eq!(dtype_of(&cfg, "Closure_Date"), ColDataType::DateDMY);
+    assert_eq!(dtype_of(&cfg, "Remarks"), ColDataType::Utf8);
+    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let out = apply_banking_hygiene_audit(
+        lf, "Opndat", "Matdat", "Closure_Date", "Acstat", "Balance", "Rate", "2026-10-31", false,
+    )
+    .unwrap()
+    .collect()
+    .unwrap();
+    let flags = str_col(&out, "Audit_Exception_Flag");
+    assert_eq!(flags.len(), 2);
+    assert_eq!(flags[0].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
+}
+
+#[test]
 fn t04a_numeric_parsing_phase1() {
     // Phase 1 behaviour: comma thousands and bracket negatives parse; row count is kept.
     // (Dr/Cr rows are covered by t04: without a sign convention they now stop the load.)
@@ -989,11 +1054,13 @@ fn t15_python_codegen_drops_banking_steps() {
         py.contains("pl.col(\"Balance\").map_elements(lambda v: _mp_amount(v, \"Balance\", \"Unset\", True), return_dtype=pl.Float64)"),
         "Float64 columns must use the amount parser:\n{py}"
     );
-    assert!(py.contains("pl.col(\"Matdat\").str.to_date(\"%d/%m/%Y\""), "{py}");
-    assert!(py.contains("pl.col(\"Opndat\").str.to_date(\"%m/%d/%Y\""), "{py}");
-    assert!(py.contains("pl.col(\"Valdat\").str.to_date(\"%Y-%m-%d\""), "{py}");
+    // Dates go through the same parser as the app (P3), not a fixed strptime format.
+    assert!(py.contains("def _mp_date(v, mode):"), "{py}");
+    assert!(py.contains("pl.col(\"Matdat\").map_elements(lambda v: _mp_date(v, \"DateDMY\"), return_dtype=pl.Date)"), "{py}");
+    assert!(py.contains("pl.col(\"Opndat\").map_elements(lambda v: _mp_date(v, \"DateMDY\"), return_dtype=pl.Date)"), "{py}");
+    assert!(py.contains("pl.col(\"Valdat\").map_elements(lambda v: _mp_date(v, \"DateISO\"), return_dtype=pl.Date)"), "{py}");
+    assert!(!py.contains("str.to_date("), "{py}");
     // Casts are not strict (bad values become null, as in the app) and the null counts are printed
-    assert!(py.contains("str.to_date(\"%d/%m/%Y\", strict=False)"), "{py}");
     assert!(!py.contains("strict=True"), "{py}");
     assert!(py.contains("_cast_cols = [\"Balance\", \"Matdat\", \"Opndat\", \"Valdat\"]"), "{py}");
     assert!(py.contains("could not be converted and became null"), "{py}");

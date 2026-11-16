@@ -4,7 +4,7 @@ use crate::banking::{
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
 };
 use crate::models::{
-    AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, FilterOp, IngestionConfig, MathOp,
+    column_name_tokens, AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, FilterOp, IngestionConfig, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -121,6 +121,15 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
 
     // Order: empty -> ISO date -> D/M/Y vs M/D/Y -> float -> text
     if non_empty == 0 {
+        // Blank in every sampled row: a date by name (Closure_Date, Expiry_Dt, Open...),
+        // otherwise text.
+        const DATE_TOKENS: &[&str] = &[
+            "date", "dt", "dat", "maturity", "expiry", "closure", "close", "open",
+        ];
+        let tokens = column_name_tokens(col_name);
+        if tokens.iter().any(|t| DATE_TOKENS.contains(&t.as_str())) {
+            return ColDataType::DateDMY;
+        }
         return ColDataType::Utf8;
     }
     if all_iso_date {
@@ -384,42 +393,33 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     let p1_str = parts.next()?.trim();
     let p2_str = parts.next()?.trim();
     let p3_str = parts.next()?.trim();
+    if !all_ascii_digits(p1_str) || !all_ascii_digits(p3_str) {
+        return None;
+    }
 
     let p1: i32 = p1_str.parse().ok()?;
     let p2_month_name = parse_month_name(p2_str);
     let p2: u32 = match p2_month_name {
         Some(m) => m,
-        None => p2_str.parse().ok()?,
+        None if all_ascii_digits(p2_str) => p2_str.parse().ok()?,
+        None => return None,
     };
-    let p3: i32 = p3_str.parse().ok()?;
+    let p3: u32 = p3_str.parse().ok()?;
 
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
 
     // Case 1: First token is a 4-digit year (YYYY-MM-DD or YYYY/MM/DD)
-    if p1 >= 1900 && p1 <= 2200 {
-        let year = p1;
-        let (m, d) = if p2 <= 12 {
-            (p2, p3 as u32)
-        } else {
-            (p3 as u32, p2)
-        };
-        let dt = NaiveDate::from_ymd_opt(year, m, d)?;
+    if p1_str.len() == 4 {
+        if !(1900..=2200).contains(&p1) {
+            return None;
+        }
+        let (m, d) = if p2 <= 12 { (p2, p3) } else { (p3, p2) };
+        let dt = NaiveDate::from_ymd_opt(p1, m, d)?;
         return Some((dt - epoch).num_days() as i32);
     }
 
-    // Case 2: Third token is the year (2-digit or 4-digit)
-    let year = if p3 < 100 {
-        if p3 >= 50 {
-            1900 + p3
-        } else {
-            2000 + p3
-        }
-    } else {
-        p3
-    };
-    if year < 1900 || year > 2200 {
-        return None;
-    }
+    // Case 2: Third token is the year: two digits (00-69 -> 20xx, 70-99 -> 19xx) or four.
+    let year = year_from_token(p3_str)?;
 
     // If middle token was a text month (e.g. "08-Feb-2024"), p1 is always day and p2 is month
     if p2_month_name.is_some() {
@@ -446,6 +446,25 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     };
 
     Some((dt - epoch).num_days() as i32)
+}
+
+fn all_ascii_digits(t: &str) -> bool {
+    !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A trailing year token: two digits pivot at 70 (00-69 -> 2000-2069, 70-99 -> 1970-1999);
+/// four digits must be 1900-2200. Any other length is not a year.
+fn year_from_token(t: &str) -> Option<i32> {
+    if !all_ascii_digits(t) {
+        return None;
+    }
+    let y: i32 = t.parse().ok()?;
+    match t.len() {
+        2 if y < 70 => Some(2000 + y),
+        2 => Some(1900 + y),
+        4 if (1900..=2200).contains(&y) => Some(y),
+        _ => None,
+    }
 }
 
 /// A date cell that means "no date": blank, "-", "0", NULL, NONE, NA or N/A (any case).
@@ -499,18 +518,10 @@ fn classify_date_value(raw: &str) -> DateFit {
     }
 
     // Year last: two or four digits
-    if !all_digits(c) || !(c.len() == 2 || c.len() == 4) {
-        return fit;
-    }
-    let Ok(y_raw) = c.parse::<i32>() else {
+    let Some(year) = year_from_token(c) else {
         return fit;
     };
-    let year = match c.len() {
-        2 if y_raw >= 50 => 1900 + y_raw,
-        2 => 2000 + y_raw,
-        _ => y_raw,
-    };
-    if !(1900..=2200).contains(&year) || !all_digits(a) {
+    if !all_digits(a) {
         return fit;
     }
     let Ok(p1) = a.parse::<u32>() else {

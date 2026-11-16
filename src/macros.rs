@@ -111,6 +111,79 @@ def _mp_amount(v, col, sign, acc, as_int=False):
 
 "#;
 
+/// Python mirror of `engine::parse_flexible_banking_date` (P3 rules), emitted when a column is
+/// typed as a date. Keep the two in step.
+const PY_DATE_HELPER: &str = r#"import datetime as _dt
+import re as _re
+_MP_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _mp_digits(t):
+    return t != "" and all("0" <= ch <= "9" for ch in t)
+
+
+def _mp_ymd(y, m, d):
+    try:
+        return _dt.date(y, m, d)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _mp_date(v, mode):
+    """Same rules as MicroParquet: D/M/Y or M/D/Y (by mode, swapping when the other reading
+    is the only valid one), YYYY-MM-DD, month names (31-Oct-26), "." separators, trailing
+    times, two-digit years 00-69 -> 20xx and 70-99 -> 19xx. Blank, "-", "0", NA -> null."""
+    if v is None:
+        return None
+    s = v.strip().strip('"').strip("'").strip()
+    if s in ("", "-", "0") or s.lower() in ("null", "none", "na", "n/a"):
+        return None
+    s = s.split(" ")[0]
+    for i in range(1, len(s) - 1):
+        if s[i] in "Tt" and _mp_digits(s[i - 1]) and _mp_digits(s[i + 1]):
+            s = s[:i]
+            break
+    parts = _re.split(r"[/.\-]", s)
+    if len(parts) < 3:
+        return None
+    a, b, c = (p.strip() for p in parts[:3])
+    if not _mp_digits(a) or not _mp_digits(c):
+        return None
+    p1 = int(a)
+    month = _MP_MONTHS.get(b.lower())
+    if month is not None:
+        p2 = month
+    elif _mp_digits(b):
+        p2 = int(b)
+    else:
+        return None
+    p3 = int(c)
+    if len(a) == 4:
+        if not 1900 <= p1 <= 2200:
+            return None
+        m, d = (p2, p3) if p2 <= 12 else (p3, p2)
+        return _mp_ymd(p1, m, d)
+    y = int(c)
+    if len(c) == 2:
+        year = 2000 + y if y < 70 else 1900 + y
+    elif len(c) == 4 and 1900 <= y <= 2200:
+        year = y
+    else:
+        return None
+    if month is not None:
+        return _mp_ymd(year, p2, p1)
+    if mode == "DateDMY":
+        return _mp_ymd(year, p2, p1) or _mp_ymd(year, p1, p2)
+    return _mp_ymd(year, p1, p2) or _mp_ymd(year, p2, p1)
+
+
+"#;
+
 /// Escapes text for a double-quoted Python string literal.
 fn py_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -166,6 +239,15 @@ pub fn generate_python_polars_code(
             py.push_str("# Amount parsing rules (same as MicroParquet)\n");
             py.push_str(PY_AMOUNT_HELPER);
         }
+        if ingestion.columns.iter().any(|c| {
+            matches!(
+                c.dtype,
+                ColDataType::DateDMY | ColDataType::DateMDY | ColDataType::DateISO
+            )
+        }) {
+            py.push_str("# Date parsing rules (same as MicroParquet)\n");
+            py.push_str(PY_DATE_HELPER);
+        }
         let acc = if ingestion.parse_accounting_negatives { "True" } else { "False" };
         for c in &ingestion.columns {
             let name = py_escape(&c.name);
@@ -187,14 +269,11 @@ pub fn generate_python_polars_code(
                     s = sign,
                     a = acc
                 )),
-                ColDataType::DateDMY => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\", strict=False)", name))
-                }
-                ColDataType::DateMDY => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%m/%d/%Y\", strict=False)", name))
-                }
-                ColDataType::DateISO => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%Y-%m-%d\", strict=False)", name))
+                ColDataType::DateDMY | ColDataType::DateMDY | ColDataType::DateISO => {
+                    casts.push(format!(
+                        "pl.col(\"{}\").map_elements(lambda v: _mp_date(v, \"{:?}\"), return_dtype=pl.Date)",
+                        name, c.dtype
+                    ))
                 }
             }
         }
