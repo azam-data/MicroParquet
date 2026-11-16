@@ -403,57 +403,263 @@ fn dr_cr_unset_message(col_name: &str) -> String {
     )
 }
 
-/// Scans every value of each Float64 column whose sign convention is unset and fails when one
-/// carries Dr/Cr. `text_cols` pairs each column with an expression giving its raw text.
-fn check_dr_cr_conventions(
-    raw_lf: &LazyFrame,
-    text_cols: &[(&ColumnSchemaConfig, Expr)],
-) -> Result<()> {
-    let checked: Vec<(&str, Expr)> = text_cols
-        .iter()
-        .filter(|(c, _)| {
-            c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset
-        })
-        .map(|(c, e)| (c.name.as_str(), e.clone()))
-        .collect();
-    if checked.is_empty() {
-        return Ok(());
+/// What one pass over a source's typed columns found.
+#[derive(Clone, Debug, Default)]
+pub struct TypedScan {
+    /// Float64 columns with no sign convention whose values carry Dr/Cr (in schema order).
+    pub dr_cr_columns: Vec<String>,
+    /// Values that could not be converted, per typed column (columns with none are left out).
+    pub failures: Vec<ParseFailure>,
+}
+
+type ScanCache = std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<TypedScan>>>;
+
+thread_local! {
+    static TYPED_SCAN_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many full typed-column scans this thread has run (cache hits do not count). For tests.
+pub fn typed_scan_runs_on_this_thread() -> usize {
+    TYPED_SCAN_RUNS.with(|c| c.get())
+}
+
+fn scan_cache() -> &'static ScanCache {
+    static CACHE: std::sync::OnceLock<ScanCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Size and modified time of a file, as text, for cache keys. `None` when it cannot be read.
+fn file_stamp(path: &Path) -> Option<String> {
+    let m = std::fs::metadata(path).ok()?;
+    let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}|{}|{}", path.display(), m.len(), t.as_nanos()))
+}
+
+/// The Dr/Cr check and the parse-failure counts need the same full scan of the typed columns.
+/// One aggregation pass answers both, and its answer is kept per (file, size, modified time,
+/// schema), so building a pipeline and opening the tab scan the file once between them.
+pub fn typed_scan(
+    path: &Path,
+    is_parquet: bool,
+    config: &IngestionConfig,
+    temp_dir: &Path,
+) -> Result<std::sync::Arc<TypedScan>> {
+    let key = file_stamp(path).and_then(|st| {
+        serde_json::to_string(config).ok().map(|cfg| format!("{}|{}|{}", st, is_parquet, cfg))
+    });
+    if let Some(k) = &key {
+        if let Some(hit) = scan_cache().lock().ok().and_then(|c| c.get(k).cloned()) {
+            return Ok(hit);
+        }
     }
-    let cols: Vec<&str> = checked.iter().map(|(n, _)| *n).collect();
-    let exprs: Vec<Expr> = checked
-        .into_iter()
-        .map(|(c, text)| {
-            text.map(
-                    |s: Series| {
-                        let ca = s.str()?;
-                        let flags: BooleanChunked = ca
-                            .into_iter()
-                            .map(|v| Some(v.is_some_and(amount_has_dr_cr)))
-                            .collect();
-                        Ok(Some(flags.into_series()))
-                    },
-                    GetOutput::from_type(DataType::Boolean),
-                )
-                .any(true)
-                .alias(c)
-        })
-        .collect();
-    let flags = raw_lf
-        .clone()
+    TYPED_SCAN_RUNS.with(|c| c.set(c.get() + 1));
+    let result = std::sync::Arc::new(run_typed_scan(path, is_parquet, config, temp_dir)?);
+    if let Some(k) = key {
+        if let Ok(mut c) = scan_cache().lock() {
+            if c.len() >= 64 {
+                c.clear();
+            }
+            c.insert(k, result.clone());
+        }
+    }
+    Ok(result)
+}
+
+fn run_typed_scan(
+    path: &Path,
+    is_parquet: bool,
+    config: &IngestionConfig,
+    temp_dir: &Path,
+) -> Result<TypedScan> {
+    // Per column: the schema entry, the raw text (for the Dr/Cr check) and the text the typed
+    // value is parsed from (for the failure count).
+    let (lf, entries): (LazyFrame, Vec<(&ColumnSchemaConfig, Expr, Expr)>) = if is_parquet {
+        let (lf, plan) = parquet_conversion_plan(path, config)?;
+        (lf, plan.into_iter().map(|(c, e)| (c, e.clone(), e)).collect())
+    } else {
+        let lf = scan_csv_text(path, config, temp_dir)?;
+        let entries = config
+            .columns
+            .iter()
+            .map(|c| (c, col(&c.name), raw_text_expr(c, config)))
+            .collect();
+        (lf, entries)
+    };
+
+    let accounting_negatives = config.parse_accounting_negatives;
+    let mut exprs: Vec<Expr> = Vec::new();
+    for (i, (c, raw, text)) in entries.iter().enumerate() {
+        if c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset {
+            exprs.push(
+                raw.clone()
+                    .map(
+                        |s: Series| {
+                            let ca = s.str()?;
+                            let flags: BooleanChunked = ca
+                                .into_iter()
+                                .map(|v| Some(v.is_some_and(amount_has_dr_cr)))
+                                .collect();
+                            Ok(Some(flags.into_series()))
+                        },
+                        GetOutput::from_type(DataType::Boolean),
+                    )
+                    .any(true)
+                    .alias(format!("__dc_{i}")),
+            );
+        }
+        if c.dtype != ColDataType::Utf8 {
+            let (dtype, sign) = (c.dtype, c.sign_convention);
+            let mask = text.clone().map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let flags: BooleanChunked = ca
+                        .into_iter()
+                        .map(|v| Some(v.is_some_and(|v| is_parse_failure(v, dtype, sign, accounting_negatives))))
+                        .collect();
+                    Ok(Some(flags.into_series()))
+                },
+                GetOutput::from_type(DataType::Boolean),
+            );
+            exprs.push(mask.clone().sum().cast(DataType::UInt64).alias(format!("__pf_n_{i}")));
+            exprs.push(text.clone().filter(mask).head(Some(5)).implode().alias(format!("__pf_x_{i}")));
+        }
+    }
+    if exprs.is_empty() {
+        return Ok(TypedScan::default());
+    }
+    let df = lf
         .select(exprs)
         .collect()
-        .context("Failed to scan amount columns for Dr/Cr markers")?;
-    for c in cols {
-        let found = flags
-            .column(c)
+        .context("Failed to scan the file's amount and date columns")?;
+
+    let mut out = TypedScan::default();
+    for (i, (c, _, _)) in entries.iter().enumerate() {
+        let found_dr_cr = df
+            .column(&format!("__dc_{i}"))
             .ok()
             .and_then(|s| s.bool().ok().and_then(|b| b.get(0)))
             .unwrap_or(false);
-        if found {
-            anyhow::bail!(dr_cr_unset_message(c));
+        if found_dr_cr {
+            out.dr_cr_columns.push(c.name.clone());
         }
+        let count = df
+            .column(&format!("__pf_n_{i}"))
+            .ok()
+            .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
+            .unwrap_or(0) as usize;
+        if count == 0 {
+            continue;
+        }
+        let mut examples = Vec::new();
+        if let Some(list) = df
+            .column(&format!("__pf_x_{i}"))
+            .ok()
+            .and_then(|s| s.list().ok().and_then(|l| l.get_as_series(0)))
+        {
+            if let Ok(ca) = list.str() {
+                examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
+            }
+        }
+        out.failures.push(ParseFailure { column: c.name.clone(), count, examples });
+    }
+    Ok(out)
+}
+
+/// Fails when a Float64 column with no sign convention carries Dr/Cr values.
+fn check_dr_cr_conventions(path: &Path, is_parquet: bool, config: &IngestionConfig, temp_dir: &Path) -> Result<()> {
+    let needs_check = config
+        .columns
+        .iter()
+        .any(|c| c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset);
+    if !needs_check {
+        return Ok(());
+    }
+    let scan = typed_scan(path, is_parquet, config, temp_dir)?;
+    if let Some(c) = scan.dr_cr_columns.first() {
+        anyhow::bail!(dr_cr_unset_message(c));
     }
     Ok(())
+}
+
+// ------------------------------------------------------------------------ baseline control sum
+
+/// Where `source_baseline_sum` got its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaselineOrigin {
+    Cached,
+    Computed,
+}
+
+type BaselineCache = std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>;
+
+fn baseline_cache() -> &'static BaselineCache {
+    static CACHE: std::sync::OnceLock<BaselineCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Identity of a source's raw data for the baseline cache: every file's path, size and modified
+/// time, plus the schema and the control column (a different schema or column is a different
+/// number). Joined and reconciled sources are not cached.
+fn baseline_key(source: &TabSource, control_col: &str) -> Option<String> {
+    let one = |path: &Path, is_parquet: bool, config: &IngestionConfig| -> Option<String> {
+        let cfg = serde_json::to_string(config).ok()?;
+        Some(format!("{}|{}|{}", file_stamp(path)?, is_parquet, cfg))
+    };
+    let body = match source {
+        TabSource::SingleFile { path, is_parquet, config } => one(path, *is_parquet, config)?,
+        TabSource::VerticalStack { files, include_source_col } => {
+            let mut parts = vec![format!("stack|{}", include_source_col)];
+            for (p, pq, cfg) in files {
+                parts.push(one(p, *pq, cfg)?);
+            }
+            parts.join("||")
+        }
+        _ => return None,
+    };
+    Some(format!("{}##{}", body, control_col))
+}
+
+/// Control sum of the raw source (no steps). It is computed once per unchanged file: the answer
+/// is kept per (path, size, modified time, schema, column), so a second tab on the same file does
+/// not read it again. No control column means no sum, and no scan.
+pub fn source_baseline_sum(
+    source: &TabSource,
+    control_col: Option<&str>,
+    temp_dir: &Path,
+) -> (Option<f64>, BaselineOrigin) {
+    let Some(ctrl) = control_col else {
+        return (None, BaselineOrigin::Computed);
+    };
+    let key = baseline_key(source, ctrl);
+    if let Some(k) = &key {
+        if let Some(hit) = baseline_cache().lock().ok().and_then(|c| c.get(k).copied()) {
+            return (hit, BaselineOrigin::Cached);
+        }
+    }
+    let computed = compile_tab_lazy(source, &[], temp_dir)
+        .ok()
+        .and_then(|lf| compute_control_totals(lf, Some(ctrl)).ok())
+        .map(|(_, s)| s);
+    if let (Some(k), Some(sum)) = (key, computed) {
+        remember(k, sum);
+    }
+    (computed.flatten(), BaselineOrigin::Computed)
+}
+
+/// Stores a baseline the caller already has (a tab with no steps has just summed the raw source).
+pub fn remember_baseline(source: &TabSource, control_col: Option<&str>, sum: Option<f64>) {
+    if let Some(k) = control_col.and_then(|c| baseline_key(source, c)) {
+        remember(k, sum);
+    }
+}
+
+fn remember(key: String, sum: Option<f64>) {
+    if let Ok(mut c) = baseline_cache().lock() {
+        if c.len() >= 256 {
+            c.clear();
+        }
+        c.insert(key, sum);
+    }
 }
 
 /// Ultra-fast native Rust date parser that handles single-digit or double-digit months/days
@@ -796,7 +1002,7 @@ pub fn build_lazy_pipeline(
         if plan.is_empty() {
             return Ok(lf);
         }
-        check_dr_cr_conventions(&lf, &plan)?;
+        check_dr_cr_conventions(path, true, config, temp_dir)?;
         let exprs: Vec<Expr> = plan
             .into_iter()
             .map(|(c, text)| typed_expr(text, c, config).alias(&c.name))
@@ -805,9 +1011,7 @@ pub fn build_lazy_pipeline(
     }
 
     let mut lf = scan_csv_text(path, config, temp_dir)?;
-    let text_cols: Vec<(&ColumnSchemaConfig, Expr)> =
-        config.columns.iter().map(|c| (c, col(&c.name))).collect();
-    check_dr_cr_conventions(&lf, &text_cols)?;
+    check_dr_cr_conventions(path, false, config, temp_dir)?;
 
     let exprs: Vec<Expr> = config
         .columns
@@ -1283,86 +1487,7 @@ pub fn compute_parse_failures(
     config: &IngestionConfig,
     temp_dir: &Path,
 ) -> Result<Vec<ParseFailure>> {
-    if is_parquet {
-        let (lf, plan) = parquet_conversion_plan(path, config)?;
-        let typed: Vec<(&ColumnSchemaConfig, Expr)> = plan
-            .into_iter()
-            .filter(|(c, _)| c.dtype != ColDataType::Utf8)
-            .collect();
-        if typed.is_empty() {
-            return Ok(Vec::new());
-        }
-        return failures_from_text(lf, &typed, config.parse_accounting_negatives);
-    }
-    let typed: Vec<&ColumnSchemaConfig> = config
-        .columns
-        .iter()
-        .filter(|c| c.dtype != ColDataType::Utf8)
-        .collect();
-    if typed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let lf = scan_csv_text(path, config, temp_dir)?;
-    let pairs: Vec<(&ColumnSchemaConfig, Expr)> =
-        typed.into_iter().map(|c| (c, raw_text_expr(c, config))).collect();
-    failures_from_text(lf, &pairs, config.parse_accounting_negatives)
-}
-
-/// Shared by CSV and Parquet: `pairs` holds each typed column and its text expression.
-fn failures_from_text(
-    lf: LazyFrame,
-    pairs: &[(&ColumnSchemaConfig, Expr)],
-    accounting_negatives: bool,
-) -> Result<Vec<ParseFailure>> {
-    let mut exprs = Vec::with_capacity(pairs.len() * 2);
-    for (i, (c, text)) in pairs.iter().enumerate() {
-        let (dtype, sign) = (c.dtype, c.sign_convention);
-        let mask = text.clone().map(
-            move |s: Series| {
-                let ca = s.str()?;
-                let flags: BooleanChunked = ca
-                    .into_iter()
-                    .map(|v| Some(v.is_some_and(|v| is_parse_failure(v, dtype, sign, accounting_negatives))))
-                    .collect();
-                Ok(Some(flags.into_series()))
-            },
-            GetOutput::from_type(DataType::Boolean),
-        );
-        exprs.push(mask.clone().sum().cast(DataType::UInt64).alias(format!("__pf_n_{i}")));
-        exprs.push(text.clone().filter(mask).head(Some(5)).implode().alias(format!("__pf_x_{i}")));
-    }
-    let df = lf
-        .select(exprs)
-        .collect()
-        .context("Failed to count values that could not be converted")?;
-
-    let mut out = Vec::new();
-    for (i, (c, _)) in pairs.iter().enumerate() {
-        let count = df
-            .column(&format!("__pf_n_{i}"))
-            .ok()
-            .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
-            .unwrap_or(0) as usize;
-        if count == 0 {
-            continue;
-        }
-        let mut examples = Vec::new();
-        if let Some(list) = df
-            .column(&format!("__pf_x_{i}"))
-            .ok()
-            .and_then(|s| s.list().ok().and_then(|l| l.get_as_series(0)))
-        {
-            if let Ok(ca) = list.str() {
-                examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
-            }
-        }
-        out.push(ParseFailure {
-            column: c.name.clone(),
-            count,
-            examples,
-        });
-    }
-    Ok(out)
+    Ok(typed_scan(path, is_parquet, config, temp_dir)?.failures.clone())
 }
 
 /// Parse failures of everything a tab reads (stacked, joined and reconciled sources included),
@@ -2666,15 +2791,81 @@ pub fn compute_control_totals(
     Ok((row_count, control_sum))
 }
 
+/// How an export wrote its file (shown in the status message).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportPath {
+    /// Written batch by batch; the view never has to fit in memory.
+    Streamed,
+    /// The whole view was collected in memory, then written (the plan cannot be streamed).
+    Collected,
+}
+
+impl ExportPath {
+    pub fn note(self) -> &'static str {
+        match self {
+            ExportPath::Streamed => "streamed",
+            ExportPath::Collected => "collected in memory first; this view cannot be streamed",
+        }
+    }
+}
+
+/// `Auto` streams when the plan allows it. `CollectOnly` always collects first (tests, and the
+/// reference for "both ways give the same file").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportMode {
+    Auto,
+    CollectOnly,
+}
+
+/// Polars says one of these, and has written nothing, when a plan has a step that cannot be
+/// streamed (it depends on the step: the whole-plan check, or the in-memory engine refusing a sink).
+fn is_not_streamable(e: &PolarsError) -> bool {
+    let msg = e.to_string();
+    msg.contains("cannot run the whole query in a streaming order")
+        || msg.contains("not yet supported in standard engine")
+}
+
 pub fn export_to_parquet_stream(
     lf: LazyFrame,
     out_path: &Path,
     dialect: ParquetDialect,
 ) -> Result<()> {
-    let compression = match dialect {
+    export_to_parquet(lf, out_path, dialect, ExportMode::Auto).map(|_| ())
+}
+
+fn parquet_compression(dialect: ParquetDialect) -> ParquetCompression {
+    match dialect {
         ParquetDialect::ArchiveZstd => ParquetCompression::Zstd(None),
         ParquetDialect::PowerBiSnappy => ParquetCompression::Snappy,
-    };
+    }
+}
+
+const PARQUET_ROW_GROUP: usize = 122_880;
+
+pub fn export_to_parquet(
+    lf: LazyFrame,
+    out_path: &Path,
+    dialect: ParquetDialect,
+    mode: ExportMode,
+) -> Result<ExportPath> {
+    let compression = parquet_compression(dialect);
+    if mode == ExportMode::Auto {
+        let options = ParquetWriteOptions {
+            compression,
+            statistics: StatisticsOptions::default(),
+            row_group_size: Some(PARQUET_ROW_GROUP),
+            data_page_size: None,
+            maintain_order: true,
+        };
+        match lf.clone().sink_parquet(out_path, options) {
+            Ok(()) => return Ok(ExportPath::Streamed),
+            Err(e) if is_not_streamable(&e) => {} // nothing was written: collect instead
+            Err(e) => {
+                let _ = std::fs::remove_file(out_path);
+                return Err(anyhow::Error::from(e).context("Failed to stream the Parquet export"));
+            }
+        }
+    }
 
     let mut df = lf
         .with_streaming(true)
@@ -2684,14 +2875,44 @@ pub fn export_to_parquet_stream(
     let file = File::create(out_path).context("Failed to create output Parquet file on disk")?;
     ParquetWriter::new(BufWriter::with_capacity(8 * 1024 * 1024, file))
         .with_compression(compression)
-        .with_row_group_size(Some(122_880))
+        .with_row_group_size(Some(PARQUET_ROW_GROUP))
         .finish(&mut df)
         .context("Failed to write Parquet data stream")?;
-    Ok(())
+    Ok(ExportPath::Collected)
 }
 
 pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> Result<()> {
+    export_to_csv(lf, out_path, mdy_dates, ExportMode::Auto).map(|_| ())
+}
+
+pub fn export_to_csv(
+    lf: LazyFrame,
+    out_path: &Path,
+    mdy_dates: bool,
+    mode: ExportMode,
+) -> Result<ExportPath> {
     let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
+
+    if mode == ExportMode::Auto {
+        let options = CsvWriterOptions {
+            include_header: true,
+            maintain_order: true,
+            serialize_options: SerializeOptions {
+                date_format: Some(date_fmt.to_string()),
+                float_scientific: Some(false),
+                ..SerializeOptions::default()
+            },
+            ..CsvWriterOptions::default()
+        };
+        match lf.clone().sink_csv(out_path, options) {
+            Ok(()) => return Ok(ExportPath::Streamed),
+            Err(e) if is_not_streamable(&e) => {} // nothing was written: collect instead
+            Err(e) => {
+                let _ = std::fs::remove_file(out_path);
+                return Err(anyhow::Error::from(e).context("Failed to stream the CSV export"));
+            }
+        }
+    }
 
     let mut df = lf
         .with_streaming(true)
@@ -2705,5 +2926,5 @@ pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> 
         .with_float_scientific(Some(false))
         .finish(&mut df)
         .context("Failed to write CSV data stream")?;
-    Ok(())
+    Ok(ExportPath::Collected)
 }

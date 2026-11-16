@@ -7,8 +7,8 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 | Task | Status | Commit | Tests added | Deviations | Open questions |
 |---|---|---|---|---|---|
 | R1 | DONE | d442fdc | none (2 unit tests moved with their functions: tab_index_after_close, default_side_column) | headless in src/headless.rs; no font loading yet; width literals stay; prelude module; derived dark tokens | Q1 |
-| R2 | DONE | (next commit) | tests/jobs.rs: 15 tests (superseded dropped; replaced queued job never runs; unique/other-tab jobs kept; cancel removes temp file; success renames; failed write leaves nothing; error and panic reach status text; inline runs on caller thread; wake callback; load/refresh numbers; unreadable source; cancelled export, split and batch) | see spec `<accepted_deviations>` (R2): previews stay sync; coarse cancel points; GUI not runnable here | Q2 |
-| R3 | TODO | | | | |
+| R2 | DONE | 2700231 | tests/jobs.rs: 15 tests (superseded dropped; replaced queued job never runs; unique/other-tab jobs kept; cancel removes temp file; success renames; failed write leaves nothing; error and panic reach status text; inline runs on caller thread; wake callback; load/refresh numbers; unreadable source; cancelled export, split and batch) | see spec `<accepted_deviations>` (R2): previews stay sync; coarse cancel points; GUI not runnable here | Q2 |
+| R3 | DONE | (next commit) | tests/r3.rs: 6 tests (Parquet and CSV streamed vs collected: same rows, sum, data and CSV bytes; non-streamable view falls back and status says so; Dr/Cr check + parse failures share one scan and rescan after a file change; Dr/Cr still refuses; baseline computed once for two tabs, recomputed on change; load stores baseline) | see spec (R3): message-based fallback; baseline key includes schema and control column; scan cache | |
 | L1 | TODO | | | | |
 | L2 | TODO | | | | |
 | L3 | TODO | | | | |

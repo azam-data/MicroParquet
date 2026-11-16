@@ -4,8 +4,9 @@
 
 use crate::batch::BatchReport;
 use crate::engine::{
-    blank_balance_notes, compile_tab_lazy, compute_control_totals, control_totals_state,
-    ensure_pii_key_for, export_to_csv_stream, export_to_parquet_stream, fetch_viewport_slice,
+    blank_balance_notes, compile_tab_lazy, control_totals_state, remember_baseline,
+    source_baseline_sum,
+    ensure_pii_key_for, export_to_csv, export_to_parquet, fetch_viewport_slice, ExportMode, ExportPath,
     join_status, source_parse_failures, source_row_check, weighted_mixed_sign_notes,
     write_parse_failures_csv,
 };
@@ -100,14 +101,13 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     let (total_rows, control_sum) = (totals.rows.unwrap_or(0), totals.sum);
     ctx.check()?;
 
-    // Baseline control sum is always computed from the raw source (0 steps)
+    // Baseline control sum is always the raw source's (0 steps); it is computed once per
+    // unchanged file and reused by every tab on it.
     let baseline_sum = if steps.is_empty() {
+        remember_baseline(&source, default_ctrl.as_deref(), control_sum);
         control_sum
     } else {
-        compile_tab_lazy(&source, &[], &temp_dir)
-            .ok()
-            .and_then(|base_lf| compute_control_totals(base_lf, default_ctrl.as_deref()).ok())
-            .and_then(|(_, s)| s)
+        source_baseline_sum(&source, default_ctrl.as_deref(), &temp_dir).0
     };
     ctx.check()?;
 
@@ -221,13 +221,8 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
             let totals = control_totals_state(Ok(lf), ctrl);
             ctx.check()?;
             let baseline = if req.recalculate_baseline {
-                // Recompute baseline from the base source (0 steps) for the newly selected control column
-                Some(
-                    compile_tab_lazy(&req.source, &[], &req.temp_dir)
-                        .ok()
-                        .and_then(|base_lf| compute_control_totals(base_lf, ctrl).ok())
-                        .and_then(|(_, s)| s),
-                )
+                // Baseline of the raw source (0 steps) for the newly selected control column
+                Some(source_baseline_sum(&req.source, ctrl, &req.temp_dir).0)
             } else {
                 None
             };
@@ -323,6 +318,8 @@ pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaAp
 
 pub struct ExportOutcome {
     pub message: String,
+    /// Parquet and CSV exports: streamed, or collected in memory first.
+    pub path_used: Option<ExportPath>,
     /// The file (or `<folder>/split_export` base name) that was written.
     pub written: Option<PathBuf>,
 }
@@ -350,10 +347,10 @@ pub fn export_tab_parquet(
 ) -> Result<ExportOutcome> {
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
     let lf = compile_tab_lazy(source, steps, temp_dir)?;
-    write_atomic(out_path, ctx, |tmp| export_to_parquet_stream(lf, tmp, dialect))?;
-    let mut message = format!("✅ Exported view to {:?}", out_path);
+    let how = write_atomic(out_path, ctx, |tmp| export_to_parquet(lf, tmp, dialect, ExportMode::Auto))?;
+    let mut message = format!("✅ Exported view to {:?} ({})", out_path, how.note());
     message.push_str(&sidecar_note(out_path, sidecar));
-    Ok(ExportOutcome { message, written: Some(out_path.to_path_buf()) })
+    Ok(ExportOutcome { message, path_used: Some(how), written: Some(out_path.to_path_buf()) })
 }
 
 pub fn export_tab_csv(
@@ -367,10 +364,10 @@ pub fn export_tab_csv(
 ) -> Result<ExportOutcome> {
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
     let lf = compile_tab_lazy(source, steps, temp_dir)?;
-    write_atomic(out_path, ctx, |tmp| export_to_csv_stream(lf, tmp, mdy_dates))?;
-    let mut message = format!("✅ Exported view to {:?}", out_path);
+    let how = write_atomic(out_path, ctx, |tmp| export_to_csv(lf, tmp, mdy_dates, ExportMode::Auto))?;
+    let mut message = format!("✅ Exported view to {:?} ({})", out_path, how.note());
     message.push_str(&sidecar_note(out_path, sidecar));
-    Ok(ExportOutcome { message, written: Some(out_path.to_path_buf()) })
+    Ok(ExportOutcome { message, path_used: Some(how), written: Some(out_path.to_path_buf()) })
 }
 
 /// A tab as an export job needs it (owned, so it can move to the worker thread).
@@ -397,7 +394,7 @@ pub fn export_tabs_xlsx(
     let mut message =
         format!("Exported multi-tab Excel workbook to {:?}: {}", out_path, rep.summary());
     message.push_str(&sidecar_note(out_path, sidecar));
-    Ok(ExportOutcome { message, written: Some(out_path.to_path_buf()) })
+    Ok(ExportOutcome { message, path_used: None, written: Some(out_path.to_path_buf()) })
 }
 
 pub fn export_tabs_pdf(
@@ -438,7 +435,7 @@ pub fn export_tabs_pdf(
         msg.push_str(&format!(" ⚠ Not exported (failed): {}", failed.join("; ")));
     }
     msg.push_str(&sidecar_note(out_path, sidecar));
-    Ok(ExportOutcome { message: msg, written: Some(out_path.to_path_buf()) })
+    Ok(ExportOutcome { message: msg, path_used: None, written: Some(out_path.to_path_buf()) })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -466,7 +463,7 @@ pub fn export_split(
         cnt, out_dir
     );
     message.push_str(&sidecar_note(&base, sidecar));
-    Ok(ExportOutcome { message, written: Some(base) })
+    Ok(ExportOutcome { message, path_used: None, written: Some(base) })
 }
 
 fn display_name(p: &Path) -> String {
@@ -485,11 +482,15 @@ pub fn convert_csv_to_parquet(
     ctx.set_progress(format!("Converting {}…", display_name(csv_path)), None);
     let src = TabSource::SingleFile { path: csv_path.to_path_buf(), is_parquet: false, config };
     let lf = compile_tab_lazy(&src, &[], temp_dir)?;
-    write_atomic(out_path, ctx, |tmp| export_to_parquet_stream(lf, tmp, dialect))?;
+    let how = write_atomic(out_path, ctx, |tmp| export_to_parquet(lf, tmp, dialect, ExportMode::Auto))?;
     let orig_mb = csv_path.metadata().map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
     let new_mb = out_path.metadata().map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
     Ok(ExportOutcome {
-        message: format!("✅ Converted to {:?}! ({:.1} MB -> {:.1} MB)", out_path, orig_mb, new_mb),
+        message: format!(
+            "✅ Converted to {:?}! ({:.1} MB -> {:.1} MB, {})",
+            out_path, orig_mb, new_mb, how.note()
+        ),
+        path_used: Some(how),
         written: Some(out_path.to_path_buf()),
     })
 }
