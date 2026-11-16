@@ -8,6 +8,7 @@ use crate::models::{
     ParquetDialect, PiiMaskMode, SqlJoinKind, TabSource, TabState, TransformStep,
 };
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use polars::prelude::*;
 use polars::sql::SQLContext;
 use std::fs::File;
@@ -101,42 +102,143 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
             all_float = false;
         }
 
-        // Normalize separators and strip trailing timestamps for date detection
-        let date_part = trimmed.split_whitespace().next().unwrap_or(trimmed);
-        let norm_slash = date_part.replace('-', "/").replace('.', "/");
-
-        if chrono::NaiveDate::parse_from_str(&norm_slash, "%m/%d/%Y").is_err()
-            && chrono::NaiveDate::parse_from_str(&norm_slash, "%m/%d/%y").is_err()
-        {
-            all_mdy_date = false;
-        }
-        if chrono::NaiveDate::parse_from_str(&norm_slash, "%d/%m/%Y").is_err()
-            && chrono::NaiveDate::parse_from_str(&norm_slash, "%d/%m/%y").is_err()
-        {
-            all_dmy_date = false;
-        }
-        if chrono::NaiveDate::parse_from_str(&norm_slash, "%Y/%m/%d").is_err() {
+        if parse_flexible_banking_date(trimmed, ColDataType::DateISO).is_none() {
             all_iso_date = false;
         }
+        if parse_flexible_banking_date(trimmed, ColDataType::DateMDY).is_none() {
+            all_mdy_date = false;
+        }
+        if parse_flexible_banking_date(trimmed, ColDataType::DateDMY).is_none() {
+            all_dmy_date = false;
+        }
     }
 
-    if non_empty == 0 || has_leading_zero {
+    if non_empty == 0 {
         return ColDataType::Utf8;
     }
-    if all_iso_date {
+    // Check date formats BEFORE has_leading_zero because dates like "02/08/2024" start with '0'!
+    if all_iso_date && !all_float {
         return ColDataType::DateISO;
     }
-    if all_mdy_date {
+    if all_mdy_date && !all_float {
         return ColDataType::DateMDY;
     }
-    if all_dmy_date {
+    if all_dmy_date && !all_float {
         return ColDataType::DateDMY;
+    }
+    if has_leading_zero {
+        return ColDataType::Utf8;
     }
     if all_float {
         return ColDataType::Float64;
     }
 
     ColDataType::Utf8
+}
+
+/// Ultra-fast native Rust date parser that handles single-digit or double-digit months/days
+/// (e.g., "2/8/2024", "02/08/2024", "11/8/2026", "11/30/2023", "31-Oct-2026", "2024-02-08",
+/// 2-digit years, and trailing timestamps) and returns days since 1970-01-01.
+pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> {
+    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
+    if s.is_empty()
+        || s == "-"
+        || s == "0"
+        || s.eq_ignore_ascii_case("null")
+        || s.eq_ignore_ascii_case("none")
+        || s.eq_ignore_ascii_case("na")
+        || s.eq_ignore_ascii_case("n/a")
+    {
+        return None;
+    }
+
+    // Strip trailing timestamp if present (e.g. "02/08/2024 00:00:00" or "2024-02-08T12:30:00")
+    let date_part = s.split([' ', 'T']).next().unwrap_or(s);
+
+    let mut parts = date_part.split(['/', '-', '.']);
+    let p1_str = parts.next()?.trim();
+    let p2_str = parts.next()?.trim();
+    let p3_str = parts.next()?.trim();
+
+    let p1: i32 = p1_str.parse().ok()?;
+    let p2_month_name = parse_month_name(p2_str);
+    let p2: u32 = match p2_month_name {
+        Some(m) => m,
+        None => p2_str.parse().ok()?,
+    };
+    let p3: i32 = p3_str.parse().ok()?;
+
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
+
+    // Case 1: First token is a 4-digit year (YYYY-MM-DD or YYYY/MM/DD)
+    if p1 >= 1900 && p1 <= 2200 {
+        let year = p1;
+        let (m, d) = if p2 <= 12 {
+            (p2, p3 as u32)
+        } else {
+            (p3 as u32, p2)
+        };
+        let dt = NaiveDate::from_ymd_opt(year, m, d)?;
+        return Some((dt - epoch).num_days() as i32);
+    }
+
+    // Case 2: Third token is the year (2-digit or 4-digit)
+    let year = if p3 < 100 {
+        if p3 >= 50 {
+            1900 + p3
+        } else {
+            2000 + p3
+        }
+    } else {
+        p3
+    };
+    if year < 1900 || year > 2200 {
+        return None;
+    }
+
+    // If middle token was a text month (e.g. "08-Feb-2024"), p1 is always day and p2 is month
+    if p2_month_name.is_some() {
+        let dt = NaiveDate::from_ymd_opt(year, p2, p1 as u32)?;
+        return Some((dt - epoch).num_days() as i32);
+    }
+
+    let u1 = p1 as u32;
+    let u2 = p2;
+
+    let dt = match mode {
+        ColDataType::DateMDY => {
+            // Try M/D/Y first; if u1 > 12 (e.g. 30/11/2023), automatically fall back to D/M/Y
+            NaiveDate::from_ymd_opt(year, u1, u2)
+                .or_else(|| NaiveDate::from_ymd_opt(year, u2, u1))?
+        }
+        ColDataType::DateDMY => {
+            // Try D/M/Y first; if u2 > 12 (e.g. 11/30/2023), automatically fall back to M/D/Y
+            NaiveDate::from_ymd_opt(year, u2, u1)
+                .or_else(|| NaiveDate::from_ymd_opt(year, u1, u2))?
+        }
+        _ => NaiveDate::from_ymd_opt(year, u1, u2)
+            .or_else(|| NaiveDate::from_ymd_opt(year, u2, u1))?,
+    };
+
+    Some((dt - epoch).num_days() as i32)
+}
+
+fn parse_month_name(s: &str) -> Option<u32> {
+    match s.to_lowercase().as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
 }
 
 pub fn heal_broken_csv_file(input_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
@@ -270,70 +372,20 @@ pub fn build_lazy_pipeline(
                 }
                 e.cast(DataType::Int64)
             }
-            ColDataType::DateMDY => {
-                let norm = e
-                    .str()
-                    .replace(lit(r"[\sT].*$"), lit(""), false)
-                    .str()
-                    .replace_all(lit(r"[-.]"), lit("/"), false);
-                let d4 = norm.clone().str().to_date(StrptimeOptions {
-                    format: Some("%m/%d/%Y".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                });
-                let d2 = norm.clone().str().to_date(StrptimeOptions {
-                    format: Some("%m/%d/%y".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                });
-                let diso = norm.str().to_date(StrptimeOptions {
-                    format: Some("%Y/%m/%d".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                });
-                d4.fill_null(d2).fill_null(diso)
-            }
-            ColDataType::DateDMY => {
-                let norm = e
-                    .str()
-                    .replace(lit(r"[\sT].*$"), lit(""), false)
-                    .str()
-                    .replace_all(lit(r"[-.]"), lit("/"), false);
-                let d4 = norm.clone().str().to_date(StrptimeOptions {
-                    format: Some("%d/%m/%Y".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                });
-                let d2 = norm.clone().str().to_date(StrptimeOptions {
-                    format: Some("%d/%m/%y".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                });
-                let diso = norm.str().to_date(StrptimeOptions {
-                    format: Some("%Y/%m/%d".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                });
-                d4.fill_null(d2).fill_null(diso)
-            }
-            ColDataType::DateISO => {
-                let norm = e
-                    .str()
-                    .replace(lit(r"[\sT].*$"), lit(""), false)
-                    .str()
-                    .replace_all(lit(r"[/.]"), lit("-"), false);
-                norm.str().to_date(StrptimeOptions {
-                    format: Some("%Y-%m-%d".into()),
-                    strict: false,
-                    exact: false,
-                    cache: true,
-                })
+            ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
+                let date_mode = col_cfg.dtype;
+                e.map(
+                    move |s: Series| {
+                        let ca = s.str()?;
+                        let days_ca: Int32Chunked = ca
+                            .into_iter()
+                            .map(|opt_v| opt_v.and_then(|v| parse_flexible_banking_date(v, date_mode)))
+                            .collect();
+                        let date_series = days_ca.into_series().cast(&DataType::Date)?;
+                        Ok(Some(date_series))
+                    },
+                    GetOutput::from_type(DataType::Date),
+                )
             }
         };
 
