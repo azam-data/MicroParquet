@@ -1902,3 +1902,59 @@ fn t27_batch_log_and_folder_checks() {
     assert_eq!((log[0].file.as_str(), log[0].status.as_str(), log[0].rows, log[0].control_sum), ("m.parquet", "OK", Some(2), Some(3.0)));
     assert_eq!((log[1].file.as_str(), log[1].status.as_str()), ("readme.txt", "COPIED"));
 }
+
+#[test]
+fn t28_control_totals_state_and_math_scalar() {
+    let df = df!("Branch" => ["DHK", "CTG", "DHK"], "Balance" => [1.0, 2.0, 4.0], "Name" => ["a", "b", "c"]).unwrap();
+    let st = control_totals_state(Ok(df.clone().lazy()), Some("Balance"));
+    assert_eq!(st, ControlTotals { rows: Some(3), sum: Some(7.0), note: None });
+    let st = control_totals_state(Ok(df.clone().lazy()), None);
+    assert_eq!((st.rows, st.sum, st.note), (Some(3), None, None));
+
+    // After a pivot the control column is gone: sum "—" with the reason (rows still known).
+    let pivot = df.clone().lazy().group_by([col("Branch")]).agg([col("Balance").sum().alias("Total")]);
+    let st = control_totals_state(Ok(pivot), Some("Balance"));
+    assert_eq!((st.rows, st.sum), (Some(2), None));
+    assert!(st.note.as_deref().unwrap().contains("'Balance' no longer exists"), "{st:?}");
+
+    // A text control column has no sum.
+    let st = control_totals_state(Ok(df.clone().lazy()), Some("Name"));
+    assert_eq!((st.rows, st.sum), (Some(3), None));
+    assert!(st.note.as_deref().unwrap().contains("not a number"), "{st:?}");
+
+    // A failing pipeline: "—" for rows and sum, with the error, never the previous values.
+    let st = control_totals_state(Err(anyhow::anyhow!("Column 'X' not found")), Some("Balance"));
+    assert_eq!((st.rows, st.sum), (None, None));
+    assert!(st.note.as_deref().unwrap().contains("Column 'X' not found"));
+    let bad = df.clone().lazy().select([col("Missing")]);
+    let st = control_totals_state(Ok(bad), Some("Balance"));
+    assert_eq!((st.rows, st.sum), (None, None));
+    assert!(st.note.is_some());
+
+    // Math column scalar.
+    assert_eq!(parse_math_scalar("x", " 10,000,000 ").unwrap(), 10_000_000.0);
+    assert_eq!(parse_math_scalar("x", "0.5").unwrap(), 0.5);
+    for v in ["abc", "", "1.2.3", "NaN", "inf"] {
+        let err = parse_math_scalar("Bal_Cr", v).err().expect("not a number");
+        let msg = format!("{err:#}");
+        assert!(msg.contains(&format!("'{v}'")) && msg.contains("Bal_Cr"), "{msg}");
+    }
+    let src = TabSource::SingleFile { path: write_parquet("t28.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let step = |v: &str| TransformStep::MathFormula {
+        new_col: "Bal_Cr".into(),
+        left_col: "Balance".into(),
+        op: MathOp::Div,
+        right_is_col: false,
+        right_val_or_col: v.into(),
+    };
+    let err = compile_tab_lazy(&src, &[step("ten million")], &tmpdir()).err().expect("bad scalar");
+    assert!(format!("{err:#}").contains("'ten million' is not a number"), "{err:#}");
+    let out = compile_tab_lazy(&src, &[step("2")], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Bal_Cr"), vec![Some(0.5), Some(1.0), Some(2.0)]);
+
+    // Python export: the parsed number, or the same error raised (never 1.0).
+    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("1,000")], None);
+    assert!(py.contains("/ 1000.0)"), "{py}");
+    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("abc")], None);
+    assert!(py.contains("raise ValueError(\"Math column 'Bal_Cr': the value 'abc' is not a number"), "{py}");
+}

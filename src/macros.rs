@@ -403,7 +403,17 @@ pub fn generate_python_polars_code(
                 let rhs = if *right_is_col {
                     format!("pl.col(\"{}\").cast(pl.Float64)", right_val_or_col)
                 } else {
-                    right_val_or_col.clone()
+                    match crate::engine::parse_math_scalar(new_col, right_val_or_col) {
+                        Ok(v) => format!("{:?}", v),
+                        Err(e) => {
+                            // Same error as the app; never a guessed number.
+                            py.push_str(&format!(
+                                "raise ValueError({:?})\n\n",
+                                format!("{:#}", e)
+                            ));
+                            continue;
+                        }
+                    }
                 };
                 py.push_str(&format!(
                     "lf = lf.with_columns(\n    (pl.col(\"{}\").cast(pl.Float64) {} {}).alias(\"{}\")\n)\n\n",

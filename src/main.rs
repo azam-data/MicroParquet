@@ -8,7 +8,7 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    detect_file_schema, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
+    control_totals_state, detect_file_schema, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
 };
@@ -716,8 +716,8 @@ impl MicroParquetApp {
             Ok(lf) => {
                 let slice = fetch_viewport_slice(lf.clone(), 0, 100).unwrap_or_default();
                 let default_ctrl = Self::guess_balance_column(&slice);
-                let (total_rows, control_sum) =
-                    compute_control_totals(lf, default_ctrl.as_deref()).unwrap_or((0, None));
+                let totals = control_totals_state(Ok(lf), default_ctrl.as_deref());
+                let (total_rows, control_sum) = (totals.rows.unwrap_or(0), totals.sum);
 
                 // Baseline control sum is always computed from the raw source (0 steps)
                 let baseline_sum = if steps.is_empty() {
@@ -766,6 +766,7 @@ impl MicroParquetApp {
                     sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
                     parse_failures,
                     join_status: join_stat,
+                    totals,
                 });
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
@@ -866,10 +867,10 @@ impl MicroParquetApp {
                 {
                     tab.cached_slice = slice;
                 }
-                if let Ok((rows, sum)) = compute_control_totals(lf, tab.control_col.as_deref()) {
-                    tab.total_rows = rows;
-                    tab.control_sum = sum;
-                }
+                // A failure shows "—" and the reason instead of keeping the previous totals.
+                tab.totals = control_totals_state(Ok(lf), tab.control_col.as_deref());
+                tab.total_rows = tab.totals.rows.unwrap_or(0);
+                tab.control_sum = tab.totals.sum;
                 if recalculate_baseline {
                     // Recompute baseline from the base source (0 steps) for the newly selected control column
                     let base_sum = compile_tab_lazy(&tab.source, &[], &self.paths.temp_dir)
@@ -893,7 +894,10 @@ impl MicroParquetApp {
                 self.init_tool_defaults_from_active_tab();
             }
             Err(e) => {
-                self.status_message = format!("Step execution failed: {}", e);
+                let msg = format!("{:#}", e);
+                tab.totals = control_totals_state(Err(e), tab.control_col.as_deref());
+                tab.control_sum = None;
+                self.status_message = format!("Step execution failed: {}", msg);
             }
         }
     }
@@ -1221,9 +1225,23 @@ impl eframe::App for MicroParquetApp {
                 if let Some(tab) = self.tabs.get(self.active_tab) {
                     ui.strong(format!(
                         "Rows: {}",
-                        format_with_commas(tab.total_rows as f64, 0)
+                        tab.totals
+                            .rows
+                            .map(|r| format_with_commas(r as f64, 0))
+                            .unwrap_or_else(|| "—".to_string())
                     ));
                     ui.separator();
+                    if let (Some(col_name), None) = (&tab.control_col, tab.control_sum) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("Control [{}]: —", col_name),
+                        );
+                        ui.separator();
+                    }
+                    if let Some(note) = &tab.totals.note {
+                        ui.colored_label(egui::Color32::from_rgb(210, 70, 0), format!("⚠ {}", note));
+                        ui.separator();
+                    }
 
                     if let (Some(col_name), Some(sum_val)) = (&tab.control_col, tab.control_sum) {
                         ui.colored_label(

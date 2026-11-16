@@ -165,6 +165,8 @@ Recorded during P6–P15 (sessions 2–3, unattended run; not yet confirmed by t
 - P10: `batch_log.csv` also lists copied companion files (status COPIED) and has a `parse_failures` column (values that became null, CSV -> Parquet). Rows and control sum: CSV -> Parquet from the written Parquet file, Parquet -> CSV from the source. The control column is a numeric column named Balance, else the first numeric column whose name contains balance or amount; empty when there is none.
 - P10: "Apply Saved .schema.json Template" without a template is now an error in `run_folder_mirror_batch` too (it used to fall back to auto-detect silently). The folder check resolves `..` and symlinks and also refuses output = input. An input file named `batch_log.csv` at the top level is not copied over the log (ERROR row).
 - P10: "malformed CSV" in the test is an empty file (no header row): Polars reads many broken CSVs without an error (an unclosed quote swallows the following lines, binary junk becomes a header with 0 rows). Those are not detected by the batch run.
+- P11: when only the control column is missing (e.g. after a pivot) the row count is still shown and only the sum is "—" with the reason; when the pipeline itself fails both are "—". A control column that is not numeric now has no sum ("—", reason shown); it used to be cast to numbers and summed. State function: `control_totals_state` (engine).
+- P11: the math scalar accepts thousands commas ("10,000,000"); NaN and infinity are errors. The Python export writes the parsed number, or `raise ValueError(<same message>)` for a value that is not a number.
 </accepted_deviations>
 
 <constraints>

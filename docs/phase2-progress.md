@@ -10,8 +10,8 @@ contain its own hash).
 | P7 | DONE | f474139 | t16 un-ignored (+Source_File, column order); t16b (type mismatch error names Balance/files/types; first-file schema loads both with 1 parse failure; saved schema with missing column; CSV+Parquet; unreadable file) | manual diagonal concat (feature not enabled); per-file read settings kept |  |
 | P8 | DONE | 5003bad | t25 (DHK/dhk/null/A\/B/A_B/blank → 5 files, no overwrite, 5-row manifest, rows = source; Parquet) | control_col argument; control-sum check added |  |
 | P9 | DONE | 8b6c8e1 | t26 (xlsx Date cell = serial + dd-mmm-yyyy style, Datetime with time; spill to '(2)','(3)'; Export_Errors names failed tab), t26b (PDF omitted columns list, 5,000-row note) | PDF row cap made visible; cell read errors fail; report structs | Q2 |
-| P10 | DONE | (this commit) | t27 (good + malformed → log with 1 OK, 1 ERROR row; output inside input refused, incl. ..; template mode without template refused; Parquet→CSV with COPIED companion) | log has COPIED rows and parse_failures column; template fallback removed | Q3 |
-| P11 | todo | | | | |
+| P10 | DONE | 69fab1c | t27 (good + malformed → log with 1 OK, 1 ERROR row; output inside input refused, incl. ..; template mode without template refused; Parquet→CSV with COPIED companion) | log has COPIED rows and parse_failures column; template fallback removed | Q3 |
+| P11 | DONE | (this commit) | t28 (control_totals_state: ok / pivot removes control column / text column / failed pipeline; parse_math_scalar errors name the value; Python export) | rows kept when only the control column is missing; text control column has no sum |  |
 | P12 | todo | | | | |
 | P13 | todo | | | | |
 | P14 | todo | | | | |

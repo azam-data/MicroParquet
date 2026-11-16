@@ -955,6 +955,16 @@ pub struct TabState {
     pub parse_failures: Vec<ParseFailure>,
     /// For a joined tab: rows and control sum against the left table, and dropped duplicates.
     pub join_status: Option<JoinStatus>,
+    /// What the status bar shows for rows and control sum (None = "—", with the reason).
+    pub totals: ControlTotals,
+}
+
+/// Rows and control sum for the status bar. `None` is shown as "—"; `note` says why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ControlTotals {
+    pub rows: Option<usize>,
+    pub sum: Option<f64>,
+    pub note: Option<String>,
 }
 
 /// Rows and control sum of a join next to the left table's, for the status bar.

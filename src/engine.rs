@@ -5,7 +5,7 @@ use crate::banking::{
 };
 use crate::models::{
     column_name_tokens, parquet_native_type, parquet_needs_conversion, AggFunc, AggSpec,
-    ColDataType, ColumnSchemaConfig, CsvTextEncoding, FilterOp, IngestionConfig, JoinStatus, MathOp,
+    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -1738,8 +1738,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             let r = if *right_is_col {
                 col(right_val_or_col).cast(DataType::Float64)
             } else {
-                let scalar = right_val_or_col.trim().parse::<f64>().unwrap_or(1.0);
-                lit(scalar)
+                lit(parse_math_scalar(new_col, right_val_or_col)?)
             };
             let res = match op {
                 MathOp::Add => l + r,
@@ -2074,6 +2073,66 @@ pub fn fetch_viewport_slice(lf: LazyFrame, offset: usize, limit: usize) -> Resul
         .collect()
         .context("Failed to collect viewport slice")?;
     Ok(df)
+}
+
+/// The number a math column uses as its right-hand side. Thousands commas are allowed;
+/// anything else that is not a finite number is an error naming the value.
+pub fn parse_math_scalar(new_col: &str, value: &str) -> Result<f64> {
+    let cleaned = value.trim().replace(',', "");
+    match cleaned.parse::<f64>() {
+        Ok(v) if v.is_finite() => Ok(v),
+        _ => anyhow::bail!(
+            "Math column '{}': the value '{}' is not a number. Enter a number such as 10000000 or 0.5.",
+            new_col,
+            value
+        ),
+    }
+}
+
+/// Rows and control sum for the status bar, or "—" with the reason. The pipeline result is
+/// passed in so a failed step also shows "—" instead of the previous step's totals.
+pub fn control_totals_state(lf: Result<LazyFrame>, control_col: Option<&str>) -> ControlTotals {
+    let unavailable = |why: String| ControlTotals {
+        rows: None,
+        sum: None,
+        note: Some(why),
+    };
+    let mut lf = match lf {
+        Ok(lf) => lf,
+        Err(e) => return unavailable(format!("Totals unavailable: {:#}", e)),
+    };
+    let schema = match lf.collect_schema() {
+        Ok(s) => s,
+        Err(e) => return unavailable(format!("Totals unavailable: {}", e)),
+    };
+    let (sum_col, note) = match control_col {
+        None => (None, None),
+        Some(c) => match schema.get(c) {
+            None => (
+                None,
+                Some(format!(
+                    "Control column '{}' no longer exists (for example after a pivot or column selection). Choose another control column.",
+                    c
+                )),
+            ),
+            Some(dt) if !dt.is_numeric() => (
+                None,
+                Some(format!(
+                    "Control column '{}' is {:?}, not a number, so it has no sum. Choose a numeric control column.",
+                    c, dt
+                )),
+            ),
+            Some(_) => (Some(c), None),
+        },
+    };
+    match compute_control_totals(lf, sum_col) {
+        Ok((rows, sum)) => ControlTotals {
+            rows: Some(rows),
+            sum,
+            note,
+        },
+        Err(e) => unavailable(format!("Totals unavailable: {}", e)),
+    }
 }
 
 pub fn compute_control_totals(
