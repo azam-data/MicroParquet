@@ -5,7 +5,7 @@ use crate::banking::{
 };
 use crate::models::{
     column_name_tokens, parquet_native_type, parquet_needs_conversion, AggFunc, AggSpec,
-    ColDataType, ColumnSchemaConfig, CsvTextEncoding, FilterOp, IngestionConfig, MathOp,
+    ColDataType, ColumnSchemaConfig, CsvTextEncoding, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -1303,6 +1303,123 @@ fn parquet_conversion_plan<'a>(
     Ok((lf, plan))
 }
 
+/// Key combinations (all key columns non-null) that occur more than once in `lf`:
+/// (number of such combinations, extra rows beyond the first per key, up to 10 examples).
+pub fn duplicate_key_report(lf: LazyFrame, keys: &[String]) -> Result<(usize, usize, Vec<String>)> {
+    if keys.is_empty() {
+        anyhow::bail!("Join: no key column given. Enter at least one key column (e.g. Actnum).");
+    }
+    let not_null = keys
+        .iter()
+        .fold(lit(true), |acc, k| acc.and(col(k).is_not_null()));
+    let key_exprs: Vec<Expr> = keys.iter().map(|k| col(k)).collect();
+    let dup = lf
+        .filter(not_null)
+        .group_by_stable(key_exprs)
+        .agg([len().alias("__mp_key_rows")])
+        .filter(col("__mp_key_rows").gt(lit(1)))
+        .collect()
+        .context("Join: could not check the right table for duplicated keys")?;
+    let n = dup.height();
+    let mut extra = 0usize;
+    if let Ok(c) = dup.column("__mp_key_rows").and_then(|c| c.cast(&DataType::UInt64)) {
+        if let Ok(ca) = c.u64() {
+            extra = ca.into_iter().flatten().map(|v| v.saturating_sub(1) as usize).sum();
+        }
+    }
+    let mut key_text = Vec::with_capacity(keys.len());
+    for k in keys {
+        key_text.push(dup.column(k)?.cast(&DataType::String)?);
+    }
+    let mut examples = Vec::new();
+    for i in 0..n.min(10) {
+        let parts: Vec<String> = key_text
+            .iter()
+            .map(|s| {
+                s.str()
+                    .ok()
+                    .and_then(|ca| ca.get(i))
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        examples.push(parts.join(" / "));
+    }
+    Ok((n, extra, examples))
+}
+
+/// Keeps the first right-side row per non-null key; rows with a null key are kept as they are
+/// (they never match, and a full join must still show them).
+fn keep_first_per_key(lf: LazyFrame, keys: &[String]) -> Result<LazyFrame> {
+    let any_null = keys
+        .iter()
+        .fold(lit(false), |acc, k| acc.or(col(k).is_null()));
+    let subset: Vec<PlSmallStr> = keys.iter().map(|k| PlSmallStr::from(k.as_str())).collect();
+    let deduped = lf
+        .clone()
+        .filter(any_null.clone().not())
+        .unique_stable(Some(subset), UniqueKeepStrategy::First);
+    let null_keys = lf.filter(any_null);
+    concat(&[deduped, null_keys], UnionArgs::default())
+        .context("Join: could not keep the first row per key")
+}
+
+/// Rows and control sum of a joined tab next to its left table's. `None` for other sources.
+pub fn join_status(
+    source: &TabSource,
+    steps: &[TransformStep],
+    control_col: Option<&str>,
+    temp_dir: &Path,
+) -> Result<Option<JoinStatus>> {
+    let TabSource::JoinedTabs {
+        left_source,
+        left_steps,
+        right_source,
+        right_steps,
+        join_kind,
+        join_keys,
+        keep_first_duplicate_right,
+        ..
+    } = source
+    else {
+        return Ok(None);
+    };
+    let left_lf = compile_tab_lazy(left_source, left_steps, temp_dir)?;
+    let left_has_ctrl = control_col
+        .map(|c| {
+            left_lf
+                .clone()
+                .collect_schema()
+                .map(|s| s.contains(c))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let (left_rows, left_sum) =
+        compute_control_totals(left_lf, if left_has_ctrl { control_col } else { None })?;
+    let joined = compile_tab_lazy(source, steps, temp_dir)?;
+    let (rows, sum) = compute_control_totals(joined, control_col)?;
+    let (mut duplicate_keys, mut dropped_rows) = (0, 0);
+    if *keep_first_duplicate_right && join_inflates_left(*join_kind) {
+        let right_lf = compile_tab_lazy(right_source, right_steps, temp_dir)?;
+        let (n, extra, _) = duplicate_key_report(right_lf, join_keys)?;
+        duplicate_keys = n;
+        dropped_rows = extra;
+    }
+    Ok(Some(JoinStatus {
+        left_rows,
+        left_sum,
+        rows,
+        sum,
+        duplicate_keys,
+        dropped_rows,
+    }))
+}
+
+/// Semi and anti joins never repeat a left row, so right-side duplicates do not matter there.
+fn join_inflates_left(kind: SqlJoinKind) -> bool {
+    !matches!(kind, SqlJoinKind::Semi | SqlJoinKind::Anti)
+}
+
 pub fn compile_tab_lazy(
     source: &TabSource,
     steps: &[TransformStep],
@@ -1343,9 +1460,26 @@ pub fn compile_tab_lazy(
             join_kind,
             join_keys,
             right_cols_to_keep,
+            keep_first_duplicate_right,
         } => {
             let left_lf = compile_tab_lazy(left_source, left_steps, temp_dir)?;
             let mut right_lf = compile_tab_lazy(right_source, right_steps, temp_dir)?;
+
+            if join_inflates_left(*join_kind) {
+                if *keep_first_duplicate_right {
+                    right_lf = keep_first_per_key(right_lf, join_keys)?;
+                } else {
+                    let (n, _, examples) = duplicate_key_report(right_lf.clone(), join_keys)?;
+                    if n > 0 {
+                        anyhow::bail!(
+                            "Right table has {} duplicated keys on {}, e.g. {}. Fix the mapping table, or switch on 'Keep first row per key' for this join.",
+                            n,
+                            join_keys.join(", "),
+                            examples.join(", ")
+                        );
+                    }
+                }
+            }
 
             if !right_cols_to_keep.is_empty() {
                 let mut select_cols: Vec<Expr> = join_keys.iter().map(|k| col(k)).collect();

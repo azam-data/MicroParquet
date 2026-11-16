@@ -921,6 +921,9 @@ pub enum TabSource {
         join_kind: SqlJoinKind,
         join_keys: Vec<String>,
         right_cols_to_keep: Vec<String>,
+        /// Keep the first right-side row per key instead of failing on duplicated keys.
+        /// (TabSource is not serialised, so there is no serde attribute to add.)
+        keep_first_duplicate_right: bool,
     },
     PeriodReconcile {
         prev_source: Box<TabSource>,
@@ -950,6 +953,44 @@ pub struct TabState {
     pub sql_scratchpad: String,
     /// Values of the tab's source that could not be converted to their column type.
     pub parse_failures: Vec<ParseFailure>,
+    /// For a joined tab: rows and control sum against the left table, and dropped duplicates.
+    pub join_status: Option<JoinStatus>,
+}
+
+/// Rows and control sum of a join next to the left table's, for the status bar.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct JoinStatus {
+    pub left_rows: usize,
+    pub left_sum: Option<f64>,
+    pub rows: usize,
+    pub sum: Option<f64>,
+    /// Key combinations that appeared more than once on the right side ("Keep first row per key").
+    pub duplicate_keys: usize,
+    /// Right-side rows dropped by "Keep first row per key".
+    pub dropped_rows: usize,
+}
+
+impl JoinStatus {
+    pub fn summary(&self) -> String {
+        let fmt_sum = |s: Option<f64>| match s {
+            Some(v) => format!("{:.2} Cr", v / 10_000_000.0),
+            None => "—".to_string(),
+        };
+        let mut out = format!(
+            "Join: {} rows (left {}), control {} (left {})",
+            self.rows,
+            self.left_rows,
+            fmt_sum(self.sum),
+            fmt_sum(self.left_sum)
+        );
+        if self.duplicate_keys > 0 {
+            out.push_str(&format!(
+                " ⚠ kept first row for {} duplicated right key(s), {} right row(s) dropped",
+                self.duplicate_keys, self.dropped_rows
+            ));
+        }
+        out
+    }
 }
 
 impl TabState {

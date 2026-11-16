@@ -1298,7 +1298,6 @@ fn t16_stack_schema_drift() {
 }
 
 #[test]
-#[ignore = "Phase 2: join validation (duplicate keys on the right side)"]
 fn t17_join_duplicates_inflate() {
     let left = df!("Actnum" => ["A1"], "Balance" => [1_000_000.0]).unwrap();
     let right = df!("Actnum" => ["A1", "A1"], "Sector" => ["RMG", "RMG (dup row)"]).unwrap();
@@ -1312,6 +1311,7 @@ fn t17_join_duplicates_inflate() {
         join_kind: SqlJoinKind::Left,
         join_keys: vec!["Actnum".into()],
         right_cols_to_keep: vec![],
+        keep_first_duplicate_right: false,
     };
     // Target: a right side with a repeated key fails loudly, naming the key, instead of
     // doubling the left row (BDT 1,000,000 would become 2,000,000).
@@ -1321,6 +1321,54 @@ fn t17_join_duplicates_inflate() {
         .expect("duplicate right-side keys must be an error");
     let msg = format!("{err:#}");
     assert!(msg.contains("A1") && msg.to_lowercase().contains("duplicate"), "{msg}");
+    assert!(msg.contains("Actnum") && msg.contains("Keep first row per key"), "{msg}");
+
+    // Semi/anti joins never repeat a left row: no check.
+    let mut semi = src.clone();
+    if let TabSource::JoinedTabs { join_kind, .. } = &mut semi {
+        *join_kind = SqlJoinKind::Semi;
+    }
+    let (rows, _) = compile_tab_lazy(&semi, &[], &tmpdir())
+        .and_then(|lf| compute_control_totals(lf, Some("Balance")))
+        .unwrap();
+    assert_eq!(rows, 1);
+
+    // "Keep first row per key": 1 row, sum unchanged, the first right row is used, warning count 1.
+    let mut keep = src.clone();
+    if let TabSource::JoinedTabs { keep_first_duplicate_right, .. } = &mut keep {
+        *keep_first_duplicate_right = true;
+    }
+    let df = compile_tab_lazy(&keep, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 1);
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1_000_000.0)]);
+    assert_eq!(str_col(&df, "Sector"), vec![Some("RMG".to_string())]);
+    let js = join_status(&keep, &[], Some("Balance"), &tmpdir()).unwrap().expect("join status");
+    assert_eq!((js.rows, js.left_rows), (1, 1));
+    assert_eq!(js.sum, Some(1_000_000.0));
+    assert_eq!(js.left_sum, Some(1_000_000.0));
+    assert_eq!((js.duplicate_keys, js.dropped_rows), (1, 1));
+    let s = js.summary();
+    assert!(s.contains("1 duplicated right key") && s.contains("1 right row(s) dropped"), "{s}");
+
+    // Null keys on the right are not duplicates (they never match) and survive "keep first".
+    let right_nulls = df!("Actnum" => [None::<&str>, None, Some("A1")], "Sector" => ["x", "y", "RMG"]).unwrap();
+    let prn = write_parquet("r_nulls.parquet", &right_nulls);
+    let mut nulls = src.clone();
+    if let TabSource::JoinedTabs { right_source, join_kind, .. } = &mut nulls {
+        *right_source = Box::new(TabSource::SingleFile { path: prn, is_parquet: true, config: IngestionConfig::default() });
+        *join_kind = SqlJoinKind::Full;
+    }
+    let df = compile_tab_lazy(&nulls, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 3);
+    if let TabSource::JoinedTabs { keep_first_duplicate_right, .. } = &mut nulls {
+        *keep_first_duplicate_right = true;
+    }
+    let df = compile_tab_lazy(&nulls, &[], &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(df.height(), 3);
+
+    // Not a join: no join status.
+    let single = TabSource::SingleFile { path: write_parquet("l2.parquet", &left), is_parquet: true, config: IngestionConfig::default() };
+    assert!(join_status(&single, &[], Some("Balance"), &tmpdir()).unwrap().is_none());
 }
 
 #[test]

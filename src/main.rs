@@ -8,7 +8,7 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    fetch_viewport_slice, preview_parquet_raw,
+    fetch_viewport_slice, join_status, preview_parquet_raw,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
 };
@@ -359,6 +359,7 @@ pub struct MicroParquetApp {
     join_right_tab: usize,
     join_kind: SqlJoinKind,
     join_keys_input: String,
+    join_keep_first: bool,
 
     rec_prev_tab: usize,
     rec_curr_tab: usize,
@@ -556,6 +557,7 @@ impl MicroParquetApp {
             join_right_tab: 0,
             join_kind: SqlJoinKind::Left,
             join_keys_input: "Actnum".to_string(),
+            join_keep_first: false,
 
             rec_prev_tab: 0,
             rec_curr_tab: 0,
@@ -717,7 +719,7 @@ impl MicroParquetApp {
                         .and_then(|(_, s)| s)
                 };
 
-                let (parse_failures, count_note) =
+                let (parse_failures, mut count_note) =
                     match source_parse_failures(&source, &self.paths.temp_dir) {
                         Ok(f) => (f, String::new()),
                         Err(e) => (
@@ -725,6 +727,18 @@ impl MicroParquetApp {
                             format!(" ⚠ Could not count parse failures: {:#}", e),
                         ),
                     };
+                let join_stat = match join_status(
+                    &source,
+                    &steps,
+                    default_ctrl.as_deref(),
+                    &self.paths.temp_dir,
+                ) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        count_note.push_str(&format!(" ⚠ Could not compare the join with its left table: {:#}", e));
+                        None
+                    }
+                };
                 self.tabs.push(TabState {
                     title,
                     source,
@@ -739,6 +753,7 @@ impl MicroParquetApp {
                     cached_slice: slice,
                     sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
                     parse_failures,
+                    join_status: join_stat,
                 });
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
@@ -852,6 +867,16 @@ impl MicroParquetApp {
                         })
                         .and_then(|(_, s)| s);
                     tab.baseline_control_sum = base_sum;
+                }
+                if tab.join_status.is_some() {
+                    tab.join_status = join_status(
+                        &tab.source,
+                        &tab.steps,
+                        tab.control_col.as_deref(),
+                        &self.paths.temp_dir,
+                    )
+                    .ok()
+                    .flatten();
                 }
                 self.init_tool_defaults_from_active_tab();
             }
@@ -1216,6 +1241,16 @@ impl eframe::App for MicroParquetApp {
                         }
                         ui.separator();
                     }
+                }
+                if let Some(js) = self.tabs.get(self.active_tab).and_then(|t| t.join_status.as_ref()) {
+                    let warn = js.duplicate_keys > 0 || js.rows != js.left_rows;
+                    let color = if warn {
+                        egui::Color32::from_rgb(210, 70, 0)
+                    } else {
+                        egui::Color32::from_rgb(0, 110, 200)
+                    };
+                    ui.colored_label(color, js.summary());
+                    ui.separator();
                 }
                 if let Some(tab) = self.tabs.get(self.active_tab) {
                     if !tab.parse_failures.is_empty() {
@@ -2954,6 +2989,8 @@ impl MicroParquetApp {
                                 ui.label("Join Key Column(s) (e.g. Actnum):");
                                 ui.text_edit_singleline(&mut self.join_keys_input);
                             });
+                            ui.checkbox(&mut self.join_keep_first, "Keep first row per key")
+                                .on_hover_text("Off: a key repeated in the right table is an error. On: the first right row per key is used and the status bar shows how many were dropped.");
                             ui.separator();
                             if ui.button("🚀 Execute Join into New Tab").clicked() {
                                 let (Some(l_tab), Some(r_tab)) = (
@@ -2980,6 +3017,7 @@ impl MicroParquetApp {
                                         join_kind: self.join_kind,
                                         join_keys: keys,
                                         right_cols_to_keep: Vec::new(),
+                                        keep_first_duplicate_right: self.join_keep_first,
                                     },
                                     Vec::new(),
                                     l_tab.col_formats,
