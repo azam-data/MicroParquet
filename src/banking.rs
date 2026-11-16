@@ -175,6 +175,15 @@ pub fn apply_maturity_bucket(
 }
 
 /// Feature B1: Interest Rate Shock / ΔNII Sensitivity Simulator (1-Year Repricing Horizon)
+///
+/// Output columns:
+/// - `Current_Annual_Int`: balance × rate, gross interest income (assets) or expense
+///   (liabilities); unsigned.
+/// - `NII_Impact_BDT`: change in net interest income, signed by side: + for assets and − for
+///   liabilities under a rate rise.
+/// - `Shocked_Annual_Int`: gross interest income or expense after the shock, unsigned
+///   (`Current_Annual_Int` + the unsigned change). It is not a net figure and must not be summed
+///   across assets and liabilities as NII; use `NII_Impact_BDT` for that.
 pub fn apply_rate_shock_sim(
     lf: LazyFrame,
     bal_col: &str,

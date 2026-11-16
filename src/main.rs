@@ -97,6 +97,19 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+/// Default for the asset/liability side picker: the first column with a "side" or "direction"
+/// name token. "type" is not used: Account_Type or Collateral_Type are not sides.
+fn default_side_column(cols: &[String]) -> String {
+    cols.iter()
+        .find(|c| {
+            column_name_tokens(c)
+                .iter()
+                .any(|t| t == "side" || t == "direction")
+        })
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()> {
     let input_path = args
         .input
@@ -1577,22 +1590,14 @@ impl MicroParquetApp {
             .unwrap_or_default();
 
         // Default the side picker whenever the column set changes (not every frame, so a
-        // deliberate "none" choice sticks): first column named like side/type/direction.
+        // deliberate "none" choice sticks): first column named like side/direction.
         if matches!(
             self.active_tool,
             ActiveToolModal::RateShockSim | ActiveToolModal::DurationAnalysis
         ) && self.alm_side_cols_seen != avail_cols
         {
             self.alm_side_cols_seen = avail_cols.clone();
-            self.alm_side_col = avail_cols
-                .iter()
-                .find(|c| {
-                    column_name_tokens(c)
-                        .iter()
-                        .any(|t| t == "side" || t == "type" || t == "direction")
-                })
-                .cloned()
-                .unwrap_or_default();
+            self.alm_side_col = default_side_column(&avail_cols);
         }
 
         let mut close_modal = false;
@@ -2269,6 +2274,7 @@ impl MicroParquetApp {
                     .collapsible(false)
                     .show(ctx, |ui| {
                         ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
+                        ui.label("NII_Impact_BDT is signed (+ asset, − liability). Shocked_Annual_Int is gross income or expense after the shock, unsigned.");
                         ui.horizontal(|ui| {
                             ui.label("Balance Col:");
                             egui::ComboBox::from_id_salt("shk_bal")
@@ -3620,5 +3626,19 @@ impl MicroParquetApp {
             Ok(_) => self.status_message = format!("✅ Exported view to {:?}", out_path),
             Err(e) => self.status_message = format!("❌ CSV export failed: {:#}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_picker_default_ignores_type() {
+        let cols = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(default_side_column(&cols(&["Account_Type", "Balance", "AL_Side"])), "AL_Side");
+        assert_eq!(default_side_column(&cols(&["Collateral_Type", "Balance"])), "");
+        assert_eq!(default_side_column(&cols(&["Direction", "Side"])), "Direction");
+        assert_eq!(default_side_column(&cols(&["BalanceSide"])), "BalanceSide");
     }
 }

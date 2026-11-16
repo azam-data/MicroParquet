@@ -72,7 +72,8 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 - Sign rule (case-insensitive, trimmed): values starting with "A" (A, ASSET, ASSETS) → +1. Values starting with "L" (L, LIAB, LIABILITY), or equal to DEPOSIT or BORROWING → −1. Any other non-null value → `Err` that lists up to 10 distinct unmapped values (collect `unique()` on that column only).
 - When `side_col` is None (old macros), behave as before but add a column `Direction_Assumed` = "ASSET (unspecified)", so the assumption shows in the output.
 - Signed outputs: `NII_Impact_BDT` and `Delta_EVE_Impact_BDT` are multiplied by the sign. A rise in rates must reduce the EVE of assets and increase the EVE of liabilities. `DV01_BPV_BDT` stays unsigned.
-- Add the Side column picker to both modals in `main.rs`. It is optional, but default it to a column whose name tokens include side, type or direction, if one exists.
+- Add the Side column picker to both modals in `main.rs`. It is optional, but default it to a column whose name tokens include side or direction, if one exists (not type: Account_Type or Collateral_Type are not sides).
+- `Shocked_Annual_Int` is gross interest income (assets) or expense (liabilities) after the shock, unsigned: `Current_Annual_Int` plus the unsigned change. Net effects are read from `NII_Impact_BDT`.
 - Acceptance (t10): +100 bp, loan 3m and term deposit 3m (1,000,000 each, maturity 2027-01-29, cutoff 2026-10-31) → +7,534.25 and −7,534.25, net 0 (±0.01). t09: asset ΔEVE −7.58, deposit +7.58 (2 dp).
 </task>
 
