@@ -3204,6 +3204,7 @@ impl MicroParquetApp {
                                 } else {
                                     Some(self.rec_cl_col.trim().to_string())
                                 };
+                                let tabs_before = self.tabs.len();
                                 self.create_tab_from_source(
                                     format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
                                     TabSource::PeriodReconcile {
@@ -3219,6 +3220,23 @@ impl MicroParquetApp {
                                     Vec::new(),
                                     HashMap::new(),
                                 );
+                                if self.tabs.len() > tabs_before {
+                                    let multi = self.tabs.last().map(|t| {
+                                        compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
+                                            .and_then(micro_parquet::banking::reconcile_multi_row_keys)
+                                    });
+                                    match multi {
+                                        Some(Ok((p, c))) => self.status_message.push_str(&format!(
+                                            " Keys with more than one row: {} in the previous period, {} in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count).",
+                                            p, c
+                                        )),
+                                        Some(Err(e)) => self.status_message.push_str(&format!(
+                                            " ⚠ Could not count keys with more than one row: {:#}",
+                                            e
+                                        )),
+                                        None => {}
+                                    }
+                                }
                                 close_modal = true;
                             }
                         }

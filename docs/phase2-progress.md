@@ -13,8 +13,8 @@ contain its own hash).
 | P10 | DONE | 69fab1c | t27 (good + malformed → log with 1 OK, 1 ERROR row; output inside input refused, incl. ..; template mode without template refused; Parquet→CSV with COPIED companion) | log has COPIED rows and parse_failures column; template fallback removed | Q3 |
 | P11 | DONE | 67e8fcc | t28 (control_totals_state: ok / pivot removes control column / text column / failed pipeline; parse_math_scalar errors name the value; Python export) | rows kept when only the control column is missing; text control column has no sum |  |
 | P12 | DONE | 454184a | t13 un-ignored (1,000,000 distinct CLIENT_ tokens; same key same token; different keys differ; no 3-digit run of 2,000 account numbers); t29 (create, reuse, 0600, concurrent first use, export/import with backup, junk import refused, damaged key error); t24 updated for ACCT_ format | account mask re-derives to avoid digit runs; fingerprint, backup on import | Q4 |
-| P13 | DONE | (this commit) | t11 un-ignored (100d 9.559, 31d 8.762; NextPointUp 10.10/9.50; 10d → 30d rate on a curve starting at 30d; 20y → last point; FTP_Method; unsorted curve; empty/duplicate curve errors; old macro loads as Linear) | 10-day case needs a curve starting at 30d (default curve has 1d/7d points) | Q5 |
-| P14 | todo | | | | |
+| P13 | DONE | 45e7728 | t11 un-ignored (100d 9.559, 31d 8.762; NextPointUp 10.10/9.50; 10d → 30d rate on a curve starting at 30d; 20y → last point; FTP_Method; unsorted curve; empty/duplicate curve errors; old macro loads as Linear) | 10-day case needs a curve starting at 30d (default curve has 1d/7d points) | Q5 |
+| P14 | DONE | (this commit) | t12 un-ignored (A1 prev rate 9.5, delta 0 bps; A2/A3 delta null; A1 Prev_Row_Count 2; multi-row key count; null-safe weights; CL worst grade / unmapped → largest balance) | CL output is the chosen row's code; row counts 0 for missing keys |  |
 | P15 | todo | | | | |
 
 ## P12 design: per-install PII key

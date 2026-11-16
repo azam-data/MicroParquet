@@ -173,6 +173,8 @@ Recorded during P6–P15 (sessions 2–3, unattended run; not yet confirmed by t
 - P13: the acceptance line "a 10-day deal gives the 30-day rate" assumes a curve that starts at 30 days; the default Bangladesh curve has 1-day and 7-day points, so with Linear a 10-day deal gets 8.25 + 3/23 × 0.50 = 8.315. The test checks the 30-day rate on the default curve without its 1d/7d points, and 8.315 on the full default curve.
 - P13: `apply_ftp_curve_map` takes the interpolation as a new last argument. An empty curve or two points with the same tenor are errors (an empty curve used to give 0%). `FTP_Method` is per row: "Linear 91d-182d", "Next point up 182d", "First point 30d (at or below curve start)" or "Last point 1825d (beyond curve)".
 - P13 (question): as specified, FTP steps in macros saved before Phase 2 load as Linear, so re-running an old macro changes its FTP rates (step → linear). Choose "Next tenor point up" in the FTP modal to reproduce old results.
+- P14: the per-key CL output is the original CL code of the chosen row (not the grade name), so single-row keys show the same code as before. The row with the worst mapped grade wins; ties, and keys whose codes are all unmapped, go to the largest-balance row. In a key that mixes mapped and unmapped codes the mapped worst grade wins. The CL map comes from `cl_code_map.json` (loaded only when a CL column is reconciled); `build_period_reconcile_lazy_with` takes the map directly (tests).
+- P14: `Prev_Row_Count` / `Curr_Row_Count` are 0 (not null) for a key missing in that period. New/closed status now follows the row counts (same result as before). A key whose rate rows all have zero or missing balance gets a null rate.
 </accepted_deviations>
 
 <constraints>

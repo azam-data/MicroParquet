@@ -1154,7 +1154,6 @@ fn t12a_reconcile_status_and_balances() {
 }
 
 #[test]
-#[ignore = "Phase 2: balance-weighted rates in period reconcile"]
 fn t12_reconcile() {
     // Target: A1's two previous rows (100 @ 5%, 900 @ 10%) give a balance-weighted 9.5%,
     // not the simple mean 7.5%, so the rate change to 9.5% is 0 bps.
@@ -1166,6 +1165,54 @@ fn t12_reconcile() {
         .unwrap();
     assert_close(f64_col(&out, "Prev_Rate")[0].unwrap(), 9.5, "A1 previous WAVG rate");
     assert_close(f64_col(&out, "Rate_Delta_Bps")[0].unwrap(), 0.0, "A1 rate change (bps)");
+    // A2 (closed) and A3 (new): no rate change (null, not ±rate × 100).
+    let bps = f64_col(&out, "Rate_Delta_Bps");
+    assert_eq!((bps[1], bps[2]), (None, None));
+    assert_eq!(f64_col(&out, "Prev_Row_Count"), vec![Some(2.0), Some(1.0), Some(0.0)]);
+    assert_eq!(f64_col(&out, "Curr_Row_Count"), vec![Some(1.0), Some(0.0), Some(1.0)]);
+    let rec = build_period_reconcile_lazy(reconcile_frames().0.lazy(), reconcile_frames().1.lazy(), "Actnum", "Balance", Some("Rate"), None).unwrap();
+    assert_eq!(reconcile_multi_row_keys(rec).unwrap(), (1, 0));
+
+    // Null-safe weighting: a row without a rate (or balance) is left out of both sums;
+    // a key whose known rows have zero balance has no rate.
+    let prev = df!(
+        "Actnum" => ["B1", "B1", "B1", "B2"],
+        "Balance" => [Some(300.0), Some(100.0), None, Some(0.0)],
+        "Rate" => [None, Some(8.0), Some(99.0), Some(7.0)]
+    )
+    .unwrap();
+    let curr = df!("Actnum" => ["B1", "B2"], "Balance" => [100.0, 50.0], "Rate" => [8.0, 7.0]).unwrap();
+    let out = build_period_reconcile_lazy(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None)
+        .unwrap()
+        .sort(["Actnum"], Default::default())
+        .collect()
+        .unwrap();
+    assert_eq!(f64_col(&out, "Prev_Rate"), vec![Some(8.0), None]);
+    assert_eq!(f64_col(&out, "Rate_Delta_Bps"), vec![Some(0.0), None]);
+
+    // CL per key: the worst grade by the CL map (STD < SMA < SS < DF < BL); unmapped codes ->
+    // the code of the largest-balance row.
+    let cl_map: Vec<(String, String)> = [("STD", "STD"), ("SMA", "SMA"), ("SS", "SS"), ("DF", "DF"), ("BL", "BL"), ("UC", "STD")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    let prev = df!(
+        "Actnum" => ["C1", "C1", "C1", "C2", "C2", "C3"],
+        "Balance" => [900.0, 50.0, 50.0, 10.0, 500.0, 1.0],
+        "CL" => ["UC", "ss", "SMA", "X9", "Y7", "BL"]
+    )
+    .unwrap();
+    let curr = df!("Actnum" => ["C1", "C2", "C3"], "Balance" => [1.0, 1.0, 1.0], "CL" => ["DF", "Y7", "BL"]).unwrap();
+    let out = build_period_reconcile_lazy_with(prev.lazy(), curr.lazy(), "Actnum", "Balance", None, Some("CL"), &cl_map)
+        .unwrap()
+        .sort(["Actnum"], Default::default())
+        .collect()
+        .unwrap();
+    assert_eq!(
+        str_col(&out, "Prev_CL"),
+        vec![Some("ss".to_string()), Some("Y7".to_string()), Some("BL".to_string())]
+    );
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[0].as_deref(), Some("ss -> DF"));
 }
 
 #[test]

@@ -406,46 +406,76 @@ pub fn build_period_reconcile_lazy(
     rate_col: Option<&str>,
     cl_status_col: Option<&str>,
 ) -> Result<LazyFrame> {
-    let prev_bal_name = "Prev_Balance";
-    let curr_bal_name = "Curr_Balance";
+    // The CL map is only needed (and only loaded) when a CL column is reconciled.
+    let cl_map = match cl_status_col {
+        Some(_) => ProvisionConfig::load_or_create(&portable_root_dir())?.cl_code_map,
+        None => Vec::new(),
+    };
+    build_period_reconcile_lazy_with(prev_lf, curr_lf, key_col, bal_col, rate_col, cl_status_col, &cl_map)
+}
 
-    let mut prev_select = vec![
-        col(key_col),
-        col(bal_col).cast(DataType::Float64).alias(prev_bal_name),
-    ];
-    let mut curr_select = vec![
-        col(key_col),
-        col(bal_col).cast(DataType::Float64).alias(curr_bal_name),
-    ];
+/// Per key and period: balance sum, balance-weighted rate (rows where rate and balance are both
+/// known; null when their balances sum to 0), row count, and the CL code of the worst-graded row
+/// (grade order STD < SMA < SS < DF < BL via `cl_map`; ties and unmapped codes go to the row with
+/// the largest balance).
+pub fn build_period_reconcile_lazy_with(
+    prev_lf: LazyFrame,
+    curr_lf: LazyFrame,
+    key_col: &str,
+    bal_col: &str,
+    rate_col: Option<&str>,
+    cl_status_col: Option<&str>,
+    cl_map: &[(String, String)],
+) -> Result<LazyFrame> {
+    let per_key = |lf: LazyFrame, bal_name: &str, rate_name: &str, cl_name: &str, count_name: &str| {
+        let bal = col(bal_col).cast(DataType::Float64);
+        let mut select = vec![col(key_col), bal.clone().alias(bal_name)];
+        if let Some(rc) = rate_col {
+            select.push(col(rc).cast(DataType::Float64).alias(rate_name));
+        }
+        if let Some(clc) = cl_status_col {
+            let code = col(clc).cast(DataType::String);
+            let grade = map_codes_expr(normalise_code_expr(code.clone()), cl_map);
+            let mut rank: Expr = lit(NULL).cast(DataType::Int32);
+            for (i, g) in CL_GRADES.iter().enumerate().rev() {
+                rank = when(grade.clone().eq(lit(*g))).then(lit(i as i32)).otherwise(rank);
+            }
+            select.push(code.alias(cl_name));
+            select.push(rank.alias("__mp_cl_rank"));
+        }
+        let mut agg = vec![col(bal_name).sum(), len().cast(DataType::Int64).alias(count_name)];
+        if rate_col.is_some() {
+            let v = col(rate_name);
+            let w = col(bal_name);
+            let mask = v.clone().is_not_null().and(w.clone().is_not_null());
+            let num = (v * w.clone()).filter(mask.clone()).sum();
+            let den = w.filter(mask).sum();
+            agg.push(
+                when(den.clone().eq(lit(0.0)))
+                    .then(lit(NULL).cast(DataType::Float64))
+                    .otherwise(num / den)
+                    .alias(rate_name),
+            );
+        }
+        if cl_status_col.is_some() {
+            agg.push(
+                col(cl_name)
+                    .sort_by(
+                        [col("__mp_cl_rank"), col(bal_name)],
+                        SortMultipleOptions::default()
+                            .with_order_descending_multi([true, true])
+                            .with_nulls_last(true)
+                            .with_maintain_order(true),
+                    )
+                    .first()
+                    .alias(cl_name),
+            );
+        }
+        lf.select(select).group_by([col(key_col)]).agg(agg)
+    };
 
-    if let Some(rc) = rate_col {
-        prev_select.push(col(rc).cast(DataType::Float64).alias("Prev_Rate"));
-        curr_select.push(col(rc).cast(DataType::Float64).alias("Curr_Rate"));
-    }
-    if let Some(clc) = cl_status_col {
-        prev_select.push(col(clc).cast(DataType::String).alias("Prev_CL"));
-        curr_select.push(col(clc).cast(DataType::String).alias("Curr_CL"));
-    }
-
-    let mut prev_agg = vec![col(prev_bal_name).sum()];
-    let mut curr_agg = vec![col(curr_bal_name).sum()];
-    if rate_col.is_some() {
-        prev_agg.push(col("Prev_Rate").mean());
-        curr_agg.push(col("Curr_Rate").mean());
-    }
-    if cl_status_col.is_some() {
-        prev_agg.push(col("Prev_CL").first());
-        curr_agg.push(col("Curr_CL").first());
-    }
-
-    let left = prev_lf
-        .select(prev_select)
-        .group_by([col(key_col)])
-        .agg(prev_agg);
-    let right = curr_lf
-        .select(curr_select)
-        .group_by([col(key_col)])
-        .agg(curr_agg);
+    let left = per_key(prev_lf, "Prev_Balance", "Prev_Rate", "Prev_CL", "Prev_Row_Count");
+    let right = per_key(curr_lf, "Curr_Balance", "Curr_Rate", "Curr_CL", "Curr_Row_Count");
 
     let joined = left.join(
         right,
@@ -454,13 +484,16 @@ pub fn build_period_reconcile_lazy(
         JoinArgs::new(JoinType::Full).with_coalesce(JoinCoalesce::CoalesceColumns),
     );
 
+    let prev_bal_name = "Prev_Balance";
+    let curr_bal_name = "Curr_Balance";
     let pb = col(prev_bal_name).fill_null(lit(0.0));
     let cb = col(curr_bal_name).fill_null(lit(0.0));
     let delta_expr = (cb.clone() - pb.clone()).alias("Balance_Delta");
 
-    let status_expr = when(col(prev_bal_name).is_null())
+    // A key missing in a period has no rows there: its row count is 0 (its balance stays null).
+    let status_expr = when(col("Prev_Row_Count").is_null())
         .then(lit("1. New Account Opened"))
-        .when(col(curr_bal_name).is_null())
+        .when(col("Curr_Row_Count").is_null())
         .then(lit("2. Closed / Matured Account"))
         .when((cb.clone() - pb.clone()).gt(lit(0.01)))
         .then(lit("3. Balance Increased"))
@@ -469,14 +502,18 @@ pub fn build_period_reconcile_lazy(
         .otherwise(lit("5. Unchanged"))
         .alias("Reconcile_Status");
 
-    let mut final_lf = joined.with_columns([status_expr, delta_expr]);
+    let mut final_lf = joined
+        .with_columns([status_expr, delta_expr])
+        .with_columns([
+            col("Prev_Row_Count").fill_null(lit(0i64)),
+            col("Curr_Row_Count").fill_null(lit(0i64)),
+        ]);
 
     if rate_col.is_some() {
-        let rate_delta_bps = ((col("Curr_Rate").fill_null(lit(0.0))
-            - col("Prev_Rate").fill_null(lit(0.0)))
-            * lit(100.0))
-        .round(2)
-        .alias("Rate_Delta_Bps");
+        // Null when either period has no rate (key missing there, or no known rate).
+        let rate_delta_bps = ((col("Curr_Rate") - col("Prev_Rate")) * lit(100.0))
+            .round(2)
+            .alias("Rate_Delta_Bps");
         final_lf = final_lf.with_column(rate_delta_bps);
     }
 
@@ -488,6 +525,26 @@ pub fn build_period_reconcile_lazy(
     }
 
     Ok(final_lf)
+}
+
+/// Keys with more than one row in the previous and in the current period, from a reconcile
+/// result (for the status message).
+pub fn reconcile_multi_row_keys(reconciled: LazyFrame) -> Result<(usize, usize)> {
+    let df = reconciled
+        .select([
+            col("Prev_Row_Count").gt(lit(1i64)).sum().cast(DataType::Int64).alias("p"),
+            col("Curr_Row_Count").gt(lit(1i64)).sum().cast(DataType::Int64).alias("c"),
+        ])
+        .collect()
+        .context("Could not count keys with more than one row")?;
+    let get = |name: &str| -> usize {
+        df.column(name)
+            .ok()
+            .and_then(|c| c.i64().ok())
+            .and_then(|ca| ca.get(0))
+            .unwrap_or(0) as usize
+    };
+    Ok((get("p"), get("c")))
 }
 
 /// IRRBB Suite: Macaulay Duration, Modified Duration, DV01 (1 bp BPV), and ΔEVE Impact
