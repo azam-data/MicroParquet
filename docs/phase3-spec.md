@@ -192,3 +192,12 @@ Table rules:
 <report>
 At the end of the session, reply in no more than 30 lines: a table (Task | Status | Tests added | Deviations), the final `cargo test` summary line, and questions for the owner. Add a short "What to look at by eye" list for the owner's visual check.
 </report>
+
+<accepted_deviations>
+Recorded during the unattended Phase 3 run (each also appears in `docs/phase3-progress.md` and in the report).
+- R1: `run_headless_cli` and `CliArgs` handling moved to `src/headless.rs` so `main.rs` is under 800 lines. No change to headless behaviour or output.
+- R1: font loading is not in `theme.rs` yet. R1 must not change the look, and the font files arrive with L1; `theme.rs` gets `load_fonts` in L1. Until then `apply_ui_theme` uses the pre-Phase-3 values (named `OLD_*` and `WARN_*` constants), so R1 changes nothing by eye.
+- R1: only colour literals moved into `theme.rs` (the acceptance grep). Widget width/height literals inside modals (`desired_width(520.0)` and similar) stay where they are until L1 restyles the modals.
+- R1: `src/ui/prelude.rs` re-exports the imports every screen needs, so each screen file has one `use` line.
+- R1: dark-theme tokens the spec does not list (accent_soft_border, selector_on_bg/border/fg, selector_off_fg, warning) were derived from the dark palette: #4A3A1C, #161C23, #3A4756, #F2C27A, #7B8794, #F0A93A. Owner to confirm.
+</accepted_deviations>
