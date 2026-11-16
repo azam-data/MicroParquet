@@ -130,6 +130,20 @@ impl MicroParquetApp {
         self.export.multi_checks = vec![true; self.tabs.len()];
     }
 
+    /// Replaces step `idx` of the active tab in place and refreshes the view.
+    pub(crate) fn replace_step_in_active_tab(&mut self, idx: usize, step: TransformStep, status: &str) {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let Some(slot) = tab.steps.get_mut(idx) else {
+            return;
+        };
+        *slot = step;
+        tab.viewport_offset = 0;
+        self.status_message = status.to_string();
+        self.refresh_tab_at(self.active_tab, false, Some(status.to_string()));
+    }
+
     pub(crate) fn push_step_to_active_tab(&mut self, step: TransformStep, open_new_tab: bool) {
         let Some(curr) = self.tabs.get(self.active_tab).cloned() else {
             return;

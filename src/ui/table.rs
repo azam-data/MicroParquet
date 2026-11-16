@@ -208,8 +208,9 @@ impl MicroParquetApp {
     /// Filter chip bar (one chip per filter step) with the paging controls on the right.
     pub(crate) fn render_filter_bar(&mut self, ui: &mut egui::Ui) {
         let tk = *theme::tokens(self.dark_mode);
-        let mut remove_step: Option<usize> = None;
-        let mut open_filter = false;
+        let mut remove_cond: Option<(usize, usize)> = None;
+        let mut edit_step: Option<usize> = None;
+        let mut add_condition = false;
         let mut page_prev = false;
         let mut page_next = false;
         let mut page_first = false;
@@ -218,17 +219,20 @@ impl MicroParquetApp {
             ui.horizontal_wrapped(|ui| {
                 ui.label(theme::semibold("Filters").size(theme::TEXT_SMALL).color(tk.muted));
                 for (i, step) in tab.steps.iter().enumerate() {
-                    if let TransformStep::FilterRows { column, operator, value, keep_matching } = step {
-                        let mut text = format!("{} {} {}", column, operator.label(), value);
-                        if !*keep_matching {
-                            text = format!("not ({})", text.trim());
+                    let Some((conds, join, keep)) = step.as_filter_group() else {
+                        continue;
+                    };
+                    for (j, c) in conds.iter().enumerate() {
+                        if j > 0 {
+                            ui.label(egui::RichText::new(join.label()).size(theme::TEXT_SMALL).color(tk.muted));
                         }
-                        let (clicked, removed) = theme::chip(ui, text.trim());
+                        let text = if keep { c.describe() } else { format!("delete: {}", c.describe()) };
+                        let (clicked, removed) = theme::chip(ui, &text);
                         if clicked {
-                            open_filter = true;
+                            edit_step = Some(i);
                         }
                         if removed {
-                            remove_step = Some(i);
+                            remove_cond = Some((i, j));
                         }
                     }
                 }
@@ -241,7 +245,7 @@ impl MicroParquetApp {
                     )
                     .clicked()
                 {
-                    open_filter = true;
+                    add_condition = true;
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -296,17 +300,14 @@ impl MicroParquetApp {
                 tab.viewport_offset += tab.viewport_limit;
                 refresh = true;
             }
-            if let Some(i) = remove_step {
-                if i < tab.steps.len() {
-                    tab.steps.remove(i);
-                    tab.viewport_offset = 0;
-                    refresh = true;
-                }
-            }
         }
-        if open_filter {
-            self.init_tool_defaults_from_active_tab();
-            self.active_tool = ActiveToolModal::FilterRows;
+        if let Some((i, j)) = remove_cond {
+            self.remove_filter_condition(i, j);
+        }
+        if let Some(i) = edit_step {
+            self.open_filter_editor(Some(i), false);
+        } else if add_condition {
+            self.open_filter_editor_to_add();
         }
         if refresh {
             self.refresh_active_tab(ctrl_changed);

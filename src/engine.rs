@@ -5,7 +5,8 @@ use crate::banking::{
     ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
-    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec, CondOp,
+    FilterCondition, GroupJoin,
     ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, RowCountCheck, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
@@ -2256,6 +2257,30 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             }
             Ok(lf.with_columns(exprs))
         }
+        TransformStep::FilterGroup { conditions, join, keep_matching } => {
+            if conditions.is_empty() {
+                return Ok(lf);
+            }
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this filter")?;
+            let mut exprs = Vec::with_capacity(conditions.len());
+            for c in conditions {
+                exprs.push(build_condition_expr(c, &schema)?);
+            }
+            let mut it = exprs.into_iter();
+            let mut combined = it.next().unwrap_or_else(|| lit(true));
+            for e in it {
+                combined = match join {
+                    GroupJoin::And => combined.and(e),
+                    GroupJoin::Or => combined.or(e),
+                };
+            }
+            // An unknown test (a null against a value) is "does not match".
+            let matches = combined.fill_null(lit(false));
+            Ok(lf.filter(if *keep_matching { matches } else { matches.not() }))
+        }
         TransformStep::FilterRows {
             column,
             operator,
@@ -2473,42 +2498,7 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
             expr
         }
         FilterOp::Eq | FilterOp::NotEq | FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
-            let dtype = schema.get(col_name).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Column '{}' was not found. Check the column chosen in this filter.",
-                    col_name
-                )
-            })?;
-            let (lhs, rhs) = if dtype.is_string() || dtype.is_categorical() {
-                (c.cast(DataType::String), lit(trimmed.to_string()))
-            } else if dtype.is_numeric() {
-                let num = trimmed.parse::<f64>().map_err(|_| {
-                    anyhow::anyhow!(
-                        "'{}' is not a number for numeric column '{}'",
-                        trimmed,
-                        col_name
-                    )
-                })?;
-                (c.cast(DataType::Float64), lit(num))
-            } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
-                let d = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
-                    anyhow::anyhow!(
-                        "'{}' is not a date for date column '{}'. Enter it as YYYY-MM-DD (e.g. 2026-10-31).",
-                        trimmed,
-                        col_name
-                    )
-                })?;
-                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .context("Internal date error (epoch)")?;
-                let days = (d - epoch).num_days() as i32;
-                (c.cast(DataType::Date), lit(days).cast(DataType::Date))
-            } else {
-                anyhow::bail!(
-                    "Column '{}' is {}; comparison filters work on text, number and date columns only",
-                    col_name,
-                    dtype
-                );
-            };
+            let (lhs, rhs) = typed_operand(col_name, trimmed, schema)?;
             match op {
                 FilterOp::Eq => lhs.eq(rhs),
                 FilterOp::NotEq => lhs.neq(rhs),
@@ -2516,6 +2506,86 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
                 FilterOp::Gte => lhs.gt_eq(rhs),
                 FilterOp::Lt => lhs.lt(rhs),
                 _ => lhs.lt_eq(rhs),
+            }
+        }
+    })
+}
+
+/// The column and the typed value to compare it with: text as text, numbers as numbers (the
+/// value must be one), dates as dates (the value must be YYYY-MM-DD).
+fn typed_operand(col_name: &str, trimmed: &str, schema: &Schema) -> Result<(Expr, Expr)> {
+    let c = col(col_name);
+    let dtype = schema.get(col_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Column '{}' was not found. Check the column chosen in this filter.",
+            col_name
+        )
+    })?;
+    if dtype.is_string() || dtype.is_categorical() {
+        Ok((c.cast(DataType::String), lit(trimmed.to_string())))
+    } else if dtype.is_numeric() {
+        let num = trimmed.parse::<f64>().map_err(|_| {
+            anyhow::anyhow!(
+                "'{}' is not a number for numeric column '{}'",
+                trimmed,
+                col_name
+            )
+        })?;
+        Ok((c.cast(DataType::Float64), lit(num)))
+    } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
+        let d = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
+            anyhow::anyhow!(
+                "'{}' is not a date for date column '{}'. Enter it as YYYY-MM-DD (e.g. 2026-10-31).",
+                trimmed,
+                col_name
+            )
+        })?;
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).context("Internal date error (epoch)")?;
+        let days = (d - epoch).num_days() as i32;
+        Ok((c.cast(DataType::Date), lit(days).cast(DataType::Date)))
+    } else {
+        anyhow::bail!(
+            "Column '{}' is {}; comparison filters work on text, number and date columns only",
+            col_name,
+            dtype
+        );
+    }
+}
+
+/// One condition of a filter group, with the same type-aware comparison as a single filter.
+/// Blank means null, or text that is empty after trimming.
+fn build_condition_expr(cond: &FilterCondition, schema: &Schema) -> Result<Expr> {
+    let name = cond.column.as_str();
+    let dtype = schema.get(name).ok_or_else(|| {
+        anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this filter.", name)
+    })?;
+    let value = cond.value.trim();
+    Ok(match cond.op {
+        CondOp::Equals => build_filter_expr(name, FilterOp::Eq, value, schema)?,
+        CondOp::NotEquals => build_filter_expr(name, FilterOp::NotEq, value, schema)?,
+        CondOp::Gt => build_filter_expr(name, FilterOp::Gt, value, schema)?,
+        CondOp::Gte => build_filter_expr(name, FilterOp::Gte, value, schema)?,
+        CondOp::Lt => build_filter_expr(name, FilterOp::Lt, value, schema)?,
+        CondOp::Lte => build_filter_expr(name, FilterOp::Lte, value, schema)?,
+        CondOp::Contains => build_filter_expr(name, FilterOp::Contains, value, schema)?,
+        CondOp::StartsWith => build_filter_expr(name, FilterOp::StartsWith, value, schema)?,
+        CondOp::InList => build_filter_expr(name, FilterOp::InList, value, schema)?,
+        CondOp::EndsWith => col(name).cast(DataType::String).str().ends_with(lit(value.to_string())),
+        CondOp::Between => {
+            let (lhs, lo) = typed_operand(name, value, schema)?;
+            let (_, hi) = typed_operand(name, cond.value2.trim(), schema)?;
+            lhs.clone().gt_eq(lo).and(lhs.lt_eq(hi))
+        }
+        CondOp::IsBlank | CondOp::IsNotBlank => {
+            let blank = if dtype.is_string() {
+                col(name).is_null().or(col(name).str().strip_chars(lit(NULL)).eq(lit("")))
+            } else {
+                col(name).is_null()
+            };
+            if cond.op == CondOp::IsBlank {
+                blank
+            } else {
+                blank.not()
             }
         }
     })

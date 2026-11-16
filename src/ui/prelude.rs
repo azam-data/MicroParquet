@@ -24,7 +24,7 @@ pub use micro_parquet::models::{
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
     format_metric_value, format_with_commas, parquet_native_type, AggFunc, AggSpec, BatchDirection,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
-    CustomBucketDef, FilterOp, FtpInterpolation, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
+    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
     SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };

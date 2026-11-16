@@ -413,8 +413,7 @@ impl MicroParquetApp {
 
     fn transform_buttons(&mut self, ui: &mut egui::Ui) {
         if theme::flat_button(ui, theme::ph::FUNNEL, "Filter").clicked() {
-            self.init_tool_defaults_from_active_tab();
-            self.active_tool = ActiveToolModal::FilterRows;
+            self.open_filter_editor_default();
         }
         if theme::flat_button(ui, theme::ph::COLUMNS, "Columns").clicked() {
             self.init_tool_defaults_from_active_tab();

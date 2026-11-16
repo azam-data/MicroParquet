@@ -605,6 +605,131 @@ impl FilterOp {
     }
 }
 
+/// Operators of the multi-condition filter (T1).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CondOp {
+    Equals,
+    NotEquals,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Between,
+    Contains,
+    StartsWith,
+    EndsWith,
+    InList,
+    IsBlank,
+    IsNotBlank,
+}
+
+impl CondOp {
+    pub fn all() -> &'static [CondOp] {
+        &[
+            CondOp::Equals,
+            CondOp::NotEquals,
+            CondOp::Gt,
+            CondOp::Gte,
+            CondOp::Lt,
+            CondOp::Lte,
+            CondOp::Between,
+            CondOp::Contains,
+            CondOp::StartsWith,
+            CondOp::EndsWith,
+            CondOp::InList,
+            CondOp::IsBlank,
+            CondOp::IsNotBlank,
+        ]
+    }
+
+    /// Short text for chips and the editor.
+    pub fn label(&self) -> &'static str {
+        match self {
+            CondOp::Equals => "equals",
+            CondOp::NotEquals => "does not equal",
+            CondOp::Gt => ">",
+            CondOp::Gte => "\u{2265}",
+            CondOp::Lt => "<",
+            CondOp::Lte => "\u{2264}",
+            CondOp::Between => "between",
+            CondOp::Contains => "contains",
+            CondOp::StartsWith => "starts with",
+            CondOp::EndsWith => "ends with",
+            CondOp::InList => "is in list",
+            CondOp::IsBlank => "is blank",
+            CondOp::IsNotBlank => "is not blank",
+        }
+    }
+
+    /// Needs no value (is blank / is not blank).
+    pub fn is_unary(&self) -> bool {
+        matches!(self, CondOp::IsBlank | CondOp::IsNotBlank)
+    }
+
+    /// The equivalent of an old single-condition operator.
+    pub fn from_filter_op(op: FilterOp) -> CondOp {
+        match op {
+            FilterOp::Eq => CondOp::Equals,
+            FilterOp::NotEq => CondOp::NotEquals,
+            FilterOp::Gt => CondOp::Gt,
+            FilterOp::Gte => CondOp::Gte,
+            FilterOp::Lt => CondOp::Lt,
+            FilterOp::Lte => CondOp::Lte,
+            FilterOp::Contains => CondOp::Contains,
+            FilterOp::StartsWith => CondOp::StartsWith,
+            FilterOp::IsNull => CondOp::IsBlank,
+            FilterOp::IsNotNull => CondOp::IsNotBlank,
+            FilterOp::InList => CondOp::InList,
+        }
+    }
+}
+
+/// One condition of a filter: "Balance > 1000", "Opndat between 2026-09-01 and 2026-09-30".
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FilterCondition {
+    pub column: String,
+    pub op: CondOp,
+    #[serde(default)]
+    pub value: String,
+    /// Upper bound of `Between` (inclusive).
+    #[serde(default)]
+    pub value2: String,
+}
+
+impl FilterCondition {
+    /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000".
+    pub fn describe(&self) -> String {
+        match self.op {
+            CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", self.column, self.op.label()),
+            CondOp::Between => format!("{} between {} and {}", self.column, self.value.trim(), self.value2.trim()),
+            _ => format!("{} {} {}", self.column, self.op.label(), self.value.trim()),
+        }
+    }
+}
+
+/// How the conditions of a filter combine.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GroupJoin {
+    /// A row must meet every condition.
+    #[default]
+    And,
+    /// A row must meet at least one condition.
+    Or,
+}
+
+impl GroupJoin {
+    pub fn label(&self) -> &'static str {
+        match self {
+            GroupJoin::And => "and",
+            GroupJoin::Or => "or",
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CondRule {
     pub col_name: String,
@@ -861,6 +986,16 @@ pub enum TransformStep {
         value: String,
         keep_matching: bool,
     },
+    /// Several conditions joined by And / Or (T1). Rows whose test is unknown (a null compared
+    /// with a value) do not match: "Keep matching" drops them, "Delete matching" keeps them.
+    FilterGroup {
+        #[serde(default)]
+        conditions: Vec<FilterCondition>,
+        #[serde(default)]
+        join: GroupJoin,
+        #[serde(default = "default_true")]
+        keep_matching: bool,
+    },
     ConditionalColumn {
         new_col: String,
         rules: Vec<CondRule>,
@@ -969,6 +1104,27 @@ pub enum TransformStep {
 }
 
 impl TransformStep {
+    /// A filter step as conditions, for the chip bar and the editor: a `FilterGroup`, or an old
+    /// single `FilterRows` shown as a one-condition group. `None` for every other step.
+    pub fn as_filter_group(&self) -> Option<(Vec<FilterCondition>, GroupJoin, bool)> {
+        match self {
+            TransformStep::FilterGroup { conditions, join, keep_matching } => {
+                Some((conditions.clone(), *join, *keep_matching))
+            }
+            TransformStep::FilterRows { column, operator, value, keep_matching } => Some((
+                vec![FilterCondition {
+                    column: column.clone(),
+                    op: CondOp::from_filter_op(*operator),
+                    value: value.clone(),
+                    value2: String::new(),
+                }],
+                GroupJoin::And,
+                *keep_matching,
+            )),
+            _ => None,
+        }
+    }
+
     pub fn short_label(&self) -> String {
         match self {
             TransformStep::SelectAndReorderColumns { cols } => {
@@ -979,6 +1135,11 @@ impl TransformStep {
             }
             TransformStep::ConvertToNumber { columns } => {
                 format!("Set to Number: {}", columns.join(", "))
+            }
+            TransformStep::FilterGroup { conditions, join, keep_matching } => {
+                let mode = if *keep_matching { "Keep" } else { "Delete" };
+                let parts: Vec<String> = conditions.iter().map(|c| c.describe()).collect();
+                format!("{}: {}", mode, parts.join(&format!(" {} ", join.label())))
             }
             TransformStep::FilterRows {
                 column,

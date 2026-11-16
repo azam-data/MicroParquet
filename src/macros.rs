@@ -1,6 +1,7 @@
 use crate::models::{
-    parquet_native_type, parquet_needs_conversion, AggFunc, ColDataType, ColumnSchemaConfig,
-    CsvTextEncoding, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
+    parquet_native_type, parquet_needs_conversion, AggFunc, ColDataType, ColumnSchemaConfig, CondOp,
+    CsvTextEncoding, FilterCondition, FilterOp, GroupJoin, IngestionConfig, MacroRecipe, PiiMaskMode,
+    TransformStep,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -405,6 +406,23 @@ pub fn generate_python_polars_code(
                     py.push_str(&format!("lf = lf.filter(~({}))\n\n", cond_py));
                 }
             }
+            TransformStep::FilterGroup { conditions, join, keep_matching } => {
+                if !conditions.is_empty() {
+                    let parts: Vec<String> = conditions.iter().map(py_condition_expr).collect();
+                    let sep = match join {
+                        GroupJoin::And => " & ",
+                        GroupJoin::Or => " | ",
+                    };
+                    let combined = parts.iter().map(|p| format!("({})", p)).collect::<Vec<_>>().join(sep);
+                    // Unknown tests (null against a value) do not match.
+                    let matches = format!("({}).fill_null(False)", combined);
+                    if *keep_matching {
+                        py.push_str(&format!("lf = lf.filter({})\n\n", matches));
+                    } else {
+                        py.push_str(&format!("lf = lf.filter(~{})\n\n", matches));
+                    }
+                }
+            }
             TransformStep::ConditionalColumn {
                 new_col,
                 rules,
@@ -624,6 +642,46 @@ pub fn generate_python_polars_code(
     py.push_str("# 5. Stream Output to Zstd-Compressed Parquet\n");
     py.push_str("lf.sink_parquet(source_path.with_name(f\"{source_path.stem}_output.parquet\"), compression=\"zstd\")\n");
     Ok(py)
+}
+
+/// Python for one filter-group condition. Like the single filter, the script cannot know the
+/// column types: a value that is a number is compared as a number, anything else as text.
+fn py_condition_expr(c: &FilterCondition) -> String {
+    let name = &c.column;
+    let lit_of = |v: &str| {
+        let t = v.trim();
+        if t.parse::<f64>().is_ok() {
+            t.to_string()
+        } else {
+            format!("\"{}\"", t)
+        }
+    };
+    match c.op {
+        CondOp::Equals => py_filter_expr(name, FilterOp::Eq, &c.value),
+        CondOp::NotEquals => py_filter_expr(name, FilterOp::NotEq, &c.value),
+        CondOp::Gt => py_filter_expr(name, FilterOp::Gt, &c.value),
+        CondOp::Gte => py_filter_expr(name, FilterOp::Gte, &c.value),
+        CondOp::Lt => py_filter_expr(name, FilterOp::Lt, &c.value),
+        CondOp::Lte => py_filter_expr(name, FilterOp::Lte, &c.value),
+        CondOp::Contains => py_filter_expr(name, FilterOp::Contains, &c.value),
+        CondOp::StartsWith => py_filter_expr(name, FilterOp::StartsWith, &c.value),
+        CondOp::InList => py_filter_expr(name, FilterOp::InList, &c.value),
+        CondOp::EndsWith => format!("pl.col(\"{}\").str.ends_with(\"{}\")", name, c.value.trim()),
+        CondOp::Between => format!(
+            "pl.col(\"{}\").is_between({}, {})",
+            name,
+            lit_of(&c.value),
+            lit_of(&c.value2)
+        ),
+        CondOp::IsBlank => format!(
+            "pl.col(\"{n}\").is_null() | (pl.col(\"{n}\").cast(pl.Utf8).str.strip_chars() == \"\")",
+            n = name
+        ),
+        CondOp::IsNotBlank => format!(
+            "~(pl.col(\"{n}\").is_null() | (pl.col(\"{n}\").cast(pl.Utf8).str.strip_chars() == \"\"))",
+            n = name
+        ),
+    }
 }
 
 fn py_filter_expr(col_name: &str, op: FilterOp, val: &str) -> String {
