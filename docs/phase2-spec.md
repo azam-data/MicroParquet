@@ -140,6 +140,19 @@ The principle is the same as Phase 1: no value is lost, guessed or defaulted wit
 
 </tasks>
 
+<accepted_deviations>
+Recorded during implementation of P1–P5 (session 1). Items marked "owner accepted" were confirmed by the owner.
+- P1: a Dr/Cr marker on a value that is already negative ("(500) Dr", "-500 Cr") is a parse failure (null, counted by P2), not a guessed sign. Owner accepted.
+- P1: with "Parse Accounting Negatives" off, brackets and a trailing minus are not negatives (the value is a parse failure); thousands commas are always stripped.
+- P1: Int64 columns use the same amount rules; a decimal point or a Dr/Cr marker without a sign convention makes the value a parse failure (the Dr/Cr load error applies to Float64 columns only, as specified).
+- P2: for split exports the failure list is `<output folder>/split_export.parse_failures.csv`. Owner accepted.
+- P2: the headless acceptance test takes the schema from a macro, because auto-detect types the sample Balance column ["100", "abc", ...] as text.
+- P2: date blanks that are not failures: blank, "-", "0", NULL, NONE, NA, N/A.
+- P3: the Rust parser already read "5/11/26"; the four-digit-year problem was in the Python export (fixed `%d/%m/%Y`). Python now uses `_mp_date`, a mirror of the app's parser.
+- P5: opening a Parquet file still opens it directly; its schema is edited with "Schema & Ingestion". Boolean/List columns cannot be converted or masked (error).
+- P5: headless runs on a Parquet input apply the macro schema to columns that exist and are String in the file; other existing columns keep their Parquet type; absent columns are skipped with a stderr warning. Owner decision.
+</accepted_deviations>
+
 <constraints>
 - Do not upgrade Polars, egui or any other dependency. The only new direct dependency allowed is `getrandom = "0.2"` (P12).
 - Every new field on a serialised struct or enum variant gets `#[serde(default)]`; Phase 1 macro, schema, preset and rule files must still load. Add a test that loads a Phase 1 schema JSON from a string literal.
