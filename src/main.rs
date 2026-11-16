@@ -53,11 +53,16 @@ struct CliArgs {
 fn main() -> eframe::Result<()> {
     let args = CliArgs::parse();
     let paths = PortablePaths::init();
-    // First run: write the default provisioning rule files (cl_code_map, segment_map, rules).
-    if let Err(e) =
-        micro_parquet::banking::ProvisionConfig::ensure_default_files(&paths.root_dir)
-    {
-        eprintln!("[MicroParquet] Could not create provisioning rule files: {:#}", e);
+    // Provisioning rule files: write defaults on first run, upgrade untouched old defaults,
+    // and warn about edited files from an older version (shown in the status bar).
+    let rule_notice: Option<String> =
+        match micro_parquet::banking::ProvisionConfig::load_or_create(&paths.root_dir) {
+            Ok(cfg) if cfg.warnings.is_empty() => None,
+            Ok(cfg) => Some(format!("⚠ {}", cfg.warnings.join(" | "))),
+            Err(e) => Some(format!("⚠ Provisioning rule files: {:#}", e)),
+        };
+    if let Some(n) = &rule_notice {
+        eprintln!("[MicroParquet] {}", n);
     }
 
     if args.headless {
@@ -81,9 +86,13 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "MicroParquet",
         native_options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             MicroParquetApp::apply_ui_theme(&cc.egui_ctx, false, 1.05);
-            Ok(Box::new(MicroParquetApp::new(paths)))
+            let mut app = MicroParquetApp::new(paths);
+            if let Some(n) = rule_notice {
+                app.status_message = n;
+            }
+            Ok(Box::new(app))
         }),
     )
 }

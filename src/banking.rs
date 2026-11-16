@@ -510,15 +510,21 @@ pub fn apply_duration_analysis(
 // ---------------------------------------------------------------------------------------------
 // Loan classification provisioning rules (BRPD Circular 15/2024 and later), held as data files
 // in portable_data/ so rates can be changed without a new build:
-//   cl_code_map.json     {"<CBS CL code>": "<STD|SMA|SS|DF|BL>", ...}
-//   segment_map.json     {"<segment code>": "<SHORT_TERM_AGRI|CMSME|OTHER>", ...}
-//   provision_rules.json [{grade, category, rate_pct, effective_from, effective_to, source, verify}]
+//   cl_code_map.json     {"defaults_version": 2, "<CBS CL code>": "<STD|SMA|SS|DF|BL>", ...}
+//   segment_map.json     {"defaults_version": 2, "<segment code>": "<SHORT_TERM_AGRI|CMSME|OTHER>", ...}
+//   provision_rules.json {"defaults_version": 2,
+//                         "rules": [{grade, category, rate_pct, effective_from, effective_to, source, verify}]}
+// Files from before versioning (flat map / bare array, no defaults_version) still load.
 // Codes are matched after normalising (uppercase, trimmed, inner spaces collapsed).
 // ---------------------------------------------------------------------------------------------
 
 pub const CL_CODE_MAP_FILE: &str = "cl_code_map.json";
 pub const SEGMENT_MAP_FILE: &str = "segment_map.json";
 pub const PROVISION_RULES_FILE: &str = "provision_rules.json";
+
+/// Version of the built-in default rule files. Bump it whenever a default changes, and keep
+/// the older defaults reachable through `default_*(version)` so untouched files can be upgraded.
+pub const RULE_FILES_VERSION: u32 = 2;
 
 const CL_GRADES: [&str; 5] = ["STD", "SMA", "SS", "DF", "BL"];
 const REG_CATEGORIES: [&str; 3] = ["SHORT_TERM_AGRI", "CMSME", "OTHER"];
@@ -551,6 +557,19 @@ const DEFAULT_CL_CODE_MAP: &[(&str, &str)] = &[
     ("BAD/LOSS", "BL"),
     ("BAD", "BL"),
     ("LOSS", "BL"),
+];
+
+/// Version 1 (first T7 build) segment defaults, kept only to recognise untouched old files.
+const V1_SEGMENT_MAP: &[(&str, &str)] = &[
+    ("CMSME", "CMSME"),
+    ("SME", "CMSME"),
+    ("CMS", "CMSME"),
+    ("COTTAGE", "CMSME"),
+    ("MICRO", "CMSME"),
+    ("SMALL", "CMSME"),
+    ("MEDIUM", "CMSME"),
+    ("AGRI ST", "SHORT_TERM_AGRI"),
+    ("SHORT TERM AGRI", "SHORT_TERM_AGRI"),
 ];
 
 /// CMSME concession covers cottage, micro and small loans only, not medium (owner decision).
@@ -589,6 +608,8 @@ pub struct ProvisionConfig {
     /// normalised segment code -> category
     pub segment_map: Vec<(String, String)>,
     pub rules: Vec<ProvisionRule>,
+    /// Plain-language notices for the status bar (e.g. an edited rule file from an older version)
+    pub warnings: Vec<String>,
 }
 
 /// Uppercase, trim and collapse inner whitespace (the code-matching rule for all three files).
@@ -608,8 +629,11 @@ fn normalise_code_expr(e: Expr) -> Expr {
 }
 
 /// A JSON object read as ordered (key, value) pairs, so a repeated key is caught instead of
-/// silently overwriting the earlier one.
-struct JsonPairs(Vec<(String, String)>);
+/// silently overwriting the earlier one. An optional numeric "defaults_version" key is split out.
+struct JsonPairs {
+    version: Option<u32>,
+    pairs: Vec<(String, String)>,
+}
 
 impl<'de> Deserialize<'de> for JsonPairs {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
@@ -624,10 +648,19 @@ impl<'de> Deserialize<'de> for JsonPairs {
                 mut map: A,
             ) -> std::result::Result<JsonPairs, A::Error> {
                 let mut pairs = Vec::new();
-                while let Some((k, v)) = map.next_entry::<String, String>()? {
-                    pairs.push((k, v));
+                let mut version = None;
+                while let Some(k) = map.next_key::<String>()? {
+                    if k == "defaults_version" {
+                        if version.is_some() {
+                            return Err(serde::de::Error::custom("defaults_version is listed twice"));
+                        }
+                        version = Some(map.next_value::<u32>()?);
+                    } else {
+                        let v: String = map.next_value()?;
+                        pairs.push((k, v));
+                    }
                 }
-                Ok(JsonPairs(pairs))
+                Ok(JsonPairs { version, pairs })
             }
         }
         d.deserialize_map(PairVisitor)
@@ -730,8 +763,68 @@ fn validate_rules(rules: &[ProvisionRule], file: &Path) -> Result<()> {
 fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("Could not read {}", path.display()))?;
+    parse_json_text(&raw, path)
+}
+
+fn parse_json_text<T: serde::de::DeserializeOwned>(raw: &str, path: &Path) -> Result<T> {
     // serde_json errors end with "at line L column C"
-    serde_json::from_str(&raw).map_err(|e| anyhow!("{} is not valid: {}", path.display(), e))
+    serde_json::from_str(raw).map_err(|e| anyhow!("{} is not valid: {}", path.display(), e))
+}
+
+/// provision_rules.json as written from version 2 on.
+#[derive(Serialize, Deserialize)]
+struct VersionedRules {
+    #[serde(default)]
+    defaults_version: Option<u32>,
+    rules: Vec<ProvisionRule>,
+}
+
+/// Reads provision_rules.json: the versioned object, or a bare array (before versioning).
+fn read_rules_file(path: &Path) -> Result<(Option<u32>, Vec<ProvisionRule>)> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Could not read {}", path.display()))?;
+    let shape: serde_json::Value = parse_json_text(&raw, path)?;
+    if shape.is_array() {
+        Ok((None, parse_json_text(&raw, path)?))
+    } else {
+        let v: VersionedRules = parse_json_text(&raw, path)?;
+        Ok((v.defaults_version, v.rules))
+    }
+}
+
+/// Atomic write (temp file + rename), replacing any existing file.
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+    std::fs::write(&tmp, contents)
+        .with_context(|| format!("Could not write {}", path.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("Could not write {}", path.display()))
+}
+
+fn same_pairs(a: &[(String, String)], b: &[(&str, &str)]) -> bool {
+    let mut a: Vec<(&str, &str)> = a.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let mut b = b.to_vec();
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
+}
+
+fn same_rules(a: &[ProvisionRule], b: &[ProvisionRule]) -> bool {
+    a.len() == b.len() && a.iter().all(|r| b.contains(r)) && b.iter().all(|r| a.contains(r))
+}
+
+fn rules_to_json(version: u32, rules: &[ProvisionRule]) -> Result<String> {
+    let v = VersionedRules { defaults_version: Some(version), rules: rules.to_vec() };
+    Ok(serde_json::to_string_pretty(&v).context("Could not prepare default provision rules")? + "\n")
+}
+
+fn outdated_warning(path: &Path, version: Option<u32>) -> String {
+    format!(
+        "{} was saved by an older MicroParquet ({}) and has been edited, so it was kept as is. Compare it with the current defaults (defaults_version {}), then set \"defaults_version\": {} in the file.",
+        path.display(),
+        version.map_or("no defaults_version".to_string(), |v| format!("defaults_version {}", v)),
+        RULE_FILES_VERSION,
+        RULE_FILES_VERSION
+    )
 }
 
 /// Writes `contents` to `path` unless it exists; via a temp file + rename so a reader never
@@ -751,18 +844,44 @@ fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
         .with_context(|| format!("Could not write default {}", path.display()))
 }
 
-fn pairs_to_json(pairs: &[(&str, &str)]) -> String {
-    let lines: Vec<String> = pairs
-        .iter()
-        .map(|(k, v)| format!("  {}: {}", serde_json::json!(k), serde_json::json!(v)))
-        .collect();
+fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
+    let mut lines = vec![format!("  \"defaults_version\": {}", version)];
+    lines.extend(
+        pairs
+            .iter()
+            .map(|(k, v)| format!("  {}: {}", serde_json::json!(k), serde_json::json!(v))),
+    );
     format!("{{\n{}\n}}\n", lines.join(",\n"))
+}
+
+/// Built-in CBS code map of a given defaults version (1 = first T7 build, 2 = current).
+pub fn default_cl_code_map(version: u32) -> Vec<(&'static str, &'static str)> {
+    let mut v = DEFAULT_CL_CODE_MAP.to_vec();
+    if version == 1 {
+        let at = v.iter().position(|(k, _)| *k == "B/L").map_or(v.len(), |i| i + 1);
+        v.insert(at, ("BLW", "BL"));
+    }
+    v
+}
+
+/// Built-in segment map of a given defaults version (1 = first T7 build, 2 = current).
+pub fn default_segment_map(version: u32) -> Vec<(&'static str, &'static str)> {
+    if version == 1 {
+        V1_SEGMENT_MAP.to_vec()
+    } else {
+        DEFAULT_SEGMENT_MAP.to_vec()
+    }
 }
 
 impl ProvisionConfig {
     /// Seed rules from the owner's review notes. Rows with `verify: true` must be checked
     /// against the circular PDFs.
     pub fn default_rules() -> Vec<ProvisionRule> {
+        Self::default_rules_for(RULE_FILES_VERSION)
+    }
+
+    /// Built-in rules of a given defaults version (1 = first T7 build, 2 = current).
+    pub fn default_rules_for(version: u32) -> Vec<ProvisionRule> {
         let rule = |grade: &str, category: &str, rate_pct: f64, from: &str, to: Option<&str>, source: &str, verify: bool| ProvisionRule {
             grade: grade.to_string(),
             category: category.to_string(),
@@ -773,7 +892,14 @@ impl ProvisionConfig {
             verify,
         };
         let c15 = "BRPD Circular 15, 27 Nov 2024";
-        let oct25 = "BRPD Circular Letter No. 22, 13 Oct 2025";
+        let (oct25, oct25_from) = if version == 1 {
+            (
+                "BRPD circular letter Oct 2025 (believed No. 22 of 2025); start date is a placeholder",
+                "2025-10-01",
+            )
+        } else {
+            ("BRPD Circular Letter No. 22, 13 Oct 2025", "2025-10-13")
+        };
         let dec25 = "BB directive Dec 2025 replacing Circular Letter 22/2025";
         let mut rules = vec![
             rule("STD", "ANY", 1.0, "2025-04-01", None, c15, false),
@@ -784,7 +910,7 @@ impl ProvisionConfig {
         ];
         for cat in ["SHORT_TERM_AGRI", "CMSME"] {
             for grade in ["STD", "SMA"] {
-                rules.push(rule(grade, cat, 1.0, "2025-10-13", Some("2025-12-20"), oct25, true));
+                rules.push(rule(grade, cat, 1.0, oct25_from, Some("2025-12-20"), oct25, true));
             }
         }
         for cat in ["SHORT_TERM_AGRI", "CMSME"] {
@@ -804,6 +930,7 @@ impl ProvisionConfig {
             cl_code_map: own(DEFAULT_CL_CODE_MAP),
             segment_map: own(DEFAULT_SEGMENT_MAP),
             rules: Self::default_rules(),
+            warnings: Vec::new(),
         }
     }
 
@@ -811,27 +938,63 @@ impl ProvisionConfig {
     pub fn ensure_default_files(dir: &Path) -> Result<()> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("Could not create {}", dir.display()))?;
-        write_if_missing(&dir.join(CL_CODE_MAP_FILE), &pairs_to_json(DEFAULT_CL_CODE_MAP))?;
-        write_if_missing(&dir.join(SEGMENT_MAP_FILE), &pairs_to_json(DEFAULT_SEGMENT_MAP))?;
-        let rules = serde_json::to_string_pretty(&Self::default_rules())
-            .context("Could not prepare default provision rules")?;
-        write_if_missing(&dir.join(PROVISION_RULES_FILE), &(rules + "\n"))
+        let v = RULE_FILES_VERSION;
+        write_if_missing(&dir.join(CL_CODE_MAP_FILE), &pairs_to_json(v, &default_cl_code_map(v)))?;
+        write_if_missing(&dir.join(SEGMENT_MAP_FILE), &pairs_to_json(v, &default_segment_map(v)))?;
+        write_if_missing(&dir.join(PROVISION_RULES_FILE), &rules_to_json(v, &Self::default_rules())?)
     }
 
     /// Loads and validates the three files from `dir`, creating missing ones first.
+    /// A file older than `RULE_FILES_VERSION` (or with no version) is replaced by the current
+    /// default when it still equals an earlier built-in default; an edited old file is kept and
+    /// a warning naming it is added to `warnings`.
     pub fn load_or_create(dir: &Path) -> Result<Self> {
         Self::ensure_default_files(dir)?;
-        let cl_path = dir.join(CL_CODE_MAP_FILE);
-        let seg_path = dir.join(SEGMENT_MAP_FILE);
+        let cur = RULE_FILES_VERSION;
+        let mut warnings = Vec::new();
+        let old = |v: Option<u32>| v.map_or(true, |v| v < cur);
+
+        let mut maps = Vec::new();
+        for (name, defaults) in [
+            (CL_CODE_MAP_FILE, default_cl_code_map as fn(u32) -> Vec<(&'static str, &'static str)>),
+            (SEGMENT_MAP_FILE, default_segment_map),
+        ] {
+            let path = dir.join(name);
+            let mut file: JsonPairs = read_json_file(&path)?;
+            if old(file.version) {
+                if (1..=cur).any(|v| same_pairs(&file.pairs, &defaults(v))) {
+                    write_atomic(&path, &pairs_to_json(cur, &defaults(cur)))?;
+                    file.pairs = defaults(cur)
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                } else {
+                    warnings.push(outdated_warning(&path, file.version));
+                }
+            }
+            maps.push((path, file.pairs));
+        }
+
         let rules_path = dir.join(PROVISION_RULES_FILE);
-        let cl: JsonPairs = read_json_file(&cl_path)?;
-        let seg: JsonPairs = read_json_file(&seg_path)?;
-        let rules: Vec<ProvisionRule> = read_json_file(&rules_path)?;
+        let (version, mut rules) = read_rules_file(&rules_path)?;
+        if old(version) {
+            if (1..=cur).any(|v| same_rules(&rules, &Self::default_rules_for(v))) {
+                rules = Self::default_rules();
+                write_atomic(&rules_path, &rules_to_json(cur, &rules)?)?;
+            } else {
+                warnings.push(outdated_warning(&rules_path, version));
+            }
+        }
         validate_rules(&rules, &rules_path)?;
+
+        let mut maps = maps.into_iter();
+        let (cl_path, cl) = maps.next().ok_or_else(|| anyhow!("internal: CL map missing"))?;
+        let (seg_path, seg) = maps.next().ok_or_else(|| anyhow!("internal: segment map missing"))?;
         Ok(Self {
-            cl_code_map: validate_code_map(cl.0, &CL_GRADES, &cl_path)?,
-            segment_map: validate_code_map(seg.0, &REG_CATEGORIES, &seg_path)?,
+            cl_code_map: validate_code_map(cl, &CL_GRADES, &cl_path)?,
+            segment_map: validate_code_map(seg, &REG_CATEGORIES, &seg_path)?,
             rules,
+            warnings,
         })
     }
 

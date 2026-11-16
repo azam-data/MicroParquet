@@ -897,3 +897,58 @@ fn t09b_duration_python_is_signed() {
     assert!(unsigned.contains("alias(\"Direction_Assumed\")"), "{unsigned}");
     println!("{signed}");
 }
+
+/// Writes the three rule files in the pre-versioning (defaults version 1) layout.
+fn write_v1_rule_files(dir: &std::path::Path, extra_cl: Option<(&str, &str)>) {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).unwrap();
+    let flat = |pairs: Vec<(&str, &str)>| {
+        let body: Vec<String> = pairs.iter().map(|(k, v)| format!("  {:?}: {:?}", k, v)).collect();
+        format!("{{\n{}\n}}\n", body.join(",\n"))
+    };
+    let mut cl = default_cl_code_map(1);
+    cl.extend(extra_cl);
+    std::fs::write(dir.join("cl_code_map.json"), flat(cl)).unwrap();
+    std::fs::write(dir.join("segment_map.json"), flat(default_segment_map(1))).unwrap();
+    let rules = serde_json::to_string_pretty(&ProvisionConfig::default_rules_for(1)).unwrap();
+    std::fs::write(dir.join("provision_rules.json"), rules).unwrap();
+}
+
+#[test]
+fn t07c_rule_file_versioning() {
+    // Untouched version-1 defaults are replaced by the current defaults, silently.
+    let dir = tmpdir().join("t07c_untouched");
+    write_v1_rule_files(&dir, None);
+    let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    for f in ["cl_code_map.json", "segment_map.json", "provision_rules.json"] {
+        let text = std::fs::read_to_string(dir.join(f)).unwrap();
+        assert!(text.contains(&format!("\"defaults_version\": {}", RULE_FILES_VERSION)), "{f}: {text}");
+    }
+    assert!(!cfg.cl_code_map.iter().any(|(k, _)| k == "BLW"));
+    assert!(cfg.segment_map.contains(&("MEDIUM".to_string(), "OTHER".to_string())));
+    assert_eq!(cfg.rules, ProvisionConfig::default_rules());
+    // A second load of the upgraded files is quiet and unchanged
+    let again = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert!(again.warnings.is_empty());
+    assert_eq!(again.rules, cfg.rules);
+
+    // An edited version-1 file is kept as is and named in a warning; untouched ones still upgrade.
+    let dir = tmpdir().join("t07c_edited");
+    write_v1_rule_files(&dir, Some(("XX", "SS")));
+    let before = std::fs::read_to_string(dir.join("cl_code_map.json")).unwrap();
+    let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert_eq!(cfg.warnings.len(), 1, "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("cl_code_map.json"), "{}", cfg.warnings[0]);
+    assert_eq!(std::fs::read_to_string(dir.join("cl_code_map.json")).unwrap(), before, "edited file must not be touched");
+    assert!(cfg.cl_code_map.contains(&("XX".to_string(), "SS".to_string())));
+    assert!(cfg.cl_code_map.iter().any(|(k, _)| k == "BLW"), "the kept file still has its own codes");
+    assert!(std::fs::read_to_string(dir.join("segment_map.json")).unwrap().contains("\"defaults_version\": 2"));
+
+    // Edited files at the current version load without a warning
+    let mut text = std::fs::read_to_string(dir.join("cl_code_map.json")).unwrap();
+    text = text.replacen('{', "{\n  \"defaults_version\": 2,", 1);
+    std::fs::write(dir.join("cl_code_map.json"), text).unwrap();
+    let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+}
