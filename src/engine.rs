@@ -1079,9 +1079,27 @@ pub fn import_pii_key(key_path: &Path, src: &Path) -> Result<Option<PathBuf>> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let bak = key_path.with_file_name(format!("{}.bak-{}", PII_KEY_FILE, secs));
-        std::fs::copy(key_path, &bak)
-            .with_context(|| format!("Could not back up the current key to {:?}; nothing was changed", bak))?;
+        let current = std::fs::read(key_path)
+            .with_context(|| format!("Could not read the current key {:?}; nothing was changed", key_path))?;
+        // Never overwrite an earlier backup: a second import in the same second gets `_2`, `_3` ...
+        let mut n = 1u32;
+        let bak = loop {
+            let name = if n == 1 {
+                format!("{}.bak-{}", PII_KEY_FILE, secs)
+            } else {
+                format!("{}.bak-{}_{}", PII_KEY_FILE, secs, n)
+            };
+            let candidate = key_path.with_file_name(name);
+            match write_new_private_file(&candidate, &current) {
+                Ok(()) => break candidate,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(e) => anyhow::bail!(
+                    "Could not back up the current key to {:?}: {}. Nothing was changed.",
+                    candidate,
+                    e
+                ),
+            }
+        };
         backup = Some(bak);
     }
     let tmp = pii_key_temp_path(key_path);

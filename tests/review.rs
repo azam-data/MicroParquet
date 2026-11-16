@@ -2413,3 +2413,39 @@ fn t29b_batch_announces_new_pii_key() {
     assert!(rep2.log.iter().all(|r| r.status != "NOTICE"));
     set_pii_key_path_override(None);
 }
+
+#[test]
+fn t29c_key_backups_are_never_overwritten() {
+    let dir = tmpdir().join("t29c_key");
+    let _ = std::fs::remove_dir_all(&dir);
+    let key_path = dir.join("portable_data").join("pii_key.bin");
+    let (first, _) = load_or_create_pii_key(&key_path).unwrap();
+
+    // Two key files to import, then three imports back to back (the same second).
+    let src_a = dir.join("a.bin");
+    let src_b = dir.join("b.bin");
+    std::fs::write(&src_a, [0xAAu8; 32]).unwrap();
+    std::fs::write(&src_b, [0xBBu8; 32]).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    // A backup that already exists under the name of this second (and the next) must survive.
+    for s in [now, now + 1] {
+        std::fs::write(key_path.with_file_name(format!("pii_key.bin.bak-{s}")), b"older backup").unwrap();
+    }
+    let bak1 = import_pii_key(&key_path, &src_a).unwrap().expect("backup 1");
+    let bak2 = import_pii_key(&key_path, &src_b).unwrap().expect("backup 2");
+    let bak3 = import_pii_key(&key_path, &src_a).unwrap().expect("backup 3");
+    assert!(bak1 != bak2 && bak2 != bak3 && bak1 != bak3, "{bak1:?} {bak2:?} {bak3:?}");
+    // Each backup holds the key that was replaced; the pre-existing files are untouched.
+    assert_eq!(std::fs::read(&bak1).unwrap(), first.to_vec());
+    assert_eq!(std::fs::read(&bak2).unwrap(), vec![0xAAu8; 32]);
+    assert_eq!(std::fs::read(&bak3).unwrap(), vec![0xBBu8; 32]);
+    for s in [now, now + 1] {
+        assert_eq!(std::fs::read(key_path.with_file_name(format!("pii_key.bin.bak-{s}"))).unwrap(), b"older backup");
+    }
+    let names: Vec<String> = [&bak1, &bak2, &bak3]
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(names.iter().any(|n| n.ends_with("_2")), "{names:?}");
+    assert_eq!(std::fs::read(&key_path).unwrap(), vec![0xAAu8; 32]);
+}
