@@ -16,7 +16,7 @@ use micro_parquet::engine::{
     weighted_mixed_sign_notes,
 };
 use micro_parquet::exporters::{
-    export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
+    export_selected_tabs_to_xlsx, export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
     PDF_MAX_ROWS_PER_TAB,
 };
 use micro_parquet::macros::{
@@ -3332,34 +3332,16 @@ impl MicroParquetApp {
                                     HashMap::new(),
                                 );
                                 if self.tabs.len() > tabs_before {
-                                    let multi = self.tabs.last().map(|t| {
+                                    let note = self.tabs.last().map(|t| {
                                         compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
-                                            .and_then(micro_parquet::banking::reconcile_multi_row_keys)
+                                            .and_then(|lf| {
+                                                micro_parquet::banking::reconcile_status_note(lf, r_col_used)
+                                            })
                                     });
-                                    let mixed = self.tabs.last().and_then(|t| {
-                                        r_col_used.then(|| {
-                                            compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
-                                                .and_then(micro_parquet::banking::reconcile_mixed_sign_keys)
-                                        })
-                                    });
-                                    match mixed {
-                                        Some(Ok((p, c))) if p + c > 0 => self.status_message.push_str(&format!(
-                                            " ⚠ Rate is null for {} key(s) in the previous period and {} in the current: their balances mix positive and negative (see Prev_Rate_Mixed_Sign / Curr_Rate_Mixed_Sign).",
-                                            p, c
-                                        )),
+                                    match note {
+                                        Some(Ok(n)) => self.status_message.push_str(&n),
                                         Some(Err(e)) => self.status_message.push_str(&format!(
-                                            " ⚠ Could not check balances for mixed signs: {:#}",
-                                            e
-                                        )),
-                                        _ => {}
-                                    }
-                                    match multi {
-                                        Some(Ok((p, c))) => self.status_message.push_str(&format!(
-                                            " Keys with more than one row: {} in the previous period, {} in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count).",
-                                            p, c
-                                        )),
-                                        Some(Err(e)) => self.status_message.push_str(&format!(
-                                            " ⚠ Could not count keys with more than one row: {:#}",
+                                            " ⚠ Could not summarise the reconcile (keys with several rows, mixed-sign balances): {:#}",
                                             e
                                         )),
                                         None => {}
@@ -4361,19 +4343,14 @@ impl MicroParquetApp {
         let out_path = rfd::FileDialog::new()
             .set_file_name("Consolidated_ALCO_Views.xlsx")
             .save_file()?;
-        let mut collected_tabs = Vec::new();
-        let mut errors = Vec::new();
-        for (i, tab) in self.tabs.iter().enumerate() {
-            if self.multi_export_checks.get(i).copied().unwrap_or(false) {
-                match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
-                    .and_then(|lf| Ok(lf.collect()?))
-                {
-                    Ok(df) => collected_tabs.push((tab.title.clone(), df)),
-                    Err(e) => errors.push((tab.title.clone(), format!("{:#}", e))),
-                }
-            }
-        }
-        match export_tabs_to_xlsx(collected_tabs, errors, &out_path) {
+        let selected: Vec<micro_parquet::exporters::TabToExport> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.multi_export_checks.get(*i).copied().unwrap_or(false))
+            .map(|(_, t)| (t.title.clone(), &t.source, t.steps.as_slice()))
+            .collect();
+        match export_selected_tabs_to_xlsx(&selected, &out_path, &self.paths.temp_dir) {
             Ok(rep) => {
                 self.status_message = format!(
                     "Exported multi-tab Excel workbook to {:?}: {}",

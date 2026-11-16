@@ -1,6 +1,9 @@
-use crate::engine::{compute_control_totals, export_to_csv_stream, export_to_parquet_stream};
+use crate::engine::{
+    compile_tab_lazy, compute_control_totals, export_to_csv_stream, export_to_parquet_stream,
+};
 use crate::models::{
     format_metric_value, ColumnFormatSpec, NumberDisplayFormat, ParquetDialect, SplitExportFormat,
+    TabSource, TransformStep,
 };
 use anyhow::{Context, Result};
 use polars::datatypes::AnyValue;
@@ -71,6 +74,37 @@ impl XlsxExportReport {
         }
         parts.join("; ")
     }
+}
+
+/// One tab to export: its title, source and steps.
+pub type TabToExport<'a> = (String, &'a TabSource, &'a [TransformStep]);
+
+/// Builds and collects every tab. A tab that fails is not skipped: it comes back as
+/// `(title, error)` so the workbook lists it on `Export_Errors`.
+pub fn collect_tabs_for_export(
+    tabs: &[TabToExport],
+    temp_dir: &Path,
+) -> (Vec<(String, DataFrame)>, Vec<(String, String)>) {
+    let mut ok = Vec::new();
+    let mut errors = Vec::new();
+    for (title, source, steps) in tabs {
+        match compile_tab_lazy(source, steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
+            Ok(df) => ok.push((title.clone(), df)),
+            Err(e) => errors.push((title.clone(), format!("{:#}", e))),
+        }
+    }
+    (ok, errors)
+}
+
+/// The multi-tab Excel export behind the UI button: collects the tabs and writes the workbook
+/// (failed tabs on `Export_Errors`).
+pub fn export_selected_tabs_to_xlsx(
+    tabs: &[TabToExport],
+    out_path: &Path,
+    temp_dir: &Path,
+) -> Result<XlsxExportReport> {
+    let (ok, errors) = collect_tabs_for_export(tabs, temp_dir);
+    export_tabs_to_xlsx(ok, errors, out_path)
 }
 
 pub fn export_tabs_to_xlsx(

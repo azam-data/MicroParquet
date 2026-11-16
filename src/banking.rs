@@ -630,6 +630,28 @@ pub fn reconcile_mixed_sign_keys(reconciled: LazyFrame) -> Result<(usize, usize)
     Ok((get("p"), get("c")))
 }
 
+/// The sentence(s) the status bar shows after a reconcile: keys with more than one row per
+/// period, and (with a rate column) keys whose rate is null because balances mix signs. Empty
+/// when there is nothing to say about the mixed signs; the multi-row sentence is always there.
+pub fn reconcile_status_note(reconciled: LazyFrame, has_rate: bool) -> Result<String> {
+    let mut note = String::new();
+    if has_rate {
+        let (p, c) = reconcile_mixed_sign_keys(reconciled.clone())?;
+        if p + c > 0 {
+            note.push_str(&format!(
+                " ⚠ Rate is null for {} key(s) in the previous period and {} in the current: their balances mix positive and negative (see Prev_Rate_Mixed_Sign / Curr_Rate_Mixed_Sign).",
+                p, c
+            ));
+        }
+    }
+    let (p, c) = reconcile_multi_row_keys(reconciled)?;
+    note.push_str(&format!(
+        " Keys with more than one row: {} in the previous period, {} in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count).",
+        p, c
+    ));
+    Ok(note)
+}
+
 /// IRRBB Suite: Macaulay Duration, Modified Duration, DV01 (1 bp BPV), and ΔEVE Impact
 pub fn apply_duration_analysis(
     lf: LazyFrame,

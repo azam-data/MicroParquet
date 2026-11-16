@@ -2590,3 +2590,216 @@ fn t11c_ftp_missing_date_is_not_a_one_day_tenor() {
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].contains("missing on 2 rows") && notes[0].contains("MISSING_DATE"), "{notes:?}");
 }
+
+/// The number-format code the cell `cell` (e.g. "C2") actually uses: its `s="N"` style index,
+/// looked up in styles.xml `cellXfs` -> `numFmtId` -> `<numFmt formatCode>`.
+fn xlsx_cell_format_code(sheet: &str, styles: &str, cell: &str) -> String {
+    let tag = sheet.split(&format!("<c r=\"{cell}\"")).nth(1).unwrap_or_else(|| panic!("no cell {cell}"));
+    let tag = tag.split('>').next().unwrap();
+    let idx: usize = tag
+        .split(" s=\"")
+        .nth(1)
+        .unwrap_or_else(|| panic!("cell {cell} has no style: {tag}"))
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let xfs = styles.split("<cellXfs").nth(1).expect("cellXfs").split("</cellXfs>").next().unwrap();
+    let xf = xfs.split("<xf ").nth(idx + 1).unwrap_or_else(|| panic!("cellXfs has no entry {idx}"));
+    let fmt_id = xf.split("numFmtId=\"").nth(1).expect("numFmtId").split('"').next().unwrap().to_string();
+    let after = styles
+        .split(&format!("<numFmt numFmtId=\"{fmt_id}\""))
+        .nth(1)
+        .unwrap_or_else(|| panic!("numFmtId {fmt_id} is not a custom format in {styles}"));
+    after.split("formatCode=\"").nth(1).expect("formatCode").split('"').next().unwrap().to_string()
+}
+
+#[test]
+fn t26d_excel_date_cell_uses_the_date_style_and_failing_tab_reaches_export_errors() {
+    use micro_parquet::exporters::*;
+    let d = days(2026, 10, 31);
+    let mut df = df!("Actnum" => ["A1", "A2"], "Balance" => [1.0, 2.0]).unwrap();
+    df.with_column(Series::new("Matdat".into(), vec![d, d]).cast(&DataType::Date).unwrap()).unwrap();
+    let us = (d as i64) * 86_400_000_000 + 43_200_000_000;
+    df.with_column(Series::new("Stamp".into(), vec![us; 2]).cast(&DataType::Datetime(TimeUnit::Microseconds, None)).unwrap()).unwrap();
+
+    // The real tab path: one good tab, one tab whose SQL step names a column that does not exist.
+    let src = TabSource::SingleFile { path: write_parquet("t26d.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let bad_steps = vec![TransformStep::SqlQuery { query: "SELECT NoSuchColumn FROM self".into() }];
+    let tabs: Vec<TabToExport> = vec![
+        ("Loans".to_string(), &src, &[][..]),
+        ("Broken tab".to_string(), &src, &bad_steps[..]),
+    ];
+    let p = tmpdir().join("t26d.xlsx");
+    let rep = export_selected_tabs_to_xlsx(&tabs, &p, &tmpdir()).unwrap();
+    assert_eq!(rep.sheets, vec![("Loans".to_string(), 1)]);
+    let wb = unzip_entry(&p, "xl/workbook.xml");
+    assert!(wb.contains("name=\"1_Loans\"") && wb.contains("name=\"Export_Errors\""), "{wb}");
+    assert!(!wb.contains("Broken tab"), "a failed tab has no data sheet: {wb}");
+    let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+    assert!(strings.contains("Broken tab") && strings.contains("NoSuchColumn"), "{strings}");
+    let summary = rep.summary();
+    assert!(summary.contains("Export_Errors") && summary.contains("Broken tab"), "{summary}");
+
+    // Cell C2 (Matdat) and D2 (Stamp): the style each cell uses carries the date format.
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let styles = unzip_entry(&p, "xl/styles.xml");
+    assert_eq!(xlsx_cell_format_code(&sheet, &styles, "C2"), "dd-mmm-yyyy");
+    assert_eq!(xlsx_cell_format_code(&sheet, &styles, "D2"), "dd-mmm-yyyy hh:mm:ss");
+    // The balance cell does not use a date style.
+    assert_ne!(xlsx_cell_format_code(&sheet, &styles, "C2"), xlsx_cell_format_code(&sheet, &styles, "D2"));
+}
+
+#[test]
+fn t12c_reconcile_status_message_and_current_period_worst_grade() {
+    let cl_map: Vec<(String, String)> = [("STD", "STD"), ("SMA", "SMA"), ("SS", "SS"), ("DF", "DF"), ("BL", "BL")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    let prev = df!(
+        "Actnum" => ["C1", "C1", "C2", "C3", "C3"],
+        "Balance" => [100.0, 50.0, 10.0, 5.0, -4.0],
+        "Rate" => [9.0, 9.0, 8.0, 9.0, 5.0],
+        "CL" => ["STD", "STD", "SMA", "STD", "STD"]
+    )
+    .unwrap();
+    // Current period: C1 has three rows; the worst grade is BL even though the largest balance is STD.
+    let curr = df!(
+        "Actnum" => ["C1", "C1", "C1", "C2"],
+        "Balance" => [900.0, 20.0, 5.0, 10.0],
+        "Rate" => [9.0, 9.0, 9.0, 8.0],
+        "CL" => ["STD", "SS", "BL", "SMA"]
+    )
+    .unwrap();
+    let rec = build_period_reconcile_lazy_with(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), Some("CL"), &cl_map).unwrap();
+    let out = rec.clone().sort(["Actnum"], Default::default()).collect().unwrap();
+    assert_eq!(str_col(&out, "Curr_CL")[0].as_deref(), Some("BL"));
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[0].as_deref(), Some("STD -> BL"));
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[1].as_deref(), Some("SMA -> SMA"));
+    assert_eq!(str_col(&out, "CL_Migration_Matrix")[2].as_deref(), Some("STD -> CLOSED"));
+
+    // Status message: C1 has 2 rows before and 3 now (1 key each), C3's rate is null (+5 and -4).
+    let note = reconcile_status_note(rec.clone(), true).unwrap();
+    assert_eq!(
+        note,
+        " ⚠ Rate is null for 1 key(s) in the previous period and 0 in the current: their balances mix positive and negative (see Prev_Rate_Mixed_Sign / Curr_Rate_Mixed_Sign). Keys with more than one row: 2 in the previous period, 1 in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count)."
+    );
+    // Nothing mixed: only the multi-row sentence.
+    let prev = df!("Actnum" => ["A", "A"], "Balance" => [1.0, 2.0], "Rate" => [5.0, 5.0]).unwrap();
+    let curr = df!("Actnum" => ["A"], "Balance" => [3.0], "Rate" => [5.0]).unwrap();
+    let rec = build_period_reconcile_lazy_with(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None, &cl_map).unwrap();
+    assert_eq!(
+        reconcile_status_note(rec, true).unwrap(),
+        " Keys with more than one row: 1 in the previous period, 0 in the current (rows are combined per key; see Prev_Row_Count / Curr_Row_Count)."
+    );
+}
+
+#[test]
+fn t12d_two_loads_through_the_key_file_give_identical_tokens() {
+    let dir = tmpdir().join("t12d");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = write_csv("t12d.csv", "Name,Actnum\nRAHIM UDDIN,0012345678901\nKARIM,0098765432109\n");
+    let cfg = IngestionConfig {
+        columns: vec![
+            ColumnSchemaConfig { name: "Name".into(), dtype: ColDataType::Utf8, pii_mask: PiiMaskMode::ClientNameHash, ..Default::default() },
+            ColumnSchemaConfig { name: "Actnum".into(), dtype: ColDataType::Utf8, pii_mask: PiiMaskMode::AccountNumber, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let load = || build_lazy_pipeline(&csv, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+
+    let key_path = dir.join("keys_a").join("pii_key.bin");
+    set_pii_key_path_override(Some(key_path.clone()));
+    let first = load(); // creates the key file
+    let key_after_first = std::fs::read(&key_path).unwrap();
+    assert_eq!(key_after_first.len(), 32);
+    let second = load(); // reads it again
+    assert_eq!(std::fs::read(&key_path).unwrap(), key_after_first, "the key file does not change");
+    for c in ["Name", "Actnum"] {
+        assert_eq!(str_col(&first, c), str_col(&second, c), "{c}: same key file, same tokens");
+        assert!(str_col(&first, c)[0].as_deref().unwrap().contains('_'));
+    }
+    assert_ne!(str_col(&first, "Name")[0], str_col(&first, "Name")[1]);
+
+    // Another install (another key file) gives other tokens.
+    set_pii_key_path_override(Some(dir.join("keys_b").join("pii_key.bin")));
+    let other = load();
+    assert_ne!(str_col(&first, "Name"), str_col(&other, "Name"));
+    assert_ne!(str_col(&first, "Actnum"), str_col(&other, "Actnum"));
+    set_pii_key_path_override(None);
+}
+
+#[test]
+fn t17b_duplicate_key_error_lists_at_most_ten_keys() {
+    let keys: Vec<String> = (1..=12).map(|i| format!("K{i:02}")).collect();
+    let left = df!("Actnum" => keys.clone(), "Balance" => vec![1.0; 12]).unwrap();
+    let mut rk = keys.clone();
+    rk.extend(keys.clone());
+    let right = df!("Actnum" => rk, "Sector" => vec!["x"; 24]).unwrap();
+    let src = TabSource::JoinedTabs {
+        left_source: Box::new(TabSource::SingleFile { path: write_parquet("l12.parquet", &left), is_parquet: true, config: IngestionConfig::default() }),
+        left_steps: vec![],
+        right_source: Box::new(TabSource::SingleFile { path: write_parquet("r12.parquet", &right), is_parquet: true, config: IngestionConfig::default() }),
+        right_steps: vec![],
+        join_kind: SqlJoinKind::Left,
+        join_keys: vec!["Actnum".into()],
+        right_cols_to_keep: vec![],
+        keep_first_duplicate_right: false,
+    };
+    let msg = format!("{:#}", compile_tab_lazy(&src, &[], &tmpdir()).err().expect("12 duplicated keys"));
+    assert!(msg.contains("Right table has 12 duplicated keys on Actnum"), "{msg}");
+    let listed = msg.split("e.g. ").nth(1).unwrap().split(". Fix").next().unwrap();
+    let listed: Vec<&str> = listed.split(", ").collect();
+    assert_eq!(listed.len(), 10, "{listed:?}");
+    assert_eq!(listed[0], "K01");
+    assert_eq!(listed[9], "K10");
+    assert!(!msg.contains("K11") && !msg.contains("K12"), "{msg}");
+}
+
+#[test]
+fn t19c_blank_balance_notes_for_limit_nii_and_duration() {
+    let df = df!(
+        "Actnum" => ["L1", "L2", "L3", "L4"],
+        "Balance" => [Some(1_000_000.0), None, None, None],
+        "Limit" => [2_000_000.0, 1.0, 1.0, 1.0],
+        "Rate" => [9.0, 9.0, 9.0, 9.0],
+        "Matdat" => [days(2027, 10, 31); 4]
+    )
+    .unwrap()
+    .lazy()
+    .with_column(col("Matdat").cast(DataType::Date))
+    .collect()
+    .unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("t19c.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let limit = TransformStep::LoanLimitUtilization { limit_col: "Limit".into(), bal_col: "Balance".into(), ccf_pct: 50.0 };
+    let nii = TransformStep::RateShockSim {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        shock_bps: 200.0,
+        side_col: None,
+    };
+    let dur = TransformStep::DurationAnalysis {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        compounding_freq: 2,
+        shock_bps: 200.0,
+        default_sight_years: 0.25,
+        side_col: None,
+    };
+    for step in [limit, nii, dur] {
+        let label = step.short_label();
+        let steps = vec![step];
+        // The step still runs (blank = 0) ...
+        assert_eq!(compile_tab_lazy(&src, &steps, &tmpdir()).unwrap().collect().unwrap().height(), 4, "{label}");
+        // ... and says how many balances were blank.
+        let notes = blank_balance_notes(&src, &steps, &tmpdir()).unwrap();
+        assert_eq!(notes.len(), 1, "{label}: {notes:?}");
+        assert_eq!(notes[0], format!("{label}: Balance blank on 3 rows; treated as 0"));
+    }
+}
