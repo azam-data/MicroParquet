@@ -199,6 +199,7 @@ impl MicroParquetApp {
                             2,
                             0,
                             None,
+                            &HashMap::new(),
                         );
                     });
 

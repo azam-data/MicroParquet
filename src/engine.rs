@@ -2257,6 +2257,35 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             }
             Ok(lf.with_columns(exprs))
         }
+        TransformStep::SortRows { levels } => {
+            if levels.is_empty() {
+                return Ok(lf);
+            }
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this sort")?;
+            let mut keys: Vec<Expr> = Vec::with_capacity(levels.len());
+            for l in levels {
+                let dtype = schema.get(l.column.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("Sort: column '{}' was not found. Pick it again in the sort editor.", l.column)
+                })?;
+                // Blank text sorts with the nulls: last, in either direction.
+                keys.push(if dtype.is_string() {
+                    when(col(l.column.as_str()).str().strip_chars(lit(NULL)).eq(lit("")))
+                        .then(lit(NULL).cast(DataType::String))
+                        .otherwise(col(l.column.as_str()))
+                } else {
+                    col(l.column.as_str())
+                });
+            }
+            let n = levels.len();
+            let options = SortMultipleOptions::default()
+                .with_order_descending_multi(levels.iter().map(|l| l.descending))
+                .with_nulls_last_multi(vec![true; n])
+                .with_maintain_order(true);
+            Ok(lf.sort_by_exprs(keys, options))
+        }
         TransformStep::FilterGroup { conditions, join, keep_matching } => {
             if conditions.is_empty() {
                 return Ok(lf);

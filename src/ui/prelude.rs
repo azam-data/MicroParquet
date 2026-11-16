@@ -22,9 +22,9 @@ pub use micro_parquet::macros::{
 };
 pub use micro_parquet::models::{
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
-    format_metric_value, format_with_commas, parquet_native_type, AggFunc, AggSpec, BatchDirection,
+    format_metric_value, format_with_commas, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
-    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
+    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
     SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };
@@ -60,6 +60,7 @@ pub use crate::ui::provision::ProvisionState;
 pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;
 pub use crate::ui::schema::PendingCsvModal;
+pub use crate::ui::sort::SortState;
 pub use crate::ui::stack::StackState;
 pub use crate::ui::steps::{MacroState, RightTab};
 pub use crate::ui::theme;

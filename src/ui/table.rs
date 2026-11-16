@@ -34,6 +34,15 @@ impl micro_parquet::table_layout::FontMetrics for EguiMetrics<'_> {
     }
 }
 
+/// What the user did in the grid's header.
+pub enum GridAction {
+    /// Clicked the header: select the column.
+    Select(String),
+    /// Chose a sort from the header menu: (column, highest first, add as a further level).
+    Sort(String, bool, bool),
+    ClearSort,
+}
+
 /// How a column's cells are drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CellKind {
@@ -78,7 +87,7 @@ fn cell_text(
 }
 
 impl MicroParquetApp {
-    /// Draws the page. Returns the column whose header was clicked, if any.
+    /// Draws the page. Returns what the user did in the header, if anything.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_data_grid(
         ui: &mut egui::Ui,
@@ -89,13 +98,14 @@ impl MicroParquetApp {
         global_decimals: usize,
         tab_id: u64,
         selected: Option<&str>,
-    ) -> Option<String> {
+        sort_marks: &HashMap<String, (usize, bool)>,
+    ) -> Option<GridAction> {
         use micro_parquet::table_layout::{column_min_width, MAX_COLUMN_WIDTH, SAMPLE_ROWS};
         let tk = *theme::tokens(ui.visuals().dark_mode);
         let cols = df.get_columns();
         let num_rows = df.height();
         let ctx = ui.ctx().clone();
-        let mut clicked: Option<String> = None;
+        let mut action: Option<GridAction> = None;
 
         // Minimum widths: header, selector, summary and the first 100 rows' texts.
         let kinds: Vec<CellKind> = cols.iter().map(cell_kind).collect();
@@ -158,12 +168,46 @@ impl MicroParquetApp {
                                         egui::Layout::left_to_right(egui::Align::Center)
                                     };
                                     ui.with_layout(layout, |ui| {
+                                        // The sort mark ("1 up-arrow") sits at the cell's edge.
+                                        if let Some((level, desc)) = sort_marks.get(&name) {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} {}",
+                                                    level,
+                                                    if *desc { theme::ph::ARROW_DOWN } else { theme::ph::ARROW_UP }
+                                                ))
+                                                .size(theme::TEXT_LABEL)
+                                                .color(tk.accent),
+                                            );
+                                        }
                                         ui.add(egui::Label::new(theme::semibold(name.clone()).color(tk.ink)).truncate());
                                     });
                                     resp.clone().on_hover_text(format!("{}  \u{b7}  {:?}", name, c.dtype()));
                                     if resp.clicked() {
-                                        clicked = Some(name);
+                                        action = Some(GridAction::Select(name.clone()));
                                     }
+                                    resp.context_menu(|ui| {
+                                        if ui.button("Sort lowest first").clicked() {
+                                            action = Some(GridAction::Sort(name.clone(), false, false));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Sort highest first").clicked() {
+                                            action = Some(GridAction::Sort(name.clone(), true, false));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Add as next sort level (lowest first)").clicked() {
+                                            action = Some(GridAction::Sort(name.clone(), false, true));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Add as next sort level (highest first)").clicked() {
+                                            action = Some(GridAction::Sort(name.clone(), true, true));
+                                            ui.close_menu();
+                                        }
+                                        if !sort_marks.is_empty() && ui.button("Remove sort").clicked() {
+                                            action = Some(GridAction::ClearSort);
+                                            ui.close_menu();
+                                        }
+                                    });
                                 });
                             }
                         })
@@ -202,7 +246,7 @@ impl MicroParquetApp {
                         });
                 });
             });
-        clicked
+        action
     }
 
     /// Filter chip bar (one chip per filter step) with the paging controls on the right.
@@ -321,13 +365,14 @@ impl MicroParquetApp {
             .tabs
             .get(self.active_tab)
             .is_some_and(|t| self.jobs.is_busy(JobKey::tab(JobKind::Refresh, t.id)));
-        let mut clicked: Option<String> = None;
+        let mut action: Option<GridAction> = None;
         if let Some(tab) = self.tabs.get(self.active_tab) {
+            let marks = sort_marks(&tab.steps);
             ui.scope(|ui| {
                 if updating {
                     ui.set_opacity(0.45);
                 }
-                clicked = Self::render_data_grid(
+                action = Self::render_data_grid(
                     ui,
                     &tab.cached_slice,
                     &tab.col_formats,
@@ -336,14 +381,20 @@ impl MicroParquetApp {
                     self.global_decimals,
                     tab.id,
                     self.selected_column.as_deref(),
+                    &marks,
                 );
             });
         }
-        if let Some(c) = clicked {
-            // Clicking a header selects the column and opens the Column tab.
-            self.selected_column = Some(c);
-            self.right_tab = RightTab::Column;
-            self.show_steps_sidebar = true;
+        match action {
+            Some(GridAction::Select(c)) => {
+                // Clicking a header selects the column and opens the Column tab.
+                self.selected_column = Some(c);
+                self.right_tab = RightTab::Column;
+                self.show_steps_sidebar = true;
+            }
+            Some(GridAction::Sort(c, desc, add)) => self.sort_from_header(&c, desc, add),
+            Some(GridAction::ClearSort) => self.clear_sort(),
+            None => {}
         }
     }
 }

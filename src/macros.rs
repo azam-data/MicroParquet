@@ -406,6 +406,26 @@ pub fn generate_python_polars_code(
                     py.push_str(&format!("lf = lf.filter(~({}))\n\n", cond_py));
                 }
             }
+            TransformStep::SortRows { levels } => {
+                if !levels.is_empty() {
+                    // Blank text counts as blank (last), like the app.
+                    let keys: Vec<String> = levels
+                        .iter()
+                        .map(|l| {
+                            format!(
+                                "pl.when(pl.col(\"{c}\").cast(pl.Utf8).str.strip_chars() == \"\").then(None).otherwise(pl.col(\"{c}\"))",
+                                c = l.column
+                            )
+                        })
+                        .collect();
+                    let desc: Vec<&str> = levels.iter().map(|l| if l.descending { "True" } else { "False" }).collect();
+                    py.push_str(&format!(
+                        "lf = lf.sort([{}], descending=[{}], nulls_last=True, maintain_order=True)\n\n",
+                        keys.join(", "),
+                        desc.join(", ")
+                    ));
+                }
+            }
             TransformStep::FilterGroup { conditions, join, keep_matching } => {
                 if !conditions.is_empty() {
                     let parts: Vec<String> = conditions.iter().map(py_condition_expr).collect();

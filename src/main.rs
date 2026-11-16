@@ -84,6 +84,7 @@ fn main() -> eframe::Result<()> {
 pub enum ActiveToolModal {
     None,
     FilterRows,
+    SortRows,
     ManageColumns,
     ConditionalCol,
     MathFormula,
@@ -135,6 +136,7 @@ pub struct MicroParquetApp {
 
     // One state struct per screen (src/ui/<name>.rs)
     pub filter: FilterState,
+    pub sort: SortState,
     pub columns: ColumnsState,
     pub cond: CondState,
     pub calc: CalcState,
@@ -186,6 +188,7 @@ impl MicroParquetApp {
                     .to_string(),
 
             filter: FilterState::default(),
+            sort: SortState::default(),
             columns: ColumnsState::default(),
             cond: CondState::default(),
             calc: CalcState::default(),
@@ -414,6 +417,9 @@ impl MicroParquetApp {
     fn transform_buttons(&mut self, ui: &mut egui::Ui) {
         if theme::flat_button(ui, theme::ph::FUNNEL, "Filter").clicked() {
             self.open_filter_editor_default();
+        }
+        if theme::flat_button(ui, theme::ph::SORT_ASCENDING, "Sort").clicked() {
+            self.open_sort_editor(None);
         }
         if theme::flat_button(ui, theme::ph::COLUMNS, "Columns").clicked() {
             self.init_tool_defaults_from_active_tab();

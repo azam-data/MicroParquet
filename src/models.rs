@@ -730,6 +730,32 @@ fn default_true() -> bool {
     true
 }
 
+/// Header mark for each sorted column: its level (1-based) and whether it is highest first. The
+/// last sort step decides the order, so its levels are the ones shown.
+pub fn sort_marks(steps: &[TransformStep]) -> HashMap<String, (usize, bool)> {
+    let mut marks = HashMap::new();
+    if let Some(levels) = steps.iter().rev().find_map(|s| s.sort_levels()) {
+        for (i, l) in levels.iter().enumerate() {
+            marks.entry(l.column.clone()).or_insert((i + 1, l.descending));
+        }
+    }
+    marks
+}
+
+/// The text of a sort mark: "1 \u{2191}" (lowest first) or "2 \u{2193}" (highest first).
+pub fn sort_mark_label(level: usize, descending: bool) -> String {
+    format!("{} {}", level, if descending { "\u{2193}" } else { "\u{2191}" })
+}
+
+/// One level of a multi-level sort.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SortLevel {
+    pub column: String,
+    /// false = lowest first (A to Z, smallest, oldest); true = highest first.
+    #[serde(default)]
+    pub descending: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CondRule {
     pub col_name: String,
@@ -986,6 +1012,11 @@ pub enum TransformStep {
         value: String,
         keep_matching: bool,
     },
+    /// Sort by several columns, blanks always last, ties keep their earlier order (T2).
+    SortRows {
+        #[serde(default)]
+        levels: Vec<SortLevel>,
+    },
     /// Several conditions joined by And / Or (T1). Rows whose test is unknown (a null compared
     /// with a value) do not match: "Keep matching" drops them, "Delete matching" keeps them.
     FilterGroup {
@@ -1106,6 +1137,14 @@ pub enum TransformStep {
 impl TransformStep {
     /// A filter step as conditions, for the chip bar and the editor: a `FilterGroup`, or an old
     /// single `FilterRows` shown as a one-condition group. `None` for every other step.
+    /// The sort levels of a `SortRows` step.
+    pub fn sort_levels(&self) -> Option<&[SortLevel]> {
+        match self {
+            TransformStep::SortRows { levels } => Some(levels),
+            _ => None,
+        }
+    }
+
     pub fn as_filter_group(&self) -> Option<(Vec<FilterCondition>, GroupJoin, bool)> {
         match self {
             TransformStep::FilterGroup { conditions, join, keep_matching } => {
@@ -1135,6 +1174,13 @@ impl TransformStep {
             }
             TransformStep::ConvertToNumber { columns } => {
                 format!("Set to Number: {}", columns.join(", "))
+            }
+            TransformStep::SortRows { levels } => {
+                let parts: Vec<String> = levels
+                    .iter()
+                    .map(|l| format!("{} {}", l.column, if l.descending { "\u{2193}" } else { "\u{2191}" }))
+                    .collect();
+                format!("Sort: {}", parts.join(", "))
             }
             TransformStep::FilterGroup { conditions, join, keep_matching } => {
                 let mode = if *keep_matching { "Keep" } else { "Delete" };

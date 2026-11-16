@@ -14,8 +14,8 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 | L3 | DONE | 32a45b7 | tests/l3.rs: 7 tests (25,000,000 → 25,000.00 K / 25.00 M / 250.00 L / 2.50 Cr via column and global scale; negatives and decimals; Crore/Lakh unchanged, rates never scaled; old macro formats load; Excel header and values in scale incl. per-column override; plain scale and old export raw; PDF header rule) | Excel writes scaled values (Excel cannot scale by 1e5/1e7); Lakh already existed | |
 | L4 | DONE | b262909 | tests/l4.rs: 7 tests ("'1,234.50" → 1234.5 and only one apostrophe dropped; Float64 column loads it and a Text column keeps "'0012"; Python mirror; Text column of numbers flagged with 98% and the exact question; 95% threshold and blanks; ID columns excluded; Set to Number step converts, errors name a missing column, JSON round trip) | Set to Number is a step, not a schema edit; check runs before GUI exports only | |
 | L5 | DONE | be38e37 | tests/phase3/l5.rs: 10 tests (forbidden characters; 120-char cap keeps extension; macOS folder beside the .app, Library fallback when not writable, bare binary, Windows/Linux next to exe; writability probe; one version number in macro files, Python header, sources and the workflow; Phase 1, 2 and 3 macros load; old schema, preset and rule files load). New tests moved into one binary `tests/phase3/` to save disk | no Info.plist in repo (workflow writes it, now from Cargo.toml); app_version is a JSON key | |
-| T1 | DONE | (next commit) | tests/phase3/t1.rs: 8 tests (AND / OR rows; delete keeps unknown rows; between on dates, numbers, text and a bad date bound; in list with numeric-looking text IDs; contains / starts / ends / blank; v1.2 FilterRows macro gives the same rows and shows as a group; serde defaults and chip text; Python translation) | own operator set; old FilterRows untouched; unknown test = no match | |
-| T2 | TODO | | | | |
+| T1 | DONE | 67c3f12 | tests/phase3/t1.rs: 8 tests (AND / OR rows; delete keeps unknown rows; between on dates, numbers, text and a bad date bound; in list with numeric-looking text IDs; contains / starts / ends / blank; v1.2 FilterRows macro gives the same rows and shows as a group; serde defaults and chip text; Python translation) | own operator set; old FilterRows untouched; unknown test = no match | |
+| T2 | DONE | (next commit) | tests/phase3/t2.rs: 6 tests (3-level text asc / number desc / date asc with ties, blanks and a stable tie; blanks last both directions and "" counts as blank; stability and two sorts in a row; empty levels and a missing column; header marks "1 ↑" / "2 ↓"; serde defaults and Python) | byte-order text sort; right-click header menu | Q4 |
 | T3 | TODO | | | | |
 | T4 | TODO | | | | |
 | T5 | TODO | | | | |
@@ -27,6 +27,8 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 - Q2 (R2): the manual freeze check (open a large file, use the menus while it loads) and a look at the status-bar Cancel button and the dimmed "Updating…" table need your eyes; this container has no display libraries.
 
 - Q3 (L1): please add `SourceSans3-Regular.ttf`, `-Semibold.ttf`, `-Bold.ttf` to `assets/fonts/` (my session could not fetch them) and look at the whole layout against `docs/design/Combined.dc.html`.
+
+- Q4 (T2): should text sort ignore case ("ctg" next to "CTG")? It is byte order now.
 
 ## Notes
 - Disk: the test binaries are ~1.5 GB each (debug info). If a build fails with "No space left on device", delete executables in `target/debug/deps` (not rlibs) and `target/debug/incremental`; never `cargo clean`.

@@ -21,6 +21,7 @@ pub mod provision;
 pub mod rate_shock;
 pub mod reconcile;
 pub mod schema;
+pub mod sort;
 pub mod sql;
 pub mod stack;
 pub mod status;
@@ -65,6 +66,7 @@ impl MicroParquetApp {
         let cols = avail_cols;
         let outcome = match self.active_tool {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
+            ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::ManageColumns => self.render_columns_modal(ctx, cols),
             ActiveToolModal::ConditionalCol => self.render_conditional_modal(ctx, cols),
             ActiveToolModal::MathFormula => self.render_calc_modal(ctx, cols),
