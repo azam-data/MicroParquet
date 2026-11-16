@@ -27,10 +27,10 @@ impl MicroParquetApp {
     pub(crate) fn render_stack_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("📚 Vertical Multi-File Merger / Stacker")
+        theme::modal("\u{E466} Vertical Multi-File Merger / Stacker")
             .collapsible(false)
             .show(ctx, |ui| {
-                if ui.button("➕ Add Files to Stack...").clicked() {
+                if ui.button("\u{E3D4} Add Files to Stack...").clicked() {
                     if let Some(files) = rfd::FileDialog::new()
                         .add_filter("Data Files", &["csv", "parquet"])
                         .pick_files()
@@ -50,7 +50,7 @@ impl MicroParquetApp {
                 ui.radio_value(&mut self.stack.schema_mode, 1, "Apply one schema to every file: the first file's");
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut self.stack.schema_mode, 2, "Apply one schema to every file: saved .schema.json");
-                    if ui.button("📂 Pick...").clicked() {
+                    if ui.button("\u{E256} Pick...").clicked() {
                         if let Some(p) = rfd::FileDialog::new()
                             .set_directory(&self.paths.schemas_dir)
                             .add_filter("Schema JSON", &["json"])
@@ -71,7 +71,7 @@ impl MicroParquetApp {
                     let run = ui
                         .add_enabled(
                             !needs_template,
-                            egui::Button::new("🚀 Stack & Open as Unified Tab"),
+                            egui::Button::new("\u{E3FE} Stack & Open as Unified Tab"),
                         )
                         .on_disabled_hover_text("Pick the .schema.json to apply first");
                     if run.clicked() && !self.stack.files_list.is_empty() {
@@ -112,7 +112,7 @@ impl MicroParquetApp {
                                 );
                                 if !notes.is_empty() {
                                     self.status_message
-                                        .push_str(&format!(" ⚠ {}", notes.join("; ")));
+                                        .push_str(&format!(" \u{E4E0} {}", notes.join("; ")));
                                 }
                                 close_modal = true;
                             }

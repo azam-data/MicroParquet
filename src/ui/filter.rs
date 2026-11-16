@@ -26,7 +26,7 @@ impl MicroParquetApp {
     pub(crate) fn render_filter_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🔍 Filter Rows / Delete Filtered Rows")
+        theme::modal("\u{E30C} Filter Rows / Delete Filtered Rows")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -71,7 +71,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Apply to Current Tab").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Apply to Current Tab").clicked() {
                         step_to_apply = Some((
                             TransformStep::FilterRows {
                                 column: self.filter.col.clone(),
@@ -83,7 +83,7 @@ impl MicroParquetApp {
                         ));
                         close_modal = true;
                     }
-                    if ui.button("➕ Open Filtered View in New Tab").clicked() {
+                    if ui.button("\u{E3D4} Open Filtered View in New Tab").clicked() {
                         step_to_apply = Some((
                             TransformStep::FilterRows {
                                 column: self.filter.col.clone(),

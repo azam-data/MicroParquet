@@ -40,7 +40,7 @@ impl MicroParquetApp {
     pub(crate) fn render_multi_export_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("📊 Consolidated Multi-Tab Exporter (.xlsx / .pdf)")
+        theme::modal("\u{E150} Consolidated Multi-Tab Exporter (.xlsx / .pdf)")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.strong("Select Open Tabs / Views to Include:");
@@ -57,7 +57,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui
-                        .button("📊 Export Selected Tabs to Single .xlsx...")
+                        .button("\u{E150} Export Selected Tabs to Single .xlsx...")
                         .clicked()
                     {
                         self.run_guarded_export(GuardedExport::MultiXlsx);
@@ -65,7 +65,7 @@ impl MicroParquetApp {
                     }
 
                     if ui
-                        .button("📄 Export Selected Tabs to Single Landscape .pdf...")
+                        .button("\u{E702} Export Selected Tabs to Single Landscape .pdf...")
                         .clicked()
                     {
                         self.run_guarded_export(GuardedExport::MultiPdf);
@@ -83,7 +83,7 @@ impl MicroParquetApp {
     pub(crate) fn render_split_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🗂 Smart Partitioned Split Exporter")
+        theme::modal("\u{E710} Smart Partitioned Split Exporter")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -108,7 +108,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("🚀 Select Output Folder & Split Now...").clicked() {
+                    if theme::primary_button(ui, "\u{E3FE} Select Output Folder & Split Now...").clicked() {
                         self.run_guarded_export(GuardedExport::Split);
                         close_modal = true;
                     }
@@ -193,7 +193,7 @@ impl MicroParquetApp {
                     let ctrl = t.control_col.as_deref() == Some(f.column.as_str());
                     lines.push(format!(
                         "{} {} — {}: {} value(s), e.g. {}",
-                        if ctrl { "●" } else { " " },
+                        if ctrl { "\u{E18A}" } else { " " },
                         t.title,
                         f.column,
                         f.count,
@@ -204,7 +204,7 @@ impl MicroParquetApp {
         }
         let mut go = false;
         let mut cancel = false;
-        egui::Window::new("⚠ Values could not be converted")
+        theme::modal("\u{E4E0} Values could not be converted")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.label(
@@ -215,7 +215,7 @@ impl MicroParquetApp {
                 for l in &lines {
                     ui.monospace(l);
                 }
-                ui.small("● = control column");
+                ui.small("\u{E18A} = control column");
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui

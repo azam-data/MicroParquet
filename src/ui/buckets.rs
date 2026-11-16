@@ -46,7 +46,7 @@ impl MicroParquetApp {
     pub(crate) fn render_buckets_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("📅 Maturity Bucketer & Custom Preset Creator (v1.2)")
+        theme::modal("\u{E108} Maturity Bucketer & Custom Preset Creator (v1.2)")
             .collapsible(false)
             .default_width(680.0)
             .show(ctx, |ui| {
@@ -85,9 +85,9 @@ impl MicroParquetApp {
 
                     if ui
                         .button(if self.buckets.show_custom_creator {
-                            "▲ Hide Custom Creator"
+                            "\u{E13C} Hide Custom Creator"
                         } else {
-                            "➕ Create Custom Preset (e.g. c-m-b-1)"
+                            "\u{E3D4} Create Custom Preset (e.g. c-m-b-1)"
                         })
                         .clicked()
                     {
@@ -99,7 +99,7 @@ impl MicroParquetApp {
                 if self.buckets.show_custom_creator {
                     ui.separator();
                     egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.strong("🛠 Custom Maturity Bucket Preset Creator");
+                        ui.strong("\u{E5D4} Custom Maturity Bucket Preset Creator");
                         ui.horizontal(|ui| {
                             ui.label("Custom Preset Name:");
                             ui.text_edit_singleline(&mut self.buckets.draft.name);
@@ -117,7 +117,7 @@ impl MicroParquetApp {
                                 );
                                 ui.label("Bucket Label:");
                                 ui.text_edit_singleline(&mut rule.label);
-                                if ui.small_button("✖").clicked() {
+                                if ui.small_button("\u{E4F6}").clicked() {
                                     remove_rule = Some(r_idx);
                                 }
                             });
@@ -127,7 +127,7 @@ impl MicroParquetApp {
                                 self.buckets.draft.rules.remove(ri);
                             }
                         }
-                        if ui.small_button("➕ Add Day Threshold Row").clicked() {
+                        if ui.small_button("\u{E3D4} Add Day Threshold Row").clicked() {
                             let next_days = self
                                 .buckets.draft
                                 .rules
@@ -159,7 +159,7 @@ impl MicroParquetApp {
                             );
                         });
 
-                        if ui.button("💾 Save Custom Preset to Dropdown").clicked()
+                        if ui.button("\u{E248} Save Custom Preset to Dropdown").clicked()
                             && !self.buckets.draft.name.trim().is_empty()
                         {
                             if let Ok(_) = CustomBucketDef::save_custom_preset(
@@ -192,7 +192,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Generate Maturity Buckets").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Generate Maturity Buckets").clicked() {
                         if let Some(chosen_def) =
                             self.buckets.presets.get(self.buckets.selected_preset_idx).cloned()
                         {

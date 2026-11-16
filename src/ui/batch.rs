@@ -32,18 +32,18 @@ impl MicroParquetApp {
             .get_or_insert(BatchSchemaStrategy::SmartSafeAutoDetect);
 
         let mut close_clicked = false;
-        egui::Window::new("🔄 Recursive Folder-Tree Mirror Batch Converter")
+        theme::modal("\u{E094} Recursive Folder-Tree Mirror Batch Converter")
             .collapsible(false)
             .default_width(680.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("📂 1. Input Root Folder...").clicked() {
+                    if ui.button("\u{E256} 1. Input Root Folder...").clicked() {
                         self.batch_modal.input_folder = rfd::FileDialog::new().pick_folder();
                     }
                     ui.label(format!("{:?}", self.batch_modal.input_folder));
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("📂 2. Output Root Folder...").clicked() {
+                    if ui.button("\u{E256} 2. Output Root Folder...").clicked() {
                         self.batch_modal.output_folder = rfd::FileDialog::new().pick_folder();
                     }
                     ui.label(format!("{:?}", self.batch_modal.output_folder));
@@ -71,7 +71,7 @@ impl MicroParquetApp {
                     self.batch_modal.schema_strategy = Some(s);
                     if s == BatchSchemaStrategy::MasterSchemaTemplate {
                         ui.horizontal(|ui| {
-                            if ui.button("📂 Pick .schema.json...").clicked() {
+                            if ui.button("\u{E256} Pick .schema.json...").clicked() {
                                 if let Some(p) = rfd::FileDialog::new()
                                     .set_directory(&self.paths.schemas_dir)
                                     .add_filter("Schema JSON", &["json"])
@@ -102,7 +102,7 @@ impl MicroParquetApp {
                             match &self.batch_modal.template_path {
                                 Some(p) => ui.label(format!("{:?}", p)),
                                 None => ui.colored_label(
-                                    theme::WARN_ORANGE,
+                                    theme::warning(ui),
                                     "No template chosen",
                                 ),
                             };
@@ -121,7 +121,7 @@ impl MicroParquetApp {
                     let run = ui
                         .add_enabled(
                             !needs_template && have_folders && !batch_running,
-                            egui::Button::new("🚀 Start Mirror Batch"),
+                            egui::Button::new("\u{E3FE} Start Mirror Batch"),
                         )
                         .on_disabled_hover_text(if needs_template {
                             "Pick the .schema.json template first"
@@ -159,7 +159,7 @@ impl MicroParquetApp {
 
                 if needs_template {
                     ui.colored_label(
-                        theme::WARN_ORANGE,
+                        theme::warning(ui),
                         "Pick a .schema.json template, or choose Smart Safe Auto-Detect.",
                     );
                 }
@@ -167,7 +167,7 @@ impl MicroParquetApp {
                     ui.label("Batch running… progress and Cancel are in the status bar.");
                 }
                 if let Some(err) = &self.batch_modal.last_error {
-                    ui.colored_label(theme::ERR_RED, format!("❌ {}", err));
+                    ui.colored_label(theme::danger(ui), format!("\u{E4F8} {}", err));
                 }
                 if let Some(rep) = &self.batch_modal.last_report {
                     ui.separator();
@@ -185,17 +185,17 @@ impl MicroParquetApp {
                     let fails: usize = rep.log.iter().filter_map(|r| r.parse_failures).sum();
                     if fails > 0 {
                         ui.colored_label(
-                            theme::WARN_ORANGE,
-                            format!("⚠ {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
+                            theme::warning(ui),
+                            format!("\u{E4E0} {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
                         );
                     }
                     for n in &rep.notices {
-                        ui.colored_label(theme::WARN_ORANGE, format!("⚠ {}", n));
+                        ui.colored_label(theme::warning(ui), format!("\u{E4E0} {}", n));
                     }
                     if !rep.warnings.is_empty() {
                         ui.colored_label(
-                            theme::WARN_ORANGE,
-                            format!("⚠ {} file(s) with fewer rows than data lines (status WARNING in the log):", rep.warnings.len()),
+                            theme::warning(ui),
+                            format!("\u{E4E0} {} file(s) with fewer rows than data lines (status WARNING in the log):", rep.warnings.len()),
                         );
                         egui::ScrollArea::vertical()
                             .id_salt("batch_warnings")
@@ -207,7 +207,7 @@ impl MicroParquetApp {
                             });
                     }
                     if !rep.errors.is_empty() {
-                        ui.colored_label(theme::ERR_RED, "Errors:");
+                        ui.colored_label(theme::danger(ui), "Errors:");
                         egui::ScrollArea::vertical()
                             .max_height(180.0)
                             .show(ui, |ui| {

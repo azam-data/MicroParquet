@@ -14,10 +14,10 @@ impl MicroParquetApp {
                         egui::TextEdit::singleline(&mut tab.sql_scratchpad)
                             .desired_width(520.0),
                     );
-                    if ui.button("▶ Apply Here").clicked() {
+                    if ui.button("\u{E3D0} Apply Here").clicked() {
                         sql_to_run = Some((tab.sql_scratchpad.clone(), false));
                     }
-                    if ui.button("➕ New Tab").clicked() {
+                    if ui.button("\u{E3D4} New Tab").clicked() {
                         sql_to_run = Some((tab.sql_scratchpad.clone(), true));
                     }
                 });

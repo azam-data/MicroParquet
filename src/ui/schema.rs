@@ -28,12 +28,11 @@ impl MicroParquetApp {
         let mut action_reread = false;
 
         let title = if modal.is_parquet {
-            "🧬 Schema & Ingestion (Parquet): Types & PII Masking"
+            "\u{E434} Schema & Ingestion (Parquet): Types & PII Masking"
         } else {
-            "🧬 Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock"
+            "\u{E434} Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock"
         };
-        egui::Window::new(title)
-            .collapsible(false)
+        theme::modal(title)
             .resizable(true)
             .default_width(980.0)
             .show(ctx, |ui| {
@@ -93,7 +92,7 @@ impl MicroParquetApp {
                                 }
                             });
                         if ui
-                            .button("🔄 Re-read with these settings")
+                            .button("\u{E094} Re-read with these settings")
                             .on_hover_text("Reloads the preview and re-detects the columns and their types")
                             .clicked()
                         {
@@ -103,7 +102,7 @@ impl MicroParquetApp {
                 }
 
                 ui.horizontal(|ui| {
-                    if ui.button("💾 Save Schema Template (.schema.json)").clicked() {
+                    if ui.button("\u{E248} Save Schema Template (.schema.json)").clicked() {
                         if let Some(save_path) = rfd::FileDialog::new()
                             .set_directory(&self.paths.schemas_dir)
                             .set_file_name("wb_schema.schema.json")
@@ -116,7 +115,7 @@ impl MicroParquetApp {
                         }
                     }
 
-                    if ui.button("📂 Load Saved Schema Template").clicked() {
+                    if ui.button("\u{E256} Load Saved Schema Template").clicked() {
                         if let Some(load_path) = rfd::FileDialog::new()
                             .set_directory(&self.paths.schemas_dir)
                             .add_filter("Schema JSON", &["json"])
@@ -134,7 +133,7 @@ impl MicroParquetApp {
                 // PII masks use the per-install key (the schema's old salt is not used).
                 let key_path = pii_key_path();
                 ui.horizontal(|ui| {
-                    ui.label("🔑 Mask Name / Mask Acct use this install's secret key (not a salt in the schema).");
+                    ui.label("\u{E2D6} Mask Name / Mask Acct use this install's secret key (not a salt in the schema).");
                     match read_pii_key(&key_path) {
                         Ok(Some(k)) => {
                             ui.label(format!("Key fingerprint: {}", pii_key_fingerprint(&k)));
@@ -143,11 +142,11 @@ impl MicroParquetApp {
                             ui.label("No key yet: it is created the first time a column is masked.");
                         }
                         Err(e) => {
-                            ui.colored_label(theme::ERR_RED, format!("{:#}", e));
+                            ui.colored_label(theme::danger(ui), format!("{:#}", e));
                         }
                     }
                     if ui
-                        .button("📤 Export key...")
+                        .button("\u{E4C0} Export key...")
                         .on_hover_text("Saves the 32-byte key file. Keep it as safe as the data: anyone with it can check guesses against the masks.")
                         .clicked()
                     {
@@ -159,7 +158,7 @@ impl MicroParquetApp {
                         }
                     }
                     if ui
-                        .button("📥 Import key...")
+                        .button("\u{E20C} Import key...")
                         .on_hover_text("Replaces this install's key (the current one is backed up next to it).")
                         .clicked()
                     {
@@ -177,8 +176,8 @@ impl MicroParquetApp {
                     }
                 });
                 ui.colored_label(
-                    theme::WARN_ORANGE,
-                    "⚠ Masks made with different keys don't match. To get the same masks on another PC, export the key here and import it there.",
+                    theme::warning(ui),
+                    "\u{E4E0} Masks made with different keys don't match. To get the same masks on another PC, export the key here and import it there.",
                 );
 
                 ui.separator();
@@ -225,8 +224,8 @@ impl MicroParquetApp {
                                         && col_cfg.sign_convention == SignConvention::Unset
                                     {
                                         ui.colored_label(
-                                            theme::WARN_AMBER,
-                                            format!("⚠ {} (has Dr/Cr)", col_cfg.name),
+                                            theme::warning(ui),
+                                            format!("\u{E4E0} {} (has Dr/Cr)", col_cfg.name),
                                         )
                                         .on_hover_text(
                                             "Values carry Dr/Cr. Choose 'Dr is +' or 'Cr is +' or the load stops.",
@@ -292,8 +291,8 @@ impl MicroParquetApp {
                                     {
                                         Some(f) => {
                                             ui.colored_label(
-                                                theme::WARN_ORANGE,
-                                                format!("⚠ {}", f.count),
+                                                theme::warning(ui),
+                                                format!("\u{E4E0} {}", f.count),
                                             )
                                             .on_hover_text(format!(
                                                 "Could not be converted (now null), e.g.:\n{}",
@@ -321,19 +320,19 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if modal.target_tab.is_some() {
-                        if ui.button("✅ Apply Schema to This Tab").clicked() {
+                        if theme::primary_button(ui, "\u{E182} Apply Schema to This Tab").clicked() {
                             action_apply_to_tab = true;
                             keep_open = false;
                         }
                     } else if !modal.direct_convert_only
-                        && ui.button("✅ Lock Schema & Open in Viewer Tab").clicked()
+                        && theme::primary_button(ui, "\u{E182} Lock Schema & Open in Viewer Tab").clicked()
                     {
                         action_open_tab = true;
                         keep_open = false;
                     }
                     if !modal.is_parquet
                         && ui
-                            .button("⚡ Convert Directly to Parquet File Now...")
+                            .button("\u{E2DE} Convert Directly to Parquet File Now...")
                             .clicked()
                     {
                         action_direct_convert = true;

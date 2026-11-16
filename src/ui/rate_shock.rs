@@ -43,7 +43,7 @@ impl MicroParquetApp {
     pub(crate) fn render_rate_shock_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("📈 Interest Rate Shock / ΔNII Sensitivity Simulator")
+        theme::modal("\u{E154} Interest Rate Shock / ΔNII Sensitivity Simulator")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
@@ -105,7 +105,7 @@ impl MicroParquetApp {
                 ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Run Rate Shock Simulation").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Run Rate Shock Simulation").clicked() {
                         step_to_apply = Some((
                             TransformStep::RateShockSim {
                                 bal_col: self.shock.bal_col.clone(),

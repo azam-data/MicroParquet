@@ -28,7 +28,7 @@ impl MicroParquetApp {
     pub(crate) fn render_join_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🔗 SQL-Style Multi-Tab Joiner")
+        theme::modal("\u{E2E2} SQL-Style Multi-Tab Joiner")
             .collapsible(false)
             .show(ctx, |ui| {
                 if self.tabs.len() < 2 {
@@ -96,7 +96,7 @@ impl MicroParquetApp {
                     ui.checkbox(&mut self.join.keep_first, "Keep first row per key")
                         .on_hover_text("Off: a key repeated in the right table is an error. On: the first right row per key is used and the status bar shows how many were dropped.");
                     ui.separator();
-                    if ui.button("🚀 Execute Join into New Tab").clicked() {
+                    if theme::primary_button(ui, "\u{E3FE} Execute Join into New Tab").clicked() {
                         let (Some(l_tab), Some(r_tab)) = (
                             self.tabs.get(self.join.left_tab).cloned(),
                             self.tabs.get(self.join.right_tab).cloned(),

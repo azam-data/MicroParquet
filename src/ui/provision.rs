@@ -32,7 +32,7 @@ impl MicroParquetApp {
     pub(crate) fn render_provision_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🏦 Bangladesh Bank CL Provision & BFP Calculator")
+        theme::modal("\u{E0B4} Bangladesh Bank CL Provision & BFP Calculator")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -72,7 +72,7 @@ impl MicroParquetApp {
                 ui.label("Rates, CL codes and segments come from cl_code_map.json, segment_map.json and provision_rules.json in portable_data.");
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Calculate CL Provision & BFP").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Calculate CL Provision & BFP").clicked() {
                         step_to_apply = Some((
                             TransformStep::LoanClassificationProvision {
                                 bal_col: self.provision.bal_col.clone(),

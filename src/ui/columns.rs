@@ -24,7 +24,7 @@ impl MicroParquetApp {
     pub(crate) fn render_columns_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("📐 Columns: Drop, Order, Rename & Number Format (v1.2)")
+        theme::modal("\u{E546} Columns: Drop, Order, Rename & Number Format (v1.2)")
             .collapsible(false)
             .default_width(680.0)
             .show(ctx, |ui| {
@@ -36,10 +36,10 @@ impl MicroParquetApp {
                         let mut swap_pair: Option<(usize, usize)> = None;
                         for i in 0..len {
                             ui.horizontal(|ui| {
-                                if ui.small_button("⬆").clicked() && i > 0 {
+                                if ui.small_button("\u{E08E}").clicked() && i > 0 {
                                     swap_pair = Some((i, i - 1));
                                 }
-                                if ui.small_button("⬇").clicked() && i + 1 < len {
+                                if ui.small_button("\u{E03E}").clicked() && i + 1 < len {
                                     swap_pair = Some((i, i + 1));
                                 }
                                 let (ref col_name, ref mut is_checked, ref mut spec) =
@@ -68,7 +68,7 @@ impl MicroParquetApp {
                         }
                     });
 
-                if ui.button("✅ Apply Column Selection, Order & Formats").clicked() {
+                if theme::primary_button(ui, "\u{E182} Apply Column Selection, Order & Formats").clicked() {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                         for (cname, _, spec) in &self.columns.list {
                             tab.col_formats.insert(cname.clone(), *spec);

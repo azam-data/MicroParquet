@@ -210,21 +210,22 @@ impl MicroParquetApp {
     pub(crate) fn render_empty_state(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(90.0);
-            ui.heading(
-                "MicroParquet v1.2: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
-            );
+            ui.heading(format!(
+                "MicroParquet {}: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
+                env!("CARGO_PKG_VERSION")
+            ));
             ui.label("Out-of-Core Polars Engine • Multi-Tab Views • Custom Maturity Buckets • Per-Metric Formats");
             ui.add_space(20.0);
-            if ui.button("📂 Open CSV or Parquet File...").clicked() {
+            if theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...").clicked() {
                 self.initiate_file_open(false);
             }
             ui.add_space(8.0);
-            if ui.button("📚 Stack / Merge Multiple Files...").clicked() {
+            if ui.button("\u{E466} Stack / Merge Multiple Files...").clicked() {
                 self.active_tool = ActiveToolModal::StackFiles;
             }
             ui.add_space(8.0);
             if ui
-                .button("🔄 Launch Recursive Folder Batch Converter...")
+                .button("\u{E094} Launch Recursive Folder Batch Converter...")
                 .clicked()
             {
                 self.batch_modal.open = true;
@@ -232,38 +233,96 @@ impl MicroParquetApp {
         });
     }
 
-    /// Draws the tab strip. Returns true when a tab was closed this frame (the frame stops there).
-    pub(crate) fn render_tab_strip(&mut self, ui: &mut egui::Ui) -> bool {
+    /// Tab strip (40 px): the active tab is white with a 2 px accent line on top.
+    pub(crate) fn render_tab_strip_panel(&mut self, ctx: &egui::Context) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let tk = *theme::tokens(self.dark_mode);
         let mut tab_to_close: Option<usize> = None;
         let mut duplicate_tab: Option<usize> = None;
-        ui.horizontal_wrapped(|ui| {
-            for idx in 0..self.tabs.len() {
-                let is_selected = idx == self.active_tab;
-                let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
-                let tab_label = format!("{} ({})", title, idx + 1);
-                if ui.selectable_label(is_selected, tab_label).clicked() {
-                    self.active_tab = idx;
-                    self.init_tool_defaults_from_active_tab();
-                }
-                if ui.small_button("➕").on_hover_text("Clone View Tab").clicked() {
-                    duplicate_tab = Some(idx);
-                }
-                if ui.small_button("✖").on_hover_text("Close Tab").clicked() {
-                    tab_to_close = Some(idx);
-                }
-                ui.separator();
-            }
-        });
+        let mut select: Option<usize> = None;
+        let mut new_tab = false;
+        egui::TopBottomPanel::top("tab_strip")
+            .exact_height(theme::TAB_STRIP_H)
+            .frame(
+                egui::Frame::none()
+                    .fill(tk.bg)
+                    .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 0.0, bottom: 0.0 }),
+            )
+            .show(ctx, |ui| {
+                theme::bottom_border(ui, tk.border);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for idx in 0..self.tabs.len() {
+                        let active = idx == self.active_tab;
+                        let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
+                        let frame = egui::Frame::none()
+                            .fill(if active { tk.surface } else { egui::Color32::TRANSPARENT })
+                            .stroke(if active { egui::Stroke::new(1.0_f32, tk.border) } else { egui::Stroke::NONE })
+                            .rounding(egui::Rounding { nw: 6.0, ne: 6.0, sw: 0.0, se: 0.0 })
+                            .inner_margin(egui::Margin::symmetric(14.0, if active { 7.0 } else { 5.0 }));
+                        let out = frame.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = theme::SPACE_S;
+                                let text = if active {
+                                    theme::semibold(title.clone()).color(tk.ink)
+                                } else {
+                                    egui::RichText::new(title.clone()).color(tk.muted)
+                                };
+                                let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                                if label.clicked() {
+                                    select = Some(idx);
+                                }
+                                if theme::icon_button(ui, theme::ph::X, "Close tab").clicked() {
+                                    tab_to_close = Some(idx);
+                                }
+                            });
+                        });
+                        if active {
+                            let r = out.response.rect;
+                            ui.painter().hline(r.x_range(), r.top() + 1.0, egui::Stroke::new(2.0_f32, tk.accent));
+                        }
+                        let resp = out.response.interact(egui::Sense::click());
+                        if resp.clicked() {
+                            select = Some(idx);
+                        }
+                        resp.context_menu(|ui| {
+                            if ui.button("Duplicate view").clicked() {
+                                duplicate_tab = Some(idx);
+                                ui.close_menu();
+                            }
+                            if ui.button("Close tab").clicked() {
+                                tab_to_close = Some(idx);
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                    if theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
+                        new_tab = true;
+                    }
+                });
+            });
 
+        if let Some(idx) = select {
+            if idx != self.active_tab {
+                self.active_tab = idx;
+                self.selected_column = None;
+                self.init_tool_defaults_from_active_tab();
+            }
+        }
+        if new_tab {
+            self.initiate_file_open(false);
+        }
         if let Some(idx) = duplicate_tab {
             if let Some(orig) = self.tabs.get(idx).cloned() {
                 let mut cloned = orig;
                 cloned.title = format!("View of {}", cloned.title);
+                cloned.id = self.next_tab_id();
                 self.tabs.push(cloned);
                 self.active_tab = self.tabs.len() - 1;
             }
         }
-
         if let Some(idx) = tab_to_close {
             if idx < self.tabs.len() {
                 self.tabs.remove(idx);
@@ -278,10 +337,9 @@ impl MicroParquetApp {
                 ] {
                     *sel = tab_index_after_close(*sel, idx, new_len);
                 }
+                self.selected_column = None;
             }
-            return true;
         }
-        false
     }
 }
 

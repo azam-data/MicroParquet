@@ -24,6 +24,7 @@ chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 rust_xlsxwriter = "0.79"
 printpdf = "0.7"
+egui-phosphor = "0.7"
 
 [dependencies.polars]
 version = "0.43"

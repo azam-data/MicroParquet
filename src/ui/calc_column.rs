@@ -28,7 +28,7 @@ impl MicroParquetApp {
     pub(crate) fn render_calc_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🧮 Add Mathematical Calculated Column")
+        theme::modal("\u{E538} Add Mathematical Calculated Column")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -68,7 +68,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Add Calculated Column").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Add Calculated Column").clicked() {
                         step_to_apply = Some((
                             TransformStep::MathFormula {
                                 new_col: self.calc.new_col.clone(),

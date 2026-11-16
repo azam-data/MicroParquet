@@ -31,7 +31,7 @@ impl MicroParquetApp {
     pub(crate) fn render_save_macro_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("💾 Save Portable Macro Recipe (.mpq.json)")
+        theme::modal("\u{E248} Save Portable Macro Recipe (.mpq.json)")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -52,7 +52,7 @@ impl MicroParquetApp {
                 );
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("💾 Save .mpq.json File...").clicked() {
+                    if ui.button("\u{E248} Save .mpq.json File...").clicked() {
                         if let Some(tab) = self.tabs.get(self.active_tab) {
                             let opt_schema = if self.macros.include_schema {
                                 match &tab.source {
@@ -106,7 +106,7 @@ impl MicroParquetApp {
     pub(crate) fn render_python_preview_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🐍 Export GUI Pipeline as Python Polars Jupyter Code")
+        theme::modal("\u{EB2C} Export GUI Pipeline as Python Polars Jupyter Code")
             .collapsible(false)
             .default_width(760.0)
             .show(ctx, |ui| {
@@ -122,14 +122,14 @@ impl MicroParquetApp {
                     });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("📋 Copy Python Code to Clipboard").clicked() {
+                    if ui.button("\u{E198} Copy Python Code to Clipboard").clicked() {
                         ctx.copy_text(self.macros.python_code.clone());
                         self.status_message = format!(
                             "Copied Python Polars code to clipboard!{}",
                             self.macros.python_warning
                         );
                     }
-                    if ui.button("💾 Save as .py Script...").clicked() {
+                    if ui.button("\u{E248} Save as .py Script...").clicked() {
                         if let Some(p) = rfd::FileDialog::new()
                             .set_file_name("micro_parquet_pipeline.py")
                             .save_file()
@@ -237,7 +237,7 @@ impl MicroParquetApp {
             String::new()
         } else {
             format!(
-                " ⚠ WARNING: {} has no Python translation; the script raises NotImplementedError there.",
+                " \u{E4E0} WARNING: {} has no Python translation; the script raises NotImplementedError there.",
                 missing.join(", ")
             )
         };
@@ -247,80 +247,143 @@ impl MicroParquetApp {
         self.active_tool = ActiveToolModal::PythonCodePreview;
     }
 
-    pub(crate) fn render_steps_panel(&mut self, ctx: &egui::Context) {
-        if !self.tabs.is_empty() && self.show_steps_sidebar {
-            egui::SidePanel::right("applied_steps_sidebar")
-                .resizable(true)
-                .default_width(255.0)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading("📋 Applied Steps");
-                        if ui.small_button("✖ Hide").clicked() {
-                            self.show_steps_sidebar = false;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.small_button("💾 Save .mpq").clicked() {
-                            self.active_tool = ActiveToolModal::SaveMacro;
-                        }
-                        if ui.small_button("▶ Load .mpq").clicked() {
-                            self.load_and_apply_macro_interactive(false);
-                        }
-                        if ui.small_button("🐍 To .py").clicked() {
-                            self.prepare_python_preview_for_active_tab();
-                        }
-                    });
-                    ui.separator();
-
-                    let mut step_to_remove: Option<usize> = None;
-                    let mut clear_all = false;
-                    let mut open_schema = false;
-
-                    if let Some(tab) = self.tabs.get(self.active_tab) {
+    /// Right panel (316 px) with two tabs: "Steps . N" and "Column".
+    pub(crate) fn render_right_panel(&mut self, ctx: &egui::Context) {
+        if self.tabs.is_empty() || !self.show_steps_sidebar {
+            return;
+        }
+        let tk = *theme::tokens(self.dark_mode);
+        let n_steps = self.tabs.get(self.active_tab).map(|t| t.steps.len()).unwrap_or(0);
+        egui::SidePanel::right("right_panel")
+            .exact_width(theme::RIGHT_PANEL_W)
+            .resizable(false)
+            .frame(egui::Frame::none().fill(tk.surface))
+            .show(ctx, |ui| {
+                theme::left_border(ui, tk.border);
+                egui::Frame::none()
+                    .fill(tk.grid)
+                    .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
+                    .inner_margin(egui::Margin::same(3.0))
+                    .outer_margin(egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 })
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label("0. [Source Locked & Sanitized]");
-                            if matches!(tab.source, TabSource::SingleFile { .. })
-                                && ui
-                                    .small_button("🧬 Schema & Ingestion")
-                                    .on_hover_text("Column types, Dr/Cr sign and parse failures")
-                                    .clicked()
-                            {
-                                open_schema = true;
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let w = (ui.available_width() - 4.0) / 2.0;
+                            for (tab, label) in [
+                                (RightTab::Steps, format!("Steps \u{b7} {}", n_steps)),
+                                (RightTab::Column, "Column".to_string()),
+                            ] {
+                                let on = self.right_tab == tab;
+                                let text = theme::semibold(label).color(if on { tk.ink } else { tk.muted });
+                                let btn = egui::Button::new(text)
+                                    .fill(if on { tk.surface } else { egui::Color32::TRANSPARENT })
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(egui::Rounding::same(theme::RADIUS_CONTROL));
+                                if ui.add_sized([w, 30.0], btn).clicked() {
+                                    self.right_tab = tab;
+                                }
                             }
                         });
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for (idx, step) in tab.steps.iter().enumerate() {
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("{}. {}", idx + 1, step.short_label()));
-                                    if ui.small_button("✖").clicked() {
-                                        step_to_remove = Some(idx);
-                                    }
-                                });
-                            }
-                        });
-                        if !tab.steps.is_empty() {
-                            ui.separator();
-                            if ui.button("🗑 Reset All Steps").clicked() {
-                                clear_all = true;
-                            }
-                        }
-                    }
+                    });
+                match self.right_tab {
+                    RightTab::Steps => self.render_steps_tab(ui),
+                    RightTab::Column => self.render_column_tab(ui),
+                }
+            });
+    }
 
-                    if open_schema {
-                        self.open_schema_modal_for_active_tab();
-                    }
-                    if let Some(idx) = step_to_remove {
-                        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                            tab.steps.remove(idx);
-                        }
-                        self.refresh_active_tab(false);
-                    } else if clear_all {
-                        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                            tab.steps.clear();
-                        }
-                        self.refresh_active_tab(false);
+    fn render_steps_tab(&mut self, ui: &mut egui::Ui) {
+        let tk = *theme::tokens(self.dark_mode);
+        let mut step_to_remove: Option<usize> = None;
+        let mut clear_all = false;
+        let mut open_schema = false;
+        egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 8.0)).show(ui, |ui| {
+            if let Some(tab) = self.tabs.get(self.active_tab) {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("0. Source (locked and sanitised)").color(tk.muted));
+                    if matches!(tab.source, TabSource::SingleFile { .. })
+                        && ui
+                            .small_button("\u{E434} Schema")
+                            .on_hover_text("Schema & Ingestion: column types, Dr/Cr sign and parse failures")
+                            .clicked()
+                    {
+                        open_schema = true;
                     }
                 });
+                egui::ScrollArea::vertical().max_height((ui.available_height() - 60.0).max(80.0)).show(ui, |ui| {
+                    for (idx, step) in tab.steps.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}. {}", idx + 1, step.short_label()));
+                            if theme::icon_button(ui, theme::ph::X, "Remove this step").clicked() {
+                                step_to_remove = Some(idx);
+                            }
+                        });
+                    }
+                });
+                if !tab.steps.is_empty() && theme::danger_button(ui, format!("{}  Reset all steps", theme::ph::TRASH)).clicked() {
+                    clear_all = true;
+                }
+            }
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                ui.horizontal(|ui| {
+                    let w = (ui.available_width() - 12.0) / 3.0;
+                    if ui.add_sized([w, 32.0], egui::Button::new(theme::semibold("Save macro").size(theme::TEXT_SMALL))).clicked() {
+                        self.active_tool = ActiveToolModal::SaveMacro;
+                    }
+                    if ui.add_sized([w, 32.0], egui::Button::new(theme::semibold("Load").size(theme::TEXT_SMALL))).clicked() {
+                        self.load_and_apply_macro_interactive(false);
+                    }
+                    if ui.add_sized([w, 32.0], egui::Button::new(theme::semibold("To .py").size(theme::TEXT_SMALL))).clicked() {
+                        self.prepare_python_preview_for_active_tab();
+                    }
+                });
+            });
+        });
+        if open_schema {
+            self.open_schema_modal_for_active_tab();
+        }
+        if let Some(idx) = step_to_remove {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                tab.steps.remove(idx);
+            }
+            self.refresh_active_tab(false);
+        } else if clear_all {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                tab.steps.clear();
+            }
+            self.refresh_active_tab(false);
         }
     }
+
+    /// The Column tab: the selected column's name and type. Statistics arrive with T5.
+    fn render_column_tab(&mut self, ui: &mut egui::Ui) {
+        let tk = *theme::tokens(self.dark_mode);
+        egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 14.0)).show(ui, |ui| {
+            let Some(tab) = self.tabs.get(self.active_tab) else {
+                return;
+            };
+            let name = self
+                .selected_column
+                .clone()
+                .filter(|c| tab.cached_slice.column(c).is_ok());
+            match name {
+                Some(name) => {
+                    ui.label(theme::bold(name.clone()).size(theme::TEXT_INSPECTOR_TITLE));
+                    if let Ok(c) = tab.cached_slice.column(&name) {
+                        ui.label(egui::RichText::new(format!("{:?}", c.dtype())).color(tk.muted));
+                    }
+                }
+                None => {
+                    ui.label(egui::RichText::new("No column selected.").color(tk.muted));
+                }
+            }
+        });
+    }
+}
+
+/// The two tabs of the right panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RightTab {
+    Steps,
+    Column,
 }

@@ -41,7 +41,7 @@ impl MicroParquetApp {
     pub(crate) fn render_audit_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🛡 Core Banking Dirty Data & Ghost Account Auditor")
+        theme::modal("\u{E40C} Core Banking Dirty Data & Ghost Account Auditor")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -83,7 +83,7 @@ impl MicroParquetApp {
                 );
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("🚀 Run Audit into New Exception Tab").clicked() {
+                    if theme::primary_button(ui, "\u{E3FE} Run Audit into New Exception Tab").clicked() {
                         step_to_apply = Some((
                             TransformStep::BankingHygieneAudit {
                                 opndat_col: self.audit.opn_col.clone(),

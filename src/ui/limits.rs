@@ -24,7 +24,7 @@ impl MicroParquetApp {
     pub(crate) fn render_limits_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("💳 Loan Limit Utilization, Over-Limit Audit & Undrawn CCF")
+        theme::modal("\u{E1D2} Loan Limit Utilization, Over-Limit Audit & Undrawn CCF")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -51,7 +51,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Calculate Limit Utilization & Undrawn CCF").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Calculate Limit Utilization & Undrawn CCF").clicked() {
                         step_to_apply = Some((
                             TransformStep::LoanLimitUtilization {
                                 limit_col: self.limits.col.clone(),

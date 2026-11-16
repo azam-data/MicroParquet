@@ -30,7 +30,7 @@ impl MicroParquetApp {
     pub(crate) fn render_duration_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("⏱ IRRBB Duration, DV01 & ΔEVE Sensitivity Engine")
+        theme::modal("\u{E492} IRRBB Duration, DV01 & ΔEVE Sensitivity Engine")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.label("Computes Residual Years (T), Macaulay Duration, Modified Duration, DV01, and ΔEVE.");
@@ -97,7 +97,7 @@ impl MicroParquetApp {
                 ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Compute Duration & ΔEVE Columns").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Compute Duration & ΔEVE Columns").clicked() {
                         step_to_apply = Some((
                             TransformStep::DurationAnalysis {
                                 bal_col: self.duration.bal_col.clone(),

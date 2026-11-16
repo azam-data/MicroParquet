@@ -31,7 +31,7 @@ impl MicroParquetApp {
     pub(crate) fn render_conditional_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("➕ Add Conditional Column (IF / ELSE IF / ELSE)")
+        theme::modal("\u{E3D4} Add Conditional Column (IF / ELSE IF / ELSE)")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -68,7 +68,7 @@ impl MicroParquetApp {
                             egui::TextEdit::singleline(&mut rule.output_val)
                                 .desired_width(90.0),
                         );
-                        if ui.small_button("✖").clicked() {
+                        if ui.small_button("\u{E4F6}").clicked() {
                             remove_idx = Some(idx);
                         }
                     });
@@ -78,7 +78,7 @@ impl MicroParquetApp {
                         self.cond.rules.remove(i);
                     }
                 }
-                if ui.button("➕ Add ELSE IF Branch").clicked() {
+                if ui.button("\u{E3D4} Add ELSE IF Branch").clicked() {
                     self.cond.rules.push(CondRule {
                         col_name: avail_cols.first().cloned().unwrap_or_default(),
                         op: FilterOp::Eq,
@@ -92,7 +92,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Add Column").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Add Column").clicked() {
                         step_to_apply = Some((
                             TransformStep::ConditionalColumn {
                                 new_col: self.cond.new_col.clone(),

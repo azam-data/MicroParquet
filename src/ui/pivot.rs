@@ -39,10 +39,7 @@ impl MicroParquetApp {
     pub(crate) fn render_pivot_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new(
-            "📊 Pivot & WAVG Builder (with Per-Metric Format & Decimal Precision)",
-        )
-        .collapsible(false)
+        theme::modal("\u{E150}  Pivot & WAVG Builder (with Per-Metric Format & Decimal Precision)")
         .default_width(720.0)
         .show(ctx, |ui| {
             ui.strong("1. Select Row Grouping Columns:");
@@ -107,7 +104,7 @@ impl MicroParquetApp {
                 ui.add(
                     egui::DragValue::new(&mut self.pivot.new_fmt.decimals).range(0..=6),
                 );
-                if ui.button("➕ Add Metric").clicked() {
+                if ui.button("\u{E3D4} Add Metric").clicked() {
                     self.pivot.aggs.push(AggSpec {
                         target_col: self.pivot.new_target.clone(),
                         func: self.pivot.new_func,
@@ -145,7 +142,7 @@ impl MicroParquetApp {
 
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("🚀 Generate Summary / Pivot View").clicked() {
+                if theme::primary_button(ui, "\u{E3FE} Generate Summary / Pivot View").clicked() {
                     let groups: Vec<String> = self
                         .pivot.group_cols
                         .iter()

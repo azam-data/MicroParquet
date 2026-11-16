@@ -60,7 +60,7 @@ pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;
 pub use crate::ui::schema::PendingCsvModal;
 pub use crate::ui::stack::StackState;
-pub use crate::ui::steps::MacroState;
+pub use crate::ui::steps::{MacroState, RightTab};
 pub use crate::ui::theme;
 pub use crate::ui::ModalOutcome;
 pub use crate::{ActiveToolModal, MicroParquetApp};

@@ -22,7 +22,7 @@ impl MicroParquetApp {
     pub(crate) fn render_normaliser_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("🏢 Counterparty Entity Name Normalizer")
+        theme::modal("\u{E102} Counterparty Entity Name Normalizer")
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.label(
@@ -48,7 +48,7 @@ impl MicroParquetApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Normalize Counterparty Names").clicked() {
+                    if theme::primary_button(ui, "\u{E182} Normalize Counterparty Names").clicked() {
                         step_to_apply = Some((
                             TransformStep::NormalizeEntity {
                                 source_col: self.normaliser.source_col.clone(),

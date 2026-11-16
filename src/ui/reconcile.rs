@@ -30,7 +30,7 @@ impl MicroParquetApp {
     pub(crate) fn render_reconcile_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let step_to_apply: Option<(TransformStep, bool)> = None;
-        egui::Window::new("⚖ Two-Period Variance & Loan CL Migration Reconciler")
+        theme::modal("\u{E750} Two-Period Variance & Loan CL Migration Reconciler")
             .collapsible(false)
             .show(ctx, |ui| {
                 if self.tabs.len() < 2 {
@@ -86,7 +86,7 @@ impl MicroParquetApp {
                         ui.text_edit_singleline(&mut self.recon.cl_col);
                     });
                     ui.separator();
-                    if ui.button("🚀 Reconcile Periods into New Tab").clicked() {
+                    if theme::primary_button(ui, "\u{E3FE} Reconcile Periods into New Tab").clicked() {
                         let (Some(p_tab), Some(c_tab)) = (
                             self.tabs.get(self.recon.prev_tab).cloned(),
                             self.tabs.get(self.recon.curr_tab).cloned(),
