@@ -5,7 +5,7 @@ use crate::banking::{
 };
 use crate::models::{
     AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, FilterOp, IngestionConfig, MathOp,
-    ParquetDialect, PiiMaskMode, SqlJoinKind, TabSource, TabState, TransformStep,
+    ParquetDialect, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState, TransformStep,
 };
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -47,11 +47,18 @@ pub fn auto_detect_smart_schema(path: &Path) -> Result<IngestionConfig> {
         }
 
         let dtype = infer_safe_column_type(&col_name, series);
+        let has_dr_cr = dtype == ColDataType::Float64
+            && series
+                .str()
+                .map(|ca| ca.into_iter().flatten().any(amount_has_dr_cr))
+                .unwrap_or(false);
         columns.push(ColumnSchemaConfig {
             name: col_name,
             dtype,
             pii_mask: PiiMaskMode::None,
             sample_values: samples,
+            sign_convention: SignConvention::Unset,
+            has_dr_cr,
         });
     }
 
@@ -97,11 +104,11 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
             has_leading_zero = true;
         }
 
-        let cleaned_num = trimmed
-            .trim_start_matches('(')
-            .trim_end_matches(')')
-            .replace(',', "");
-        if cleaned_num.parse::<f64>().is_err() {
+        // Any sign convention will do here: only "is this a number" matters.
+        if !matches!(
+            parse_banking_amount(trimmed, SignConvention::CrPositive, true),
+            AmountCell::Value(_)
+        ) {
             all_float = false;
         }
 
@@ -134,6 +141,230 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
     }
 
     ColDataType::Utf8
+}
+
+/// One amount cell after parsing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AmountCell {
+    Value(f64),
+    /// Blank, NA, N/A or NULL: a genuine null, not a parse failure.
+    Blank,
+    /// Not a number under the parsing rules; it becomes null and counts as a parse failure.
+    Invalid,
+    /// Carries Dr/Cr but the column's sign convention is not set.
+    NeedsSignConvention,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DrCr {
+    Dr,
+    Cr,
+}
+
+/// Blank, NA, N/A or NULL (any case) after trimming.
+pub fn is_blank_amount_token(s: &str) -> bool {
+    let s = s.trim();
+    s.is_empty()
+        || s.eq_ignore_ascii_case("na")
+        || s.eq_ignore_ascii_case("n/a")
+        || s.eq_ignore_ascii_case("null")
+}
+
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        s.get(prefix.len()..)
+    } else {
+        None
+    }
+}
+
+fn strip_suffix_ci<'a>(s: &'a str, suffix: &str) -> Option<&'a str> {
+    let cut = s.len().checked_sub(suffix.len())?;
+    let tail = s.get(cut..)?;
+    if tail.eq_ignore_ascii_case(suffix) {
+        s.get(..cut)
+    } else {
+        None
+    }
+}
+
+/// Removes one currency prefix: BDT, TK, Tk. or ৳ (any case, optional space after it).
+fn strip_currency_prefix(s: &str) -> &str {
+    for p in ["৳", "bdt", "tk.", "tk"] {
+        if let Some(rest) = strip_prefix_ci(s, p) {
+            return rest.trim_start();
+        }
+    }
+    s
+}
+
+/// Splits off a Dr/Cr marker (Dr, Dr., CR, any case, optional space) at either end.
+fn split_dr_cr(s: &str) -> (Option<DrCr>, &str) {
+    const MARKERS: [(&str, DrCr); 4] = [
+        ("dr.", DrCr::Dr),
+        ("cr.", DrCr::Cr),
+        ("dr", DrCr::Dr),
+        ("cr", DrCr::Cr),
+    ];
+    for (m, kind) in MARKERS {
+        if let Some(rest) = strip_suffix_ci(s, m) {
+            return (Some(kind), rest.trim());
+        }
+    }
+    for (m, kind) in MARKERS {
+        if let Some(rest) = strip_prefix_ci(s, m) {
+            return (Some(kind), rest.trim());
+        }
+    }
+    (None, s)
+}
+
+/// True when the value carries a Dr/Cr marker (after any currency prefix).
+pub fn amount_has_dr_cr(raw: &str) -> bool {
+    split_dr_cr(strip_currency_prefix(raw.trim())).0.is_some()
+}
+
+/// Cleans an amount down to an unsigned digit string and its sign.
+/// Order: currency prefix, Dr/Cr marker, thousands commas, brackets, trailing minus, lone "-".
+fn clean_amount(
+    raw: &str,
+    sign: SignConvention,
+    accounting_negatives: bool,
+) -> std::result::Result<(String, bool), AmountCell> {
+    let s = raw.trim();
+    if is_blank_amount_token(s) {
+        return Err(AmountCell::Blank);
+    }
+    let s = strip_currency_prefix(s);
+    let (marker, s) = split_dr_cr(s);
+    if marker.is_some() && sign == SignConvention::Unset {
+        return Err(AmountCell::NeedsSignConvention);
+    }
+    let s = strip_currency_prefix(s.trim());
+    if s == "-" {
+        return Ok(("0".to_string(), false));
+    }
+    let s = s.replace(',', "");
+    let mut body = s.trim();
+    let mut negative = false;
+    if accounting_negatives {
+        if let Some(inner) = body.strip_prefix('(').and_then(|b| b.strip_suffix(')')) {
+            body = strip_currency_prefix(inner.trim());
+            negative = true;
+        } else if body.len() > 1 {
+            if let Some(inner) = body.strip_suffix('-') {
+                body = inner.trim();
+                negative = true;
+            }
+        }
+    }
+    if let Some(rest) = body.strip_prefix('-') {
+        if negative {
+            return Err(AmountCell::Invalid);
+        }
+        negative = true;
+        body = rest;
+    } else if let Some(rest) = body.strip_prefix('+') {
+        body = rest;
+    }
+    let digits = body.bytes().filter(|b| b.is_ascii_digit()).count();
+    let dots = body.bytes().filter(|b| *b == b'.').count();
+    if digits == 0 || dots > 1 || digits + dots != body.len() {
+        return Err(AmountCell::Invalid);
+    }
+    match marker {
+        None => Ok((body.to_string(), negative)),
+        // A Dr/Cr marker on a value that already has a minus or brackets is ambiguous.
+        Some(_) if negative => Err(AmountCell::Invalid),
+        Some(m) => {
+            let positive_side = match sign {
+                SignConvention::DrPositive => DrCr::Dr,
+                _ => DrCr::Cr,
+            };
+            Ok((body.to_string(), m != positive_side))
+        }
+    }
+}
+
+/// Parses one amount: currency prefix (BDT, TK, Tk., ৳), thousands commas, brackets and a
+/// trailing minus (when `accounting_negatives`), Dr/Cr per `sign`, "-" = 0, and blank / NA /
+/// N/A / NULL = blank. Anything else is `Invalid`.
+pub fn parse_banking_amount(
+    raw: &str,
+    sign: SignConvention,
+    accounting_negatives: bool,
+) -> AmountCell {
+    match clean_amount(raw, sign, accounting_negatives) {
+        Ok((body, negative)) => match body.parse::<f64>() {
+            Ok(v) if v.is_finite() => AmountCell::Value(if negative { -v } else { v }),
+            _ => AmountCell::Invalid,
+        },
+        Err(cell) => cell,
+    }
+}
+
+/// Whole-number version of `parse_banking_amount` (a decimal point makes it `Invalid`).
+fn parse_banking_int(raw: &str, sign: SignConvention, accounting_negatives: bool) -> Option<i64> {
+    let (body, negative) = clean_amount(raw, sign, accounting_negatives).ok()?;
+    let v: i64 = body.parse().ok()?;
+    Some(if negative { -v } else { v })
+}
+
+fn dr_cr_unset_message(col_name: &str) -> String {
+    format!(
+        "Column '{}' has Dr/Cr amounts. Choose 'Dr is +' or 'Cr is +' for it in Schema & Ingestion.",
+        col_name
+    )
+}
+
+/// Scans every value of each Float64 column whose sign convention is unset (the columns of
+/// `raw_lf` are still text) and fails when one carries Dr/Cr.
+fn check_dr_cr_conventions(raw_lf: &LazyFrame, config: &IngestionConfig) -> Result<()> {
+    let cols: Vec<&str> = config
+        .columns
+        .iter()
+        .filter(|c| c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset)
+        .map(|c| c.name.as_str())
+        .collect();
+    if cols.is_empty() {
+        return Ok(());
+    }
+    let exprs: Vec<Expr> = cols
+        .iter()
+        .map(|c| {
+            col(*c)
+                .map(
+                    |s: Series| {
+                        let ca = s.str()?;
+                        let flags: BooleanChunked = ca
+                            .into_iter()
+                            .map(|v| Some(v.is_some_and(amount_has_dr_cr)))
+                            .collect();
+                        Ok(Some(flags.into_series()))
+                    },
+                    GetOutput::from_type(DataType::Boolean),
+                )
+                .any(true)
+                .alias(*c)
+        })
+        .collect();
+    let flags = raw_lf
+        .clone()
+        .select(exprs)
+        .collect()
+        .context("Failed to scan amount columns for Dr/Cr markers")?;
+    for c in cols {
+        let found = flags
+            .column(c)
+            .ok()
+            .and_then(|s| s.bool().ok().and_then(|b| b.get(0)))
+            .unwrap_or(false);
+        if found {
+            anyhow::bail!(dr_cr_unset_message(c));
+        }
+    }
+    Ok(())
 }
 
 /// Ultra-fast native Rust date parser that handles single-digit or double-digit months/days
@@ -395,6 +626,8 @@ pub fn build_lazy_pipeline(
         .finish()
         .context("Failed to build LazyCsvReader")?;
 
+    check_dr_cr_conventions(&lf, config)?;
+
     let mut exprs: Vec<Expr> = Vec::with_capacity(config.columns.len());
 
     for col_cfg in &config.columns {
@@ -428,20 +661,43 @@ pub fn build_lazy_pipeline(
         e = match col_cfg.dtype {
             ColDataType::Utf8 => e,
             ColDataType::Float64 => {
-                if config.parse_accounting_negatives {
-                    e = e
-                        .str()
-                        .replace_all(lit(","), lit(""), true)
-                        .str()
-                        .replace(lit(r"^\((.*)\)$"), lit("-${1}"), false);
-                }
-                e.cast(DataType::Float64)
+                let sign = col_cfg.sign_convention;
+                let acc = config.parse_accounting_negatives;
+                let name = cname.clone();
+                e.map(
+                    move |s: Series| {
+                        let ca = s.str()?;
+                        let mut out: Vec<Option<f64>> = Vec::with_capacity(ca.len());
+                        for v in ca.into_iter() {
+                            out.push(match v.map(|v| parse_banking_amount(v, sign, acc)) {
+                                Some(AmountCell::Value(x)) => Some(x),
+                                Some(AmountCell::NeedsSignConvention) => {
+                                    return Err(PolarsError::ComputeError(
+                                        dr_cr_unset_message(&name).into(),
+                                    ))
+                                }
+                                _ => None,
+                            });
+                        }
+                        Ok(Some(Float64Chunked::from_iter(out).into_series()))
+                    },
+                    GetOutput::from_type(DataType::Float64),
+                )
             }
             ColDataType::Int64 => {
-                if config.parse_accounting_negatives {
-                    e = e.str().replace_all(lit(","), lit(""), true);
-                }
-                e.cast(DataType::Int64)
+                let sign = col_cfg.sign_convention;
+                let acc = config.parse_accounting_negatives;
+                e.map(
+                    move |s: Series| {
+                        let ca = s.str()?;
+                        let out: Int64Chunked = ca
+                            .into_iter()
+                            .map(|v| v.and_then(|v| parse_banking_int(v, sign, acc)))
+                            .collect();
+                        Ok(Some(out.into_series()))
+                    },
+                    GetOutput::from_type(DataType::Int64),
+                )
             }
             ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
                 let date_mode = col_cfg.dtype;

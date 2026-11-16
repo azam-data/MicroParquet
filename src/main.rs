@@ -20,8 +20,8 @@ use micro_parquet::models::{
     column_name_tokens, default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
-    NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths, SplitExportFormat,
-    SqlJoinKind, TabSource, TabState, TransformStep,
+    NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths, SignConvention,
+    SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };
 use polars::datatypes::AnyValue;
 use polars::prelude::DataFrame;
@@ -3370,11 +3370,24 @@ impl MicroParquetApp {
                                 ui.strong("Column Name");
                                 ui.strong("Target Data Type");
                                 ui.strong("PII Anonymizer");
+                                ui.strong("Dr/Cr Sign");
                                 ui.strong("Sample Values");
                                 ui.end_row();
 
                                 for (i, col_cfg) in modal.config.columns.iter_mut().enumerate() {
-                                    ui.label(&col_cfg.name);
+                                    if col_cfg.has_dr_cr
+                                        && col_cfg.sign_convention == SignConvention::Unset
+                                    {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(220, 120, 0),
+                                            format!("⚠ {} (has Dr/Cr)", col_cfg.name),
+                                        )
+                                        .on_hover_text(
+                                            "Values carry Dr/Cr. Choose 'Dr is +' or 'Cr is +' or the load stops.",
+                                        );
+                                    } else {
+                                        ui.label(&col_cfg.name);
+                                    }
                                     egui::ComboBox::from_id_salt(format!("dtype_{}", i))
                                         .selected_text(col_cfg.dtype.label())
                                         .show_ui(ui, |ui| {
@@ -3401,6 +3414,21 @@ impl MicroParquetApp {
                                                 );
                                             }
                                         });
+                                    if col_cfg.dtype == ColDataType::Float64 {
+                                        egui::ComboBox::from_id_salt(format!("sign_{}", i))
+                                            .selected_text(col_cfg.sign_convention.label())
+                                            .show_ui(ui, |ui| {
+                                                for sc in SignConvention::all() {
+                                                    ui.selectable_value(
+                                                        &mut col_cfg.sign_convention,
+                                                        *sc,
+                                                        sc.label(),
+                                                    );
+                                                }
+                                            });
+                                    } else {
+                                        ui.label("—");
+                                    }
                                     ui.label(
                                         col_cfg
                                             .sample_values

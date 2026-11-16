@@ -50,8 +50,9 @@ impl PortablePaths {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ColDataType {
+    #[default]
     Utf8,
     Float64,
     Int64,
@@ -84,8 +85,9 @@ impl ColDataType {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PiiMaskMode {
+    #[default]
     None,
     ClientNameHash,
     AccountNumber,
@@ -101,12 +103,46 @@ impl PiiMaskMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Which side of a Dr/Cr marked amount is positive. `Unset` refuses to load a column whose
+/// values carry Dr/Cr, so the sign is never guessed.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SignConvention {
+    #[default]
+    Unset,
+    DrPositive,
+    CrPositive,
+}
+
+impl SignConvention {
+    pub fn all() -> &'static [SignConvention] {
+        &[
+            SignConvention::Unset,
+            SignConvention::DrPositive,
+            SignConvention::CrPositive,
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SignConvention::Unset => "Dr/Cr: not set",
+            SignConvention::DrPositive => "Dr is +",
+            SignConvention::CrPositive => "Cr is +",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ColumnSchemaConfig {
     pub name: String,
     pub dtype: ColDataType,
     pub pii_mask: PiiMaskMode,
     pub sample_values: Vec<String>,
+    /// Sign of Dr/Cr marked amounts in a Float64 column.
+    #[serde(default)]
+    pub sign_convention: SignConvention,
+    /// Auto-detect saw Dr/Cr markers in this column's sample (the schema modal highlights it).
+    #[serde(default)]
+    pub has_dr_cr: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

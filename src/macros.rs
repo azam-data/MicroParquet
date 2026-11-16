@@ -39,6 +39,78 @@ pub fn python_untranslated_steps(steps: &[TransformStep]) -> Vec<String> {
         .collect()
 }
 
+/// Python mirror of `engine::parse_banking_amount` (P1 rules), emitted when a column is typed
+/// Float64 or Int64. Keep the two in step.
+const PY_AMOUNT_HELPER: &str = r#"import re as _re
+_MP_CURRENCY = ("\u09f3", "bdt", "tk.", "tk")
+_MP_MARKERS = (("dr.", "Dr"), ("cr.", "Cr"), ("dr", "Dr"), ("cr", "Cr"))
+
+
+def _mp_strip_currency(s):
+    low = s.lower()
+    for p in _MP_CURRENCY:
+        if low.startswith(p):
+            return s[len(p):].lstrip()
+    return s
+
+
+def _mp_amount(v, col, sign, acc, as_int=False):
+    """Same rules as MicroParquet: currency prefix, Dr/Cr per sign convention, commas,
+    (brackets) and trailing minus, "-" = 0, blank/NA/N/A/NULL = null. Anything else -> null."""
+    if v is None:
+        return None
+    s = v.strip()
+    if s == "" or s.lower() in ("na", "n/a", "null"):
+        return None
+    s = _mp_strip_currency(s)
+    marker = None
+    low = s.lower()
+    for m, kind in _MP_MARKERS:
+        if low.endswith(m):
+            marker, s = kind, s[: len(s) - len(m)].strip()
+            break
+    else:
+        for m, kind in _MP_MARKERS:
+            if low.startswith(m):
+                marker, s = kind, s[len(m):].strip()
+                break
+    if marker is not None and sign == "Unset":
+        raise ValueError(
+            f"Column '{col}' has Dr/Cr amounts. Choose 'Dr is +' or 'Cr is +' for it in Schema & Ingestion."
+        )
+    s = _mp_strip_currency(s.strip())
+    if s == "-":
+        return 0 if as_int else 0.0
+    body = s.replace(",", "").strip()
+    neg = False
+    if acc:
+        if body.startswith("(") and body.endswith(")"):
+            body, neg = _mp_strip_currency(body[1:-1].strip()), True
+        elif len(body) > 1 and body.endswith("-"):
+            body, neg = body[:-1].strip(), True
+    if body.startswith("-"):
+        if neg:
+            return None
+        neg, body = True, body[1:]
+    elif body.startswith("+"):
+        body = body[1:]
+    if not _re.fullmatch(r"[0-9]*\.?[0-9]*", body) or not _re.search(r"[0-9]", body):
+        return None
+    if marker is not None:
+        if neg:
+            return None
+        neg = marker != ("Dr" if sign == "DrPositive" else "Cr")
+    if as_int:
+        if "." in body:
+            return None
+        x = int(body)
+    else:
+        x = float(body)
+    return -x if neg else x
+
+
+"#;
+
 /// Escapes text for a double-quoted Python string literal.
 fn py_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -86,32 +158,35 @@ pub fn generate_python_polars_code(
         // be converted becomes null (as in the app), and the script prints how many per column.
         let mut casts: Vec<String> = Vec::new();
         let mut cast_cols: Vec<String> = Vec::new();
+        if ingestion
+            .columns
+            .iter()
+            .any(|c| matches!(c.dtype, ColDataType::Float64 | ColDataType::Int64))
+        {
+            py.push_str("# Amount parsing rules (same as MicroParquet)\n");
+            py.push_str(PY_AMOUNT_HELPER);
+        }
+        let acc = if ingestion.parse_accounting_negatives { "True" } else { "False" };
         for c in &ingestion.columns {
             let name = py_escape(&c.name);
-            let cleaned = if ingestion.parse_accounting_negatives {
-                format!(
-                    "pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${{1}}\")",
-                    name
-                )
-            } else {
-                format!("pl.col(\"{}\")", name)
-            };
+            let sign = format!("{:?}", c.sign_convention);
             if c.dtype != ColDataType::Utf8 {
                 cast_cols.push(format!("\"{}\"", name));
             }
             match c.dtype {
                 ColDataType::Utf8 => {}
-                ColDataType::Float64 => {
-                    casts.push(format!("{}.cast(pl.Float64, strict=False)", cleaned))
-                }
-                ColDataType::Int64 => {
-                    let int_cleaned = if ingestion.parse_accounting_negatives {
-                        format!("pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True)", name)
-                    } else {
-                        format!("pl.col(\"{}\")", name)
-                    };
-                    casts.push(format!("{}.cast(pl.Int64, strict=False)", int_cleaned))
-                }
+                ColDataType::Float64 => casts.push(format!(
+                    "pl.col(\"{n}\").map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}), return_dtype=pl.Float64)",
+                    n = name,
+                    s = sign,
+                    a = acc
+                )),
+                ColDataType::Int64 => casts.push(format!(
+                    "pl.col(\"{n}\").map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}, as_int=True), return_dtype=pl.Int64)",
+                    n = name,
+                    s = sign,
+                    a = acc
+                )),
                 ColDataType::DateDMY => {
                     casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\", strict=False)", name))
                 }
@@ -124,7 +199,7 @@ pub fn generate_python_polars_code(
             }
         }
         if !casts.is_empty() {
-            py.push_str("# 2b. Apply Ingestion Column Types (numbers cleaned of commas and (brackets))\n");
+            py.push_str("# 2b. Apply Ingestion Column Types (amounts parsed by _mp_amount)\n");
             py.push_str("# Casts are not strict: a value that cannot be converted becomes null, as in MicroParquet.\n");
             py.push_str(&format!("_cast_cols = [{}]\n", cast_cols.join(", ")));
             py.push_str("_nulls_before = lf.select([pl.col(c).is_null().sum() for c in _cast_cols]).collect().row(0)\n");

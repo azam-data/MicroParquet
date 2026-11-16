@@ -126,6 +126,7 @@ fn t03_date_parsing_variants() {
             dtype: ColDataType::DateDMY,
             pii_mask: PiiMaskMode::None,
             sample_values: vec![],
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -145,9 +146,10 @@ fn t03_date_parsing_variants() {
 #[test]
 fn t04a_numeric_parsing_phase1() {
     // Phase 1 behaviour: comma thousands and bracket negatives parse; row count is kept.
+    // (Dr/Cr rows are covered by t04: without a sign convention they now stop the load.)
     let p = write_csv(
-        "nums.csv",
-        "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",
+        "nums_p1.csv",
+        "Balance\n\"1,234.50\"\n(500.00)\n1234.50\n-250.00\n-\n 99.5 \nBDT 10\n",
     );
     let cfg = IngestionConfig {
         columns: vec![ColumnSchemaConfig {
@@ -155,6 +157,7 @@ fn t04a_numeric_parsing_phase1() {
             dtype: ColDataType::Float64,
             pii_mask: PiiMaskMode::None,
             sample_values: vec![],
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -169,26 +172,23 @@ fn t04a_numeric_parsing_phase1() {
 }
 
 #[test]
-#[ignore = "Phase 2: Dr/Cr suffixes, currency prefix and dash-as-zero parsing; raw-vs-parsed control sums"]
 fn t04_numeric_parsing_silent_nulls() {
-    // Target: no value silently becomes null. Cr = +, Dr = −, "-" = 0,
+    // No value silently becomes null: Dr/Cr per the column's sign convention, "-" = 0,
     // "BDT 10" = 10. Parsed control sum = 1,828.50 with 0 nulls.
-    // Phase 2: set 'Cr is +' when the Dr/Cr setting exists; add a second case where a blank
-    // setting with Dr/Cr suffixes → error.
     let p = write_csv(
         "nums.csv",
         "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",
     );
-    let cfg = IngestionConfig {
+    let cfg_with = |sign| IngestionConfig {
         columns: vec![ColumnSchemaConfig {
             name: "Balance".into(),
             dtype: ColDataType::Float64,
-            pii_mask: PiiMaskMode::None,
-            sample_values: vec![],
+            sign_convention: sign,
+            ..Default::default()
         }],
         ..Default::default()
     };
-    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let lf = build_lazy_pipeline(&p, false, &cfg_with(SignConvention::CrPositive), &tmpdir()).unwrap();
     let vals = f64_col(&lf.clone().collect().unwrap(), "Balance");
     assert_eq!(
         vals,
@@ -197,6 +197,53 @@ fn t04_numeric_parsing_silent_nulls() {
     let (rows, sum) = compute_control_totals(lf, Some("Balance")).unwrap();
     assert_eq!(rows, 7);
     assert_close(sum.unwrap(), 1828.5, "parsed control sum");
+
+    // Dr is +: the Dr/Cr rows flip, everything else is unchanged.
+    let lf = build_lazy_pipeline(&p, false, &cfg_with(SignConvention::DrPositive), &tmpdir()).unwrap();
+    assert_eq!(
+        f64_col(&lf.collect().unwrap(), "Balance"),
+        vec![Some(1234.5), Some(-500.0), Some(-1234.5), Some(250.0), Some(0.0), Some(99.5), Some(10.0)]
+    );
+
+    // Sign convention not set: loading stops and names the column.
+    let err = build_lazy_pipeline(&p, false, &cfg_with(SignConvention::Unset), &tmpdir())
+        .err()
+        .expect("Dr/Cr amounts with no sign convention must not load");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("'Balance'") && msg.contains("Dr/Cr"), "{msg}");
+
+    // Auto-detect marks the column so the schema modal can highlight it.
+    let auto = auto_detect_smart_schema(&p).unwrap();
+    let bal = auto.columns.iter().find(|c| c.name == "Balance").unwrap();
+    assert_eq!(bal.dtype, ColDataType::Float64);
+    assert!(bal.has_dr_cr);
+    assert_eq!(bal.sign_convention, SignConvention::Unset);
+}
+
+#[test]
+fn t04b_amount_parsing_rules() {
+    use SignConvention::*;
+    let v = |raw: &str| parse_banking_amount(raw, CrPositive, true);
+    assert_eq!(v("500-"), AmountCell::Value(-500.0));
+    assert_eq!(v("Tk. 1,000"), AmountCell::Value(1000.0));
+    assert_eq!(v("tk1,000"), AmountCell::Value(1000.0));
+    assert_eq!(v("৳ 75"), AmountCell::Value(75.0));
+    assert_eq!(v("BDT(1,000.50)"), AmountCell::Value(-1000.5));
+    assert_eq!(v("1,000 dr."), AmountCell::Value(-1000.0));
+    assert_eq!(v("CR 20"), AmountCell::Value(20.0));
+    assert_eq!(v("Tk 5 Dr"), AmountCell::Value(-5.0));
+    assert_eq!(v("-"), AmountCell::Value(0.0));
+    for blank in ["", "  ", "NA", "n/a", "NULL"] {
+        assert_eq!(v(blank), AmountCell::Blank, "{blank:?}");
+    }
+    for bad in ["abc", "1.2.3", "1e5", "inf", "NaN", "(500) Dr", "--5", "Cr"] {
+        assert_eq!(v(bad), AmountCell::Invalid, "{bad:?}");
+    }
+    assert_eq!(parse_banking_amount("5 Dr", Unset, true), AmountCell::NeedsSignConvention);
+    // Accounting negatives switched off: brackets and a trailing minus are not numbers.
+    assert_eq!(parse_banking_amount("(5)", CrPositive, false), AmountCell::Invalid);
+    assert_eq!(parse_banking_amount("5-", CrPositive, false), AmountCell::Invalid);
+    assert_eq!(parse_banking_amount("1,234", CrPositive, false), AmountCell::Value(1234.0));
 }
 
 #[test]
@@ -722,6 +769,7 @@ fn t13_pii_hash_collisions() {
             dtype: ColDataType::Utf8,
             pii_mask: PiiMaskMode::ClientNameHash,
             sample_values: vec![],
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -818,6 +866,7 @@ fn t15_python_codegen_drops_banking_steps() {
         dtype,
         pii_mask,
         sample_values: vec![],
+        ..Default::default()
     };
     let cfg = IngestionConfig {
         columns: vec![
@@ -839,15 +888,16 @@ fn t15_python_codegen_drops_banking_steps() {
     assert!(py.contains("raise NotImplementedError(\"Step 1 '+BB CL Provision & BFP' has no Python translation"), "{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 2 '+ΔNII Shock (+100 bps)' has no Python translation"), "{py}");
     assert!(py.contains("# WARNING: PII masking not reproduced"), "{py}");
+    // Amounts go through the same parsing rules as the app (P1), with the column's sign setting.
+    assert!(py.contains("def _mp_amount(v, col, sign, acc, as_int=False):"), "{py}");
     assert!(
-        py.contains("pl.col(\"Balance\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${1}\").cast(pl.Float64"),
-        "comma and bracket cleaning must come before the Float64 cast:\n{py}"
+        py.contains("pl.col(\"Balance\").map_elements(lambda v: _mp_amount(v, \"Balance\", \"Unset\", True), return_dtype=pl.Float64)"),
+        "Float64 columns must use the amount parser:\n{py}"
     );
     assert!(py.contains("pl.col(\"Matdat\").str.to_date(\"%d/%m/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Opndat\").str.to_date(\"%m/%d/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Valdat\").str.to_date(\"%Y-%m-%d\""), "{py}");
     // Casts are not strict (bad values become null, as in the app) and the null counts are printed
-    assert!(py.contains("\").cast(pl.Float64, strict=False)"), "{py}");
     assert!(py.contains("str.to_date(\"%d/%m/%Y\", strict=False)"), "{py}");
     assert!(!py.contains("strict=True"), "{py}");
     assert!(py.contains("_cast_cols = [\"Balance\", \"Matdat\", \"Opndat\", \"Valdat\"]"), "{py}");
@@ -987,6 +1037,28 @@ fn t20_v111_macro_json_still_loads() {
         }
         other => panic!("unexpected step {other:?}"),
     }
+}
+
+#[test]
+fn t20b_phase1_schema_json_still_loads() {
+    // A .schema.json saved by a Phase 1 build (no Phase 2 fields)
+    let json = r#"{
+        "columns": [
+            {"name": "Actnum", "dtype": "Utf8", "pii_mask": "AccountNumber", "sample_values": ["0012345"]},
+            {"name": "Balance", "dtype": "Float64", "pii_mask": "None", "sample_values": ["1,234.50"]},
+            {"name": "Matdat", "dtype": "DateDMY", "pii_mask": "None", "sample_values": ["05/11/2026"]}
+        ],
+        "sanitize_linebreaks": true,
+        "parse_accounting_negatives": true,
+        "heal_broken_csv_lines": false,
+        "pii_salt": "BANK_ASIA_ALM_2026"
+    }"#;
+    let cfg: IngestionConfig = serde_json::from_str(json).expect("Phase 1 schema JSON must load");
+    assert_eq!(cfg.columns.len(), 3);
+    let bal = &cfg.columns[1];
+    assert_eq!(bal.dtype, ColDataType::Float64);
+    assert_eq!(bal.sign_convention, SignConvention::Unset);
+    assert!(!bal.has_dr_cr);
 }
 
 #[test]
