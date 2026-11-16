@@ -1173,7 +1173,8 @@ impl eframe::App for MicroParquetApp {
             ui.horizontal_wrapped(|ui| {
                 for idx in 0..self.tabs.len() {
                     let is_selected = idx == self.active_tab;
-                    let tab_label = format!("{} ({})", self.tabs[idx].title, idx + 1);
+                    let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
+                    let tab_label = format!("{} ({})", title, idx + 1);
                     if ui.selectable_label(is_selected, tab_label).clicked() {
                         self.active_tab = idx;
                         self.init_tool_defaults_from_active_tab();
@@ -1198,9 +1199,28 @@ impl eframe::App for MicroParquetApp {
             }
 
             if let Some(idx) = tab_to_close {
-                self.tabs.remove(idx);
+                if idx < self.tabs.len() {
+                    self.tabs.remove(idx);
+                }
                 if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
                     self.active_tab = self.tabs.len() - 1;
+                }
+                // Keep join/reconcile selections pointing at the same tab, or reset them to 0
+                let new_len = self.tabs.len();
+                for sel in [
+                    &mut self.join_left_tab,
+                    &mut self.join_right_tab,
+                    &mut self.rec_prev_tab,
+                    &mut self.rec_curr_tab,
+                ] {
+                    if *sel > idx {
+                        *sel -= 1;
+                    } else if *sel == idx {
+                        *sel = 0;
+                    }
+                    if *sel >= new_len {
+                        *sel = 0;
+                    }
                 }
                 return;
             }
@@ -2624,13 +2644,16 @@ impl MicroParquetApp {
                         if self.tabs.len() < 2 {
                             ui.label("Please open at least 2 tabs to perform a join.");
                         } else {
-                            let left_title = self.tabs[self.join_left_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
-                            let right_title = self.tabs
-                                [self.join_right_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
+                            let left_title = self
+                                .tabs
+                                .get(self.join_left_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
+                            let right_title = self
+                                .tabs
+                                .get(self.join_right_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
                             let tab_titles: Vec<(usize, String)> = self
                                 .tabs
                                 .iter()
@@ -2682,8 +2705,14 @@ impl MicroParquetApp {
                             });
                             ui.separator();
                             if ui.button("🚀 Execute Join into New Tab").clicked() {
-                                let l_tab = self.tabs[self.join_left_tab].clone();
-                                let r_tab = self.tabs[self.join_right_tab].clone();
+                                let (Some(l_tab), Some(r_tab)) = (
+                                    self.tabs.get(self.join_left_tab).cloned(),
+                                    self.tabs.get(self.join_right_tab).cloned(),
+                                ) else {
+                                    self.status_message =
+                                        "Join: the selected left or right tab no longer exists. Pick both tabs again.".to_string();
+                                    return;
+                                };
                                 let keys: Vec<String> = self
                                     .join_keys_input
                                     .split(',')
@@ -2722,12 +2751,16 @@ impl MicroParquetApp {
                                 "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
                             );
                         } else {
-                            let prev_title = self.tabs[self.rec_prev_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
-                            let curr_title = self.tabs[self.rec_curr_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
+                            let prev_title = self
+                                .tabs
+                                .get(self.rec_prev_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
+                            let curr_title = self
+                                .tabs
+                                .get(self.rec_curr_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
                             let tab_titles: Vec<(usize, String)> = self
                                 .tabs
                                 .iter()
@@ -2767,8 +2800,14 @@ impl MicroParquetApp {
                             });
                             ui.separator();
                             if ui.button("🚀 Reconcile Periods into New Tab").clicked() {
-                                let p_tab = self.tabs[self.rec_prev_tab].clone();
-                                let c_tab = self.tabs[self.rec_curr_tab].clone();
+                                let (Some(p_tab), Some(c_tab)) = (
+                                    self.tabs.get(self.rec_prev_tab).cloned(),
+                                    self.tabs.get(self.rec_curr_tab).cloned(),
+                                ) else {
+                                    self.status_message =
+                                        "Reconcile: the selected previous or current tab no longer exists. Pick both tabs again.".to_string();
+                                    return;
+                                };
                                 let r_col = if self.rec_rate_col.trim().is_empty() {
                                     None
                                 } else {
