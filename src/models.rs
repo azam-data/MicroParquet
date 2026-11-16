@@ -259,31 +259,34 @@ pub fn format_metric_value(
 }
 
 fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
-    let lower = col_name.to_lowercase();
-    // Rate / Percentage columns should NEVER be divided by 10,000,000 (Crore)
-    if lower.contains("rate")
-        || lower.contains("pct")
-        || lower.contains("percent")
-        || lower.contains("yield")
-        || lower.contains("spread")
-        || lower.contains("util")
-        || lower.contains("ratio")
-        || lower.contains("wavg")
-    {
-        return MetricFormatType::PercentAsIs;
+    // Whole-token matches only: "Utility_Bill_Amount" is money, not utilisation
+    const BPS_TOKENS: &[&str] = &["bps", "bp"];
+    const PLAIN_NUMBER_TOKENS: &[&str] = &[
+        "duration", "years", "yrs", "tenor", "days", "count", "cnt", "num", "nos", "freq",
+    ];
+    const PERCENT_TOKENS: &[&str] = &[
+        "rate", "pct", "percent", "yield", "spread", "util", "utilization", "utilisation", "ratio",
+        "wavg",
+    ];
+    let tokens = column_name_tokens(col_name);
+    let has_any = |set: &[&str]| tokens.iter().any(|t| set.contains(&t.as_str()));
+
+    // 1. Basis points are plain numbers, even when the name also says "rate"
+    if has_any(BPS_TOKENS) {
+        return MetricFormatType::StandardCommas;
     }
-    // Duration / Tenor / Days / Count columns should display as clean decimals/numbers
-    if lower.contains("duration")
-        || lower.contains("years")
-        || lower.contains("tenor")
-        || lower.contains("days")
-        || lower.contains("count")
-        || lower.contains("freq")
-        || lower.contains("bps")
+    // 2. Duration / tenor / day / count columns display as plain numbers
+    if has_any(PLAIN_NUMBER_TOKENS)
+        || col_name.to_lowercase().starts_with("no_of")
+        || tokens.starts_with(&["no".to_string(), "of".to_string()])
     {
         return MetricFormatType::StandardCommas;
     }
-    // Everything else (Balance, Amount, BFP, Provision, NII, EVE, DV01, Limit) uses global monetary format
+    // 3. Rates are stored in percent and must never be divided into Crore
+    if has_any(PERCENT_TOKENS) {
+        return MetricFormatType::PercentAsIs;
+    }
+    // 4. Everything else (Balance, Amount, BFP, Provision, NII, EVE, DV01, Limit) is money
     MetricFormatType::Auto
 }
 

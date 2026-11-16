@@ -258,7 +258,6 @@ fn t05b_other_date_inputs_reject_strings() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T5"]
 fn t06_auto_format_classification() {
     let cases = [
         ("Modified_Duration", "25,000,000.00"),
