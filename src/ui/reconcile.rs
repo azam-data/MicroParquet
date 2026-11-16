@@ -105,9 +105,8 @@ impl MicroParquetApp {
                         } else {
                             Some(self.recon.cl_col.trim().to_string())
                         };
-                        let tabs_before = self.tabs.len();
                         let r_col_used = r_col.is_some();
-                        self.create_tab_from_source(
+                        self.create_tab_from_source_with(
                             format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
                             TabSource::PeriodReconcile {
                                 prev_source: Box::new(p_tab.source),
@@ -121,23 +120,8 @@ impl MicroParquetApp {
                             },
                             Vec::new(),
                             HashMap::new(),
+                            Some(r_col_used),
                         );
-                        if self.tabs.len() > tabs_before {
-                            let note = self.tabs.last().map(|t| {
-                                compile_tab_lazy(&t.source, &t.steps, &self.paths.temp_dir)
-                                    .and_then(|lf| {
-                                        micro_parquet::banking::reconcile_status_note(lf, r_col_used)
-                                    })
-                            });
-                            match note {
-                                Some(Ok(n)) => self.status_message.push_str(&n),
-                                Some(Err(e)) => self.status_message.push_str(&format!(
-                                    " ⚠ Could not summarise the reconcile (keys with several rows, mixed-sign balances): {:#}",
-                                    e
-                                )),
-                                None => {}
-                            }
-                        }
                         close_modal = true;
                     }
                 }

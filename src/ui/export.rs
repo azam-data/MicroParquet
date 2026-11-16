@@ -150,19 +150,19 @@ impl MicroParquetApp {
             self.export.guard = Some(kind);
             return;
         }
-        let written = match kind {
-            GuardedExport::Parquet => self.export_active_tab_parquet(),
-            GuardedExport::Csv => self.export_active_tab_csv(),
-            GuardedExport::MultiXlsx => self.export_multi_tab_xlsx(),
-            GuardedExport::MultiPdf => self.export_multi_tab_pdf(),
-            GuardedExport::Split => self.export_split_by_column(),
-        };
-        if let (true, Some(out)) = (forced, written) {
-            self.write_failure_sidecar(&out, &tabs);
+        // "Export anyway": the parse failures are listed next to the file by the export job.
+        let sidecar = if forced { Some(self.failure_sidecar_rows(&tabs)) } else { None };
+        match kind {
+            GuardedExport::Parquet => self.export_active_tab_parquet(sidecar),
+            GuardedExport::Csv => self.export_active_tab_csv(sidecar),
+            GuardedExport::MultiXlsx => self.export_multi_tab_xlsx(sidecar),
+            GuardedExport::MultiPdf => self.export_multi_tab_pdf(sidecar),
+            GuardedExport::Split => self.export_split_by_column(sidecar),
         }
     }
 
-    pub(crate) fn write_failure_sidecar(&mut self, output: &Path, tabs: &[usize]) {
+    /// The parse failures of the exported tabs (a "tab / column" prefix when several tabs).
+    pub(crate) fn failure_sidecar_rows(&self, tabs: &[usize]) -> Vec<ParseFailure> {
         let with_failures: Vec<&TabState> = tabs
             .iter()
             .filter_map(|i| self.tabs.get(*i))
@@ -179,12 +179,7 @@ impl MicroParquetApp {
                 rows.push(f);
             }
         }
-        match write_parse_failures_csv(output, &rows) {
-            Ok(p) => self
-                .status_message
-                .push_str(&format!(" Parse failures listed in {:?}.", p)),
-            Err(e) => self.status_message.push_str(&format!(" ⚠ {:#}", e)),
-        }
+        rows
     }
 
     pub(crate) fn render_export_guard(&mut self, ctx: &egui::Context) {
@@ -245,147 +240,127 @@ impl MicroParquetApp {
         }
     }
 
-    pub(crate) fn export_active_tab_parquet(&mut self) -> Option<PathBuf> {
-        let tab = self.tabs.get(self.active_tab)?;
-        let out_path = rfd::FileDialog::new()
+    fn export_tab_of(t: &TabState) -> ExportTab {
+        ExportTab {
+            title: t.title.clone(),
+            source: t.source.clone(),
+            steps: t.steps.clone(),
+            col_formats: t.col_formats.clone(),
+        }
+    }
+
+    fn submit_export(
+        &mut self,
+        label: String,
+        work: impl FnOnce(&micro_parquet::jobs::JobCtx) -> anyhow::Result<micro_parquet::tab_jobs::ExportOutcome>
+            + Send
+            + 'static,
+    ) {
+        self.jobs.submit(JobKey::unique(JobKind::Export), label, true, move |ctx| {
+            work(ctx).map(JobOutput::Exported)
+        });
+        self.status_message = "Export started…".to_string();
+    }
+
+    pub(crate) fn export_active_tab_parquet(&mut self, sidecar: Option<Vec<ParseFailure>>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let Some(out_path) = rfd::FileDialog::new()
             .set_file_name(format!("{}.parquet", tab.title))
-            .save_file()?;
-
-        match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
-            .and_then(|lf| export_to_parquet_stream(lf, &out_path, self.parquet_dialect))
-        {
-            Ok(_) => {
-                self.status_message = format!("✅ Exported view to {:?}", out_path);
-                Some(out_path)
-            }
-            Err(e) => {
-                self.status_message = format!("❌ Parquet export failed: {:#}", e);
-                None
-            }
-        }
+            .save_file()
+        else {
+            return;
+        };
+        let (source, steps) = (tab.source.clone(), tab.steps.clone());
+        let (temp, dialect) = (self.paths.temp_dir.clone(), self.parquet_dialect);
+        let label = format!("Parquet export {}", file_label(&out_path));
+        self.submit_export(label, move |ctx| {
+            export_tab_parquet(&source, &steps, &temp, &out_path, dialect, sidecar.as_deref(), ctx)
+        });
     }
 
-    pub(crate) fn export_active_tab_csv(&mut self) -> Option<PathBuf> {
-        let tab = self.tabs.get(self.active_tab)?;
-        let out_path = rfd::FileDialog::new()
+    pub(crate) fn export_active_tab_csv(&mut self, sidecar: Option<Vec<ParseFailure>>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let Some(out_path) = rfd::FileDialog::new()
             .set_file_name(format!("{}.csv", tab.title))
-            .save_file()?;
-
-        match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
-            .and_then(|lf| export_to_csv_stream(lf, &out_path, self.export_csv_mdy))
-        {
-            Ok(_) => {
-                self.status_message = format!("✅ Exported view to {:?}", out_path);
-                Some(out_path)
-            }
-            Err(e) => {
-                self.status_message = format!("❌ CSV export failed: {:#}", e);
-                None
-            }
-        }
+            .save_file()
+        else {
+            return;
+        };
+        let (source, steps) = (tab.source.clone(), tab.steps.clone());
+        let (temp, mdy) = (self.paths.temp_dir.clone(), self.export_csv_mdy);
+        let label = format!("CSV export {}", file_label(&out_path));
+        self.submit_export(label, move |ctx| {
+            export_tab_csv(&source, &steps, &temp, &out_path, mdy, sidecar.as_deref(), ctx)
+        });
     }
 
-    pub(crate) fn export_multi_tab_xlsx(&mut self) -> Option<PathBuf> {
-        let out_path = rfd::FileDialog::new()
-            .set_file_name("Consolidated_ALCO_Views.xlsx")
-            .save_file()?;
-        let selected: Vec<micro_parquet::exporters::TabToExport> = self
-            .tabs
+    fn ticked_export_tabs(&self) -> Vec<ExportTab> {
+        self.tabs
             .iter()
             .enumerate()
             .filter(|(i, _)| self.export.multi_checks.get(*i).copied().unwrap_or(false))
-            .map(|(_, t)| (t.title.clone(), &t.source, t.steps.as_slice()))
-            .collect();
-        match export_selected_tabs_to_xlsx(&selected, &out_path, &self.paths.temp_dir) {
-            Ok(rep) => {
-                self.status_message = format!(
-                    "Exported multi-tab Excel workbook to {:?}: {}",
-                    out_path,
-                    rep.summary()
-                );
-                Some(out_path)
-            }
-            Err(e) => {
-                self.status_message = format!("Excel export error: {:#}", e);
-                None
-            }
-        }
+            .map(|(_, t)| Self::export_tab_of(t))
+            .collect()
     }
 
-    pub(crate) fn export_multi_tab_pdf(&mut self) -> Option<PathBuf> {
-        let out_path = rfd::FileDialog::new()
-            .set_file_name("Consolidated_ALCO_Report.pdf")
-            .save_file()?;
-        let mut collected_tabs = Vec::new();
-        let mut failed = Vec::new();
-        for (i, tab) in self.tabs.iter().enumerate() {
-            if self.export.multi_checks.get(i).copied().unwrap_or(false) {
-                // One row past the limit, so the export can say the tab was cut.
-                match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir).and_then(
-                    |lf| Ok(lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?),
-                ) {
-                    Ok(df) => collected_tabs.push((tab.title.clone(), df, tab.col_formats.clone())),
-                    Err(e) => failed.push(format!("'{}' ({:#})", tab.title, e)),
-                }
-            }
-        }
-        match export_tabs_to_pdf(
-            collected_tabs,
-            &out_path,
-            self.num_format,
-            self.global_decimals,
-        ) {
-            Ok(rep) => {
-                let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
-                let s = rep.summary();
-                if !s.is_empty() {
-                    msg.push_str(&format!(" ⚠ {}", s));
-                }
-                if !failed.is_empty() {
-                    msg.push_str(&format!(" ⚠ Not exported (failed): {}", failed.join("; ")));
-                }
-                self.status_message = msg;
-                Some(out_path)
-            }
-            Err(e) => {
-                self.status_message = format!("PDF export error: {:#}", e);
-                None
-            }
-        }
-    }
-
-    /// Returns `<folder>/split_export` as the base name for the parse-failure list.
-    pub(crate) fn export_split_by_column(&mut self) -> Option<PathBuf> {
-        let tab = self.tabs.get(self.active_tab)?;
-        let out_dir = rfd::FileDialog::new().pick_folder()?;
-        let control_col = tab.control_col.clone();
-        let lf = match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
-            Ok(lf) => lf,
-            Err(e) => {
-                self.status_message = format!("Split export failed: {:#}", e);
-                return None;
-            }
+    pub(crate) fn export_multi_tab_xlsx(&mut self, sidecar: Option<Vec<ParseFailure>>) {
+        let Some(out_path) = rfd::FileDialog::new()
+            .set_file_name("Consolidated_ALCO_Views.xlsx")
+            .save_file()
+        else {
+            return;
         };
-        match split_and_export_by_column(
-            lf,
-            &self.export.split_col,
-            &out_dir,
-            self.export.split_format,
-            self.parquet_dialect,
-            self.export_csv_mdy,
-            control_col.as_deref(),
-        ) {
-            Ok(cnt) => {
-                self.status_message = format!(
-                    "Split & exported {} individual files into {:?} (rows and control sums in split_manifest.csv)",
-                    cnt, out_dir
-                );
-                Some(out_dir.join("split_export"))
-            }
-            Err(e) => {
-                self.status_message = format!("Split export failed: {:#}", e);
-                None
-            }
-        }
+        let tabs = self.ticked_export_tabs();
+        let temp = self.paths.temp_dir.clone();
+        let label = format!("Excel export {}", file_label(&out_path));
+        self.submit_export(label, move |ctx| {
+            export_tabs_xlsx(&tabs, &temp, &out_path, sidecar.as_deref(), ctx)
+        });
     }
+
+    pub(crate) fn export_multi_tab_pdf(&mut self, sidecar: Option<Vec<ParseFailure>>) {
+        let Some(out_path) = rfd::FileDialog::new()
+            .set_file_name("Consolidated_ALCO_Report.pdf")
+            .save_file()
+        else {
+            return;
+        };
+        let tabs = self.ticked_export_tabs();
+        let temp = self.paths.temp_dir.clone();
+        let (fmt, dec) = (self.num_format, self.global_decimals);
+        let label = format!("PDF export {}", file_label(&out_path));
+        self.submit_export(label, move |ctx| {
+            export_tabs_pdf(&tabs, &temp, &out_path, fmt, dec, sidecar.as_deref(), ctx)
+        });
+    }
+
+    pub(crate) fn export_split_by_column(&mut self, sidecar: Option<Vec<ParseFailure>>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let Some(out_dir) = rfd::FileDialog::new().pick_folder() else {
+            return;
+        };
+        let (source, steps) = (tab.source.clone(), tab.steps.clone());
+        let control_col = tab.control_col.clone();
+        let temp = self.paths.temp_dir.clone();
+        let (split_col, format) = (self.export.split_col.clone(), self.export.split_format);
+        let (dialect, mdy) = (self.parquet_dialect, self.export_csv_mdy);
+        let label = format!("Split export to {}", file_label(&out_dir));
+        self.submit_export(label, move |ctx| {
+            export_split(
+                &source, &steps, &temp, &out_dir, &split_col, format, dialect, mdy,
+                control_col.as_deref(), sidecar.as_deref(), ctx,
+            )
+        });
+    }
+}
+
+/// The file or folder name of a path, for job labels.
+pub(crate) fn file_label(p: &Path) -> String {
+    p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
 }

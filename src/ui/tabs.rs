@@ -67,93 +67,34 @@ impl MicroParquetApp {
         steps: Vec<TransformStep>,
         col_formats: HashMap<String, ColumnFormatSpec>,
     ) {
-        let key_note = match ensure_pii_key_for(&source) {
-            Ok(n) => n,
-            Err(e) => {
-                self.status_message = format!("Pipeline error: {:#}", e);
-                return;
-            }
+        self.create_tab_from_source_with(title, source, steps, col_formats, None);
+    }
+
+    /// Builds the tab on the worker thread; the tab appears (and becomes active) when it is ready.
+    /// `reconcile_rate_used`: a period reconcile, whose status gets the reconcile summary.
+    pub(crate) fn create_tab_from_source_with(
+        &mut self,
+        title: String,
+        source: TabSource,
+        steps: Vec<TransformStep>,
+        col_formats: HashMap<String, ColumnFormatSpec>,
+        reconcile_rate_used: Option<bool>,
+    ) {
+        let tab_id = self.next_tab_id();
+        let label = format!("Opening '{}'", title);
+        let req = LoadRequest {
+            tab_id,
+            title,
+            source,
+            steps,
+            col_formats,
+            temp_dir: self.paths.temp_dir.clone(),
+            reconcile_rate_used,
         };
-        match compile_tab_lazy(&source, &steps, &self.paths.temp_dir) {
-            Ok(lf) => {
-                let slice = fetch_viewport_slice(lf.clone(), 0, 100).unwrap_or_default();
-                let default_ctrl = Self::guess_balance_column(&slice);
-                let totals = control_totals_state(Ok(lf), default_ctrl.as_deref());
-                let (total_rows, control_sum) = (totals.rows.unwrap_or(0), totals.sum);
-
-                // Baseline control sum is always computed from the raw source (0 steps)
-                let baseline_sum = if steps.is_empty() {
-                    control_sum
-                } else {
-                    compile_tab_lazy(&source, &[], &self.paths.temp_dir)
-                        .ok()
-                        .and_then(|base_lf| {
-                            compute_control_totals(base_lf, default_ctrl.as_deref()).ok()
-                        })
-                        .and_then(|(_, s)| s)
-                };
-
-                let (parse_failures, mut count_note) =
-                    match source_parse_failures(&source, &self.paths.temp_dir) {
-                        Ok(f) => (f, String::new()),
-                        Err(e) => (
-                            Vec::new(),
-                            format!(" ⚠ Could not count parse failures: {:#}", e),
-                        ),
-                    };
-                let row_check = match source_row_check(&source, &self.paths.temp_dir) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        count_note.push_str(&format!(" ⚠ Could not compare rows with the file's lines: {:#}", e));
-                        None
-                    }
-                };
-                if let Some(w) = row_check.as_ref().and_then(|c| c.warning()) {
-                    count_note.push_str(&format!(" ⚠ {}", w));
-                }
-                let join_stat = match join_status(
-                    &source,
-                    &steps,
-                    default_ctrl.as_deref(),
-                    &self.paths.temp_dir,
-                ) {
-                    Ok(j) => j,
-                    Err(e) => {
-                        count_note.push_str(&format!(" ⚠ Could not compare the join with its left table: {:#}", e));
-                        None
-                    }
-                };
-                self.tabs.push(TabState {
-                    title,
-                    source,
-                    steps,
-                    col_formats,
-                    total_rows,
-                    control_col: default_ctrl,
-                    control_sum,
-                    baseline_control_sum: baseline_sum,
-                    viewport_offset: 0,
-                    viewport_limit: 100,
-                    cached_slice: slice,
-                    sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
-                    parse_failures,
-                    join_status: join_stat,
-                    totals,
-                    row_check,
-                });
-                self.active_tab = self.tabs.len() - 1;
-                self.init_tool_defaults_from_active_tab();
-                self.status_message =
-                    format!("Tab created and evaluated out-of-core.{}", count_note);
-                if let Some(n) = key_note {
-                    self.status_message.push_str(&format!(" 🔑 {}", n));
-                }
-                self.append_blank_balance_notes();
-            }
-            Err(e) => {
-                self.status_message = format!("Pipeline error: {}", e);
-            }
-        }
+        self.jobs.submit(JobKey::tab(JobKind::Load, tab_id), label, true, move |ctx| {
+            load_tab(req, ctx).map(|t| JobOutput::Loaded(Box::new(t)))
+        });
+        self.status_message = "Loading…".to_string();
     }
 
     pub(crate) fn init_tool_defaults_from_active_tab(&mut self) {
@@ -214,99 +155,56 @@ impl MicroParquetApp {
                 tab.col_formats = updated_formats;
                 tab.viewport_offset = 0;
             }
-            // A failed refresh replaces this message with the error.
-            let added = format!("Step added: {}.", step_label);
-            self.status_message = added.clone();
-            self.refresh_active_tab(false);
-            if self.status_message == added {
-                self.append_blank_balance_notes();
-            }
-        }
-    }
-
-    pub(crate) fn guess_balance_column(df: &DataFrame) -> Option<String> {
-        // Prefer exact "balance" column before partial matches
-        for col in df.get_columns() {
-            if col.name().eq_ignore_ascii_case("balance") {
-                return Some(col.name().to_string());
-            }
-        }
-        for col in df.get_columns() {
-            let lower = col.name().to_lowercase();
-            if lower.contains("balance") || lower.contains("amount") || lower.contains("delta") {
-                return Some(col.name().to_string());
-            }
-        }
-        None
-    }
-
-    /// Adds "Balance blank on N rows; treated as 0" for the active tab's banking steps.
-    pub(crate) fn append_blank_balance_notes(&mut self) {
-        let Some(tab) = self.tabs.get(self.active_tab) else {
-            return;
-        };
-        let notes = blank_balance_notes(&tab.source, &tab.steps, &self.paths.temp_dir).and_then(|mut n| {
-            n.extend(weighted_mixed_sign_notes(&tab.source, &tab.steps, &self.paths.temp_dir)?);
-            Ok(n)
-        });
-        match notes {
-            Ok(notes) if !notes.is_empty() => {
-                self.status_message = format!("{} ⚠ {}", self.status_message, notes.join("; "));
-            }
-            Ok(_) => {}
-            Err(e) => {
-                self.status_message = format!(
-                    "{} ⚠ Could not count blank balances: {:#}",
-                    self.status_message, e
-                );
-            }
+            // The job's result replaces this message: with the notes, or with the error.
+            self.status_message = format!("Step added: {}.", step_label);
+            self.refresh_tab_at(self.active_tab, false, Some(format!("Step added: {}.", step_label)));
         }
     }
 
     pub(crate) fn refresh_active_tab(&mut self, recalculate_baseline: bool) {
-        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+        self.refresh_tab_at(self.active_tab, recalculate_baseline, None);
+    }
+
+    /// Rebuilds a tab's page, totals and notes on the worker thread. A newer refresh of the same
+    /// tab replaces an older one that has not finished.
+    pub(crate) fn refresh_tab_at(
+        &mut self,
+        idx: usize,
+        recalculate_baseline: bool,
+        added_status: Option<String>,
+    ) {
+        let Some(tab) = self.tabs.get(idx) else {
             return;
         };
-        match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
-            Ok(lf) => {
-                if let Ok(slice) =
-                    fetch_viewport_slice(lf.clone(), tab.viewport_offset, tab.viewport_limit)
-                {
-                    tab.cached_slice = slice;
-                }
-                // A failure shows "—" and the reason instead of keeping the previous totals.
-                tab.totals = control_totals_state(Ok(lf), tab.control_col.as_deref());
-                tab.total_rows = tab.totals.rows.unwrap_or(0);
-                tab.control_sum = tab.totals.sum;
-                if recalculate_baseline {
-                    // Recompute baseline from the base source (0 steps) for the newly selected control column
-                    let base_sum = compile_tab_lazy(&tab.source, &[], &self.paths.temp_dir)
-                        .ok()
-                        .and_then(|base_lf| {
-                            compute_control_totals(base_lf, tab.control_col.as_deref()).ok()
-                        })
-                        .and_then(|(_, s)| s);
-                    tab.baseline_control_sum = base_sum;
-                }
-                if tab.join_status.is_some() {
-                    tab.join_status = join_status(
-                        &tab.source,
-                        &tab.steps,
-                        tab.control_col.as_deref(),
-                        &self.paths.temp_dir,
-                    )
-                    .ok()
-                    .flatten();
-                }
-                self.init_tool_defaults_from_active_tab();
-            }
-            Err(e) => {
-                let msg = format!("{:#}", e);
-                tab.totals = control_totals_state(Err(e), tab.control_col.as_deref());
-                tab.control_sum = None;
-                self.status_message = format!("Step execution failed: {}", msg);
-            }
+        // A refresh that this one replaces may have had a baseline recount or a "Step added" note
+        // to deliver; the newer job does that work too.
+        let pend = self.pending_refresh.entry(tab.id).or_default();
+        pend.recalculate_baseline |= recalculate_baseline;
+        if added_status.is_some() {
+            pend.added_status = added_status;
         }
+        let req = RefreshRequest {
+            tab_id: tab.id,
+            source: tab.source.clone(),
+            steps: tab.steps.clone(),
+            offset: tab.viewport_offset,
+            limit: tab.viewport_limit,
+            control_col: tab.control_col.clone(),
+            recalculate_baseline: pend.recalculate_baseline,
+            check_join: tab.join_status.is_some(),
+            added_status: pend.added_status.clone(),
+            temp_dir: self.paths.temp_dir.clone(),
+        };
+        let key = JobKey::tab(JobKind::Refresh, tab.id);
+        self.jobs.submit(key, "Refreshing view", false, move |ctx| {
+            refresh_tab(req, ctx).map(|r| JobOutput::Refreshed(Box::new(r)))
+        });
+    }
+
+    /// A tab id nobody has used (ids are never reused, unlike positions).
+    pub(crate) fn next_tab_id(&mut self) -> u64 {
+        self.tab_id_counter += 1;
+        self.tab_id_counter
     }
 
     pub(crate) fn render_empty_state(&mut self, ui: &mut egui::Ui) {

@@ -77,12 +77,17 @@ impl MicroParquetApp {
     pub(crate) fn render_table_area(&mut self, ui: &mut egui::Ui) {
         let mut needs_refresh = false;
         let mut ctrl_col_changed = false;
+        // While a refresh runs, the last good page stays on screen, dimmed.
+        let updating = self
+            .tabs
+            .get(self.active_tab)
+            .is_some_and(|t| self.jobs.is_busy(JobKey::tab(JobKind::Refresh, t.id)));
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             ui.horizontal(|ui| {
                 ui.label(format!(
                     "Rows {} – {} of {}",
-                    tab.viewport_offset + 1,
-                    (tab.viewport_offset + tab.cached_slice.height()).min(tab.total_rows),
+                    tab.slice_offset + 1,
+                    (tab.slice_offset + tab.cached_slice.height()).min(tab.total_rows),
                     tab.total_rows
                 ));
 
@@ -129,14 +134,19 @@ impl MicroParquetApp {
             });
 
             ui.separator();
-            Self::render_data_grid(
-                ui,
-                &tab.cached_slice,
-                &tab.col_formats,
-                tab.viewport_offset,
-                self.num_format,
-                self.global_decimals,
-            );
+            ui.scope(|ui| {
+                if updating {
+                    ui.set_opacity(0.45);
+                }
+                Self::render_data_grid(
+                    ui,
+                    &tab.cached_slice,
+                    &tab.col_formats,
+                    tab.slice_offset,
+                    self.num_format,
+                    self.global_decimals,
+                );
+            });
         }
 
         if needs_refresh {

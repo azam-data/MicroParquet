@@ -3,6 +3,7 @@
     compute_parse_failures, count_nonempty_lines, ensure_pii_key_for, export_to_csv_stream,
     export_to_parquet_stream,
 };
+use crate::jobs::{write_atomic, Cancelled, JobCtx};
 use crate::models::{
     BatchDirection, BatchSchemaStrategy, IngestionConfig, ParquetDialect, RowCountCheck, TabSource,
 };
@@ -41,6 +42,8 @@ pub struct BatchReport {
     pub log: Vec<BatchLogRow>,
     /// Where `batch_log.csv` was written.
     pub log_path: Option<PathBuf>,
+    /// The user cancelled: files after the last logged one were not converted.
+    pub cancelled: bool,
 }
 
 /// Text of the `batch_log.csv` line (and the notice) written when a batch run creates the PII key.
@@ -150,6 +153,34 @@ pub fn run_folder_mirror_batch(
     mdy_dates_on_csv_export: bool,
     temp_dir: &Path,
 ) -> Result<BatchReport> {
+    run_folder_mirror_batch_ctx(
+        input_root,
+        output_root,
+        direction,
+        schema_strategy,
+        master_template,
+        parquet_dialect,
+        mdy_dates_on_csv_export,
+        temp_dir,
+        &JobCtx::inert(),
+    )
+}
+
+/// As `run_folder_mirror_batch`, with progress and cancel. A cancel stops before the next file;
+/// every output file is written through a temporary name, so no half-written file is left, and
+/// the log lists what was done plus a CANCELLED line.
+#[allow(clippy::too_many_arguments)]
+pub fn run_folder_mirror_batch_ctx(
+    input_root: &Path,
+    output_root: &Path,
+    direction: BatchDirection,
+    schema_strategy: BatchSchemaStrategy,
+    master_template: Option<&IngestionConfig>,
+    parquet_dialect: ParquetDialect,
+    mdy_dates_on_csv_export: bool,
+    temp_dir: &Path,
+    ctx: &JobCtx,
+) -> Result<BatchReport> {
     check_batch_folders(input_root, output_root)?;
     if direction == BatchDirection::CsvToParquet
         && schema_strategy == BatchSchemaStrategy::MasterSchemaTemplate
@@ -162,7 +193,20 @@ pub fn run_folder_mirror_batch(
     let log_path = output_root.join("batch_log.csv");
     let mut report = BatchReport::default();
 
+    let mut cancel_note: Option<String> = None;
     for entry_res in WalkDir::new(input_root).into_iter() {
+        if ctx.is_cancelled() {
+            cancel_note = Some("Cancelled: the files after this point were not converted".to_string());
+            break;
+        }
+        ctx.set_progress(
+            format!(
+                "Batch: {} file(s) done, {} error(s)",
+                report.files_converted + report.companion_files_copied,
+                report.errors.len()
+            ),
+            None,
+        );
         let entry = match entry_res {
             Ok(e) => e,
             Err(err) => {
@@ -255,7 +299,7 @@ pub fn run_folder_mirror_batch(
                         });
                     }
                     let lf = build_lazy_pipeline(src_path, false, &cfg, temp_dir)?;
-                    export_to_parquet_stream(lf, &out_parquet, parquet_dialect)?;
+                    write_atomic(&out_parquet, ctx, |t| export_to_parquet_stream(lf, t, parquet_dialect))?;
                     let fails: usize = compute_parse_failures(src_path, false, &cfg, temp_dir)?
                         .iter()
                         .map(|f| f.count)
@@ -282,7 +326,7 @@ pub fn run_folder_mirror_batch(
                 let dummy_cfg = IngestionConfig::default();
 
                 let res = build_lazy_pipeline(src_path, true, &dummy_cfg, temp_dir).and_then(|lf| {
-                    export_to_csv_stream(lf.clone(), &out_csv, mdy_dates_on_csv_export)?;
+                    write_atomic(&out_csv, ctx, |t| export_to_csv_stream(lf.clone(), t, mdy_dates_on_csv_export))?;
                     let (rows, sum) = totals_of(lf)?;
                     Ok((rows, sum, None, None))
                 });
@@ -329,6 +373,10 @@ pub fn run_folder_mirror_batch(
                     error: warning.unwrap_or_default(),
                 });
             }
+            Some(Err(e)) if e.downcast_ref::<Cancelled>().is_some() => {
+                cancel_note = Some(format!("Cancelled while converting {}: no output was written for it, and the files after it were not converted", file));
+                break;
+            }
             Some(Err(e)) => {
                 let msg = format!("{:#}", e);
                 report.errors.push(format!("{}: {}", file, msg));
@@ -345,6 +393,18 @@ pub fn run_folder_mirror_batch(
         }
     }
 
+    if let Some(note) = cancel_note {
+        report.cancelled = true;
+        report.log.push(BatchLogRow {
+            file: String::new(),
+            rows: None,
+            data_lines: None,
+            control_sum: None,
+            parse_failures: None,
+            status: "CANCELLED".into(),
+            error: note,
+        });
+    }
     write_batch_log(&log_path, &report.log)?;
     report.log_path = Some(log_path);
     Ok(report)

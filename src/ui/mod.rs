@@ -11,6 +11,7 @@ pub mod duration;
 pub mod export;
 pub mod filter;
 pub mod ftp;
+pub mod jobs;
 pub mod join;
 pub mod limits;
 pub mod normaliser;

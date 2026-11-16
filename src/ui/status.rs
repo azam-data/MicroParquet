@@ -99,6 +99,33 @@ impl MicroParquetApp {
                         ui.separator();
                     }
                 }
+                if let Some(job) = self.jobs.active_long() {
+                    ui.spinner();
+                    let text = if job.cancelling {
+                        format!("Cancelling {}…", job.label)
+                    } else if job.progress.text.is_empty() {
+                        format!("{}…", job.label)
+                    } else {
+                        job.progress.text.clone()
+                    };
+                    ui.label(text);
+                    if let Some(f) = job.progress.fraction {
+                        ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).desired_width(120.0));
+                    }
+                    if ui.add_enabled(!job.cancelling, egui::Button::new("Cancel")).clicked() {
+                        self.jobs.cancel(job.id);
+                    }
+                    ui.separator();
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                let updating = self.tabs.get(self.active_tab).is_some_and(|t| {
+                    self.jobs.is_busy(JobKey::tab(JobKind::Refresh, t.id))
+                        || self.jobs.is_busy(JobKey::tab(JobKind::Schema, t.id))
+                });
+                if updating {
+                    ui.colored_label(theme::INFO_BLUE, "Updating…");
+                    ui.separator();
+                }
                 ui.label(&self.status_message);
             });
 

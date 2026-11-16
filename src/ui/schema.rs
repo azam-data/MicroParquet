@@ -390,33 +390,14 @@ impl MicroParquetApp {
                     .unwrap_or_default()
                     .to_string_lossy();
                 let out_path = out_dir.join(format!("{}.parquet", stem));
-                let src = TabSource::SingleFile {
-                    path: modal.csv_path.clone(),
-                    is_parquet: false,
-                    config: modal.config,
-                };
-                match compile_tab_lazy(&src, &[], &self.paths.temp_dir)
-                    .and_then(|lf| export_to_parquet_stream(lf, &out_path, self.parquet_dialect))
-                {
-                    Ok(_) => {
-                        let orig_mb = modal
-                            .csv_path
-                            .metadata()
-                            .map(|m| m.len() as f64 / 1_048_576.0)
-                            .unwrap_or(0.0);
-                        let new_mb = out_path
-                            .metadata()
-                            .map(|m| m.len() as f64 / 1_048_576.0)
-                            .unwrap_or(0.0);
-                        self.status_message = format!(
-                            "✅ Converted to {:?}! ({:.1} MB -> {:.1} MB)",
-                            out_path, orig_mb, new_mb
-                        );
-                    }
-                    Err(e) => {
-                        self.status_message = format!("❌ Direct conversion error: {:#}", e);
-                    }
-                }
+                let (csv_path, config) = (modal.csv_path.clone(), modal.config);
+                let (temp, dialect) = (self.paths.temp_dir.clone(), self.parquet_dialect);
+                let label = format!("Converting {}", crate::ui::export::file_label(&csv_path));
+                self.jobs.submit(JobKey::unique(JobKind::Export), label, true, move |ctx| {
+                    convert_csv_to_parquet(&csv_path, config, &temp, &out_path, dialect, ctx)
+                        .map(JobOutput::Exported)
+                });
+                self.status_message = "Conversion started…".to_string();
             }
         } else if keep_open {
             self.pending_csv_modal = Some(modal);
@@ -474,9 +455,10 @@ impl MicroParquetApp {
         }
     }
 
-    /// Replaces the ingestion settings of an open tab, keeping its steps, and reloads it.
+    /// Replaces the ingestion settings of an open tab, keeping its steps, and reloads it. The
+    /// check runs on the worker thread; the tab is only changed when it passes.
     pub(crate) fn apply_schema_to_tab(&mut self, idx: usize, config: IngestionConfig) {
-        let Some(tab) = self.tabs.get_mut(idx) else {
+        let Some(tab) = self.tabs.get(idx) else {
             return;
         };
         let TabSource::SingleFile {
@@ -490,44 +472,16 @@ impl MicroParquetApp {
             is_parquet: *is_parquet,
             config,
         };
-        let key_note = match ensure_pii_key_for(&new_source) {
-            Ok(n) => n,
-            Err(e) => {
-                self.status_message = format!("Schema not applied: {:#}", e);
-                return;
-            }
+        let req = SchemaRequest {
+            tab_id: tab.id,
+            new_source,
+            steps: tab.steps.clone(),
+            temp_dir: self.paths.temp_dir.clone(),
         };
-        if let Err(e) = compile_tab_lazy(&new_source, &tab.steps, &self.paths.temp_dir) {
-            self.status_message = format!("Schema not applied: {:#}", e);
-            return;
-        }
-        match source_parse_failures(&new_source, &self.paths.temp_dir) {
-            Ok(f) => tab.parse_failures = f,
-            Err(e) => {
-                tab.parse_failures.clear();
-                self.status_message = format!("⚠ Could not count parse failures: {:#}", e);
-            }
-        }
-        let row_check = source_row_check(&new_source, &self.paths.temp_dir);
-        tab.source = new_source;
-        let mut row_note = String::new();
-        match row_check {
-            Ok(c) => {
-                if let Some(w) = c.as_ref().and_then(|c| c.warning()) {
-                    row_note = format!(" ⚠ {}", w);
-                }
-                tab.row_check = c;
-            }
-            Err(e) => {
-                tab.row_check = None;
-                row_note = format!(" ⚠ Could not compare rows with the file's lines: {:#}", e);
-            }
-        }
-        self.active_tab = idx;
-        self.refresh_active_tab(true);
-        self.status_message = format!("Schema applied and tab reloaded.{}", row_note);
-        if let Some(n) = key_note {
-            self.status_message.push_str(&format!(" 🔑 {}", n));
-        }
+        let key = JobKey::tab(JobKind::Schema, tab.id);
+        self.jobs.submit(key, "Applying schema", true, move |ctx| {
+            check_schema_for_tab(req, ctx).map(|s| JobOutput::Schema(Box::new(s)))
+        });
+        self.status_message = "Applying the schema…".to_string();
     }
 }

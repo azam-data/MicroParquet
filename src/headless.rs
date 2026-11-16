@@ -81,7 +81,7 @@ pub(crate) fn run_headless_cli(args: &crate::CliArgs, paths: &PortablePaths) -> 
     }
     let control = match recipe_control {
         Some(c) => Some(c),
-        None => MicroParquetApp::guess_balance_column(&lf.clone().limit(0).collect()?),
+        None => micro_parquet::tab_jobs::guess_balance_column(&lf.clone().limit(0).collect()?),
     };
     if let Some(ctrl) = &control {
         if let Some(f) = failures.iter().find(|f| &f.column == ctrl) {
@@ -98,26 +98,38 @@ pub(crate) fn run_headless_cli(args: &crate::CliArgs, paths: &PortablePaths) -> 
     }
 
     if let Some(out_parq) = &args.export_parquet {
-        export_to_parquet_stream(lf.clone(), out_parq, ParquetDialect::ArchiveZstd)?;
+        micro_parquet::jobs::run_inline(|ctx| {
+            export_tab_parquet(&source, &steps, &paths.temp_dir, out_parq, ParquetDialect::ArchiveZstd, None, ctx)
+        })?;
         println!("Exported Parquet: {:?}", out_parq);
     }
     if let Some(out_csv) = &args.export_csv {
-        export_to_csv_stream(lf.clone(), out_csv, false)?;
+        micro_parquet::jobs::run_inline(|ctx| {
+            export_tab_csv(&source, &steps, &paths.temp_dir, out_csv, false, None, ctx)
+        })?;
         println!("Exported CSV: {:?}", out_csv);
     }
     if let Some(out_xlsx) = &args.export_xlsx {
         let df = lf.clone().collect()?;
-        let rep = export_tabs_to_xlsx(vec![("Headless_Output".to_string(), df)], Vec::new(), out_xlsx)?;
+        let rep = micro_parquet::jobs::run_inline(|ctx| {
+            micro_parquet::jobs::write_atomic(out_xlsx, ctx, |tmp| {
+                export_tabs_to_xlsx(vec![("Headless_Output".to_string(), df)], Vec::new(), tmp)
+            })
+        })?;
         println!("Exported Excel: {:?} ({})", out_xlsx, rep.summary());
     }
     if let Some(out_pdf) = &args.export_pdf {
         let df = lf.collect()?;
-        let rep = export_tabs_to_pdf(
-            vec![("Headless_Report".to_string(), df, HashMap::new())],
-            out_pdf,
-            NumberDisplayFormat::BdtCrore,
-            2,
-        )?;
+        let rep = micro_parquet::jobs::run_inline(|ctx| {
+            micro_parquet::jobs::write_atomic(out_pdf, ctx, |tmp| {
+                export_tabs_to_pdf(
+                    vec![("Headless_Report".to_string(), df, HashMap::new())],
+                    tmp,
+                    NumberDisplayFormat::BdtCrore,
+                    2,
+                )
+            })
+        })?;
         println!("Exported PDF: {:?}", out_pdf);
         let s = rep.summary();
         if !s.is_empty() {

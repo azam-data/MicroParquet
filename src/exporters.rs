@@ -5,6 +5,7 @@ use crate::models::{
     format_metric_value, ColumnFormatSpec, NumberDisplayFormat, ParquetDialect, SplitExportFormat,
     TabSource, TransformStep,
 };
+use crate::jobs::{Cancelled, JobCtx, TempOutput};
 use anyhow::{Context, Result};
 use polars::datatypes::AnyValue;
 use polars::prelude::*;
@@ -13,7 +14,7 @@ use rust_xlsxwriter::{Format, Workbook};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Data rows per Excel sheet: 1,048,576 rows minus the header row.
 pub const EXCEL_MAX_DATA_ROWS: usize = 1_048_575;
@@ -509,6 +510,24 @@ pub fn split_and_export_by_column(
     mdy_dates: bool,
     control_col: Option<&str>,
 ) -> Result<usize> {
+    split_and_export_by_column_ctx(
+        lf, split_col, out_dir, format, dialect, mdy_dates, control_col, &JobCtx::inert(),
+    )
+}
+
+/// As `split_and_export_by_column`, with progress and cancel. Each file is written through a
+/// temporary name; a cancel removes the files this run already wrote and writes no manifest.
+#[allow(clippy::too_many_arguments)]
+pub fn split_and_export_by_column_ctx(
+    lf: LazyFrame,
+    split_col: &str,
+    out_dir: &Path,
+    format: SplitExportFormat,
+    dialect: ParquetDialect,
+    mdy_dates: bool,
+    control_col: Option<&str>,
+    ctx: &JobCtx,
+) -> Result<usize> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("Could not create the output folder {:?}", out_dir))?;
 
@@ -556,7 +575,19 @@ pub fn split_and_export_by_column(
     let mut manifest_sum: Vec<Option<f64>> = Vec::new();
     let mut total_rows = 0usize;
 
-    for (key, sub_lf) in groups {
+    let mut written_paths: Vec<PathBuf> = Vec::new();
+    let n_groups = groups.len().max(1);
+    for (gi, (key, sub_lf)) in groups.into_iter().enumerate() {
+        if ctx.is_cancelled() {
+            for w in &written_paths {
+                let _ = std::fs::remove_file(w);
+            }
+            return Err(Cancelled.into());
+        }
+        ctx.set_progress(
+            format!("Writing file {} of {}…", gi + 1, n_groups),
+            Some(gi as f32 / n_groups as f32),
+        );
         let (rows, sum) = compute_control_totals(sub_lf.clone(), control_col)?;
         if key.is_none() && rows == 0 {
             continue;
@@ -574,14 +605,17 @@ pub fn split_and_export_by_column(
         used.insert(stem.to_lowercase());
         let file_name = format!("{}.{}", stem, ext);
         let p = out_dir.join(&file_name);
+        let tmp = TempOutput::new(&p);
         match format {
-            SplitExportFormat::Parquet => export_to_parquet_stream(sub_lf, &p, dialect)?,
-            SplitExportFormat::Csv => export_to_csv_stream(sub_lf, &p, mdy_dates)?,
+            SplitExportFormat::Parquet => export_to_parquet_stream(sub_lf, tmp.path(), dialect)?,
+            SplitExportFormat::Csv => export_to_csv_stream(sub_lf, tmp.path(), mdy_dates)?,
             SplitExportFormat::Xlsx => {
                 let sub_df = sub_lf.collect()?;
-                export_tabs_to_xlsx(vec![(stem.clone(), sub_df)], Vec::new(), &p)?;
+                export_tabs_to_xlsx(vec![(stem.clone(), sub_df)], Vec::new(), tmp.path())?;
             }
         }
+        tmp.commit()?;
+        written_paths.push(p.clone());
         total_rows += rows;
         manifest_key.push(key);
         manifest_file.push(file_name);
@@ -589,6 +623,12 @@ pub fn split_and_export_by_column(
         manifest_sum.push(sum);
     }
 
+    if ctx.is_cancelled() {
+        for w in &written_paths {
+            let _ = std::fs::remove_file(w);
+        }
+        return Err(Cancelled.into());
+    }
     let files = manifest_file.len();
     let mut manifest = DataFrame::new(vec![
         Series::new("key".into(), manifest_key).into(),

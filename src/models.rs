@@ -985,6 +985,8 @@ pub enum TabSource {
 
 #[derive(Clone)]
 pub struct TabState {
+    /// Stable identity of the tab (survives closing other tabs); background results use it.
+    pub id: u64,
     pub title: String,
     pub source: TabSource,
     pub steps: Vec<TransformStep>,
@@ -994,6 +996,8 @@ pub struct TabState {
     pub control_sum: Option<f64>,
     pub baseline_control_sum: Option<f64>,
     pub viewport_offset: usize,
+    /// Row offset of `cached_slice` (differs from `viewport_offset` while a new page is loading).
+    pub slice_offset: usize,
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,

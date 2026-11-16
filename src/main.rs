@@ -69,7 +69,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             theme::apply_ui_theme(&cc.egui_ctx, false, 1.05);
-            let mut app = MicroParquetApp::new(paths);
+            let mut app = MicroParquetApp::new(paths, cc.egui_ctx.clone());
             if let Some(n) = rule_notice {
                 app.status_message = n;
             }
@@ -104,6 +104,10 @@ pub enum ActiveToolModal {
 }
 
 pub struct MicroParquetApp {
+    /// The worker thread: all Polars work runs there (R2).
+    pub jobs: JobQueue<JobOutput>,
+    tab_id_counter: u64,
+    pending_refresh: HashMap<u64, PendingRefresh>,
     paths: PortablePaths,
     tabs: Vec<TabState>,
     active_tab: usize,
@@ -144,9 +148,12 @@ pub struct MicroParquetApp {
 }
 
 impl MicroParquetApp {
-    pub fn new(paths: PortablePaths) -> Self {
+    pub fn new(paths: PortablePaths, egui_ctx: egui::Context) -> Self {
         let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
         Self {
+            jobs: JobQueue::new(move || egui_ctx.request_repaint()),
+            tab_id_counter: 0,
+            pending_refresh: HashMap::new(),
             paths,
             tabs: Vec::new(),
             active_tab: 0,
@@ -195,6 +202,7 @@ impl eframe::App for MicroParquetApp {
         if let Some(note) = take_pii_key_created_note() {
             self.status_message = note;
         }
+        self.poll_jobs(ctx);
         self.render_menu_bar(ctx);
         self.render_status_bar(ctx);
         self.render_steps_panel(ctx);

@@ -116,10 +116,11 @@ impl MicroParquetApp {
                     && self.batch_modal.loaded_template.is_none();
                 let have_folders = self.batch_modal.input_folder.is_some()
                     && self.batch_modal.output_folder.is_some();
+                let batch_running = self.jobs.active_long().is_some_and(|a| a.label == "Batch conversion");
                 ui.horizontal(|ui| {
                     let run = ui
                         .add_enabled(
-                            !needs_template && have_folders,
+                            !needs_template && have_folders && !batch_running,
                             egui::Button::new("🚀 Start Mirror Batch"),
                         )
                         .on_disabled_hover_text(if needs_template {
@@ -132,25 +133,23 @@ impl MicroParquetApp {
                             self.batch_modal.input_folder.clone(),
                             self.batch_modal.output_folder.clone(),
                         ) {
-                            match run_folder_mirror_batch(
-                                &in_dir,
-                                &out_dir,
-                                d,
-                                s,
-                                self.batch_modal.loaded_template.as_ref(),
-                                self.parquet_dialect,
-                                self.batch_modal.mdy_dates_on_csv,
-                                &self.paths.temp_dir,
-                            ) {
-                                Ok(rep) => {
-                                    self.batch_modal.last_report = Some(rep);
-                                    self.batch_modal.last_error = None;
-                                }
-                                Err(e) => {
-                                    self.batch_modal.last_report = None;
-                                    self.batch_modal.last_error = Some(format!("{:#}", e));
-                                }
-                            }
+                            let (dialect, mdy) = (self.parquet_dialect, self.batch_modal.mdy_dates_on_csv);
+                            let template = self.batch_modal.loaded_template.clone();
+                            let temp = self.paths.temp_dir.clone();
+                            self.jobs.submit(
+                                JobKey::unique(JobKind::Batch),
+                                "Batch conversion",
+                                true,
+                                move |ctx| {
+                                    micro_parquet::batch::run_folder_mirror_batch_ctx(
+                                        &in_dir, &out_dir, d, s, template.as_ref(), dialect, mdy, &temp, ctx,
+                                    )
+                                    .map(|r| JobOutput::Batch(Box::new(r)))
+                                },
+                            );
+                            self.batch_modal.last_report = None;
+                            self.batch_modal.last_error = None;
+                            self.status_message = "Batch started…".to_string();
                         }
                     }
                     if ui.button("Close").clicked() {
@@ -163,6 +162,9 @@ impl MicroParquetApp {
                         theme::WARN_ORANGE,
                         "Pick a .schema.json template, or choose Smart Safe Auto-Detect.",
                     );
+                }
+                if batch_running {
+                    ui.label("Batch running… progress and Cancel are in the status bar.");
                 }
                 if let Some(err) = &self.batch_modal.last_error {
                     ui.colored_label(theme::ERR_RED, format!("❌ {}", err));

@@ -3,20 +3,18 @@
 pub use eframe::egui;
 pub use egui_extras::{Column, TableBuilder};
 pub use egui_plot::{Bar, BarChart, Plot};
-pub use micro_parquet::batch::{run_folder_mirror_batch, BatchReport};
+pub use micro_parquet::batch::BatchReport;
 pub use micro_parquet::engine::{
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema,
     auto_detect_smart_schema_with, blank_balance_notes, collect_masked_columns, compile_tab_lazy,
-    compute_control_totals, control_totals_state, detect_file_schema, ensure_pii_key_for,
-    export_pii_key, export_to_csv_stream, export_to_parquet_stream, fetch_viewport_slice,
-    import_pii_key, join_status, parse_failure_summary, pii_key_fingerprint, pii_key_path,
+    detect_file_schema, ensure_pii_key_for, export_pii_key,
+    import_pii_key, parse_failure_summary, pii_key_fingerprint, pii_key_path,
     preview_csv_raw, preview_csv_with, preview_parquet_raw, read_pii_key, source_masks_pii,
     source_parse_failures, source_row_check, stack_file_configs, take_pii_key_created_note,
-    weighted_mixed_sign_notes, write_parse_failures_csv,
+    weighted_mixed_sign_notes,
 };
 pub use micro_parquet::exporters::{
-    export_selected_tabs_to_xlsx, export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard,
-    split_and_export_by_column, PDF_MAX_ROWS_PER_TAB,
+    export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard,
 };
 pub use micro_parquet::macros::{
     generate_python_polars_code, load_macro_from_file, python_pii_refusal,
@@ -29,6 +27,12 @@ pub use micro_parquet::models::{
     CustomBucketDef, FilterOp, FtpInterpolation, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
     SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
+};
+pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
+pub use micro_parquet::tab_jobs::{
+    check_schema_for_tab, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
+    export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
+    LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest,
 };
 pub use polars::datatypes::AnyValue;
 pub use polars::prelude::DataFrame;
@@ -46,6 +50,7 @@ pub use crate::ui::duration::DurationState;
 pub use crate::ui::export::{ExportState, GuardedExport};
 pub use crate::ui::filter::FilterState;
 pub use crate::ui::ftp::FtpState;
+pub use crate::ui::jobs::PendingRefresh;
 pub use crate::ui::join::JoinState;
 pub use crate::ui::limits::LimitState;
 pub use crate::ui::normaliser::NormState;
