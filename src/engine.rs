@@ -4,8 +4,8 @@ use crate::banking::{
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
 };
 use crate::models::{
-    column_name_tokens, AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, CsvTextEncoding,
-    FilterOp, IngestionConfig, MathOp,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, AggFunc, AggSpec,
+    ColDataType, ColumnSchemaConfig, CsvTextEncoding, FilterOp, IngestionConfig, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -133,6 +133,7 @@ pub fn auto_detect_smart_schema_with(path: &Path, base: &IngestionConfig) -> Res
             sample_values: samples,
             sign_convention: SignConvention::Unset,
             has_dr_cr,
+            source_dtype: String::new(),
         });
     }
 
@@ -401,23 +402,27 @@ fn dr_cr_unset_message(col_name: &str) -> String {
     )
 }
 
-/// Scans every value of each Float64 column whose sign convention is unset (the columns of
-/// `raw_lf` are still text) and fails when one carries Dr/Cr.
-fn check_dr_cr_conventions(raw_lf: &LazyFrame, config: &IngestionConfig) -> Result<()> {
-    let cols: Vec<&str> = config
-        .columns
+/// Scans every value of each Float64 column whose sign convention is unset and fails when one
+/// carries Dr/Cr. `text_cols` pairs each column with an expression giving its raw text.
+fn check_dr_cr_conventions(
+    raw_lf: &LazyFrame,
+    text_cols: &[(&ColumnSchemaConfig, Expr)],
+) -> Result<()> {
+    let checked: Vec<(&str, Expr)> = text_cols
         .iter()
-        .filter(|c| c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset)
-        .map(|c| c.name.as_str())
+        .filter(|(c, _)| {
+            c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset
+        })
+        .map(|(c, e)| (c.name.as_str(), e.clone()))
         .collect();
-    if cols.is_empty() {
+    if checked.is_empty() {
         return Ok(());
     }
-    let exprs: Vec<Expr> = cols
-        .iter()
-        .map(|c| {
-            col(*c)
-                .map(
+    let cols: Vec<&str> = checked.iter().map(|(n, _)| *n).collect();
+    let exprs: Vec<Expr> = checked
+        .into_iter()
+        .map(|(c, text)| {
+            text.map(
                     |s: Series| {
                         let ca = s.str()?;
                         let flags: BooleanChunked = ca
@@ -429,7 +434,7 @@ fn check_dr_cr_conventions(raw_lf: &LazyFrame, config: &IngestionConfig) -> Resu
                     GetOutput::from_type(DataType::Boolean),
                 )
                 .any(true)
-                .alias(*c)
+                .alias(c)
         })
         .collect();
     let flags = raw_lf
@@ -786,13 +791,22 @@ pub fn build_lazy_pipeline(
     temp_dir: &Path,
 ) -> Result<LazyFrame> {
     if is_parquet {
-        let lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
-            .context("Failed to scan Parquet file")?;
-        return Ok(lf);
+        let (lf, plan) = parquet_conversion_plan(path, config)?;
+        if plan.is_empty() {
+            return Ok(lf);
+        }
+        check_dr_cr_conventions(&lf, &plan)?;
+        let exprs: Vec<Expr> = plan
+            .into_iter()
+            .map(|(c, text)| typed_expr(text, c, config).alias(&c.name))
+            .collect();
+        return Ok(lf.with_columns(exprs));
     }
 
     let mut lf = scan_csv_text(path, config, temp_dir)?;
-    check_dr_cr_conventions(&lf, config)?;
+    let text_cols: Vec<(&ColumnSchemaConfig, Expr)> =
+        config.columns.iter().map(|c| (c, col(&c.name))).collect();
+    check_dr_cr_conventions(&lf, &text_cols)?;
 
     let exprs: Vec<Expr> = config
         .columns
@@ -854,8 +868,10 @@ fn scan_csv_text(path: &Path, config: &IngestionConfig, temp_dir: &Path) -> Resu
 
 /// The text a column holds just before typing: linebreaks sanitised, then the PII mask.
 fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
-    let mut e = col(&col_cfg.name);
+    text_expr_from(col(&col_cfg.name), col_cfg, config)
+}
 
+fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
     if config.sanitize_linebreaks {
         e = e
             .str()
@@ -974,7 +990,15 @@ pub fn compute_parse_failures(
     temp_dir: &Path,
 ) -> Result<Vec<ParseFailure>> {
     if is_parquet {
-        return Ok(Vec::new());
+        let (lf, plan) = parquet_conversion_plan(path, config)?;
+        let typed: Vec<(&ColumnSchemaConfig, Expr)> = plan
+            .into_iter()
+            .filter(|(c, _)| c.dtype != ColDataType::Utf8)
+            .collect();
+        if typed.is_empty() {
+            return Ok(Vec::new());
+        }
+        return failures_from_text(lf, &typed, config.parse_accounting_negatives);
     }
     let typed: Vec<&ColumnSchemaConfig> = config
         .columns
@@ -1127,6 +1151,124 @@ pub fn write_parse_failures_csv(output: &Path, failures: &[ParseFailure]) -> Res
     std::fs::write(&side, body)
         .with_context(|| format!("Failed to write the parse-failure list {:?}", side))?;
     Ok(side)
+}
+
+/// Label of a Parquet column type, as stored in `ColumnSchemaConfig::source_dtype`.
+pub fn parquet_type_label(dt: &DataType) -> String {
+    match dt {
+        DataType::String => "String".into(),
+        DataType::Float32 => "Float32".into(),
+        DataType::Float64 => "Float64".into(),
+        DataType::Decimal(..) => "Decimal".into(),
+        DataType::Int8 => "Int8".into(),
+        DataType::Int16 => "Int16".into(),
+        DataType::Int32 => "Int32".into(),
+        DataType::Int64 => "Int64".into(),
+        DataType::UInt8 => "UInt8".into(),
+        DataType::UInt16 => "UInt16".into(),
+        DataType::UInt32 => "UInt32".into(),
+        DataType::UInt64 => "UInt64".into(),
+        DataType::Date => "Date".into(),
+        DataType::Datetime(..) => "Datetime".into(),
+        other => format!("{:?}", other),
+    }
+}
+
+/// First rows of a Parquet file as stored (for the schema modal preview).
+pub fn preview_parquet_raw(path: &Path, n_rows: usize) -> Result<DataFrame> {
+    LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?
+        .limit(n_rows as IdxSize)
+        .collect()
+        .context("Failed to read the first Parquet rows")
+}
+
+/// Schema of a Parquet file for the schema modal: every column keeps its own type (String
+/// columns are Text until the user changes them); sample values are the first 5 rows as text.
+pub fn auto_detect_parquet_schema(path: &Path) -> Result<IngestionConfig> {
+    let mut lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?;
+    let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
+    let head = lf
+        .limit(5)
+        .collect()
+        .context("Failed to read the first Parquet rows")?;
+    let mut columns = Vec::with_capacity(schema.len());
+    for (name, dt) in schema.iter() {
+        let label = parquet_type_label(dt);
+        let samples = head
+            .column(name)
+            .ok()
+            .and_then(|s| s.cast(&DataType::String).ok())
+            .map(|s| {
+                s.str()
+                    .map(|ca| {
+                        ca.into_iter()
+                            .map(|v| v.unwrap_or("null").to_string())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        columns.push(ColumnSchemaConfig {
+            name: name.to_string(),
+            dtype: parquet_native_type(&label).unwrap_or(ColDataType::Utf8),
+            sample_values: samples,
+            source_dtype: label,
+            ..Default::default()
+        });
+    }
+    Ok(IngestionConfig {
+        columns,
+        ..Default::default()
+    })
+}
+
+/// Scans a Parquet file and lists the configured columns that must be converted, each with an
+/// expression giving its text (String columns as they are; other types cast to text). Columns
+/// whose type is unchanged and unmasked are left as they are in the file.
+fn parquet_conversion_plan<'a>(
+    path: &Path,
+    config: &'a IngestionConfig,
+) -> Result<(LazyFrame, Vec<(&'a ColumnSchemaConfig, Expr)>)> {
+    let mut lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?;
+    if config.columns.is_empty() {
+        return Ok((lf, Vec::new()));
+    }
+    let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
+    let mut plan = Vec::new();
+    for c in &config.columns {
+        let Some(dt) = schema.get(&c.name) else {
+            anyhow::bail!(
+                "Column '{}' is in the schema but not in the Parquet file {:?}.",
+                c.name,
+                path
+            );
+        };
+        // Judge by the file's actual type, not a label saved earlier.
+        let label = parquet_type_label(dt);
+        let mut actual = c.clone();
+        actual.source_dtype = label.clone();
+        if !parquet_needs_conversion(&actual) {
+            continue;
+        }
+        if parquet_native_type(&label).is_none() {
+            anyhow::bail!(
+                "Column '{}' is {} in the Parquet file and cannot be converted or masked. \
+                 Set it back to Text with no mask in Schema & Ingestion.",
+                c.name,
+                label
+            );
+        }
+        let base = if *dt == DataType::String {
+            col(&c.name)
+        } else {
+            col(&c.name).cast(DataType::String)
+        };
+        plan.push((c, text_expr_from(base, c, config)));
+    }
+    Ok((lf, plan))
 }
 
 pub fn compile_tab_lazy(

@@ -1,5 +1,6 @@
 use crate::models::{
-    AggFunc, ColDataType, CsvTextEncoding, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
+    parquet_native_type, parquet_needs_conversion, AggFunc, ColDataType, ColumnSchemaConfig,
+    CsvTextEncoding, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -235,24 +236,46 @@ pub fn generate_python_polars_code(
             py.push_str("# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n");
             py.push_str("lf = lf.with_columns(\n    pl.col(pl.Utf8).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars()\n)\n\n");
         }
+    }
 
-        if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
-            py.push_str("# WARNING: PII masking not reproduced\n\n");
-        }
+    if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
+        py.push_str("# WARNING: PII masking not reproduced\n\n");
+    }
 
+    // Columns to type, each with the expression giving its text. CSV: every column (read as
+    // text). Parquet: only columns whose type was changed from the file's own; non-text
+    // columns are cast to text first, as in the app.
+    let typed: Vec<(&ColumnSchemaConfig, String)> = ingestion
+        .columns
+        .iter()
+        .filter_map(|c| {
+            let name = py_escape(&c.name);
+            if !is_parquet {
+                return Some((c, format!("pl.col(\"{}\")", name)));
+            }
+            if !parquet_needs_conversion(c) || parquet_native_type(&c.source_dtype).is_none() {
+                return None;
+            }
+            if c.source_dtype == "String" {
+                Some((c, format!("pl.col(\"{}\")", name)))
+            } else {
+                Some((c, format!("pl.col(\"{}\").cast(pl.Utf8)", name)))
+            }
+        })
+        .collect();
+    {
         // Same typing as MicroParquet's ingestion: casts are not strict, so a value that cannot
         // be converted becomes null (as in the app), and the script prints how many per column.
         let mut casts: Vec<String> = Vec::new();
         let mut cast_cols: Vec<String> = Vec::new();
-        if ingestion
-            .columns
+        if typed
             .iter()
-            .any(|c| matches!(c.dtype, ColDataType::Float64 | ColDataType::Int64))
+            .any(|(c, _)| matches!(c.dtype, ColDataType::Float64 | ColDataType::Int64))
         {
             py.push_str("# Amount parsing rules (same as MicroParquet)\n");
             py.push_str(PY_AMOUNT_HELPER);
         }
-        if ingestion.columns.iter().any(|c| {
+        if typed.iter().any(|(c, _)| {
             matches!(
                 c.dtype,
                 ColDataType::DateDMY | ColDataType::DateMDY | ColDataType::DateISO
@@ -262,30 +285,37 @@ pub fn generate_python_polars_code(
             py.push_str(PY_DATE_HELPER);
         }
         let acc = if ingestion.parse_accounting_negatives { "True" } else { "False" };
-        for c in &ingestion.columns {
+        for (c, base) in &typed {
             let name = py_escape(&c.name);
             let sign = format!("{:?}", c.sign_convention);
             if c.dtype != ColDataType::Utf8 {
                 cast_cols.push(format!("\"{}\"", name));
             }
             match c.dtype {
-                ColDataType::Utf8 => {}
+                // CSV text stays as read; a Parquet column changed to Text is cast.
+                ColDataType::Utf8 => {
+                    if is_parquet && c.source_dtype != "String" {
+                        casts.push(base.clone());
+                    }
+                }
                 ColDataType::Float64 => casts.push(format!(
-                    "pl.col(\"{n}\").map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}), return_dtype=pl.Float64)",
+                    "{b}.map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}), return_dtype=pl.Float64)",
+                    b = base,
                     n = name,
                     s = sign,
                     a = acc
                 )),
                 ColDataType::Int64 => casts.push(format!(
-                    "pl.col(\"{n}\").map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}, as_int=True), return_dtype=pl.Int64)",
+                    "{b}.map_elements(lambda v: _mp_amount(v, \"{n}\", \"{s}\", {a}, as_int=True), return_dtype=pl.Int64)",
+                    b = base,
                     n = name,
                     s = sign,
                     a = acc
                 )),
                 ColDataType::DateDMY | ColDataType::DateMDY | ColDataType::DateISO => {
                     casts.push(format!(
-                        "pl.col(\"{}\").map_elements(lambda v: _mp_date(v, \"{:?}\"), return_dtype=pl.Date)",
-                        name, c.dtype
+                        "{}.map_elements(lambda v: _mp_date(v, \"{:?}\"), return_dtype=pl.Date)",
+                        base, c.dtype
                     ))
                 }
             }

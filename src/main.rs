@@ -7,7 +7,8 @@ use egui_extras::{Column, TableBuilder};
 use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
-    auto_detect_smart_schema_with, export_to_parquet_stream, fetch_viewport_slice,
+    auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
+    fetch_viewport_slice, preview_parquet_raw,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
 };
@@ -19,7 +20,7 @@ use micro_parquet::macros::{
     save_macro_to_file,
 };
 use micro_parquet::models::{
-    column_name_tokens, default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
+    column_name_tokens, default_bd_ftp_curve, parquet_native_type, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CsvTextEncoding,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
@@ -230,6 +231,8 @@ struct PendingCsvModal {
     target_tab: Option<usize>,
     /// Parse failures of that tab's last load (empty for a new file).
     parse_failures: Vec<ParseFailure>,
+    /// The file is Parquet: CSV reading options are hidden and file types are shown.
+    is_parquet: bool,
 }
 
 /// Exports that stop for confirmation when the control column has parse failures.
@@ -664,6 +667,7 @@ impl MicroParquetApp {
                         direct_convert_only,
                         target_tab: None,
                         parse_failures: Vec::new(),
+                        is_parquet: false,
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {
@@ -3293,7 +3297,12 @@ impl MicroParquetApp {
         let mut action_direct_convert = false;
         let mut action_reread = false;
 
-        egui::Window::new("🔍 CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock")
+        let title = if modal.is_parquet {
+            "🧬 Schema & Ingestion (Parquet): Types & PII Masking"
+        } else {
+            "🧬 Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock"
+        };
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(true)
             .default_width(980.0)
@@ -3301,55 +3310,67 @@ impl MicroParquetApp {
                 ui.label(format!("File: {:?}", modal.csv_path));
                 ui.separator();
 
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(
-                        &mut modal.config.sanitize_linebreaks,
-                        "Sanitize Linebreaks (\\r, \\n) & Trim Whitespace",
-                    );
+                if modal.is_parquet {
                     ui.checkbox(
                         &mut modal.config.parse_accounting_negatives,
                         "Parse Accounting Negatives (1,234.50 -> -1234.50)",
                     );
-                    ui.checkbox(
-                        &mut modal.config.heal_broken_csv_lines,
-                        "Pre-Heal Broken Unquoted CSV Lines",
+                    ui.label(
+                        "Columns keep their Parquet type unless you change it. Text columns can be \
+                         set to a number or date type; masks apply to any column.",
                     );
-                });
+                }
+                if !modal.is_parquet {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(
+                            &mut modal.config.sanitize_linebreaks,
+                            "Sanitize Linebreaks (\\r, \\n) & Trim Whitespace",
+                        );
+                        ui.checkbox(
+                            &mut modal.config.parse_accounting_negatives,
+                            "Parse Accounting Negatives (1,234.50 -> -1234.50)",
+                        );
+                        ui.checkbox(
+                            &mut modal.config.heal_broken_csv_lines,
+                            "Pre-Heal Broken Unquoted CSV Lines",
+                        );
+                    });
 
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Separator:");
-                    let sep_label = |c: char| match c {
-                        ',' => "Comma ,",
-                        '|' => "Pipe |",
-                        ';' => "Semicolon ;",
-                        '\t' => "Tab",
-                        _ => "Other",
-                    };
-                    egui::ComboBox::from_id_salt("csv_separator")
-                        .selected_text(sep_label(modal.config.separator))
-                        .show_ui(ui, |ui| {
-                            for c in [',', '|', ';', '\t'] {
-                                ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
-                            }
-                        });
-                    ui.label("Title lines above header:");
-                    ui.add(egui::DragValue::new(&mut modal.config.skip_rows).range(0..=100));
-                    ui.label("Encoding:");
-                    egui::ComboBox::from_id_salt("csv_encoding")
-                        .selected_text(modal.config.encoding.label())
-                        .show_ui(ui, |ui| {
-                            for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
-                                ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
-                            }
-                        });
-                    if ui
-                        .button("🔄 Re-read with these settings")
-                        .on_hover_text("Reloads the preview and re-detects the columns and their types")
-                        .clicked()
-                    {
-                        action_reread = true;
-                    }
-                });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Separator:");
+                        let sep_label = |c: char| match c {
+                            ',' => "Comma ,",
+                            '|' => "Pipe |",
+                            ';' => "Semicolon ;",
+                            '\t' => "Tab",
+                            _ => "Other",
+                        };
+                        egui::ComboBox::from_id_salt("csv_separator")
+                            .selected_text(sep_label(modal.config.separator))
+                            .show_ui(ui, |ui| {
+                                for c in [',', '|', ';', '\t'] {
+                                    ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
+                                }
+                            });
+                        ui.label("Title lines above header:");
+                        ui.add(egui::DragValue::new(&mut modal.config.skip_rows).range(0..=100));
+                        ui.label("Encoding:");
+                        egui::ComboBox::from_id_salt("csv_encoding")
+                            .selected_text(modal.config.encoding.label())
+                            .show_ui(ui, |ui| {
+                                for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
+                                    ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
+                                }
+                            });
+                        if ui
+                            .button("🔄 Re-read with these settings")
+                            .on_hover_text("Reloads the preview and re-detects the columns and their types")
+                            .clicked()
+                        {
+                            action_reread = true;
+                        }
+                    });
+                }
 
                 ui.horizontal(|ui| {
                     if ui.button("💾 Save Schema Template (.schema.json)").clicked() {
@@ -3381,7 +3402,11 @@ impl MicroParquetApp {
                 });
 
                 ui.separator();
-                ui.strong("1. Raw 5-Row Text Preview:");
+                ui.strong(if modal.is_parquet {
+                    "1. First 5 Rows:"
+                } else {
+                    "1. Raw 5-Row Text Preview:"
+                });
                 egui::ScrollArea::vertical()
                     .id_salt("raw_preview_scroll")
                     .max_height(130.0)
@@ -3426,35 +3451,45 @@ impl MicroParquetApp {
                                         .on_hover_text(
                                             "Values carry Dr/Cr. Choose 'Dr is +' or 'Cr is +' or the load stops.",
                                         );
+                                    } else if modal.is_parquet {
+                                        ui.label(format!("{}  [{}]", col_cfg.name, col_cfg.source_dtype));
                                     } else {
                                         ui.label(&col_cfg.name);
                                     }
-                                    egui::ComboBox::from_id_salt(format!("dtype_{}", i))
-                                        .selected_text(col_cfg.dtype.label())
-                                        .show_ui(ui, |ui| {
-                                            for dt in ColDataType::all() {
-                                                ui.selectable_value(
-                                                    &mut col_cfg.dtype,
-                                                    *dt,
-                                                    dt.label(),
-                                                );
-                                            }
-                                        });
-                                    egui::ComboBox::from_id_salt(format!("pii_{}", i))
-                                        .selected_text(col_cfg.pii_mask.label())
-                                        .show_ui(ui, |ui| {
-                                            for mode in [
-                                                PiiMaskMode::None,
-                                                PiiMaskMode::ClientNameHash,
-                                                PiiMaskMode::AccountNumber,
-                                            ] {
-                                                ui.selectable_value(
-                                                    &mut col_cfg.pii_mask,
-                                                    mode,
-                                                    mode.label(),
-                                                );
-                                            }
-                                        });
+                                    // Parquet types with no counterpart here (Boolean, List...)
+                                    // stay as they are.
+                                    let convertible = !modal.is_parquet
+                                        || parquet_native_type(&col_cfg.source_dtype).is_some();
+                                    ui.add_enabled_ui(convertible, |ui| {
+                                        egui::ComboBox::from_id_salt(format!("dtype_{}", i))
+                                            .selected_text(col_cfg.dtype.label())
+                                            .show_ui(ui, |ui| {
+                                                for dt in ColDataType::all() {
+                                                    ui.selectable_value(
+                                                        &mut col_cfg.dtype,
+                                                        *dt,
+                                                        dt.label(),
+                                                    );
+                                                }
+                                            });
+                                    });
+                                    ui.add_enabled_ui(convertible, |ui| {
+                                        egui::ComboBox::from_id_salt(format!("pii_{}", i))
+                                            .selected_text(col_cfg.pii_mask.label())
+                                            .show_ui(ui, |ui| {
+                                                for mode in [
+                                                    PiiMaskMode::None,
+                                                    PiiMaskMode::ClientNameHash,
+                                                    PiiMaskMode::AccountNumber,
+                                                ] {
+                                                    ui.selectable_value(
+                                                        &mut col_cfg.pii_mask,
+                                                        mode,
+                                                        mode.label(),
+                                                    );
+                                                }
+                                            });
+                                    });
                                     if col_cfg.dtype == ColDataType::Float64 {
                                         egui::ComboBox::from_id_salt(format!("sign_{}", i))
                                             .selected_text(col_cfg.sign_convention.label())
@@ -3516,9 +3551,10 @@ impl MicroParquetApp {
                         action_open_tab = true;
                         keep_open = false;
                     }
-                    if ui
-                        .button("⚡ Convert Directly to Parquet File Now...")
-                        .clicked()
+                    if !modal.is_parquet
+                        && ui
+                            .button("⚡ Convert Directly to Parquet File Now...")
+                            .clicked()
                     {
                         action_direct_convert = true;
                         keep_open = false;
@@ -3966,22 +4002,41 @@ impl MicroParquetApp {
         else {
             return;
         };
-        if *is_parquet {
-            self.status_message = "Schema for Parquet sources is not available yet.".into();
-            return;
-        }
-        match preview_csv_with(path, 5, config) {
-            Ok(preview) => {
+        let loaded = if *is_parquet {
+            // Parquet: list every column with the file's own type. A saved schema keeps the
+            // user's choices; the file types and samples are always read fresh.
+            preview_parquet_raw(path, 5).and_then(|preview| {
+                let detected = auto_detect_parquet_schema(path)?;
+                let cfg = if config.columns.is_empty() {
+                    detected
+                } else {
+                    let mut cfg = config.clone();
+                    for c in cfg.columns.iter_mut() {
+                        if let Some(d) = detected.columns.iter().find(|d| d.name == c.name) {
+                            c.source_dtype = d.source_dtype.clone();
+                            c.sample_values = d.sample_values.clone();
+                        }
+                    }
+                    cfg
+                };
+                Ok((preview, cfg))
+            })
+        } else {
+            preview_csv_with(path, 5, config).map(|p| (p, config.clone()))
+        };
+        match loaded {
+            Ok((preview, cfg)) => {
                 self.pending_csv_modal = Some(PendingCsvModal {
                     csv_path: path.clone(),
                     raw_preview_df: preview,
-                    config: config.clone(),
+                    config: cfg,
                     direct_convert_only: false,
                     target_tab: Some(self.active_tab),
                     parse_failures: tab.parse_failures.clone(),
+                    is_parquet: *is_parquet,
                 });
             }
-            Err(e) => self.status_message = format!("Error reading CSV preview: {:#}", e),
+            Err(e) => self.status_message = format!("Error reading the file preview: {:#}", e),
         }
     }
 

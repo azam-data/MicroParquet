@@ -479,6 +479,84 @@ fn t23_csv_reading_options() {
 }
 
 #[test]
+fn t24_parquet_schema() {
+    // P5: String columns of a Parquet file convert with the CSV rules; masks apply.
+    let df = df!(
+        "Actnum" => ["0012345678", "0098765432", "0011112222"],
+        "Balance" => ["1,000", "(50)", "abc"],
+        "Matdat" => ["05/11/2026", "31-Oct-26", ""],
+        "Rate" => [9.5, 10.0, 11.0],
+        "Flag" => [true, false, true]
+    )
+    .unwrap();
+    let p = write_parquet("p5.parquet", &df);
+
+    let mut cfg = auto_detect_parquet_schema(&p).unwrap();
+    let labels: Vec<(&str, &str, ColDataType)> = cfg
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.source_dtype.as_str(), c.dtype))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            ("Actnum", "String", ColDataType::Utf8),
+            ("Balance", "String", ColDataType::Utf8),
+            ("Matdat", "String", ColDataType::Utf8),
+            ("Rate", "Float64", ColDataType::Float64),
+            ("Flag", "Boolean", ColDataType::Utf8),
+        ]
+    );
+    assert_eq!(cfg.columns[1].sample_values, vec!["1,000", "(50)", "abc"]);
+
+    // The auto-detected schema changes nothing.
+    let same = build_lazy_pipeline(&p, true, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert!(same.equals_missing(&df));
+
+    let set = |cfg: &mut IngestionConfig, name: &str, f: &dyn Fn(&mut ColumnSchemaConfig)| {
+        f(cfg.columns.iter_mut().find(|c| c.name == name).unwrap())
+    };
+    set(&mut cfg, "Balance", &|c| c.dtype = ColDataType::Float64);
+    set(&mut cfg, "Matdat", &|c| c.dtype = ColDataType::DateDMY);
+    set(&mut cfg, "Actnum", &|c| c.pii_mask = PiiMaskMode::AccountNumber);
+    let out = build_lazy_pipeline(&p, true, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Balance"), vec![Some(1000.0), Some(-50.0), None]);
+    assert_eq!(
+        date_days_col(&out, "Matdat"),
+        vec![Some(days(2026, 11, 5)), Some(days(2026, 10, 31)), None]
+    );
+    let acct = str_col(&out, "Actnum");
+    let a0 = acct[0].clone().unwrap();
+    assert!(a0.starts_with("001") && a0.ends_with("678") && a0 != "0012345678", "{a0}");
+    assert_eq!(a0.len(), 11, "3 + 5 hex + 3: {a0}");
+    assert_eq!(f64_col(&out, "Rate"), vec![Some(9.5), Some(10.0), Some(11.0)]);
+    assert_eq!(out.column("Flag").unwrap().dtype(), &DataType::Boolean);
+
+    // P2 counts cover Parquet conversions ("abc"; the blank date is not a failure).
+    let f = compute_parse_failures(&p, true, &cfg, &tmpdir()).unwrap();
+    assert_eq!(f, vec![ParseFailure { column: "Balance".into(), count: 1, examples: vec!["abc".into()] }]);
+
+    // A numeric Parquet column changed to Text becomes text; a Boolean cannot become a number.
+    let mut c2 = cfg.clone();
+    set(&mut c2, "Rate", &|c| c.dtype = ColDataType::Utf8);
+    let out = build_lazy_pipeline(&p, true, &c2, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(str_col(&out, "Rate")[0].as_deref(), Some("9.5"));
+    set(&mut c2, "Flag", &|c| c.dtype = ColDataType::Float64);
+    let err = build_lazy_pipeline(&p, true, &c2, &tmpdir()).err().expect("Boolean -> Float64 must fail");
+    assert!(format!("{err:#}").contains("'Flag' is Boolean"), "{err:#}");
+
+    // Dr/Cr in a Parquet String column with no sign convention stops the load too.
+    let p2 = write_parquet("p5_drcr.parquet", &df!("Balance" => ["100 Dr", "50 Cr"]).unwrap());
+    let mut c3 = auto_detect_parquet_schema(&p2).unwrap();
+    c3.columns[0].dtype = ColDataType::Float64;
+    let err = build_lazy_pipeline(&p2, true, &c3, &tmpdir()).err().expect("Dr/Cr with no sign must fail");
+    assert!(format!("{err:#}").contains("'Balance' has Dr/Cr"), "{err:#}");
+    c3.columns[0].sign_convention = SignConvention::DrPositive;
+    let out = build_lazy_pipeline(&p2, true, &c3, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Balance"), vec![Some(100.0), Some(-50.0)]);
+}
+
+#[test]
 fn t05_parquet_datetime_maturity_bucket() {
     // Parquet written by pandas / Power BI usually stores dates as Datetime(ns/us/ms), not Date
     let mut df = df!(

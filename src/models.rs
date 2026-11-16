@@ -143,6 +143,37 @@ pub struct ColumnSchemaConfig {
     /// Auto-detect saw Dr/Cr markers in this column's sample (the schema modal highlights it).
     #[serde(default)]
     pub has_dr_cr: bool,
+    /// Parquet sources: the column's type in the file ("String", "Float64", "Date", ...).
+    /// Empty for CSV.
+    #[serde(default)]
+    pub source_dtype: String,
+}
+
+/// The column type a Parquet column already has, from its `source_dtype` label; `None` for
+/// types that cannot be converted here (Boolean, List, ...).
+pub fn parquet_native_type(source_dtype: &str) -> Option<ColDataType> {
+    match source_dtype {
+        "String" => Some(ColDataType::Utf8),
+        "Float32" | "Float64" | "Decimal" => Some(ColDataType::Float64),
+        "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32" | "UInt64" => {
+            Some(ColDataType::Int64)
+        }
+        "Date" | "Datetime" => Some(ColDataType::DateISO),
+        _ => None,
+    }
+}
+
+/// True when a Parquet column must be read as text and converted: its type was changed from
+/// the file's own, or it has a PII mask. A type with no counterpart here (Boolean, List...)
+/// shown as Text counts as unchanged.
+pub fn parquet_needs_conversion(c: &ColumnSchemaConfig) -> bool {
+    if c.pii_mask != PiiMaskMode::None {
+        return true;
+    }
+    match parquet_native_type(&c.source_dtype) {
+        Some(native) => native != c.dtype,
+        None => c.dtype != ColDataType::Utf8,
+    }
 }
 
 /// Non-blank values of one typed column that could not be converted and became null.
