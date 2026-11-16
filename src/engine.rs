@@ -1069,6 +1069,29 @@ pub fn ensure_pii_key_for(source: &TabSource) -> Result<Option<String>> {
     }))
 }
 
+/// Names of the PII-masked columns of every file in `source` (no duplicates).
+pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
+    let mut add = |c: &IngestionConfig| {
+        for col in c.columns.iter().filter(|c| c.pii_mask != PiiMaskMode::None) {
+            if !out.contains(&col.name) {
+                out.push(col.name.clone());
+            }
+        }
+    };
+    match source {
+        TabSource::SingleFile { config, .. } => add(config),
+        TabSource::VerticalStack { files, .. } => files.iter().for_each(|(_, _, c)| add(c)),
+        TabSource::JoinedTabs { left_source, right_source, .. } => {
+            collect_masked_columns(left_source, out);
+            collect_masked_columns(right_source, out);
+        }
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+            collect_masked_columns(prev_source, out);
+            collect_masked_columns(curr_source, out);
+        }
+    }
+}
+
 /// Whether building this source masks any column (and so needs the PII key).
 pub fn source_masks_pii(source: &TabSource) -> bool {
     let cfg_masks = |c: &IngestionConfig| c.columns.iter().any(|col| col.pii_mask != PiiMaskMode::None);

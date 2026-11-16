@@ -8,7 +8,8 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    blank_balance_notes, control_totals_state, source_row_check, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
+    blank_balance_notes, collect_masked_columns, control_totals_state, source_masks_pii,
+    source_row_check, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
     pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
@@ -18,7 +19,7 @@ use micro_parquet::exporters::{
     PDF_MAX_ROWS_PER_TAB,
 };
 use micro_parquet::macros::{
-    generate_python_polars_code, load_macro_from_file, python_untranslated_steps,
+    generate_python_polars_code, load_macro_from_file, python_pii_refusal, python_untranslated_steps,
     save_macro_to_file,
 };
 use micro_parquet::models::{
@@ -1026,13 +1027,26 @@ impl MicroParquetApp {
                 IngestionConfig::default(),
             ),
         };
-        self.generated_python_code = generate_python_polars_code(
+        // Masked columns anywhere in the source (also inside stacks and joins) refuse the export.
+        if source_masks_pii(&tab.source) {
+            let mut masked: Vec<String> = Vec::new();
+            collect_masked_columns(&tab.source, &mut masked);
+            self.status_message = python_pii_refusal(&masked);
+            return;
+        }
+        self.generated_python_code = match generate_python_polars_code(
             &path,
             is_parq,
             &cfg,
             &tab.steps,
             tab.control_col.as_deref(),
-        );
+        ) {
+            Ok(py) => py,
+            Err(e) => {
+                self.status_message = format!("{:#}", e);
+                return;
+            }
+        };
         let missing = python_untranslated_steps(&tab.steps);
         self.python_export_warning = if missing.is_empty() {
             String::new()

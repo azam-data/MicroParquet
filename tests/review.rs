@@ -1359,7 +1359,7 @@ fn t15_python_codegen_drops_banking_steps() {
     };
     let cfg = IngestionConfig {
         columns: vec![
-            col_cfg("Balance", ColDataType::Float64, PiiMaskMode::AccountNumber),
+            col_cfg("Balance", ColDataType::Float64, PiiMaskMode::None),
             col_cfg("Matdat", ColDataType::DateDMY, PiiMaskMode::None),
             col_cfg("Opndat", ColDataType::DateMDY, PiiMaskMode::None),
             col_cfg("Valdat", ColDataType::DateISO, PiiMaskMode::None),
@@ -1372,11 +1372,11 @@ fn t15_python_codegen_drops_banking_steps() {
         &cfg,
         &steps,
         None,
-    );
+    )
+    .unwrap();
     assert!(!py.contains("Specialized Banking Step Executed"), "placeholder still emitted:\n{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 1 '+BB CL Provision & BFP' has no Python translation"), "{py}");
     assert!(py.contains("raise NotImplementedError(\"Step 2 '+ΔNII Shock (+100 bps)' has no Python translation"), "{py}");
-    assert!(py.contains("# WARNING: PII masking not reproduced"), "{py}");
     // Amounts go through the same parsing rules as the app (P1), with the column's sign setting.
     assert!(py.contains("def _mp_amount(v, col, sign, acc, as_int=False):"), "{py}");
     assert!(
@@ -1740,7 +1740,8 @@ fn t08b_wavg_python_is_null_safe() {
         &IngestionConfig::default(),
         &[wavg_step(Some("Balance"))],
         None,
-    );
+    )
+    .unwrap();
     assert!(py.contains("pl.col(\"Rate\").cast(pl.Float64).is_not_null() & pl.col(\"Balance\").cast(pl.Float64).is_not_null()"), "{py}");
     assert!(py.contains(".then(None)"), "{py}");
     let py = micro_parquet::macros::generate_python_polars_code(
@@ -1749,7 +1750,8 @@ fn t08b_wavg_python_is_null_safe() {
         &IngestionConfig::default(),
         &[wavg_step(None)],
         None,
-    );
+    )
+    .unwrap();
     assert!(py.contains("raise ValueError(\"Weighted average needs a weight column"), "{py}");
 }
 
@@ -1767,7 +1769,7 @@ fn t09b_duration_python_is_signed() {
         side_col: side.map(str::to_string),
     };
     let cfg = IngestionConfig { columns: vec![], ..Default::default() };
-    let gen = |s| micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.csv"), false, &cfg, &[s], None);
+    let gen = |s| micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.csv"), false, &cfg, &[s], None).unwrap();
     let signed = gen(step(Some("Side")));
     assert!(signed.contains("_sign = pl.when"), "{signed}");
     assert!(signed.contains("* _sign).round(2).alias(\"Delta_EVE_Impact_BDT\")"), "{signed}");
@@ -2137,9 +2139,9 @@ fn t28_control_totals_state_and_math_scalar() {
     assert_eq!(f64_col(&out, "Bal_Cr"), vec![Some(0.5), Some(1.0), Some(2.0)]);
 
     // Python export: the parsed number, or the same error raised (never 1.0).
-    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("1,000")], None);
+    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("1,000")], None).unwrap();
     assert!(py.contains("/ 1000.0)"), "{py}");
-    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("abc")], None);
+    let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("abc")], None).unwrap();
     assert!(py.contains("raise ValueError(\"Math column 'Bal_Cr': the value 'abc' is not a number"), "{py}");
 }
 
@@ -2280,4 +2282,48 @@ fn t27b_row_count_warnings() {
     assert_eq!(str_col(&log, "rows"), vec![Some("2".to_string()), Some("1".to_string())]);
     assert_eq!(str_col(&log, "data_lines"), vec![Some("2".to_string()), Some("3".to_string())]);
     assert!(str_col(&log, "error")[1].as_deref().unwrap().contains("unclosed quotes"));
+}
+
+#[test]
+fn t15b_python_export_refuses_pii_masks() {
+    let col = |name: &str, pii_mask| ColumnSchemaConfig {
+        name: name.into(),
+        dtype: ColDataType::Utf8,
+        pii_mask,
+        sample_values: vec![],
+        ..Default::default()
+    };
+    let cfg = IngestionConfig {
+        columns: vec![
+            col("Actnum", PiiMaskMode::AccountNumber),
+            col("Name", PiiMaskMode::ClientNameHash),
+            col("Branch", PiiMaskMode::None),
+        ],
+        ..Default::default()
+    };
+    let err = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("x.csv"), false, &cfg, &[], None)
+        .err()
+        .expect("masked columns must refuse the export");
+    let msg = format!("{err:#}");
+    assert!(msg.starts_with("Python export refused: column(s) Actnum, Name are PII-masked"), "{msg}");
+    assert!(msg.contains("cannot reproduce") && msg.contains("real names and account numbers"), "{msg}");
+    // Without masks the script is produced.
+    let mut plain = cfg.clone();
+    plain.columns.iter_mut().for_each(|c| c.pii_mask = PiiMaskMode::None);
+    assert!(micro_parquet::macros::generate_python_polars_code(std::path::Path::new("x.csv"), false, &plain, &[], None).is_ok());
+    // Masks inside a stack or join are found too (the app checks these before exporting).
+    let src = TabSource::JoinedTabs {
+        left_source: Box::new(TabSource::SingleFile { path: "l.csv".into(), is_parquet: false, config: plain.clone() }),
+        left_steps: vec![],
+        right_source: Box::new(TabSource::VerticalStack { files: vec![("r.csv".into(), false, cfg.clone())], include_source_col: false }),
+        right_steps: vec![],
+        join_kind: SqlJoinKind::Left,
+        join_keys: vec!["Actnum".into()],
+        right_cols_to_keep: vec![],
+        keep_first_duplicate_right: false,
+    };
+    assert!(source_masks_pii(&src));
+    let mut masked = Vec::new();
+    collect_masked_columns(&src, &mut masked);
+    assert_eq!(masked, vec!["Actnum".to_string(), "Name".to_string()]);
 }
