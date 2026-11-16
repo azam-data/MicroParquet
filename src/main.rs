@@ -8,7 +8,8 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    control_totals_state, detect_file_schema, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
+    control_totals_state, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
+    pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
 };
@@ -179,6 +180,9 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         config: cfg,
     };
 
+    if let Some(note) = ensure_pii_key_for(&source)? {
+        eprintln!("[MicroParquet] {}", note);
+    }
     let lf = compile_tab_lazy(&source, &steps, &paths.temp_dir)?;
 
     // Values that could not be converted: always reported, and they stop the run when the
@@ -712,6 +716,13 @@ impl MicroParquetApp {
         steps: Vec<TransformStep>,
         col_formats: HashMap<String, ColumnFormatSpec>,
     ) {
+        let key_note = match ensure_pii_key_for(&source) {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Pipeline error: {:#}", e);
+                return;
+            }
+        };
         match compile_tab_lazy(&source, &steps, &self.paths.temp_dir) {
             Ok(lf) => {
                 let slice = fetch_viewport_slice(lf.clone(), 0, 100).unwrap_or_default();
@@ -772,6 +783,9 @@ impl MicroParquetApp {
                 self.init_tool_defaults_from_active_tab();
                 self.status_message =
                     format!("Tab created and evaluated out-of-core.{}", count_note);
+                if let Some(n) = key_note {
+                    self.status_message.push_str(&format!(" 🔑 {}", n));
+                }
             }
             Err(e) => {
                 self.status_message = format!("Pipeline error: {}", e);
@@ -3526,6 +3540,56 @@ impl MicroParquetApp {
                     }
                 });
 
+                // PII masks use the per-install key (the schema's old salt is not used).
+                let key_path = pii_key_path();
+                ui.horizontal(|ui| {
+                    ui.label("🔑 Mask Name / Mask Acct use this install's secret key (not a salt in the schema).");
+                    match read_pii_key(&key_path) {
+                        Ok(Some(k)) => {
+                            ui.label(format!("Key fingerprint: {}", pii_key_fingerprint(&k)));
+                        }
+                        Ok(None) => {
+                            ui.label("No key yet: it is created the first time a column is masked.");
+                        }
+                        Err(e) => {
+                            ui.colored_label(egui::Color32::from_rgb(200, 30, 30), format!("{:#}", e));
+                        }
+                    }
+                    if ui
+                        .button("📤 Export key...")
+                        .on_hover_text("Saves the 32-byte key file. Keep it as safe as the data: anyone with it can check guesses against the masks.")
+                        .clicked()
+                    {
+                        if let Some(dest) = rfd::FileDialog::new().set_file_name("pii_key.bin").save_file() {
+                            self.status_message = match export_pii_key(&key_path, &dest) {
+                                Ok(_) => format!("Exported the PII key to {:?}. Keep it safe.", dest),
+                                Err(e) => format!("Key export failed: {:#}", e),
+                            };
+                        }
+                    }
+                    if ui
+                        .button("📥 Import key...")
+                        .on_hover_text("Replaces this install's key (the current one is backed up next to it).")
+                        .clicked()
+                    {
+                        if let Some(src) = rfd::FileDialog::new().pick_file() {
+                            self.status_message = match import_pii_key(&key_path, &src) {
+                                Ok(bak) => format!(
+                                    "Imported the PII key from {:?}.{} Open tabs use it on their next refresh.",
+                                    src,
+                                    bak.map(|b| format!(" The previous key was saved as {:?}.", b))
+                                        .unwrap_or_default()
+                                ),
+                                Err(e) => format!("Key import failed: {:#}", e),
+                            };
+                        }
+                    }
+                });
+                ui.colored_label(
+                    egui::Color32::from_rgb(210, 70, 0),
+                    "⚠ Masks made with different keys don't match. To get the same masks on another PC, export the key here and import it there.",
+                );
+
                 ui.separator();
                 ui.strong(if modal.is_parquet {
                     "1. First 5 Rows:"
@@ -4296,6 +4360,13 @@ impl MicroParquetApp {
             is_parquet: *is_parquet,
             config,
         };
+        let key_note = match ensure_pii_key_for(&new_source) {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Schema not applied: {:#}", e);
+                return;
+            }
+        };
         if let Err(e) = compile_tab_lazy(&new_source, &tab.steps, &self.paths.temp_dir) {
             self.status_message = format!("Schema not applied: {:#}", e);
             return;
@@ -4311,6 +4382,9 @@ impl MicroParquetApp {
         self.active_tab = idx;
         self.refresh_active_tab(true);
         self.status_message = "Schema applied and tab reloaded.".into();
+        if let Some(n) = key_note {
+            self.status_message.push_str(&format!(" 🔑 {}", n));
+        }
     }
 }
 

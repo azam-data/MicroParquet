@@ -4,7 +4,7 @@ use crate::banking::{
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
 };
 use crate::models::{
-    column_name_tokens, parquet_native_type, parquet_needs_conversion, AggFunc, AggSpec,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
     ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
@@ -881,21 +881,207 @@ fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionC
     }
 
     if col_cfg.pii_mask != PiiMaskMode::None {
-        let salt = config.pii_salt.clone();
+        // The old `config.pii_salt` is no longer used: masks use the per-install key.
         let mode = col_cfg.pii_mask;
-        e = e.map(
-            move |s: Series| {
-                let ca = s.str()?;
-                let out: StringChunked = ca
-                    .into_iter()
-                    .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &salt)))
-                    .collect();
-                Ok(Some(out.into_series()))
-            },
-            GetOutput::from_type(DataType::String),
-        );
+        e = match load_or_create_pii_key(&pii_key_path()) {
+            Ok((key, _)) => e.map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let out: StringChunked = ca
+                        .into_iter()
+                        .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &key)))
+                        .collect();
+                    Ok(Some(out.into_series()))
+                },
+                GetOutput::from_type(DataType::String),
+            ),
+            Err(err) => {
+                let msg = format!("{:#}", err);
+                e.map(
+                    move |_s: Series| Err(polars_err!(ComputeError: "{}", msg)),
+                    GetOutput::from_type(DataType::String),
+                )
+            }
+        };
     }
     e
+}
+
+/// Name of the per-install PII key file inside `portable_data/`.
+pub const PII_KEY_FILE: &str = "pii_key.bin";
+
+/// `portable_data/pii_key.bin` next to the executable.
+pub fn pii_key_path() -> PathBuf {
+    portable_root_dir().join(PII_KEY_FILE)
+}
+
+fn pii_key_from_bytes(path: &Path, bytes: &[u8]) -> Result<[u8; 32]> {
+    <[u8; 32]>::try_from(bytes).map_err(|_| {
+        anyhow::anyhow!(
+            "The PII key file {:?} is damaged ({} bytes, expected 32). Import your exported key in Schema & Ingestion, or delete the file to create a new key (masks made with a new key will not match earlier ones).",
+            path,
+            bytes.len()
+        )
+    })
+}
+
+/// Writes a new file that only the current user can read (Unix); fails if it exists.
+fn write_new_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+fn pii_key_temp_path(path: &Path) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.with_file_name(format!("{}.tmp-{}-{}-{}", PII_KEY_FILE, std::process::id(), nanos, n))
+}
+
+/// Reads the PII key, creating it with 32 random bytes when the file does not exist.
+/// Returns the key and whether it was just created. A damaged file is an error, never replaced.
+pub fn load_or_create_pii_key(path: &Path) -> Result<([u8; 32], bool)> {
+    match std::fs::read(path) {
+        Ok(bytes) => return Ok((pii_key_from_bytes(path, &bytes)?, false)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => anyhow::bail!(
+            "Could not read the PII key file {:?}: {}. Check the file's permissions, or import your exported key in Schema & Ingestion.",
+            path,
+            e
+        ),
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Could not create the folder {:?} for the PII key", dir))?;
+    }
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key)
+        .map_err(|e| anyhow::anyhow!("Could not get random bytes for a new PII key: {}", e))?;
+    // Write a temporary file, then hard-link it into place: a link never replaces an existing
+    // file, so two processes creating the key at once end up with the same key.
+    let tmp = pii_key_temp_path(path);
+    write_new_private_file(&tmp, &key)
+        .with_context(|| format!("Could not write a new PII key next to {:?}", path))?;
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok((key, true)),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("Could not read the PII key file {:?}", path))?;
+            Ok((pii_key_from_bytes(path, &bytes)?, false))
+        }
+        // File systems without hard links (e.g. FAT on a USB stick): exclusive create instead.
+        Err(_) => match write_new_private_file(path, &key) {
+            Ok(()) => Ok((key, true)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let bytes = std::fs::read(path)
+                    .with_context(|| format!("Could not read the PII key file {:?}", path))?;
+                Ok((pii_key_from_bytes(path, &bytes)?, false))
+            }
+            Err(e) => anyhow::bail!("Could not create the PII key file {:?}: {}", path, e),
+        },
+    }
+}
+
+/// First 8 hex characters of blake3 of the key: shows whether two installs share a key.
+pub fn pii_key_fingerprint(key: &[u8; 32]) -> String {
+    blake3::hash(key).to_hex()[..8].to_uppercase()
+}
+
+/// Copies the install key (created first if missing) to `dest`. Returns whether it was created.
+pub fn export_pii_key(key_path: &Path, dest: &Path) -> Result<bool> {
+    let (key, created) = load_or_create_pii_key(key_path)?;
+    std::fs::write(dest, key).with_context(|| format!("Could not write the key to {:?}", dest))?;
+    Ok(created)
+}
+
+/// Replaces the install key with the 32-byte key in `src`. The current key is first copied to
+/// `pii_key.bin.bak-<unix seconds>`; that path is returned.
+pub fn import_pii_key(key_path: &Path, src: &Path) -> Result<Option<PathBuf>> {
+    let bytes = std::fs::read(src).with_context(|| format!("Could not read the key file {:?}", src))?;
+    let key = <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+        anyhow::anyhow!(
+            "{:?} is not a MicroParquet PII key ({} bytes, expected 32). Nothing was changed.",
+            src,
+            bytes.len()
+        )
+    })?;
+    if let Some(dir) = key_path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Could not create the folder {:?}", dir))?;
+    }
+    let mut backup = None;
+    if key_path.exists() {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let bak = key_path.with_file_name(format!("{}.bak-{}", PII_KEY_FILE, secs));
+        std::fs::copy(key_path, &bak)
+            .with_context(|| format!("Could not back up the current key to {:?}; nothing was changed", bak))?;
+        backup = Some(bak);
+    }
+    let tmp = pii_key_temp_path(key_path);
+    write_new_private_file(&tmp, &key)
+        .with_context(|| format!("Could not write the new key next to {:?}", key_path))?;
+    if let Err(e) = std::fs::rename(&tmp, key_path) {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("Could not replace the PII key {:?}: {}", key_path, e);
+    }
+    Ok(backup)
+}
+
+/// The key in `path`: `Ok(None)` when there is no key file yet. Never creates one.
+pub fn read_pii_key(path: &Path) -> Result<Option<[u8; 32]>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(pii_key_from_bytes(path, &bytes)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => anyhow::bail!("Could not read the PII key file {:?}: {}", path, e),
+    }
+}
+
+/// Creates the key when `source` masks a column and there is no key file yet. Returns a note
+/// for the user when a key was created, or the error (missing permissions, damaged file).
+pub fn ensure_pii_key_for(source: &TabSource) -> Result<Option<String>> {
+    if !source_masks_pii(source) {
+        return Ok(None);
+    }
+    let path = pii_key_path();
+    let (key, created) = load_or_create_pii_key(&path)?;
+    Ok(created.then(|| {
+        format!(
+            "Created a new PII key (fingerprint {}) at {:?}. Export it (Schema & Ingestion) to keep masks reproducible on another PC or after reinstalling.",
+            pii_key_fingerprint(&key),
+            path
+        )
+    }))
+}
+
+/// Whether building this source masks any column (and so needs the PII key).
+pub fn source_masks_pii(source: &TabSource) -> bool {
+    let cfg_masks = |c: &IngestionConfig| c.columns.iter().any(|col| col.pii_mask != PiiMaskMode::None);
+    match source {
+        TabSource::SingleFile { config, .. } => cfg_masks(config),
+        TabSource::VerticalStack { files, .. } => files.iter().any(|(_, _, c)| cfg_masks(c)),
+        TabSource::JoinedTabs { left_source, right_source, .. } => {
+            source_masks_pii(left_source) || source_masks_pii(right_source)
+        }
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+            source_masks_pii(prev_source) || source_masks_pii(curr_source)
+        }
+    }
 }
 
 /// Converts a text expression to the column's configured type (P1 amount and date rules).
@@ -2041,28 +2227,52 @@ fn apply_groupby_pivot(
     Ok(out_lf)
 }
 
-fn mask_pii_value(val: &str, mode: PiiMaskMode, salt: &str) -> String {
+/// Keyed blake3 mask of one value: `CLIENT_` or `ACCT_` + 16 upper-case hex characters
+/// (64 bits). Nothing of the original value is kept. Blank stays blank.
+pub fn mask_pii_value(val: &str, mode: PiiMaskMode, key: &[u8; 32]) -> String {
     let trimmed = val.trim();
     if trimmed.is_empty() {
         return String::new();
     }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(salt.as_bytes());
-    hasher.update(trimmed.as_bytes());
-    let hex = hasher.finalize().to_hex().to_string().to_uppercase();
-
+    let token = |round: u32| -> String {
+        let hash = if round == 0 {
+            blake3::keyed_hash(key, trimmed.as_bytes())
+        } else {
+            let mut h = blake3::Hasher::new_keyed(key);
+            h.update(trimmed.as_bytes());
+            h.update(&[0]);
+            h.update(&round.to_le_bytes());
+            h.finalize()
+        };
+        hash.to_hex()[..16].to_uppercase()
+    };
     match mode {
         PiiMaskMode::None => trimmed.to_string(),
-        PiiMaskMode::ClientNameHash => format!("CLIENT_{}", &hex[..8]),
+        PiiMaskMode::ClientNameHash => format!("CLIENT_{}", token(0)),
         PiiMaskMode::AccountNumber => {
-            let chars: Vec<char> = trimmed.chars().collect();
-            if chars.len() >= 7 {
-                let prefix: String = chars[..3].iter().collect();
-                let suffix: String = chars[chars.len() - 3..].iter().collect();
-                format!("{}{}{}", prefix, &hex[..5], suffix)
-            } else {
-                format!("ACCT_{}", &hex[..6])
+            // Hex digits can repeat 3 digits of the account number by chance; the next round of
+            // the keyed hash is taken until they don't (deterministic for a value and key).
+            let digits: Vec<char> = trimmed.chars().collect();
+            let leaks = |t: &str| {
+                digits.windows(3).any(|w| {
+                    w.iter().all(|c| c.is_ascii_digit()) && t.contains(&w.iter().collect::<String>())
+                })
+            };
+            for round in 0..256 {
+                let t = token(round);
+                if !leaks(&t) {
+                    return format!("ACCT_{}", t);
+                }
             }
+            // Not reachable in practice; never return digits of the original.
+            let safe: String = token(0)
+                .chars()
+                .map(|c| match c.to_digit(10) {
+                    Some(d) => char::from(b'G' + d as u8),
+                    None => c,
+                })
+                .collect();
+            format!("ACCT_{}", safe)
         }
     }
 }

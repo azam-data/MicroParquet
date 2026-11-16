@@ -2528,6 +2528,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_plot",
+ "getrandom 0.2.17",
  "polars",
  "printpdf",
  "rfd",

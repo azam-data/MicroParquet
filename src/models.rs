@@ -98,7 +98,7 @@ impl PiiMaskMode {
         match self {
             PiiMaskMode::None => "No Masking",
             PiiMaskMode::ClientNameHash => "Mask Name (CLIENT_XXXX)",
-            PiiMaskMode::AccountNumber => "Mask Acct (629***042)",
+            PiiMaskMode::AccountNumber => "Mask Acct (ACCT_XXXX)",
         }
     }
 }

@@ -167,6 +167,9 @@ Recorded during P6–P15 (sessions 2–3, unattended run; not yet confirmed by t
 - P10: "malformed CSV" in the test is an empty file (no header row): Polars reads many broken CSVs without an error (an unclosed quote swallows the following lines, binary junk becomes a header with 0 rows). Those are not detected by the batch run.
 - P11: when only the control column is missing (e.g. after a pivot) the row count is still shown and only the sum is "—" with the reason; when the pipeline itself fails both are "—". A control column that is not numeric now has no sum ("—", reason shown); it used to be cast to numbers and summed. State function: `control_totals_state` (engine).
 - P11: the math scalar accepts thousands commas ("10,000,000"); NaN and infinity are errors. The Python export writes the parsed number, or `raise ValueError(<same message>)` for a value that is not a number.
+- P12: hex can repeat 3 digits of an account number by chance ("ACCT_2A7C2AB96375C989" for 1234567237570), so the account mask takes the next round of the keyed hash (key, value, 0x00, round) until the 16 hex characters contain no 3-digit run of the original. Same value + same key still gives the same token.
+- P12: design in `docs/phase2-progress.md`. Additions to the spec: the schema modal shows a key fingerprint (first 8 hex of blake3 of the key); Import key backs up the current key as `pii_key.bin.bak-<unix seconds>`; a damaged key file is an error and is never replaced automatically; a newly created key is announced in the status bar / on stderr. The Python export still does not reproduce masking (blake3 is not in the Python standard library); the script now also prints a warning when it runs.
+- P12 (question): tokens are 64-bit keyed hashes; anyone holding the exported key file can test guesses (e.g. all account numbers of a branch) against the masks. The key file must be handled like the data.
 </accepted_deviations>
 
 <constraints>

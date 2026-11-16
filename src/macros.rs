@@ -239,7 +239,9 @@ pub fn generate_python_polars_code(
     }
 
     if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
-        py.push_str("# WARNING: PII masking not reproduced\n\n");
+        py.push_str("# WARNING: PII masking not reproduced\n");
+        py.push_str("# (the app masks with a per-install key; this script keeps the original values)\n");
+        py.push_str("print(\"WARNING: PII masking is not reproduced by this script; masked columns hold the original values.\")\n\n");
     }
 
     // Columns to type, each with the expression giving its text. CSV: every column (read as

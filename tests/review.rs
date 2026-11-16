@@ -527,8 +527,7 @@ fn t24_parquet_schema() {
     );
     let acct = str_col(&out, "Actnum");
     let a0 = acct[0].clone().unwrap();
-    assert!(a0.starts_with("001") && a0.ends_with("678") && a0 != "0012345678", "{a0}");
-    assert_eq!(a0.len(), 11, "3 + 5 hex + 3: {a0}");
+    assert!(a0.starts_with("ACCT_") && a0.len() == 21 && !a0.contains("001"), "ACCT_ + 16 hex: {a0}");
     assert_eq!(f64_col(&out, "Rate"), vec![Some(9.5), Some(10.0), Some(11.0)]);
     assert_eq!(out.column("Flag").unwrap().dtype(), &DataType::Boolean);
 
@@ -1122,7 +1121,6 @@ fn t12_reconcile() {
 }
 
 #[test]
-#[ignore = "Phase 2: wider PII name hash (CLIENT_ token has 8 hex characters = 32 bits)"]
 fn t13_pii_hash_collisions() {
     // Target: 1,000,000 distinct customer names give 1,000,000 distinct CLIENT_ tokens through
     // the real ingestion mask. With 32 bits about 116 collisions are expected.
@@ -1147,6 +1145,31 @@ fn t13_pii_hash_collisions() {
     let names = df.column("Name").unwrap();
     assert_eq!(names.len(), n);
     assert_eq!(names.n_unique().unwrap(), n, "masked names must stay distinct");
+    let first = names.str().unwrap().get(0).unwrap().to_string();
+    assert!(first.starts_with("CLIENT_") && first.len() == 7 + 16, "{first}");
+
+    // Same input + same key = same token; different keys = different tokens.
+    let k1 = [7u8; 32];
+    let mut k2 = [7u8; 32];
+    k2[31] = 8;
+    let m = |v: &str, mode, k: &[u8; 32]| mask_pii_value(v, mode, k);
+    assert_eq!(m("RAHIM UDDIN", PiiMaskMode::ClientNameHash, &k1), m(" RAHIM UDDIN ", PiiMaskMode::ClientNameHash, &k1));
+    assert_ne!(m("RAHIM UDDIN", PiiMaskMode::ClientNameHash, &k1), m("RAHIM UDDIN", PiiMaskMode::ClientNameHash, &k2));
+    assert_eq!(m("   ", PiiMaskMode::AccountNumber, &k1), "");
+    // Account tokens keep no run of 3+ digits of the original.
+    for i in 0..2000u64 {
+        let acct = format!("{:013}", 1_234_567_000_000u64 + i * 7_919);
+        for k in [&k1, &k2] {
+            let t = m(&acct, PiiMaskMode::AccountNumber, k);
+            assert!(t.starts_with("ACCT_") && t.len() == 21, "{t}");
+            assert!(t[5..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()), "{t}");
+            let digits: Vec<char> = acct.chars().collect();
+            for w in digits.windows(3) {
+                let run: String = w.iter().collect();
+                assert!(!t.contains(&run), "{t} contains {run} of {acct}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -1957,4 +1980,65 @@ fn t28_control_totals_state_and_math_scalar() {
     assert!(py.contains("/ 1000.0)"), "{py}");
     let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[step("abc")], None);
     assert!(py.contains("raise ValueError(\"Math column 'Bal_Cr': the value 'abc' is not a number"), "{py}");
+}
+
+#[test]
+fn t29_pii_key_file() {
+    let dir = tmpdir().join("t29_key");
+    let _ = std::fs::remove_dir_all(&dir);
+    let key_path = dir.join("portable_data").join("pii_key.bin");
+    assert_eq!(read_pii_key(&key_path).unwrap(), None);
+
+    // First use creates 32 random bytes; later uses read the same key.
+    let (k, created) = load_or_create_pii_key(&key_path).unwrap();
+    assert!(created);
+    assert_eq!(std::fs::read(&key_path).unwrap(), k.to_vec());
+    let (k_again, created) = load_or_create_pii_key(&key_path).unwrap();
+    assert!(!created);
+    assert_eq!(k, k_again);
+    assert_ne!(k, [0u8; 32]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    // Concurrent first use: every thread gets the same key.
+    let race_path = dir.join("race").join("pii_key.bin");
+    let keys: Vec<[u8; 32]> = (0..8)
+        .map(|_| {
+            let p = race_path.clone();
+            std::thread::spawn(move || load_or_create_pii_key(&p).unwrap().0)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(keys.iter().all(|x| *x == keys[0]));
+    let leftovers = std::fs::read_dir(race_path.parent().unwrap()).unwrap().count();
+    assert_eq!(leftovers, 1, "temporary key files are removed");
+
+    // Export, then import into another install: same fingerprint; the old key is backed up.
+    let exported = dir.join("backup_key.bin");
+    assert!(!export_pii_key(&key_path, &exported).unwrap());
+    let other = dir.join("other").join("pii_key.bin");
+    let (k_other, _) = load_or_create_pii_key(&other).unwrap();
+    assert_ne!(pii_key_fingerprint(&k_other), pii_key_fingerprint(&k));
+    let bak = import_pii_key(&other, &exported).unwrap().expect("backup of the replaced key");
+    assert_eq!(std::fs::read(&bak).unwrap(), k_other.to_vec());
+    assert_eq!(read_pii_key(&other).unwrap(), Some(k));
+
+    // A file that is not a key is refused and changes nothing.
+    let junk = dir.join("junk.bin");
+    std::fs::write(&junk, b"not a key").unwrap();
+    let err = import_pii_key(&other, &junk).err().expect("wrong size");
+    assert!(format!("{err:#}").contains("expected 32"), "{err:#}");
+    assert_eq!(read_pii_key(&other).unwrap(), Some(k));
+
+    // A damaged key file is an error (never silently replaced).
+    std::fs::write(&key_path, b"short").unwrap();
+    let err = load_or_create_pii_key(&key_path).err().expect("damaged key");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("damaged") && msg.contains("5 bytes"), "{msg}");
+    assert_eq!(std::fs::read(&key_path).unwrap(), b"short".to_vec());
+    assert_eq!(pii_key_fingerprint(&k).len(), 8);
 }
