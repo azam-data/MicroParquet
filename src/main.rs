@@ -14,6 +14,7 @@ use micro_parquet::engine::{
 };
 use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
+    PDF_MAX_ROWS_PER_TAB,
 };
 use micro_parquet::macros::{
     generate_python_polars_code, load_macro_from_file, python_untranslated_steps,
@@ -219,18 +220,22 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
     }
     if let Some(out_xlsx) = &args.export_xlsx {
         let df = lf.clone().collect()?;
-        export_tabs_to_xlsx(vec![("Headless_Output".to_string(), df)], out_xlsx)?;
-        println!("Exported Excel: {:?}", out_xlsx);
+        let rep = export_tabs_to_xlsx(vec![("Headless_Output".to_string(), df)], Vec::new(), out_xlsx)?;
+        println!("Exported Excel: {:?} ({})", out_xlsx, rep.summary());
     }
     if let Some(out_pdf) = &args.export_pdf {
         let df = lf.collect()?;
-        export_tabs_to_pdf(
+        let rep = export_tabs_to_pdf(
             vec![("Headless_Report".to_string(), df, HashMap::new())],
             out_pdf,
             NumberDisplayFormat::BdtCrore,
             2,
         )?;
         println!("Exported PDF: {:?}", out_pdf);
+        let s = rep.summary();
+        if !s.is_empty() {
+            eprintln!("WARNING (PDF): {}", s);
+        }
     }
 
     Ok(())
@@ -4009,23 +4014,28 @@ impl MicroParquetApp {
             .set_file_name("Consolidated_ALCO_Views.xlsx")
             .save_file()?;
         let mut collected_tabs = Vec::new();
+        let mut errors = Vec::new();
         for (i, tab) in self.tabs.iter().enumerate() {
             if self.multi_export_checks.get(i).copied().unwrap_or(false) {
-                if let Ok(lf) = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
-                    if let Ok(df) = lf.limit(1_048_500).collect() {
-                        collected_tabs.push((tab.title.clone(), df));
-                    }
+                match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
+                    .and_then(|lf| Ok(lf.collect()?))
+                {
+                    Ok(df) => collected_tabs.push((tab.title.clone(), df)),
+                    Err(e) => errors.push((tab.title.clone(), format!("{:#}", e))),
                 }
             }
         }
-        match export_tabs_to_xlsx(collected_tabs, &out_path) {
-            Ok(_) => {
-                self.status_message =
-                    format!("Exported multi-tab Excel workbook to {:?}", out_path);
+        match export_tabs_to_xlsx(collected_tabs, errors, &out_path) {
+            Ok(rep) => {
+                self.status_message = format!(
+                    "Exported multi-tab Excel workbook to {:?}: {}",
+                    out_path,
+                    rep.summary()
+                );
                 Some(out_path)
             }
             Err(e) => {
-                self.status_message = format!("Excel export error: {}", e);
+                self.status_message = format!("Excel export error: {:#}", e);
                 None
             }
         }
@@ -4036,12 +4046,15 @@ impl MicroParquetApp {
             .set_file_name("Consolidated_ALCO_Report.pdf")
             .save_file()?;
         let mut collected_tabs = Vec::new();
+        let mut failed = Vec::new();
         for (i, tab) in self.tabs.iter().enumerate() {
             if self.multi_export_checks.get(i).copied().unwrap_or(false) {
-                if let Ok(lf) = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
-                    if let Ok(df) = lf.limit(5_000).collect() {
-                        collected_tabs.push((tab.title.clone(), df, tab.col_formats.clone()));
-                    }
+                // One row past the limit, so the export can say the tab was cut.
+                match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir).and_then(
+                    |lf| Ok(lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?),
+                ) {
+                    Ok(df) => collected_tabs.push((tab.title.clone(), df, tab.col_formats.clone())),
+                    Err(e) => failed.push(format!("'{}' ({:#})", tab.title, e)),
                 }
             }
         }
@@ -4051,12 +4064,20 @@ impl MicroParquetApp {
             self.num_format,
             self.global_decimals,
         ) {
-            Ok(_) => {
-                self.status_message = format!("Exported multi-tab PDF report to {:?}", out_path);
+            Ok(rep) => {
+                let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
+                let s = rep.summary();
+                if !s.is_empty() {
+                    msg.push_str(&format!(" ⚠ {}", s));
+                }
+                if !failed.is_empty() {
+                    msg.push_str(&format!(" ⚠ Not exported (failed): {}", failed.join("; ")));
+                }
+                self.status_message = msg;
                 Some(out_path)
             }
             Err(e) => {
-                self.status_message = format!("PDF export error: {}", e);
+                self.status_message = format!("PDF export error: {:#}", e);
                 None
             }
         }

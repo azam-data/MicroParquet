@@ -1761,3 +1761,78 @@ fn t25_split_export_keeps_every_row() {
         .sum();
     assert_eq!(total, 7);
 }
+
+fn unzip_entry(zip: &std::path::Path, entry: &str) -> String {
+    let out = std::process::Command::new("unzip").arg("-p").arg(zip).arg(entry).output().expect("unzip must be installed");
+    assert!(out.status.success(), "unzip {entry}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn t26_excel_dates_sheets_and_errors() {
+    use micro_parquet::exporters::*;
+    let d = days(2026, 10, 31);
+    let df = df!("Actnum" => ["A1", "A2", "A3", "A4", "A5"], "Balance" => [1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    let mut df = df;
+    df.with_column(Series::new("Matdat".into(), vec![d, d, d, d, d]).cast(&DataType::Date).unwrap()).unwrap();
+    // 2026-10-31 12:00:00 in microseconds
+    let us = (d as i64) * 86_400_000_000 + 43_200_000_000;
+    df.with_column(
+        Series::new("Stamp".into(), vec![us; 5]).cast(&DataType::Datetime(TimeUnit::Microseconds, None)).unwrap(),
+    )
+    .unwrap();
+
+    let p = tmpdir().join("t26.xlsx");
+    let rep = export_tabs_to_xlsx(vec![("Loans".into(), df.clone())], Vec::new(), &p).unwrap();
+    assert_eq!(rep.sheets, vec![("Loans".to_string(), 1)]);
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let styles = unzip_entry(&p, "xl/styles.xml");
+    let serial = d + 25_569;
+    // Matdat is column C: a number cell (no t="s"/"str") holding the date serial, with a style.
+    let c2 = sheet.split("<c r=\"C2\"").nth(1).expect("C2 cell").split("</c>").next().unwrap().to_string();
+    assert!(c2.contains(&format!("<v>{serial}</v>")) && c2.contains(" s=\"") && !c2.contains("t=\""), "{c2}");
+    assert!(styles.contains("formatCode=\"dd-mmm-yyyy\""), "{styles}");
+    assert!(styles.contains("formatCode=\"dd-mmm-yyyy hh:mm:ss\""), "{styles}");
+    let d2 = sheet.split("<c r=\"D2\"").nth(1).expect("D2 cell").split("</c>").next().unwrap().to_string();
+    assert!(d2.contains(&format!("<v>{serial}.5</v>")), "{d2}");
+
+    // More rows than a sheet holds: continues on "<sheet> (2)", "(3)" instead of truncating.
+    let p2 = tmpdir().join("t26_spill.xlsx");
+    let failing = vec![("Broken tab".to_string(), "Column 'X' not found".to_string())];
+    let rep = write_xlsx_workbook(vec![("Loans".into(), df.clone())], failing, &p2, 2).unwrap();
+    assert_eq!(rep.sheets, vec![("Loans".to_string(), 3)]);
+    let wb = unzip_entry(&p2, "xl/workbook.xml");
+    for name in ["1_Loans\"", "1_Loans (2)\"", "1_Loans (3)\"", "Export_Errors\""] {
+        assert!(wb.contains(&format!("name=\"{name}")), "{name} in {wb}");
+    }
+    let s3 = unzip_entry(&p2, "xl/worksheets/sheet3.xml");
+    assert!(s3.contains("<c r=\"B2\"") && !s3.contains("<c r=\"B3\""), "last sheet holds row 5 only: {s3}");
+    let strings = unzip_entry(&p2, "xl/sharedStrings.xml");
+    assert!(strings.contains("Broken tab") && strings.contains("Column 'X' not found"), "{strings}");
+    let summary = rep.summary();
+    assert!(summary.contains("Export_Errors") && summary.contains("Broken tab") && summary.contains("3 sheets"), "{summary}");
+
+    // Nothing to export at all is an error, not an empty workbook.
+    assert!(export_tabs_to_xlsx(vec![], vec![], &tmpdir().join("t26_empty.xlsx")).is_err());
+}
+
+#[test]
+fn t26b_pdf_omitted_columns_and_rows() {
+    use micro_parquet::exporters::*;
+    assert_eq!(pdf_column_layout(4).0, 4);
+    let (shown, w) = pdf_column_layout(20);
+    assert_eq!(shown, 15);
+    assert!(w >= 18.0 && shown as f32 * w <= 273.0 + 0.01);
+    let cols: Vec<Series> = (0..20).map(|i| Series::new(format!("C{i:02}").into(), vec![1.0f64, 2.0])).collect();
+    let df = DataFrame::new(cols).unwrap();
+    let p = tmpdir().join("t26b.pdf");
+    let rep = export_tabs_to_pdf(vec![("Wide".into(), df, Default::default())], &p, NumberDisplayFormat::Raw, 2).unwrap();
+    assert_eq!(rep.omitted_columns, vec![("Wide".to_string(), (15..20).map(|i| format!("C{i:02}")).collect::<Vec<_>>())]);
+    assert!(rep.summary().contains("C15, C16, C17, C18, C19 omitted"), "{}", rep.summary());
+    assert!(rep.truncated_tabs.is_empty());
+
+    let long = df!("Balance" => vec![1.0f64; PDF_MAX_ROWS_PER_TAB + 1]).unwrap();
+    let rep = export_tabs_to_pdf(vec![("Long".into(), long, Default::default())], &tmpdir().join("t26c.pdf"), NumberDisplayFormat::Raw, 2).unwrap();
+    assert_eq!(rep.truncated_tabs, vec!["Long".to_string()]);
+    assert!(rep.omitted_columns.is_empty());
+}
