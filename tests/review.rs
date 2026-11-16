@@ -143,7 +143,8 @@ fn t03_date_parsing_variants() {
 }
 
 #[test]
-fn t04_numeric_parsing_silent_nulls() {
+fn t04a_numeric_parsing_phase1() {
+    // Phase 1 behaviour: comma thousands and bracket negatives parse; row count is kept.
     let p = write_csv(
         "nums.csv",
         "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",
@@ -158,15 +159,42 @@ fn t04_numeric_parsing_silent_nulls() {
         ..Default::default()
     };
     let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
-    let df = lf.clone().collect().unwrap();
-    let vals = f64_col(&df, "Balance");
+    let vals = f64_col(&lf.clone().collect().unwrap(), "Balance");
     assert_eq!(vals.len(), 7);
     assert_close(vals[0].unwrap(), 1234.5, "comma thousands");
     assert_close(vals[1].unwrap(), -500.0, "bracket negative");
-    // Dr/Cr suffixes and raw-vs-parsed control sums are Phase 2; evidence only.
+    assert_close(vals[5].unwrap(), 99.5, "padded number");
+    let (rows, _) = compute_control_totals(lf, Some("Balance")).unwrap();
+    assert_eq!(rows, 7);
+}
+
+#[test]
+#[ignore = "Phase 2: Dr/Cr suffixes, currency prefix and dash-as-zero parsing; raw-vs-parsed control sums"]
+fn t04_numeric_parsing_silent_nulls() {
+    // Target: no value silently becomes null. Cr = +, Dr = − (owner to confirm), "-" = 0,
+    // "BDT 10" = 10. Parsed control sum = 1,828.50 with 0 nulls.
+    let p = write_csv(
+        "nums.csv",
+        "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",
+    );
+    let cfg = IngestionConfig {
+        columns: vec![ColumnSchemaConfig {
+            name: "Balance".into(),
+            dtype: ColDataType::Float64,
+            pii_mask: PiiMaskMode::None,
+            sample_values: vec![],
+        }],
+        ..Default::default()
+    };
+    let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
+    let vals = f64_col(&lf.clone().collect().unwrap(), "Balance");
+    assert_eq!(
+        vals,
+        vec![Some(1234.5), Some(-500.0), Some(1234.5), Some(-250.0), Some(0.0), Some(99.5), Some(10.0)]
+    );
     let (rows, sum) = compute_control_totals(lf, Some("Balance")).unwrap();
     assert_eq!(rows, 7);
-    println!("NUMS:\n{}\nNUMS control rows={} sum={:?}", df, rows, sum);
+    assert_close(sum.unwrap(), 1828.5, "parsed control sum");
 }
 
 #[test]
@@ -571,8 +599,8 @@ fn t10_nii_shock_signs() {
 }
 
 #[test]
-fn t11_ftp_step_vs_interpolation() {
-    // Step vs interpolation is not a part-1 task; only the tenor is asserted.
+fn t11a_ftp_tenor_days() {
+    // Phase 1 behaviour: contractual tenor in days.
     let o = days(2026, 1, 1);
     let df = df!(
         "Opndat" => [o, o],
@@ -588,12 +616,34 @@ fn t11_ftp_step_vs_interpolation() {
         .collect()
         .unwrap();
     assert_eq!(f64_col(&out, "Tenor_Days"), vec![Some(100.0), Some(31.0)]);
-    println!("FTP (curve 91d=9.50, 182d=10.10, 30d=8.75):\n{}", out);
 }
 
 #[test]
-fn t12_reconcile() {
-    // Rate WAVG in reconcile is not a part-1 task; balances and status are asserted.
+#[ignore = "Phase 2: FTP curve linear interpolation between tenor points"]
+fn t11_ftp_step_vs_interpolation() {
+    // Target: linear interpolation on the default curve (30d 8.75, 91d 9.50, 182d 10.10).
+    // 100d = 9.50 + 9/91 × 0.60 = 9.5593…; 31d = 8.75 + 1/61 × 0.75 = 8.7623…
+    // (the step lookup gives 10.10 and 9.50).
+    let o = days(2026, 1, 1);
+    let df = df!(
+        "Opndat" => [o, o],
+        "Matdat" => [o + 100, o + 31],
+        "Balance" => [1_000_000.0, 1_000_000.0],
+        "Rate" => [9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true)
+        .unwrap()
+        .collect()
+        .unwrap();
+    let ftp = f64_col(&out, "Benchmark_FTP_Rate");
+    assert_close(ftp[0].unwrap(), 9.50 + 9.0 / 91.0 * 0.60, "100-day FTP");
+    assert_close(ftp[1].unwrap(), 8.75 + 1.0 / 61.0 * 0.75, "31-day FTP");
+}
+
+fn reconcile_frames() -> (DataFrame, DataFrame) {
     let prev = df!(
         "Actnum" => ["A1", "A1", "A2"],
         "Balance" => [100.0, 900.0, 500.0],
@@ -606,6 +656,13 @@ fn t12_reconcile() {
         "Rate" => [9.5, 11.0]
     )
     .unwrap();
+    (prev, curr)
+}
+
+#[test]
+fn t12a_reconcile_status_and_balances() {
+    // Phase 1 behaviour: statuses and balance deltas.
+    let (prev, curr) = reconcile_frames();
     let out = build_period_reconcile_lazy(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None)
         .unwrap()
         .sort(["Actnum"], Default::default())
@@ -620,26 +677,48 @@ fn t12_reconcile() {
         ]
     );
     assert_eq!(f64_col(&out, "Balance_Delta"), vec![Some(0.0), Some(-500.0), Some(50.0)]);
-    println!("RECONCILE (A1 prev WAVG rate = 9.5%):\n{}", out);
 }
 
 #[test]
-#[ignore = "evidence only (PII hash width); no expected value in Phase 1 part 1"]
+#[ignore = "Phase 2: balance-weighted rates in period reconcile"]
+fn t12_reconcile() {
+    // Target: A1's two previous rows (100 @ 5%, 900 @ 10%) give a balance-weighted 9.5%,
+    // not the simple mean 7.5%, so the rate change to 9.5% is 0 bps.
+    let (prev, curr) = reconcile_frames();
+    let out = build_period_reconcile_lazy(prev.lazy(), curr.lazy(), "Actnum", "Balance", Some("Rate"), None)
+        .unwrap()
+        .sort(["Actnum"], Default::default())
+        .collect()
+        .unwrap();
+    assert_close(f64_col(&out, "Prev_Rate")[0].unwrap(), 9.5, "A1 previous WAVG rate");
+    assert_close(f64_col(&out, "Rate_Delta_Bps")[0].unwrap(), 0.0, "A1 rate change (bps)");
+}
+
+#[test]
+#[ignore = "Phase 2: wider PII name hash (CLIENT_ token has 8 hex characters = 32 bits)"]
 fn t13_pii_hash_collisions() {
-    use std::collections::HashSet;
-    let n = 1_000_000u32;
-    let mut seen = HashSet::with_capacity(n as usize);
-    let mut coll = 0u32;
+    // Target: 1,000,000 distinct customer names give 1,000,000 distinct CLIENT_ tokens through
+    // the real ingestion mask. With 32 bits about 116 collisions are expected.
+    let n = 1_000_000usize;
+    let mut body = String::with_capacity(n * 24);
+    body.push_str("Name\n");
     for i in 0..n {
-        let mut h = blake3::Hasher::new();
-        h.update(b"BANK_ASIA_ALM_2026");
-        h.update(format!("CUSTOMER NAME {}", i).as_bytes());
-        let hex = h.finalize().to_hex().to_string().to_uppercase();
-        if !seen.insert(hex[..8].to_string()) {
-            coll += 1;
-        }
+        body.push_str(&format!("CUSTOMER NAME {}\n", i));
     }
-    println!("PII: {} names -> {} CLIENT_xxxxxxxx collisions", n, coll);
+    let p = write_csv("pii_names.csv", &body);
+    let cfg = IngestionConfig {
+        columns: vec![ColumnSchemaConfig {
+            name: "Name".into(),
+            dtype: ColDataType::Utf8,
+            pii_mask: PiiMaskMode::ClientNameHash,
+            sample_values: vec![],
+        }],
+        ..Default::default()
+    };
+    let df = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap().collect().unwrap();
+    let names = df.column("Name").unwrap();
+    assert_eq!(names.len(), n);
+    assert_eq!(names.n_unique().unwrap(), n, "masked names must stay distinct");
 }
 
 #[test]
@@ -768,8 +847,9 @@ fn t15_python_codegen_drops_banking_steps() {
 }
 
 #[test]
-#[ignore = "evidence only: stack schema drift is not a Phase 1 part 1 task"]
+#[ignore = "Phase 2: stacking files whose columns differ"]
 fn t16_stack_schema_drift() {
+    // Target: October's extra Branch column does not break the stack; September rows get null.
     let a = write_csv("sep.csv", "Actnum,Balance\n001,100\n");
     let b = write_csv("oct.csv", "Actnum,Balance,Branch\n001,200,DHK\n");
     let files = vec![
@@ -777,14 +857,16 @@ fn t16_stack_schema_drift() {
         (b.clone(), false, auto_detect_smart_schema(&b).unwrap()),
     ];
     let src = TabSource::VerticalStack { files, include_source_col: true };
-    match compile_tab_lazy(&src, &[], &tmpdir()).and_then(|lf| Ok(lf.collect()?)) {
-        Ok(df) => println!("STACK ok:\n{}", df),
-        Err(e) => println!("STACK error when Oct has one extra column: {e}"),
-    }
+    let df = compile_tab_lazy(&src, &[], &tmpdir())
+        .and_then(|lf| Ok(lf.collect()?))
+        .expect("stack with an extra column must succeed");
+    assert_eq!(df.height(), 2);
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(100.0), Some(200.0)]);
+    assert_eq!(str_col(&df, "Branch"), vec![None, Some("DHK".to_string())]);
 }
 
 #[test]
-#[ignore = "Phase 2: join validation"]
+#[ignore = "Phase 2: join validation (duplicate keys on the right side)"]
 fn t17_join_duplicates_inflate() {
     let left = df!("Actnum" => ["A1"], "Balance" => [1_000_000.0]).unwrap();
     let right = df!("Actnum" => ["A1", "A1"], "Sector" => ["RMG", "RMG (dup row)"]).unwrap();
@@ -799,10 +881,14 @@ fn t17_join_duplicates_inflate() {
         join_keys: vec!["Actnum".into()],
         right_cols_to_keep: vec![],
     };
-    let lf = compile_tab_lazy(&src, &[], &tmpdir()).unwrap();
-    let (rows, sum) = compute_control_totals(lf, Some("Balance")).unwrap();
-    println!("JOIN: rows={} Balance sum={:?} (source sum 1,000,000)", rows, sum);
-    assert_close(sum.unwrap(), 1_000_000.0, "join must not inflate the control sum");
+    // Target: a right side with a repeated key fails loudly, naming the key, instead of
+    // doubling the left row (BDT 1,000,000 would become 2,000,000).
+    let err = compile_tab_lazy(&src, &[], &tmpdir())
+        .and_then(|lf| compute_control_totals(lf, Some("Balance")))
+        .err()
+        .expect("duplicate right-side keys must be an error");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("A1") && msg.to_lowercase().contains("duplicate"), "{msg}");
 }
 
 #[test]
