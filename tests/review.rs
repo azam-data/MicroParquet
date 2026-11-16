@@ -518,7 +518,6 @@ fn t14_filter_big_account_numbers() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T9"]
 fn t15_python_codegen_drops_banking_steps() {
     let steps = vec![
         TransformStep::LoanClassificationProvision {
@@ -566,6 +565,8 @@ fn t15_python_codegen_drops_banking_steps() {
     assert!(py.contains("pl.col(\"Matdat\").str.to_date(\"%d/%m/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Opndat\").str.to_date(\"%m/%d/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Valdat\").str.to_date(\"%Y-%m-%d\""), "{py}");
+    let missing = micro_parquet::macros::python_untranslated_steps(&steps);
+    assert_eq!(missing, vec!["Step 1 '+BB CL Provision & BFP'".to_string(), "Step 2 '+ΔNII Shock (+100 bps)'".to_string()]);
 }
 
 #[test]

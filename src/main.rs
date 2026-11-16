@@ -12,7 +12,10 @@ use micro_parquet::engine::{
 use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
 };
-use micro_parquet::macros::{generate_python_polars_code, load_macro_from_file, save_macro_to_file};
+use micro_parquet::macros::{
+    generate_python_polars_code, load_macro_from_file, python_untranslated_steps,
+    save_macro_to_file,
+};
 use micro_parquet::models::{
     default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
@@ -309,6 +312,7 @@ pub struct MicroParquetApp {
     macro_enforce_ctrl: bool,
     macro_include_schema: bool,
     generated_python_code: String,
+    python_export_warning: String,
 
     multi_export_checks: Vec<bool>,
     split_col_name: String,
@@ -509,6 +513,7 @@ impl MicroParquetApp {
             macro_enforce_ctrl: true,
             macro_include_schema: true,
             generated_python_code: String::new(),
+            python_export_warning: String::new(),
 
             multi_export_checks: Vec::new(),
             split_col_name: "Brancd".to_string(),
@@ -787,6 +792,18 @@ impl MicroParquetApp {
             &tab.steps,
             tab.control_col.as_deref(),
         );
+        let missing = python_untranslated_steps(&tab.steps);
+        self.python_export_warning = if missing.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ⚠ WARNING: {} has no Python translation; the script raises NotImplementedError there.",
+                missing.join(", ")
+            )
+        };
+        if !self.python_export_warning.is_empty() {
+            self.status_message = format!("Python preview ready.{}", self.python_export_warning);
+        }
         self.active_tool = ActiveToolModal::PythonCodePreview;
     }
 }
@@ -2932,16 +2949,27 @@ impl MicroParquetApp {
                         ui.horizontal(|ui| {
                             if ui.button("📋 Copy Python Code to Clipboard").clicked() {
                                 ctx.copy_text(self.generated_python_code.clone());
-                                self.status_message =
-                                    "Copied Python Polars code to clipboard!".to_string();
+                                self.status_message = format!(
+                                    "Copied Python Polars code to clipboard!{}",
+                                    self.python_export_warning
+                                );
                             }
                             if ui.button("💾 Save as .py Script...").clicked() {
                                 if let Some(p) = rfd::FileDialog::new()
                                     .set_file_name("micro_parquet_pipeline.py")
                                     .save_file()
                                 {
-                                    let _ = std::fs::write(&p, &self.generated_python_code);
-                                    self.status_message = format!("Saved Python script to {:?}", p);
+                                    self.status_message =
+                                        match std::fs::write(&p, &self.generated_python_code) {
+                                            Ok(()) => format!(
+                                                "Saved Python script to {:?}{}",
+                                                p, self.python_export_warning
+                                            ),
+                                            Err(e) => format!(
+                                                "Could not save Python script to {:?}: {}",
+                                                p, e
+                                            ),
+                                        };
                                 }
                             }
                             if ui.button("Close").clicked() {

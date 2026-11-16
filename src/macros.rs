@@ -1,4 +1,6 @@
-use crate::models::{AggFunc, FilterOp, IngestionConfig, MacroRecipe, TransformStep};
+use crate::models::{
+    AggFunc, ColDataType, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
+};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -13,6 +15,33 @@ pub fn load_macro_from_file(path: &Path) -> Result<MacroRecipe> {
     let recipe: MacroRecipe =
         serde_json::from_str(&raw).context("Failed to parse .mpq.json structure")?;
     Ok(recipe)
+}
+
+/// True when the Python generator has a translation for this step.
+fn has_python_translation(step: &TransformStep) -> bool {
+    !matches!(
+        step,
+        TransformStep::RateShockSim { .. }
+            | TransformStep::FtpCurveMap { .. }
+            | TransformStep::BankingHygieneAudit { .. }
+            | TransformStep::LoanClassificationProvision { .. }
+            | TransformStep::LoanLimitUtilization { .. }
+    )
+}
+
+/// "Step N '<label>'" for every step the Python export cannot reproduce, for UI warnings.
+pub fn python_untranslated_steps(steps: &[TransformStep]) -> Vec<String> {
+    steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !has_python_translation(s))
+        .map(|(i, s)| format!("Step {} '{}'", i + 1, s.short_label()))
+        .collect()
+}
+
+/// Escapes text for a double-quoted Python string literal.
+fn py_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 pub fn generate_python_polars_code(
@@ -47,6 +76,52 @@ pub fn generate_python_polars_code(
         if ingestion.sanitize_linebreaks {
             py.push_str("# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n");
             py.push_str("lf = lf.with_columns(\n    pl.col(pl.Utf8).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars()\n)\n\n");
+        }
+
+        if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
+            py.push_str("# WARNING: PII masking not reproduced\n\n");
+        }
+
+        // Same typing as MicroParquet's ingestion. Casts are strict, so a bad value raises.
+        let mut casts: Vec<String> = Vec::new();
+        for c in &ingestion.columns {
+            let name = py_escape(&c.name);
+            let cleaned = if ingestion.parse_accounting_negatives {
+                format!(
+                    "pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${{1}}\")",
+                    name
+                )
+            } else {
+                format!("pl.col(\"{}\")", name)
+            };
+            match c.dtype {
+                ColDataType::Utf8 => {}
+                ColDataType::Float64 => casts.push(format!("{}.cast(pl.Float64)", cleaned)),
+                ColDataType::Int64 => {
+                    let int_cleaned = if ingestion.parse_accounting_negatives {
+                        format!("pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True)", name)
+                    } else {
+                        format!("pl.col(\"{}\")", name)
+                    };
+                    casts.push(format!("{}.cast(pl.Int64)", int_cleaned))
+                }
+                ColDataType::DateDMY => {
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\")", name))
+                }
+                ColDataType::DateMDY => {
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%m/%d/%Y\")", name))
+                }
+                ColDataType::DateISO => {
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%Y-%m-%d\")", name))
+                }
+            }
+        }
+        if !casts.is_empty() {
+            py.push_str("# 2b. Apply Ingestion Column Types (numbers cleaned of commas and (brackets))\n");
+            py.push_str(&format!(
+                "lf = lf.with_columns([\n    {},\n])\n\n",
+                casts.join(",\n    ")
+            ));
         }
     }
 
@@ -244,8 +319,16 @@ pub fn generate_python_polars_code(
                     query
                 ));
             }
-            _ => {
-                py.push_str("# (Specialized Banking Step Executed via Polars Expressions)\n\n");
+            TransformStep::RateShockSim { .. }
+            | TransformStep::FtpCurveMap { .. }
+            | TransformStep::BankingHygieneAudit { .. }
+            | TransformStep::LoanClassificationProvision { .. }
+            | TransformStep::LoanLimitUtilization { .. } => {
+                py.push_str(&format!(
+                    "raise NotImplementedError(\"Step {} '{}' has no Python translation in this version; run it in MicroParquet\")\n\n",
+                    idx + 1,
+                    py_escape(&step.short_label())
+                ));
             }
         }
     }
