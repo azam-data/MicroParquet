@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MicroParquet — chosen combined design</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FAD}a:hover{color:#174A87}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; background: #F6F7F9; font-family: 'Source Sans 3', system-ui, sans-serif; color: #1B2430; font-size: 14px; border: 1px solid #D5DAE1; overflow: hidden">
+
+  <div style="height: 36px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: #FFFFFF; border-bottom: 1px solid #E3E6EB">
+    <div style="width: 18px; height: 18px; border-radius: 4px; background: #1F5FAD; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 11px; font-weight: 700">M</div>
+    <div style="font-weight: 600">MicroParquet</div>
+    <div style="color: #5B6675">FDR_Sep_Maturity.csv</div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; gap: 18px; color: #5B6675"><span>&#8211;</span><span>&#9633;</span><span>&#10005;</span></div>
+  </div>
+
+  <div style="height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: #FFFFFF; border-bottom: 1px solid #E3E6EB">
+    <sc-for list="{{groups}}" as="g" hint-placeholder-count="4">
+      <div style="display: flex; align-items: center; gap: 2px; padding-right: 8px; margin-right: 4px; border-right: 1px solid #E3E6EB">
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <button style="display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: #1B2430; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 14px; font-weight: 500">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3D4856" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{it.d}}"></path></svg>
+            <span>{{it.label}}</span>
+          </button>
+        </sc-for>
+      </div>
+    </sc-for>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 10px; height: 34px; width: 330px; padding: 0 10px; border: 1px solid #D5DAE1; border-radius: 8px; background: #F6F7F9; color: #5B6675">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6675" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+      <span style="flex-grow: 1">Search actions and columns</span>
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 6px; border: 1px solid #D5DAE1; border-radius: 4px; background: #FFFFFF">Ctrl K</span>
+    </div>
+  </div>
+
+  <div style="height: 40px; flex-shrink: 0; display: flex; align-items: flex-end; gap: 2px; padding: 0 12px; background: #EEF0F3; border-bottom: 1px solid #E3E6EB">
+    <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; background: #FFFFFF; border: 1px solid #E3E6EB; border-bottom: 0; border-top: 2px solid #1F5FAD; border-radius: 6px 6px 0 0; font-weight: 600">
+      <span>FDR_Sep_Maturity.csv</span><span style="color: #5B6675; font-weight: 400">&#10005;</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px; color: #5B6675"><span>Loans_Oct.parquet</span><span>&#10005;</span></div>
+    <button aria-label="New tab" style="height: 30px; width: 30px; margin-bottom: 2px; border: 0; background: transparent; color: #5B6675; font-size: 18px">+</button>
+  </div>
+
+  <div style="flex-grow: 1; display: flex; min-height: 0">
+
+    <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 14px 16px 0; gap: 12px">
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+        <div style="font-size: 13px; font-weight: 600; color: #5B6675; margin-right: 4px">Filters</div>
+        <sc-for list="{{chips}}" as="c" hint-placeholder-count="2">
+          <div style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 6px 0 12px; border-radius: 14px; background: #EAF1FB; color: #174A87; border: 1px solid #C9DBF3">
+            <span>{{c}}</span>
+            <button aria-label="Remove filter" style="width: 20px; height: 20px; border: 0; border-radius: 10px; background: transparent; color: #174A87; font-size: 11px">&#10005;</button>
+          </div>
+        </sc-for>
+        <button style="height: 28px; padding: 0 12px; border: 1px dashed #A9B4C2; border-radius: 14px; background: transparent; color: #3D4856; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 13px">+ Add condition</button>
+        <div style="flex-grow: 1"></div>
+        <div style="color: #5B6675">Rows <span style="font-family: 'JetBrains Mono', monospace; color: #1B2430">1–100</span> of <span style="font-family: 'JetBrains Mono', monospace; color: #1B2430">20,391</span></div>
+        <button aria-label="Previous page" style="width: 30px; height: 28px; border: 1px solid #D5DAE1; border-radius: 6px; background: #FFFFFF; color: #3D4856">&#8249;</button>
+        <button aria-label="Next page" style="width: 30px; height: 28px; border: 1px solid #D5DAE1; border-radius: 6px; background: #FFFFFF; color: #3D4856">&#8250;</button>
+      </div>
+
+      <div style="flex-grow: 1; min-height: 0; background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column">
+        <div style="display: grid; grid-template-columns: {{cols}}; border-bottom: 1px solid #E3E6EB">
+          <sc-for list="{{headers}}" as="h" hint-placeholder-count="8">
+            <button onClick="{{h.pick}}" style="display: flex; align-items: center; justify-content: {{h.justify}}; gap: 6px; height: 38px; padding: 0 12px; border: 0; border-right: 1px solid #EEF0F3; border-bottom: 2px solid {{h.line}}; background: {{h.bg}}; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 14px; font-weight: 600; color: #1B2430; white-space: nowrap">
+              <span>{{h.label}}</span><span style="color: #1F5FAD; font-size: 11px">{{h.sort}}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="display: grid; grid-template-columns: {{cols}}; background: #F6F7F9; border-bottom: 1px solid #E3E6EB">
+          <sc-for list="{{aggs}}" as="a" hint-placeholder-count="8">
+            <div style="display: flex; align-items: center; justify-content: {{a.justify}}; height: 30px; padding: 0 8px; border-right: 1px solid #E3E6EB">
+              <div style="display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 4px; background: {{a.bg}}; border: 1px solid {{a.border}}; color: {{a.fg}}; font-size: 12px; font-weight: 600; white-space: nowrap">{{a.label}} <span style="font-size: 9px">&#9662;</span></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display: grid; grid-template-columns: {{cols}}; background: {{sumBg}}">
+          <sc-for list="{{totals}}" as="t" hint-placeholder-count="8">
+            <div style="display: flex; align-items: center; justify-content: {{t.justify}}; height: 38px; padding: 0 12px; font-family: 'JetBrains Mono', monospace; font-weight: 600; color: {{sumFg}}; white-space: nowrap; border-right: 1px solid {{sumLine}}">{{t.v}}</div>
+          </sc-for>
+        </div>
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="12">
+          <div style="display: grid; grid-template-columns: {{cols}}; background: {{r.bg}}; border-bottom: 1px solid #F0F2F5">
+            <sc-for list="{{r.cells}}" as="c" hint-placeholder-count="8">
+              <div style="display: flex; align-items: center; justify-content: {{c.justify}}; height: 32px; padding: 0 12px; font-family: {{c.font}}; background: {{c.bg}}; white-space: nowrap; overflow: hidden; border-right: 1px solid #F0F2F5">{{c.v}}</div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="width: 316px; flex-shrink: 0; display: flex; flex-direction: column; background: #FFFFFF; border-left: 1px solid #E3E6EB">
+      <div style="display: flex; gap: 4px; margin: 12px 14px 4px; padding: 3px; border-radius: 8px; background: #EEF0F3">
+        <button onClick="{{showSteps}}" style="flex-grow: 1; height: 30px; border: 0; border-radius: 6px; background: {{tabStepsBg}}; color: {{tabStepsFg}}; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 14px; font-weight: 600">Steps · 4</button>
+        <button onClick="{{showColumn}}" style="flex-grow: 1; height: 30px; border: 0; border-radius: 6px; background: {{tabColBg}}; color: {{tabColFg}}; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 14px; font-weight: 600">Column</button>
+      </div>
+
+      <sc-if value="{{isSteps}}" hint-placeholder-val="{{ true }}">
+        <div style="flex-grow: 1; display: flex; flex-direction: column; min-height: 0">
+          <div style="display: flex; flex-direction: column; padding: 12px 16px 0">
+            <sc-for list="{{steps}}" as="s" hint-placeholder-count="5">
+              <div style="display: flex; gap: 12px">
+                <div style="display: flex; flex-direction: column; align-items: center">
+                  <div style="width: 12px; height: 12px; margin-top: 5px; border-radius: 6px; background: {{s.dot}}; border: 2px solid {{s.ring}}; box-sizing: border-box"></div>
+                  <div style="width: 2px; flex-grow: 1; min-height: 24px; background: #E3E6EB"></div>
+                </div>
+                <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; padding: 2px 8px 12px; margin-bottom: 4px; border-radius: 8px; background: {{s.bg}}">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+                    <span style="font-weight: 700; color: {{s.titleFg}}">{{s.title}}</span>
+                    <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #5B6675">{{s.rows}}</span>
+                  </div>
+                  <div style="color: #5B6675; font-size: 13px">{{s.detail}}</div>
+                  <sc-if value="{{s.active}}" hint-placeholder-val="{{ false }}">
+                    <div style="display: flex; gap: 4px; padding-top: 6px">
+                      <sc-for list="{{stepTools}}" as="t" hint-placeholder-count="6">
+                        <button aria-label="{{t.label}}" title="{{t.label}}" style="width: 30px; height: 28px; display: flex; align-items: center; justify-content: center; border: 1px solid #D5DAE1; border-radius: 6px; background: #FFFFFF">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{t.color}}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{t.d}}"></path></svg>
+                        </button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+            <button style="align-self: flex-start; margin-left: 24px; height: 28px; padding: 0 10px; border: 1px dashed #A9B4C2; border-radius: 6px; background: transparent; color: #3D4856; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 13px">+ Insert step after "Sort"</button>
+          </div>
+          <div style="flex-grow: 1"></div>
+          <div style="display: flex; gap: 6px; padding: 12px; border-top: 1px solid #E3E6EB">
+            <button style="flex-grow: 1; height: 32px; border: 1px solid #D5DAE1; border-radius: 6px; background: #FFFFFF; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 13px; font-weight: 600; color: #1B2430">Save macro</button>
+            <button style="flex-grow: 1; height: 32px; border: 1px solid #D5DAE1; border-radius: 6px; background: #FFFFFF; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 13px; font-weight: 600; color: #1B2430">Load</button>
+            <button style="flex-grow: 1; height: 32px; border: 1px solid #D5DAE1; border-radius: 6px; background: #FFFFFF; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 13px; font-weight: 600; color: #1B2430">To .py</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isColumn}}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 16px; padding: 14px 16px">
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <div style="font-size: 20px; font-weight: 700">Balance (BDT)</div>
+            <div style="color: #5B6675">Number · Crore · 2 dp</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+            <sc-for list="{{stats}}" as="s" hint-placeholder-count="6">
+              <div style="display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 8px; background: #F6F7F9">
+                <div style="color: #5B6675; font-size: 12px; font-weight: 600">{{s.k}}</div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-weight: 600; color: {{s.fg}}">{{s.v}}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; justify-content: space-between; color: #5B6675; font-size: 12px; font-weight: 600"><span>Distribution</span><span>sample</span></div>
+            <div style="display: flex; align-items: flex-end; gap: 4px; height: 70px">
+              <sc-for list="{{hist}}" as="b" hint-placeholder-count="10">
+                <div style="flex-grow: 1; height: {{b}}; border-radius: 3px 3px 0 0; background: #1F5FAD; opacity: 0.8"></div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <sc-for list="{{colActions}}" as="a" hint-placeholder-count="4">
+              <button style="height: 34px; padding: 0 12px; border: 1px solid #D5DAE1; border-radius: 8px; background: #FFFFFF; font-family: 'Source Sans 3', system-ui, sans-serif; font-size: 14px; font-weight: 600; color: #1B2430; text-align: left">{{a}}</button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 18px; padding: 0 14px; background: #FFFFFF; border-top: 1px solid #E3E6EB; color: #3D4856; font-size: 13px">
+    <span><span style="font-family: 'JetBrains Mono', monospace; color: #1B2430">20,391</span> rows</span>
+    <span style="width: 1px; height: 16px; background: #E3E6EB"></span>
+    <span>Control · Balance <span style="font-family: 'JetBrains Mono', monospace; color: #1B2430; font-weight: 600">2,725.29 Cr</span></span>
+    <span>Δ vs source <span style="font-family: 'JetBrains Mono', monospace; color: #1E7A4C; font-weight: 600">0.00</span></span>
+    <span style="display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 11px; background: #E6F4EC; color: #1E7A4C; font-weight: 600">&#10003; 0 parse failures</span>
+    <div style="flex-grow: 1"></div>
+    <span>Scale: Crore · 2 dp</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"summaryStyle":{"editor":"enum","default":"Navy band","options":["Navy band","Amber band","Soft blue"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { panel: 'steps' };
+  }
+  renderVals() {
+    const panel = this.state.panel;
+    const isSteps = panel === 'steps';
+    const isColumn = panel === 'column';
+    const style = this.props.summaryStyle ?? 'Navy band';
+    const S = {
+      'Navy band': { bg: '#1F3A5F', fg: '#FFFFFF', line: '#2E4C75' },
+      'Amber band': { bg: '#FFE9B8', fg: '#5C3F00', line: '#F2D48F' },
+      'Soft blue': { bg: '#EAF1FB', fg: '#174A87', line: '#D7E4F6' }
+    }[style] || { bg: '#1F3A5F', fg: '#FFFFFF', line: '#2E4C75' };
+    const P = {
+      open: 'M3 7h6l2 2h10v10H3z', stack: 'M4 6h16M4 12h16M4 18h16', batch: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+      filter: 'M3 5h18l-7 8v6l-4 2v-8z', sort: 'M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4', cols: 'M4 4h16v16H4zM10 4v16M16 4v16',
+      calc: 'M12 5v14M5 12h14', pivot: 'M4 4h16v16H4zM4 10h16M10 4v16',
+      bank: 'M3 10l9-6 9 6M5 10v8M10 10v8M14 10v8M19 10v8M3 20h18', export: 'M12 15V3M7 8l5-5 5 5M4 15v5h16v-5'
+    };
+    const groups = [
+      { items: [{ label: 'Open', d: P.open }, { label: 'Stack', d: P.stack }, { label: 'Batch', d: P.batch }] },
+      { items: [{ label: 'Filter', d: P.filter }, { label: 'Sort', d: P.sort }, { label: 'Columns', d: P.cols }, { label: 'Calc column', d: P.calc }, { label: 'Pivot', d: P.pivot }] },
+      { items: [{ label: 'Banking ▾', d: P.bank }] },
+      { items: [{ label: 'Export ▾', d: P.export }] }
+    ];
+    const chips = ['Deposit Type = FDR', 'Bank = Conventional'];
+    const cols = '112px 112px 160px 140px 156px 104px 132px minmax(150px, 1fr)';
+    const L = 'flex-start', R = 'flex-end';
+    const showColumn = () => this.setState({ panel: 'column' });
+    const showSteps = () => this.setState({ panel: 'steps' });
+    const hd = (label, justify, sort, isBal) => ({
+      label, justify, sort,
+      bg: isBal && isColumn ? '#EAF1FB' : '#FFFFFF',
+      line: isBal && isColumn ? '#1F5FAD' : '#FFFFFF',
+      pick: isBal ? showColumn : showSteps
+    });
+    const headers = [hd('Process Date', L, ''), hd('Branch', L, ''), hd('Product', L, ''), hd('Account No', L, ''), hd('Balance (BDT)', R, '2 ↓', true), hd('Rate %', R, ''), hd('Maturity', L, '1 ↑'), hd('Bucket', L, '')];
+    const ag = (label, on, justify) => ({ label, justify, bg: on ? '#FFFFFF' : 'transparent', fg: on ? '#1F3A5F' : '#8792A0', border: on ? '#B9C7DA' : 'transparent' });
+    const aggs = [ag('Count', true, L), ag('None', false, L), ag('None', false, L), ag('Distinct', true, L), ag('Sum', true, R), ag('W.Avg', true, R), ag('Min', true, L), ag('None', false, L)];
+    const totals = [{ v: '20,391', justify: L }, { v: '', justify: L }, { v: '', justify: L }, { v: '20,391', justify: L }, { v: '2,725.29 Cr', justify: R }, { v: '9.62', justify: R }, { v: '01-Sep-2026', justify: L }, { v: '', justify: L }];
+    const data = [
+      ['31-Aug-2026', 'Paltan', 'FDR Regular', '0049-0001238', '1,250,000.00', '9.50', '01-Sep-2026', '02. 2–7 Days'],
+      ['31-Aug-2026', 'Nangolkot', 'FDR Regular', '0601-0004812', '500,000.00', '9.25', '03-Sep-2026', '02. 2–7 Days'],
+      ['31-Aug-2026', 'Gulshan', 'FDR Monthly Profit', '0112-0090417', '10,000,000.00', '10.10', '15-Sep-2026', '03. 8 Days–1 Month'],
+      ['31-Aug-2026', 'Motijheel', 'FDR Regular', '0003-0217755', '75,000.00', '8.75', '20-Sep-2026', '03. 8 Days–1 Month'],
+      ['31-Aug-2026', 'Agrabad', 'FDR Regular', '0207-0031902', '2,400,000.00', '9.50', '05-Oct-2026', '04. 1–3 Months'],
+      ['31-Aug-2026', 'Paltan', 'FDR Regular', '0049-0001911', '300,000.00', '9.00', '12-Oct-2026', '04. 1–3 Months'],
+      ['31-Aug-2026', 'Gulshan', 'FDR Monthly Profit', '0112-0090588', '15,000,000.00', '10.25', '01-Nov-2026', '04. 1–3 Months'],
+      ['31-Aug-2026', 'Sylhet', 'FDR Regular', '0315-0002204', '1,000,000.00', '9.75', '18-Dec-2026', '05. 3–6 Months'],
+      ['31-Aug-2026', 'Rajshahi', 'FDR Regular', '0410-0007333', '820,500.00', '8.75', '09-Jan-2027', '05. 3–6 Months'],
+      ['31-Aug-2026', 'Dhanmondi', 'FDR Monthly Profit', '0130-0045120', '5,000,000.00', '10.00', '28-Feb-2027', '06. 6–12 Months'],
+      ['31-Aug-2026', 'Uttara', 'FDR Regular', '0144-0011876', '650,000.00', '9.25', '14-Mar-2027', '06. 6–12 Months'],
+      ['31-Aug-2026', 'Khulna', 'FDR Regular', '0502-0003390', '1,800,000.00', '9.50', '30-Jun-2027', '06. 6–12 Months']
+    ];
+    const mono = "'JetBrains Mono', monospace", sans = "'Source Sans 3', system-ui, sans-serif";
+    const rows = data.map((r, i) => ({
+      bg: i % 2 ? '#FAFBFC' : '#FFFFFF',
+      cells: r.map((v, j) => ({ v, justify: (j === 4 || j === 5) ? R : L, font: (j === 3 || j === 4 || j === 5) ? mono : sans, bg: (j === 4 && isColumn) ? '#F3F7FD' : 'transparent' }))
+    }));
+    const step = (title, detail, rows, active, off) => ({
+      title, detail, rows, active,
+      bg: active ? '#EAF1FB' : 'transparent',
+      dot: active ? '#1F5FAD' : '#FFFFFF', ring: active ? '#1F5FAD' : '#A9B4C2',
+      titleFg: off ? '#8792A0' : '#1B2430'
+    });
+    const steps = [
+      step('Source', 'Schema locked · 39 columns', '20,391', false),
+      step('Filter · 2 conditions', 'Deposit Type = FDR AND Bank = Conventional', '20,391', false),
+      step('Maturity buckets', 'BB SLP · cutoff 31-Aug-2026', '20,391', false),
+      step('Sort · 2 levels', 'Maturity ↑, then Balance ↓', '20,391', true)
+    ];
+    const stepTools = [
+      { label: 'Edit step', d: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4', color: '#3D4856' },
+      { label: 'Move up', d: 'M12 19V5M6 11l6-6 6 6', color: '#3D4856' },
+      { label: 'Move down', d: 'M12 5v14M6 13l6 6 6-6', color: '#3D4856' },
+      { label: 'Turn off (skip) this step', d: 'M9 5v14M15 5v14', color: '#3D4856' },
+      { label: 'Duplicate step', d: 'M8 8h12v12H8zM4 16V4h12', color: '#3D4856' },
+      { label: 'Delete step', d: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3', color: '#B42318' }
+    ];
+    const stats = [
+      { k: 'Rows', v: '20,391', fg: '#1B2430' }, { k: 'Blank', v: '0', fg: '#1B2430' },
+      { k: 'Parse failures', v: '0', fg: '#1E7A4C' }, { k: 'Sum', v: '2,725.29 Cr', fg: '#1B2430' },
+      { k: 'Min', v: '[min]', fg: '#5B6675' }, { k: 'Max', v: '[max]', fg: '#5B6675' }
+    ];
+    const hist = ['18%', '42%', '88%', '100%', '74%', '51%', '33%', '20%', '12%', '6%'];
+    const colActions = ['Filter on this column…', 'Add as sort level', 'Summary: Sum ▾', 'Change type or format…'];
+    return {
+      groups, chips, cols, headers, aggs, totals, rows, steps, stepTools, stats, hist, colActions,
+      isSteps, isColumn, showSteps, showColumn,
+      tabStepsBg: isSteps ? '#FFFFFF' : 'transparent', tabStepsFg: isSteps ? '#1B2430' : '#5B6675',
+      tabColBg: isColumn ? '#FFFFFF' : 'transparent', tabColFg: isColumn ? '#1B2430' : '#5B6675',
+      sumBg: S.bg, sumFg: S.fg, sumLine: S.line
+    };
+  }
+}
+</script>
+</body>
+</html>
