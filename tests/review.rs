@@ -247,6 +247,101 @@ fn t04b_amount_parsing_rules() {
 }
 
 #[test]
+fn t22_parse_failure_counts() {
+    // P2: non-blank values that became null are counted per typed column, with examples.
+    let p = write_csv(
+        "pf.csv",
+        "Balance,Matdat,Name\n100,05/11/2026,a\nabc,31/02/2026,b\n200,,c\n,-,d\n",
+    );
+    let cfg = IngestionConfig {
+        columns: vec![
+            ColumnSchemaConfig { name: "Balance".into(), dtype: ColDataType::Float64, ..Default::default() },
+            ColumnSchemaConfig { name: "Matdat".into(), dtype: ColDataType::DateDMY, ..Default::default() },
+            ColumnSchemaConfig { name: "Name".into(), dtype: ColDataType::Utf8, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let f = compute_parse_failures(&p, false, &cfg, &tmpdir()).unwrap();
+    assert_eq!(
+        f,
+        vec![
+            ParseFailure { column: "Balance".into(), count: 1, examples: vec!["abc".into()] },
+            ParseFailure { column: "Matdat".into(), count: 1, examples: vec!["31/02/2026".into()] },
+        ]
+    );
+    assert_eq!(parse_failure_summary(&f), "Parse failures: Balance 1, Matdat 1");
+    assert_eq!(parse_failure_summary(&[]), "");
+
+    // A stack of the same file twice adds the counts up per column.
+    let stack = TabSource::VerticalStack {
+        files: vec![(p.clone(), false, cfg.clone()), (p.clone(), false, cfg.clone())],
+        include_source_col: false,
+    };
+    let sf = source_parse_failures(&stack, &tmpdir()).unwrap();
+    assert_eq!(sf[0].count, 2);
+    assert_eq!(sf[0].examples, vec!["abc".to_string(), "abc".to_string()]);
+
+    // "Export anyway" list: <output>.parse_failures.csv next to the export.
+    let out = tmpdir().join("pf_out.csv");
+    let side = write_parse_failures_csv(&out, &f).unwrap();
+    assert_eq!(side, tmpdir().join("pf_out.csv.parse_failures.csv"));
+    assert_eq!(
+        std::fs::read_to_string(&side).unwrap(),
+        "column,count,examples\n\"Balance\",1,\"abc\"\n\"Matdat\",1,\"31/02/2026\"\n"
+    );
+}
+
+#[test]
+fn t22b_headless_stops_on_control_column_failures() {
+    // Auto-detect would type this column as text ("abc"), so the schema comes from a macro.
+    let p = write_csv("pf_headless.csv", "Balance\n100\nabc\n200\n\n");
+    let recipe = MacroRecipe {
+        name: "pf".into(),
+        description: String::new(),
+        created_at: String::new(),
+        enforce_balance_control: true,
+        control_column: Some("Balance".into()),
+        optional_ingestion_schema: Some(IngestionConfig {
+            columns: vec![ColumnSchemaConfig {
+                name: "Balance".into(),
+                dtype: ColDataType::Float64,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        steps: vec![],
+    };
+    let m = tmpdir().join("pf_headless.mpq.json");
+    std::fs::write(&m, serde_json::to_string(&recipe).unwrap()).unwrap();
+    let out = tmpdir().join("pf_headless_out.csv");
+    let _ = std::fs::remove_file(&out);
+    let run = |extra: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_MicroParquet"))
+            .args(["--headless", "--input"])
+            .arg(&p)
+            .arg("--macro-file")
+            .arg(&m)
+            .arg("--export-csv")
+            .arg(&out)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let r = run(&[]);
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+    assert!(!r.status.success(), "must exit non-zero: {err}");
+    assert!(err.contains("Parse failures: Balance 1"), "{err}");
+    assert!(err.contains("--allow-parse-failures"), "{err}");
+    assert!(!out.exists(), "nothing is exported when the run stops");
+
+    let r = run(&["--allow-parse-failures"]);
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+    assert!(r.status.success(), "{err}");
+    assert!(err.contains("Parse failures: Balance 1"), "{err}");
+    assert!(out.exists());
+}
+
+#[test]
 fn t05_parquet_datetime_maturity_bucket() {
     // Parquet written by pandas / Power BI usually stores dates as Datetime(ns/us/ms), not Date
     let mut df = df!(

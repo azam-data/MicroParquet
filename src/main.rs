@@ -7,7 +7,8 @@ use egui_extras::{Column, TableBuilder};
 use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
-    export_to_parquet_stream, fetch_viewport_slice, preview_csv_raw,
+    export_to_parquet_stream, fetch_viewport_slice, parse_failure_summary, preview_csv_raw,
+    source_parse_failures, write_parse_failures_csv,
 };
 use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
@@ -20,13 +21,13 @@ use micro_parquet::models::{
     column_name_tokens, default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
-    NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths, SignConvention,
+    NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths, SignConvention,
     SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };
 use polars::datatypes::AnyValue;
 use polars::prelude::DataFrame;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,6 +49,9 @@ struct CliArgs {
     export_xlsx: Option<PathBuf>,
     #[arg(long)]
     export_pdf: Option<PathBuf>,
+    /// Export even when the control column has values that could not be converted.
+    #[arg(long)]
+    allow_parse_failures: bool,
 }
 
 fn main() -> eframe::Result<()> {
@@ -131,8 +135,9 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         .unwrap_or("")
         .eq_ignore_ascii_case("parquet");
 
-    let (cfg, steps) = if let Some(m_path) = &args.macro_file {
+    let (cfg, steps, recipe_control) = if let Some(m_path) = &args.macro_file {
         let recipe = load_macro_from_file(m_path)?;
+        let control = recipe.control_column.clone();
         let ing = if is_parquet {
             IngestionConfig::default()
         } else if let Some(saved_ing) = recipe.optional_ingestion_schema {
@@ -140,14 +145,14 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         } else {
             auto_detect_smart_schema(input_path)?
         };
-        (ing, recipe.steps)
+        (ing, recipe.steps, control)
     } else {
         let ing = if is_parquet {
             IngestionConfig::default()
         } else {
             auto_detect_smart_schema(input_path)?
         };
-        (ing, Vec::new())
+        (ing, Vec::new(), None)
     };
 
     let source = TabSource::SingleFile {
@@ -157,6 +162,35 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
     };
 
     let lf = compile_tab_lazy(&source, &steps, &paths.temp_dir)?;
+
+    // Values that could not be converted: always reported, and they stop the run when the
+    // control column has any (unless --allow-parse-failures).
+    let failures = source_parse_failures(&source, &paths.temp_dir)?;
+    for f in &failures {
+        eprintln!(
+            "[MicroParquet] Parse failures: {} {} (examples: {})",
+            f.column,
+            f.count,
+            f.examples.join(" | ")
+        );
+    }
+    let control = match recipe_control {
+        Some(c) => Some(c),
+        None => MicroParquetApp::guess_balance_column(&lf.clone().limit(0).collect()?),
+    };
+    if let Some(ctrl) = &control {
+        if let Some(f) = failures.iter().find(|f| &f.column == ctrl) {
+            if !args.allow_parse_failures {
+                anyhow::bail!(
+                    "Control column '{}' has {} value(s) that could not be converted (e.g. {}). \
+                     Fix the file or its schema, or pass --allow-parse-failures to export anyway.",
+                    ctrl,
+                    f.count,
+                    f.examples.join(" | ")
+                );
+            }
+        }
+    }
 
     if let Some(out_parq) = &args.export_parquet {
         export_to_parquet_stream(lf.clone(), out_parq, ParquetDialect::ArchiveZstd)?;
@@ -190,6 +224,20 @@ struct PendingCsvModal {
     raw_preview_df: DataFrame,
     config: IngestionConfig,
     direct_convert_only: bool,
+    /// Set when the modal edits the schema of an open tab instead of opening a new one.
+    target_tab: Option<usize>,
+    /// Parse failures of that tab's last load (empty for a new file).
+    parse_failures: Vec<ParseFailure>,
+}
+
+/// Exports that stop for confirmation when the control column has parse failures.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GuardedExport {
+    Parquet,
+    Csv,
+    MultiXlsx,
+    MultiPdf,
+    Split,
 }
 
 #[derive(Default)]
@@ -244,6 +292,10 @@ pub struct MicroParquetApp {
     dark_mode: bool,
     ui_zoom: f32,
     pending_csv_modal: Option<PendingCsvModal>,
+    /// Export waiting for "Export anyway" / "Cancel" because of parse failures.
+    export_guard: Option<GuardedExport>,
+    /// The user chose "Export anyway" for this export.
+    export_override: Option<GuardedExport>,
     batch_modal: BatchModalState,
     active_tool: ActiveToolModal,
     status_message: String,
@@ -429,6 +481,8 @@ impl MicroParquetApp {
             dark_mode: false,
             ui_zoom: 1.05,
             pending_csv_modal: None,
+            export_guard: None,
+            export_override: None,
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
             status_message:
@@ -606,6 +660,8 @@ impl MicroParquetApp {
                         raw_preview_df: preview_df,
                         config,
                         direct_convert_only,
+                        target_tab: None,
+                        parse_failures: Vec::new(),
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {
@@ -641,6 +697,14 @@ impl MicroParquetApp {
                         .and_then(|(_, s)| s)
                 };
 
+                let (parse_failures, count_note) =
+                    match source_parse_failures(&source, &self.paths.temp_dir) {
+                        Ok(f) => (f, String::new()),
+                        Err(e) => (
+                            Vec::new(),
+                            format!(" ⚠ Could not count parse failures: {:#}", e),
+                        ),
+                    };
                 self.tabs.push(TabState {
                     title,
                     source,
@@ -654,10 +718,12 @@ impl MicroParquetApp {
                     viewport_limit: 100,
                     cached_slice: slice,
                     sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
+                    parse_failures,
                 });
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
-                self.status_message = "Tab created and evaluated out-of-core.".to_string();
+                self.status_message =
+                    format!("Tab created and evaluated out-of-core.{}", count_note);
             }
             Err(e) => {
                 self.status_message = format!("Pipeline error: {}", e);
@@ -1064,11 +1130,11 @@ impl eframe::App for MicroParquetApp {
                     ui.separator();
                     if ui.button("Export Active Tab to Parquet (.parquet)...").clicked() {
                         ui.close_menu();
-                        self.export_active_tab_parquet();
+                        self.run_guarded_export(GuardedExport::Parquet);
                     }
                     if ui.button("Export Active Tab to CSV (.csv)...").clicked() {
                         ui.close_menu();
-                        self.export_active_tab_csv();
+                        self.run_guarded_export(GuardedExport::Csv);
                     }
                     ui.separator();
                     if ui.button("📊 Multi-Tab Consolidated Excel (.xlsx)...").clicked() {
@@ -1131,6 +1197,24 @@ impl eframe::App for MicroParquetApp {
                         ui.separator();
                     }
                 }
+                if let Some(tab) = self.tabs.get(self.active_tab) {
+                    if !tab.parse_failures.is_empty() {
+                        let detail: Vec<String> = tab
+                            .parse_failures
+                            .iter()
+                            .map(|f| format!("{}: {}", f.column, f.examples.join(" | ")))
+                            .collect();
+                        ui.colored_label(
+                            egui::Color32::from_rgb(210, 70, 0),
+                            format!("⚠ {}", parse_failure_summary(&tab.parse_failures)),
+                        )
+                        .on_hover_text(format!(
+                            "Non-blank values that could not be converted and are null. Examples:\n{}",
+                            detail.join("\n")
+                        ));
+                        ui.separator();
+                    }
+                }
                 ui.label(&self.status_message);
             });
 
@@ -1168,9 +1252,20 @@ impl eframe::App for MicroParquetApp {
 
                     let mut step_to_remove: Option<usize> = None;
                     let mut clear_all = false;
+                    let mut open_schema = false;
 
                     if let Some(tab) = self.tabs.get(self.active_tab) {
-                        ui.label("0. [Source Locked & Sanitized]");
+                        ui.horizontal(|ui| {
+                            ui.label("0. [Source Locked & Sanitized]");
+                            if matches!(tab.source, TabSource::SingleFile { .. })
+                                && ui
+                                    .small_button("🧬 Schema & Ingestion")
+                                    .on_hover_text("Column types, Dr/Cr sign and parse failures")
+                                    .clicked()
+                            {
+                                open_schema = true;
+                            }
+                        });
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for (idx, step) in tab.steps.iter().enumerate() {
                                 ui.horizontal(|ui| {
@@ -1189,6 +1284,9 @@ impl eframe::App for MicroParquetApp {
                         }
                     }
 
+                    if open_schema {
+                        self.open_schema_modal_for_active_tab();
+                    }
                     if let Some(idx) = step_to_remove {
                         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                             tab.steps.remove(idx);
@@ -1467,6 +1565,7 @@ impl eframe::App for MicroParquetApp {
 
         // Modals
         self.render_csv_schema_modal(ctx);
+        self.render_export_guard(ctx);
         self.render_batch_modal(ctx);
         self.render_active_tool_modal(ctx);
     }
@@ -3115,37 +3214,7 @@ impl MicroParquetApp {
                                 .button("📊 Export Selected Tabs to Single .xlsx...")
                                 .clicked()
                             {
-                                if let Some(out_path) = rfd::FileDialog::new()
-                                    .set_file_name("Consolidated_ALCO_Views.xlsx")
-                                    .save_file()
-                                {
-                                    let mut collected_tabs = Vec::new();
-                                    for (i, tab) in self.tabs.iter().enumerate() {
-                                        if self.multi_export_checks[i] {
-                                            if let Ok(lf) = compile_tab_lazy(
-                                                &tab.source,
-                                                &tab.steps,
-                                                &self.paths.temp_dir,
-                                            ) {
-                                                if let Ok(df) = lf.limit(1_048_500).collect() {
-                                                    collected_tabs.push((tab.title.clone(), df));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    match export_tabs_to_xlsx(collected_tabs, &out_path) {
-                                        Ok(_) => {
-                                            self.status_message = format!(
-                                                "Exported multi-tab Excel workbook to {:?}",
-                                                out_path
-                                            );
-                                        }
-                                        Err(e) => {
-                                            self.status_message =
-                                                format!("Excel export error: {}", e);
-                                        }
-                                    }
-                                }
+                                self.run_guarded_export(GuardedExport::MultiXlsx);
                                 close_modal = true;
                             }
 
@@ -3153,46 +3222,7 @@ impl MicroParquetApp {
                                 .button("📄 Export Selected Tabs to Single Landscape .pdf...")
                                 .clicked()
                             {
-                                if let Some(out_path) = rfd::FileDialog::new()
-                                    .set_file_name("Consolidated_ALCO_Report.pdf")
-                                    .save_file()
-                                {
-                                    let mut collected_tabs = Vec::new();
-                                    for (i, tab) in self.tabs.iter().enumerate() {
-                                        if self.multi_export_checks[i] {
-                                            if let Ok(lf) = compile_tab_lazy(
-                                                &tab.source,
-                                                &tab.steps,
-                                                &self.paths.temp_dir,
-                                            ) {
-                                                if let Ok(df) = lf.limit(5_000).collect() {
-                                                    collected_tabs.push((
-                                                        tab.title.clone(),
-                                                        df,
-                                                        tab.col_formats.clone(),
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    match export_tabs_to_pdf(
-                                        collected_tabs,
-                                        &out_path,
-                                        self.num_format,
-                                        self.global_decimals,
-                                    ) {
-                                        Ok(_) => {
-                                            self.status_message = format!(
-                                                "Exported multi-tab PDF report to {:?}",
-                                                out_path
-                                            );
-                                        }
-                                        Err(e) => {
-                                            self.status_message =
-                                                format!("PDF export error: {}", e);
-                                        }
-                                    }
-                                }
+                                self.run_guarded_export(GuardedExport::MultiPdf);
                                 close_modal = true;
                             }
                             if ui.button("Cancel").clicked() {
@@ -3229,36 +3259,7 @@ impl MicroParquetApp {
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("🚀 Select Output Folder & Split Now...").clicked() {
-                                if let (Some(tab), Some(out_dir)) = (
-                                    self.tabs.get(self.active_tab),
-                                    rfd::FileDialog::new().pick_folder(),
-                                ) {
-                                    if let Ok(lf) = compile_tab_lazy(
-                                        &tab.source,
-                                        &tab.steps,
-                                        &self.paths.temp_dir,
-                                    ) {
-                                        match split_and_export_by_column(
-                                            lf,
-                                            &self.split_col_name,
-                                            &out_dir,
-                                            self.split_format,
-                                            self.parquet_dialect,
-                                            self.export_csv_mdy,
-                                        ) {
-                                            Ok(cnt) => {
-                                                self.status_message = format!(
-                                                    "Split & exported {} individual files into {:?}",
-                                                    cnt, out_dir
-                                                );
-                                            }
-                                            Err(e) => {
-                                                self.status_message =
-                                                    format!("Split export failed: {}", e);
-                                            }
-                                        }
-                                    }
-                                }
+                                self.run_guarded_export(GuardedExport::Split);
                                 close_modal = true;
                             }
                             if ui.button("Cancel").clicked() {
@@ -3286,6 +3287,7 @@ impl MicroParquetApp {
 
         let mut keep_open = true;
         let mut action_open_tab = false;
+        let mut action_apply_to_tab = false;
         let mut action_direct_convert = false;
 
         egui::Window::new("🔍 CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock")
@@ -3371,6 +3373,7 @@ impl MicroParquetApp {
                                 ui.strong("Target Data Type");
                                 ui.strong("PII Anonymizer");
                                 ui.strong("Dr/Cr Sign");
+                                ui.strong("Parse Failures");
                                 ui.strong("Sample Values");
                                 ui.end_row();
 
@@ -3429,6 +3432,25 @@ impl MicroParquetApp {
                                     } else {
                                         ui.label("—");
                                     }
+                                    match modal
+                                        .parse_failures
+                                        .iter()
+                                        .find(|f| f.column == col_cfg.name)
+                                    {
+                                        Some(f) => {
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(210, 70, 0),
+                                                format!("⚠ {}", f.count),
+                                            )
+                                            .on_hover_text(format!(
+                                                "Could not be converted (now null), e.g.:\n{}",
+                                                f.examples.join("\n")
+                                            ));
+                                        }
+                                        None => {
+                                            ui.label("");
+                                        }
+                                    }
                                     ui.label(
                                         col_cfg
                                             .sample_values
@@ -3445,7 +3467,12 @@ impl MicroParquetApp {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if !modal.direct_convert_only
+                    if modal.target_tab.is_some() {
+                        if ui.button("✅ Apply Schema to This Tab").clicked() {
+                            action_apply_to_tab = true;
+                            keep_open = false;
+                        }
+                    } else if !modal.direct_convert_only
                         && ui.button("✅ Lock Schema & Open in Viewer Tab").clicked()
                     {
                         action_open_tab = true;
@@ -3464,7 +3491,11 @@ impl MicroParquetApp {
                 });
             });
 
-        if action_open_tab {
+        if action_apply_to_tab {
+            if let Some(idx) = modal.target_tab {
+                self.apply_schema_to_tab(idx, modal.config);
+            }
+        } else if action_open_tab {
             let title = modal
                 .csv_path
                 .file_name()
@@ -3618,42 +3649,319 @@ impl MicroParquetApp {
         }
     }
 
-    fn export_active_tab_parquet(&mut self) {
-        let Some(tab) = self.tabs.get(self.active_tab) else {
+    /// Tabs an export reads: the ticked tabs for multi-tab exports, else the active tab.
+    fn guarded_export_tabs(&self, kind: GuardedExport) -> Vec<usize> {
+        match kind {
+            GuardedExport::MultiXlsx | GuardedExport::MultiPdf => (0..self.tabs.len())
+                .filter(|i| self.multi_export_checks.get(*i).copied().unwrap_or(false))
+                .collect(),
+            _ => vec![self.active_tab],
+        }
+    }
+
+    /// True when the tab's control column has values that could not be converted.
+    fn control_column_has_failures(tab: &TabState) -> bool {
+        tab.control_col
+            .as_ref()
+            .is_some_and(|c| tab.parse_failures.iter().any(|f| &f.column == c))
+    }
+
+    /// Runs an export, or stops it for confirmation when a control column has parse failures.
+    /// After "Export anyway", `<output>.parse_failures.csv` is written next to the export.
+    fn run_guarded_export(&mut self, kind: GuardedExport) {
+        let forced = self.export_override.take() == Some(kind);
+        let tabs = self.guarded_export_tabs(kind);
+        let blocked = tabs
+            .iter()
+            .filter_map(|i| self.tabs.get(*i))
+            .any(Self::control_column_has_failures);
+        if blocked && !forced {
+            self.export_guard = Some(kind);
+            return;
+        }
+        let written = match kind {
+            GuardedExport::Parquet => self.export_active_tab_parquet(),
+            GuardedExport::Csv => self.export_active_tab_csv(),
+            GuardedExport::MultiXlsx => self.export_multi_tab_xlsx(),
+            GuardedExport::MultiPdf => self.export_multi_tab_pdf(),
+            GuardedExport::Split => self.export_split_by_column(),
+        };
+        if let (true, Some(out)) = (forced, written) {
+            self.write_failure_sidecar(&out, &tabs);
+        }
+    }
+
+    fn write_failure_sidecar(&mut self, output: &Path, tabs: &[usize]) {
+        let with_failures: Vec<&TabState> = tabs
+            .iter()
+            .filter_map(|i| self.tabs.get(*i))
+            .filter(|t| !t.parse_failures.is_empty())
+            .collect();
+        let prefix = with_failures.len() > 1;
+        let mut rows: Vec<ParseFailure> = Vec::new();
+        for t in with_failures {
+            for f in &t.parse_failures {
+                let mut f = f.clone();
+                if prefix {
+                    f.column = format!("{} / {}", t.title, f.column);
+                }
+                rows.push(f);
+            }
+        }
+        match write_parse_failures_csv(output, &rows) {
+            Ok(p) => self
+                .status_message
+                .push_str(&format!(" Parse failures listed in {:?}.", p)),
+            Err(e) => self.status_message.push_str(&format!(" ⚠ {:#}", e)),
+        }
+    }
+
+    fn render_export_guard(&mut self, ctx: &egui::Context) {
+        let Some(kind) = self.export_guard else {
             return;
         };
-        let Some(out_path) = rfd::FileDialog::new()
+        let mut lines = Vec::new();
+        for i in self.guarded_export_tabs(kind) {
+            if let Some(t) = self.tabs.get(i) {
+                for f in &t.parse_failures {
+                    let ctrl = t.control_col.as_deref() == Some(f.column.as_str());
+                    lines.push(format!(
+                        "{} {} — {}: {} value(s), e.g. {}",
+                        if ctrl { "●" } else { " " },
+                        t.title,
+                        f.column,
+                        f.count,
+                        f.examples.join(" | ")
+                    ));
+                }
+            }
+        }
+        let mut go = false;
+        let mut cancel = false;
+        egui::Window::new("⚠ Values could not be converted")
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label(
+                    "The control column has values that could not be converted to their type. \
+                     They are null in the export, so its totals will not match the source file.",
+                );
+                ui.separator();
+                for l in &lines {
+                    ui.monospace(l);
+                }
+                ui.small("● = control column");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Export anyway")
+                        .on_hover_text("Also writes <output>.parse_failures.csv next to the export")
+                        .clicked()
+                    {
+                        go = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if go {
+            self.export_guard = None;
+            self.export_override = Some(kind);
+            self.run_guarded_export(kind);
+        } else if cancel {
+            self.export_guard = None;
+            self.status_message = "Export cancelled: the control column has parse failures.".into();
+        }
+    }
+
+    fn export_active_tab_parquet(&mut self) -> Option<PathBuf> {
+        let tab = self.tabs.get(self.active_tab)?;
+        let out_path = rfd::FileDialog::new()
             .set_file_name(format!("{}.parquet", tab.title))
-            .save_file()
-        else {
-            return;
-        };
+            .save_file()?;
 
         match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
             .and_then(|lf| export_to_parquet_stream(lf, &out_path, self.parquet_dialect))
         {
-            Ok(_) => self.status_message = format!("✅ Exported view to {:?}", out_path),
-            Err(e) => self.status_message = format!("❌ Parquet export failed: {:#}", e),
+            Ok(_) => {
+                self.status_message = format!("✅ Exported view to {:?}", out_path);
+                Some(out_path)
+            }
+            Err(e) => {
+                self.status_message = format!("❌ Parquet export failed: {:#}", e);
+                None
+            }
         }
     }
 
-    fn export_active_tab_csv(&mut self) {
-        let Some(tab) = self.tabs.get(self.active_tab) else {
-            return;
-        };
-        let Some(out_path) = rfd::FileDialog::new()
+    fn export_active_tab_csv(&mut self) -> Option<PathBuf> {
+        let tab = self.tabs.get(self.active_tab)?;
+        let out_path = rfd::FileDialog::new()
             .set_file_name(format!("{}.csv", tab.title))
-            .save_file()
-        else {
-            return;
-        };
+            .save_file()?;
 
         match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir)
             .and_then(|lf| export_to_csv_stream(lf, &out_path, self.export_csv_mdy))
         {
-            Ok(_) => self.status_message = format!("✅ Exported view to {:?}", out_path),
-            Err(e) => self.status_message = format!("❌ CSV export failed: {:#}", e),
+            Ok(_) => {
+                self.status_message = format!("✅ Exported view to {:?}", out_path);
+                Some(out_path)
+            }
+            Err(e) => {
+                self.status_message = format!("❌ CSV export failed: {:#}", e);
+                None
+            }
         }
+    }
+
+    fn export_multi_tab_xlsx(&mut self) -> Option<PathBuf> {
+        let out_path = rfd::FileDialog::new()
+            .set_file_name("Consolidated_ALCO_Views.xlsx")
+            .save_file()?;
+        let mut collected_tabs = Vec::new();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if self.multi_export_checks.get(i).copied().unwrap_or(false) {
+                if let Ok(lf) = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
+                    if let Ok(df) = lf.limit(1_048_500).collect() {
+                        collected_tabs.push((tab.title.clone(), df));
+                    }
+                }
+            }
+        }
+        match export_tabs_to_xlsx(collected_tabs, &out_path) {
+            Ok(_) => {
+                self.status_message =
+                    format!("Exported multi-tab Excel workbook to {:?}", out_path);
+                Some(out_path)
+            }
+            Err(e) => {
+                self.status_message = format!("Excel export error: {}", e);
+                None
+            }
+        }
+    }
+
+    fn export_multi_tab_pdf(&mut self) -> Option<PathBuf> {
+        let out_path = rfd::FileDialog::new()
+            .set_file_name("Consolidated_ALCO_Report.pdf")
+            .save_file()?;
+        let mut collected_tabs = Vec::new();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if self.multi_export_checks.get(i).copied().unwrap_or(false) {
+                if let Ok(lf) = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
+                    if let Ok(df) = lf.limit(5_000).collect() {
+                        collected_tabs.push((tab.title.clone(), df, tab.col_formats.clone()));
+                    }
+                }
+            }
+        }
+        match export_tabs_to_pdf(
+            collected_tabs,
+            &out_path,
+            self.num_format,
+            self.global_decimals,
+        ) {
+            Ok(_) => {
+                self.status_message = format!("Exported multi-tab PDF report to {:?}", out_path);
+                Some(out_path)
+            }
+            Err(e) => {
+                self.status_message = format!("PDF export error: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Returns `<folder>/split_export` as the base name for the parse-failure list.
+    fn export_split_by_column(&mut self) -> Option<PathBuf> {
+        let tab = self.tabs.get(self.active_tab)?;
+        let out_dir = rfd::FileDialog::new().pick_folder()?;
+        let lf = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir).ok()?;
+        match split_and_export_by_column(
+            lf,
+            &self.split_col_name,
+            &out_dir,
+            self.split_format,
+            self.parquet_dialect,
+            self.export_csv_mdy,
+        ) {
+            Ok(cnt) => {
+                self.status_message = format!(
+                    "Split & exported {} individual files into {:?}",
+                    cnt, out_dir
+                );
+                Some(out_dir.join("split_export"))
+            }
+            Err(e) => {
+                self.status_message = format!("Split export failed: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Reopens the schema modal for the active single-file tab, with its parse failures.
+    fn open_schema_modal_for_active_tab(&mut self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let TabSource::SingleFile {
+            path,
+            is_parquet,
+            config,
+        } = &tab.source
+        else {
+            return;
+        };
+        if *is_parquet {
+            self.status_message = "Schema for Parquet sources is not available yet.".into();
+            return;
+        }
+        match preview_csv_raw(path, 5) {
+            Ok(preview) => {
+                self.pending_csv_modal = Some(PendingCsvModal {
+                    csv_path: path.clone(),
+                    raw_preview_df: preview,
+                    config: config.clone(),
+                    direct_convert_only: false,
+                    target_tab: Some(self.active_tab),
+                    parse_failures: tab.parse_failures.clone(),
+                });
+            }
+            Err(e) => self.status_message = format!("Error reading CSV preview: {:#}", e),
+        }
+    }
+
+    /// Replaces the ingestion settings of an open tab, keeping its steps, and reloads it.
+    fn apply_schema_to_tab(&mut self, idx: usize, config: IngestionConfig) {
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        let TabSource::SingleFile {
+            path, is_parquet, ..
+        } = &tab.source
+        else {
+            return;
+        };
+        let new_source = TabSource::SingleFile {
+            path: path.clone(),
+            is_parquet: *is_parquet,
+            config,
+        };
+        if let Err(e) = compile_tab_lazy(&new_source, &tab.steps, &self.paths.temp_dir) {
+            self.status_message = format!("Schema not applied: {:#}", e);
+            return;
+        }
+        match source_parse_failures(&new_source, &self.paths.temp_dir) {
+            Ok(f) => tab.parse_failures = f,
+            Err(e) => {
+                tab.parse_failures.clear();
+                self.status_message = format!("⚠ Could not count parse failures: {:#}", e);
+            }
+        }
+        tab.source = new_source;
+        self.active_tab = idx;
+        self.refresh_active_tab(true);
+        self.status_message = "Schema applied and tab reloaded.".into();
     }
 }
 

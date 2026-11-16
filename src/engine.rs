@@ -5,7 +5,8 @@ use crate::banking::{
 };
 use crate::models::{
     AggFunc, AggSpec, ColDataType, ColumnSchemaConfig, FilterOp, IngestionConfig, MathOp,
-    ParquetDialect, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState, TransformStep,
+    ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
+    TransformStep,
 };
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -371,17 +372,10 @@ fn check_dr_cr_conventions(raw_lf: &LazyFrame, config: &IngestionConfig) -> Resu
 /// (e.g., "2/8/2024", "02/08/2024", "11/8/2026", "11/30/2023", "31-Oct-2026", "2024-02-08",
 /// 2-digit years, and trailing timestamps) and returns days since 1970-01-01.
 pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> {
-    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
-    if s.is_empty()
-        || s == "-"
-        || s == "0"
-        || s.eq_ignore_ascii_case("null")
-        || s.eq_ignore_ascii_case("none")
-        || s.eq_ignore_ascii_case("na")
-        || s.eq_ignore_ascii_case("n/a")
-    {
+    if is_blank_date_token(raw) {
         return None;
     }
+    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
 
     // Strip trailing timestamp if present (e.g. "02/08/2024 00:00:00" or "2024-02-08T12:30:00")
     let date_part = strip_time_part(s);
@@ -452,6 +446,18 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     };
 
     Some((dt - epoch).num_days() as i32)
+}
+
+/// A date cell that means "no date": blank, "-", "0", NULL, NONE, NA or N/A (any case).
+pub fn is_blank_date_token(raw: &str) -> bool {
+    let s = raw.trim().trim_matches('"').trim_matches('\'').trim();
+    s.is_empty()
+        || s == "-"
+        || s == "0"
+        || s.eq_ignore_ascii_case("null")
+        || s.eq_ignore_ascii_case("none")
+        || s.eq_ignore_ascii_case("na")
+        || s.eq_ignore_ascii_case("n/a")
 }
 
 /// Drops a trailing time: everything after a space, or after a 'T' between two digits
@@ -605,6 +611,23 @@ pub fn build_lazy_pipeline(
         return Ok(lf);
     }
 
+    let mut lf = scan_csv_text(path, config, temp_dir)?;
+    check_dr_cr_conventions(&lf, config)?;
+
+    let exprs: Vec<Expr> = config
+        .columns
+        .iter()
+        .map(|c| typed_expr(raw_text_expr(c, config), c, config).alias(&c.name))
+        .collect();
+    if !exprs.is_empty() {
+        lf = lf.with_columns(exprs);
+    }
+
+    Ok(lf)
+}
+
+/// Reads a CSV with every configured column as text (no typing yet).
+fn scan_csv_text(path: &Path, config: &IngestionConfig, temp_dir: &Path) -> Result<LazyFrame> {
     let actual_csv_path = if config.heal_broken_csv_lines {
         heal_broken_csv_file(path, temp_dir)?
     } else {
@@ -616,7 +639,7 @@ pub fn build_lazy_pipeline(
         schema.with_column(col_cfg.name.clone().into(), DataType::String);
     }
 
-    let mut lf = LazyCsvReader::new(&actual_csv_path)
+    LazyCsvReader::new(&actual_csv_path)
         .with_dtype_overwrite(Some(Arc::new(schema)))
         .with_encoding(CsvEncoding::LossyUtf8)
         .with_ignore_errors(true)
@@ -624,106 +647,284 @@ pub fn build_lazy_pipeline(
         .with_try_parse_dates(false)
         .with_infer_schema_length(Some(0))
         .finish()
-        .context("Failed to build LazyCsvReader")?;
+        .context("Failed to build LazyCsvReader")
+}
 
-    check_dr_cr_conventions(&lf, config)?;
+/// The text a column holds just before typing: linebreaks sanitised, then the PII mask.
+fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+    let mut e = col(&col_cfg.name);
 
-    let mut exprs: Vec<Expr> = Vec::with_capacity(config.columns.len());
+    if config.sanitize_linebreaks {
+        e = e
+            .str()
+            .replace_all(lit(r"[\r\n]+"), lit(" "), false)
+            .str()
+            .strip_chars(lit(" "));
+    }
 
-    for col_cfg in &config.columns {
-        let cname = &col_cfg.name;
-        let mut e = col(cname);
+    if col_cfg.pii_mask != PiiMaskMode::None {
+        let salt = config.pii_salt.clone();
+        let mode = col_cfg.pii_mask;
+        e = e.map(
+            move |s: Series| {
+                let ca = s.str()?;
+                let out: StringChunked = ca
+                    .into_iter()
+                    .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &salt)))
+                    .collect();
+                Ok(Some(out.into_series()))
+            },
+            GetOutput::from_type(DataType::String),
+        );
+    }
+    e
+}
 
-        if config.sanitize_linebreaks {
-            e = e
-                .str()
-                .replace_all(lit(r"[\r\n]+"), lit(" "), false)
-                .str()
-                .strip_chars(lit(" "));
-        }
-
-        if col_cfg.pii_mask != PiiMaskMode::None {
-            let salt = config.pii_salt.clone();
-            let mode = col_cfg.pii_mask;
-            e = e.map(
+/// Converts a text expression to the column's configured type (P1 amount and date rules).
+fn typed_expr(e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+    match col_cfg.dtype {
+        ColDataType::Utf8 => e,
+        ColDataType::Float64 => {
+            let sign = col_cfg.sign_convention;
+            let acc = config.parse_accounting_negatives;
+            let name = col_cfg.name.clone();
+            e.map(
                 move |s: Series| {
                     let ca = s.str()?;
-                    let out: StringChunked = ca
+                    let mut out: Vec<Option<f64>> = Vec::with_capacity(ca.len());
+                    for v in ca.into_iter() {
+                        out.push(match v.map(|v| parse_banking_amount(v, sign, acc)) {
+                            Some(AmountCell::Value(x)) => Some(x),
+                            Some(AmountCell::NeedsSignConvention) => {
+                                return Err(PolarsError::ComputeError(
+                                    dr_cr_unset_message(&name).into(),
+                                ))
+                            }
+                            _ => None,
+                        });
+                    }
+                    Ok(Some(Float64Chunked::from_iter(out).into_series()))
+                },
+                GetOutput::from_type(DataType::Float64),
+            )
+        }
+        ColDataType::Int64 => {
+            let sign = col_cfg.sign_convention;
+            let acc = config.parse_accounting_negatives;
+            e.map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let out: Int64Chunked = ca
                         .into_iter()
-                        .map(|opt_v| opt_v.map(|v| mask_pii_value(v, mode, &salt)))
+                        .map(|v| v.and_then(|v| parse_banking_int(v, sign, acc)))
                         .collect();
                     Ok(Some(out.into_series()))
                 },
-                GetOutput::from_type(DataType::String),
-            );
+                GetOutput::from_type(DataType::Int64),
+            )
         }
-
-        e = match col_cfg.dtype {
-            ColDataType::Utf8 => e,
-            ColDataType::Float64 => {
-                let sign = col_cfg.sign_convention;
-                let acc = config.parse_accounting_negatives;
-                let name = cname.clone();
-                e.map(
-                    move |s: Series| {
-                        let ca = s.str()?;
-                        let mut out: Vec<Option<f64>> = Vec::with_capacity(ca.len());
-                        for v in ca.into_iter() {
-                            out.push(match v.map(|v| parse_banking_amount(v, sign, acc)) {
-                                Some(AmountCell::Value(x)) => Some(x),
-                                Some(AmountCell::NeedsSignConvention) => {
-                                    return Err(PolarsError::ComputeError(
-                                        dr_cr_unset_message(&name).into(),
-                                    ))
-                                }
-                                _ => None,
-                            });
-                        }
-                        Ok(Some(Float64Chunked::from_iter(out).into_series()))
-                    },
-                    GetOutput::from_type(DataType::Float64),
-                )
-            }
-            ColDataType::Int64 => {
-                let sign = col_cfg.sign_convention;
-                let acc = config.parse_accounting_negatives;
-                e.map(
-                    move |s: Series| {
-                        let ca = s.str()?;
-                        let out: Int64Chunked = ca
-                            .into_iter()
-                            .map(|v| v.and_then(|v| parse_banking_int(v, sign, acc)))
-                            .collect();
-                        Ok(Some(out.into_series()))
-                    },
-                    GetOutput::from_type(DataType::Int64),
-                )
-            }
-            ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
-                let date_mode = col_cfg.dtype;
-                e.map(
-                    move |s: Series| {
-                        let ca = s.str()?;
-                        let days_ca: Int32Chunked = ca
-                            .into_iter()
-                            .map(|opt_v| opt_v.and_then(|v| parse_flexible_banking_date(v, date_mode)))
-                            .collect();
-                        let date_series = days_ca.into_series().cast(&DataType::Date)?;
-                        Ok(Some(date_series))
-                    },
-                    GetOutput::from_type(DataType::Date),
-                )
-            }
-        };
-
-        exprs.push(e.alias(cname));
+        ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
+            let date_mode = col_cfg.dtype;
+            e.map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let days_ca: Int32Chunked = ca
+                        .into_iter()
+                        .map(|opt_v| opt_v.and_then(|v| parse_flexible_banking_date(v, date_mode)))
+                        .collect();
+                    let date_series = days_ca.into_series().cast(&DataType::Date)?;
+                    Ok(Some(date_series))
+                },
+                GetOutput::from_type(DataType::Date),
+            )
+        }
     }
+}
 
-    if !exprs.is_empty() {
-        lf = lf.with_columns(exprs);
+/// True when a non-blank raw value of a typed column does not convert (it would become null).
+pub fn is_parse_failure(
+    raw: &str,
+    dtype: ColDataType,
+    sign: SignConvention,
+    accounting_negatives: bool,
+) -> bool {
+    match dtype {
+        ColDataType::Utf8 => false,
+        ColDataType::Float64 => !matches!(
+            parse_banking_amount(raw, sign, accounting_negatives),
+            AmountCell::Value(_) | AmountCell::Blank
+        ),
+        ColDataType::Int64 => {
+            !is_blank_amount_token(raw) && parse_banking_int(raw, sign, accounting_negatives).is_none()
+        }
+        ColDataType::DateMDY | ColDataType::DateDMY | ColDataType::DateISO => {
+            !is_blank_date_token(raw) && parse_flexible_banking_date(raw, dtype).is_none()
+        }
     }
+}
 
-    Ok(lf)
+/// Counts, per typed column, the non-blank raw values that become null, with up to 5 examples.
+/// Columns with no failures are left out.
+pub fn compute_parse_failures(
+    path: &Path,
+    is_parquet: bool,
+    config: &IngestionConfig,
+    temp_dir: &Path,
+) -> Result<Vec<ParseFailure>> {
+    if is_parquet {
+        return Ok(Vec::new());
+    }
+    let typed: Vec<&ColumnSchemaConfig> = config
+        .columns
+        .iter()
+        .filter(|c| c.dtype != ColDataType::Utf8)
+        .collect();
+    if typed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let lf = scan_csv_text(path, config, temp_dir)?;
+    let pairs: Vec<(&ColumnSchemaConfig, Expr)> =
+        typed.into_iter().map(|c| (c, raw_text_expr(c, config))).collect();
+    failures_from_text(lf, &pairs, config.parse_accounting_negatives)
+}
+
+/// Shared by CSV and Parquet: `pairs` holds each typed column and its text expression.
+fn failures_from_text(
+    lf: LazyFrame,
+    pairs: &[(&ColumnSchemaConfig, Expr)],
+    accounting_negatives: bool,
+) -> Result<Vec<ParseFailure>> {
+    let mut exprs = Vec::with_capacity(pairs.len() * 2);
+    for (i, (c, text)) in pairs.iter().enumerate() {
+        let (dtype, sign) = (c.dtype, c.sign_convention);
+        let mask = text.clone().map(
+            move |s: Series| {
+                let ca = s.str()?;
+                let flags: BooleanChunked = ca
+                    .into_iter()
+                    .map(|v| Some(v.is_some_and(|v| is_parse_failure(v, dtype, sign, accounting_negatives))))
+                    .collect();
+                Ok(Some(flags.into_series()))
+            },
+            GetOutput::from_type(DataType::Boolean),
+        );
+        exprs.push(mask.clone().sum().cast(DataType::UInt64).alias(format!("__pf_n_{i}")));
+        exprs.push(text.clone().filter(mask).head(Some(5)).implode().alias(format!("__pf_x_{i}")));
+    }
+    let df = lf
+        .select(exprs)
+        .collect()
+        .context("Failed to count values that could not be converted")?;
+
+    let mut out = Vec::new();
+    for (i, (c, _)) in pairs.iter().enumerate() {
+        let count = df
+            .column(&format!("__pf_n_{i}"))
+            .ok()
+            .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
+            .unwrap_or(0) as usize;
+        if count == 0 {
+            continue;
+        }
+        let mut examples = Vec::new();
+        if let Some(list) = df
+            .column(&format!("__pf_x_{i}"))
+            .ok()
+            .and_then(|s| s.list().ok().and_then(|l| l.get_as_series(0)))
+        {
+            if let Ok(ca) = list.str() {
+                examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
+            }
+        }
+        out.push(ParseFailure {
+            column: c.name.clone(),
+            count,
+            examples,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse failures of everything a tab reads (stacked, joined and reconciled sources included),
+/// added up per column name.
+pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<ParseFailure>> {
+    let mut parts = Vec::new();
+    match source {
+        TabSource::SingleFile {
+            path,
+            is_parquet,
+            config,
+        } => parts.extend(compute_parse_failures(path, *is_parquet, config, temp_dir)?),
+        TabSource::VerticalStack { files, .. } => {
+            for (path, is_parquet, cfg) in files {
+                parts.extend(compute_parse_failures(path, *is_parquet, cfg, temp_dir)?);
+            }
+        }
+        TabSource::JoinedTabs {
+            left_source,
+            right_source,
+            ..
+        } => {
+            parts.extend(source_parse_failures(left_source, temp_dir)?);
+            parts.extend(source_parse_failures(right_source, temp_dir)?);
+        }
+        TabSource::PeriodReconcile {
+            prev_source,
+            curr_source,
+            ..
+        } => {
+            parts.extend(source_parse_failures(prev_source, temp_dir)?);
+            parts.extend(source_parse_failures(curr_source, temp_dir)?);
+        }
+    }
+    let mut merged: Vec<ParseFailure> = Vec::new();
+    for f in parts {
+        match merged.iter_mut().find(|m| m.column == f.column) {
+            Some(m) => {
+                m.count += f.count;
+                for ex in f.examples {
+                    if m.examples.len() < 5 {
+                        m.examples.push(ex);
+                    }
+                }
+            }
+            None => merged.push(f),
+        }
+    }
+    Ok(merged)
+}
+
+/// "Parse failures: Balance 3, Matdat 1", or "" when there are none.
+pub fn parse_failure_summary(failures: &[ParseFailure]) -> String {
+    if failures.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = failures
+        .iter()
+        .map(|f| format!("{} {}", f.column, f.count))
+        .collect();
+    format!("Parse failures: {}", parts.join(", "))
+}
+
+/// Writes `<output>.parse_failures.csv` next to an export (columns: column, count, examples)
+/// and returns its path.
+pub fn write_parse_failures_csv(output: &Path, failures: &[ParseFailure]) -> Result<PathBuf> {
+    let mut name = output.file_name().unwrap_or_default().to_os_string();
+    name.push(".parse_failures.csv");
+    let side = output.with_file_name(name);
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let mut body = String::from("column,count,examples\n");
+    for f in failures {
+        body.push_str(&format!(
+            "{},{},{}\n",
+            quote(&f.column),
+            f.count,
+            quote(&f.examples.join(" | "))
+        ));
+    }
+    std::fs::write(&side, body)
+        .with_context(|| format!("Failed to write the parse-failure list {:?}", side))?;
+    Ok(side)
 }
 
 pub fn compile_tab_lazy(

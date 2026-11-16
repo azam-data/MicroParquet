@@ -145,6 +145,15 @@ pub struct ColumnSchemaConfig {
     pub has_dr_cr: bool,
 }
 
+/// Non-blank values of one typed column that could not be converted and became null.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParseFailure {
+    pub column: String,
+    pub count: usize,
+    /// Up to 5 raw values, as read.
+    pub examples: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IngestionConfig {
     pub columns: Vec<ColumnSchemaConfig>,
@@ -876,6 +885,8 @@ pub struct TabState {
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
+    /// Values of the tab's source that could not be converted to their column type.
+    pub parse_failures: Vec<ParseFailure>,
 }
 
 impl TabState {
