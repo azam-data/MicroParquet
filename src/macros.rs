@@ -1,4 +1,6 @@
-use crate::models::{AggFunc, FilterOp, IngestionConfig, MacroRecipe, TransformStep};
+use crate::models::{
+    AggFunc, ColDataType, FilterOp, IngestionConfig, MacroRecipe, PiiMaskMode, TransformStep,
+};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -13,6 +15,33 @@ pub fn load_macro_from_file(path: &Path) -> Result<MacroRecipe> {
     let recipe: MacroRecipe =
         serde_json::from_str(&raw).context("Failed to parse .mpq.json structure")?;
     Ok(recipe)
+}
+
+/// True when the Python generator has a translation for this step.
+fn has_python_translation(step: &TransformStep) -> bool {
+    !matches!(
+        step,
+        TransformStep::RateShockSim { .. }
+            | TransformStep::FtpCurveMap { .. }
+            | TransformStep::BankingHygieneAudit { .. }
+            | TransformStep::LoanClassificationProvision { .. }
+            | TransformStep::LoanLimitUtilization { .. }
+    )
+}
+
+/// "Step N '<label>'" for every step the Python export cannot reproduce, for UI warnings.
+pub fn python_untranslated_steps(steps: &[TransformStep]) -> Vec<String> {
+    steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !has_python_translation(s))
+        .map(|(i, s)| format!("Step {} '{}'", i + 1, s.short_label()))
+        .collect()
+}
+
+/// Escapes text for a double-quoted Python string literal.
+fn py_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 pub fn generate_python_polars_code(
@@ -47,6 +76,64 @@ pub fn generate_python_polars_code(
         if ingestion.sanitize_linebreaks {
             py.push_str("# 2. Sanitize Linebreaks (\\r, \\n) & Trim Whitespace Across All Text Columns\n");
             py.push_str("lf = lf.with_columns(\n    pl.col(pl.Utf8).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars()\n)\n\n");
+        }
+
+        if ingestion.columns.iter().any(|c| c.pii_mask != PiiMaskMode::None) {
+            py.push_str("# WARNING: PII masking not reproduced\n\n");
+        }
+
+        // Same typing as MicroParquet's ingestion: casts are not strict, so a value that cannot
+        // be converted becomes null (as in the app), and the script prints how many per column.
+        let mut casts: Vec<String> = Vec::new();
+        let mut cast_cols: Vec<String> = Vec::new();
+        for c in &ingestion.columns {
+            let name = py_escape(&c.name);
+            let cleaned = if ingestion.parse_accounting_negatives {
+                format!(
+                    "pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True).str.replace(r\"^\\((.*)\\)$\", \"-${{1}}\")",
+                    name
+                )
+            } else {
+                format!("pl.col(\"{}\")", name)
+            };
+            if c.dtype != ColDataType::Utf8 {
+                cast_cols.push(format!("\"{}\"", name));
+            }
+            match c.dtype {
+                ColDataType::Utf8 => {}
+                ColDataType::Float64 => {
+                    casts.push(format!("{}.cast(pl.Float64, strict=False)", cleaned))
+                }
+                ColDataType::Int64 => {
+                    let int_cleaned = if ingestion.parse_accounting_negatives {
+                        format!("pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True)", name)
+                    } else {
+                        format!("pl.col(\"{}\")", name)
+                    };
+                    casts.push(format!("{}.cast(pl.Int64, strict=False)", int_cleaned))
+                }
+                ColDataType::DateDMY => {
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\", strict=False)", name))
+                }
+                ColDataType::DateMDY => {
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%m/%d/%Y\", strict=False)", name))
+                }
+                ColDataType::DateISO => {
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%Y-%m-%d\", strict=False)", name))
+                }
+            }
+        }
+        if !casts.is_empty() {
+            py.push_str("# 2b. Apply Ingestion Column Types (numbers cleaned of commas and (brackets))\n");
+            py.push_str("# Casts are not strict: a value that cannot be converted becomes null, as in MicroParquet.\n");
+            py.push_str(&format!("_cast_cols = [{}]\n", cast_cols.join(", ")));
+            py.push_str("_nulls_before = lf.select([pl.col(c).is_null().sum() for c in _cast_cols]).collect().row(0)\n");
+            py.push_str(&format!(
+                "lf = lf.with_columns([\n    {},\n])\n",
+                casts.join(",\n    ")
+            ));
+            py.push_str("_nulls_after = lf.select([pl.col(c).is_null().sum() for c in _cast_cols]).collect().row(0)\n");
+            py.push_str("for _c, _b, _a in zip(_cast_cols, _nulls_before, _nulls_after):\n    print(f\"Cast {_c}: {_a - _b} value(s) could not be converted and became null\")\n\n");
         }
     }
 
@@ -176,16 +263,41 @@ pub fn generate_python_polars_code(
                 compounding_freq,
                 shock_bps,
                 default_sight_years,
+                side_col,
             } => {
+                // Asset/liability sign for Delta EVE (same rule as banking::direction_sign)
+                let side = side_col.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                let (sign_py, assumed_py) = match side {
+                    Some(s) => {
+                        py.push_str(&format!(
+                            "_side = pl.col(\"{s}\").cast(pl.Utf8).str.strip_chars().str.to_uppercase()\n_sign = pl.when(_side.str.starts_with(\"A\")).then(1.0).when(_side.str.starts_with(\"L\") | _side.is_in([\"DEPOSIT\", \"BORROWING\"])).then(-1.0).otherwise(None)\n_bad = lf.select(pl.col(\"{s}\")).filter(_sign.is_null()).unique(maintain_order=True).head(10).collect()\nif _bad.height > 0:\n    raise ValueError(f\"Side column '{s}' has values that are neither asset nor liability: {{_bad.to_series().to_list()}}\")\n"
+                        ));
+                        ("_sign".to_string(), String::new())
+                    }
+                    None => (
+                        "1.0".to_string(),
+                        ",\n    pl.lit(\"ASSET (unspecified)\").alias(\"Direction_Assumed\")".to_string(),
+                    ),
+                };
                 py.push_str(&format!(
-                    "# IRRBB Duration & Delta EVE Analysis ({:+.0} bps)\nrem_days = (pl.col(\"{}\") - pl.lit(\"{}\").str.to_date(\"%Y-%m-%d\")).dt.total_days()\nT = pl.when(pl.col(\"{}\").is_null()).then({}).otherwise((rem_days / 365.0).clip(0.0027, 100.0))\ny = (pl.col(\"{}\").cast(pl.Float64).fill_null(0.0) / 100.0).clip(0.0001, 1.0)\nk = {:.1}\nmac_dur = pl.when(T <= 0.5).then(T).otherwise(((1.0 + y/k)/y) * (1.0 - (1.0 + y/k).pow(-T*k)))\nmod_dur = mac_dur / (1.0 + y/k)\nlf = lf.with_columns([\n    T.alias(\"Residual_Years_T\"),\n    mac_dur.round(4).alias(\"Macaulay_Duration_Yrs\"),\n    mod_dur.round(4).alias(\"Modified_Duration\"),\n    (pl.col(\"{}\") * mod_dur * 0.0001).round(2).alias(\"DV01_BPV_BDT\"),\n    (-pl.col(\"{}\") * mod_dur * ({} / 10000.0)).round(2).alias(\"Delta_EVE_Impact_BDT\")\n])\n\n",
-                    shock_bps, mat_col, cutoff_date, mat_col, default_sight_years, rate_col, *compounding_freq as f64, bal_col, bal_col, shock_bps
+                    "# IRRBB Duration & Delta EVE Analysis ({:+.0} bps)\nrem_days = (pl.col(\"{}\") - pl.lit(\"{}\").str.to_date(\"%Y-%m-%d\")).dt.total_days()\nT = pl.when(pl.col(\"{}\").is_null()).then({}).otherwise((rem_days / 365.0).clip(0.0027, 100.0))\ny = (pl.col(\"{}\").cast(pl.Float64).fill_null(0.0) / 100.0).clip(0.0001, 1.0)\nk = {:.1}\nmac_dur = pl.when(T <= 0.5).then(T).otherwise(((1.0 + y/k)/y) * (1.0 - (1.0 + y/k).pow(-T*k)))\nmod_dur = mac_dur / (1.0 + y/k)\nlf = lf.with_columns([\n    T.alias(\"Residual_Years_T\"),\n    mac_dur.round(4).alias(\"Macaulay_Duration_Yrs\"),\n    mod_dur.round(4).alias(\"Modified_Duration\"),\n    (pl.col(\"{}\") * mod_dur * 0.0001).round(2).alias(\"DV01_BPV_BDT\"),\n    (-pl.col(\"{}\") * mod_dur * ({} / 10000.0) * {}).round(2).alias(\"Delta_EVE_Impact_BDT\"){}\n])\n\n",
+                    shock_bps, mat_col, cutoff_date, mat_col, default_sight_years, rate_col, *compounding_freq as f64, bal_col, bal_col, shock_bps, sign_py, assumed_py
                 ));
             }
             TransformStep::GroupByPivot {
                 group_cols, aggs, ..
             } => {
                 let g_str: Vec<String> = group_cols.iter().map(|c| format!("\"{}\"", c)).collect();
+                for a in aggs {
+                    if a.func == AggFunc::WeightedAvg
+                        && a.weight_col.as_deref().map_or(true, |w| w.trim().is_empty())
+                    {
+                        py.push_str(&format!(
+                            "raise ValueError(\"Weighted average needs a weight column (metric '{}')\")\n",
+                            a.alias
+                        ));
+                    }
+                }
                 let mut a_strs = Vec::new();
                 for a in aggs {
                     let expr = match a.func {
@@ -205,8 +317,16 @@ pub fn generate_python_polars_code(
                             format!("pl.col(\"{}\").max().alias(\"{}\")", a.target_col, a.alias)
                         }
                         AggFunc::WeightedAvg => {
-                            let w = a.weight_col.as_deref().unwrap_or(&a.target_col);
-                            format!("((pl.col(\"{}\") * pl.col(\"{}\")).sum() / pl.col(\"{}\").sum()).alias(\"{}\")", a.target_col, w, w, a.alias)
+                            // Null-safe: only rows with both value and weight count; zero weight -> null
+                            let w = a.weight_col.as_deref().unwrap_or("").trim();
+                            let v_py = format!("pl.col(\"{}\").cast(pl.Float64)", a.target_col);
+                            let w_py = format!("pl.col(\"{}\").cast(pl.Float64)", w);
+                            let mask = format!("({v_py}.is_not_null() & {w_py}.is_not_null())");
+                            let den = format!("{w_py}.filter({mask}).sum()");
+                            format!(
+                                "pl.when({den} == 0).then(None).otherwise(({v_py} * {w_py}).filter({mask}).sum() / {den}).alias(\"{}\")",
+                                a.alias
+                            )
                         }
                         AggFunc::PctOfTotal => {
                             format!("pl.col(\"{}\").sum().alias(\"{}\")", a.target_col, a.alias)
@@ -226,8 +346,16 @@ pub fn generate_python_polars_code(
                     query
                 ));
             }
-            _ => {
-                py.push_str("# (Specialized Banking Step Executed via Polars Expressions)\n\n");
+            TransformStep::RateShockSim { .. }
+            | TransformStep::FtpCurveMap { .. }
+            | TransformStep::BankingHygieneAudit { .. }
+            | TransformStep::LoanClassificationProvision { .. }
+            | TransformStep::LoanLimitUtilization { .. } => {
+                py.push_str(&format!(
+                    "raise NotImplementedError(\"Step {} '{}' has no Python translation in this version; run it in MicroParquet\")\n\n",
+                    idx + 1,
+                    py_escape(&step.short_label())
+                ));
             }
         }
     }

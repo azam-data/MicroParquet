@@ -1,27 +1,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod banking;
-mod batch;
-mod engine;
-mod exporters;
-mod macros;
-mod models;
-
-use batch::{run_folder_mirror_batch, BatchReport};
+use micro_parquet::batch::{run_folder_mirror_batch, BatchReport};
 use clap::Parser;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use egui_plot::{Bar, BarChart, Plot};
-use engine::{
+use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     export_to_parquet_stream, fetch_viewport_slice, preview_csv_raw,
 };
-use exporters::{
+use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
 };
-use macros::{generate_python_polars_code, load_macro_from_file, save_macro_to_file};
-use models::{
-    default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
+use micro_parquet::macros::{
+    generate_python_polars_code, load_macro_from_file, python_untranslated_steps,
+    save_macro_to_file,
+};
+use micro_parquet::models::{
+    column_name_tokens, default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
     NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths, SplitExportFormat,
@@ -57,6 +53,17 @@ struct CliArgs {
 fn main() -> eframe::Result<()> {
     let args = CliArgs::parse();
     let paths = PortablePaths::init();
+    // Provisioning rule files: write defaults on first run, upgrade untouched old defaults,
+    // and warn about edited files from an older version (shown in the status bar).
+    let rule_notice: Option<String> =
+        match micro_parquet::banking::ProvisionConfig::load_or_create(&paths.root_dir) {
+            Ok(cfg) if cfg.warnings.is_empty() => None,
+            Ok(cfg) => Some(format!("⚠ {}", cfg.warnings.join(" | "))),
+            Err(e) => Some(format!("⚠ Provisioning rule files: {:#}", e)),
+        };
+    if let Some(n) = &rule_notice {
+        eprintln!("[MicroParquet] {}", n);
+    }
 
     if args.headless {
         if let Err(e) = run_headless_cli(&args, &paths) {
@@ -79,11 +86,37 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "MicroParquet",
         native_options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             MicroParquetApp::apply_ui_theme(&cc.egui_ctx, false, 1.05);
-            Ok(Box::new(MicroParquetApp::new(paths)))
+            let mut app = MicroParquetApp::new(paths);
+            if let Some(n) = rule_notice {
+                app.status_message = n;
+            }
+            Ok(Box::new(app))
         }),
     )
+}
+
+/// Where a stored tab index points after the tab at `closed` is removed, leaving `new_len` tabs.
+/// Indices after the closed tab shift down so they keep pointing at the same tab. An index at
+/// the closed tab moves to the tab that took its place (or the new last tab). Any result is
+/// clamped to 0..new_len, and is 0 when no tabs are left.
+fn tab_index_after_close(sel: usize, closed: usize, new_len: usize) -> usize {
+    let shifted = if sel > closed { sel - 1 } else { sel };
+    shifted.min(new_len.saturating_sub(1))
+}
+
+/// Default for the asset/liability side picker: the first column with a "side" or "direction"
+/// name token. "type" is not used: Account_Type or Collateral_Type are not sides.
+fn default_side_column(cols: &[String]) -> String {
+    cols.iter()
+        .find(|c| {
+            column_name_tokens(c)
+                .iter()
+                .any(|t| t == "side" || t == "direction")
+        })
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()> {
@@ -273,6 +306,10 @@ pub struct MicroParquetApp {
     alm_show_custom_creator: bool,
     custom_bucket_draft: CustomBucketDef,
 
+    // Asset/liability side column shared by the ΔNII and ΔEVE modals ("" = none)
+    alm_side_col: String,
+    alm_side_cols_seen: Vec<String>,
+
     shock_bal_col: String,
     shock_rate_col: String,
     shock_mat_col: String,
@@ -306,6 +343,8 @@ pub struct MicroParquetApp {
     loan_seg_col: String,
     loan_susp_col: String,
     loan_sec_col: String,
+    loan_coll_type_col: String,
+    loan_cutoff: String,
 
     lim_col: String,
     lim_bal_col: String,
@@ -316,6 +355,7 @@ pub struct MicroParquetApp {
     macro_enforce_ctrl: bool,
     macro_include_schema: bool,
     generated_python_code: String,
+    python_export_warning: String,
 
     multi_export_checks: Vec<bool>,
     split_col_name: String,
@@ -472,6 +512,8 @@ impl MicroParquetApp {
                 null_long_label: "05. Non-Maturing Core".to_string(),
             },
 
+            alm_side_col: String::new(),
+            alm_side_cols_seen: Vec::new(),
             shock_bal_col: "Balance".to_string(),
             shock_rate_col: "Int Rate".to_string(),
             shock_mat_col: "Matdat".to_string(),
@@ -505,6 +547,8 @@ impl MicroParquetApp {
             loan_seg_col: "Sector".to_string(),
             loan_susp_col: String::new(),
             loan_sec_col: String::new(),
+            loan_coll_type_col: String::new(),
+            loan_cutoff: String::new(),
 
             lim_col: "Sanctioned_Limit".to_string(),
             lim_bal_col: "Balance".to_string(),
@@ -516,6 +560,7 @@ impl MicroParquetApp {
             macro_enforce_ctrl: true,
             macro_include_schema: true,
             generated_python_code: String::new(),
+            python_export_warning: String::new(),
 
             multi_export_checks: Vec::new(),
             split_col_name: "Brancd".to_string(),
@@ -794,6 +839,18 @@ impl MicroParquetApp {
             &tab.steps,
             tab.control_col.as_deref(),
         );
+        let missing = python_untranslated_steps(&tab.steps);
+        self.python_export_warning = if missing.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ⚠ WARNING: {} has no Python translation; the script raises NotImplementedError there.",
+                missing.join(", ")
+            )
+        };
+        if !self.python_export_warning.is_empty() {
+            self.status_message = format!("Python preview ready.{}", self.python_export_warning);
+        }
         self.active_tool = ActiveToolModal::PythonCodePreview;
     }
 }
@@ -1180,7 +1237,8 @@ impl eframe::App for MicroParquetApp {
             ui.horizontal_wrapped(|ui| {
                 for idx in 0..self.tabs.len() {
                     let is_selected = idx == self.active_tab;
-                    let tab_label = format!("{} ({})", self.tabs[idx].title, idx + 1);
+                    let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
+                    let tab_label = format!("{} ({})", title, idx + 1);
                     if ui.selectable_label(is_selected, tab_label).clicked() {
                         self.active_tab = idx;
                         self.init_tool_defaults_from_active_tab();
@@ -1205,9 +1263,19 @@ impl eframe::App for MicroParquetApp {
             }
 
             if let Some(idx) = tab_to_close {
-                self.tabs.remove(idx);
-                if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
-                    self.active_tab = self.tabs.len() - 1;
+                if idx < self.tabs.len() {
+                    self.tabs.remove(idx);
+                    // Every stored tab index must stay valid (see tab_index_after_close)
+                    let new_len = self.tabs.len();
+                    for sel in [
+                        &mut self.active_tab,
+                        &mut self.join_left_tab,
+                        &mut self.join_right_tab,
+                        &mut self.rec_prev_tab,
+                        &mut self.rec_curr_tab,
+                    ] {
+                        *sel = tab_index_after_close(*sel, idx, new_len);
+                    }
                 }
                 return;
             }
@@ -1520,6 +1588,17 @@ impl MicroParquetApp {
             .get(self.active_tab)
             .map(|t| t.available_columns())
             .unwrap_or_default();
+
+        // Default the side picker whenever the column set changes (not every frame, so a
+        // deliberate "none" choice sticks): first column named like side/direction.
+        if matches!(
+            self.active_tool,
+            ActiveToolModal::RateShockSim | ActiveToolModal::DurationAnalysis
+        ) && self.alm_side_cols_seen != avail_cols
+        {
+            self.alm_side_cols_seen = avail_cols.clone();
+            self.alm_side_col = default_side_column(&avail_cols);
+        }
 
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
@@ -2195,6 +2274,7 @@ impl MicroParquetApp {
                     .collapsible(false)
                     .show(ctx, |ui| {
                         ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
+                        ui.label("NII_Impact_BDT is signed (+ asset, − liability). Shocked_Annual_Int is gross income or expense after the shock, unsigned.");
                         ui.horizontal(|ui| {
                             ui.label("Balance Col:");
                             egui::ComboBox::from_id_salt("shk_bal")
@@ -2229,6 +2309,27 @@ impl MicroParquetApp {
                             ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
                             ui.add(egui::DragValue::new(&mut self.shock_bps).speed(5.0));
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Asset/Liability Side Col:");
+                            let shown = if self.alm_side_col.is_empty() {
+                                "(none: treat all rows as assets)".to_string()
+                            } else {
+                                self.alm_side_col.clone()
+                            };
+                            egui::ComboBox::from_id_salt("shk_side")
+                                .selected_text(shown)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.alm_side_col,
+                                        String::new(),
+                                        "(none: treat all rows as assets)",
+                                    );
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.alm_side_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Run Rate Shock Simulation").clicked() {
@@ -2239,6 +2340,11 @@ impl MicroParquetApp {
                                         mat_col: self.shock_mat_col.clone(),
                                         cutoff_date: self.alm_cutoff.clone(),
                                         shock_bps: self.shock_bps,
+                                        side_col: if self.alm_side_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.alm_side_col.clone())
+                                        },
                                     },
                                     true,
                                 ));
@@ -2296,6 +2402,27 @@ impl MicroParquetApp {
                             ui.label("Null Matdat Tenor (Yrs):");
                             ui.add(egui::DragValue::new(&mut self.dur_sight_yrs).speed(0.05));
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Asset/Liability Side Col:");
+                            let shown = if self.alm_side_col.is_empty() {
+                                "(none: treat all rows as assets)".to_string()
+                            } else {
+                                self.alm_side_col.clone()
+                            };
+                            egui::ComboBox::from_id_salt("dur_side")
+                                .selected_text(shown)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.alm_side_col,
+                                        String::new(),
+                                        "(none: treat all rows as assets)",
+                                    );
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.alm_side_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Compute Duration & ΔEVE Columns").clicked() {
@@ -2308,6 +2435,11 @@ impl MicroParquetApp {
                                         compounding_freq: self.dur_freq,
                                         shock_bps: self.dur_shock_bps,
                                         default_sight_years: self.dur_sight_yrs,
+                                        side_col: if self.alm_side_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.alm_side_col.clone())
+                                        },
                                     },
                                     false,
                                 ));
@@ -2352,6 +2484,13 @@ impl MicroParquetApp {
                             ui.label("Optional Eligible Security Col:");
                             ui.text_edit_singleline(&mut self.loan_sec_col);
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Optional Collateral Type Col:");
+                            ui.text_edit_singleline(&mut self.loan_coll_type_col);
+                            ui.label("Cutoff Date (YYYY-MM-DD, blank = today):");
+                            ui.text_edit_singleline(&mut self.loan_cutoff);
+                        });
+                        ui.label("Rates, CL codes and segments come from cl_code_map.json, segment_map.json and provision_rules.json in portable_data.");
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Calculate CL Provision & BFP").clicked() {
@@ -2373,6 +2512,12 @@ impl MicroParquetApp {
                                             None
                                         } else {
                                             Some(self.loan_sec_col.trim().to_string())
+                                        },
+                                        cutoff_date: self.loan_cutoff.trim().to_string(),
+                                        collateral_type_col: if self.loan_coll_type_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.loan_coll_type_col.trim().to_string())
                                         },
                                     },
                                     false,
@@ -2631,13 +2776,16 @@ impl MicroParquetApp {
                         if self.tabs.len() < 2 {
                             ui.label("Please open at least 2 tabs to perform a join.");
                         } else {
-                            let left_title = self.tabs[self.join_left_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
-                            let right_title = self.tabs
-                                [self.join_right_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
+                            let left_title = self
+                                .tabs
+                                .get(self.join_left_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
+                            let right_title = self
+                                .tabs
+                                .get(self.join_right_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
                             let tab_titles: Vec<(usize, String)> = self
                                 .tabs
                                 .iter()
@@ -2689,8 +2837,14 @@ impl MicroParquetApp {
                             });
                             ui.separator();
                             if ui.button("🚀 Execute Join into New Tab").clicked() {
-                                let l_tab = self.tabs[self.join_left_tab].clone();
-                                let r_tab = self.tabs[self.join_right_tab].clone();
+                                let (Some(l_tab), Some(r_tab)) = (
+                                    self.tabs.get(self.join_left_tab).cloned(),
+                                    self.tabs.get(self.join_right_tab).cloned(),
+                                ) else {
+                                    self.status_message =
+                                        "Join: the selected left or right tab no longer exists. Pick both tabs again.".to_string();
+                                    return;
+                                };
                                 let keys: Vec<String> = self
                                     .join_keys_input
                                     .split(',')
@@ -2729,12 +2883,16 @@ impl MicroParquetApp {
                                 "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
                             );
                         } else {
-                            let prev_title = self.tabs[self.rec_prev_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
-                            let curr_title = self.tabs[self.rec_curr_tab.min(self.tabs.len() - 1)]
-                                .title
-                                .clone();
+                            let prev_title = self
+                                .tabs
+                                .get(self.rec_prev_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
+                            let curr_title = self
+                                .tabs
+                                .get(self.rec_curr_tab)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
                             let tab_titles: Vec<(usize, String)> = self
                                 .tabs
                                 .iter()
@@ -2774,8 +2932,14 @@ impl MicroParquetApp {
                             });
                             ui.separator();
                             if ui.button("🚀 Reconcile Periods into New Tab").clicked() {
-                                let p_tab = self.tabs[self.rec_prev_tab].clone();
-                                let c_tab = self.tabs[self.rec_curr_tab].clone();
+                                let (Some(p_tab), Some(c_tab)) = (
+                                    self.tabs.get(self.rec_prev_tab).cloned(),
+                                    self.tabs.get(self.rec_curr_tab).cloned(),
+                                ) else {
+                                    self.status_message =
+                                        "Reconcile: the selected previous or current tab no longer exists. Pick both tabs again.".to_string();
+                                    return;
+                                };
                                 let r_col = if self.rec_rate_col.trim().is_empty() {
                                     None
                                 } else {
@@ -2900,16 +3064,27 @@ impl MicroParquetApp {
                         ui.horizontal(|ui| {
                             if ui.button("📋 Copy Python Code to Clipboard").clicked() {
                                 ctx.copy_text(self.generated_python_code.clone());
-                                self.status_message =
-                                    "Copied Python Polars code to clipboard!".to_string();
+                                self.status_message = format!(
+                                    "Copied Python Polars code to clipboard!{}",
+                                    self.python_export_warning
+                                );
                             }
                             if ui.button("💾 Save as .py Script...").clicked() {
                                 if let Some(p) = rfd::FileDialog::new()
                                     .set_file_name("micro_parquet_pipeline.py")
                                     .save_file()
                                 {
-                                    let _ = std::fs::write(&p, &self.generated_python_code);
-                                    self.status_message = format!("Saved Python script to {:?}", p);
+                                    self.status_message =
+                                        match std::fs::write(&p, &self.generated_python_code) {
+                                            Ok(()) => format!(
+                                                "Saved Python script to {:?}{}",
+                                                p, self.python_export_warning
+                                            ),
+                                            Err(e) => format!(
+                                                "Could not save Python script to {:?}: {}",
+                                                p, e
+                                            ),
+                                        };
                                 }
                             }
                             if ui.button("Close").clicked() {
@@ -3450,6 +3625,44 @@ impl MicroParquetApp {
         {
             Ok(_) => self.status_message = format!("✅ Exported view to {:?}", out_path),
             Err(e) => self.status_message = format!("❌ CSV export failed: {:#}", e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_picker_default_ignores_type() {
+        let cols = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(default_side_column(&cols(&["Account_Type", "Balance", "AL_Side"])), "AL_Side");
+        assert_eq!(default_side_column(&cols(&["Collateral_Type", "Balance"])), "");
+        assert_eq!(default_side_column(&cols(&["Direction", "Side"])), "Direction");
+        assert_eq!(default_side_column(&cols(&["BalanceSide"])), "BalanceSide");
+    }
+
+    #[test]
+    fn tab_indices_stay_valid_after_close() {
+        // 4 tabs [0,1,2,3]; close tab 1 -> 3 tabs left
+        assert_eq!(tab_index_after_close(0, 1, 3), 0, "before the closed tab: unchanged");
+        assert_eq!(tab_index_after_close(2, 1, 3), 1, "after: same tab, shifted down");
+        assert_eq!(tab_index_after_close(3, 1, 3), 2, "last tab stays last");
+        assert_eq!(tab_index_after_close(1, 1, 3), 1, "closed tab: the tab that took its place");
+        // Closing the selected last tab moves to the new last tab
+        assert_eq!(tab_index_after_close(3, 3, 3), 2);
+        // Stale index beyond the list is clamped
+        assert_eq!(tab_index_after_close(9, 0, 3), 2);
+        // Closing the only tab
+        assert_eq!(tab_index_after_close(0, 0, 0), 0);
+        // Exhaustive: every result is a valid index (or 0 when empty)
+        for len in 1..6usize {
+            for closed in 0..len {
+                for sel in 0..len + 2 {
+                    let r = tab_index_after_close(sel, closed, len - 1);
+                    assert!(r < (len - 1).max(1), "sel {sel} closed {closed} len {len} -> {r}");
+                }
+            }
         }
     }
 }

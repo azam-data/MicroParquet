@@ -90,7 +90,10 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
         }
         non_empty += 1;
 
-        if trimmed.len() > 1 && trimmed.starts_with('0') && !trimmed.starts_with("0.") {
+        if trimmed.len() > 1
+            && trimmed.starts_with('0')
+            && trimmed.bytes().all(|b| b.is_ascii_digit())
+        {
             has_leading_zero = true;
         }
 
@@ -102,29 +105,26 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
             all_float = false;
         }
 
-        if parse_flexible_banking_date(trimmed, ColDataType::DateISO).is_none() {
-            all_iso_date = false;
-        }
-        if parse_flexible_banking_date(trimmed, ColDataType::DateMDY).is_none() {
-            all_mdy_date = false;
-        }
-        if parse_flexible_banking_date(trimmed, ColDataType::DateDMY).is_none() {
-            all_dmy_date = false;
-        }
+        let fit = classify_date_value(trimmed);
+        all_iso_date &= fit.iso;
+        all_dmy_date &= fit.dmy;
+        all_mdy_date &= fit.mdy;
     }
 
+    // Order: empty -> ISO date -> D/M/Y vs M/D/Y -> float -> text
     if non_empty == 0 {
         return ColDataType::Utf8;
     }
-    // Check date formats BEFORE has_leading_zero because dates like "02/08/2024" start with '0'!
-    if all_iso_date && !all_float {
+    if all_iso_date {
         return ColDataType::DateISO;
     }
-    if all_mdy_date && !all_float {
-        return ColDataType::DateMDY;
-    }
-    if all_dmy_date && !all_float {
+    // Bangladesh CBS exports are D/M/Y: when both readings fit every value, choose D/M/Y.
+    // M/D/Y only wins when some value can't be D/M/Y (its second part is a day > 12).
+    if all_dmy_date {
         return ColDataType::DateDMY;
+    }
+    if all_mdy_date {
+        return ColDataType::DateMDY;
     }
     if has_leading_zero {
         return ColDataType::Utf8;
@@ -153,7 +153,7 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     }
 
     // Strip trailing timestamp if present (e.g. "02/08/2024 00:00:00" or "2024-02-08T12:30:00")
-    let date_part = s.split([' ', 'T']).next().unwrap_or(s);
+    let date_part = strip_time_part(s);
 
     let mut parts = date_part.split(['/', '-', '.']);
     let p1_str = parts.next()?.trim();
@@ -221,6 +221,77 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     };
 
     Some((dt - epoch).num_days() as i32)
+}
+
+/// Drops a trailing time: everything after a space, or after a 'T' between two digits
+/// (ISO 8601). A 'T' inside a month name such as "31-OCT-2026" is kept.
+fn strip_time_part(s: &str) -> &str {
+    let s = s.split(' ').next().unwrap_or(s);
+    let b = s.as_bytes();
+    for i in 1..b.len().saturating_sub(1) {
+        if (b[i] == b'T' || b[i] == b't') && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit() {
+            return &s[..i];
+        }
+    }
+    s
+}
+
+/// Which strict date layouts a single sampled value fits (no day/month swapping).
+#[derive(Default, Clone, Copy)]
+struct DateFit {
+    iso: bool,
+    dmy: bool,
+    mdy: bool,
+}
+
+fn classify_date_value(raw: &str) -> DateFit {
+    let mut fit = DateFit::default();
+    let s = strip_time_part(raw.trim().trim_matches('"').trim_matches('\'').trim());
+    let parts: Vec<&str> = s.split(['/', '-', '.']).map(str::trim).collect();
+    let [a, b, c] = parts.as_slice() else {
+        return fit;
+    };
+    let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|x| x.is_ascii_digit());
+
+    // ISO: YYYY-MM-DD with a four-digit year first
+    if a.len() == 4 && all_digits(a) {
+        if let (Ok(y), Ok(m), Ok(d)) = (a.parse::<i32>(), b.parse::<u32>(), c.parse::<u32>()) {
+            fit.iso = (1900..=2200).contains(&y) && NaiveDate::from_ymd_opt(y, m, d).is_some();
+        }
+        return fit;
+    }
+
+    // Year last: two or four digits
+    if !all_digits(c) || !(c.len() == 2 || c.len() == 4) {
+        return fit;
+    }
+    let Ok(y_raw) = c.parse::<i32>() else {
+        return fit;
+    };
+    let year = match c.len() {
+        2 if y_raw >= 50 => 1900 + y_raw,
+        2 => 2000 + y_raw,
+        _ => y_raw,
+    };
+    if !(1900..=2200).contains(&year) || !all_digits(a) {
+        return fit;
+    }
+    let Ok(p1) = a.parse::<u32>() else {
+        return fit;
+    };
+    if let Some(m) = parse_month_name(b) {
+        fit.dmy = NaiveDate::from_ymd_opt(year, m, p1).is_some();
+        return fit;
+    }
+    if !all_digits(b) {
+        return fit;
+    }
+    let Ok(p2) = b.parse::<u32>() else {
+        return fit;
+    };
+    fit.dmy = NaiveDate::from_ymd_opt(year, p2, p1).is_some();
+    fit.mdy = NaiveDate::from_ymd_opt(year, p1, p2).is_some();
+    fit
 }
 
 fn parse_month_name(s: &str) -> Option<u32> {
@@ -515,7 +586,11 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             value,
             keep_matching,
         } => {
-            let cond = build_filter_expr(column, *operator, value);
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this filter")?;
+            let cond = build_filter_expr(column, *operator, value, &schema)?;
             let final_cond = if *keep_matching { cond } else { cond.not() };
             Ok(lf.filter(final_cond))
         }
@@ -528,9 +603,13 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             if rules.is_empty() {
                 return Ok(lf);
             }
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this conditional column")?;
             let mut expr: Expr = parse_val_expr(fallback, *output_as_float);
             for r in rules.iter().rev() {
-                let c = build_filter_expr(&r.col_name, r.op, &r.compare_val);
+                let c = build_filter_expr(&r.col_name, r.op, &r.compare_val, &schema)?;
                 let o = parse_val_expr(&r.output_val, *output_as_float);
                 expr = when(c).then(o).otherwise(expr);
             }
@@ -575,7 +654,16 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             mat_col,
             cutoff_date,
             shock_bps,
-        } => apply_rate_shock_sim(lf, bal_col, rate_col, mat_col, cutoff_date, *shock_bps),
+            side_col,
+        } => apply_rate_shock_sim(
+            lf,
+            bal_col,
+            rate_col,
+            mat_col,
+            cutoff_date,
+            *shock_bps,
+            side_col.as_deref(),
+        ),
         TransformStep::FtpCurveMap {
             opndat_col,
             matdat_col,
@@ -621,6 +709,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             compounding_freq,
             shock_bps,
             default_sight_years,
+            side_col,
         } => apply_duration_analysis(
             lf,
             bal_col,
@@ -630,6 +719,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             *compounding_freq,
             *shock_bps,
             *default_sight_years,
+            side_col.as_deref(),
         ),
         TransformStep::LoanClassificationProvision {
             bal_col,
@@ -637,6 +727,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             segment_col,
             suspense_col,
             security_col,
+            cutoff_date,
+            collateral_type_col,
         } => apply_loan_classification_provision(
             lf,
             bal_col,
@@ -644,6 +736,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             segment_col.as_deref(),
             suspense_col.as_deref(),
             security_col.as_deref(),
+            collateral_type_col.as_deref(),
+            cutoff_date,
         ),
         TransformStep::LoanLimitUtilization {
             limit_col,
@@ -668,11 +762,14 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
     }
 }
 
-fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str) -> Expr {
+/// Builds a filter condition that compares by the column's real type: text columns compare
+/// as text (so 17-digit account numbers stay exact), numeric columns as numbers and date
+/// columns as dates. A value that doesn't fit the column type is an error, not a silent miss.
+fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schema) -> Result<Expr> {
     let c = col(col_name);
     let trimmed = raw_val.trim();
 
-    match op {
+    Ok(match op {
         FilterOp::IsNull => c.is_null(),
         FilterOp::IsNotNull => c.is_not_null(),
         FilterOp::Contains => c
@@ -692,32 +789,53 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str) -> Expr {
             }
             expr
         }
-        _ => {
-            if let Ok(num) = trimmed.parse::<f64>() {
-                let cf = c.cast(DataType::Float64);
-                match op {
-                    FilterOp::Eq => cf.eq(lit(num)),
-                    FilterOp::NotEq => cf.neq(lit(num)),
-                    FilterOp::Gt => cf.gt(lit(num)),
-                    FilterOp::Gte => cf.gt_eq(lit(num)),
-                    FilterOp::Lt => cf.lt(lit(num)),
-                    FilterOp::Lte => cf.lt_eq(lit(num)),
-                    _ => unreachable!(),
-                }
+        FilterOp::Eq | FilterOp::NotEq | FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
+            let dtype = schema.get(col_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Column '{}' was not found. Check the column chosen in this filter.",
+                    col_name
+                )
+            })?;
+            let (lhs, rhs) = if dtype.is_string() || dtype.is_categorical() {
+                (c.cast(DataType::String), lit(trimmed.to_string()))
+            } else if dtype.is_numeric() {
+                let num = trimmed.parse::<f64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "'{}' is not a number for numeric column '{}'",
+                        trimmed,
+                        col_name
+                    )
+                })?;
+                (c.cast(DataType::Float64), lit(num))
+            } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
+                let d = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
+                    anyhow::anyhow!(
+                        "'{}' is not a date for date column '{}'. Enter it as YYYY-MM-DD (e.g. 2026-10-31).",
+                        trimmed,
+                        col_name
+                    )
+                })?;
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .context("Internal date error (epoch)")?;
+                let days = (d - epoch).num_days() as i32;
+                (c.cast(DataType::Date), lit(days).cast(DataType::Date))
             } else {
-                let cs = c.cast(DataType::String);
-                match op {
-                    FilterOp::Eq => cs.eq(lit(trimmed)),
-                    FilterOp::NotEq => cs.neq(lit(trimmed)),
-                    FilterOp::Gt => cs.gt(lit(trimmed)),
-                    FilterOp::Gte => cs.gt_eq(lit(trimmed)),
-                    FilterOp::Lt => cs.lt(lit(trimmed)),
-                    FilterOp::Lte => cs.lt_eq(lit(trimmed)),
-                    _ => unreachable!(),
-                }
+                anyhow::bail!(
+                    "Column '{}' is {}; comparison filters work on text, number and date columns only",
+                    col_name,
+                    dtype
+                );
+            };
+            match op {
+                FilterOp::Eq => lhs.eq(rhs),
+                FilterOp::NotEq => lhs.neq(rhs),
+                FilterOp::Gt => lhs.gt(rhs),
+                FilterOp::Gte => lhs.gt_eq(rhs),
+                FilterOp::Lt => lhs.lt(rhs),
+                _ => lhs.lt_eq(rhs),
             }
         }
-    }
+    })
 }
 
 fn parse_val_expr(val: &str, as_float: bool) -> Expr {
@@ -753,10 +871,27 @@ fn apply_groupby_pivot(
             AggFunc::Min => tc.min().alias(&spec.alias),
             AggFunc::Max => tc.max().alias(&spec.alias),
             AggFunc::WeightedAvg => {
-                let w_name = spec.weight_col.as_deref().unwrap_or(&spec.target_col);
+                let w_name = spec
+                    .weight_col
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|w| !w.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Weighted average needs a weight column (metric '{}')",
+                            spec.alias
+                        )
+                    })?;
                 let w = col(w_name).cast(DataType::Float64);
                 let v = tc.cast(DataType::Float64);
-                ((v * w.clone()).sum() / w.sum()).alias(&spec.alias)
+                // Only rows where both value and weight are known count, in numerator and denominator
+                let mask = v.clone().is_not_null().and(w.clone().is_not_null());
+                let num = (v * w.clone()).filter(mask.clone()).sum();
+                let den = w.filter(mask).sum();
+                when(den.clone().eq(lit(0.0)))
+                    .then(lit(NULL).cast(DataType::Float64))
+                    .otherwise(num / den)
+                    .alias(&spec.alias)
             }
             AggFunc::PctOfTotal => {
                 let temp_sum_name = format!("__sum_for_{}", spec.alias);

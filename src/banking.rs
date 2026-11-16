@@ -1,7 +1,96 @@
-use crate::models::{CustomBucketDef, FtpPoint};
-use anyhow::{Context, Result};
+use crate::models::{portable_root_dir, CustomBucketDef, FtpPoint};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// Checks that a date input is a real Date column before any day-difference maths.
+/// Date passes through, Datetime is cast to Date, anything else (text, numbers) is an error,
+/// so a wrongly typed column can never be silently bucketed.
+fn ensure_date(mut lf: LazyFrame, col_name: &str) -> Result<LazyFrame> {
+    let schema = lf
+        .collect_schema()
+        .context("Could not read the column types of this table")?;
+    let dtype = schema.get(col_name).cloned().ok_or_else(|| {
+        anyhow!(
+            "Column '{}' was not found. Check the date column chosen in this step.",
+            col_name
+        )
+    })?;
+    match dtype {
+        DataType::Date => Ok(lf),
+        DataType::Datetime(_, _) => Ok(lf.with_column(col(col_name).cast(DataType::Date))),
+        other => bail!(
+            "Column '{}' is {}, not a date. Set it to a Date type in the Schema & Ingestion settings.",
+            col_name,
+            other
+        ),
+    }
+}
+
+/// Side text -> +1.0 (asset) / -1.0 (liability) / null (not recognised).
+/// Trimmed and case-insensitive: "A..." is an asset; "L...", DEPOSIT and BORROWING are liabilities.
+fn side_sign_expr(side: Expr) -> Expr {
+    let s = side
+        .cast(DataType::String)
+        .str()
+        .strip_chars(lit(NULL))
+        .str()
+        .to_uppercase();
+    when(s.clone().str().starts_with(lit("A")))
+        .then(lit(1.0))
+        .when(
+            s.clone()
+                .str()
+                .starts_with(lit("L"))
+                .or(s.clone().eq(lit("DEPOSIT")))
+                .or(s.eq(lit("BORROWING"))),
+        )
+        .then(lit(-1.0))
+        .otherwise(lit(NULL).cast(DataType::Float64))
+}
+
+/// Sign (+1 asset, -1 liability) for signed rate-shock outputs, after checking every side value maps.
+/// Blank or unrecognised sides are an error listing up to 10 of them. With no side column
+/// (macros saved before sides existed) every row is treated as an asset and a
+/// `Direction_Assumed` column says so in the output.
+fn direction_sign(lf: LazyFrame, side_col: Option<&str>) -> Result<(LazyFrame, Expr)> {
+    let side_col = match side_col.map(str::trim) {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return Ok((
+                lf.with_column(lit("ASSET (unspecified)").alias("Direction_Assumed")),
+                lit(1.0),
+            ))
+        }
+    };
+    let bad = lf
+        .clone()
+        .select([col(side_col).cast(DataType::String).alias("__side")])
+        .filter(side_sign_expr(col("__side")).is_null())
+        .unique_stable(None, UniqueKeepStrategy::First)
+        .limit(10)
+        .collect()
+        .with_context(|| format!("Could not read the side column '{}'", side_col))?;
+    if bad.height() > 0 {
+        let vals: Vec<String> = bad
+            .column("__side")?
+            .str()?
+            .into_iter()
+            .map(|v| match v {
+                Some(s) if !s.trim().is_empty() => format!("'{}'", s),
+                _ => "(blank)".to_string(),
+            })
+            .collect();
+        bail!(
+            "Side column '{}' has values that are neither asset nor liability: {}. Use A/ASSET for assets and L/LIABILITY/DEPOSIT/BORROWING for liabilities.",
+            side_col,
+            vals.join(", ")
+        );
+    }
+    Ok((lf, side_sign_expr(col(side_col))))
+}
 
 /// Feature B8: Standardizes corporate & counterparty names
 pub fn apply_entity_normalizer(lf: LazyFrame, source_col: &str, new_col: &str) -> LazyFrame {
@@ -43,6 +132,7 @@ pub fn apply_maturity_bucket(
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be in YYYY-MM-DD format (e.g., 2026-10-31)")?;
+    let lf = ensure_date(lf, mat_col)?;
 
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days_since_epoch = (cutoff - epoch).num_days();
@@ -71,7 +161,8 @@ pub fn apply_maturity_bucket(
             .otherwise(expr);
     }
 
-    let final_bucket_expr = when(col(mat_col).is_null())
+    // Null label from the computed remaining days, so a failed conversion can't reach overflow
+    let final_bucket_expr = when(d.clone().is_null())
         .then(lit(null_label))
         .when(d.lt(lit(0)))
         .then(lit(bucket_def.overdue_label.as_str()))
@@ -84,6 +175,15 @@ pub fn apply_maturity_bucket(
 }
 
 /// Feature B1: Interest Rate Shock / ΔNII Sensitivity Simulator (1-Year Repricing Horizon)
+///
+/// Output columns:
+/// - `Current_Annual_Int`: balance × rate, gross interest income (assets) or expense
+///   (liabilities); unsigned.
+/// - `NII_Impact_BDT`: change in net interest income, signed by side: + for assets and − for
+///   liabilities under a rate rise.
+/// - `Shocked_Annual_Int`: gross interest income or expense after the shock, unsigned
+///   (`Current_Annual_Int` + the unsigned change). It is not a net figure and must not be summed
+///   across assets and liabilities as NII; use `NII_Impact_BDT` for that.
 pub fn apply_rate_shock_sim(
     lf: LazyFrame,
     bal_col: &str,
@@ -91,9 +191,12 @@ pub fn apply_rate_shock_sim(
     mat_col: &str,
     cutoff_date: &str,
     shock_bps: f64,
+    side_col: Option<&str>,
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, mat_col)?;
+    let (lf, sign) = direction_sign(lf, side_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -110,9 +213,11 @@ pub fn apply_rate_shock_sim(
         .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0));
 
     let current_int = (bal.clone() * (rate / lit(100.0))).alias("Current_Annual_Int");
-    let nii_impact = (bal * repricing_weight * lit(shock_pct / 100.0)).alias("NII_Impact_BDT");
-    let shocked_int =
-        (col("Current_Annual_Int") + col("NII_Impact_BDT")).alias("Shocked_Annual_Int");
+    // Change in the interest amount (income on assets, expense on liabilities), always >= 0 for a rise.
+    let int_change = bal * repricing_weight * lit(shock_pct / 100.0);
+    // NII effect: a rate rise adds income on assets (+) and adds cost on liabilities (-).
+    let nii_impact = (int_change.clone() * sign).alias("NII_Impact_BDT");
+    let shocked_int = (col("Current_Annual_Int") + int_change).alias("Shocked_Annual_Int");
 
     Ok(lf
         .with_columns([current_int, nii_impact])
@@ -129,6 +234,8 @@ pub fn apply_ftp_curve_map(
     curve: &[FtpPoint],
     is_liability: bool,
 ) -> Result<LazyFrame> {
+    let lf = ensure_date(lf, opndat_col)?;
+    let lf = ensure_date(lf, matdat_col)?;
     let opn_days = col(opndat_col).cast(DataType::Int32).cast(DataType::Int64);
     let mat_days = col(matdat_col).cast(DataType::Int32).cast(DataType::Int64);
     let raw_diff = mat_days - opn_days;
@@ -191,6 +298,9 @@ pub fn apply_banking_hygiene_audit(
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, opndat_col)?;
+    let lf = ensure_date(lf, matdat_col)?;
+    let lf = ensure_date(lf, clsdat_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -343,9 +453,12 @@ pub fn apply_duration_analysis(
     compounding_freq: usize,
     shock_bps: f64,
     default_sight_years: f64,
+    side_col: Option<&str>,
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, mat_col)?;
+    let (lf, sign) = direction_sign(lf, side_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -390,7 +503,9 @@ pub fn apply_duration_analysis(
         .round(2)
         .alias("DV01_BPV_BDT");
 
-    let delta_eve = (lit(0.0) - (bal * col("Modified_Duration") * lit(shock_dec)))
+    // A rate rise lowers the value of assets and lowers the value owed on liabilities (EVE up).
+    // DV01 above stays unsigned.
+    let delta_eve = ((lit(0.0) - (bal * col("Modified_Duration") * lit(shock_dec))) * sign)
         .round(2)
         .alias("Delta_EVE_Impact_BDT");
 
@@ -401,7 +516,578 @@ pub fn apply_duration_analysis(
         .with_columns([dv01, delta_eve]))
 }
 
-/// Loans & Advances Suite (C1): Bangladesh Bank CL Provisioning & Base For Provision (BFP) Calculator
+// ---------------------------------------------------------------------------------------------
+// Loan classification provisioning rules (BRPD Circular 15/2024 and later), held as data files
+// in portable_data/ so rates can be changed without a new build:
+//   cl_code_map.json     {"defaults_version": 2, "<CBS CL code>": "<STD|SMA|SS|DF|BL>", ...}
+//   segment_map.json     {"defaults_version": 2, "<segment code>": "<SHORT_TERM_AGRI|CMSME|OTHER>", ...}
+//   provision_rules.json {"defaults_version": 2,
+//                         "rules": [{grade, category, rate_pct, effective_from, effective_to, source, verify}]}
+// Files from before versioning (flat map / bare array, no defaults_version) still load.
+// Codes are matched after normalising (uppercase, trimmed, inner spaces collapsed).
+// ---------------------------------------------------------------------------------------------
+
+pub const CL_CODE_MAP_FILE: &str = "cl_code_map.json";
+pub const SEGMENT_MAP_FILE: &str = "segment_map.json";
+pub const PROVISION_RULES_FILE: &str = "provision_rules.json";
+
+/// Version of the built-in default rule files. Bump it whenever a default changes, and keep
+/// the older defaults reachable through `default_*(version)` so untouched files can be upgraded.
+pub const RULE_FILES_VERSION: u32 = 2;
+
+const CL_GRADES: [&str; 5] = ["STD", "SMA", "SS", "DF", "BL"];
+const REG_CATEGORIES: [&str; 3] = ["SHORT_TERM_AGRI", "CMSME", "OTHER"];
+/// Collateral types whose eligible security is deducted without the 15%-of-outstanding floor.
+const FLOOR_EXEMPT_COLLATERAL: [&str; 5] = [
+    "DEPOSIT_LIEN",
+    "GOVT_SECURITY",
+    "GOVT_GUARANTEE",
+    "BB_GUARANTEE",
+    "AAA_MDB_GUARANTEE",
+];
+
+const DEFAULT_CL_CODE_MAP: &[(&str, &str)] = &[
+    ("STD", "STD"),
+    ("STD-0", "STD"),
+    ("STD-1", "STD"),
+    ("STD-2", "STD"),
+    ("UC", "STD"),
+    ("STANDARD", "STD"),
+    ("UNCLASSIFIED", "STD"),
+    ("SMA", "SMA"),
+    ("SS", "SS"),
+    ("SUB-STANDARD", "SS"),
+    ("SUBSTANDARD", "SS"),
+    ("SUB STANDARD", "SS"),
+    ("DF", "DF"),
+    ("DOUBTFUL", "DF"),
+    ("BL", "BL"),
+    ("B/L", "BL"),
+    ("BAD/LOSS", "BL"),
+    ("BAD", "BL"),
+    ("LOSS", "BL"),
+];
+
+/// Version 1 (first T7 build) segment defaults, kept only to recognise untouched old files.
+const V1_SEGMENT_MAP: &[(&str, &str)] = &[
+    ("CMSME", "CMSME"),
+    ("SME", "CMSME"),
+    ("CMS", "CMSME"),
+    ("COTTAGE", "CMSME"),
+    ("MICRO", "CMSME"),
+    ("SMALL", "CMSME"),
+    ("MEDIUM", "CMSME"),
+    ("AGRI ST", "SHORT_TERM_AGRI"),
+    ("SHORT TERM AGRI", "SHORT_TERM_AGRI"),
+];
+
+/// CMSME concession covers cottage, micro and small loans only, not medium (owner decision).
+const DEFAULT_SEGMENT_MAP: &[(&str, &str)] = &[
+    ("CMS", "CMSME"),
+    ("COTTAGE", "CMSME"),
+    ("MICRO", "CMSME"),
+    ("SMALL", "CMSME"),
+    ("AGRI ST", "SHORT_TERM_AGRI"),
+    ("SHORT TERM AGRI", "SHORT_TERM_AGRI"),
+    ("CORPORATE", "OTHER"),
+    ("NON-CMSME", "OTHER"),
+    ("MEDIUM", "OTHER"),
+];
+
+/// One dated provisioning rate. `effective_to` = None means open-ended. Both ends inclusive.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProvisionRule {
+    pub grade: String,
+    /// SHORT_TERM_AGRI, CMSME, OTHER, or ANY (fallback when no category-specific row applies)
+    pub category: String,
+    pub rate_pct: f64,
+    pub effective_from: String,
+    pub effective_to: Option<String>,
+    pub source: String,
+    /// true = rate or dates still to be checked against the circular
+    #[serde(default)]
+    pub verify: bool,
+}
+
+/// The three provisioning rule files, loaded and validated.
+#[derive(Clone, Debug)]
+pub struct ProvisionConfig {
+    /// normalised CBS code -> grade
+    pub cl_code_map: Vec<(String, String)>,
+    /// normalised segment code -> category
+    pub segment_map: Vec<(String, String)>,
+    pub rules: Vec<ProvisionRule>,
+    /// Plain-language notices for the status bar (e.g. an edited rule file from an older version)
+    pub warnings: Vec<String>,
+}
+
+/// Uppercase, trim and collapse inner whitespace (the code-matching rule for all three files).
+pub fn normalise_code(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase()
+}
+
+/// Same normalisation as `normalise_code`, as a Polars expression.
+fn normalise_code_expr(e: Expr) -> Expr {
+    e.cast(DataType::String)
+        .str()
+        .strip_chars(lit(NULL))
+        .str()
+        .replace_all(lit(r"\s+"), lit(" "), false)
+        .str()
+        .to_uppercase()
+}
+
+/// A JSON object read as ordered (key, value) pairs, so a repeated key is caught instead of
+/// silently overwriting the earlier one. An optional numeric "defaults_version" key is split out.
+struct JsonPairs {
+    version: Option<u32>,
+    pairs: Vec<(String, String)>,
+}
+
+impl<'de> Deserialize<'de> for JsonPairs {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct PairVisitor;
+        impl<'de> serde::de::Visitor<'de> for PairVisitor {
+            type Value = JsonPairs;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object of \"code\": \"value\" pairs")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<JsonPairs, A::Error> {
+                let mut pairs = Vec::new();
+                let mut version = None;
+                while let Some(k) = map.next_key::<String>()? {
+                    if k == "defaults_version" {
+                        if version.is_some() {
+                            return Err(serde::de::Error::custom("defaults_version is listed twice"));
+                        }
+                        version = Some(map.next_value::<u32>()?);
+                    } else {
+                        let v: String = map.next_value()?;
+                        pairs.push((k, v));
+                    }
+                }
+                Ok(JsonPairs { version, pairs })
+            }
+        }
+        d.deserialize_map(PairVisitor)
+    }
+}
+
+fn parse_rule_date(s: &str, file: &Path, idx: usize, field: &str) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").map_err(|_| {
+        anyhow!(
+            "{}: rule {} has {} '{}', which is not a YYYY-MM-DD date.",
+            file.display(),
+            idx + 1,
+            field,
+            s
+        )
+    })
+}
+
+/// Normalises keys and checks values against `allowed`; a code listed twice is an error.
+fn validate_code_map(
+    pairs: Vec<(String, String)>,
+    allowed: &[&str],
+    file: &Path,
+) -> Result<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::with_capacity(pairs.len());
+    for (raw_key, raw_val) in pairs {
+        let key = normalise_code(&raw_key);
+        let val = normalise_code(&raw_val);
+        if key.is_empty() {
+            bail!("{}: an entry has a blank code.", file.display());
+        }
+        if !allowed.contains(&val.as_str()) {
+            bail!(
+                "{}: code '{}' maps to '{}', which is not one of {}.",
+                file.display(),
+                raw_key,
+                raw_val,
+                allowed.join(", ")
+            );
+        }
+        if let Some((_, prev)) = out.iter().find(|(k, _)| *k == key) {
+            bail!(
+                "{}: code '{}' is listed more than once (as {} and {}). Keep one entry.",
+                file.display(),
+                key,
+                prev,
+                val
+            );
+        }
+        out.push((key, val));
+    }
+    Ok(out)
+}
+
+fn validate_rules(rules: &[ProvisionRule], file: &Path) -> Result<()> {
+    for (i, r) in rules.iter().enumerate() {
+        if !CL_GRADES.contains(&r.grade.as_str()) {
+            bail!(
+                "{}: rule {} has grade '{}'; use one of {}.",
+                file.display(),
+                i + 1,
+                r.grade,
+                CL_GRADES.join(", ")
+            );
+        }
+        if r.category != "ANY" && !REG_CATEGORIES.contains(&r.category.as_str()) {
+            bail!(
+                "{}: rule {} has category '{}'; use ANY or one of {}.",
+                file.display(),
+                i + 1,
+                r.category,
+                REG_CATEGORIES.join(", ")
+            );
+        }
+        if !r.rate_pct.is_finite() || r.rate_pct < 0.0 || r.rate_pct > 100.0 {
+            bail!(
+                "{}: rule {} has rate_pct {}; it must be between 0 and 100 (percent).",
+                file.display(),
+                i + 1,
+                r.rate_pct
+            );
+        }
+        let from = parse_rule_date(&r.effective_from, file, i, "effective_from")?;
+        if let Some(to) = &r.effective_to {
+            let to = parse_rule_date(to, file, i, "effective_to")?;
+            if to < from {
+                bail!(
+                    "{}: rule {} ends ({}) before it starts ({}).",
+                    file.display(),
+                    i + 1,
+                    to,
+                    from
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Could not read {}", path.display()))?;
+    parse_json_text(&raw, path)
+}
+
+fn parse_json_text<T: serde::de::DeserializeOwned>(raw: &str, path: &Path) -> Result<T> {
+    // serde_json errors end with "at line L column C"
+    serde_json::from_str(raw).map_err(|e| anyhow!("{} is not valid: {}", path.display(), e))
+}
+
+/// provision_rules.json as written from version 2 on.
+#[derive(Serialize, Deserialize)]
+struct VersionedRules {
+    #[serde(default)]
+    defaults_version: Option<u32>,
+    rules: Vec<ProvisionRule>,
+}
+
+/// Reads provision_rules.json: the versioned object, or a bare array (before versioning).
+fn read_rules_file(path: &Path) -> Result<(Option<u32>, Vec<ProvisionRule>)> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Could not read {}", path.display()))?;
+    let shape: serde_json::Value = parse_json_text(&raw, path)?;
+    if shape.is_array() {
+        Ok((None, parse_json_text(&raw, path)?))
+    } else {
+        let v: VersionedRules = parse_json_text(&raw, path)?;
+        Ok((v.defaults_version, v.rules))
+    }
+}
+
+/// Atomic write (temp file + rename), replacing any existing file.
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+    std::fs::write(&tmp, contents)
+        .with_context(|| format!("Could not write {}", path.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("Could not write {}", path.display()))
+}
+
+fn same_pairs(a: &[(String, String)], b: &[(&str, &str)]) -> bool {
+    let mut a: Vec<(&str, &str)> = a.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let mut b = b.to_vec();
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
+}
+
+fn same_rules(a: &[ProvisionRule], b: &[ProvisionRule]) -> bool {
+    a.len() == b.len() && a.iter().all(|r| b.contains(r)) && b.iter().all(|r| a.contains(r))
+}
+
+fn rules_to_json(version: u32, rules: &[ProvisionRule]) -> Result<String> {
+    let v = VersionedRules { defaults_version: Some(version), rules: rules.to_vec() };
+    Ok(serde_json::to_string_pretty(&v).context("Could not prepare default provision rules")? + "\n")
+}
+
+fn outdated_warning(path: &Path, version: Option<u32>) -> String {
+    format!(
+        "{} was saved by an older MicroParquet ({}) and has been edited, so it was kept as is. Compare it with the current defaults (defaults_version {}), then set \"defaults_version\": {} in the file.",
+        path.display(),
+        version.map_or("no defaults_version".to_string(), |v| format!("defaults_version {}", v)),
+        RULE_FILES_VERSION,
+        RULE_FILES_VERSION
+    )
+}
+
+/// Writes `contents` to `path` unless it exists; via a temp file + rename so a reader never
+/// sees a half-written file.
+fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+    std::fs::write(&tmp, contents)
+        .with_context(|| format!("Could not write default {}", path.display()))?;
+    if path.exists() {
+        let _ = std::fs::remove_file(&tmp);
+        return Ok(());
+    }
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Could not write default {}", path.display()))
+}
+
+fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
+    let mut lines = vec![format!("  \"defaults_version\": {}", version)];
+    lines.extend(
+        pairs
+            .iter()
+            .map(|(k, v)| format!("  {}: {}", serde_json::json!(k), serde_json::json!(v))),
+    );
+    format!("{{\n{}\n}}\n", lines.join(",\n"))
+}
+
+/// Built-in CBS code map of a given defaults version (1 = first T7 build, 2 = current).
+pub fn default_cl_code_map(version: u32) -> Vec<(&'static str, &'static str)> {
+    let mut v = DEFAULT_CL_CODE_MAP.to_vec();
+    if version == 1 {
+        let at = v.iter().position(|(k, _)| *k == "B/L").map_or(v.len(), |i| i + 1);
+        v.insert(at, ("BLW", "BL"));
+    }
+    v
+}
+
+/// Built-in segment map of a given defaults version (1 = first T7 build, 2 = current).
+pub fn default_segment_map(version: u32) -> Vec<(&'static str, &'static str)> {
+    if version == 1 {
+        V1_SEGMENT_MAP.to_vec()
+    } else {
+        DEFAULT_SEGMENT_MAP.to_vec()
+    }
+}
+
+impl ProvisionConfig {
+    /// Seed rules from the owner's review notes. Rows with `verify: true` must be checked
+    /// against the circular PDFs.
+    pub fn default_rules() -> Vec<ProvisionRule> {
+        Self::default_rules_for(RULE_FILES_VERSION)
+    }
+
+    /// Built-in rules of a given defaults version (1 = first T7 build, 2 = current).
+    pub fn default_rules_for(version: u32) -> Vec<ProvisionRule> {
+        let rule = |grade: &str, category: &str, rate_pct: f64, from: &str, to: Option<&str>, source: &str, verify: bool| ProvisionRule {
+            grade: grade.to_string(),
+            category: category.to_string(),
+            rate_pct,
+            effective_from: from.to_string(),
+            effective_to: to.map(str::to_string),
+            source: source.to_string(),
+            verify,
+        };
+        let c15 = "BRPD Circular 15, 27 Nov 2024";
+        let (oct25, oct25_from) = if version == 1 {
+            (
+                "BRPD circular letter Oct 2025 (believed No. 22 of 2025); start date is a placeholder",
+                "2025-10-01",
+            )
+        } else {
+            ("BRPD Circular Letter No. 22, 13 Oct 2025", "2025-10-13")
+        };
+        let dec25 = "BB directive Dec 2025 replacing Circular Letter 22/2025";
+        let mut rules = vec![
+            rule("STD", "ANY", 1.0, "2025-04-01", None, c15, false),
+            rule("SMA", "ANY", 5.0, "2025-04-01", None, c15, false),
+            rule("SS", "ANY", 20.0, "2025-04-01", None, c15, false),
+            rule("DF", "ANY", 50.0, "2025-04-01", None, c15, false),
+            rule("BL", "ANY", 100.0, "2025-04-01", None, c15, false),
+        ];
+        for cat in ["SHORT_TERM_AGRI", "CMSME"] {
+            for grade in ["STD", "SMA"] {
+                rules.push(rule(grade, cat, 1.0, oct25_from, Some("2025-12-20"), oct25, true));
+            }
+        }
+        for cat in ["SHORT_TERM_AGRI", "CMSME"] {
+            for grade in ["STD", "SMA"] {
+                rules.push(rule(grade, cat, 0.5, "2025-12-21", Some("2026-12-31"), dec25, true));
+            }
+        }
+        rules
+    }
+
+    /// Built-in defaults (the same content as the files written on first run).
+    pub fn defaults() -> Self {
+        let own = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+            p.iter().map(|(k, v)| (normalise_code(k), v.to_string())).collect()
+        };
+        Self {
+            cl_code_map: own(DEFAULT_CL_CODE_MAP),
+            segment_map: own(DEFAULT_SEGMENT_MAP),
+            rules: Self::default_rules(),
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Creates any of the three files that does not exist yet, with the defaults.
+    pub fn ensure_default_files(dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Could not create {}", dir.display()))?;
+        let v = RULE_FILES_VERSION;
+        write_if_missing(&dir.join(CL_CODE_MAP_FILE), &pairs_to_json(v, &default_cl_code_map(v)))?;
+        write_if_missing(&dir.join(SEGMENT_MAP_FILE), &pairs_to_json(v, &default_segment_map(v)))?;
+        write_if_missing(&dir.join(PROVISION_RULES_FILE), &rules_to_json(v, &Self::default_rules())?)
+    }
+
+    /// Loads and validates the three files from `dir`, creating missing ones first.
+    /// A file older than `RULE_FILES_VERSION` (or with no version) is replaced by the current
+    /// default when it still equals an earlier built-in default; an edited old file is kept and
+    /// a warning naming it is added to `warnings`.
+    pub fn load_or_create(dir: &Path) -> Result<Self> {
+        Self::ensure_default_files(dir)?;
+        let cur = RULE_FILES_VERSION;
+        let mut warnings = Vec::new();
+        let old = |v: Option<u32>| v.map_or(true, |v| v < cur);
+
+        let mut maps = Vec::new();
+        for (name, defaults) in [
+            (CL_CODE_MAP_FILE, default_cl_code_map as fn(u32) -> Vec<(&'static str, &'static str)>),
+            (SEGMENT_MAP_FILE, default_segment_map),
+        ] {
+            let path = dir.join(name);
+            let mut file: JsonPairs = read_json_file(&path)?;
+            if old(file.version) {
+                if (1..=cur).any(|v| same_pairs(&file.pairs, &defaults(v))) {
+                    write_atomic(&path, &pairs_to_json(cur, &defaults(cur)))?;
+                    file.pairs = defaults(cur)
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                } else {
+                    warnings.push(outdated_warning(&path, file.version));
+                }
+            }
+            maps.push((path, file.pairs));
+        }
+
+        let rules_path = dir.join(PROVISION_RULES_FILE);
+        let (version, mut rules) = read_rules_file(&rules_path)?;
+        if old(version) {
+            if (1..=cur).any(|v| same_rules(&rules, &Self::default_rules_for(v))) {
+                rules = Self::default_rules();
+                write_atomic(&rules_path, &rules_to_json(cur, &rules)?)?;
+            } else {
+                warnings.push(outdated_warning(&rules_path, version));
+            }
+        }
+        validate_rules(&rules, &rules_path)?;
+
+        let mut maps = maps.into_iter();
+        let (cl_path, cl) = maps.next().ok_or_else(|| anyhow!("internal: CL map missing"))?;
+        let (seg_path, seg) = maps.next().ok_or_else(|| anyhow!("internal: segment map missing"))?;
+        Ok(Self {
+            cl_code_map: validate_code_map(cl, &CL_GRADES, &cl_path)?,
+            segment_map: validate_code_map(seg, &REG_CATEGORIES, &seg_path)?,
+            rules,
+            warnings,
+        })
+    }
+
+    /// The single rule for (grade, category) in force on `cutoff`. A category-specific row wins
+    /// over category ANY. Two rows in force at the same level, or none at all, is an error.
+    pub fn lookup(&self, grade: &str, category: &str, cutoff: NaiveDate) -> Result<&ProvisionRule> {
+        let in_force = |r: &&ProvisionRule| -> bool {
+            let from = NaiveDate::parse_from_str(&r.effective_from, "%Y-%m-%d").ok();
+            let to = match &r.effective_to {
+                Some(t) => NaiveDate::parse_from_str(t, "%Y-%m-%d").ok(),
+                None => Some(NaiveDate::MAX),
+            };
+            matches!((from, to), (Some(f), Some(t)) if f <= cutoff && cutoff <= t)
+        };
+        // No rules exist before the first one in the file (Circular 15/2024 regime start).
+        let earliest = self
+            .rules
+            .iter()
+            .filter_map(|r| NaiveDate::parse_from_str(&r.effective_from, "%Y-%m-%d").ok())
+            .min();
+        if let Some(first) = earliest {
+            if cutoff < first {
+                bail!(
+                    "No provisioning rule covers cutoff {}; rules start {} (BRPD Circular 15/2024)",
+                    cutoff,
+                    first
+                );
+            }
+        }
+        for cat in [category, "ANY"] {
+            let hits: Vec<&ProvisionRule> = self
+                .rules
+                .iter()
+                .filter(|r| r.grade == grade && r.category == cat)
+                .filter(in_force)
+                .collect();
+            match hits.as_slice() {
+                [] => continue,
+                [one] => return Ok(one),
+                [a, b, ..] => bail!(
+                    "{} has {} rules for grade {} / category {} in force on {}: '{}' ({} to {}) and '{}' ({} to {}). Fix the overlapping dates.",
+                    PROVISION_RULES_FILE,
+                    hits.len(),
+                    grade,
+                    cat,
+                    cutoff,
+                    a.source,
+                    a.effective_from,
+                    a.effective_to.as_deref().unwrap_or("open"),
+                    b.source,
+                    b.effective_from,
+                    b.effective_to.as_deref().unwrap_or("open")
+                ),
+            }
+        }
+        bail!(
+            "{} has no rule for grade {} / category {} (or ANY) in force on {}.",
+            PROVISION_RULES_FILE,
+            grade,
+            category,
+            cutoff
+        )
+    }
+}
+
+/// Maps `e` (already normalised) through `pairs`; null when the code is not listed.
+fn map_codes_expr(e: Expr, pairs: &[(String, String)]) -> Expr {
+    pairs
+        .iter()
+        .rev()
+        .fold(lit(NULL).cast(DataType::String), |acc, (k, v)| {
+            when(e.clone().eq(lit(k.clone())))
+                .then(lit(v.clone()))
+                .otherwise(acc)
+        })
+}
+
+fn max_expr(a: Expr, b: Expr) -> Expr {
+    when(a.clone().gt_eq(b.clone())).then(a).otherwise(b)
+}
+
+/// Loans & Advances Suite (C1): Bangladesh Bank CL provisioning and Base For Provision (BFP).
+/// Rates, CBS code mapping and segment mapping come from the rule files in portable_data/.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_loan_classification_provision(
     lf: LazyFrame,
     bal_col: &str,
@@ -409,90 +1095,159 @@ pub fn apply_loan_classification_provision(
     segment_col: Option<&str>,
     suspense_col: Option<&str>,
     security_col: Option<&str>,
+    collateral_type_col: Option<&str>,
+    cutoff_date: &str,
 ) -> Result<LazyFrame> {
-    let bal = col(bal_col).cast(DataType::Float64).fill_null(lit(0.0));
-    let susp = match suspense_col {
-        Some(s) if !s.trim().is_empty() => col(s).cast(DataType::Float64).fill_null(lit(0.0)),
-        _ => lit(0.0),
-    };
-    let sec = match security_col {
-        Some(s) if !s.trim().is_empty() => col(s).cast(DataType::Float64).fill_null(lit(0.0)),
-        _ => lit(0.0),
+    let config = ProvisionConfig::load_or_create(&portable_root_dir())?;
+    apply_loan_classification_provision_with(
+        lf,
+        bal_col,
+        cl_status_col,
+        segment_col,
+        suspense_col,
+        security_col,
+        collateral_type_col,
+        cutoff_date,
+        &config,
+    )
+}
+
+/// As `apply_loan_classification_provision`, with the rule set passed in.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_loan_classification_provision_with(
+    lf: LazyFrame,
+    bal_col: &str,
+    cl_status_col: &str,
+    segment_col: Option<&str>,
+    suspense_col: Option<&str>,
+    security_col: Option<&str>,
+    collateral_type_col: Option<&str>,
+    cutoff_date: &str,
+    config: &ProvisionConfig,
+) -> Result<LazyFrame> {
+    let given = |c: Option<&str>| c.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let (segment_col, suspense_col, security_col, collateral_type_col) = (
+        given(segment_col),
+        given(suspense_col),
+        given(security_col),
+        given(collateral_type_col),
+    );
+
+    // Cutoff: blank = today, and the output says so.
+    let (cutoff, mut lf) = if cutoff_date.trim().is_empty() {
+        let today = chrono::Local::now().date_naive();
+        let lf = lf.with_column(lit(today.format("%Y-%m-%d").to_string()).alias("Cutoff_Assumed"));
+        (today, lf)
+    } else {
+        let d = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
+            .context("Provision cutoff date must be YYYY-MM-DD")?;
+        (d, lf)
     };
 
-    let cl_upper = col(cl_status_col)
-        .cast(DataType::String)
-        .str()
-        .to_uppercase()
-        .str()
-        .strip_chars(lit(" "));
-
-    let is_cmsme = match segment_col {
-        Some(seg) if !seg.trim().is_empty() => col(seg)
-            .cast(DataType::String)
-            .str()
-            .to_uppercase()
-            .str()
-            .contains(lit("SME|CMSME|AGRI|MICRO|COTTAGE"), false),
-        _ => lit(false),
-    };
-
-    let is_npl = cl_upper
+    // 1. CL grade: every code must be in cl_code_map.json; unknown codes are an error, never 1%.
+    let bad = lf
         .clone()
-        .eq(lit("SS"))
-        .or(cl_upper.clone().eq(lit("DF")))
-        .or(cl_upper.clone().eq(lit("BL")))
-        .or(cl_upper.clone().str().contains(lit("SUB|DOUBT|BAD|LOSS"), false));
+        .select([col(cl_status_col).cast(DataType::String).alias("__cl")])
+        .filter(map_codes_expr(normalise_code_expr(col("__cl")), &config.cl_code_map).is_null())
+        .unique_stable(None, UniqueKeepStrategy::First)
+        .limit(20)
+        .collect()
+        .with_context(|| format!("Could not read the CL status column '{}'", cl_status_col))?;
+    if bad.height() > 0 {
+        let codes: Vec<String> = bad
+            .column("__cl")?
+            .str()?
+            .into_iter()
+            .map(|v| match v {
+                Some(s) if !s.trim().is_empty() => format!("'{}'", s),
+                _ => "(blank)".to_string(),
+            })
+            .collect();
+        bail!(
+            "CL status column '{}' has codes not in {}: {}. Add each code with its grade (STD, SMA, SS, DF or BL) to that file.",
+            cl_status_col,
+            CL_CODE_MAP_FILE,
+            codes.join(", ")
+        );
+    }
+    let grade_expr = map_codes_expr(normalise_code_expr(col(cl_status_col)), &config.cl_code_map);
 
-    let npl_flag = when(is_npl.clone())
-        .then(lit("NPL (Classified)"))
-        .otherwise(lit("Performing (UC/SMA)"))
-        .alias("NPL_Category");
+    // 2. Regulatory category from segment_map.json (exact match); unlisted -> OTHER, flagged.
+    let seg_mapped = match &segment_col {
+        Some(s) => map_codes_expr(normalise_code_expr(col(s.as_str())), &config.segment_map),
+        None => lit(NULL).cast(DataType::String),
+    };
+    lf = lf.with_columns([
+        grade_expr.alias("CL_Grade"),
+        seg_mapped.clone().fill_null(lit("OTHER")).alias("Reg_Category"),
+        seg_mapped.is_null().alias("Segment_Unmapped"),
+    ]);
 
-    let raw_net = bal.clone() - susp - sec;
-    let net_bfp = when(raw_net.clone().gt(lit(0.0)))
-        .then(raw_net)
-        .otherwise(lit(0.0));
-    let pos_bal = when(bal.clone().gt(lit(0.0))).then(bal).otherwise(lit(0.0));
+    // 3. Rate and source for every grade x category in force on the cutoff (fails on gaps/overlaps).
+    let mut rate_expr = lit(NULL).cast(DataType::Float64);
+    let mut source_expr = lit(NULL).cast(DataType::String);
+    for grade in CL_GRADES {
+        for cat in REG_CATEGORIES {
+            let rule = config.lookup(grade, cat, cutoff)?;
+            let hit = col("CL_Grade").eq(lit(grade)).and(col("Reg_Category").eq(lit(cat)));
+            let source = if rule.verify {
+                format!("{} [verify]", rule.source)
+            } else {
+                rule.source.clone()
+            };
+            rate_expr = when(hit.clone()).then(lit(rule.rate_pct)).otherwise(rate_expr);
+            source_expr = when(hit).then(lit(source)).otherwise(source_expr);
+        }
+    }
 
-    let bfp_expr = when(is_npl)
-        .then(net_bfp)
-        .otherwise(pos_bal)
+    // 4. Base for provision.
+    let num = |c: &Option<String>| match c {
+        Some(s) => col(s.as_str()).cast(DataType::Float64).fill_null(lit(0.0)),
+        None => lit(0.0),
+    };
+    let bal = col(bal_col).cast(DataType::Float64).fill_null(lit(0.0));
+    let susp = num(&suspense_col);
+    // Phase 1: the security column is taken as already eligible (after haircuts); haircuts
+    // on eligible security are not applied here.
+    let sec = num(&security_col);
+    let floor_exempt = match &collateral_type_col {
+        Some(c) => {
+            let t = normalise_code_expr(col(c.as_str())).str().replace_all(lit(r"[ \-]"), lit("_"), false);
+            FLOOR_EXEMPT_COLLATERAL
+                .iter()
+                .fold(lit(false), |acc, k| acc.or(t.clone().eq(lit(*k))))
+                .fill_null(lit(false))
+        }
+        None => lit(false),
+    };
+    let is_npl = col("CL_Grade").is_in(lit(Series::new("npl".into(), ["SS", "DF", "BL"])));
+    let raw_net = max_expr(bal.clone() - susp - sec.clone(), lit(0.0));
+    // 15%-of-outstanding floor only when security is deducted and the collateral is not exempt.
+    let floor_applies = sec.gt(lit(0.0)).and(floor_exempt.not());
+    let floored = max_expr(raw_net.clone(), bal.clone() * lit(0.15));
+    let npl_bfp = when(floor_applies).then(floored).otherwise(raw_net);
+    let bfp_expr = when(is_npl.clone())
+        .then(npl_bfp)
+        .otherwise(max_expr(bal, lit(0.0)))
         .round(2)
         .alias("Base_For_Provision_BDT");
 
-    let prov_rate_pct = when(
-        cl_upper
-            .clone()
-            .eq(lit("BL"))
-            .or(cl_upper.clone().str().contains(lit("BAD|LOSS"), false)),
-    )
-    .then(lit(100.0))
-    .when(
-        cl_upper
-            .clone()
-            .eq(lit("DF"))
-            .or(cl_upper.clone().str().contains(lit("DOUBT"), false)),
-    )
-    .then(when(is_cmsme.clone()).then(lit(20.0)).otherwise(lit(50.0)))
-    .when(
-        cl_upper
-            .clone()
-            .eq(lit("SS"))
-            .or(cl_upper.clone().str().contains(lit("SUB"), false)),
-    )
-    .then(when(is_cmsme.clone()).then(lit(5.0)).otherwise(lit(20.0)))
-    .when(cl_upper.eq(lit("SMA")))
-    .then(when(is_cmsme.clone()).then(lit(0.25)).otherwise(lit(1.0)))
-    .otherwise(when(is_cmsme).then(lit(0.25)).otherwise(lit(1.0)))
-    .alias("Statutory_Prov_Rate_Pct");
+    let npl_flag = when(is_npl)
+        .then(lit("NPL (Classified)"))
+        .otherwise(lit("Performing (UC/SMA)"))
+        .alias("NPL_Category");
 
     let req_prov = (col("Base_For_Provision_BDT") * (col("Statutory_Prov_Rate_Pct") / lit(100.0)))
         .round(2)
         .alias("Required_Provision_BDT");
 
     Ok(lf
-        .with_columns([npl_flag, bfp_expr, prov_rate_pct])
+        .with_columns([
+            npl_flag,
+            bfp_expr,
+            rate_expr.alias("Statutory_Prov_Rate_Pct"),
+            source_expr.alias("Rule_Source"),
+        ])
         .with_column(req_prov))
 }
 

@@ -14,14 +14,18 @@ pub struct PortablePaths {
     pub temp_dir: PathBuf,
 }
 
+/// `portable_data/` next to the executable (falls back to the working directory).
+pub fn portable_root_dir() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    exe_dir.join("portable_data")
+}
+
 impl PortablePaths {
     pub fn init() -> Self {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-        let root_dir = exe_dir.join("portable_data");
+        let root_dir = portable_root_dir();
         let recipes_folder = root_dir.join("macros");
         let schema_folder = root_dir.join("schemas");
         let curve_folder = root_dir.join("curves");
@@ -259,32 +263,60 @@ pub fn format_metric_value(
 }
 
 fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
-    let lower = col_name.to_lowercase();
-    // Rate / Percentage columns should NEVER be divided by 10,000,000 (Crore)
-    if lower.contains("rate")
-        || lower.contains("pct")
-        || lower.contains("percent")
-        || lower.contains("yield")
-        || lower.contains("spread")
-        || lower.contains("util")
-        || lower.contains("ratio")
-        || lower.contains("wavg")
-    {
-        return MetricFormatType::PercentAsIs;
+    // Whole-token matches only: "Utility_Bill_Amount" is money, not utilisation
+    const BPS_TOKENS: &[&str] = &["bps", "bp"];
+    const PLAIN_NUMBER_TOKENS: &[&str] = &[
+        "duration", "years", "yrs", "tenor", "days", "count", "cnt", "num", "nos", "freq",
+    ];
+    const PERCENT_TOKENS: &[&str] = &[
+        "rate", "pct", "percent", "yield", "spread", "util", "utilization", "utilisation", "ratio",
+        "wavg",
+    ];
+    let tokens = column_name_tokens(col_name);
+    let has_any = |set: &[&str]| tokens.iter().any(|t| set.contains(&t.as_str()));
+
+    // 1. Basis points are plain numbers, even when the name also says "rate"
+    if has_any(BPS_TOKENS) {
+        return MetricFormatType::StandardCommas;
     }
-    // Duration / Tenor / Days / Count columns should display as clean decimals/numbers
-    if lower.contains("duration")
-        || lower.contains("years")
-        || lower.contains("tenor")
-        || lower.contains("days")
-        || lower.contains("count")
-        || lower.contains("freq")
-        || lower.contains("bps")
+    // 2. Duration / tenor / day / count columns display as plain numbers
+    if has_any(PLAIN_NUMBER_TOKENS)
+        || col_name.to_lowercase().starts_with("no_of")
+        || tokens.starts_with(&["no".to_string(), "of".to_string()])
     {
         return MetricFormatType::StandardCommas;
     }
-    // Everything else (Balance, Amount, BFP, Provision, NII, EVE, DV01, Limit) uses global monetary format
+    // 3. Rates are stored in percent and must never be divided into Crore
+    if has_any(PERCENT_TOKENS) {
+        return MetricFormatType::PercentAsIs;
+    }
+    // 4. Everything else (Balance, Amount, BFP, Provision, NII, EVE, DV01, Limit) is money
     MetricFormatType::Auto
+}
+
+/// Splits a column name into lowercase tokens on `_`, space, `-`, `.` and camelCase
+/// boundaries: "BranchCode" -> ["branch", "code"], "CIFNumber" -> ["cif", "number"].
+pub fn column_name_tokens(col_name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for part in col_name.split(['_', ' ', '-', '.']) {
+        let chars: Vec<char> = part.chars().collect();
+        let mut cur = String::new();
+        for (i, &c) in chars.iter().enumerate() {
+            if c.is_uppercase() && !cur.is_empty() {
+                let prev = chars.get(i.wrapping_sub(1)).copied().unwrap_or(' ');
+                let next_is_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+                if prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_is_lower) {
+                    tokens.push(cur.to_lowercase());
+                    cur.clear();
+                }
+            }
+            cur.push(c);
+        }
+        if !cur.is_empty() {
+            tokens.push(cur.to_lowercase());
+        }
+    }
+    tokens
 }
 
 pub fn format_with_commas(val: f64, decimals: usize) -> String {
@@ -623,6 +655,9 @@ pub enum TransformStep {
         mat_col: String,
         cutoff_date: String,
         shock_bps: f64,
+        /// Asset/liability side column; None = old macro, treated as asset (flagged in output)
+        #[serde(default)]
+        side_col: Option<String>,
     },
     FtpCurveMap {
         opndat_col: String,
@@ -651,6 +686,9 @@ pub enum TransformStep {
         compounding_freq: usize,
         shock_bps: f64,
         default_sight_years: f64,
+        /// Asset/liability side column; None = old macro, treated as asset (flagged in output)
+        #[serde(default)]
+        side_col: Option<String>,
     },
     LoanClassificationProvision {
         bal_col: String,
@@ -658,6 +696,12 @@ pub enum TransformStep {
         segment_col: Option<String>,
         suspense_col: Option<String>,
         security_col: Option<String>,
+        /// YYYY-MM-DD; empty = today (flagged in a Cutoff_Assumed column)
+        #[serde(default)]
+        cutoff_date: String,
+        /// Collateral type column; DEPOSIT_LIEN etc. skip the 15% BFP floor
+        #[serde(default)]
+        collateral_type_col: Option<String>,
     },
     LoanLimitUtilization {
         limit_col: String,
@@ -799,26 +843,21 @@ pub struct TabState {
 }
 
 impl TabState {
+    /// A column is an ID (kept as text) when one whole token is an ID word and no token is a
+    /// money, rate or date word. "Account_Balance" is a balance, "Customer_ID" is an ID.
     pub fn is_likely_id_column(col_name: &str) -> bool {
-        let lower = col_name.to_lowercase();
-        let keywords = [
-            "brancd",
-            "branch",
-            "actnum",
-            "account",
-            "glcode",
-            "gl_code",
-            "sector code",
-            "id",
-            "code",
-            "cif",
-            "tin",
-            "nid",
-            "phone",
-            "mobile",
-            "routing",
+        const ID_TOKENS: &[&str] = &[
+            "brancd", "branch", "actnum", "account", "acct", "glcode", "gl", "code", "cif", "id",
+            "tin", "nid", "phone", "mobile", "routing",
         ];
-        keywords.iter().any(|k| lower.contains(k))
+        const VALUE_TOKENS: &[&str] = &[
+            "bal", "balance", "amt", "amount", "outstanding", "limit", "sum", "total", "rate",
+            "int", "interest", "prov", "provision", "value", "val", "date", "dt", "maturity",
+            "profit",
+        ];
+        let tokens = column_name_tokens(col_name);
+        tokens.iter().any(|t| ID_TOKENS.contains(&t.as_str()))
+            && !tokens.iter().any(|t| VALUE_TOKENS.contains(&t.as_str()))
     }
 
     pub fn available_columns(&self) -> Vec<String> {

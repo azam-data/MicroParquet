@@ -56,7 +56,7 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 - A column counts as an ID only if (a) one token is in {brancd, branch, actnum, account, acct, glcode, gl, code, cif, id, tin, nid, phone, mobile, routing}, and (b) no token is in {bal, balance, amt, amount, outstanding, limit, sum, total, rate, int, interest, prov, provision, value, val, date, dt, maturity, profit}. Keep keywords that appear inside a single token (actnum, glcode, brancd) as whole-token matches only.
 - Apply the leading-zero rule only to values made entirely of ASCII digits, with length > 1 and a first character of '0'.
 - Order of checks: empty → ISO date → D/M/Y vs M/D/Y → float → text.
-- When D/M/Y and M/D/Y both fit every sampled value, choose **DateDMY**. Choose MDY only when some value has a first part > 12.
+- When D/M/Y and M/D/Y both fit every sampled value, choose **DateDMY**. Choose MDY only when some value has a second part > 12 (for example 10/31/2026).
 - Acceptance (t01): Actnum→Utf8, Account_Balance→Float64, Residual_Maturity→DateDMY, Reporting_Date→DateDMY, Matdat→DateDMY, Opndat_US (10/31/2026 style)→DateMDY, Balance→Float64, Liquidity_Bucket_Amt→Float64, Paid_Amount→Float64. t02 → DateDMY. Add: "Customer_ID" with values "0012"→Utf8, and "BranchCode"→Utf8.
 </task>
 
@@ -72,7 +72,8 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 - Sign rule (case-insensitive, trimmed): values starting with "A" (A, ASSET, ASSETS) → +1. Values starting with "L" (L, LIAB, LIABILITY), or equal to DEPOSIT or BORROWING → −1. Any other non-null value → `Err` that lists up to 10 distinct unmapped values (collect `unique()` on that column only).
 - When `side_col` is None (old macros), behave as before but add a column `Direction_Assumed` = "ASSET (unspecified)", so the assumption shows in the output.
 - Signed outputs: `NII_Impact_BDT` and `Delta_EVE_Impact_BDT` are multiplied by the sign. A rise in rates must reduce the EVE of assets and increase the EVE of liabilities. `DV01_BPV_BDT` stays unsigned.
-- Add the Side column picker to both modals in `main.rs`. It is optional, but default it to a column whose name tokens include side, type or direction, if one exists.
+- Add the Side column picker to both modals in `main.rs`. It is optional, but default it to a column whose name tokens include side or direction, if one exists (not type: Account_Type or Collateral_Type are not sides).
+- `Shocked_Annual_Int` is gross interest income (assets) or expense (liabilities) after the shock, unsigned: `Current_Annual_Int` plus the unsigned change. Net effects are read from `NII_Impact_BDT`.
 - Acceptance (t10): +100 bp, loan 3m and term deposit 3m (1,000,000 each, maturity 2027-01-29, cutoff 2026-10-31) → +7,534.25 and −7,534.25, net 0 (±0.01). t09: asset ΔEVE −7.58, deposit +7.58 (2 dp).
 </task>
 
@@ -96,24 +97,26 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 <task id="T7" name="Provisioning engine, BRPD Circular 15/2024 (dated rules)">
 Replace the hard-coded rates in `apply_loan_classification_provision` with data files in `portable_data/`. Create default files on first run if they don't exist. Loading uses `serde_json`. On a parse error, return an `Err` that names the file and the line.
 
+Versioning: each default file carries `"defaults_version": 2` (the two maps as an extra key in the flat object; the rules file as `{"defaults_version": 2, "rules": [...]}`). Files with no version or an older one still load. If such a file equals an earlier built-in default it is replaced with the current default; if it was edited it is kept, and a status-bar warning names the file.
+
 1. `cl_code_map.json`: normalised CBS code → grade, where grade is one of STD, SMA, SS, DF, BL. Normalise by uppercase, trim and collapse internal spaces. Defaults:
    - STD ← STD, STD-0, STD-1, STD-2, UC, STANDARD, UNCLASSIFIED
    - SMA ← SMA
    - SS ← SS, SUB-STANDARD, SUBSTANDARD, SUB STANDARD
    - DF ← DF, DOUBTFUL
-   - BL ← BL, B/L, BLW, BAD/LOSS, BAD, LOSS
+   - BL ← BL, B/L, BAD/LOSS, BAD, LOSS (BLW is not mapped; owner decision)
    Any code not in the map → `Err` listing up to 20 distinct unmapped codes. Never default an unknown code to 1%.
-2. `segment_map.json`: normalised segment code → category, where category is one of SHORT_TERM_AGRI, CMSME, OTHER. Exact match only, no regex. Defaults map CMSME, SME, CMS, COTTAGE, MICRO, SMALL and MEDIUM → CMSME, and AGRI ST and SHORT TERM AGRI → SHORT_TERM_AGRI. Unmapped values → OTHER, and the step adds a column `Segment_Unmapped` = true so they can be reviewed. "NON-CMSME" must map to OTHER.
-3. `provision_rules.json`: a list of `{grade, category, rate_pct, effective_from, effective_to (nullable), source, verify}`. Rate lookup = the row matching grade and category (category "ANY" as fallback) where `effective_from ≤ cutoff ≤ effective_to`. Two matching rows, or none → `Err`. Seed these rows, keeping `"verify": true` on the ones marked so the owner checks them against the circular PDFs:
+2. `segment_map.json`: normalised segment code → category, where category is one of SHORT_TERM_AGRI, CMSME, OTHER. Exact match only, no regex. Defaults map CMS, COTTAGE, MICRO and SMALL (only) → CMSME, since the concession covers cottage, micro and small loans but not medium; AGRI ST and SHORT TERM AGRI → SHORT_TERM_AGRI; and CORPORATE, NON-CMSME and MEDIUM → OTHER explicitly. Unmapped values (including a bare "CMSME" or "SME" code) → OTHER, and the step adds a column `Segment_Unmapped` = true so they can be reviewed.
+3. `provision_rules.json`: a list of `{grade, category, rate_pct, effective_from, effective_to (nullable), source, verify}`. Rate lookup = the row matching grade and category (category "ANY" as fallback) where `effective_from ≤ cutoff ≤ effective_to`. Two matching rows, or none → `Err`. No rules exist before 2025-04-01; a cutoff before the first rule fails with "No provisioning rule covers cutoff <date>; rules start 2025-04-01 (BRPD Circular 15/2024)". Seed these rows, keeping `"verify": true` on the ones marked so the owner checks them against the circular PDFs:
    - ANY: STD 1%, SMA 5%, SS 20%, DF 50%, BL 100%, from 2025-04-01 (BRPD Circular 15, 27 Nov 2024).
-   - SHORT_TERM_AGRI and CMSME: STD 1% and SMA 1%, from the October 2025 BRPD circular letter (believed to be No. 22 of 2025) to the day before the December 2025 directive. Leave the exact dates as `"verify": true`.
+   - SHORT_TERM_AGRI and CMSME: STD 1% and SMA 1%, from 2025-10-13 to 2025-12-20, source "BRPD Circular Letter No. 22, 13 Oct 2025" (`"verify": true`).
    - SHORT_TERM_AGRI and CMSME: STD 0.5% and SMA 0.5%, from 2025-12-21 to 2026-12-31 (directive that replaced Circular Letter 22/2025; `"verify": true`).
    - SS, DF and BL for SHORT_TERM_AGRI and CMSME use the ANY rows. The concession covers only unclassified loans.
 4. Add `#[serde(default)]` fields to `TransformStep::LoanClassificationProvision`: `cutoff_date: String` (if empty, use today and add a column `Cutoff_Assumed`) and `collateral_type_col: Option<String>`.
 5. Base for provision:
    - STD and SMA: BFP = max(outstanding, 0).
    - SS, DF and BL: raw = max(outstanding − interest suspense − eligible security, 0).
-   - If the collateral type, normalised, is in {DEPOSIT_LIEN, GOVT_SECURITY, GOVT_GUARANTEE, BB_GUARANTEE, AAA_MDB_GUARANTEE}, then BFP = raw. Otherwise (including when there is no collateral-type column and security > 0), BFP = max(raw, 15% × outstanding).
+   - The 15% floor applies only when security > 0 and the collateral type is not exempt: BFP = max(raw, 15% × outstanding). Exempt types (normalised): {DEPOSIT_LIEN, GOVT_SECURITY, GOVT_GUARANTEE, BB_GUARANTEE, AAA_MDB_GUARANTEE}. A missing collateral-type column counts as not exempt. With no security, or exempt collateral, BFP = raw (so no security → BFP = max(outstanding − suspense, 0)).
    - Eligible-security haircuts are out of scope for Phase 1. The security column is taken as already eligible. Say so in a code comment.
 6. Output columns: `CL_Grade`, `Reg_Category`, `NPL_Category`, `Base_For_Provision_BDT`, `Statutory_Prov_Rate_Pct`, `Required_Provision_BDT`, `Rule_Source`.
 7. Acceptance at cutoff 2026-10-31, balance 1,000,000 per row (t07, t18 rewritten):
@@ -123,27 +126,48 @@ Replace the hard-coded rates in `apply_loan_classification_provision` with data 
    - DF CORPORATE, suspense 100,000 → 450,000
    - B/L CORPORATE, suspense 100,000 → 900,000
    - BL NON-CMSME, suspense 100,000 → 900,000
-   - STD-1 CMSME → 5,000
-   - SS CMSME → 200,000
+   - STD-1 SMALL → 5,000
+   - SS SMALL → 200,000
    - BL CORPORATE, security 950,000, no collateral type → BFP 150,000, provision 150,000
    - Same row with collateral type DEPOSIT_LIEN → 50,000
    - "AGRI TERM LOAN" DF → 50% (segment unmapped → OTHER)
    - Code "XYZ" → `Err` that mentions XYZ
-   - The same CMSME STD row at cutoff 2027-01-31 → 10,000, and at cutoff 2025-06-30 → 10,000
+   - Code "BLW" → `Err` that mentions BLW
+   - SS CORPORATE, suspense 900,000, no security → BFP 100,000, provision 20,000
+   - MEDIUM STD → 10,000 (MEDIUM is OTHER)
+   - The same SMALL STD row at cutoff 2027-01-31 → 10,000, and at cutoff 2025-06-30 → 10,000
+   - Cutoff 2025-03-31 → `Err` "No provisioning rule covers cutoff 2025-03-31; rules start 2025-04-01 (BRPD Circular 15/2024)"
 </task>
 
 <task id="T8" name="No panics on stale tab indices">
 - Use `self.tabs.get(i)` at the join and reconcile execution sites in `main.rs` (around lines 2692–2693 and 2777–2778). On None, set `self.status_message` and keep the modal open.
-- When a tab is closed, clamp `join_left_tab`, `join_right_tab`, `rec_prev_tab` and `rec_curr_tab` to the new length, or reset them to 0.
+- When a tab is closed, update `active_tab`, `join_left_tab`, `join_right_tab`, `rec_prev_tab` and `rec_curr_tab` with one rule (`tab_index_after_close`): indices after the closed tab shift down, an index at the closed tab moves to the tab that took its place, and every index is clamped to the remaining tabs (0 when none are left).
 - Search `main.rs` for any other `self.tabs[<index other than active_tab>]` and fix it the same way.
 </task>
 
 <task id="T9" name="Python export must not silently drop steps">
 - In `macros.rs` `generate_python_polars_code`, for any step that has no Python translation (the banking steps that print "(Specialized Banking Step Executed via Polars Expressions)"), stop emitting the placeholder comment. Instead put `raise NotImplementedError("Step N '<label>' has no Python translation in this version; run it in MicroParquet")` at that point in the script, and add a warning to the UI status message when the script is exported.
-- Emit casts for the ingestion schema: Float64 columns go through the same comma and bracket cleaning and are cast to Float64. Date columns use `str.to_date` with the matching format. The PII mask is out of scope: emit a `# WARNING: PII masking not reproduced` line when any column has a mask.
+- Emit casts for the ingestion schema: Float64 columns go through the same comma and bracket cleaning and are cast to Float64. Date columns use `str.to_date` with the matching format. Casts use `strict=False` (a value that cannot be converted becomes null, as in the app), and the script prints how many nulls each cast created, per column. The PII mask is out of scope: emit a `# WARNING: PII masking not reproduced` line when any column has a mask.
 </task>
 
 </tasks>
+
+<accepted_deviations>
+Differences from the task text above that the owner has accepted (Phase 1 review, Nov 2026).
+- T0: Phase 2 evidence tests (t04, t11, t12, t13, t16, t17) assert their Phase 2 target values and are `#[ignore = "Phase 2: <item>"]`. The Phase 1 assertions of t04, t11 and t12 live on in t04a, t11a and t12a. `.gitignore` (`/target`) was added.
+- T2: the date parser no longer splits on a "T" inside a month name, so "31-OCT-2026" parses (fixed as part of T2).
+- T3: the error text is "Weighted average needs a weight column (metric '<alias>')", naming the metric.
+- T4: a blank or null side value is an error too ("(blank)" in the list), not only unknown non-null values; otherwise the row would drop out of the ΔNII total.
+- T4: the Python export of the ΔEVE step applies the same side sign and fails on unknown sides.
+- T6: Datetime columns are filtered as dates (YYYY-MM-DD). Categorical columns cannot occur in this build (Polars `dtype-categorical` is not enabled), so that branch is untested.
+- T7: the collateral type is also normalised by turning spaces and hyphens into "_", so "Deposit Lien" matches DEPOSIT_LIEN.
+- T7: `Rule_Source` ends with " [verify]" for rules marked `verify: true`.
+- T7: in the cutoff-before-first-rule message the date comes from the rules file; "(BRPD Circular 15/2024)" is fixed text.
+- T7: a code listed twice in a map file (after normalising) is an error, and all 15 grade × category pairs are resolved for the cutoff, so a gap or overlap anywhere in the rules file stops the step.
+- T7: the bare segment codes "CMSME" and "SME" are not mapped (they may include medium loans); such rows fall to OTHER with `Segment_Unmapped = true`.
+- T8: on tab close, later indices shift down instead of being reset to 0 (see the T8 rule).
+- T9: Int64 columns are cast too (comma-cleaned, `strict=False`).
+</accepted_deviations>
 
 <constraints>
 - Do not upgrade Polars, egui or any other dependency, and do not add new crates. `serde_json`, `chrono` and `anyhow` are already available.
