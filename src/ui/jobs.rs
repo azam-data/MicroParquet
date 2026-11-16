@@ -114,6 +114,12 @@ impl MicroParquetApp {
                 // The summary row is of the whole result, so it follows every refresh.
                 self.submit_summary(idx);
                 self.submit_step_counts(idx);
+                self.submit_column_stats(idx);
+            }
+            JobOutput::ColumnStats(r) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
+                    tab.column_stats = Some(r.stats);
+                }
             }
             JobOutput::StepCounts(r) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {

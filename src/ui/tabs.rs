@@ -273,6 +273,39 @@ impl MicroParquetApp {
         });
     }
 
+    /// Computes the inspector statistics of the selected column of tab `idx` on the worker thread.
+    pub(crate) fn submit_column_stats(&mut self, idx: usize) {
+        let Some(column) = self.selected_column.clone() else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(idx) else {
+            return;
+        };
+        if !tab.available_columns().contains(&column) {
+            return;
+        }
+        let exec = tab.exec_steps.min(tab.steps.len());
+        let req = ColumnStatsRequest {
+            tab_id: tab.id,
+            source: tab.source.clone(),
+            steps: tab.steps[..exec].to_vec(),
+            column,
+            temp_dir: self.paths.temp_dir.clone(),
+        };
+        let key = JobKey::tab(JobKind::Stats, tab.id);
+        self.jobs.submit(key, "Column statistics", false, move |ctx| {
+            compute_tab_column_stats(req, ctx).map(|r| JobOutput::ColumnStats(Box::new(r)))
+        });
+    }
+
+    /// Selects a column for the inspector and shows its tab.
+    pub(crate) fn select_column(&mut self, column: &str) {
+        self.selected_column = Some(column.to_string());
+        self.right_tab = RightTab::Column;
+        self.show_steps_sidebar = true;
+        self.submit_column_stats(self.active_tab);
+    }
+
     /// The user picked a summary (or a weight column) for a column of the active tab.
     pub(crate) fn set_summary(&mut self, column: &str, spec: SummarySpec) {
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {

@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 /// What a finished job hands back to the UI.
 pub enum JobOutput {
+    ColumnStats(Box<ColumnStatsResult>),
     StepCounts(Box<StepCountsResult>),
     TextCheck(Box<TextCheckResult>),
     Summary(Box<SummaryResult>),
@@ -187,6 +188,7 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         history: Default::default(),
         step_counts: Vec::new(),
         step_hashes: Vec::new(),
+        column_stats: None,
     };
     Ok(LoadedTab { tab, status })
 }
@@ -665,4 +667,35 @@ pub fn compute_step_counts(req: StepCountsRequest, ctx: &JobCtx) -> Result<StepC
         counts[i] = df.column("n").ok().and_then(|s| s.u32().ok().and_then(|c| c.get(0))).map(|n| n as usize);
     }
     Ok(StepCountsResult { tab_id: req.tab_id, hashes: req.hashes, counts })
+}
+
+// -------------------------------------------------------------------------- column inspector
+
+pub struct ColumnStatsRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    /// The steps the table runs.
+    pub steps: Vec<TransformStep>,
+    pub column: String,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ColumnStatsResult {
+    pub tab_id: u64,
+    pub stats: crate::column_stats::ColumnStats,
+}
+
+/// The fingerprint that ties a statistics result to the steps it was computed for.
+pub fn stats_key(steps: &[TransformStep]) -> u64 {
+    crate::steps_edit::prefix_hashes(steps).last().copied().unwrap_or(0)
+}
+
+/// Statistics of one column over the whole result.
+pub fn compute_tab_column_stats(req: ColumnStatsRequest, ctx: &JobCtx) -> Result<ColumnStatsResult> {
+    ctx.check()?;
+    ctx.set_progress(format!("Statistics of {}…", req.column), None);
+    let key = stats_key(&req.steps);
+    let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
+    let stats = crate::column_stats::compute_column_stats(lf, &req.column, key)?;
+    Ok(ColumnStatsResult { tab_id: req.tab_id, stats })
 }

@@ -642,29 +642,222 @@ impl MicroParquetApp {
         }
     }
 
-    /// The Column tab: the selected column's name and type. Statistics arrive with T5.
+    /// The Column tab (inspector): name, type and format, counts, statistics, a histogram or the
+    /// most frequent values, and actions for the column.
     fn render_column_tab(&mut self, ui: &mut egui::Ui) {
+        use micro_parquet::column_stats::ColumnKind;
         let tk = *theme::tokens(self.dark_mode);
-        egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 14.0)).show(ui, |ui| {
-            let Some(tab) = self.tabs.get(self.active_tab) else {
-                return;
-            };
-            let name = self
-                .selected_column
-                .clone()
-                .filter(|c| tab.cached_slice.column(c).is_ok());
-            match name {
-                Some(name) => {
-                    ui.label(theme::bold(name.clone()).size(theme::TEXT_INSPECTOR_TITLE));
-                    if let Ok(c) = tab.cached_slice.column(&name) {
-                        ui.label(egui::RichText::new(format!("{:?}", c.dtype())).color(tk.muted));
+        let mut do_filter: Option<String> = None;
+        let mut do_sort: Option<String> = None;
+        let mut do_summary: Option<(String, SummarySpec)> = None;
+        let mut do_format = false;
+        let mut do_type = false;
+        let (num_format, decimals) = (self.num_format, self.global_decimals);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 14.0)).show(ui, |ui| {
+                let Some(tab) = self.tabs.get(self.active_tab) else {
+                    return;
+                };
+                let cols = tab.available_columns();
+                let Some(name) = self.selected_column.clone().filter(|c| cols.contains(c)) else {
+                    ui.label(egui::RichText::new("Click a column header to see its statistics.").color(tk.muted));
+                    return;
+                };
+                let dtype = tab.cached_slice.column(&name).map(|c| c.dtype().clone()).ok();
+                let spec = tab.col_formats.get(&name);
+                let key = stats_key(&tab.steps[..tab.exec_steps.min(tab.steps.len())]);
+                let stats = tab.column_stats.as_ref().filter(|s| s.column == name);
+                let stale = stats.is_none_or(|s| s.key != key);
+
+                ui.label(theme::bold(name.clone()).size(theme::TEXT_INSPECTOR_TITLE));
+                let kind_label = match stats.map(|s| &s.kind) {
+                    Some(ColumnKind::Number) => "Number",
+                    Some(ColumnKind::Date) => "Date",
+                    Some(ColumnKind::Text) => "Text",
+                    Some(ColumnKind::Other) => "Other",
+                    None => match &dtype {
+                        Some(d) if d.is_numeric() => "Number",
+                        Some(d) if d.is_temporal() => "Date",
+                        Some(_) => "Text",
+                        None => "",
+                    },
+                };
+                let is_number = kind_label == "Number";
+                let format_text = if is_number {
+                    let scale = resolved_scale(&name, spec, num_format);
+                    let dec = spec.map(|s| s.decimals).unwrap_or(decimals);
+                    match scale {
+                        Some(s) => format!("{} \u{b7} {} \u{b7} {} dp", kind_label, s.suffix, dec),
+                        None => format!("{} \u{b7} {} dp", kind_label, dec),
                     }
+                } else {
+                    kind_label.to_string()
+                };
+                ui.label(egui::RichText::new(format_text).color(tk.muted));
+                ui.add_space(theme::SPACE_M);
+
+                if stale {
+                    ui.label(theme::semibold("Updating\u{2026}").size(theme::TEXT_SMALL).color(tk.accent));
                 }
-                None => {
-                    ui.label(egui::RichText::new("No column selected.").color(tk.muted));
+                if let Some(st) = stats {
+                    ui.scope(|ui| {
+                        if stale {
+                            ui.set_opacity(0.45);
+                        }
+                        let count = |n: u64| format_with_commas(n as f64, 0);
+                        let fails = tab.parse_failures.iter().find(|f| f.column == name).map(|f| f.count as u64).unwrap_or(0);
+                        let num = |v: f64| format_metric_value(v, &name, spec, num_format, decimals);
+                        let mut tiles: Vec<(&str, String, Option<egui::Color32>)> = vec![
+                            ("Rows", count(st.rows), None),
+                            ("Blanks", count(st.blanks), None),
+                            ("Parse failures", count(fails), Some(if fails == 0 { tk.success } else { tk.warning })),
+                        ];
+                        if let Some(n) = &st.number {
+                            tiles.push(("Sum", num(n.sum), None));
+                            tiles.push(("Min", num(n.min), None));
+                            tiles.push(("Max", num(n.max), None));
+                            tiles.push(("Mean", num(n.mean), None));
+                            tiles.push(("Distinct", count(n.distinct), None));
+                        }
+                        if let Some(d) = &st.date {
+                            tiles.push(("Min", micro_parquet::summary::date_text(d.min), None));
+                            tiles.push(("Max", micro_parquet::summary::date_text(d.max), None));
+                        }
+                        if let Some(t) = &st.text {
+                            tiles.push(("Distinct", count(t.distinct), None));
+                        }
+                        egui::Grid::new("col_tiles").num_columns(2).spacing([8.0, 8.0]).show(ui, |ui| {
+                            for (i, (k, v, color)) in tiles.iter().enumerate() {
+                                egui::Frame::none()
+                                    .fill(tk.bg)
+                                    .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
+                                    .inner_margin(egui::Margin::same(10.0))
+                                    .show(ui, |ui| {
+                                        ui.set_width(118.0);
+                                        ui.label(theme::semibold(*k).size(theme::TEXT_LABEL).color(tk.muted));
+                                        ui.add(egui::Label::new(theme::mono_semibold(v.clone()).color(color.unwrap_or(tk.ink))).truncate());
+                                    });
+                                if i % 2 == 1 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                        // distribution
+                        if let Some(n) = &st.number {
+                            ui.add_space(theme::SPACE_M);
+                            ui.label(theme::semibold("Distribution").size(theme::TEXT_LABEL).color(tk.muted));
+                            let max = n.histogram.iter().copied().max().unwrap_or(1).max(1) as f32;
+                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 70.0), egui::Sense::hover());
+                            let w = rect.width() / n.histogram.len() as f32;
+                            for (i, c) in n.histogram.iter().enumerate() {
+                                let h = (*c as f32 / max) * rect.height();
+                                let bar = egui::Rect::from_min_max(
+                                    egui::pos2(rect.left() + i as f32 * w + 2.0, rect.bottom() - h),
+                                    egui::pos2(rect.left() + (i as f32 + 1.0) * w - 2.0, rect.bottom()),
+                                );
+                                ui.painter().rect_filled(bar, egui::Rounding { nw: 3.0, ne: 3.0, sw: 0.0, se: 0.0 }, tk.accent.gamma_multiply(0.8));
+                            }
+                            resp.on_hover_text(format!(
+                                "{} bars from {} to {}; the bars add up to {} values",
+                                n.histogram.len(),
+                                num(n.min),
+                                num(n.max),
+                                count(n.histogram.iter().sum())
+                            ));
+                        }
+                        if let Some(t) = &st.text {
+                            ui.add_space(theme::SPACE_M);
+                            ui.label(theme::semibold("Most frequent").size(theme::TEXT_LABEL).color(tk.muted));
+                            for (v, c) in &t.top {
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::Label::new(egui::RichText::new(v.clone()).color(tk.ink)).truncate());
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.label(theme::mono(count(*c)).size(11.0).color(tk.muted));
+                                    });
+                                });
+                            }
+                        }
+                    });
                 }
-            }
+
+                // actions
+                ui.add_space(theme::SPACE_M);
+                let wide = |ui: &mut egui::Ui, text: String| ui.add_sized([ui.available_width(), 34.0], egui::Button::new(theme::semibold(text)));
+                if wide(ui, format!("{}  Filter on this column\u{2026}", theme::ph::FUNNEL)).clicked() {
+                    do_filter = Some(name.clone());
+                }
+                if wide(ui, format!("{}  Add as sort level", theme::ph::SORT_ASCENDING)).clicked() {
+                    do_sort = Some(name.clone());
+                }
+                // Summary: the choice for this column, and the weight of a weighted average
+                let current = tab.summary.get(&name).cloned().unwrap_or_else(|| SummarySpec {
+                    agg: dtype.as_ref().map(|d| micro_parquet::summary::default_agg_for(d, &name)).unwrap_or_default(),
+                    weight_col: None,
+                });
+                ui.horizontal(|ui| {
+                    ui.label(theme::semibold("Summary").size(theme::TEXT_SMALL).color(tk.muted));
+                    egui::ComboBox::from_id_salt("insp_summary")
+                        .selected_text(current.agg.label())
+                        .show_ui(ui, |ui| {
+                            for agg in SummaryAgg::all() {
+                                let needs_numbers = matches!(agg, SummaryAgg::Sum | SummaryAgg::Average | SummaryAgg::WeightedAvg);
+                                if ui.add_enabled(!needs_numbers || is_number, egui::SelectableLabel::new(current.agg == *agg, agg.label())).clicked() {
+                                    do_summary = Some((name.clone(), SummarySpec { agg: *agg, weight_col: current.weight_col.clone() }));
+                                }
+                            }
+                        });
+                });
+                if current.agg == SummaryAgg::WeightedAvg {
+                    ui.horizontal(|ui| {
+                        ui.label(theme::semibold("Weight").size(theme::TEXT_SMALL).color(tk.muted));
+                        egui::ComboBox::from_id_salt("insp_weight")
+                            .selected_text(current.weight_col.clone().unwrap_or_else(|| "pick a column".to_string()))
+                            .show_ui(ui, |ui| {
+                                for c in &cols {
+                                    if c != &name && ui.selectable_label(current.weight_col.as_deref() == Some(c.as_str()), c).clicked() {
+                                        do_summary = Some((
+                                            name.clone(),
+                                            SummarySpec { agg: SummaryAgg::WeightedAvg, weight_col: Some(c.clone()) },
+                                        ));
+                                    }
+                                }
+                            });
+                    });
+                }
+                let single = matches!(tab.source, TabSource::SingleFile { .. });
+                ui.menu_button(
+                    theme::semibold(format!("{}  Change type or format\u{2026}", theme::ph::SLIDERS_HORIZONTAL)),
+                    |ui| {
+                        if ui.button("Number format and decimals (Columns)\u{2026}").clicked() {
+                            do_format = true;
+                            ui.close_menu();
+                        }
+                        let t = ui.add_enabled(single, egui::Button::new("Column type (Schema & Ingestion)\u{2026}"));
+                        if t.on_disabled_hover_text("Types are set on the file; this tab is not a single file.").clicked() {
+                            do_type = true;
+                            ui.close_menu();
+                        }
+                    },
+                );
+            });
         });
+
+        if let Some(c) = do_filter {
+            self.open_filter_editor_for_column(&c);
+        }
+        if let Some(c) = do_sort {
+            self.sort_from_header(&c, false, true);
+        }
+        if let Some((c, spec)) = do_summary {
+            self.set_summary(&c, spec);
+        }
+        if do_format {
+            self.init_tool_defaults_from_active_tab();
+            self.active_tool = ActiveToolModal::ManageColumns;
+        }
+        if do_type {
+            self.open_schema_modal_for_active_tab();
+        }
     }
 }
 

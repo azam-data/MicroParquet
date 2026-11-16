@@ -106,7 +106,6 @@ impl MicroParquetApp {
     }
 
     /// Opens a new condition on `column` ("Filter on this column...", used by the inspector).
-    #[allow(dead_code)]
     pub(crate) fn open_filter_editor_for_column(&mut self, column: &str) {
         self.filter.col = column.to_string();
         let idx = self.first_filter_step();

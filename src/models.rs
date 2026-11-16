@@ -1421,6 +1421,8 @@ pub struct TabState {
     pub step_counts: Vec<Option<usize>>,
     /// Fingerprint of the steps up to each position (see `steps_edit::prefix_hashes`).
     pub step_hashes: Vec<u64>,
+    /// Statistics of the column the inspector shows (computed on the worker).
+    pub column_stats: Option<crate::column_stats::ColumnStats>,
 }
 
 /// Rows read from a CSV against its non-empty lines (minus the header and title lines).

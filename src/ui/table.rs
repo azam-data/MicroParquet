@@ -533,12 +533,8 @@ impl MicroParquetApp {
             });
         }
         match action {
-            Some(GridAction::Select(c)) => {
-                // Clicking a header selects the column and opens the Column tab.
-                self.selected_column = Some(c);
-                self.right_tab = RightTab::Column;
-                self.show_steps_sidebar = true;
-            }
+            // Clicking a header selects the column and opens the Column tab.
+            Some(GridAction::Select(c)) => self.select_column(&c),
             Some(GridAction::Sort(c, desc, add)) => self.sort_from_header(&c, desc, add),
             Some(GridAction::ClearSort) => self.clear_sort(),
             Some(GridAction::SetSummary(col, spec)) => self.set_summary(&col, spec),
