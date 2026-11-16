@@ -169,6 +169,14 @@ Differences from the task text above that the owner has accepted (Phase 1 review
 - T9: Int64 columns are cast too (comma-cleaned, `strict=False`).
 </accepted_deviations>
 
+<phase2_decisions>
+Owner decisions for Phase 2 (Nov 2026). Recorded only; nothing here is implemented in Phase 1.
+- t04 Dr/Cr amounts: a per-column ingestion setting, "Dr is +" or "Cr is +". If a column has Dr/Cr suffixes and the setting is blank, the load fails with an error naming the column; never guess the sign. A lone "-" = 0, and "BDT 10" = 10. The ignored t04 target values assume "Cr is +"; the test sets that option once it exists.
+- t17 joins: duplicate keys on the right side are an error naming the key column, the number of duplicated keys and up to 10 example keys. "Keep first + warning" is available only as an opt-in toggle on the join step, off by default.
+- t11 FTP curve lookup: a setting with the values linear | next-point-up. The default is linear interpolation on days between the two surrounding tenor points.
+- T6 Categorical columns: leave Polars `dtype-categorical` off (no dependency change). The Categorical filter branch stays untested while such columns cannot occur.
+</phase2_decisions>
+
 <constraints>
 - Do not upgrade Polars, egui or any other dependency, and do not add new crates. `serde_json`, `chrono` and `anyhow` are already available.
 - Every new field on a serialised struct or enum variant gets `#[serde(default)]`. A v1.1.1 macro JSON with a `RateShockSim`, `DurationAnalysis` or `LoanClassificationProvision` step must still deserialise. Add a test that loads such JSON from a string literal.
