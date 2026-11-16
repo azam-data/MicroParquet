@@ -79,7 +79,6 @@ fn date_days_col(df: &DataFrame, name: &str) -> Vec<Option<i32>> {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T2"]
 fn t01_schema_inference() {
     let p = write_csv(
         "infer.csv",
@@ -108,7 +107,6 @@ fn t01_schema_inference() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T2"]
 fn t02_ambiguous_dates_prefer_dmy() {
     // All days <= 12: genuinely ambiguous; Bangladesh CBS exports are usually D/M/Y
     let p = write_csv("ambig.csv", "Matdat\n3/4/2027\n5/6/2027\n11/12/2027\n");
@@ -117,7 +115,6 @@ fn t02_ambiguous_dates_prefer_dmy() {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T2 (31-OCT-2026 parsed as null)"]
 fn t03_date_parsing_variants() {
     let p = write_csv(
         "dates.csv",
@@ -684,4 +681,17 @@ fn t20_v111_macro_json_still_loads() {
     assert!(matches!(recipe.steps[0], TransformStep::RateShockSim { .. }));
     assert!(matches!(recipe.steps[1], TransformStep::DurationAnalysis { .. }));
     assert!(matches!(recipe.steps[2], TransformStep::LoanClassificationProvision { .. }));
+}
+
+#[test]
+fn t21_column_tokens_and_ids() {
+    assert_eq!(column_name_tokens("BranchCode"), vec!["branch", "code"]);
+    assert_eq!(column_name_tokens("CIFNumber"), vec!["cif", "number"]);
+    assert_eq!(column_name_tokens("Rate_Delta-Bps.x"), vec!["rate", "delta", "bps", "x"]);
+    for id in ["Actnum", "Customer_ID", "BranchCode", "GL_Code", "glcode", "CIF", "Mobile No"] {
+        assert!(TabState::is_likely_id_column(id), "{id} should be an ID");
+    }
+    for not_id in ["Account_Balance", "Paid_Amount", "Acct_Int_Rate", "Branch_Total", "Matdat", "Valid_Flag", "Dividend"] {
+        assert!(!TabState::is_likely_id_column(not_id), "{not_id} should not be an ID");
+    }
 }

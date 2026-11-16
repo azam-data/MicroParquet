@@ -287,6 +287,31 @@ fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
     MetricFormatType::Auto
 }
 
+/// Splits a column name into lowercase tokens on `_`, space, `-`, `.` and camelCase
+/// boundaries: "BranchCode" -> ["branch", "code"], "CIFNumber" -> ["cif", "number"].
+pub fn column_name_tokens(col_name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for part in col_name.split(['_', ' ', '-', '.']) {
+        let chars: Vec<char> = part.chars().collect();
+        let mut cur = String::new();
+        for (i, &c) in chars.iter().enumerate() {
+            if c.is_uppercase() && !cur.is_empty() {
+                let prev = chars.get(i.wrapping_sub(1)).copied().unwrap_or(' ');
+                let next_is_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+                if prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_is_lower) {
+                    tokens.push(cur.to_lowercase());
+                    cur.clear();
+                }
+            }
+            cur.push(c);
+        }
+        if !cur.is_empty() {
+            tokens.push(cur.to_lowercase());
+        }
+    }
+    tokens
+}
+
 pub fn format_with_commas(val: f64, decimals: usize) -> String {
     if val.is_nan() || val.is_infinite() {
         return "0.00".to_string();
@@ -799,26 +824,21 @@ pub struct TabState {
 }
 
 impl TabState {
+    /// A column is an ID (kept as text) when one whole token is an ID word and no token is a
+    /// money, rate or date word. "Account_Balance" is a balance, "Customer_ID" is an ID.
     pub fn is_likely_id_column(col_name: &str) -> bool {
-        let lower = col_name.to_lowercase();
-        let keywords = [
-            "brancd",
-            "branch",
-            "actnum",
-            "account",
-            "glcode",
-            "gl_code",
-            "sector code",
-            "id",
-            "code",
-            "cif",
-            "tin",
-            "nid",
-            "phone",
-            "mobile",
-            "routing",
+        const ID_TOKENS: &[&str] = &[
+            "brancd", "branch", "actnum", "account", "acct", "glcode", "gl", "code", "cif", "id",
+            "tin", "nid", "phone", "mobile", "routing",
         ];
-        keywords.iter().any(|k| lower.contains(k))
+        const VALUE_TOKENS: &[&str] = &[
+            "bal", "balance", "amt", "amount", "outstanding", "limit", "sum", "total", "rate",
+            "int", "interest", "prov", "provision", "value", "val", "date", "dt", "maturity",
+            "profit",
+        ];
+        let tokens = column_name_tokens(col_name);
+        tokens.iter().any(|t| ID_TOKENS.contains(&t.as_str()))
+            && !tokens.iter().any(|t| VALUE_TOKENS.contains(&t.as_str()))
     }
 
     pub fn available_columns(&self) -> Vec<String> {

@@ -90,7 +90,10 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
         }
         non_empty += 1;
 
-        if trimmed.len() > 1 && trimmed.starts_with('0') && !trimmed.starts_with("0.") {
+        if trimmed.len() > 1
+            && trimmed.starts_with('0')
+            && trimmed.bytes().all(|b| b.is_ascii_digit())
+        {
             has_leading_zero = true;
         }
 
@@ -102,29 +105,26 @@ fn infer_safe_column_type(col_name: &str, series: &Series) -> ColDataType {
             all_float = false;
         }
 
-        if parse_flexible_banking_date(trimmed, ColDataType::DateISO).is_none() {
-            all_iso_date = false;
-        }
-        if parse_flexible_banking_date(trimmed, ColDataType::DateMDY).is_none() {
-            all_mdy_date = false;
-        }
-        if parse_flexible_banking_date(trimmed, ColDataType::DateDMY).is_none() {
-            all_dmy_date = false;
-        }
+        let fit = classify_date_value(trimmed);
+        all_iso_date &= fit.iso;
+        all_dmy_date &= fit.dmy;
+        all_mdy_date &= fit.mdy;
     }
 
+    // Order: empty -> ISO date -> D/M/Y vs M/D/Y -> float -> text
     if non_empty == 0 {
         return ColDataType::Utf8;
     }
-    // Check date formats BEFORE has_leading_zero because dates like "02/08/2024" start with '0'!
-    if all_iso_date && !all_float {
+    if all_iso_date {
         return ColDataType::DateISO;
     }
-    if all_mdy_date && !all_float {
-        return ColDataType::DateMDY;
-    }
-    if all_dmy_date && !all_float {
+    // Bangladesh CBS exports are D/M/Y: when both readings fit every value, choose D/M/Y.
+    // M/D/Y only wins when some value can't be D/M/Y (its second part is a day > 12).
+    if all_dmy_date {
         return ColDataType::DateDMY;
+    }
+    if all_mdy_date {
+        return ColDataType::DateMDY;
     }
     if has_leading_zero {
         return ColDataType::Utf8;
@@ -153,7 +153,7 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     }
 
     // Strip trailing timestamp if present (e.g. "02/08/2024 00:00:00" or "2024-02-08T12:30:00")
-    let date_part = s.split([' ', 'T']).next().unwrap_or(s);
+    let date_part = strip_time_part(s);
 
     let mut parts = date_part.split(['/', '-', '.']);
     let p1_str = parts.next()?.trim();
@@ -221,6 +221,77 @@ pub fn parse_flexible_banking_date(raw: &str, mode: ColDataType) -> Option<i32> 
     };
 
     Some((dt - epoch).num_days() as i32)
+}
+
+/// Drops a trailing time: everything after a space, or after a 'T' between two digits
+/// (ISO 8601). A 'T' inside a month name such as "31-OCT-2026" is kept.
+fn strip_time_part(s: &str) -> &str {
+    let s = s.split(' ').next().unwrap_or(s);
+    let b = s.as_bytes();
+    for i in 1..b.len().saturating_sub(1) {
+        if (b[i] == b'T' || b[i] == b't') && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit() {
+            return &s[..i];
+        }
+    }
+    s
+}
+
+/// Which strict date layouts a single sampled value fits (no day/month swapping).
+#[derive(Default, Clone, Copy)]
+struct DateFit {
+    iso: bool,
+    dmy: bool,
+    mdy: bool,
+}
+
+fn classify_date_value(raw: &str) -> DateFit {
+    let mut fit = DateFit::default();
+    let s = strip_time_part(raw.trim().trim_matches('"').trim_matches('\'').trim());
+    let parts: Vec<&str> = s.split(['/', '-', '.']).map(str::trim).collect();
+    let [a, b, c] = parts.as_slice() else {
+        return fit;
+    };
+    let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|x| x.is_ascii_digit());
+
+    // ISO: YYYY-MM-DD with a four-digit year first
+    if a.len() == 4 && all_digits(a) {
+        if let (Ok(y), Ok(m), Ok(d)) = (a.parse::<i32>(), b.parse::<u32>(), c.parse::<u32>()) {
+            fit.iso = (1900..=2200).contains(&y) && NaiveDate::from_ymd_opt(y, m, d).is_some();
+        }
+        return fit;
+    }
+
+    // Year last: two or four digits
+    if !all_digits(c) || !(c.len() == 2 || c.len() == 4) {
+        return fit;
+    }
+    let Ok(y_raw) = c.parse::<i32>() else {
+        return fit;
+    };
+    let year = match c.len() {
+        2 if y_raw >= 50 => 1900 + y_raw,
+        2 => 2000 + y_raw,
+        _ => y_raw,
+    };
+    if !(1900..=2200).contains(&year) || !all_digits(a) {
+        return fit;
+    }
+    let Ok(p1) = a.parse::<u32>() else {
+        return fit;
+    };
+    if let Some(m) = parse_month_name(b) {
+        fit.dmy = NaiveDate::from_ymd_opt(year, m, p1).is_some();
+        return fit;
+    }
+    if !all_digits(b) {
+        return fit;
+    }
+    let Ok(p2) = b.parse::<u32>() else {
+        return fit;
+    };
+    fit.dmy = NaiveDate::from_ymd_opt(year, p2, p1).is_some();
+    fit.mdy = NaiveDate::from_ymd_opt(year, p1, p2).is_some();
+    fit
 }
 
 fn parse_month_name(s: &str) -> Option<u32> {
