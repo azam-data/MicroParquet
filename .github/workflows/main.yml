@@ -37,9 +37,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: clippy
 
       - name: 3. Cache Cargo & Polars Dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: 3b. Run Calculation Tests
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: 3c. Clippy (informational, not blocking)
+        continue-on-error: true
+        run: cargo clippy --target ${{ matrix.target }}
 
       - name: 4. Compile Release Binary
         run: cargo build --release --target ${{ matrix.target }}

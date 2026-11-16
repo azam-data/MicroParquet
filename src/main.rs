@@ -1,26 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod banking;
-mod batch;
-mod engine;
-mod exporters;
-mod macros;
-mod models;
-
-use batch::{run_folder_mirror_batch, BatchReport};
+use micro_parquet::batch::{run_folder_mirror_batch, BatchReport};
 use clap::Parser;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use egui_plot::{Bar, BarChart, Plot};
-use engine::{
+use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     export_to_parquet_stream, fetch_viewport_slice, preview_csv_raw,
 };
-use exporters::{
+use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
 };
-use macros::{generate_python_polars_code, load_macro_from_file, save_macro_to_file};
-use models::{
+use micro_parquet::macros::{generate_python_polars_code, load_macro_from_file, save_macro_to_file};
+use micro_parquet::models::{
     default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
