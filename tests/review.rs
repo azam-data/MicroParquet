@@ -757,6 +757,12 @@ fn t15_python_codegen_drops_banking_steps() {
     assert!(py.contains("pl.col(\"Matdat\").str.to_date(\"%d/%m/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Opndat\").str.to_date(\"%m/%d/%Y\""), "{py}");
     assert!(py.contains("pl.col(\"Valdat\").str.to_date(\"%Y-%m-%d\""), "{py}");
+    // Casts are not strict (bad values become null, as in the app) and the null counts are printed
+    assert!(py.contains("\").cast(pl.Float64, strict=False)"), "{py}");
+    assert!(py.contains("str.to_date(\"%d/%m/%Y\", strict=False)"), "{py}");
+    assert!(!py.contains("strict=True"), "{py}");
+    assert!(py.contains("_cast_cols = [\"Balance\", \"Matdat\", \"Opndat\", \"Valdat\"]"), "{py}");
+    assert!(py.contains("could not be converted and became null"), "{py}");
     let missing = micro_parquet::macros::python_untranslated_steps(&steps);
     assert_eq!(missing, vec!["Step 1 '+BB CL Provision & BFP'".to_string(), "Step 2 '+ΔNII Shock (+100 bps)'".to_string()]);
 }

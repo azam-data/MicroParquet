@@ -82,8 +82,10 @@ pub fn generate_python_polars_code(
             py.push_str("# WARNING: PII masking not reproduced\n\n");
         }
 
-        // Same typing as MicroParquet's ingestion. Casts are strict, so a bad value raises.
+        // Same typing as MicroParquet's ingestion: casts are not strict, so a value that cannot
+        // be converted becomes null (as in the app), and the script prints how many per column.
         let mut casts: Vec<String> = Vec::new();
+        let mut cast_cols: Vec<String> = Vec::new();
         for c in &ingestion.columns {
             let name = py_escape(&c.name);
             let cleaned = if ingestion.parse_accounting_negatives {
@@ -94,34 +96,44 @@ pub fn generate_python_polars_code(
             } else {
                 format!("pl.col(\"{}\")", name)
             };
+            if c.dtype != ColDataType::Utf8 {
+                cast_cols.push(format!("\"{}\"", name));
+            }
             match c.dtype {
                 ColDataType::Utf8 => {}
-                ColDataType::Float64 => casts.push(format!("{}.cast(pl.Float64)", cleaned)),
+                ColDataType::Float64 => {
+                    casts.push(format!("{}.cast(pl.Float64, strict=False)", cleaned))
+                }
                 ColDataType::Int64 => {
                     let int_cleaned = if ingestion.parse_accounting_negatives {
                         format!("pl.col(\"{}\").str.replace_all(\",\", \"\", literal=True)", name)
                     } else {
                         format!("pl.col(\"{}\")", name)
                     };
-                    casts.push(format!("{}.cast(pl.Int64)", int_cleaned))
+                    casts.push(format!("{}.cast(pl.Int64, strict=False)", int_cleaned))
                 }
                 ColDataType::DateDMY => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\")", name))
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%d/%m/%Y\", strict=False)", name))
                 }
                 ColDataType::DateMDY => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%m/%d/%Y\")", name))
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%m/%d/%Y\", strict=False)", name))
                 }
                 ColDataType::DateISO => {
-                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%Y-%m-%d\")", name))
+                    casts.push(format!("pl.col(\"{}\").str.to_date(\"%Y-%m-%d\", strict=False)", name))
                 }
             }
         }
         if !casts.is_empty() {
             py.push_str("# 2b. Apply Ingestion Column Types (numbers cleaned of commas and (brackets))\n");
+            py.push_str("# Casts are not strict: a value that cannot be converted becomes null, as in MicroParquet.\n");
+            py.push_str(&format!("_cast_cols = [{}]\n", cast_cols.join(", ")));
+            py.push_str("_nulls_before = lf.select([pl.col(c).is_null().sum() for c in _cast_cols]).collect().row(0)\n");
             py.push_str(&format!(
-                "lf = lf.with_columns([\n    {},\n])\n\n",
+                "lf = lf.with_columns([\n    {},\n])\n",
                 casts.join(",\n    ")
             ));
+            py.push_str("_nulls_after = lf.select([pl.col(c).is_null().sum() for c in _cast_cols]).collect().row(0)\n");
+            py.push_str("for _c, _b, _a in zip(_cast_cols, _nulls_before, _nulls_after):\n    print(f\"Cast {_c}: {_a - _b} value(s) could not be converted and became null\")\n\n");
         }
     }
 

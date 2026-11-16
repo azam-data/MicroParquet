@@ -145,7 +145,7 @@ Replace the hard-coded rates in `apply_loan_classification_provision` with data 
 
 <task id="T9" name="Python export must not silently drop steps">
 - In `macros.rs` `generate_python_polars_code`, for any step that has no Python translation (the banking steps that print "(Specialized Banking Step Executed via Polars Expressions)"), stop emitting the placeholder comment. Instead put `raise NotImplementedError("Step N '<label>' has no Python translation in this version; run it in MicroParquet")` at that point in the script, and add a warning to the UI status message when the script is exported.
-- Emit casts for the ingestion schema: Float64 columns go through the same comma and bracket cleaning and are cast to Float64. Date columns use `str.to_date` with the matching format. The PII mask is out of scope: emit a `# WARNING: PII masking not reproduced` line when any column has a mask.
+- Emit casts for the ingestion schema: Float64 columns go through the same comma and bracket cleaning and are cast to Float64. Date columns use `str.to_date` with the matching format. Casts use `strict=False` (a value that cannot be converted becomes null, as in the app), and the script prints how many nulls each cast created, per column. The PII mask is out of scope: emit a `# WARNING: PII masking not reproduced` line when any column has a mask.
 </task>
 
 </tasks>
