@@ -358,7 +358,15 @@ fn t07_provisioning() {
     assert_eq!(str_col(&out, "NPL_Category")[2].as_deref(), Some("NPL (Classified)"));
     let src = str_col(&out, "Rule_Source");
     assert!(src[0].as_deref().unwrap().contains("Circular 15"));
-    assert!(src[6].as_deref().unwrap().ends_with("[verify]"), "{:?}", src[6]);
+    assert_eq!(src[6].as_deref(), Some("BRPD Circular Letter No. 29, 21 Dec 2025"), "checked v3 row: no [verify]");
+    assert!(src.iter().all(|s| !s.as_deref().unwrap().contains("[verify]")), "{src:?}");
+    // A row still flagged verify (v2 defaults) gets the " [verify]" suffix
+    let v2 = ProvisionConfig { rules: ProvisionConfig::default_rules_for(2), ..ProvisionConfig::defaults() };
+    let out2 = apply_loan_classification_provision_with(df.slice(6, 1).lazy(), "Balance", "CL", Some("Seg"), Some("Susp"), Some("Sec"), None, "2026-10-31", &v2)
+        .unwrap()
+        .collect()
+        .unwrap();
+    assert!(str_col(&out2, "Rule_Source")[0].as_deref().unwrap().ends_with("[verify]"));
     assert!(out.column("Cutoff_Assumed").is_err());
     println!("PROV:\n{}", out.drop("Balance").unwrap());
 
@@ -1082,12 +1090,74 @@ fn t07c_rule_file_versioning() {
     assert_eq!(std::fs::read_to_string(dir.join("cl_code_map.json")).unwrap(), before, "edited file must not be touched");
     assert!(cfg.cl_code_map.contains(&("XX".to_string(), "SS".to_string())));
     assert!(cfg.cl_code_map.iter().any(|(k, _)| k == "BLW"), "the kept file still has its own codes");
-    assert!(std::fs::read_to_string(dir.join("segment_map.json")).unwrap().contains("\"defaults_version\": 2"));
+    let cur_tag = format!("\"defaults_version\": {RULE_FILES_VERSION}");
+    assert!(std::fs::read_to_string(dir.join("segment_map.json")).unwrap().contains(&cur_tag));
 
     // Edited files at the current version load without a warning
     let mut text = std::fs::read_to_string(dir.join("cl_code_map.json")).unwrap();
-    text = text.replacen('{', "{\n  \"defaults_version\": 2,", 1);
+    text = text.replacen('{', &format!("{{\n  {cur_tag},"), 1);
     std::fs::write(dir.join("cl_code_map.json"), text).unwrap();
     let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
     assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+}
+
+/// Writes the three rule files as the version-2 build wrote them (versioned layout).
+fn write_v2_rule_files(dir: &std::path::Path, rules: &[ProvisionRule]) {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).unwrap();
+    let flat = |pairs: Vec<(&str, &str)>| {
+        let mut body = vec!["  \"defaults_version\": 2".to_string()];
+        body.extend(pairs.iter().map(|(k, v)| format!("  {:?}: {:?}", k, v)));
+        format!("{{\n{}\n}}\n", body.join(",\n"))
+    };
+    std::fs::write(dir.join("cl_code_map.json"), flat(default_cl_code_map(2))).unwrap();
+    std::fs::write(dir.join("segment_map.json"), flat(default_segment_map(2))).unwrap();
+    let file = serde_json::json!({ "defaults_version": 2, "rules": rules });
+    std::fs::write(dir.join("provision_rules.json"), serde_json::to_string_pretty(&file).unwrap()).unwrap();
+}
+
+#[test]
+fn t07d_rule_files_v2_to_v3() {
+    assert_eq!(RULE_FILES_VERSION, 3);
+    let v3 = ProvisionConfig::default_rules();
+    let concession: Vec<&ProvisionRule> = v3.iter().filter(|r| r.effective_from.starts_with("2025-1")).collect();
+    assert_eq!(concession.len(), 8, "Oct and Dec 2025 rows");
+    assert!(concession.iter().all(|r| !r.verify), "v3 rows are checked");
+    let dec: Vec<_> = concession.iter().filter(|r| r.effective_from == "2025-12-21").collect();
+    assert_eq!(dec.len(), 4);
+    assert!(dec.iter().all(|r| r.source == "BRPD Circular Letter No. 29, 21 Dec 2025" && r.rate_pct == 0.5));
+    assert!(concession.iter().filter(|r| r.effective_from == "2025-10-13").all(|r| r.source == "BRPD Circular Letter No. 22, 13 Oct 2025" && r.rate_pct == 1.0));
+    // Only verify and the Dec source differ from v2; rates and dates are unchanged
+    let v2 = ProvisionConfig::default_rules_for(2);
+    assert_eq!(v2.len(), v3.len());
+    for (a, b) in v2.iter().zip(&v3) {
+        assert_eq!((&a.grade, &a.category, a.rate_pct, &a.effective_from, &a.effective_to), (&b.grade, &b.category, b.rate_pct, &b.effective_from, &b.effective_to));
+    }
+    assert!(v2.iter().filter(|r| r.effective_from.starts_with("2025-1")).all(|r| r.verify));
+
+    // Untouched v2 files are upgraded to v3 silently
+    let dir = tmpdir().join("t07d_untouched");
+    write_v2_rule_files(&dir, &v2);
+    let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    assert_eq!(cfg.rules, v3);
+    for f in ["cl_code_map.json", "segment_map.json", "provision_rules.json"] {
+        let text = std::fs::read_to_string(dir.join(f)).unwrap();
+        assert!(text.contains("\"defaults_version\": 3"), "{f}: {text}");
+    }
+    let text = std::fs::read_to_string(dir.join("provision_rules.json")).unwrap();
+    assert!(text.contains("Circular Letter No. 29") && !text.contains("\"verify\": true"), "{text}");
+
+    // An edited v2 rules file is kept with a warning; its rows stay flagged
+    let dir = tmpdir().join("t07d_edited");
+    let mut edited = v2.clone();
+    edited[0].source = "BRPD Circular 15, 27 Nov 2024 (bank copy)".into();
+    write_v2_rule_files(&dir, &edited);
+    let before = std::fs::read_to_string(dir.join("provision_rules.json")).unwrap();
+    let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert_eq!(cfg.warnings.len(), 1, "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("provision_rules.json"), "{}", cfg.warnings[0]);
+    assert_eq!(std::fs::read_to_string(dir.join("provision_rules.json")).unwrap(), before);
+    assert_eq!(cfg.rules, edited);
+    assert!(std::fs::read_to_string(dir.join("segment_map.json")).unwrap().contains("\"defaults_version\": 3"));
 }

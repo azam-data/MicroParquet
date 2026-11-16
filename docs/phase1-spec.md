@@ -97,7 +97,7 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 <task id="T7" name="Provisioning engine, BRPD Circular 15/2024 (dated rules)">
 Replace the hard-coded rates in `apply_loan_classification_provision` with data files in `portable_data/`. Create default files on first run if they don't exist. Loading uses `serde_json`. On a parse error, return an `Err` that names the file and the line.
 
-Versioning: each default file carries `"defaults_version": 2` (the two maps as an extra key in the flat object; the rules file as `{"defaults_version": 2, "rules": [...]}`). Files with no version or an older one still load. If such a file equals an earlier built-in default it is replaced with the current default; if it was edited it is kept, and a status-bar warning names the file.
+Versioning: each default file carries `"defaults_version": 3` (the two maps as an extra key in the flat object; the rules file as `{"defaults_version": 3, "rules": [...]}`). Files with no version or an older one still load. If such a file equals an earlier built-in default (versions 1, 2 or 3) it is replaced with the current default; if it was edited it is kept, and a status-bar warning names the file. Version 3 changes only the rules file: the Oct and Dec 2025 rows have `"verify": false` (checked by the owner) and the Dec source is named; the two maps are the same as version 2.
 
 1. `cl_code_map.json`: normalised CBS code → grade, where grade is one of STD, SMA, SS, DF, BL. Normalise by uppercase, trim and collapse internal spaces. Defaults:
    - STD ← STD, STD-0, STD-1, STD-2, UC, STANDARD, UNCLASSIFIED
@@ -107,10 +107,10 @@ Versioning: each default file carries `"defaults_version": 2` (the two maps as a
    - BL ← BL, B/L, BAD/LOSS, BAD, LOSS (BLW is not mapped; owner decision)
    Any code not in the map → `Err` listing up to 20 distinct unmapped codes. Never default an unknown code to 1%.
 2. `segment_map.json`: normalised segment code → category, where category is one of SHORT_TERM_AGRI, CMSME, OTHER. Exact match only, no regex. Defaults map CMS, COTTAGE, MICRO and SMALL (only) → CMSME, since the concession covers cottage, micro and small loans but not medium; AGRI ST and SHORT TERM AGRI → SHORT_TERM_AGRI; and CORPORATE, NON-CMSME and MEDIUM → OTHER explicitly. Unmapped values (including a bare "CMSME" or "SME" code) → OTHER, and the step adds a column `Segment_Unmapped` = true so they can be reviewed.
-3. `provision_rules.json`: a list of `{grade, category, rate_pct, effective_from, effective_to (nullable), source, verify}`. Rate lookup = the row matching grade and category (category "ANY" as fallback) where `effective_from ≤ cutoff ≤ effective_to`. Two matching rows, or none → `Err`. No rules exist before 2025-04-01; a cutoff before the first rule fails with "No provisioning rule covers cutoff <date>; rules start 2025-04-01 (BRPD Circular 15/2024)". Seed these rows, keeping `"verify": true` on the ones marked so the owner checks them against the circular PDFs:
+3. `provision_rules.json`: a list of `{grade, category, rate_pct, effective_from, effective_to (nullable), source, verify}`. Rate lookup = the row matching grade and category (category "ANY" as fallback) where `effective_from ≤ cutoff ≤ effective_to`. Two matching rows, or none → `Err`. No rules exist before 2025-04-01; a cutoff before the first rule fails with "No provisioning rule covers cutoff <date>; rules start 2025-04-01 (BRPD Circular 15/2024)". Seed these rows. All have `"verify": false`; the owner checked the Oct and Dec 2025 rows against the circulars for defaults version 3 (version 2 had `"verify": true` on them):
    - ANY: STD 1%, SMA 5%, SS 20%, DF 50%, BL 100%, from 2025-04-01 (BRPD Circular 15, 27 Nov 2024).
-   - SHORT_TERM_AGRI and CMSME: STD 1% and SMA 1%, from 2025-10-13 to 2025-12-20, source "BRPD Circular Letter No. 22, 13 Oct 2025" (`"verify": true`).
-   - SHORT_TERM_AGRI and CMSME: STD 0.5% and SMA 0.5%, from 2025-12-21 to 2026-12-31 (directive that replaced Circular Letter 22/2025; `"verify": true`).
+   - SHORT_TERM_AGRI and CMSME: STD 1% and SMA 1%, from 2025-10-13 to 2025-12-20, source "BRPD Circular Letter No. 22, 13 Oct 2025".
+   - SHORT_TERM_AGRI and CMSME: STD 0.5% and SMA 0.5%, from 2025-12-21 to 2026-12-31, source "BRPD Circular Letter No. 29, 21 Dec 2025" (replaces Circular Letter 22/2025).
    - SS, DF and BL for SHORT_TERM_AGRI and CMSME use the ANY rows. The concession covers only unclassified loans.
 4. Add `#[serde(default)]` fields to `TransformStep::LoanClassificationProvision`: `cutoff_date: String` (if empty, use today and add a column `Cutoff_Assumed`) and `collateral_type_col: Option<String>`.
 5. Base for provision:
@@ -161,7 +161,7 @@ Differences from the task text above that the owner has accepted (Phase 1 review
 - T4: the Python export of the ΔEVE step applies the same side sign and fails on unknown sides.
 - T6: Datetime columns are filtered as dates (YYYY-MM-DD). Categorical columns cannot occur in this build (Polars `dtype-categorical` is not enabled), so that branch is untested.
 - T7: the collateral type is also normalised by turning spaces and hyphens into "_", so "Deposit Lien" matches DEPOSIT_LIEN.
-- T7: `Rule_Source` ends with " [verify]" for rules marked `verify: true`.
+- T7: `Rule_Source` ends with " [verify]" for rules marked `verify: true` (none in the v3 defaults; tested with the v2 rules). The CMSME STD row at 2026-10-31 shows "BRPD Circular Letter No. 29, 21 Dec 2025" with no suffix.
 - T7: in the cutoff-before-first-rule message the date comes from the rules file; "(BRPD Circular 15/2024)" is fixed text.
 - T7: a code listed twice in a map file (after normalising) is an error, and all 15 grade × category pairs are resolved for the cutoff, so a gap or overlap anywhere in the rules file stops the step.
 - T7: the bare segment codes "CMSME" and "SME" are not mapped (they may include medium loans); such rows fall to OTHER with `Segment_Unmapped = true`.

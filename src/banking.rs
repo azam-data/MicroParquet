@@ -533,7 +533,7 @@ pub const PROVISION_RULES_FILE: &str = "provision_rules.json";
 
 /// Version of the built-in default rule files. Bump it whenever a default changes, and keep
 /// the older defaults reachable through `default_*(version)` so untouched files can be upgraded.
-pub const RULE_FILES_VERSION: u32 = 2;
+pub const RULE_FILES_VERSION: u32 = 3;
 
 const CL_GRADES: [&str; 5] = ["STD", "SMA", "SS", "DF", "BL"];
 const REG_CATEGORIES: [&str; 3] = ["SHORT_TERM_AGRI", "CMSME", "OTHER"];
@@ -863,7 +863,7 @@ fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
     format!("{{\n{}\n}}\n", lines.join(",\n"))
 }
 
-/// Built-in CBS code map of a given defaults version (1 = first T7 build, 2 = current).
+/// Built-in CBS code map of a given defaults version (1 = first T7 build; unchanged since 2).
 pub fn default_cl_code_map(version: u32) -> Vec<(&'static str, &'static str)> {
     let mut v = DEFAULT_CL_CODE_MAP.to_vec();
     if version == 1 {
@@ -873,7 +873,7 @@ pub fn default_cl_code_map(version: u32) -> Vec<(&'static str, &'static str)> {
     v
 }
 
-/// Built-in segment map of a given defaults version (1 = first T7 build, 2 = current).
+/// Built-in segment map of a given defaults version (1 = first T7 build; unchanged since 2).
 pub fn default_segment_map(version: u32) -> Vec<(&'static str, &'static str)> {
     if version == 1 {
         V1_SEGMENT_MAP.to_vec()
@@ -884,12 +884,13 @@ pub fn default_segment_map(version: u32) -> Vec<(&'static str, &'static str)> {
 
 impl ProvisionConfig {
     /// Seed rules from the owner's review notes. Rows with `verify: true` must be checked
-    /// against the circular PDFs.
+    /// against the circular PDFs (none are flagged since version 3).
     pub fn default_rules() -> Vec<ProvisionRule> {
         Self::default_rules_for(RULE_FILES_VERSION)
     }
 
-    /// Built-in rules of a given defaults version (1 = first T7 build, 2 = current).
+    /// Built-in rules of a given defaults version (1 = first T7 build, 2 = owner answers,
+    /// 3 = current: Oct and Dec 2025 rows checked by the owner, Dec source named).
     pub fn default_rules_for(version: u32) -> Vec<ProvisionRule> {
         let rule = |grade: &str, category: &str, rate_pct: f64, from: &str, to: Option<&str>, source: &str, verify: bool| ProvisionRule {
             grade: grade.to_string(),
@@ -909,7 +910,13 @@ impl ProvisionConfig {
         } else {
             ("BRPD Circular Letter No. 22, 13 Oct 2025", "2025-10-13")
         };
-        let dec25 = "BB directive Dec 2025 replacing Circular Letter 22/2025";
+        let dec25 = if version <= 2 {
+            "BB directive Dec 2025 replacing Circular Letter 22/2025"
+        } else {
+            "BRPD Circular Letter No. 29, 21 Dec 2025"
+        };
+        // The owner checked the Oct and Dec 2025 rows against the circulars for version 3.
+        let check = version <= 2;
         let mut rules = vec![
             rule("STD", "ANY", 1.0, "2025-04-01", None, c15, false),
             rule("SMA", "ANY", 5.0, "2025-04-01", None, c15, false),
@@ -919,12 +926,12 @@ impl ProvisionConfig {
         ];
         for cat in ["SHORT_TERM_AGRI", "CMSME"] {
             for grade in ["STD", "SMA"] {
-                rules.push(rule(grade, cat, 1.0, oct25_from, Some("2025-12-20"), oct25, true));
+                rules.push(rule(grade, cat, 1.0, oct25_from, Some("2025-12-20"), oct25, check));
             }
         }
         for cat in ["SHORT_TERM_AGRI", "CMSME"] {
             for grade in ["STD", "SMA"] {
-                rules.push(rule(grade, cat, 0.5, "2025-12-21", Some("2026-12-31"), dec25, true));
+                rules.push(rule(grade, cat, 0.5, "2025-12-21", Some("2026-12-31"), dec25, check));
             }
         }
         rules
