@@ -883,8 +883,8 @@ fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionC
     if col_cfg.pii_mask != PiiMaskMode::None {
         // The old `config.pii_salt` is no longer used: masks use the per-install key.
         let mode = col_cfg.pii_mask;
-        e = match load_or_create_pii_key(&pii_key_path()) {
-            Ok((key, _)) => e.map(
+        e = match pii_key_for_pipeline() {
+            Ok(key) => e.map(
                 move |s: Series| {
                     let ca = s.str()?;
                     let out: StringChunked = ca
@@ -910,9 +910,60 @@ fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionC
 /// Name of the per-install PII key file inside `portable_data/`.
 pub const PII_KEY_FILE: &str = "pii_key.bin";
 
+thread_local! {
+    /// Lets a test point the key at a temporary folder (the key is read while the pipeline is
+    /// built, on the calling thread).
+    static PII_KEY_PATH_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Uses `path` as the PII key file on this thread (`None` restores the default). For tests.
+pub fn set_pii_key_path_override(path: Option<PathBuf>) {
+    PII_KEY_PATH_OVERRIDE.with(|p| *p.borrow_mut() = path);
+}
+
 /// `portable_data/pii_key.bin` next to the executable.
 pub fn pii_key_path() -> PathBuf {
-    portable_root_dir().join(PII_KEY_FILE)
+    PII_KEY_PATH_OVERRIDE
+        .with(|p| p.borrow().clone())
+        .unwrap_or_else(|| portable_root_dir().join(PII_KEY_FILE))
+}
+
+/// Set when a pipeline created the key without going through `ensure_pii_key_for`; the app
+/// shows it in the status bar so a new key is never created unannounced.
+/// (Per thread: pipelines are built on the thread that shows the status bar.)
+thread_local! {
+    static PII_KEY_PENDING_NOTE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn pii_key_created_note(path: &Path, key: &[u8; 32]) -> String {
+    format!(
+        "Created a new PII key (fingerprint {}) at {:?}. Export it (Schema & Ingestion) to keep masks reproducible on another PC or after reinstalling.",
+        pii_key_fingerprint(key),
+        path
+    )
+}
+
+/// The one place that reads (or creates) the key for masking. Returns the key and, when it was
+/// just created, the notice to show.
+fn pii_key_and_note() -> Result<([u8; 32], Option<String>)> {
+    let path = pii_key_path();
+    let (key, created) = load_or_create_pii_key(&path)?;
+    Ok((key, created.then(|| pii_key_created_note(&path, &key))))
+}
+
+/// Key for building a masking expression. A key created here (no caller announced it first) is
+/// remembered for `take_pii_key_created_note`.
+fn pii_key_for_pipeline() -> Result<[u8; 32]> {
+    let (key, note) = pii_key_and_note()?;
+    if let Some(n) = note {
+        PII_KEY_PENDING_NOTE.with(|slot| *slot.borrow_mut() = Some(n));
+    }
+    Ok(key)
+}
+
+/// A notice for a key that a pipeline created on its own, once.
+pub fn take_pii_key_created_note() -> Option<String> {
+    PII_KEY_PENDING_NOTE.with(|slot| slot.borrow_mut().take())
 }
 
 fn pii_key_from_bytes(path: &Path, bytes: &[u8]) -> Result<[u8; 32]> {
@@ -1053,20 +1104,14 @@ pub fn read_pii_key(path: &Path) -> Result<Option<[u8; 32]>> {
 }
 
 /// Creates the key when `source` masks a column and there is no key file yet. Returns a note
-/// for the user when a key was created, or the error (missing permissions, damaged file).
+/// for the user when a key was created (here or by an earlier pipeline build that nobody
+/// announced), or the error (missing permissions, damaged file).
 pub fn ensure_pii_key_for(source: &TabSource) -> Result<Option<String>> {
     if !source_masks_pii(source) {
-        return Ok(None);
+        return Ok(take_pii_key_created_note());
     }
-    let path = pii_key_path();
-    let (key, created) = load_or_create_pii_key(&path)?;
-    Ok(created.then(|| {
-        format!(
-            "Created a new PII key (fingerprint {}) at {:?}. Export it (Schema & Ingestion) to keep masks reproducible on another PC or after reinstalling.",
-            pii_key_fingerprint(&key),
-            path
-        )
-    }))
+    let (_, note) = pii_key_and_note()?;
+    Ok(note.or_else(take_pii_key_created_note))
 }
 
 /// Names of the PII-masked columns of every file in `source` (no duplicates).

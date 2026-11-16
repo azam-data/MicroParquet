@@ -2368,3 +2368,48 @@ fn t15b_python_export_refuses_pii_masks() {
     collect_masked_columns(&src, &mut masked);
     assert_eq!(masked, vec!["Actnum".to_string(), "Name".to_string()]);
 }
+
+#[test]
+fn t29b_batch_announces_new_pii_key() {
+    use micro_parquet::batch::*;
+    let base = tmpdir().join("t29b");
+    let _ = std::fs::remove_dir_all(&base);
+    let inp = base.join("in");
+    std::fs::create_dir_all(&inp).unwrap();
+    let csv = inp.join("a.csv");
+    std::fs::write(&csv, "Actnum,Balance\n0012345,100\n0067890,200\n").unwrap();
+    std::fs::write(inp.join("b.csv"), "Actnum,Balance\n0012345,50\n").unwrap();
+    let mut tpl = auto_detect_smart_schema(&csv).unwrap();
+    tpl.columns.iter_mut().find(|c| c.name == "Actnum").unwrap().pii_mask = PiiMaskMode::AccountNumber;
+
+    // Point the key at a fresh folder for this thread: the batch run creates it.
+    let key_path = base.join("keys").join("pii_key.bin");
+    set_pii_key_path_override(Some(key_path.clone()));
+    let run = |out: &str| {
+        run_folder_mirror_batch(&inp, &base.join(out), BatchDirection::CsvToParquet, BatchSchemaStrategy::MasterSchemaTemplate, Some(&tpl), ParquetDialect::ArchiveZstd, false, &base).unwrap()
+    };
+    let rep = run("out1");
+    assert!(key_path.exists());
+    assert_eq!(rep.files_converted, 2);
+    assert_eq!(rep.notices, vec!["New masking key created — export a backup".to_string()]);
+    let log = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(base.join("out1").join("batch_log.csv")))
+        .unwrap()
+        .finish()
+        .unwrap();
+    let status = str_col(&log, "status");
+    let error = str_col(&log, "error");
+    let notice = status.iter().position(|s| s.as_deref() == Some("NOTICE")).expect("one NOTICE line");
+    assert_eq!(error[notice].as_deref(), Some("New masking key created — export a backup"));
+    assert_eq!(status.iter().filter(|s| s.as_deref() == Some("NOTICE")).count(), 1);
+    // The files were masked with the new key.
+    let out = LazyFrame::scan_parquet(base.join("out1").join("a.parquet"), Default::default()).unwrap().collect().unwrap();
+    assert!(str_col(&out, "Actnum")[0].clone().unwrap().starts_with("ACCT_"));
+
+    // A second run finds the key: no notice, no NOTICE line.
+    let rep2 = run("out2");
+    assert!(rep2.notices.is_empty());
+    assert!(rep2.log.iter().all(|r| r.status != "NOTICE"));
+    set_pii_key_path_override(None);
+}

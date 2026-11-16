@@ -1,9 +1,10 @@
 ﻿use crate::engine::{
     auto_detect_smart_schema, build_lazy_pipeline, compute_control_totals,
-    compute_parse_failures, count_nonempty_lines, export_to_csv_stream, export_to_parquet_stream,
+    compute_parse_failures, count_nonempty_lines, ensure_pii_key_for, export_to_csv_stream,
+    export_to_parquet_stream,
 };
 use crate::models::{
-    BatchDirection, BatchSchemaStrategy, IngestionConfig, ParquetDialect, RowCountCheck,
+    BatchDirection, BatchSchemaStrategy, IngestionConfig, ParquetDialect, RowCountCheck, TabSource,
 };
 use anyhow::{Context, Result};
 use polars::prelude::*;
@@ -20,7 +21,7 @@ pub struct BatchLogRow {
     pub control_sum: Option<f64>,
     /// Values that could not be converted and became null (CSV -> Parquet only).
     pub parse_failures: Option<usize>,
-    /// OK, WARNING (converted, but fewer rows than data lines), COPIED or ERROR.
+    /// OK, WARNING (converted, but fewer rows than data lines), NOTICE, COPIED or ERROR.
     pub status: String,
     pub error: String,
 }
@@ -33,12 +34,17 @@ pub struct BatchReport {
     pub errors: Vec<String>,
     /// Converted files whose row count looks short (see `RowCountCheck::warning`).
     pub warnings: Vec<String>,
+    /// Things the user must act on that are not errors (a new PII masking key was created).
+    pub notices: Vec<String>,
     pub bytes_before: u64,
     pub bytes_after: u64,
     pub log: Vec<BatchLogRow>,
     /// Where `batch_log.csv` was written.
     pub log_path: Option<PathBuf>,
 }
+
+/// Text of the `batch_log.csv` line (and the notice) written when a batch run creates the PII key.
+pub const NEW_KEY_LOG_MESSAGE: &str = "New masking key created — export a backup";
 
 /// The path with `..`/`.` resolved and symlinks followed as far as the path exists.
 fn resolve_path(p: &Path) -> PathBuf {
@@ -230,6 +236,24 @@ pub fn run_folder_mirror_batch(
                 };
 
                 let res = config_res.and_then(|cfg| {
+                    // The key is created here, before the pipeline, so the run can say so.
+                    let masked_source = TabSource::SingleFile {
+                        path: src_path.to_path_buf(),
+                        is_parquet: false,
+                        config: cfg.clone(),
+                    };
+                    if ensure_pii_key_for(&masked_source)?.is_some() {
+                        report.notices.push(NEW_KEY_LOG_MESSAGE.to_string());
+                        report.log.push(BatchLogRow {
+                            file: rel_path.display().to_string(),
+                            rows: None,
+                            data_lines: None,
+                            control_sum: None,
+                            parse_failures: None,
+                            status: "NOTICE".into(),
+                            error: NEW_KEY_LOG_MESSAGE.to_string(),
+                        });
+                    }
                     let lf = build_lazy_pipeline(src_path, false, &cfg, temp_dir)?;
                     export_to_parquet_stream(lf, &out_parquet, parquet_dialect)?;
                     let fails: usize = compute_parse_failures(src_path, false, &cfg, temp_dir)?

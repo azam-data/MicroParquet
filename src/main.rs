@@ -12,7 +12,7 @@ use micro_parquet::engine::{
     source_row_check, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
     pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
-    source_parse_failures, write_parse_failures_csv,
+    source_parse_failures, write_parse_failures_csv, take_pii_key_created_note,
 };
 use micro_parquet::exporters::{
     export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, split_and_export_by_column,
@@ -1065,6 +1065,10 @@ impl MicroParquetApp {
 
 impl eframe::App for MicroParquetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A PII key created by a pipeline nobody announced it for is never silent.
+        if let Some(note) = take_pii_key_created_note() {
+            self.status_message = note;
+        }
         // 1. Compact 720p-Friendly Top Menu Bar with Sub-Menus
         egui::TopBottomPanel::top("top_menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -4126,6 +4130,9 @@ impl MicroParquetApp {
                             egui::Color32::from_rgb(210, 70, 0),
                             format!("⚠ {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
                         );
+                    }
+                    for n in &rep.notices {
+                        ui.colored_label(egui::Color32::from_rgb(210, 70, 0), format!("⚠ {}", n));
                     }
                     if !rep.warnings.is_empty() {
                         ui.colored_label(
