@@ -1,4 +1,4 @@
-use crate::models::{portable_root_dir, CustomBucketDef, FtpPoint};
+use crate::models::{portable_root_dir, CustomBucketDef, FtpInterpolation, FtpPoint};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
@@ -225,6 +225,64 @@ pub fn apply_rate_shock_sim(
 }
 
 /// Feature B2: Automated FTP (Fund Transfer Pricing) Yield Curve Mapper using Tenor Days
+/// FTP rate and method label for `Tenor_Days`, from the curve sorted by tenor. Below the first
+/// point the first rate applies, beyond the last point the last rate.
+fn ftp_rate_exprs(curve: &[FtpPoint], interpolation: FtpInterpolation) -> Result<(Expr, Expr)> {
+    let mut pts = curve.to_vec();
+    pts.sort_by_key(|p| p.tenor_days);
+    let (Some(first), Some(last)) = (pts.first().cloned(), pts.last().cloned()) else {
+        anyhow::bail!("The FTP curve has no points. Add at least one tenor point.");
+    };
+    for w in pts.windows(2) {
+        if w[0].tenor_days == w[1].tenor_days {
+            anyhow::bail!(
+                "The FTP curve has two points at {} days ({}% and {}%). Keep one rate per tenor.",
+                w[0].tenor_days,
+                w[0].ftp_rate,
+                w[1].ftp_rate
+            );
+        }
+    }
+    for p in &pts {
+        if !p.ftp_rate.is_finite() {
+            anyhow::bail!("The FTP curve point at {} days has no valid rate.", p.tenor_days);
+        }
+    }
+    let t = col("Tenor_Days").cast(DataType::Float64);
+    let mut rate: Expr = lit(last.ftp_rate);
+    let mut method: Expr = lit(format!("Last point {}d (beyond curve)", last.tenor_days));
+    match interpolation {
+        FtpInterpolation::NextPointUp => {
+            for p in pts.iter().rev() {
+                let cond = col("Tenor_Days").lt_eq(lit(p.tenor_days));
+                rate = when(cond.clone()).then(lit(p.ftp_rate)).otherwise(rate);
+                method = when(cond)
+                    .then(lit(format!("Next point up {}d", p.tenor_days)))
+                    .otherwise(method);
+            }
+        }
+        FtpInterpolation::Linear => {
+            for w in pts.windows(2).rev() {
+                let (a, b) = (&w[0], &w[1]);
+                let slope = (b.ftp_rate - a.ftp_rate) / (b.tenor_days - a.tenor_days) as f64;
+                let cond = col("Tenor_Days").lt_eq(lit(b.tenor_days));
+                rate = when(cond.clone())
+                    .then(lit(a.ftp_rate) + (t.clone() - lit(a.tenor_days as f64)) * lit(slope))
+                    .otherwise(rate);
+                method = when(cond)
+                    .then(lit(format!("Linear {}d-{}d", a.tenor_days, b.tenor_days)))
+                    .otherwise(method);
+            }
+            let cond = col("Tenor_Days").lt_eq(lit(first.tenor_days));
+            rate = when(cond.clone()).then(lit(first.ftp_rate)).otherwise(rate);
+            method = when(cond)
+                .then(lit(format!("First point {}d (at or below curve start)", first.tenor_days)))
+                .otherwise(method);
+        }
+    }
+    Ok((rate, method))
+}
+
 pub fn apply_ftp_curve_map(
     lf: LazyFrame,
     opndat_col: &str,
@@ -233,6 +291,7 @@ pub fn apply_ftp_curve_map(
     rate_col: &str,
     curve: &[FtpPoint],
     is_liability: bool,
+    interpolation: FtpInterpolation,
 ) -> Result<LazyFrame> {
     let lf = ensure_date(lf, opndat_col)?;
     let lf = ensure_date(lf, matdat_col)?;
@@ -250,21 +309,9 @@ pub fn apply_ftp_curve_map(
     .otherwise(raw_diff)
     .alias("Tenor_Days");
 
-    let mut sorted_curve = curve.to_vec();
-    sorted_curve.sort_by_key(|p| p.tenor_days);
-
-    let ftp_rate_expr = if sorted_curve.is_empty() {
-        lit(0.0).alias("Benchmark_FTP_Rate")
-    } else {
-        let last_rate = sorted_curve.last().unwrap().ftp_rate;
-        let mut expr: Expr = lit(last_rate);
-        for pt in sorted_curve.iter().rev() {
-            expr = when(col("Tenor_Days").lt_eq(lit(pt.tenor_days)))
-                .then(lit(pt.ftp_rate))
-                .otherwise(expr);
-        }
-        expr.alias("Benchmark_FTP_Rate")
-    };
+    let (ftp_rate_expr, method_expr) = ftp_rate_exprs(curve, interpolation)?;
+    let ftp_rate_expr = ftp_rate_expr.alias("Benchmark_FTP_Rate");
+    let method_expr = method_expr.alias("FTP_Method");
 
     let acct_rate = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0));
     let spread_expr = if is_liability {
@@ -279,7 +326,7 @@ pub fn apply_ftp_curve_map(
 
     Ok(lf
         .with_column(tenor_expr)
-        .with_column(ftp_rate_expr)
+        .with_columns([ftp_rate_expr, method_expr])
         .with_column(spread_expr)
         .with_column(margin_expr))
 }

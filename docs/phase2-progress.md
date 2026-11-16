@@ -12,8 +12,8 @@ contain its own hash).
 | P9 | DONE | 8b6c8e1 | t26 (xlsx Date cell = serial + dd-mmm-yyyy style, Datetime with time; spill to '(2)','(3)'; Export_Errors names failed tab), t26b (PDF omitted columns list, 5,000-row note) | PDF row cap made visible; cell read errors fail; report structs | Q2 |
 | P10 | DONE | 69fab1c | t27 (good + malformed → log with 1 OK, 1 ERROR row; output inside input refused, incl. ..; template mode without template refused; Parquet→CSV with COPIED companion) | log has COPIED rows and parse_failures column; template fallback removed | Q3 |
 | P11 | DONE | 67e8fcc | t28 (control_totals_state: ok / pivot removes control column / text column / failed pipeline; parse_math_scalar errors name the value; Python export) | rows kept when only the control column is missing; text control column has no sum |  |
-| P12 | DONE | (this commit) | t13 un-ignored (1,000,000 distinct CLIENT_ tokens; same key same token; different keys differ; no 3-digit run of 2,000 account numbers); t29 (create, reuse, 0600, concurrent first use, export/import with backup, junk import refused, damaged key error); t24 updated for ACCT_ format | account mask re-derives to avoid digit runs; fingerprint, backup on import | Q4 |
-| P13 | todo | | | | |
+| P12 | DONE | 454184a | t13 un-ignored (1,000,000 distinct CLIENT_ tokens; same key same token; different keys differ; no 3-digit run of 2,000 account numbers); t29 (create, reuse, 0600, concurrent first use, export/import with backup, junk import refused, damaged key error); t24 updated for ACCT_ format | account mask re-derives to avoid digit runs; fingerprint, backup on import | Q4 |
+| P13 | DONE | (this commit) | t11 un-ignored (100d 9.559, 31d 8.762; NextPointUp 10.10/9.50; 10d → 30d rate on a curve starting at 30d; 20y → last point; FTP_Method; unsorted curve; empty/duplicate curve errors; old macro loads as Linear) | 10-day case needs a curve starting at 30d (default curve has 1d/7d points) | Q5 |
 | P14 | todo | | | | |
 | P15 | todo | | | | |
 
@@ -56,5 +56,6 @@ contain its own hash).
 - Q2 (P9): Int64 values with more than 15 significant digits lose digits in Excel (Excel numbers are doubles). Write such values as text, or error?
 - Q3 (P10): Polars reads some broken CSVs without an error (an unclosed quote swallows later lines into one field; binary junk becomes a header with 0 rows). Should the batch run flag files whose row count looks wrong (e.g. 0 rows, or far fewer rows than lines)?
 - Q4 (P12): the Python export still keeps the original values in masked columns (blake3 is not in the Python standard library). Generate code that needs `pip install blake3` and reads the key file, or make masked columns stop the Python export?
+- Q5 (P13): old macros' FTP steps load as Linear (the spec's default), so their FTP rates change on re-run. Keep that, or load old steps as NextPointUp to reproduce earlier ALCO numbers?
 
 ## Notes

@@ -25,7 +25,7 @@ use micro_parquet::models::{
     column_name_tokens, default_bd_ftp_curve, parquet_native_type, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CsvTextEncoding,
-    CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
+    CustomBucketDef, FilterOp, FtpInterpolation, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
     NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths, SignConvention,
     SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
 };
@@ -407,6 +407,7 @@ pub struct MicroParquetApp {
     ftp_rate_col: String,
     ftp_is_liability: bool,
     ftp_curve: Vec<FtpPoint>,
+    ftp_interpolation: FtpInterpolation,
 
     audit_opn_col: String,
     audit_mat_col: String,
@@ -616,6 +617,7 @@ impl MicroParquetApp {
             ftp_rate_col: "Int Rate".to_string(),
             ftp_is_liability: true,
             ftp_curve: default_bd_ftp_curve(),
+            ftp_interpolation: FtpInterpolation::Linear,
 
             audit_opn_col: "Opndat".to_string(),
             audit_mat_col: "Matdat".to_string(),
@@ -2820,10 +2822,17 @@ impl MicroParquetApp {
                             "Liability Book (Deposits/Borrowings: Spread = FTP Rate - Account Rate)",
                         );
                         ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Rate between tenor points:");
+                            for m in [FtpInterpolation::Linear, FtpInterpolation::NextPointUp] {
+                                ui.radio_value(&mut self.ftp_interpolation, m, m.label());
+                            }
+                        });
+                        ui.label("Below the first point the first rate applies; beyond the last point the last rate. The FTP_Method column shows which rule each row used.");
                         ui.strong("Benchmark Yield Curve (Tenor Days -> FTP Rate %):");
                         for pt in &mut self.ftp_curve {
                             ui.horizontal(|ui| {
-                                ui.label("Up to Days:");
+                                ui.label("Tenor Days:");
                                 ui.add(egui::DragValue::new(&mut pt.tenor_days));
                                 ui.label("FTP %:");
                                 ui.add(egui::DragValue::new(&mut pt.ftp_rate).speed(0.05));
@@ -2840,6 +2849,7 @@ impl MicroParquetApp {
                                         rate_col: self.ftp_rate_col.clone(),
                                         curve: self.ftp_curve.clone(),
                                         is_liability: self.ftp_is_liability,
+                                        interpolation: self.ftp_interpolation,
                                     },
                                     false,
                                 ));

@@ -1968,6 +1968,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             curve,
             is_liability,
+            interpolation,
         } => apply_ftp_curve_map(
             lf,
             opndat_col,
@@ -1976,6 +1977,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             curve,
             *is_liability,
+            *interpolation,
         ),
         TransformStep::BankingHygieneAudit {
             opndat_col,

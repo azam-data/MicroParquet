@@ -694,7 +694,7 @@ fn t05b_other_date_inputs_reject_strings() {
     )
     .unwrap();
     let e1 = apply_rate_shock_sim(df.clone().lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, None).err();
-    let e2 = apply_ftp_curve_map(df.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true).err();
+    let e2 = apply_ftp_curve_map(df.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear).err();
     let e3 = apply_banking_hygiene_audit(df.clone().lazy(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false).err();
     let e4 = apply_duration_analysis(df.lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 1, 200.0, 0.0833, None).err();
     for (name, e) in [("shock", e1), ("ftp", e2), ("hygiene", e3), ("duration", e4)] {
@@ -1037,7 +1037,7 @@ fn t11a_ftp_tenor_days() {
     .unwrap()
     .lazy()
     .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
-    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true)
+    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear)
         .unwrap()
         .collect()
         .unwrap();
@@ -1045,7 +1045,6 @@ fn t11a_ftp_tenor_days() {
 }
 
 #[test]
-#[ignore = "Phase 2: FTP curve linear interpolation between tenor points"]
 fn t11_ftp_step_vs_interpolation() {
     // Target: linear interpolation on the default curve (30d 8.75, 91d 9.50, 182d 10.10).
     // 100d = 9.50 + 9/91 × 0.60 = 9.5593…; 31d = 8.75 + 1/61 × 0.75 = 8.7623…
@@ -1060,13 +1059,62 @@ fn t11_ftp_step_vs_interpolation() {
     .unwrap()
     .lazy()
     .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
-    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true)
-        .unwrap()
-        .collect()
-        .unwrap();
+    let run = |lf: LazyFrame, curve: &[FtpPoint], m: FtpInterpolation| {
+        apply_ftp_curve_map(lf, "Opndat", "Matdat", "Balance", "Rate", curve, true, m).unwrap().collect().unwrap()
+    };
+    let out = run(df.clone(), &default_bd_ftp_curve(), FtpInterpolation::Linear);
     let ftp = f64_col(&out, "Benchmark_FTP_Rate");
     assert_close(ftp[0].unwrap(), 9.50 + 9.0 / 91.0 * 0.60, "100-day FTP");
     assert_close(ftp[1].unwrap(), 8.75 + 1.0 / 61.0 * 0.75, "31-day FTP");
+    assert!((ftp[0].unwrap() - 9.559).abs() < 0.001 && (ftp[1].unwrap() - 8.762).abs() < 0.001);
+    assert_eq!(str_col(&out, "FTP_Method"), vec![Some("Linear 91d-182d".to_string()), Some("Linear 30d-91d".to_string())]);
+    // Liability spread uses the interpolated rate.
+    assert_close(f64_col(&out, "FTP_Spread_Pct")[0].unwrap(), 9.50 + 9.0 / 91.0 * 0.60 - 9.0, "spread");
+
+    let out = run(df.clone(), &default_bd_ftp_curve(), FtpInterpolation::NextPointUp);
+    assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), vec![Some(10.10), Some(9.50)]);
+    assert_eq!(str_col(&out, "FTP_Method"), vec![Some("Next point up 182d".to_string()), Some("Next point up 91d".to_string())]);
+
+    // Outside the curve: flat. 10 days on a curve starting at 30d -> the 30-day rate;
+    // 20 years -> the last point (both methods).
+    let edge = df!(
+        "Opndat" => [o, o, o],
+        "Matdat" => [o + 10, o + 7300, o + 30],
+        "Balance" => [1.0, 1.0, 1.0],
+        "Rate" => [9.0, 9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let from_30: Vec<FtpPoint> = default_bd_ftp_curve().into_iter().filter(|p| p.tenor_days >= 30).collect();
+    for m in [FtpInterpolation::Linear, FtpInterpolation::NextPointUp] {
+        let out = run(edge.clone(), &from_30, m);
+        assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), vec![Some(8.75), Some(11.75), Some(8.75)], "{m:?}");
+    }
+    let out = run(edge.clone(), &from_30, FtpInterpolation::Linear);
+    let methods = str_col(&out, "FTP_Method");
+    assert!(methods[0].as_deref().unwrap().starts_with("First point 30d"), "{methods:?}");
+    assert!(methods[1].as_deref().unwrap().starts_with("Last point 1825d"), "{methods:?}");
+    // On the full default curve (1d, 7d, 30d …) a 10-day deal lies between 7d and 30d.
+    let out = run(edge.clone(), &default_bd_ftp_curve(), FtpInterpolation::Linear);
+    assert_close(f64_col(&out, "Benchmark_FTP_Rate")[0].unwrap(), 8.25 + 3.0 / 23.0 * 0.50, "10-day on default curve");
+    // Unsorted input curve gives the same result.
+    let mut shuffled = default_bd_ftp_curve();
+    shuffled.reverse();
+    let out2 = run(edge.clone(), &shuffled, FtpInterpolation::Linear);
+    assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), f64_col(&out2, "Benchmark_FTP_Rate"));
+
+    // Bad curves fail loudly.
+    let err = apply_ftp_curve_map(edge.clone(), "Opndat", "Matdat", "Balance", "Rate", &[], true, FtpInterpolation::Linear).err().expect("empty");
+    assert!(format!("{err:#}").contains("no points"));
+    let dup = vec![FtpPoint { tenor_days: 30, ftp_rate: 8.0 }, FtpPoint { tenor_days: 30, ftp_rate: 9.0 }];
+    let err = apply_ftp_curve_map(edge, "Opndat", "Matdat", "Balance", "Rate", &dup, true, FtpInterpolation::Linear).err().expect("dup");
+    assert!(format!("{err:#}").contains("two points at 30 days"), "{err:#}");
+
+    // A v1.1.1 macro's FTP step (no interpolation field) loads as Linear.
+    let json = r#"{"FtpCurveMap":{"opndat_col":"Opndat","matdat_col":"Matdat","bal_col":"Balance","rate_col":"Rate","curve":[{"tenor_days":30,"ftp_rate":8.75}],"is_liability":true}}"#;
+    let step: TransformStep = serde_json::from_str(json).unwrap();
+    assert!(matches!(step, TransformStep::FtpCurveMap { interpolation: FtpInterpolation::Linear, .. }));
 }
 
 fn reconcile_frames() -> (DataFrame, DataFrame) {

@@ -683,6 +683,25 @@ impl Default for FtpPoint {
     }
 }
 
+/// How a tenor between two curve points gets its FTP rate.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FtpInterpolation {
+    /// Straight line on days between the two surrounding points (flat outside the curve).
+    #[default]
+    Linear,
+    /// The rate of the next tenor point at or above the deal's tenor (Phase 1 behaviour).
+    NextPointUp,
+}
+
+impl FtpInterpolation {
+    pub fn label(&self) -> &'static str {
+        match self {
+            FtpInterpolation::Linear => "Linear between tenor points",
+            FtpInterpolation::NextPointUp => "Next tenor point up (step)",
+        }
+    }
+}
+
 pub fn default_bd_ftp_curve() -> Vec<FtpPoint> {
     vec![
         FtpPoint { tenor_days: 1, ftp_rate: 8.00 },
@@ -774,6 +793,9 @@ pub enum TransformStep {
         rate_col: String,
         curve: Vec<FtpPoint>,
         is_liability: bool,
+        /// Old macros load as Linear (the Phase 2 default).
+        #[serde(default)]
+        interpolation: FtpInterpolation,
     },
     BankingHygieneAudit {
         opndat_col: String,
