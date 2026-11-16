@@ -1112,10 +1112,51 @@ fn t11_ftp_step_vs_interpolation() {
     let err = apply_ftp_curve_map(edge, "Opndat", "Matdat", "Balance", "Rate", &dup, true, FtpInterpolation::Linear).err().expect("dup");
     assert!(format!("{err:#}").contains("two points at 30 days"), "{err:#}");
 
-    // A v1.1.1 macro's FTP step (no interpolation field) loads as Linear.
-    let json = r#"{"FtpCurveMap":{"opndat_col":"Opndat","matdat_col":"Matdat","bal_col":"Balance","rate_col":"Rate","curve":[{"tenor_days":30,"ftp_rate":8.75}],"is_liability":true}}"#;
+    // A step that names its interpolation keeps it.
+    let json = r#"{"FtpCurveMap":{"opndat_col":"Opndat","matdat_col":"Matdat","bal_col":"Balance","rate_col":"Rate","curve":[{"tenor_days":30,"ftp_rate":8.75}],"is_liability":true,"interpolation":"Linear"}}"#;
     let step: TransformStep = serde_json::from_str(json).unwrap();
     assert!(matches!(step, TransformStep::FtpCurveMap { interpolation: FtpInterpolation::Linear, .. }));
+    // New steps (the FTP modal's default) are Linear.
+    assert_eq!(FtpInterpolation::default(), FtpInterpolation::Linear);
+}
+
+#[test]
+fn t11b_old_ftp_macro_reproduces_step_rates() {
+    // A macro saved before Phase 2: its FTP step has no "interpolation" field.
+    let json = r#"{
+        "name": "FTP monthly",
+        "description": "v1.1.1 recipe",
+        "created_at": "2026-10-31 10:00:00",
+        "enforce_balance_control": true,
+        "control_column": "Balance",
+        "optional_ingestion_schema": null,
+        "steps": [
+            {"FtpCurveMap": {"opndat_col": "Opndat", "matdat_col": "Matdat", "bal_col": "Balance",
+                             "rate_col": "Rate", "is_liability": true,
+                             "curve": [{"tenor_days": 30, "ftp_rate": 8.75}, {"tenor_days": 91, "ftp_rate": 9.5},
+                                       {"tenor_days": 182, "ftp_rate": 10.1}]}}
+        ]
+    }"#;
+    let path = tmpdir().join("t11b_old_ftp.mpq.json");
+    std::fs::write(&path, json).unwrap();
+    let recipe = micro_parquet::macros::load_macro_from_file(&path).expect("old FTP macro must load");
+    assert!(matches!(recipe.steps[0], TransformStep::FtpCurveMap { interpolation: FtpInterpolation::NextPointUp, .. }));
+    // Running it gives the past (step) rates: 100 days -> 10.10, 31 days -> 9.50.
+    let o = days(2026, 1, 1);
+    let df = df!(
+        "Opndat" => [o, o],
+        "Matdat" => [o + 100, o + 31],
+        "Balance" => [1_000_000.0, 1_000_000.0],
+        "Rate" => [9.0, 9.0]
+    )
+    .unwrap();
+    let mut df = df;
+    df.with_column(df.column("Opndat").unwrap().cast(&DataType::Date).unwrap()).unwrap();
+    df.with_column(df.column("Matdat").unwrap().cast(&DataType::Date).unwrap()).unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("t11b.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let out = compile_tab_lazy(&src, &recipe.steps, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&out, "Benchmark_FTP_Rate"), vec![Some(10.10), Some(9.50)]);
+    assert_eq!(str_col(&out, "FTP_Method")[0].as_deref(), Some("Next point up 182d"));
 }
 
 fn reconcile_frames() -> (DataFrame, DataFrame) {

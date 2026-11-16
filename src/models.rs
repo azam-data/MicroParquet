@@ -712,6 +712,11 @@ pub fn default_rate_max_pct() -> f64 {
     25.0
 }
 
+/// Interpolation of an FTP step saved without the field (before Phase 2): the old step lookup.
+pub fn legacy_ftp_interpolation() -> FtpInterpolation {
+    FtpInterpolation::NextPointUp
+}
+
 pub fn default_bd_ftp_curve() -> Vec<FtpPoint> {
     vec![
         FtpPoint { tenor_days: 1, ftp_rate: 8.00 },
@@ -803,8 +808,9 @@ pub enum TransformStep {
         rate_col: String,
         curve: Vec<FtpPoint>,
         is_liability: bool,
-        /// Old macros load as Linear (the Phase 2 default).
-        #[serde(default)]
+        /// Steps saved before Phase 2 (no field) load as NextPointUp, so old macros reproduce
+        /// their past results; new steps from the FTP modal default to Linear.
+        #[serde(default = "legacy_ftp_interpolation")]
         interpolation: FtpInterpolation,
     },
     BankingHygieneAudit {
