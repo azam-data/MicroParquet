@@ -9,6 +9,12 @@ jobs:
   test:
     name: cargo test
     runs-on: ubuntu-latest
+    env:
+      # Debug builds of Polars test binaries are about 1.5 GB each; without debug info and
+      # incremental data the job fits on the runner's disk (the linker died with a bus error).
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
