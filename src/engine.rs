@@ -990,6 +990,27 @@ fn write_new_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.sync_all()
 }
 
+/// Writes (or replaces) a file that only the current user can read on Unix. On Windows this is
+/// an ordinary write.
+fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    // `mode` only applies to a new file; tighten one that already existed.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
 fn pii_key_temp_path(path: &Path) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1054,7 +1075,7 @@ pub fn pii_key_fingerprint(key: &[u8; 32]) -> String {
 /// Copies the install key (created first if missing) to `dest`. Returns whether it was created.
 pub fn export_pii_key(key_path: &Path, dest: &Path) -> Result<bool> {
     let (key, created) = load_or_create_pii_key(key_path)?;
-    std::fs::write(dest, key).with_context(|| format!("Could not write the key to {:?}", dest))?;
+    write_private_file(dest, &key).with_context(|| format!("Could not write the key to {:?}", dest))?;
     Ok(created)
 }
 

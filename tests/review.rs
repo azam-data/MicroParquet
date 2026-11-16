@@ -2415,7 +2415,7 @@ fn t29b_batch_announces_new_pii_key() {
 }
 
 #[test]
-fn t29c_key_backups_are_never_overwritten() {
+fn t29c_key_backups_are_never_overwritten_and_export_is_private() {
     let dir = tmpdir().join("t29c_key");
     let _ = std::fs::remove_dir_all(&dir);
     let key_path = dir.join("portable_data").join("pii_key.bin");
@@ -2448,4 +2448,19 @@ fn t29c_key_backups_are_never_overwritten() {
         .collect();
     assert!(names.iter().any(|n| n.ends_with("_2")), "{names:?}");
     assert_eq!(std::fs::read(&key_path).unwrap(), vec![0xAAu8; 32]);
+
+    // The exported key is readable by its owner only (Unix), also when the file existed already.
+    let dest = dir.join("exported_key.bin");
+    export_pii_key(&key_path, &dest).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), vec![0xAAu8; 32]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dest), 0o600);
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644)).unwrap();
+        export_pii_key(&key_path, &dest).unwrap();
+        assert_eq!(mode(&dest), 0o600);
+        assert_eq!(mode(&bak1), 0o600);
+    }
 }
