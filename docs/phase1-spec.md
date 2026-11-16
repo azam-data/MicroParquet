@@ -56,7 +56,7 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 - A column counts as an ID only if (a) one token is in {brancd, branch, actnum, account, acct, glcode, gl, code, cif, id, tin, nid, phone, mobile, routing}, and (b) no token is in {bal, balance, amt, amount, outstanding, limit, sum, total, rate, int, interest, prov, provision, value, val, date, dt, maturity, profit}. Keep keywords that appear inside a single token (actnum, glcode, brancd) as whole-token matches only.
 - Apply the leading-zero rule only to values made entirely of ASCII digits, with length > 1 and a first character of '0'.
 - Order of checks: empty → ISO date → D/M/Y vs M/D/Y → float → text.
-- When D/M/Y and M/D/Y both fit every sampled value, choose **DateDMY**. Choose MDY only when some value has a first part > 12.
+- When D/M/Y and M/D/Y both fit every sampled value, choose **DateDMY**. Choose MDY only when some value has a second part > 12 (for example 10/31/2026).
 - Acceptance (t01): Actnum→Utf8, Account_Balance→Float64, Residual_Maturity→DateDMY, Reporting_Date→DateDMY, Matdat→DateDMY, Opndat_US (10/31/2026 style)→DateMDY, Balance→Float64, Liquidity_Bucket_Amt→Float64, Paid_Amount→Float64. t02 → DateDMY. Add: "Customer_ID" with values "0012"→Utf8, and "BranchCode"→Utf8.
 </task>
 
@@ -96,6 +96,8 @@ These results came from running the v1.1.1 code. Use them as the failing baselin
 
 <task id="T7" name="Provisioning engine, BRPD Circular 15/2024 (dated rules)">
 Replace the hard-coded rates in `apply_loan_classification_provision` with data files in `portable_data/`. Create default files on first run if they don't exist. Loading uses `serde_json`. On a parse error, return an `Err` that names the file and the line.
+
+Versioning: each default file carries `"defaults_version": 2` (the two maps as an extra key in the flat object; the rules file as `{"defaults_version": 2, "rules": [...]}`). Files with no version or an older one still load. If such a file equals an earlier built-in default it is replaced with the current default; if it was edited it is kept, and a status-bar warning names the file.
 
 1. `cl_code_map.json`: normalised CBS code → grade, where grade is one of STD, SMA, SS, DF, BL. Normalise by uppercase, trim and collapse internal spaces. Defaults:
    - STD ← STD, STD-0, STD-1, STD-2, UC, STANDARD, UNCLASSIFIED
@@ -139,7 +141,7 @@ Replace the hard-coded rates in `apply_loan_classification_provision` with data 
 
 <task id="T8" name="No panics on stale tab indices">
 - Use `self.tabs.get(i)` at the join and reconcile execution sites in `main.rs` (around lines 2692–2693 and 2777–2778). On None, set `self.status_message` and keep the modal open.
-- When a tab is closed, clamp `join_left_tab`, `join_right_tab`, `rec_prev_tab` and `rec_curr_tab` to the new length, or reset them to 0.
+- When a tab is closed, update `active_tab`, `join_left_tab`, `join_right_tab`, `rec_prev_tab` and `rec_curr_tab` with one rule (`tab_index_after_close`): indices after the closed tab shift down, an index at the closed tab moves to the tab that took its place, and every index is clamped to the remaining tabs (0 when none are left).
 - Search `main.rs` for any other `self.tabs[<index other than active_tab>]` and fix it the same way.
 </task>
 
@@ -149,6 +151,23 @@ Replace the hard-coded rates in `apply_loan_classification_provision` with data 
 </task>
 
 </tasks>
+
+<accepted_deviations>
+Differences from the task text above that the owner has accepted (Phase 1 review, Nov 2026).
+- T0: Phase 2 evidence tests (t04, t11, t12, t13, t16, t17) assert their Phase 2 target values and are `#[ignore = "Phase 2: <item>"]`. The Phase 1 assertions of t04, t11 and t12 live on in t04a, t11a and t12a. `.gitignore` (`/target`) was added.
+- T2: the date parser no longer splits on a "T" inside a month name, so "31-OCT-2026" parses (fixed as part of T2).
+- T3: the error text is "Weighted average needs a weight column (metric '<alias>')", naming the metric.
+- T4: a blank or null side value is an error too ("(blank)" in the list), not only unknown non-null values; otherwise the row would drop out of the ΔNII total.
+- T4: the Python export of the ΔEVE step applies the same side sign and fails on unknown sides.
+- T6: Datetime columns are filtered as dates (YYYY-MM-DD). Categorical columns cannot occur in this build (Polars `dtype-categorical` is not enabled), so that branch is untested.
+- T7: the collateral type is also normalised by turning spaces and hyphens into "_", so "Deposit Lien" matches DEPOSIT_LIEN.
+- T7: `Rule_Source` ends with " [verify]" for rules marked `verify: true`.
+- T7: in the cutoff-before-first-rule message the date comes from the rules file; "(BRPD Circular 15/2024)" is fixed text.
+- T7: a code listed twice in a map file (after normalising) is an error, and all 15 grade × category pairs are resolved for the cutoff, so a gap or overlap anywhere in the rules file stops the step.
+- T7: the bare segment codes "CMSME" and "SME" are not mapped (they may include medium loans); such rows fall to OTHER with `Segment_Unmapped = true`.
+- T8: on tab close, later indices shift down instead of being reset to 0 (see the T8 rule).
+- T9: Int64 columns are cast too (comma-cleaned, `strict=False`).
+</accepted_deviations>
 
 <constraints>
 - Do not upgrade Polars, egui or any other dependency, and do not add new crates. `serde_json`, `chrono` and `anyhow` are already available.
