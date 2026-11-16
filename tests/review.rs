@@ -171,8 +171,10 @@ fn t04a_numeric_parsing_phase1() {
 #[test]
 #[ignore = "Phase 2: Dr/Cr suffixes, currency prefix and dash-as-zero parsing; raw-vs-parsed control sums"]
 fn t04_numeric_parsing_silent_nulls() {
-    // Target: no value silently becomes null. Cr = +, Dr = − (owner to confirm), "-" = 0,
+    // Target: no value silently becomes null. Cr = +, Dr = −, "-" = 0,
     // "BDT 10" = 10. Parsed control sum = 1,828.50 with 0 nulls.
+    // Phase 2: set 'Cr is +' when the Dr/Cr setting exists; add a second case where a blank
+    // setting with Dr/Cr suffixes → error.
     let p = write_csv(
         "nums.csv",
         "Balance\n\"1,234.50\"\n(500.00)\n1234.50 Cr\n250.00 Dr\n-\n 99.5 \nBDT 10\n",

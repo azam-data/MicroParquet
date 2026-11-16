@@ -171,7 +171,7 @@ Differences from the task text above that the owner has accepted (Phase 1 review
 
 <phase2_decisions>
 Owner decisions for Phase 2 (Nov 2026). Recorded only; nothing here is implemented in Phase 1.
-- t04 Dr/Cr amounts: a per-column ingestion setting, "Dr is +" or "Cr is +". If a column has Dr/Cr suffixes and the setting is blank, the load fails with an error naming the column; never guess the sign. A lone "-" = 0, and "BDT 10" = 10. The ignored t04 target values assume "Cr is +"; the test sets that option once it exists.
+- t04 Dr/Cr amounts: a per-column ingestion setting, "Dr is +" or "Cr is +". If a column has Dr/Cr suffixes and the setting is blank, the load fails with an error naming the column; never guess the sign. A lone "-" = 0, and "BDT 10" = 10. The ignored t04 test is left as is for now; its target values assume "Cr is +". In Phase 2, set 'Cr is +' in t04 when the Dr/Cr setting exists, and add a second case where a blank setting with Dr/Cr suffixes → error.
 - t17 joins: duplicate keys on the right side are an error naming the key column, the number of duplicated keys and up to 10 example keys. "Keep first + warning" is available only as an opt-in toggle on the join step, off by default.
 - t11 FTP curve lookup: a setting with the values linear | next-point-up. The default is linear interpolation on days between the two surrounding tenor points.
 - T6 Categorical columns: leave Polars `dtype-categorical` off (no dependency change). The Categorical filter branch stays untested while such columns cannot occur.
