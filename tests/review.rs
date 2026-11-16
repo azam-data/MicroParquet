@@ -557,6 +557,66 @@ fn t24_parquet_schema() {
 }
 
 #[test]
+fn t24b_headless_parquet_applies_macro_schema() {
+    // Macro schema on a Parquet input: String columns that exist are converted, a native
+    // column keeps its type, and absent columns are skipped with a warning on stderr.
+    let p = write_parquet(
+        "p5_headless.parquet",
+        &df!(
+            "Balance" => ["1,000", "(50)"],
+            "Matdat" => ["05/11/2026", "31-Oct-26"],
+            "Rate" => [9.5, 10.0]
+        )
+        .unwrap(),
+    );
+    let col = |name: &str, dtype| ColumnSchemaConfig { name: name.into(), dtype, ..Default::default() };
+    let saved = IngestionConfig {
+        columns: vec![
+            col("Balance", ColDataType::Float64),
+            col("Matdat", ColDataType::DateDMY),
+            col("Rate", ColDataType::Utf8),
+            col("Branch_Name", ColDataType::Utf8),
+            col("Old_Limit", ColDataType::Float64),
+        ],
+        ..Default::default()
+    };
+    let (fitted, missing) = adapt_schema_to_parquet(&p, &saved).unwrap();
+    assert_eq!(missing, vec!["Branch_Name".to_string(), "Old_Limit".to_string()]);
+    let kept: Vec<&str> = fitted.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(kept, vec!["Balance", "Matdat"]);
+
+    let recipe = MacroRecipe {
+        name: "pq".into(),
+        description: String::new(),
+        created_at: String::new(),
+        enforce_balance_control: true,
+        control_column: Some("Balance".into()),
+        optional_ingestion_schema: Some(saved),
+        steps: vec![],
+    };
+    let m = tmpdir().join("p5_headless.mpq.json");
+    std::fs::write(&m, serde_json::to_string(&recipe).unwrap()).unwrap();
+    let out = tmpdir().join("p5_headless_out.parquet");
+    let _ = std::fs::remove_file(&out);
+    let r = std::process::Command::new(env!("CARGO_BIN_EXE_MicroParquet"))
+        .args(["--headless", "--input"])
+        .arg(&p)
+        .arg("--macro-file")
+        .arg(&m)
+        .arg("--export-parquet")
+        .arg(&out)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+    assert!(r.status.success(), "{err}");
+    assert!(err.contains("not in the Parquet file, skipped: Branch_Name, Old_Limit"), "{err}");
+    let df = LazyFrame::scan_parquet(&out, ScanArgsParquet::default()).unwrap().collect().unwrap();
+    assert_eq!(f64_col(&df, "Balance"), vec![Some(1000.0), Some(-50.0)]);
+    assert_eq!(date_days_col(&df, "Matdat"), vec![Some(days(2026, 11, 5)), Some(days(2026, 10, 31))]);
+    assert_eq!(df.column("Rate").unwrap().dtype(), &DataType::Float64, "native column keeps its type");
+}
+
+#[test]
 fn t05_parquet_datetime_maturity_bucket() {
     // Parquet written by pandas / Power BI usually stores dates as Datetime(ns/us/ms), not Date
     let mut df = df!(

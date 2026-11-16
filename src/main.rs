@@ -7,7 +7,7 @@ use egui_extras::{Column, TableBuilder};
 use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
-    auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
+    adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
     fetch_viewport_slice, preview_parquet_raw,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
@@ -142,7 +142,21 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         let recipe = load_macro_from_file(m_path)?;
         let control = recipe.control_column.clone();
         let ing = if is_parquet {
-            IngestionConfig::default()
+            match recipe.optional_ingestion_schema {
+                // Applies to columns that exist and are String in the file; the others keep
+                // their Parquet type.
+                Some(saved_ing) => {
+                    let (fitted, missing) = adapt_schema_to_parquet(input_path, &saved_ing)?;
+                    if !missing.is_empty() {
+                        eprintln!(
+                            "[MicroParquet] Warning: macro schema columns not in the Parquet file, skipped: {}",
+                            missing.join(", ")
+                        );
+                    }
+                    fitted
+                }
+                None => IngestionConfig::default(),
+            }
         } else if let Some(saved_ing) = recipe.optional_ingestion_schema {
             saved_ing
         } else {

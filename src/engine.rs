@@ -1224,6 +1224,38 @@ pub fn auto_detect_parquet_schema(path: &Path) -> Result<IngestionConfig> {
     })
 }
 
+/// Fits a saved (macro) schema to a Parquet file: entries for columns that exist and are
+/// String in the file are kept (with that file type); columns of other types keep their own
+/// type. Returns the fitted schema and the names of schema columns absent from the file.
+pub fn adapt_schema_to_parquet(
+    path: &Path,
+    saved: &IngestionConfig,
+) -> Result<(IngestionConfig, Vec<String>)> {
+    let mut lf = LazyFrame::scan_parquet(path, ScanArgsParquet::default())
+        .context("Failed to scan Parquet file")?;
+    let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
+    let mut missing = Vec::new();
+    let mut columns = Vec::new();
+    for c in &saved.columns {
+        match schema.get(&c.name) {
+            None => missing.push(c.name.clone()),
+            Some(DataType::String) => {
+                let mut c = c.clone();
+                c.source_dtype = "String".into();
+                columns.push(c);
+            }
+            Some(_) => {}
+        }
+    }
+    Ok((
+        IngestionConfig {
+            columns,
+            ..saved.clone()
+        },
+        missing,
+    ))
+}
+
 /// Scans a Parquet file and lists the configured columns that must be converted, each with an
 /// expression giving its text (String columns as they are; other types cast to text). Columns
 /// whose type is unchanged and unmasked are left as they are in the file.
