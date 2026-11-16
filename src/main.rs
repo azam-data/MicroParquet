@@ -8,7 +8,7 @@ use egui_plot::{Bar, BarChart, Plot};
 use micro_parquet::engine::{
     auto_detect_smart_schema, compile_tab_lazy, compute_control_totals, export_to_csv_stream,
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema_with, export_to_parquet_stream,
-    control_totals_state, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
+    blank_balance_notes, control_totals_state, detect_file_schema, ensure_pii_key_for, export_pii_key, import_pii_key,
     pii_key_fingerprint, pii_key_path, read_pii_key, fetch_viewport_slice, join_status, preview_parquet_raw, stack_file_configs,
     parse_failure_summary, preview_csv_raw, preview_csv_with,
     source_parse_failures, write_parse_failures_csv,
@@ -22,7 +22,7 @@ use micro_parquet::macros::{
     save_macro_to_file,
 };
 use micro_parquet::models::{
-    column_name_tokens, default_bd_ftp_curve, parquet_native_type, format_metric_value, format_with_commas, AggFunc, AggSpec,
+    column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct, parquet_native_type, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CsvTextEncoding,
     CustomBucketDef, FilterOp, FtpInterpolation, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
@@ -184,6 +184,9 @@ fn run_headless_cli(args: &CliArgs, paths: &PortablePaths) -> anyhow::Result<()>
         eprintln!("[MicroParquet] {}", note);
     }
     let lf = compile_tab_lazy(&source, &steps, &paths.temp_dir)?;
+    for note in blank_balance_notes(&source, &steps, &paths.temp_dir)? {
+        eprintln!("[MicroParquet] {}", note);
+    }
 
     // Values that could not be converted: always reported, and they stop the run when the
     // control column has any (unless --allow-parse-failures).
@@ -417,6 +420,10 @@ pub struct MicroParquetApp {
     audit_rate_col: String,
     audit_key_col: String,
     audit_only_exceptions: bool,
+    /// Comma-separated status codes that mean active (hygiene audit).
+    audit_active_statuses: String,
+    audit_rate_min: f64,
+    audit_rate_max: f64,
 
     dur_bal_col: String,
     dur_rate_col: String,
@@ -627,6 +634,9 @@ impl MicroParquetApp {
             audit_rate_col: "Int Rate".to_string(),
             audit_key_col: "Actnum".to_string(),
             audit_only_exceptions: true,
+            audit_active_statuses: default_active_statuses().join(", "),
+            audit_rate_min: 0.0,
+            audit_rate_max: default_rate_max_pct(),
 
             dur_bal_col: "Balance".to_string(),
             dur_rate_col: "Int Rate".to_string(),
@@ -788,6 +798,7 @@ impl MicroParquetApp {
                 if let Some(n) = key_note {
                     self.status_message.push_str(&format!(" 🔑 {}", n));
                 }
+                self.append_blank_balance_notes();
             }
             Err(e) => {
                 self.status_message = format!("Pipeline error: {}", e);
@@ -841,6 +852,7 @@ impl MicroParquetApp {
             }
         }
 
+        let step_label = step.short_label();
         if open_new_tab {
             let mut new_steps = curr.steps.clone();
             let title = format!("{} - {}", curr.title, step.short_label());
@@ -852,7 +864,13 @@ impl MicroParquetApp {
                 tab.col_formats = updated_formats;
                 tab.viewport_offset = 0;
             }
+            // A failed refresh replaces this message with the error.
+            let added = format!("Step added: {}.", step_label);
+            self.status_message = added.clone();
             self.refresh_active_tab(false);
+            if self.status_message == added {
+                self.append_blank_balance_notes();
+            }
         }
     }
 
@@ -870,6 +888,25 @@ impl MicroParquetApp {
             }
         }
         None
+    }
+
+    /// Adds "Balance blank on N rows; treated as 0" for the active tab's banking steps.
+    fn append_blank_balance_notes(&mut self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        match blank_balance_notes(&tab.source, &tab.steps, &self.paths.temp_dir) {
+            Ok(notes) if !notes.is_empty() => {
+                self.status_message = format!("{} ⚠ {}", self.status_message, notes.join("; "));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.status_message = format!(
+                    "{} ⚠ Could not count blank balances: {:#}",
+                    self.status_message, e
+                );
+            }
+        }
     }
 
     fn refresh_active_tab(&mut self, recalculate_baseline: bool) {
@@ -2888,6 +2925,17 @@ impl MicroParquetApp {
                             ui.label("Reporting Cutoff Date (YYYY-MM-DD):");
                             ui.text_edit_singleline(&mut self.alm_cutoff);
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Active status codes (comma-separated, any case):");
+                            ui.text_edit_singleline(&mut self.audit_active_statuses);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Rate outlier below %:");
+                            ui.add(egui::DragValue::new(&mut self.audit_rate_min).speed(0.1));
+                            ui.label("or above %:");
+                            ui.add(egui::DragValue::new(&mut self.audit_rate_max).speed(0.1));
+                        });
+                        ui.label("Audit_Exception_Flag shows the first flag; Audit_All_Flags lists every flag that applies.");
                         ui.checkbox(
                             &mut self.audit_only_exceptions,
                             "Show Exception Rows Only (Filter out 'OK' accounts)",
@@ -2906,6 +2954,14 @@ impl MicroParquetApp {
                                         actnum_col: self.audit_key_col.clone(),
                                         cutoff_date: self.alm_cutoff.clone(),
                                         only_exceptions: self.audit_only_exceptions,
+                                        active_statuses: self
+                                            .audit_active_statuses
+                                            .split(',')
+                                            .map(|s| s.trim().to_string())
+                                            .filter(|s| !s.is_empty())
+                                            .collect(),
+                                        rate_min_pct: self.audit_rate_min,
+                                        rate_max_pct: self.audit_rate_max,
                                     },
                                     true,
                                 ));

@@ -702,6 +702,16 @@ impl FtpInterpolation {
     }
 }
 
+/// Hygiene audit: status codes that mean "active" by default.
+pub fn default_active_statuses() -> Vec<String> {
+    ["ACT", "ACTIVE", "A", "OPEN"].iter().map(|s| s.to_string()).collect()
+}
+
+/// Hygiene audit: rates above this (percent) are outliers by default.
+pub fn default_rate_max_pct() -> f64 {
+    25.0
+}
+
 pub fn default_bd_ftp_curve() -> Vec<FtpPoint> {
     vec![
         FtpPoint { tenor_days: 1, ftp_rate: 8.00 },
@@ -807,6 +817,14 @@ pub enum TransformStep {
         actnum_col: String,
         cutoff_date: String,
         only_exceptions: bool,
+        /// Status codes that mean "active", matched trimmed and case-insensitive.
+        #[serde(default = "default_active_statuses")]
+        active_statuses: Vec<String>,
+        /// Rates outside [rate_min_pct, rate_max_pct] are flagged as outliers.
+        #[serde(default)]
+        rate_min_pct: f64,
+        #[serde(default = "default_rate_max_pct")]
+        rate_max_pct: f64,
     },
     DurationAnalysis {
         bal_col: String,

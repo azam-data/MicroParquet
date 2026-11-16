@@ -175,6 +175,9 @@ Recorded during P6–P15 (sessions 2–3, unattended run; not yet confirmed by t
 - P13 (question): as specified, FTP steps in macros saved before Phase 2 load as Linear, so re-running an old macro changes its FTP rates (step → linear). Choose "Next tenor point up" in the FTP modal to reproduce old results.
 - P14: the per-key CL output is the original CL code of the chosen row (not the grade name), so single-row keys show the same code as before. The row with the worst mapped grade wins; ties, and keys whose codes are all unmapped, go to the largest-balance row. In a key that mixes mapped and unmapped codes the mapped worst grade wins. The CL map comes from `cl_code_map.json` (loaded only when a CL column is reconciled); `build_period_reconcile_lazy_with` takes the map directly (tests).
 - P14: `Prev_Row_Count` / `Curr_Row_Count` are 0 (not null) for a key missing in that period. New/closed status now follows the row counts (same result as before). A key whose rate rows all have zero or missing balance gets a null rate.
+- P15: the audit settings are saved in the step (`active_statuses`, `rate_min_pct`, `rate_max_pct`; old macros load with ACT, ACTIVE, A, OPEN and 0–25). An empty status list or a lower bound above the upper bound is an error. `Audit_All_Flags` is "OK" when no flag applies.
+- P15: the blank-balance note names the step, e.g. "+BB CL Provision & BFP: Balance blank on 2 rows; treated as 0". It is shown when a step is added, when a tab (or macro) is opened, and on stderr in headless runs. "Blank" means null after conversion to a number, so a text value that is not a number also counts (those are already listed as parse failures).
+- P15 (question): old macros' audit steps now treat ACTIVE, A and OPEN as active (as specified), so re-running them can flag more rows than before.
 </accepted_deviations>
 
 <constraints>

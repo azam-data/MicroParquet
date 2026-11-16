@@ -1988,6 +1988,9 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             cutoff_date,
             only_exceptions,
+            active_statuses,
+            rate_min_pct,
+            rate_max_pct,
             ..
         } => apply_banking_hygiene_audit(
             lf,
@@ -1999,6 +2002,9 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rate_col,
             cutoff_date,
             *only_exceptions,
+            active_statuses,
+            *rate_min_pct,
+            *rate_max_pct,
         ),
         TransformStep::DurationAnalysis {
             bal_col,
@@ -2299,6 +2305,54 @@ pub fn parse_math_scalar(new_col: &str, value: &str) -> Result<f64> {
             value
         ),
     }
+}
+
+/// Rows where `column` is blank (null, or text that is not a number).
+pub fn count_blank_values(lf: LazyFrame, column: &str) -> Result<usize> {
+    let df = lf
+        .select([col(column)
+            .cast(DataType::Float64)
+            .is_null()
+            .sum()
+            .cast(DataType::Int64)
+            .alias("__mp_blank")])
+        .collect()
+        .with_context(|| format!("Could not count blank values in '{}'", column))?;
+    Ok(df
+        .column("__mp_blank")
+        .ok()
+        .and_then(|c| c.i64().ok())
+        .and_then(|ca| ca.get(0))
+        .unwrap_or(0) as usize)
+}
+
+/// Provisioning, limit utilisation, ΔNII and duration treat a blank balance as 0. One note per
+/// such step whose input has blank balances: "<step>: Balance blank on N rows; treated as 0".
+pub fn blank_balance_notes(
+    source: &TabSource,
+    steps: &[TransformStep],
+    temp_dir: &Path,
+) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        let bal = match step {
+            TransformStep::LoanClassificationProvision { bal_col, .. }
+            | TransformStep::LoanLimitUtilization { bal_col, .. }
+            | TransformStep::RateShockSim { bal_col, .. }
+            | TransformStep::DurationAnalysis { bal_col, .. } => bal_col,
+            _ => continue,
+        };
+        let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+        let n = count_blank_values(input, bal)?;
+        if n > 0 {
+            notes.push(format!(
+                "{}: Balance blank on {} rows; treated as 0",
+                step.short_label(),
+                n
+            ));
+        }
+    }
+    Ok(notes)
 }
 
 /// Rows and control sum for the status bar, or "—" with the reason. The pipeline result is

@@ -199,6 +199,7 @@ fn t03c_blank_date_column_and_hygiene_audit() {
     let lf = build_lazy_pipeline(&p, false, &cfg, &tmpdir()).unwrap();
     let out = apply_banking_hygiene_audit(
         lf, "Opndat", "Matdat", "Closure_Date", "Acstat", "Balance", "Rate", "2026-10-31", false,
+        &default_active_statuses(), 0.0, default_rate_max_pct(),
     )
     .unwrap()
     .collect()
@@ -695,7 +696,7 @@ fn t05b_other_date_inputs_reject_strings() {
     .unwrap();
     let e1 = apply_rate_shock_sim(df.clone().lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, None).err();
     let e2 = apply_ftp_curve_map(df.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear).err();
-    let e3 = apply_banking_hygiene_audit(df.clone().lazy(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false).err();
+    let e3 = apply_banking_hygiene_audit(df.clone().lazy(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false, &default_active_statuses(), 0.0, 25.0).err();
     let e4 = apply_duration_analysis(df.lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 1, 200.0, 0.0833, None).err();
     for (name, e) in [("shock", e1), ("ftp", e2), ("hygiene", e3), ("duration", e4)] {
         let e = e.unwrap_or_else(|| panic!("{name}: string date column must be rejected"));
@@ -1568,16 +1569,17 @@ fn t18_segment_and_status_edge_cases() {
 
 #[test]
 fn t19_hygiene_case_sensitivity() {
-    // Status-code mapping is not a part-1 task; the exact-code row is asserted.
+    // Active statuses are a setting (default ACT, ACTIVE, A, OPEN), trimmed and case-insensitive.
     let past = days(2025, 1, 1);
     let open = days(2024, 1, 1);
+    let future = days(2027, 1, 1);
     let df = df!(
-        "Opndat" => [open, open],
-        "Matdat" => [past, past],
-        "Clsdat" => [None::<i32>, None],
-        "Acstat" => ["ACT", "Active"],
-        "Balance" => [500.0, 500.0],
-        "Rate" => [9.0, 9.0]
+        "Opndat" => [open, open, open, open, open, open],
+        "Matdat" => [past, past, past, future, past, future],
+        "Clsdat" => [None::<i32>, None, None, None, None, None],
+        "Acstat" => ["ACT", "Active", " open ", "A", "CLOSED", "ACT"],
+        "Balance" => [500.0, 500.0, 500.0, 500.0, 500.0, 500.0],
+        "Rate" => [9.0, 30.0, 9.0, 9.0, 9.0, 9.0]
     )
     .unwrap()
     .lazy()
@@ -1586,13 +1588,77 @@ fn t19_hygiene_case_sensitivity() {
         col("Matdat").cast(DataType::Date),
         col("Clsdat").cast(DataType::Date),
     ]);
-    let out = apply_banking_hygiene_audit(df, "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false)
-        .unwrap()
-        .collect()
-        .unwrap();
+    let run = |statuses: &[String], lo: f64, hi: f64| {
+        apply_banking_hygiene_audit(df.clone(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false, statuses, lo, hi)
+            .unwrap()
+            .collect()
+            .unwrap()
+    };
+    let out = run(&default_active_statuses(), 0.0, 25.0);
     let flags = str_col(&out, "Audit_Exception_Flag");
+    let all = str_col(&out, "Audit_All_Flags");
     assert_eq!(flags[0].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
-    println!("HYGIENE:\n{}", out.select(["Acstat", "Audit_Exception_Flag"]).unwrap());
+    // "Active" with a past maturity and positive balance is flagged; its 30% rate is also listed.
+    assert_eq!(flags[1].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
+    assert_eq!(all[1].as_deref(), Some("1. GHOST_MATURED_ACTIVE; 3. INTEREST_RATE_OUTLIER"));
+    assert_eq!(flags[2].as_deref(), Some("1. GHOST_MATURED_ACTIVE"), "' open ' is active");
+    assert_eq!(flags[3].as_deref(), Some("OK"), "not matured");
+    assert_eq!(flags[4].as_deref(), Some("OK"), "CLOSED is not active");
+    assert_eq!(all[0].as_deref(), Some("1. GHOST_MATURED_ACTIVE"));
+    assert_eq!(all[5].as_deref(), Some("OK"));
+
+    // Settings: only ACT is active; outliers above 8%.
+    let out = run(&["act".to_string()], 0.0, 8.0);
+    let flags = str_col(&out, "Audit_Exception_Flag");
+    assert_eq!(flags[1].as_deref(), Some("3. INTEREST_RATE_OUTLIER"));
+    assert_eq!(flags[5].as_deref(), Some("3. INTEREST_RATE_OUTLIER"));
+    // Bad settings fail loudly.
+    let bad = |s: &[String], lo: f64, hi: f64| {
+        apply_banking_hygiene_audit(df.clone(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false, s, lo, hi).is_err()
+    };
+    assert!(bad(&[" ".to_string()], 0.0, 25.0));
+    assert!(bad(&default_active_statuses(), 30.0, 25.0));
+
+    // A v1.1.1 macro's audit step loads with the defaults.
+    let json = r#"{"BankingHygieneAudit":{"opndat_col":"O","matdat_col":"M","clsdat_col":"C","acstat_col":"S","bal_col":"B","rate_col":"R","actnum_col":"A","cutoff_date":"2026-10-31","only_exceptions":false}}"#;
+    match serde_json::from_str::<TransformStep>(json).unwrap() {
+        TransformStep::BankingHygieneAudit { active_statuses, rate_min_pct, rate_max_pct, .. } => {
+            assert_eq!(active_statuses, default_active_statuses());
+            assert_eq!((rate_min_pct, rate_max_pct), (0.0, 25.0));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn t19b_blank_balances_reported() {
+    let df = df!(
+        "Actnum" => ["L1", "L2", "L3", "L4"],
+        "Balance" => [Some(1_000_000.0), None, None, Some(500.0)],
+        "CL" => ["STD", "SS", "BL", "STD"]
+    )
+    .unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("t19b.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
+    let prov = TransformStep::LoanClassificationProvision {
+        bal_col: "Balance".into(),
+        cl_status_col: "CL".into(),
+        segment_col: None,
+        suspense_col: None,
+        security_col: None,
+        cutoff_date: "2026-10-31".into(),
+        collateral_type_col: None,
+    };
+    let steps = vec![prov];
+    // The treatment does not change (the step still runs) ...
+    let out = compile_tab_lazy(&src, &steps, &tmpdir()).unwrap().collect().unwrap();
+    assert_eq!(out.height(), 4);
+    // ... and the blank balances are reported.
+    let notes = blank_balance_notes(&src, &steps, &tmpdir()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].ends_with("Balance blank on 2 rows; treated as 0"), "{notes:?}");
+    // No banking step, or no blanks: no note.
+    assert!(blank_balance_notes(&src, &[], &tmpdir()).unwrap().is_empty());
+    assert_eq!(count_blank_values(df.lazy(), "Actnum").unwrap(), 4, "text is not a balance");
 }
 
 #[test]

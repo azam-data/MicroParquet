@@ -342,9 +342,27 @@ pub fn apply_banking_hygiene_audit(
     rate_col: &str,
     cutoff_date: &str,
     only_exceptions: bool,
+    active_statuses: &[String],
+    rate_min_pct: f64,
+    rate_max_pct: f64,
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
+    let active: Vec<String> = active_statuses
+        .iter()
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if active.is_empty() {
+        bail!("Hygiene audit: enter at least one active status code (for example ACT, ACTIVE, A, OPEN).");
+    }
+    if !(rate_min_pct.is_finite() && rate_max_pct.is_finite()) || rate_min_pct > rate_max_pct {
+        bail!(
+            "Hygiene audit: the rate outlier bounds {}% to {}% are not a valid range (the lower bound must not exceed the upper).",
+            rate_min_pct,
+            rate_max_pct
+        );
+    }
     let lf = ensure_date(lf, opndat_col)?;
     let lf = ensure_date(lf, matdat_col)?;
     let lf = ensure_date(lf, clsdat_col)?;
@@ -357,9 +375,17 @@ pub fn apply_banking_hygiene_audit(
     let bal = col(bal_col).cast(DataType::Float64).fill_null(lit(0.0));
     let rate = col(rate_col).cast(DataType::Float64);
 
-    let is_ghost = col(acstat_col)
+    let status = col(acstat_col)
         .cast(DataType::String)
-        .eq(lit("ACT"))
+        .str()
+        .strip_chars(lit(NULL))
+        .str()
+        .to_uppercase();
+    let is_active = active
+        .iter()
+        .fold(lit(false), |acc, a| acc.or(status.clone().eq(lit(a.clone()))))
+        .fill_null(lit(false));
+    let is_ghost = is_active
         .and(bal.clone().gt(lit(0.0)))
         .and(col(matdat_col).is_not_null())
         .and(mat.clone().lt(lit(cutoff_days)));
@@ -375,22 +401,33 @@ pub fn apply_banking_hygiene_audit(
 
     let is_rate_outlier = col(rate_col)
         .is_not_null()
-        .and(rate.clone().lt(lit(0.0)).or(rate.gt(lit(25.0))));
+        .and(rate.clone().lt(lit(rate_min_pct)).or(rate.gt(lit(rate_max_pct))));
 
     let is_neg_bal = bal.lt(lit(0.0));
 
-    let audit_flag_expr = when(is_ghost)
-        .then(lit("1. GHOST_MATURED_ACTIVE"))
-        .when(is_bad_date)
-        .then(lit("2. BACKWARDS_DATE_ANOMALY"))
-        .when(is_rate_outlier)
-        .then(lit("3. INTEREST_RATE_OUTLIER"))
-        .when(is_neg_bal)
-        .then(lit("4. NEGATIVE_BALANCE"))
-        .otherwise(lit("OK"))
-        .alias("Audit_Exception_Flag");
+    let flags = [
+        (is_ghost.fill_null(lit(false)), "1. GHOST_MATURED_ACTIVE"),
+        (is_bad_date.fill_null(lit(false)), "2. BACKWARDS_DATE_ANOMALY"),
+        (is_rate_outlier.fill_null(lit(false)), "3. INTEREST_RATE_OUTLIER"),
+        (is_neg_bal.fill_null(lit(false)), "4. NEGATIVE_BALANCE"),
+    ];
+    // First flag that applies (unchanged column) ...
+    let mut audit_flag_expr: Expr = lit("OK");
+    for (cond, label) in flags.iter().rev() {
+        audit_flag_expr = when(cond.clone()).then(lit(*label)).otherwise(audit_flag_expr);
+    }
+    // ... and every flag that applies.
+    let parts: Vec<Expr> = flags
+        .iter()
+        .map(|(cond, label)| when(cond.clone()).then(lit(*label)).otherwise(lit(NULL).cast(DataType::String)))
+        .collect();
+    let joined = concat_str(parts, "; ", true);
+    let all_flags_expr = when(joined.clone().is_null().or(joined.clone().eq(lit(""))))
+        .then(lit("OK"))
+        .otherwise(joined)
+        .alias("Audit_All_Flags");
 
-    let mut out_lf = lf.with_column(audit_flag_expr);
+    let mut out_lf = lf.with_columns([audit_flag_expr.alias("Audit_Exception_Flag"), all_flags_expr]);
     if only_exceptions {
         out_lf = out_lf.filter(col("Audit_Exception_Flag").neq(lit("OK")));
     }

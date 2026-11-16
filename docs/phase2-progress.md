@@ -14,8 +14,8 @@ contain its own hash).
 | P11 | DONE | 67e8fcc | t28 (control_totals_state: ok / pivot removes control column / text column / failed pipeline; parse_math_scalar errors name the value; Python export) | rows kept when only the control column is missing; text control column has no sum |  |
 | P12 | DONE | 454184a | t13 un-ignored (1,000,000 distinct CLIENT_ tokens; same key same token; different keys differ; no 3-digit run of 2,000 account numbers); t29 (create, reuse, 0600, concurrent first use, export/import with backup, junk import refused, damaged key error); t24 updated for ACCT_ format | account mask re-derives to avoid digit runs; fingerprint, backup on import | Q4 |
 | P13 | DONE | 45e7728 | t11 un-ignored (100d 9.559, 31d 8.762; NextPointUp 10.10/9.50; 10d → 30d rate on a curve starting at 30d; 20y → last point; FTP_Method; unsorted curve; empty/duplicate curve errors; old macro loads as Linear) | 10-day case needs a curve starting at 30d (default curve has 1d/7d points) | Q5 |
-| P14 | DONE | (this commit) | t12 un-ignored (A1 prev rate 9.5, delta 0 bps; A2/A3 delta null; A1 Prev_Row_Count 2; multi-row key count; null-safe weights; CL worst grade / unmapped → largest balance) | CL output is the chosen row's code; row counts 0 for missing keys |  |
-| P15 | todo | | | | |
+| P14 | DONE | cf15d2b | t12 un-ignored (A1 prev rate 9.5, delta 0 bps; A2/A3 delta null; A1 Prev_Row_Count 2; multi-row key count; null-safe weights; CL worst grade / unmapped → largest balance) | CL output is the chosen row's code; row counts 0 for missing keys |  |
+| P15 | DONE | (this commit) | t19 (Active/' open ' flagged; matured-active + outlier both in Audit_All_Flags; settings; bad settings error; old macro defaults); t19b (provisioning with 2 blank balances reports 2) | settings stored in the step; note names the step | Q6 |
 
 ## P12 design: per-install PII key
 
@@ -57,5 +57,6 @@ contain its own hash).
 - Q3 (P10): Polars reads some broken CSVs without an error (an unclosed quote swallows later lines into one field; binary junk becomes a header with 0 rows). Should the batch run flag files whose row count looks wrong (e.g. 0 rows, or far fewer rows than lines)?
 - Q4 (P12): the Python export still keeps the original values in masked columns (blake3 is not in the Python standard library). Generate code that needs `pip install blake3` and reads the key file, or make masked columns stop the Python export?
 - Q5 (P13): old macros' FTP steps load as Linear (the spec's default), so their FTP rates change on re-run. Keep that, or load old steps as NextPointUp to reproduce earlier ALCO numbers?
+- Q6 (P15): old macros' hygiene audits now treat ACTIVE, A and OPEN as active (the spec's default), so they can flag more rows on re-run. Keep?
 
 ## Notes
