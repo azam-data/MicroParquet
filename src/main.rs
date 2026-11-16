@@ -4066,7 +4066,14 @@ impl MicroParquetApp {
     fn export_split_by_column(&mut self) -> Option<PathBuf> {
         let tab = self.tabs.get(self.active_tab)?;
         let out_dir = rfd::FileDialog::new().pick_folder()?;
-        let lf = compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir).ok()?;
+        let control_col = tab.control_col.clone();
+        let lf = match compile_tab_lazy(&tab.source, &tab.steps, &self.paths.temp_dir) {
+            Ok(lf) => lf,
+            Err(e) => {
+                self.status_message = format!("Split export failed: {:#}", e);
+                return None;
+            }
+        };
         match split_and_export_by_column(
             lf,
             &self.split_col_name,
@@ -4074,16 +4081,17 @@ impl MicroParquetApp {
             self.split_format,
             self.parquet_dialect,
             self.export_csv_mdy,
+            control_col.as_deref(),
         ) {
             Ok(cnt) => {
                 self.status_message = format!(
-                    "Split & exported {} individual files into {:?}",
+                    "Split & exported {} individual files into {:?} (rows and control sums in split_manifest.csv)",
                     cnt, out_dir
                 );
                 Some(out_dir.join("split_export"))
             }
             Err(e) => {
-                self.status_message = format!("Split export failed: {}", e);
+                self.status_message = format!("Split export failed: {:#}", e);
                 None
             }
         }

@@ -1709,3 +1709,55 @@ fn t07d_rule_files_v2_to_v3() {
     assert_eq!(cfg.rules, edited);
     assert!(std::fs::read_to_string(dir.join("segment_map.json")).unwrap().contains("\"defaults_version\": 3"));
 }
+
+#[test]
+fn t25_split_export_keeps_every_row() {
+    use micro_parquet::exporters::split_and_export_by_column;
+    let df = df!(
+        "Branch" => [Some("DHK"), Some("dhk"), None, Some("A/B"), Some("A_B"), Some("  "), Some("DHK")],
+        "Balance" => [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]
+    )
+    .unwrap();
+    let out = tmpdir().join("split_t25");
+    let _ = std::fs::remove_dir_all(&out);
+    let n = split_and_export_by_column(df.clone().lazy(), "Branch", &out, SplitExportFormat::Csv, ParquetDialect::ArchiveZstd, false, Some("Balance"))
+        .unwrap();
+    assert_eq!(n, 5);
+    let mut files: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(files, vec!["A_B.csv", "A_B_2.csv", "BLANK_KEY.csv", "DHK.csv", "dhk_2.csv", "split_manifest.csv"]);
+    let man = CsvReadOptions::default()
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(out.join("split_manifest.csv")))
+        .unwrap()
+        .finish()
+        .unwrap();
+    assert_eq!(man.height(), 5);
+    let rows: usize = str_col(&man, "rows").iter().map(|r| r.as_deref().unwrap().parse::<usize>().unwrap()).sum();
+    assert_eq!(rows, df.height());
+    // Null and whitespace-only keys share BLANK_KEY (rows 4 + 32).
+    let blank_row = str_col(&man, "file").iter().position(|f| f.as_deref() == Some("BLANK_KEY.csv")).unwrap();
+    assert_eq!(str_col(&man, "rows")[blank_row].as_deref(), Some("2"));
+    assert_eq!(str_col(&man, "control_sum")[blank_row].as_deref(), Some("36.0"));
+    assert_eq!(str_col(&man, "key")[blank_row], None);
+    let dhk = str_col(&man, "key").iter().position(|k| k.as_deref() == Some("DHK")).unwrap();
+    assert_eq!(str_col(&man, "rows")[dhk].as_deref(), Some("2"));
+    let body = std::fs::read_to_string(out.join("dhk_2.csv")).unwrap();
+    assert!(body.contains("dhk") && !body.contains("DHK"), "{body}");
+
+    // Parquet: same partition.
+    let outp = tmpdir().join("split_t25p");
+    let _ = std::fs::remove_dir_all(&outp);
+    let n = split_and_export_by_column(df.lazy(), "Branch", &outp, SplitExportFormat::Parquet, ParquetDialect::ArchiveZstd, false, None).unwrap();
+    assert_eq!(n, 5);
+    let total: usize = ["A_B", "A_B_2", "BLANK_KEY", "DHK", "dhk_2"]
+        .iter()
+        .map(|s| {
+            LazyFrame::scan_parquet(outp.join(format!("{s}.parquet")), Default::default()).unwrap().collect().unwrap().height()
+        })
+        .sum();
+    assert_eq!(total, 7);
+}

@@ -158,6 +158,7 @@ Recorded during P6–P15 (sessions 2–3, unattended run; not yet confirmed by t
 - P7: the `diagonal_concat` Polars feature is not enabled and enabling it would change Cargo.toml, so the diagonal stack is built by hand: each file is selected onto the union of columns (first-appearance order, `Source_File` last) with missing columns as typed nulls, then concatenated. Same result as `concat_lf_diagonal`.
 - P7: "Apply one schema to every file" keeps each CSV's own detected separator, title-line count and encoding (only column settings and the other flags come from the shared schema); a file's columns that the schema does not name keep their detected type. Files lacking a schema column get a status-bar note. Type check: any dtype difference is an error except a column that is all-null (Null type) in one file.
 - P7: a CSV whose schema detection fails is now an error naming the file (it used to stack with an empty schema).
+- P8: `split_and_export_by_column` gains a `control_col` argument (the tab's control column). Null keys and keys that are only spaces both go to `BLANK_KEY.<ext>` (no file when there are none; its manifest key is empty). Besides the row check, the files' control sum must equal the source's, otherwise error. The manifest is written before the checks so a failed split can be inspected.
 </accepted_deviations>
 
 <constraints>

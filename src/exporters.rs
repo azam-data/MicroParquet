@@ -1,4 +1,4 @@
-use crate::engine::{export_to_csv_stream, export_to_parquet_stream};
+use crate::engine::{compute_control_totals, export_to_csv_stream, export_to_parquet_stream};
 use crate::models::{
     format_metric_value, ColumnFormatSpec, NumberDisplayFormat, ParquetDialect, SplitExportFormat,
 };
@@ -198,6 +198,10 @@ pub fn export_tabs_to_pdf(
     Ok(())
 }
 
+/// Writes one file per value of `split_col`. Rows whose key is null or blank go to
+/// `BLANK_KEY.<ext>`; file names that collide after sanitising (compared case-insensitively)
+/// get `_2`, `_3` … suffixes. Writes `split_manifest.csv` (key, file, rows, control sum) and
+/// fails if the files do not hold every source row. Returns the number of files written.
 pub fn split_and_export_by_column(
     lf: LazyFrame,
     split_col: &str,
@@ -205,58 +209,137 @@ pub fn split_and_export_by_column(
     format: SplitExportFormat,
     dialect: ParquetDialect,
     mdy_dates: bool,
+    control_col: Option<&str>,
 ) -> Result<usize> {
-    std::fs::create_dir_all(out_dir)?;
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("Could not create the output folder {:?}", out_dir))?;
+
+    let key_text = col(split_col).cast(DataType::String);
+    let blank = key_text.clone().is_null().or(key_text
+        .clone()
+        .str()
+        .strip_chars(lit(NULL))
+        .eq(lit("")));
+
+    let (source_rows, source_sum) = compute_control_totals(lf.clone(), control_col)?;
 
     let unique_df = lf
         .clone()
-        .select([col(split_col).cast(DataType::String).unique()])
+        .filter(blank.clone().not())
+        .select([key_text.clone().alias("__mp_key")])
+        .unique_stable(None, UniqueKeepStrategy::First)
         .collect()
         .context("Failed to collect unique partition values")?;
+    let keys: Vec<String> = unique_df
+        .column("__mp_key")?
+        .str()?
+        .into_iter()
+        .flatten()
+        .map(|s| s.to_string())
+        .collect();
 
-    let ca = unique_df.column(split_col)?.str()?;
-    let mut exported_count = 0;
-
-    for opt_val in ca.into_iter().flatten() {
-        let safe_file_stem: String = opt_val
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let file_stem = if safe_file_stem.trim().is_empty() {
-            "BLANK_KEY".to_string()
-        } else {
-            safe_file_stem
-        };
-
-        let sub_lf = lf
-            .clone()
-            .filter(col(split_col).cast(DataType::String).eq(lit(opt_val)));
-
-        match format {
-            SplitExportFormat::Parquet => {
-                let p = out_dir.join(format!("{}.parquet", file_stem));
-                export_to_parquet_stream(sub_lf, &p, dialect)?;
-            }
-            SplitExportFormat::Csv => {
-                let p = out_dir.join(format!("{}.csv", file_stem));
-                export_to_csv_stream(sub_lf, &p, mdy_dates)?;
-            }
-            SplitExportFormat::Xlsx => {
-                let p = out_dir.join(format!("{}.xlsx", file_stem));
-                let sub_df = sub_lf.collect()?;
-                export_tabs_to_xlsx(vec![(file_stem, sub_df)], &p)?;
-            }
-        }
-        exported_count += 1;
+    // The blank group first, so it gets the plain BLANK_KEY name.
+    let mut groups: Vec<(Option<String>, LazyFrame)> = Vec::with_capacity(keys.len() + 1);
+    groups.push((None, lf.clone().filter(blank)));
+    for k in keys {
+        let sub = lf.clone().filter(key_text.clone().eq(lit(k.clone())));
+        groups.push((Some(k), sub));
     }
 
-    Ok(exported_count)
+    let ext = match format {
+        SplitExportFormat::Parquet => "parquet",
+        SplitExportFormat::Csv => "csv",
+        SplitExportFormat::Xlsx => "xlsx",
+    };
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut manifest_key: Vec<Option<String>> = Vec::new();
+    let mut manifest_file: Vec<String> = Vec::new();
+    let mut manifest_rows: Vec<u64> = Vec::new();
+    let mut manifest_sum: Vec<Option<f64>> = Vec::new();
+    let mut total_rows = 0usize;
+
+    for (key, sub_lf) in groups {
+        let (rows, sum) = compute_control_totals(sub_lf.clone(), control_col)?;
+        if key.is_none() && rows == 0 {
+            continue;
+        }
+        let base = match &key {
+            None => "BLANK_KEY".to_string(),
+            Some(k) => sanitize_file_stem(k),
+        };
+        let mut stem = base.clone();
+        let mut n = 2;
+        while used.contains(&stem.to_lowercase()) {
+            stem = format!("{}_{}", base, n);
+            n += 1;
+        }
+        used.insert(stem.to_lowercase());
+        let file_name = format!("{}.{}", stem, ext);
+        let p = out_dir.join(&file_name);
+        match format {
+            SplitExportFormat::Parquet => export_to_parquet_stream(sub_lf, &p, dialect)?,
+            SplitExportFormat::Csv => export_to_csv_stream(sub_lf, &p, mdy_dates)?,
+            SplitExportFormat::Xlsx => {
+                let sub_df = sub_lf.collect()?;
+                export_tabs_to_xlsx(vec![(stem.clone(), sub_df)], &p)?;
+            }
+        }
+        total_rows += rows;
+        manifest_key.push(key);
+        manifest_file.push(file_name);
+        manifest_rows.push(rows as u64);
+        manifest_sum.push(sum);
+    }
+
+    let files = manifest_file.len();
+    let mut manifest = DataFrame::new(vec![
+        Series::new("key".into(), manifest_key).into(),
+        Series::new("file".into(), manifest_file).into(),
+        Series::new("rows".into(), manifest_rows).into(),
+        Series::new("control_sum".into(), manifest_sum).into(),
+    ])?;
+    let manifest_path = out_dir.join("split_manifest.csv");
+    let mut f = File::create(&manifest_path)
+        .with_context(|| format!("Could not write {:?}", manifest_path))?;
+    CsvWriter::new(&mut f)
+        .include_header(true)
+        .finish(&mut manifest)
+        .with_context(|| format!("Could not write {:?}", manifest_path))?;
+
+    if total_rows != source_rows {
+        anyhow::bail!(
+            "Split export: the {} files hold {} rows but the source has {}. Do not use these files; see {:?}.",
+            files,
+            total_rows,
+            source_rows,
+            manifest_path
+        );
+    }
+    if let Some(src_sum) = source_sum {
+        let split_sum: f64 = manifest.column("control_sum")?.f64()?.into_iter().flatten().sum();
+        if (split_sum - src_sum).abs() > 0.005_f64.max(src_sum.abs() * 1e-9) {
+            anyhow::bail!(
+                "Split export: the files' control sum {:.2} differs from the source's {:.2}. Do not use these files; see {:?}.",
+                split_sum,
+                src_sum,
+                manifest_path
+            );
+        }
+    }
+    Ok(files)
+}
+
+/// Letters, digits, '-' and '_' are kept; anything else becomes '_'.
+fn sanitize_file_stem(key: &str) -> String {
+    key.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 pub fn format_df_for_clipboard(
