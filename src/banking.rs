@@ -27,6 +27,69 @@ fn ensure_date(mut lf: LazyFrame, col_name: &str) -> Result<LazyFrame> {
     }
 }
 
+/// Side text -> +1.0 (asset) / -1.0 (liability) / null (not recognised).
+/// Trimmed and case-insensitive: "A..." is an asset; "L...", DEPOSIT and BORROWING are liabilities.
+fn side_sign_expr(side: Expr) -> Expr {
+    let s = side
+        .cast(DataType::String)
+        .str()
+        .strip_chars(lit(NULL))
+        .str()
+        .to_uppercase();
+    when(s.clone().str().starts_with(lit("A")))
+        .then(lit(1.0))
+        .when(
+            s.clone()
+                .str()
+                .starts_with(lit("L"))
+                .or(s.clone().eq(lit("DEPOSIT")))
+                .or(s.eq(lit("BORROWING"))),
+        )
+        .then(lit(-1.0))
+        .otherwise(lit(NULL).cast(DataType::Float64))
+}
+
+/// Sign (+1 asset, -1 liability) for signed rate-shock outputs, after checking every side value maps.
+/// Blank or unrecognised sides are an error listing up to 10 of them. With no side column
+/// (macros saved before sides existed) every row is treated as an asset and a
+/// `Direction_Assumed` column says so in the output.
+fn direction_sign(lf: LazyFrame, side_col: Option<&str>) -> Result<(LazyFrame, Expr)> {
+    let side_col = match side_col.map(str::trim) {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return Ok((
+                lf.with_column(lit("ASSET (unspecified)").alias("Direction_Assumed")),
+                lit(1.0),
+            ))
+        }
+    };
+    let bad = lf
+        .clone()
+        .select([col(side_col).cast(DataType::String).alias("__side")])
+        .filter(side_sign_expr(col("__side")).is_null())
+        .unique_stable(None, UniqueKeepStrategy::First)
+        .limit(10)
+        .collect()
+        .with_context(|| format!("Could not read the side column '{}'", side_col))?;
+    if bad.height() > 0 {
+        let vals: Vec<String> = bad
+            .column("__side")?
+            .str()?
+            .into_iter()
+            .map(|v| match v {
+                Some(s) if !s.trim().is_empty() => format!("'{}'", s),
+                _ => "(blank)".to_string(),
+            })
+            .collect();
+        bail!(
+            "Side column '{}' has values that are neither asset nor liability: {}. Use A/ASSET for assets and L/LIABILITY/DEPOSIT/BORROWING for liabilities.",
+            side_col,
+            vals.join(", ")
+        );
+    }
+    Ok((lf, side_sign_expr(col(side_col))))
+}
+
 /// Feature B8: Standardizes corporate & counterparty names
 pub fn apply_entity_normalizer(lf: LazyFrame, source_col: &str, new_col: &str) -> LazyFrame {
     let norm_expr = col(source_col)
@@ -117,10 +180,12 @@ pub fn apply_rate_shock_sim(
     mat_col: &str,
     cutoff_date: &str,
     shock_bps: f64,
+    side_col: Option<&str>,
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
     let lf = ensure_date(lf, mat_col)?;
+    let (lf, sign) = direction_sign(lf, side_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -137,9 +202,11 @@ pub fn apply_rate_shock_sim(
         .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0));
 
     let current_int = (bal.clone() * (rate / lit(100.0))).alias("Current_Annual_Int");
-    let nii_impact = (bal * repricing_weight * lit(shock_pct / 100.0)).alias("NII_Impact_BDT");
-    let shocked_int =
-        (col("Current_Annual_Int") + col("NII_Impact_BDT")).alias("Shocked_Annual_Int");
+    // Change in the interest amount (income on assets, expense on liabilities), always >= 0 for a rise.
+    let int_change = bal * repricing_weight * lit(shock_pct / 100.0);
+    // NII effect: a rate rise adds income on assets (+) and adds cost on liabilities (-).
+    let nii_impact = (int_change.clone() * sign).alias("NII_Impact_BDT");
+    let shocked_int = (col("Current_Annual_Int") + int_change).alias("Shocked_Annual_Int");
 
     Ok(lf
         .with_columns([current_int, nii_impact])
@@ -375,10 +442,12 @@ pub fn apply_duration_analysis(
     compounding_freq: usize,
     shock_bps: f64,
     default_sight_years: f64,
+    side_col: Option<&str>,
 ) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
         .context("Cutoff Date must be YYYY-MM-DD")?;
     let lf = ensure_date(lf, mat_col)?;
+    let (lf, sign) = direction_sign(lf, side_col)?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
 
@@ -423,7 +492,9 @@ pub fn apply_duration_analysis(
         .round(2)
         .alias("DV01_BPV_BDT");
 
-    let delta_eve = (lit(0.0) - (bal * col("Modified_Duration") * lit(shock_dec)))
+    // A rate rise lowers the value of assets and lowers the value owed on liabilities (EVE up).
+    // DV01 above stays unsigned.
+    let delta_eve = ((lit(0.0) - (bal * col("Modified_Duration") * lit(shock_dec))) * sign)
         .round(2)
         .alias("Delta_EVE_Impact_BDT");
 

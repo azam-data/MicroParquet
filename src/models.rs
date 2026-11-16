@@ -651,6 +651,9 @@ pub enum TransformStep {
         mat_col: String,
         cutoff_date: String,
         shock_bps: f64,
+        /// Asset/liability side column; None = old macro, treated as asset (flagged in output)
+        #[serde(default)]
+        side_col: Option<String>,
     },
     FtpCurveMap {
         opndat_col: String,
@@ -679,6 +682,9 @@ pub enum TransformStep {
         compounding_freq: usize,
         shock_bps: f64,
         default_sight_years: f64,
+        /// Asset/liability side column; None = old macro, treated as asset (flagged in output)
+        #[serde(default)]
+        side_col: Option<String>,
     },
     LoanClassificationProvision {
         bal_col: String,

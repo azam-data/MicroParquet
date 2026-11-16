@@ -247,10 +247,10 @@ fn t05b_other_date_inputs_reject_strings() {
         "Rate" => [9.0]
     )
     .unwrap();
-    let e1 = apply_rate_shock_sim(df.clone().lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 100.0).err();
+    let e1 = apply_rate_shock_sim(df.clone().lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, None).err();
     let e2 = apply_ftp_curve_map(df.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true).err();
     let e3 = apply_banking_hygiene_audit(df.clone().lazy(), "Opndat", "Matdat", "Clsdat", "Acstat", "Balance", "Rate", "2026-10-31", false).err();
-    let e4 = apply_duration_analysis(df.lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 1, 200.0, 0.0833).err();
+    let e4 = apply_duration_analysis(df.lazy(), "Balance", "Rate", "Matdat", "2026-10-31", 1, 200.0, 0.0833, None).err();
     for (name, e) in [("shock", e1), ("ftp", e2), ("hygiene", e3), ("duration", e4)] {
         let e = e.unwrap_or_else(|| panic!("{name}: string date column must be rejected"));
         assert!(format!("{e:#}").contains("not a date"), "{name}: got {e:#}");
@@ -349,7 +349,7 @@ fn t08_wavg_with_nulls() {
 
 #[test]
 fn t09_duration_and_eve() {
-    // Direction-aware ΔEVE is Phase 1 T4 (not in part 1). Duration maths only.
+    // T4: ΔEVE is signed by side (asset −, liability +); DV01 stays unsigned.
     // 5y fixed 10% annual-pay par instrument, BDT 100: textbook Macaulay D = 4.1699, ModD = 3.7908
     let cutoff = "2026-10-31";
     let mat_days = days(2031, 10, 30); // 1825 days later
@@ -362,7 +362,7 @@ fn t09_duration_and_eve() {
     .unwrap()
     .lazy()
     .with_column(col("Matdat").cast(DataType::Date));
-    let out = apply_duration_analysis(df, "Balance", "Rate", "Matdat", cutoff, 1, 200.0, 0.0833)
+    let out = apply_duration_analysis(df, "Balance", "Rate", "Matdat", cutoff, 1, 200.0, 0.0833, Some("Side"))
         .unwrap()
         .collect()
         .unwrap();
@@ -370,27 +370,67 @@ fn t09_duration_and_eve() {
     let md = f64_col(&out, "Modified_Duration");
     assert_close(mac[0].unwrap(), 4.1699, "Macaulay duration");
     assert_close(md[0].unwrap(), 3.7908, "Modified duration");
+    let eve = f64_col(&out, "Delta_EVE_Impact_BDT");
+    assert_close(eve[0].unwrap(), -7.58, "asset ΔEVE +200bp");
+    assert_close(eve[1].unwrap(), 7.58, "deposit ΔEVE +200bp");
+    let dv01 = f64_col(&out, "DV01_BPV_BDT");
+    assert!(dv01[0].unwrap() > 0.0 && dv01[1].unwrap() > 0.0, "DV01 stays unsigned");
+    assert!(out.column("Direction_Assumed").is_err());
     println!("DURATION:\n{}", out);
 }
 
 #[test]
 fn t10_nii_shock_signs() {
-    // Asset/liability direction is Phase 1 T4 (not in part 1); smoke test only.
-    let df = df!(
-        "Side" => ["Loan 3m", "Term deposit 3m", "Savings (no maturity)"],
-        "Balance" => [1_000_000.0, 1_000_000.0, 1_000_000.0],
-        "Rate" => [12.0, 9.0, 4.0],
-        "Matdat" => [Some(days(2027, 1, 29)), Some(days(2027, 1, 29)), None]
-    )
-    .unwrap()
-    .lazy()
-    .with_column(col("Matdat").cast(DataType::Date));
-    let out = apply_rate_shock_sim(df, "Balance", "Rate", "Matdat", "2026-10-31", 100.0)
+    // T4: +100bp, 3m loan and 3m term deposit (90 days to 2027-01-29) → +7,534.25 / −7,534.25, net 0.
+    let make = |sides: [&str; 2]| {
+        df!(
+            "Product" => ["Loan 3m", "Term deposit 3m"],
+            "Side" => sides,
+            "Balance" => [1_000_000.0, 1_000_000.0],
+            "Rate" => [12.0, 9.0],
+            "Matdat" => [days(2027, 1, 29), days(2027, 1, 29)]
+        )
+        .unwrap()
+        .lazy()
+        .with_column(col("Matdat").cast(DataType::Date))
+    };
+    let out = apply_rate_shock_sim(make([" asset", "Deposit"]), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, Some("Side"))
         .unwrap()
         .collect()
         .unwrap();
-    assert_eq!(out.height(), 3);
+    let nii = f64_col(&out, "NII_Impact_BDT");
+    assert!((nii[0].unwrap() - 7_534.25).abs() <= 0.01, "loan ΔNII: {:?}", nii[0]);
+    assert!((nii[1].unwrap() + 7_534.25).abs() <= 0.01, "deposit ΔNII: {:?}", nii[1]);
+    assert!((nii[0].unwrap() + nii[1].unwrap()).abs() <= 0.01, "net ΔNII");
+    // Shocked interest is the interest amount after the shock (income or expense), so it rises for both.
+    let shocked = f64_col(&out, "Shocked_Annual_Int");
+    assert!((shocked[1].unwrap() - (90_000.0 + 7_534.25)).abs() <= 0.01);
     println!("NII SHOCK +100bp:\n{}", out);
+
+    // Other side spellings
+    let out = apply_rate_shock_sim(make(["A", "liab"]), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, Some("Side"))
+        .unwrap()
+        .collect()
+        .unwrap();
+    let nii = f64_col(&out, "NII_Impact_BDT");
+    assert!(nii[0].unwrap() > 0.0 && nii[1].unwrap() < 0.0);
+
+    // Unmapped side values fail loudly and are named
+    let err = apply_rate_shock_sim(make(["Loan", "Term deposit"]), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, Some("Side"))
+        .err()
+        .expect("unmapped sides must fail")
+        .to_string();
+    assert!(err.contains("'Term deposit'"), "{err}");
+    assert!(!err.contains("'Loan'"), "'Loan' starts with L and is a liability: {err}");
+
+    // Old macros (no side column): treated as assets, and the output says so
+    let out = apply_rate_shock_sim(make(["x", "y"]), "Balance", "Rate", "Matdat", "2026-10-31", 100.0, None)
+        .unwrap()
+        .collect()
+        .unwrap();
+    let nii = f64_col(&out, "NII_Impact_BDT");
+    assert!(nii[0].unwrap() > 0.0 && nii[1].unwrap() > 0.0);
+    assert_eq!(str_col(&out, "Direction_Assumed")[0].as_deref(), Some("ASSET (unspecified)"));
 }
 
 #[test]
@@ -533,6 +573,7 @@ fn t15_python_codegen_drops_banking_steps() {
             mat_col: "Matdat".into(),
             cutoff_date: "2026-10-31".into(),
             shock_bps: 100.0,
+            side_col: Some("Side".into()),
         },
     ];
     let col_cfg = |name: &str, dtype, pii_mask| ColumnSchemaConfig {
@@ -676,8 +717,8 @@ fn t20_v111_macro_json_still_loads() {
     }"#;
     let recipe: MacroRecipe = serde_json::from_str(json).expect("v1.1.1 macro JSON must load");
     assert_eq!(recipe.steps.len(), 3);
-    assert!(matches!(recipe.steps[0], TransformStep::RateShockSim { .. }));
-    assert!(matches!(recipe.steps[1], TransformStep::DurationAnalysis { .. }));
+    assert!(matches!(recipe.steps[0], TransformStep::RateShockSim { side_col: None, .. }));
+    assert!(matches!(recipe.steps[1], TransformStep::DurationAnalysis { side_col: None, .. }));
     assert!(matches!(recipe.steps[2], TransformStep::LoanClassificationProvision { .. }));
 }
 
@@ -713,4 +754,28 @@ fn t08b_wavg_python_is_null_safe() {
         None,
     );
     assert!(py.contains("raise ValueError(\"Weighted average needs a weight column"), "{py}");
+}
+
+#[test]
+fn t09b_duration_python_is_signed() {
+    // T4: the Python export of the ΔEVE step applies the same side sign (or flags the assumption).
+    let step = |side: Option<&str>| TransformStep::DurationAnalysis {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        compounding_freq: 1,
+        shock_bps: 200.0,
+        default_sight_years: 0.0833,
+        side_col: side.map(str::to_string),
+    };
+    let cfg = IngestionConfig { columns: vec![], ..Default::default() };
+    let gen = |s| micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.csv"), false, &cfg, &[s], None);
+    let signed = gen(step(Some("Side")));
+    assert!(signed.contains("_sign = pl.when"), "{signed}");
+    assert!(signed.contains("* _sign).round(2).alias(\"Delta_EVE_Impact_BDT\")"), "{signed}");
+    assert!(signed.contains("raise ValueError"), "{signed}");
+    let unsigned = gen(step(None));
+    assert!(unsigned.contains("alias(\"Direction_Assumed\")"), "{unsigned}");
+    println!("{signed}");
 }

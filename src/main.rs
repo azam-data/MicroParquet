@@ -17,7 +17,7 @@ use micro_parquet::macros::{
     save_macro_to_file,
 };
 use micro_parquet::models::{
-    default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
+    column_name_tokens, default_bd_ftp_curve, format_metric_value, format_with_commas, AggFunc, AggSpec,
     BatchDirection, BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule,
     CustomBucketDef, FilterOp, FtpPoint, IngestionConfig, MacroRecipe, MathOp, MetricFormatType,
     NumberDisplayFormat, ParquetDialect, PiiMaskMode, PortablePaths, SplitExportFormat,
@@ -269,6 +269,10 @@ pub struct MicroParquetApp {
     alm_show_custom_creator: bool,
     custom_bucket_draft: CustomBucketDef,
 
+    // Asset/liability side column shared by the ΔNII and ΔEVE modals ("" = none)
+    alm_side_col: String,
+    alm_side_cols_seen: Vec<String>,
+
     shock_bal_col: String,
     shock_rate_col: String,
     shock_mat_col: String,
@@ -469,6 +473,8 @@ impl MicroParquetApp {
                 null_long_label: "05. Non-Maturing Core".to_string(),
             },
 
+            alm_side_col: String::new(),
+            alm_side_cols_seen: Vec::new(),
             shock_bal_col: "Balance".to_string(),
             shock_rate_col: "Int Rate".to_string(),
             shock_mat_col: "Matdat".to_string(),
@@ -1551,6 +1557,25 @@ impl MicroParquetApp {
             .map(|t| t.available_columns())
             .unwrap_or_default();
 
+        // Default the side picker whenever the column set changes (not every frame, so a
+        // deliberate "none" choice sticks): first column named like side/type/direction.
+        if matches!(
+            self.active_tool,
+            ActiveToolModal::RateShockSim | ActiveToolModal::DurationAnalysis
+        ) && self.alm_side_cols_seen != avail_cols
+        {
+            self.alm_side_cols_seen = avail_cols.clone();
+            self.alm_side_col = avail_cols
+                .iter()
+                .find(|c| {
+                    column_name_tokens(c)
+                        .iter()
+                        .any(|t| t == "side" || t == "type" || t == "direction")
+                })
+                .cloned()
+                .unwrap_or_default();
+        }
+
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
 
@@ -2259,6 +2284,27 @@ impl MicroParquetApp {
                             ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
                             ui.add(egui::DragValue::new(&mut self.shock_bps).speed(5.0));
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Asset/Liability Side Col:");
+                            let shown = if self.alm_side_col.is_empty() {
+                                "(none: treat all rows as assets)".to_string()
+                            } else {
+                                self.alm_side_col.clone()
+                            };
+                            egui::ComboBox::from_id_salt("shk_side")
+                                .selected_text(shown)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.alm_side_col,
+                                        String::new(),
+                                        "(none: treat all rows as assets)",
+                                    );
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.alm_side_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Run Rate Shock Simulation").clicked() {
@@ -2269,6 +2315,11 @@ impl MicroParquetApp {
                                         mat_col: self.shock_mat_col.clone(),
                                         cutoff_date: self.alm_cutoff.clone(),
                                         shock_bps: self.shock_bps,
+                                        side_col: if self.alm_side_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.alm_side_col.clone())
+                                        },
                                     },
                                     true,
                                 ));
@@ -2326,6 +2377,27 @@ impl MicroParquetApp {
                             ui.label("Null Matdat Tenor (Yrs):");
                             ui.add(egui::DragValue::new(&mut self.dur_sight_yrs).speed(0.05));
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Asset/Liability Side Col:");
+                            let shown = if self.alm_side_col.is_empty() {
+                                "(none: treat all rows as assets)".to_string()
+                            } else {
+                                self.alm_side_col.clone()
+                            };
+                            egui::ComboBox::from_id_salt("dur_side")
+                                .selected_text(shown)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.alm_side_col,
+                                        String::new(),
+                                        "(none: treat all rows as assets)",
+                                    );
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut self.alm_side_col, c.clone(), c);
+                                    }
+                                });
+                        });
+                        ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Compute Duration & ΔEVE Columns").clicked() {
@@ -2338,6 +2410,11 @@ impl MicroParquetApp {
                                         compounding_freq: self.dur_freq,
                                         shock_bps: self.dur_shock_bps,
                                         default_sight_years: self.dur_sight_yrs,
+                                        side_col: if self.alm_side_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.alm_side_col.clone())
+                                        },
                                     },
                                     false,
                                 ));

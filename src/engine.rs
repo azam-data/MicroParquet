@@ -654,7 +654,16 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             mat_col,
             cutoff_date,
             shock_bps,
-        } => apply_rate_shock_sim(lf, bal_col, rate_col, mat_col, cutoff_date, *shock_bps),
+            side_col,
+        } => apply_rate_shock_sim(
+            lf,
+            bal_col,
+            rate_col,
+            mat_col,
+            cutoff_date,
+            *shock_bps,
+            side_col.as_deref(),
+        ),
         TransformStep::FtpCurveMap {
             opndat_col,
             matdat_col,
@@ -700,6 +709,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             compounding_freq,
             shock_bps,
             default_sight_years,
+            side_col,
         } => apply_duration_analysis(
             lf,
             bal_col,
@@ -709,6 +719,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             *compounding_freq,
             *shock_bps,
             *default_sight_years,
+            side_col.as_deref(),
         ),
         TransformStep::LoanClassificationProvision {
             bal_col,

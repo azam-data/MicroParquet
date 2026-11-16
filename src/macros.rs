@@ -251,10 +251,25 @@ pub fn generate_python_polars_code(
                 compounding_freq,
                 shock_bps,
                 default_sight_years,
+                side_col,
             } => {
+                // Asset/liability sign for Delta EVE (same rule as banking::direction_sign)
+                let side = side_col.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                let (sign_py, assumed_py) = match side {
+                    Some(s) => {
+                        py.push_str(&format!(
+                            "_side = pl.col(\"{s}\").cast(pl.Utf8).str.strip_chars().str.to_uppercase()\n_sign = pl.when(_side.str.starts_with(\"A\")).then(1.0).when(_side.str.starts_with(\"L\") | _side.is_in([\"DEPOSIT\", \"BORROWING\"])).then(-1.0).otherwise(None)\n_bad = lf.select(pl.col(\"{s}\")).filter(_sign.is_null()).unique(maintain_order=True).head(10).collect()\nif _bad.height > 0:\n    raise ValueError(f\"Side column '{s}' has values that are neither asset nor liability: {{_bad.to_series().to_list()}}\")\n"
+                        ));
+                        ("_sign".to_string(), String::new())
+                    }
+                    None => (
+                        "1.0".to_string(),
+                        ",\n    pl.lit(\"ASSET (unspecified)\").alias(\"Direction_Assumed\")".to_string(),
+                    ),
+                };
                 py.push_str(&format!(
-                    "# IRRBB Duration & Delta EVE Analysis ({:+.0} bps)\nrem_days = (pl.col(\"{}\") - pl.lit(\"{}\").str.to_date(\"%Y-%m-%d\")).dt.total_days()\nT = pl.when(pl.col(\"{}\").is_null()).then({}).otherwise((rem_days / 365.0).clip(0.0027, 100.0))\ny = (pl.col(\"{}\").cast(pl.Float64).fill_null(0.0) / 100.0).clip(0.0001, 1.0)\nk = {:.1}\nmac_dur = pl.when(T <= 0.5).then(T).otherwise(((1.0 + y/k)/y) * (1.0 - (1.0 + y/k).pow(-T*k)))\nmod_dur = mac_dur / (1.0 + y/k)\nlf = lf.with_columns([\n    T.alias(\"Residual_Years_T\"),\n    mac_dur.round(4).alias(\"Macaulay_Duration_Yrs\"),\n    mod_dur.round(4).alias(\"Modified_Duration\"),\n    (pl.col(\"{}\") * mod_dur * 0.0001).round(2).alias(\"DV01_BPV_BDT\"),\n    (-pl.col(\"{}\") * mod_dur * ({} / 10000.0)).round(2).alias(\"Delta_EVE_Impact_BDT\")\n])\n\n",
-                    shock_bps, mat_col, cutoff_date, mat_col, default_sight_years, rate_col, *compounding_freq as f64, bal_col, bal_col, shock_bps
+                    "# IRRBB Duration & Delta EVE Analysis ({:+.0} bps)\nrem_days = (pl.col(\"{}\") - pl.lit(\"{}\").str.to_date(\"%Y-%m-%d\")).dt.total_days()\nT = pl.when(pl.col(\"{}\").is_null()).then({}).otherwise((rem_days / 365.0).clip(0.0027, 100.0))\ny = (pl.col(\"{}\").cast(pl.Float64).fill_null(0.0) / 100.0).clip(0.0001, 1.0)\nk = {:.1}\nmac_dur = pl.when(T <= 0.5).then(T).otherwise(((1.0 + y/k)/y) * (1.0 - (1.0 + y/k).pow(-T*k)))\nmod_dur = mac_dur / (1.0 + y/k)\nlf = lf.with_columns([\n    T.alias(\"Residual_Years_T\"),\n    mac_dur.round(4).alias(\"Macaulay_Duration_Yrs\"),\n    mod_dur.round(4).alias(\"Modified_Duration\"),\n    (pl.col(\"{}\") * mod_dur * 0.0001).round(2).alias(\"DV01_BPV_BDT\"),\n    (-pl.col(\"{}\") * mod_dur * ({} / 10000.0) * {}).round(2).alias(\"Delta_EVE_Impact_BDT\"){}\n])\n\n",
+                    shock_bps, mat_col, cutoff_date, mat_col, default_sight_years, rate_col, *compounding_freq as f64, bal_col, bal_col, shock_bps, sign_py, assumed_py
                 ));
             }
             TransformStep::GroupByPivot {
