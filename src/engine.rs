@@ -824,10 +824,27 @@ fn apply_groupby_pivot(
             AggFunc::Min => tc.min().alias(&spec.alias),
             AggFunc::Max => tc.max().alias(&spec.alias),
             AggFunc::WeightedAvg => {
-                let w_name = spec.weight_col.as_deref().unwrap_or(&spec.target_col);
+                let w_name = spec
+                    .weight_col
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|w| !w.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Weighted average needs a weight column (metric '{}')",
+                            spec.alias
+                        )
+                    })?;
                 let w = col(w_name).cast(DataType::Float64);
                 let v = tc.cast(DataType::Float64);
-                ((v * w.clone()).sum() / w.sum()).alias(&spec.alias)
+                // Only rows where both value and weight are known count, in numerator and denominator
+                let mask = v.clone().is_not_null().and(w.clone().is_not_null());
+                let num = (v * w.clone()).filter(mask.clone()).sum();
+                let den = w.filter(mask).sum();
+                when(den.clone().eq(lit(0.0)))
+                    .then(lit(NULL).cast(DataType::Float64))
+                    .otherwise(num / den)
+                    .alias(&spec.alias)
             }
             AggFunc::PctOfTotal => {
                 let temp_sum_name = format!("__sum_for_{}", spec.alias);

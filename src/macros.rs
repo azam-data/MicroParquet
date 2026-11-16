@@ -186,6 +186,16 @@ pub fn generate_python_polars_code(
                 group_cols, aggs, ..
             } => {
                 let g_str: Vec<String> = group_cols.iter().map(|c| format!("\"{}\"", c)).collect();
+                for a in aggs {
+                    if a.func == AggFunc::WeightedAvg
+                        && a.weight_col.as_deref().map_or(true, |w| w.trim().is_empty())
+                    {
+                        py.push_str(&format!(
+                            "raise ValueError(\"Weighted average needs a weight column (metric '{}')\")\n",
+                            a.alias
+                        ));
+                    }
+                }
                 let mut a_strs = Vec::new();
                 for a in aggs {
                     let expr = match a.func {
@@ -205,8 +215,16 @@ pub fn generate_python_polars_code(
                             format!("pl.col(\"{}\").max().alias(\"{}\")", a.target_col, a.alias)
                         }
                         AggFunc::WeightedAvg => {
-                            let w = a.weight_col.as_deref().unwrap_or(&a.target_col);
-                            format!("((pl.col(\"{}\") * pl.col(\"{}\")).sum() / pl.col(\"{}\").sum()).alias(\"{}\")", a.target_col, w, w, a.alias)
+                            // Null-safe: only rows with both value and weight count; zero weight -> null
+                            let w = a.weight_col.as_deref().unwrap_or("").trim();
+                            let v_py = format!("pl.col(\"{}\").cast(pl.Float64)", a.target_col);
+                            let w_py = format!("pl.col(\"{}\").cast(pl.Float64)", w);
+                            let mask = format!("({v_py}.is_not_null() & {w_py}.is_not_null())");
+                            let den = format!("{w_py}.filter({mask}).sum()");
+                            format!(
+                                "pl.when({den} == 0).then(None).otherwise(({v_py} * {w_py}).filter({mask}).sum() / {den}).alias(\"{}\")",
+                                a.alias
+                            )
                         }
                         AggFunc::PctOfTotal => {
                             format!("pl.col(\"{}\").sum().alias(\"{}\")", a.target_col, a.alias)

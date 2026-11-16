@@ -314,7 +314,6 @@ fn wavg_step(weight: Option<&str>) -> TransformStep {
 }
 
 #[test]
-#[ignore = "fixed by Phase 1 T3"]
 fn t08_wavg_with_nulls() {
     // Rate missing on the big account: true WAVG over known rates = (10*100)/100 = 10%
     let df = df!(
@@ -694,4 +693,25 @@ fn t21_column_tokens_and_ids() {
     for not_id in ["Account_Balance", "Paid_Amount", "Acct_Int_Rate", "Branch_Total", "Matdat", "Valid_Flag", "Dividend"] {
         assert!(!TabState::is_likely_id_column(not_id), "{not_id} should not be an ID");
     }
+}
+
+#[test]
+fn t08b_wavg_python_is_null_safe() {
+    let py = micro_parquet::macros::generate_python_polars_code(
+        std::path::Path::new("x.parquet"),
+        true,
+        &IngestionConfig::default(),
+        &[wavg_step(Some("Balance"))],
+        None,
+    );
+    assert!(py.contains("pl.col(\"Rate\").cast(pl.Float64).is_not_null() & pl.col(\"Balance\").cast(pl.Float64).is_not_null()"), "{py}");
+    assert!(py.contains(".then(None)"), "{py}");
+    let py = micro_parquet::macros::generate_python_polars_code(
+        std::path::Path::new("x.parquet"),
+        true,
+        &IngestionConfig::default(),
+        &[wavg_step(None)],
+        None,
+    );
+    assert!(py.contains("raise ValueError(\"Weighted average needs a weight column"), "{py}");
 }
