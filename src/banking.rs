@@ -8,7 +8,7 @@ use std::path::Path;
 /// Checks that a date input is a real Date column before any day-difference maths.
 /// Date passes through, Datetime is cast to Date, anything else (text, numbers) is an error,
 /// so a wrongly typed column can never be silently bucketed.
-fn ensure_date(mut lf: LazyFrame, col_name: &str) -> Result<LazyFrame> {
+pub(crate) fn ensure_date(mut lf: LazyFrame, col_name: &str) -> Result<LazyFrame> {
     let schema = lf
         .collect_schema()
         .context("Could not read the column types of this table")?;
@@ -283,6 +283,9 @@ fn ftp_rate_exprs(curve: &[FtpPoint], interpolation: FtpInterpolation) -> Result
     Ok((rate, method))
 }
 
+/// `FTP_Method` of a row whose open or maturity date is missing (no FTP rate is given).
+pub const FTP_MISSING_DATE: &str = "MISSING_DATE";
+
 pub fn apply_ftp_curve_map(
     lf: LazyFrame,
     opndat_col: &str,
@@ -299,19 +302,25 @@ pub fn apply_ftp_curve_map(
     let mat_days = col(matdat_col).cast(DataType::Int32).cast(DataType::Int64);
     let raw_diff = mat_days - opn_days;
 
-    let tenor_expr = when(
-        col(matdat_col)
-            .is_null()
-            .or(col(opndat_col).is_null())
-            .or(raw_diff.clone().lt(lit(1i64))),
-    )
-    .then(lit(1i64))
-    .otherwise(raw_diff)
-    .alias("Tenor_Days");
+    // A missing open or maturity date has no tenor: Tenor_Days, the FTP rate and the spread are
+    // null and FTP_Method says MISSING_DATE (it used to become a 1-day tenor without a word).
+    let missing_date = col(matdat_col).is_null().or(col(opndat_col).is_null());
+    let tenor_expr = when(missing_date.clone())
+        .then(lit(NULL).cast(DataType::Int64))
+        .when(raw_diff.clone().lt(lit(1i64)))
+        .then(lit(1i64))
+        .otherwise(raw_diff)
+        .alias("Tenor_Days");
 
     let (ftp_rate_expr, method_expr) = ftp_rate_exprs(curve, interpolation)?;
-    let ftp_rate_expr = ftp_rate_expr.alias("Benchmark_FTP_Rate");
-    let method_expr = method_expr.alias("FTP_Method");
+    let ftp_rate_expr = when(missing_date.clone())
+        .then(lit(NULL).cast(DataType::Float64))
+        .otherwise(ftp_rate_expr)
+        .alias("Benchmark_FTP_Rate");
+    let method_expr = when(missing_date)
+        .then(lit(FTP_MISSING_DATE))
+        .otherwise(method_expr)
+        .alias("FTP_Method");
 
     let acct_rate = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0));
     let spread_expr = if is_liability {

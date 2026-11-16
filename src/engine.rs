@@ -2,7 +2,7 @@ use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
     apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
-    weighted_rate_exprs,
+    ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
     column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
@@ -2454,6 +2454,27 @@ pub fn source_row_check(source: &TabSource, temp_dir: &Path) -> Result<Option<Ro
     }))
 }
 
+/// Rows where the open or the maturity date is missing (after conversion to a date).
+pub fn count_missing_ftp_dates(lf: LazyFrame, opndat_col: &str, matdat_col: &str) -> Result<usize> {
+    let lf = ensure_date(lf, opndat_col)?;
+    let lf = ensure_date(lf, matdat_col)?;
+    let df = lf
+        .select([col(opndat_col)
+            .is_null()
+            .or(col(matdat_col).is_null())
+            .cast(DataType::Int64)
+            .sum()
+            .alias("__mp_missing")])
+        .collect()
+        .context("Could not count rows with a missing open or maturity date")?;
+    Ok(df
+        .column("__mp_missing")
+        .ok()
+        .and_then(|c| c.i64().ok())
+        .and_then(|ca| ca.get(0))
+        .unwrap_or(0) as usize)
+}
+
 /// Rows where `column` is blank (null, or text that is not a number).
 pub fn count_blank_values(lf: LazyFrame, column: &str) -> Result<usize> {
     let df = lf
@@ -2475,6 +2496,7 @@ pub fn count_blank_values(lf: LazyFrame, column: &str) -> Result<usize> {
 
 /// Provisioning, limit utilisation, ΔNII and duration treat a blank balance as 0. One note per
 /// such step whose input has blank balances: "<step>: Balance blank on N rows; treated as 0".
+/// An FTP step also gets a note when rows lack an open or maturity date (no FTP rate for them).
 pub fn blank_balance_notes(
     source: &TabSource,
     steps: &[TransformStep],
@@ -2482,6 +2504,18 @@ pub fn blank_balance_notes(
 ) -> Result<Vec<String>> {
     let mut notes = Vec::new();
     for (i, step) in steps.iter().enumerate() {
+        if let TransformStep::FtpCurveMap { opndat_col, matdat_col, .. } = step {
+            let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+            let n = count_missing_ftp_dates(input, opndat_col, matdat_col)?;
+            if n > 0 {
+                notes.push(format!(
+                    "{}: open or maturity date missing on {} rows; FTP rate and spread left blank (FTP_Method {})",
+                    step.short_label(),
+                    n,
+                    FTP_MISSING_DATE
+                ));
+            }
+        }
         let bal = match step {
             TransformStep::LoanClassificationProvision { bal_col, .. }
             | TransformStep::LoanLimitUtilization { bal_col, .. }

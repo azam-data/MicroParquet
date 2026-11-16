@@ -2522,3 +2522,71 @@ fn t12b_weighted_rate_with_mixed_sign_weights() {
     let src = TabSource::SingleFile { path: write_parquet("wavg_neg.parquet", &df), is_parquet: true, config: IngestionConfig::default() };
     assert!(weighted_mixed_sign_notes(&src, &steps, &tmpdir()).unwrap().is_empty());
 }
+
+#[test]
+fn t11c_ftp_missing_date_is_not_a_one_day_tenor() {
+    let o = days(2026, 1, 1);
+    let df = df!(
+        "Opndat" => [Some(o), Some(o), None, Some(o)],
+        "Matdat" => [Some(o + 100), None, Some(o + 100), Some(o + 31)],
+        "Balance" => [1_000_000.0, 1_000_000.0, 1_000_000.0, 1_000_000.0],
+        "Rate" => [9.0, 9.0, 9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let out = apply_ftp_curve_map(df, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::Linear)
+        .unwrap()
+        .collect()
+        .unwrap();
+    assert_eq!(f64_col(&out, "Tenor_Days"), vec![Some(100.0), None, None, Some(31.0)]);
+    let rate = f64_col(&out, "Benchmark_FTP_Rate");
+    assert_eq!((rate[1], rate[2]), (None, None));
+    assert!((rate[0].unwrap() - 9.559).abs() < 0.001, "100-day FTP rate {:?}", rate[0]);
+    let spread = f64_col(&out, "FTP_Spread_Pct");
+    assert_eq!((spread[1], spread[2]), (None, None));
+    assert!(spread[0].is_some() && spread[3].is_some());
+    let margin = f64_col(&out, "Annual_FTP_Margin_BDT");
+    assert_eq!((margin[1], margin[2]), (None, None));
+    let method = str_col(&out, "FTP_Method");
+    assert_eq!(method[1].as_deref(), Some("MISSING_DATE"));
+    assert_eq!(method[2].as_deref(), Some("MISSING_DATE"));
+    assert!(method[0].as_deref().unwrap().starts_with("Linear"), "{method:?}");
+    // NextPointUp treats a missing date the same way.
+    let df2 = df!("Opndat" => [Some(o)], "Matdat" => [None::<i32>], "Balance" => [1.0], "Rate" => [9.0])
+        .unwrap()
+        .lazy()
+        .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)]);
+    let out2 = apply_ftp_curve_map(df2, "Opndat", "Matdat", "Balance", "Rate", &default_bd_ftp_curve(), true, FtpInterpolation::NextPointUp)
+        .unwrap()
+        .collect()
+        .unwrap();
+    assert_eq!(f64_col(&out2, "Benchmark_FTP_Rate"), vec![None]);
+    assert_eq!(str_col(&out2, "FTP_Method")[0].as_deref(), Some("MISSING_DATE"));
+
+    // The status note counts them.
+    let raw = df!(
+        "Opndat" => [Some(o), Some(o), None],
+        "Matdat" => [Some(o + 100), None, Some(o + 100)],
+        "Balance" => [1.0, 2.0, 3.0],
+        "Rate" => [9.0, 9.0, 9.0]
+    )
+    .unwrap()
+    .lazy()
+    .with_columns([col("Opndat").cast(DataType::Date), col("Matdat").cast(DataType::Date)])
+    .collect()
+    .unwrap();
+    let src = TabSource::SingleFile { path: write_parquet("ftp_missing.parquet", &raw), is_parquet: true, config: IngestionConfig::default() };
+    let step = TransformStep::FtpCurveMap {
+        opndat_col: "Opndat".into(),
+        matdat_col: "Matdat".into(),
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        curve: default_bd_ftp_curve(),
+        is_liability: true,
+        interpolation: FtpInterpolation::Linear,
+    };
+    let notes = blank_balance_notes(&src, &[step], &tmpdir()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("missing on 2 rows") && notes[0].contains("MISSING_DATE"), "{notes:?}");
+}
