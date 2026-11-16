@@ -1031,17 +1031,17 @@ impl RowCountCheck {
         if self.nonempty_lines > 0 && self.parsed_rows == 0 {
             return Some(format!(
                 "0 rows read from a file with {} non-empty lines ({} data lines). Check the separator, title lines and encoding.",
-                self.nonempty_lines,
-                self.data_lines()
+                format_with_commas(self.nonempty_lines as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0)
             ));
         }
         if self.parsed_rows < self.data_lines() {
             return Some(format!(
                 "Read {} rows but the file has {} data lines ({} non-empty lines − 1 header − {} title lines). Check for unclosed quotes or broken lines.",
-                self.parsed_rows,
-                self.data_lines(),
-                self.nonempty_lines,
-                self.skip_rows
+                format_with_commas(self.parsed_rows as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0),
+                format_with_commas(self.nonempty_lines as f64, 0),
+                format_with_commas(self.skip_rows as f64, 0)
             ));
         }
         None
@@ -1077,15 +1077,16 @@ impl JoinStatus {
         };
         let mut out = format!(
             "Join: {} rows (left {}), control {} (left {})",
-            self.rows,
-            self.left_rows,
+            format_with_commas(self.rows as f64, 0),
+            format_with_commas(self.left_rows as f64, 0),
             fmt_sum(self.sum),
             fmt_sum(self.left_sum)
         );
         if self.duplicate_keys > 0 {
             out.push_str(&format!(
                 " ⚠ kept first row for {} duplicated right key(s), {} right row(s) dropped",
-                self.duplicate_keys, self.dropped_rows
+                format_with_commas(self.duplicate_keys as f64, 0),
+                format_with_commas(self.dropped_rows as f64, 0)
             ));
         }
         out

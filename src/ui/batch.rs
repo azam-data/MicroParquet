@@ -173,9 +173,9 @@ impl MicroParquetApp {
                     ui.separator();
                     ui.label(format!(
                         "Converted: {} | Companion Copied: {} | Errors: {} | Size: {:.1} MB -> {:.1} MB",
-                        rep.files_converted,
-                        rep.companion_files_copied,
-                        rep.errors.len(),
+                        micro_parquet::table_layout::format_count(rep.files_converted),
+                        micro_parquet::table_layout::format_count(rep.companion_files_copied),
+                        micro_parquet::table_layout::format_count(rep.errors.len()),
                         rep.bytes_before as f64 / 1_048_576.0,
                         rep.bytes_after as f64 / 1_048_576.0
                     ));
@@ -186,7 +186,7 @@ impl MicroParquetApp {
                     if fails > 0 {
                         ui.colored_label(
                             theme::warning(ui),
-                            format!("\u{E4E0} {} value(s) could not be converted and are null (see parse_failures in the log)", fails),
+                            format!("\u{E4E0} {} value(s) could not be converted and are null (see parse_failures in the log)", micro_parquet::table_layout::format_count(fails)),
                         );
                     }
                     for n in &rep.notices {
@@ -195,7 +195,7 @@ impl MicroParquetApp {
                     if !rep.warnings.is_empty() {
                         ui.colored_label(
                             theme::warning(ui),
-                            format!("\u{E4E0} {} file(s) with fewer rows than data lines (status WARNING in the log):", rep.warnings.len()),
+                            format!("\u{E4E0} {} file(s) with fewer rows than data lines (status WARNING in the log):", micro_parquet::table_layout::format_count(rep.warnings.len())),
                         );
                         egui::ScrollArea::vertical()
                             .id_salt("batch_warnings")

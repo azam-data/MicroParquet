@@ -9,8 +9,8 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 | R1 | DONE | d442fdc | none (2 unit tests moved with their functions: tab_index_after_close, default_side_column) | headless in src/headless.rs; no font loading yet; width literals stay; prelude module; derived dark tokens | Q1 |
 | R2 | DONE | 2700231 | tests/jobs.rs: 15 tests (superseded dropped; replaced queued job never runs; unique/other-tab jobs kept; cancel removes temp file; success renames; failed write leaves nothing; error and panic reach status text; inline runs on caller thread; wake callback; load/refresh numbers; unreadable source; cancelled export, split and batch) | see spec `<accepted_deviations>` (R2): previews stay sync; coarse cancel points; GUI not runnable here | Q2 |
 | R3 | DONE | 907bfa0 | tests/r3.rs: 6 tests (Parquet and CSV streamed vs collected: same rows, sum, data and CSV bytes; non-streamable view falls back and status says so; Dr/Cr check + parse failures share one scan and rescan after a file change; Dr/Cr still refuses; baseline computed once for two tabs, recomputed on change; load stores baseline) | see spec (R3): message-based fallback; baseline key includes schema and control column; scan cache | |
-| L1 | DONE | (next commit) | theme tests (23 tokens light = dark counterpart, spec values, sizes, symbol→glyph map, every UI symbol has a glyph in the loaded fonts) | Source Sans 3 TTFs missing (fallback); title strip inside OS window; More menu; dark primary text; see spec | Q3 |
-| L2 | TODO | | | | |
+| L1 | DONE | 22e8657 | theme tests (23 tokens light = dark counterpart, spec values, sizes, symbol→glyph map, every UI symbol has a glyph in the loaded fonts) | Source Sans 3 TTFs missing (fallback); title strip inside OS window; More menu; dark primary text; see spec | Q3 |
+| L2 | DONE | (next commit) | tests/l2.rs: 5 tests (widest of header / selector / summary / samples wins; 420 cap and floor; only first 100 samples; "01-Sep-2026" fits on one line at the computed width; "20,391" and "1–100 of 20,391") | name-only headers; selector/summary inputs wired but empty until T3; mono dates/IDs | |
 | L3 | TODO | | | | |
 | L4 | TODO | | | | |
 | L5 | TODO | | | | |
@@ -29,5 +29,6 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 - Q3 (L1): please add `SourceSans3-Regular.ttf`, `-Semibold.ttf`, `-Bold.ttf` to `assets/fonts/` (my session could not fetch them) and look at the whole layout against `docs/design/Combined.dc.html`.
 
 ## Notes
+- Disk: the test binaries are ~1.5 GB each (debug info). If a build fails with "No space left on device", delete executables in `target/debug/deps` (not rlibs) and `target/debug/incremental`; never `cargo clean`.
 - R1 check: a line-by-line comparison of the old and new code (after the field renames) shows only structural changes, the 4 colour constants and the theme call.
 - `grep -nE '#[0-9A-Fa-f]{6}|Color32::from_rgb' src/ui src/main.rs` matches only `src/ui/theme.rs`. `main.rs` is 521 lines.

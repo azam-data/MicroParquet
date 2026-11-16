@@ -2,7 +2,84 @@
 
 use crate::ui::prelude::*;
 
+/// Text widths measured with the fonts egui has loaded.
+struct EguiMetrics<'a> {
+    ctx: &'a egui::Context,
+    /// Cells of this column are drawn in the mono font (numbers, dates, IDs).
+    mono_cells: bool,
+}
+
+impl EguiMetrics<'_> {
+    fn width(&self, text: &str, font: egui::FontId) -> f32 {
+        self.ctx.fonts(|f| f.layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE).size().x)
+    }
+}
+
+impl micro_parquet::table_layout::FontMetrics for EguiMetrics<'_> {
+    fn header(&self, text: &str) -> f32 {
+        self.width(text, egui::FontId::new(theme::TEXT_BASE, theme::family_semibold()))
+    }
+    fn selector(&self, text: &str) -> f32 {
+        self.width(text, egui::FontId::new(theme::TEXT_LABEL, theme::family_semibold()))
+    }
+    fn summary(&self, text: &str) -> f32 {
+        self.width(text, egui::FontId::new(theme::TEXT_MONO, theme::family_mono_semibold()))
+    }
+    fn cell(&self, text: &str) -> f32 {
+        if self.mono_cells {
+            self.width(text, egui::FontId::new(theme::TEXT_MONO, egui::FontFamily::Monospace))
+        } else {
+            self.width(text, egui::FontId::new(theme::TEXT_BASE, egui::FontFamily::Proportional))
+        }
+    }
+}
+
+/// How a column's cells are drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellKind {
+    /// Numbers: right-aligned, mono.
+    Number,
+    /// Dates and IDs: left-aligned, mono.
+    MonoText,
+    /// Everything else: left-aligned, Source Sans 3.
+    Text,
+}
+
+fn cell_kind(c: &polars::prelude::Series) -> CellKind {
+    let dt = c.dtype();
+    if dt.is_numeric() {
+        CellKind::Number
+    } else if dt.is_temporal() || TabState::is_likely_id_column(c.name().as_str()) {
+        CellKind::MonoText
+    } else {
+        CellKind::Text
+    }
+}
+
+/// The text of one cell, as the grid shows it.
+fn cell_text(
+    c: &polars::prelude::Series,
+    r_idx: usize,
+    col_formats: &HashMap<String, ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+) -> String {
+    let cname = c.name().as_str();
+    let spec = col_formats.get(cname);
+    match c.get(r_idx) {
+        Ok(AnyValue::Null) => "null".to_string(),
+        Ok(AnyValue::Float64(v)) => format_metric_value(v, cname, spec, num_format, global_decimals),
+        Ok(AnyValue::Float32(v)) => format_metric_value(v as f64, cname, spec, num_format, global_decimals),
+        Ok(AnyValue::String(s)) => s.to_string(),
+        Ok(AnyValue::Int64(v)) if !TabState::is_likely_id_column(cname) => format_with_commas(v as f64, 0),
+        Ok(other) => format!("{}", other),
+        Err(_) => "".to_string(),
+    }
+}
+
 impl MicroParquetApp {
+    /// Draws the page. Returns the column whose header was clicked, if any.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_data_grid(
         ui: &mut egui::Ui,
         df: &DataFrame,
@@ -10,68 +87,122 @@ impl MicroParquetApp {
         row_offset: usize,
         num_format: NumberDisplayFormat,
         global_decimals: usize,
-    ) {
+        tab_id: u64,
+        selected: Option<&str>,
+    ) -> Option<String> {
+        use micro_parquet::table_layout::{column_min_width, MAX_COLUMN_WIDTH, SAMPLE_ROWS};
+        let tk = *theme::tokens(ui.visuals().dark_mode);
         let cols = df.get_columns();
         let num_rows = df.height();
+        let ctx = ui.ctx().clone();
+        let mut clicked: Option<String> = None;
 
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            let mut builder = TableBuilder::new(ui)
-                .striped(true)
-                .resizable(true)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::initial(55.0).at_least(40.0));
+        // Minimum widths: header, selector, summary and the first 100 rows' texts.
+        let kinds: Vec<CellKind> = cols.iter().map(cell_kind).collect();
+        let min_widths: Vec<f32> = cols
+            .iter()
+            .zip(&kinds)
+            .map(|(c, kind)| {
+                let m = EguiMetrics { ctx: &ctx, mono_cells: *kind != CellKind::Text };
+                let samples: Vec<String> = (0..num_rows.min(SAMPLE_ROWS))
+                    .map(|r| cell_text(c, r, col_formats, num_format, global_decimals))
+                    .collect();
+                column_min_width(c.name().as_str(), "", "", &samples, &m)
+            })
+            .collect();
+        let row_no_width = EguiMetrics { ctx: &ctx, mono_cells: true };
+        let row_no_min = {
+            use micro_parquet::table_layout::FontMetrics;
+            row_no_width.cell(&format_with_commas((row_offset + num_rows.max(1)) as f64, 0)) + 24.0
+        };
 
-            for _ in cols {
-                builder = builder.column(Column::initial(145.0).at_least(80.0).clip(true));
-            }
-
-            builder
-                .header(32.0, |mut header| {
-                    header.col(|ui| {
-                        ui.strong("#");
-                    });
-                    for c in cols {
-                        header.col(|ui| {
-                            ui.strong(format!("{}\n({:?})", c.name(), c.dtype()));
-                        });
+        egui::Frame::none()
+            .fill(tk.surface)
+            .stroke(egui::Stroke::new(1.0_f32, tk.border))
+            .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
+            .show(ui, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    // The id keeps each tab's dragged column widths apart.
+                    let mut builder = TableBuilder::new(ui)
+                        .id_salt(("data_grid", tab_id))
+                        .striped(true)
+                        .resizable(true)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(Column::initial(row_no_min.max(48.0)).at_least(row_no_min.max(40.0)));
+                    for w in &min_widths {
+                        builder = builder.column(
+                            Column::initial((*w).max(96.0).min(MAX_COLUMN_WIDTH))
+                                .at_least(*w)
+                                .clip(true)
+                                .resizable(true),
+                        );
                     }
-                })
-                .body(|body| {
-                    body.rows(25.0, num_rows, |mut row| {
-                        let r_idx = row.index();
-                        row.col(|ui| {
-                            ui.label((row_offset + r_idx + 1).to_string());
-                        });
-                        for c in cols {
-                            row.col(|ui| {
-                                let cname = c.name().as_str();
-                                let spec = col_formats.get(cname);
-                                let cell_text = match c.get(r_idx) {
-                                    Ok(AnyValue::Null) => "null".to_string(),
-                                    Ok(AnyValue::Float64(v)) => format_metric_value(
-                                        v,
-                                        cname,
-                                        spec,
-                                        num_format,
-                                        global_decimals,
-                                    ),
-                                    Ok(AnyValue::Float32(v)) => format_metric_value(
-                                        v as f64,
-                                        cname,
-                                        spec,
-                                        num_format,
-                                        global_decimals,
-                                    ),
-                                    Ok(AnyValue::String(s)) => s.to_string(),
-                                    Ok(other) => format!("{}", other),
-                                    Err(_) => "".to_string(),
-                                };
-                                ui.label(cell_text);
+                    builder
+                        .header(theme::HEADER_ROW_H, |mut header| {
+                            header.col(|ui| {
+                                ui.label(theme::label_text("#").color(tk.muted));
                             });
-                        }
-                    });
+                            for (c, kind) in cols.iter().zip(&kinds) {
+                                header.col(|ui| {
+                                    let rect = ui.max_rect();
+                                    let name = c.name().to_string();
+                                    let is_sel = selected == Some(name.as_str());
+                                    let resp = ui.interact(rect, ui.id().with(("hdr", name.as_str())), egui::Sense::click());
+                                    if is_sel {
+                                        ui.painter().rect_filled(rect, 0.0, tk.accent_soft);
+                                        ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, egui::Stroke::new(2.0_f32, tk.accent));
+                                    }
+                                    let layout = if *kind == CellKind::Number {
+                                        egui::Layout::right_to_left(egui::Align::Center)
+                                    } else {
+                                        egui::Layout::left_to_right(egui::Align::Center)
+                                    };
+                                    ui.with_layout(layout, |ui| {
+                                        ui.add(egui::Label::new(theme::semibold(name.clone()).color(tk.ink)).truncate());
+                                    });
+                                    resp.clone().on_hover_text(format!("{}  \u{b7}  {:?}", name, c.dtype()));
+                                    if resp.clicked() {
+                                        clicked = Some(name);
+                                    }
+                                });
+                            }
+                        })
+                        .body(|body| {
+                            body.rows(theme::DATA_ROW_H, num_rows, |mut row| {
+                                let r_idx = row.index();
+                                row.col(|ui| {
+                                    ui.label(theme::mono(format_with_commas((row_offset + r_idx + 1) as f64, 0)).color(tk.muted));
+                                });
+                                for (c, kind) in cols.iter().zip(&kinds) {
+                                    row.col(|ui| {
+                                        let text = cell_text(c, r_idx, col_formats, num_format, global_decimals);
+                                        let is_null = text == "null";
+                                        let rich = match kind {
+                                            CellKind::Text => egui::RichText::new(text.clone()),
+                                            _ => theme::mono(text.clone()),
+                                        }
+                                        .color(if is_null { tk.muted } else { tk.ink });
+                                        let layout = if *kind == CellKind::Number {
+                                            egui::Layout::right_to_left(egui::Align::Center)
+                                        } else {
+                                            egui::Layout::left_to_right(egui::Align::Center)
+                                        };
+                                        ui.with_layout(layout, |ui| {
+                                            let r = ui.add(egui::Label::new(rich).truncate());
+                                            // A cut cell shows its full text on hover.
+                                            let cut = text.chars().count() > 6
+                                                && r.rect.width() >= ui.max_rect().width() - 0.5;
+                                            if cut {
+                                                r.on_hover_text(text.clone());
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                        });
                 });
-        });
+            });
+        clicked
     }
 
     /// Filter chip bar (one chip per filter step) with the paging controls on the right.
@@ -125,14 +256,10 @@ impl MicroParquetApp {
                         page_first = true;
                     }
                     ui.label(
-                        egui::RichText::new(format!(
-                            "{}\u{2013}{} of {}",
-                            format_with_commas((tab.slice_offset + 1) as f64, 0),
-                            format_with_commas(
-                                (tab.slice_offset + tab.cached_slice.height()).min(tab.total_rows) as f64,
-                                0
-                            ),
-                            format_with_commas(tab.total_rows as f64, 0)
+                        egui::RichText::new(micro_parquet::table_layout::format_row_range(
+                            tab.slice_offset + 1,
+                            (tab.slice_offset + tab.cached_slice.height()).min(tab.total_rows),
+                            tab.total_rows,
                         ))
                         .family(egui::FontFamily::Monospace)
                         .size(theme::TEXT_MONO)
@@ -193,20 +320,29 @@ impl MicroParquetApp {
             .tabs
             .get(self.active_tab)
             .is_some_and(|t| self.jobs.is_busy(JobKey::tab(JobKind::Refresh, t.id)));
+        let mut clicked: Option<String> = None;
         if let Some(tab) = self.tabs.get(self.active_tab) {
             ui.scope(|ui| {
                 if updating {
                     ui.set_opacity(0.45);
                 }
-                Self::render_data_grid(
+                clicked = Self::render_data_grid(
                     ui,
                     &tab.cached_slice,
                     &tab.col_formats,
                     tab.slice_offset,
                     self.num_format,
                     self.global_decimals,
+                    tab.id,
+                    self.selected_column.as_deref(),
                 );
             });
+        }
+        if let Some(c) = clicked {
+            // Clicking a header selects the column and opens the Column tab.
+            self.selected_column = Some(c);
+            self.right_tab = RightTab::Column;
+            self.show_steps_sidebar = true;
         }
     }
 }

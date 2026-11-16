@@ -197,6 +197,8 @@ impl MicroParquetApp {
                             0,
                             NumberDisplayFormat::Raw,
                             2,
+                            0,
+                            None,
                         );
                     });
 

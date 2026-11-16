@@ -1546,7 +1546,7 @@ pub fn parse_failure_summary(failures: &[ParseFailure]) -> String {
     }
     let parts: Vec<String> = failures
         .iter()
-        .map(|f| format!("{} {}", f.column, f.count))
+        .map(|f| format!("{} {}", f.column, crate::models::format_with_commas(f.count as f64, 0)))
         .collect();
     format!("Parse failures: {}", parts.join(", "))
 }
