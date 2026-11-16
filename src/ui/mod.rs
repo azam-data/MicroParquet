@@ -6,6 +6,7 @@ pub mod buckets;
 pub mod calc_column;
 pub mod chart;
 pub mod columns;
+pub mod commands;
 pub mod conditional;
 pub mod duration;
 pub mod export;

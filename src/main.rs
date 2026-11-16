@@ -132,8 +132,13 @@ pub struct MicroParquetApp {
     pub confirm_delete_step: Option<usize>,
     pub insert_after: Option<usize>,
     show_about: bool,
-    /// Command search overlay (Ctrl K).
+    /// Command search overlay (Ctrl K): open, what is typed, the highlighted row, and the commands
+    /// used last (first = most recent).
     pub command_open: bool,
+    pub command_query: String,
+    pub command_cursor: usize,
+    pub command_focus: bool,
+    pub recent_commands: Vec<micro_parquet::commands::CommandId>,
     dark_mode: bool,
     ui_zoom: f32,
     pending_csv_modal: Option<PendingCsvModal>,
@@ -167,6 +172,9 @@ pub struct MicroParquetApp {
 impl MicroParquetApp {
     pub fn new(paths: PortablePaths, egui_ctx: egui::Context) -> Self {
         let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
+        let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
+            .map(|t| micro_parquet::commands::recent_from_text(&t))
+            .unwrap_or_default();
         Self {
             jobs: JobQueue::new(move || egui_ctx.request_repaint()),
             tab_id_counter: 0,
@@ -189,6 +197,10 @@ impl MicroParquetApp {
             insert_after: None,
             show_about: false,
             command_open: false,
+            command_query: String::new(),
+            command_cursor: 0,
+            command_focus: false,
+            recent_commands,
             dark_mode: false,
             ui_zoom: 1.05,
             pending_csv_modal: None,
@@ -229,6 +241,7 @@ impl eframe::App for MicroParquetApp {
             self.status_message = note;
         }
         self.poll_jobs(ctx);
+        self.handle_palette_shortcut(ctx);
         self.handle_step_shortcuts(ctx);
         self.render_title_bar(ctx);
         self.render_toolbar_panel(ctx);
@@ -258,6 +271,7 @@ impl eframe::App for MicroParquetApp {
         self.render_batch_modal(ctx);
         self.render_active_tool_modal(ctx);
         self.render_about(ctx);
+        self.render_command_palette(ctx);
     }
 }
 
@@ -302,41 +316,13 @@ impl MicroParquetApp {
     }
 
     fn file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        use micro_parquet::commands::{CommandGroup, CommandId};
         ui.menu_button("File", |ui| {
-            if ui.button("Open CSV or Parquet...").clicked() {
-                ui.close_menu();
-                self.initiate_file_open(false);
-            }
-            if ui.button("Direct CSV -> Parquet Converter...").clicked() {
-                ui.close_menu();
-                self.initiate_file_open(true);
-            }
-            ui.separator();
-            if ui.button("Recursive Batch Folder Mirror...").clicked() {
-                ui.close_menu();
-                self.batch_modal.open = true;
-            }
-            ui.separator();
-            let has_tab = !self.tabs.is_empty();
-            if ui.add_enabled(has_tab, egui::Button::new("Save Active Tab as Macro (.mpq.json)...")).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::SaveMacro;
-            }
-            if ui.add_enabled(has_tab, egui::Button::new("Load & Replay Macro on Current Tab...")).clicked() {
-                ui.close_menu();
-                self.load_and_apply_macro_interactive(false);
-            }
-            if ui.add_enabled(has_tab, egui::Button::new("Load & Replay Macro into New Tab...")).clicked() {
-                ui.close_menu();
-                self.load_and_apply_macro_interactive(true);
-            }
-            if ui.add_enabled(has_tab, egui::Button::new("Export Pipeline as Python Polars (.py)...")).clicked() {
-                ui.close_menu();
-                self.prepare_python_preview_for_active_tab();
-            }
-            ui.separator();
-            if ui.button("Quit").clicked() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            for c in micro_parquet::commands::in_group(CommandGroup::File) {
+                if matches!(c.id, CommandId::SaveMacro | CommandId::Quit) {
+                    ui.separator();
+                }
+                self.command_menu_item(ui, ctx, c.id);
             }
         });
     }
@@ -396,28 +382,36 @@ impl MicroParquetApp {
                 ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    let ph = theme::ph::FOLDER_OPEN;
-                    if theme::flat_button(ui, ph, "Open").clicked() {
-                        self.initiate_file_open(false);
-                    }
-                    if theme::flat_button(ui, theme::ph::STACK, "Stack").clicked() {
-                        self.active_tool = ActiveToolModal::StackFiles;
-                    }
-                    if theme::flat_button(ui, theme::ph::ARROWS_CLOCKWISE, "Batch").clicked() {
-                        self.batch_modal.open = true;
-                    }
-                    ui.separator();
                     let has_tab = !self.tabs.is_empty();
+                    for id in micro_parquet::commands::TOOLBAR_BUTTONS_FILE {
+                        self.toolbar_button(ui, ctx, *id);
+                    }
+                    ui.separator();
                     ui.add_enabled_ui(has_tab, |ui| {
-                        self.transform_buttons(ui);
+                        for id in micro_parquet::commands::TOOLBAR_BUTTONS_TRANSFORM {
+                            self.toolbar_button(ui, ctx, *id);
+                        }
+                        ui.menu_button(format!("{}  More", theme::ph::DOTS_THREE), |ui| {
+                            for id in micro_parquet::commands::TOOLBAR_MORE {
+                                self.command_menu_item(ui, ctx, *id);
+                            }
+                        });
                     });
                     ui.separator();
                     ui.add_enabled_ui(has_tab, |ui| {
-                        self.banking_menu(ui);
+                        ui.menu_button(format!("{}  Banking  {}", theme::ph::BANK, theme::ph::CARET_DOWN), |ui| {
+                            for c in micro_parquet::commands::in_group(micro_parquet::commands::CommandGroup::Banking) {
+                                self.command_menu_item(ui, ctx, c.id);
+                            }
+                        });
                     });
                     ui.separator();
                     ui.add_enabled_ui(has_tab, |ui| {
-                        self.export_menu(ui);
+                        ui.menu_button(format!("{}  Export  {}", theme::ph::EXPORT, theme::ph::CARET_DOWN), |ui| {
+                            for c in micro_parquet::commands::in_group(micro_parquet::commands::CommandGroup::Export) {
+                                self.command_menu_item(ui, ctx, c.id);
+                            }
+                        });
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         self.command_box(ui);
@@ -426,46 +420,6 @@ impl MicroParquetApp {
             });
     }
 
-    fn transform_buttons(&mut self, ui: &mut egui::Ui) {
-        if theme::flat_button(ui, theme::ph::FUNNEL, "Filter").clicked() {
-            self.open_filter_editor_default();
-        }
-        if theme::flat_button(ui, theme::ph::SORT_ASCENDING, "Sort").clicked() {
-            self.open_sort_editor(None);
-        }
-        if theme::flat_button(ui, theme::ph::COLUMNS, "Columns").clicked() {
-            self.init_tool_defaults_from_active_tab();
-            self.active_tool = ActiveToolModal::ManageColumns;
-        }
-        if theme::flat_button(ui, theme::ph::CALCULATOR, "Calc column").clicked() {
-            self.active_tool = ActiveToolModal::MathFormula;
-        }
-        if theme::flat_button(ui, theme::ph::TABLE, "Pivot").clicked() {
-            self.init_tool_defaults_from_active_tab();
-            self.active_tool = ActiveToolModal::GroupByPivot;
-        }
-        ui.menu_button(format!("{}  More", theme::ph::DOTS_THREE), |ui| {
-            if ui.button(format!("{}  Conditional column (IF / ELSE)...", theme::ph::PLUS)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::ConditionalCol;
-            }
-            if ui.button(format!("{}  Counterparty name normaliser...", theme::ph::BUILDINGS)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::NormalizeEntity;
-            }
-            if ui.button(format!("{}  SQL join of two open tabs...", theme::ph::LINK)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::JoinTabs;
-            }
-            ui.separator();
-            ui.checkbox(&mut self.show_sql_bar, "SQL scratchpad bar");
-            ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
-            if ui.button(format!("{}  Copy table (for Excel / PowerPoint)", theme::ph::CLIPBOARD_TEXT)).clicked() {
-                ui.close_menu();
-                self.copy_table_to_clipboard(ui.ctx());
-            }
-        });
-    }
 
     fn copy_table_to_clipboard(&mut self, ctx: &egui::Context) {
         if let Some(tab) = self.tabs.get(self.active_tab) {
@@ -481,81 +435,23 @@ impl MicroParquetApp {
         }
     }
 
-    fn banking_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button(format!("{}  Banking  {}", theme::ph::BANK, theme::ph::CARET_DOWN), |ui| {
-            ui.strong("Treasury & ALM");
-            if ui.button(format!("{}  Maturity bucketer (SLP / LCR / Custom)...", theme::ph::CALENDAR)).clicked() {
-                ui.close_menu();
-                self.buckets.presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
-                self.active_tool = ActiveToolModal::MaturityBucket;
-            }
-            if ui.button(format!("{}  Interest rate shock / \u{394}NII...", theme::ph::CHART_LINE)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::RateShockSim;
-            }
-            if ui.button(format!("{}  Duration, DV01 & \u{394}EVE...", theme::ph::TIMER)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::DurationAnalysis;
-            }
-            if ui.button(format!("{}  FTP yield curve mapper...", theme::ph::CALCULATOR)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::FtpCurveMap;
-            }
-            ui.separator();
-            ui.strong("Loans & credit risk");
-            if ui.button(format!("{}  BB classified-loan provision & BFP...", theme::ph::BANK)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::LoanProvision;
-            }
-            if ui.button(format!("{}  Limit utilisation, over-limit & undrawn CCF...", theme::ph::CREDIT_CARD)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::LoanLimitUtil;
-            }
-            ui.separator();
-            if ui.button(format!("{}  Two-period variance & CL migration...", theme::ph::SCALES)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::ReconcilePeriods;
-            }
-            if ui.button(format!("{}  Core banking dirty-data auditor...", theme::ph::SHIELD_CHECK)).clicked() {
-                ui.close_menu();
-                self.active_tool = ActiveToolModal::BankingAudit;
-            }
-        });
-    }
 
-    fn export_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button(format!("{}  Export  {}", theme::ph::EXPORT, theme::ph::CARET_DOWN), |ui| {
-            ui.menu_button("Parquet compression mode", |ui| {
-                ui.selectable_value(&mut self.parquet_dialect, ParquetDialect::ArchiveZstd, ParquetDialect::ArchiveZstd.label());
-                ui.selectable_value(&mut self.parquet_dialect, ParquetDialect::PowerBiSnappy, ParquetDialect::PowerBiSnappy.label());
-            });
-            ui.separator();
-            if ui.button("Active tab to Parquet (.parquet)...").clicked() {
-                ui.close_menu();
-                self.run_guarded_export(GuardedExport::Parquet);
-            }
-            if ui.button("Active tab to CSV (.csv)...").clicked() {
-                ui.close_menu();
-                self.run_guarded_export(GuardedExport::Csv);
-            }
-            ui.separator();
-            if ui.button(format!("{}  Multi-tab Excel workbook (.xlsx)...", theme::ph::FILE_XLS)).clicked() {
-                ui.close_menu();
-                self.export.multi_checks = vec![true; self.tabs.len()];
-                self.active_tool = ActiveToolModal::MultiTabExport;
-            }
-            if ui.button(format!("{}  Multi-tab PDF report (.pdf)...", theme::ph::FILE_PDF)).clicked() {
-                ui.close_menu();
-                self.export.multi_checks = vec![true; self.tabs.len()];
-                self.active_tool = ActiveToolModal::MultiTabExport;
-            }
-            ui.separator();
-            if ui.button(format!("{}  Split export by column...", theme::ph::FILES)).clicked() {
-                ui.close_menu();
-                self.init_tool_defaults_from_active_tab();
-                self.active_tool = ActiveToolModal::SplitByColumn;
-            }
-        });
+
+    /// A flat toolbar button for a command; greyed with the reason when it cannot run.
+    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId) {
+        let reason = self.command_unavailable(id);
+        let btn = ui
+            .add_enabled_ui(reason.is_none(), |ui| {
+                theme::flat_button(ui, ui::commands::command_icon(id), ui::commands::toolbar_label(id))
+            })
+            .inner;
+        let btn = match reason {
+            Some(r) => btn.on_disabled_hover_text(r),
+            None => btn,
+        };
+        if btn.clicked() {
+            self.run_command(ctx, id);
+        }
     }
 
     /// The search box on the right of the toolbar ("Search actions and columns", Ctrl K).
@@ -586,7 +482,7 @@ impl MicroParquetApp {
             .response
             .interact(egui::Sense::click());
         if resp.clicked() {
-            self.command_open = true;
+            self.open_command_palette();
         }
     }
 
