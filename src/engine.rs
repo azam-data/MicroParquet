@@ -727,6 +727,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             segment_col,
             suspense_col,
             security_col,
+            cutoff_date,
+            collateral_type_col,
         } => apply_loan_classification_provision(
             lf,
             bal_col,
@@ -734,6 +736,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             segment_col.as_deref(),
             suspense_col.as_deref(),
             security_col.as_deref(),
+            collateral_type_col.as_deref(),
+            cutoff_date,
         ),
         TransformStep::LoanLimitUtilization {
             limit_col,

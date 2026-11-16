@@ -1,6 +1,6 @@
 // Review harness: exercises MicroParquet's calculation code against hand-checked cases.
-// Expected values come from docs/phase1-spec.md. Tests for tasks outside Phase 1 part 1
-// (T4, T7, Phase 2) keep their evidence printout and assert only what is already settled.
+// Expected values come from docs/phase1-spec.md. Tests for work outside Phase 1
+// (Phase 2) keep their evidence printout and assert only what is already settled.
 use micro_parquet::banking::*;
 use micro_parquet::engine::*;
 use micro_parquet::models::*;
@@ -279,21 +279,108 @@ fn t06_auto_format_classification() {
 
 #[test]
 fn t07_provisioning() {
-    // Rates are reworked in Phase 1 T7 (not in part 1); smoke test only.
+    // T7 acceptance at cutoff 2026-10-31, using rule files written to and re-read from disk.
+    let dir = tmpdir().join("t07_rules");
+    let _ = std::fs::remove_dir_all(&dir);
+    let cfg = ProvisionConfig::load_or_create(&dir).unwrap();
+    assert!(dir.join("cl_code_map.json").exists() && dir.join("segment_map.json").exists());
+    assert_eq!(cfg.rules, ProvisionConfig::defaults().rules, "rule file round trip");
+
     let df = df!(
-        "Balance" => [1_000_000.0; 9],
-        "CL" => ["UC", "SMA", "SS", "DF", "B/L", "BL", "STD-1", "SS", "BL"],
-        "Seg" => ["CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "NON-CMSME", "CMSME", "CMSME", "CORPORATE"],
-        "Susp" => [0.0, 0.0, 100_000.0, 100_000.0, 100_000.0, 100_000.0, 0.0, 0.0, 0.0],
-        "Sec" => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 950_000.0]
+        "Balance" => [1_000_000.0; 11],
+        "CL" => ["UC", "SMA", "SS", "DF", "B/L", "BL", "STD-1", "SS", "BL", "BL", "DF"],
+        "Seg" => ["CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "CORPORATE", "NON-CMSME", "CMSME", "CMSME", "CORPORATE", "CORPORATE", "AGRI TERM LOAN"],
+        "Susp" => [0.0, 0.0, 100_000.0, 100_000.0, 100_000.0, 100_000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "Sec" => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 950_000.0, 950_000.0, 0.0],
+        "Coll" => [None, None, None, None, None, None, None, None, None, Some(" deposit lien"), None]
     )
     .unwrap();
-    let out = apply_loan_classification_provision(df.lazy(), "Balance", "CL", Some("Seg"), Some("Susp"), Some("Sec"))
-        .unwrap()
-        .collect()
-        .unwrap();
-    assert_eq!(out.height(), 9);
+    let run = |df: DataFrame, coll: Option<&str>, cutoff: &str| {
+        apply_loan_classification_provision_with(df.lazy(), "Balance", "CL", Some("Seg"), Some("Susp"), Some("Sec"), coll, cutoff, &cfg)
+    };
+    let out = run(df.clone(), Some("Coll"), "2026-10-31").unwrap().collect().unwrap();
+    let prov = f64_col(&out, "Required_Provision_BDT");
+    let expected = [10_000.0, 50_000.0, 180_000.0, 450_000.0, 900_000.0, 900_000.0, 5_000.0, 200_000.0, 150_000.0, 50_000.0, 500_000.0];
+    for (i, e) in expected.iter().enumerate() {
+        assert_close(prov[i].unwrap(), *e, &format!("row {} provision", i + 1));
+    }
+    let bfp = f64_col(&out, "Base_For_Provision_BDT");
+    assert_close(bfp[2].unwrap(), 900_000.0, "SS BFP");
+    assert_close(bfp[8].unwrap(), 150_000.0, "BL BFP with 15% floor");
+    assert_eq!(f64_col(&out, "Statutory_Prov_Rate_Pct")[10], Some(50.0));
+    let cat = str_col(&out, "Reg_Category");
+    assert_eq!(cat[5].as_deref(), Some("OTHER"), "NON-CMSME");
+    assert_eq!(cat[6].as_deref(), Some("CMSME"));
+    assert_eq!(cat[10].as_deref(), Some("OTHER"), "AGRI TERM LOAN is not an exact match");
+    let unmapped: Vec<Option<bool>> = out.column("Segment_Unmapped").unwrap().bool().unwrap().into_iter().collect();
+    assert_eq!(unmapped[6], Some(false));
+    assert_eq!(unmapped[10], Some(true));
+    let grade = str_col(&out, "CL_Grade");
+    assert_eq!(grade[0].as_deref(), Some("STD"));
+    assert_eq!(grade[4].as_deref(), Some("BL"));
+    assert_eq!(str_col(&out, "NPL_Category")[2].as_deref(), Some("NPL (Classified)"));
+    let src = str_col(&out, "Rule_Source");
+    assert!(src[0].as_deref().unwrap().contains("Circular 15"));
+    assert!(src[6].as_deref().unwrap().ends_with("[verify]"), "{:?}", src[6]);
+    assert!(out.column("Cutoff_Assumed").is_err());
     println!("PROV:\n{}", out.drop("Balance").unwrap());
+
+    // No collateral-type column at all: the 15% floor applies
+    let out = run(df.slice(8, 1), None, "2026-10-31").unwrap().collect().unwrap();
+    assert_close(f64_col(&out, "Required_Provision_BDT")[0].unwrap(), 150_000.0, "BL, no collateral column");
+
+    // CMSME STD outside the 0.5% window falls back to the ANY 1% row
+    for cutoff in ["2027-01-31", "2025-06-30"] {
+        let out = run(df.slice(6, 1), None, cutoff).unwrap().collect().unwrap();
+        assert_close(f64_col(&out, "Required_Provision_BDT")[0].unwrap(), 10_000.0, cutoff);
+    }
+
+    // Unknown CL code: an error that names it, never a default rate
+    let bad = df!("Balance" => [1.0, 2.0, 3.0], "CL" => ["UC", "XYZ", "XYZ"], "Seg" => ["A", "B", "C"], "Susp" => [0.0; 3], "Sec" => [0.0; 3]).unwrap();
+    let err = run(bad, None, "2026-10-31").err().expect("XYZ must fail").to_string();
+    assert!(err.contains("XYZ") && !err.contains("'UC'"), "{err}");
+
+    // Blank cutoff = today, flagged
+    let out = run(df.slice(0, 1), None, "").unwrap().collect().unwrap();
+    assert!(out.column("Cutoff_Assumed").is_ok());
+}
+
+#[test]
+fn t07b_provision_rule_files() {
+    let cutoff = |s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+    let mut cfg = ProvisionConfig::defaults();
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-11-15")).unwrap().rate_pct, 1.0);
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2025-12-21")).unwrap().rate_pct, 0.5);
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2026-12-31")).unwrap().rate_pct, 0.5);
+    assert_eq!(cfg.lookup("SMA", "CMSME", cutoff("2027-01-01")).unwrap().rate_pct, 5.0);
+    assert_eq!(cfg.lookup("SS", "CMSME", cutoff("2026-10-31")).unwrap().rate_pct, 20.0);
+    // Before the first rule: no rate, error
+    let err = cfg.lookup("STD", "OTHER", cutoff("2025-03-31")).unwrap_err().to_string();
+    assert!(err.contains("no rule"), "{err}");
+    // Overlap: a second ANY row in force on the same day is an error naming both
+    let mut extra = cfg.rules[0].clone();
+    extra.source = "duplicate row".into();
+    extra.effective_from = "2026-01-01".into();
+    cfg.rules.push(extra);
+    let err = cfg.lookup("STD", "OTHER", cutoff("2026-10-31")).unwrap_err().to_string();
+    assert!(err.contains("duplicate row") && err.contains("Circular 15"), "{err}");
+
+    // File errors name the file and line
+    let dir = tmpdir().join("t07b_rules");
+    let _ = std::fs::remove_dir_all(&dir);
+    ProvisionConfig::ensure_default_files(&dir).unwrap();
+    std::fs::write(dir.join("provision_rules.json"), "[\n  {\"grade\": \"STD\",\n   \"category\": \"ANY\" oops\n]").unwrap();
+    let err = ProvisionConfig::load_or_create(&dir).unwrap_err().to_string();
+    assert!(err.contains("provision_rules.json") && err.contains("line 3"), "{err}");
+    std::fs::remove_file(dir.join("provision_rules.json")).unwrap();
+    // Same code listed twice (after normalising) is an error, not last-one-wins
+    std::fs::write(dir.join("cl_code_map.json"), "{\"BL\": \"BL\", \" bl \": \"DF\"}").unwrap();
+    let err = ProvisionConfig::load_or_create(&dir).unwrap_err().to_string();
+    assert!(err.contains("cl_code_map.json") && err.contains("more than once"), "{err}");
+    // Grades are validated
+    std::fs::write(dir.join("cl_code_map.json"), "{\"UC\": \"PERFORMING\"}").unwrap();
+    let err = ProvisionConfig::load_or_create(&dir).unwrap_err().to_string();
+    assert!(err.contains("PERFORMING"), "{err}");
 }
 
 fn wavg_step(weight: Option<&str>) -> TransformStep {
@@ -566,6 +653,8 @@ fn t15_python_codegen_drops_banking_steps() {
             segment_col: None,
             suspense_col: None,
             security_col: None,
+            cutoff_date: "2026-10-31".into(),
+            collateral_type_col: None,
         },
         TransformStep::RateShockSim {
             bal_col: "Balance".into(),
@@ -650,19 +739,24 @@ fn t17_join_duplicates_inflate() {
 
 #[test]
 fn t18_segment_and_status_edge_cases() {
-    // Status/segment mapping is Phase 1 T7 (not in part 1); smoke test only.
+    // T7: codes are normalised (case, spaces); segments match exactly, unmapped -> OTHER (flagged).
     let df = df!(
-        "Balance" => [1_000_000.0; 4],
-        "CL" => ["SS", "ss ", "Sub-Standard", "DF"],
-        "Seg" => ["NON-CMSME", "CORPORATE", "CORPORATE", "AGRI TERM LOAN"]
+        "Balance" => [1_000_000.0; 5],
+        "CL" => ["SS", "ss ", "Sub  Standard", "DF", "Sub-Standard"],
+        "Seg" => ["NON-CMSME", "CORPORATE", "CORPORATE", "AGRI TERM LOAN", " cmsme "]
     )
     .unwrap();
-    let out = apply_loan_classification_provision(df.lazy(), "Balance", "CL", Some("Seg"), None, None)
+    let cfg = ProvisionConfig::defaults();
+    let out = apply_loan_classification_provision_with(df.lazy(), "Balance", "CL", Some("Seg"), None, None, None, "2026-10-31", &cfg)
         .unwrap()
         .collect()
         .unwrap();
-    assert_eq!(out.height(), 4);
-    println!("PROV-EDGE:\n{}", out.select(["CL", "Seg", "NPL_Category", "Statutory_Prov_Rate_Pct"]).unwrap());
+    assert_eq!(f64_col(&out, "Statutory_Prov_Rate_Pct"), vec![Some(20.0), Some(20.0), Some(20.0), Some(50.0), Some(20.0)]);
+    let cat = str_col(&out, "Reg_Category");
+    assert_eq!(cat[0].as_deref(), Some("OTHER"));
+    assert_eq!(cat[3].as_deref(), Some("OTHER"));
+    assert_eq!(cat[4].as_deref(), Some("CMSME"));
+    println!("PROV-EDGE:\n{}", out.select(["CL", "Seg", "CL_Grade", "Reg_Category", "Segment_Unmapped", "Statutory_Prov_Rate_Pct"]).unwrap());
 }
 
 #[test]
@@ -719,7 +813,12 @@ fn t20_v111_macro_json_still_loads() {
     assert_eq!(recipe.steps.len(), 3);
     assert!(matches!(recipe.steps[0], TransformStep::RateShockSim { side_col: None, .. }));
     assert!(matches!(recipe.steps[1], TransformStep::DurationAnalysis { side_col: None, .. }));
-    assert!(matches!(recipe.steps[2], TransformStep::LoanClassificationProvision { .. }));
+    match &recipe.steps[2] {
+        TransformStep::LoanClassificationProvision { cutoff_date, collateral_type_col, .. } => {
+            assert!(cutoff_date.is_empty() && collateral_type_col.is_none());
+        }
+        other => panic!("unexpected step {other:?}"),
+    }
 }
 
 #[test]

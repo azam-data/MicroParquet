@@ -14,14 +14,18 @@ pub struct PortablePaths {
     pub temp_dir: PathBuf,
 }
 
+/// `portable_data/` next to the executable (falls back to the working directory).
+pub fn portable_root_dir() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    exe_dir.join("portable_data")
+}
+
 impl PortablePaths {
     pub fn init() -> Self {
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-        let root_dir = exe_dir.join("portable_data");
+        let root_dir = portable_root_dir();
         let recipes_folder = root_dir.join("macros");
         let schema_folder = root_dir.join("schemas");
         let curve_folder = root_dir.join("curves");
@@ -692,6 +696,12 @@ pub enum TransformStep {
         segment_col: Option<String>,
         suspense_col: Option<String>,
         security_col: Option<String>,
+        /// YYYY-MM-DD; empty = today (flagged in a Cutoff_Assumed column)
+        #[serde(default)]
+        cutoff_date: String,
+        /// Collateral type column; DEPOSIT_LIEN etc. skip the 15% BFP floor
+        #[serde(default)]
+        collateral_type_col: Option<String>,
     },
     LoanLimitUtilization {
         limit_col: String,

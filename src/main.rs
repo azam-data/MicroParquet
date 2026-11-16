@@ -53,6 +53,12 @@ struct CliArgs {
 fn main() -> eframe::Result<()> {
     let args = CliArgs::parse();
     let paths = PortablePaths::init();
+    // First run: write the default provisioning rule files (cl_code_map, segment_map, rules).
+    if let Err(e) =
+        micro_parquet::banking::ProvisionConfig::ensure_default_files(&paths.root_dir)
+    {
+        eprintln!("[MicroParquet] Could not create provisioning rule files: {:#}", e);
+    }
 
     if args.headless {
         if let Err(e) = run_headless_cli(&args, &paths) {
@@ -306,6 +312,8 @@ pub struct MicroParquetApp {
     loan_seg_col: String,
     loan_susp_col: String,
     loan_sec_col: String,
+    loan_coll_type_col: String,
+    loan_cutoff: String,
 
     lim_col: String,
     lim_bal_col: String,
@@ -508,6 +516,8 @@ impl MicroParquetApp {
             loan_seg_col: "Sector".to_string(),
             loan_susp_col: String::new(),
             loan_sec_col: String::new(),
+            loan_coll_type_col: String::new(),
+            loan_cutoff: String::new(),
 
             lim_col: "Sanctioned_Limit".to_string(),
             lim_bal_col: "Balance".to_string(),
@@ -2459,6 +2469,13 @@ impl MicroParquetApp {
                             ui.label("Optional Eligible Security Col:");
                             ui.text_edit_singleline(&mut self.loan_sec_col);
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Optional Collateral Type Col:");
+                            ui.text_edit_singleline(&mut self.loan_coll_type_col);
+                            ui.label("Cutoff Date (YYYY-MM-DD, blank = today):");
+                            ui.text_edit_singleline(&mut self.loan_cutoff);
+                        });
+                        ui.label("Rates, CL codes and segments come from cl_code_map.json, segment_map.json and provision_rules.json in portable_data.");
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("✅ Calculate CL Provision & BFP").clicked() {
@@ -2480,6 +2497,12 @@ impl MicroParquetApp {
                                             None
                                         } else {
                                             Some(self.loan_sec_col.trim().to_string())
+                                        },
+                                        cutoff_date: self.loan_cutoff.trim().to_string(),
+                                        collateral_type_col: if self.loan_coll_type_col.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(self.loan_coll_type_col.trim().to_string())
                                         },
                                     },
                                     false,
