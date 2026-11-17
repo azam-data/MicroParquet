@@ -367,7 +367,8 @@ use micro_parquet::models::ColumnSchemaConfig;
 use polars::prelude::NamedFrom;
 
 pub(crate) fn schema_modal(rows: usize, columns: usize, parquet: bool) -> PendingCsvModal {
-    let names: Vec<String> = (0..4).map(|i| format!("Col{i}")).collect();
+    // the preview shows as many columns as the file has (up to 60)
+    let names: Vec<String> = (0..columns.clamp(4, 60)).map(|i| format!("Col{i}")).collect();
     let df = DataFrame::new(
         names
             .iter()
@@ -530,12 +531,12 @@ fn parquet_files_show_the_one_option_that_applies() {
 
 /// What one frame painted: texts with their position and font family, and filled rectangles.
 #[derive(Default)]
-struct Painted {
-    texts: Vec<(String, egui::Pos2, egui::FontFamily)>,
-    rects: Vec<(egui::Rect, egui::Color32)>,
+pub(crate) struct Painted {
+    pub(crate) texts: Vec<(String, egui::Pos2, egui::FontFamily)>,
+    pub(crate) rects: Vec<(egui::Rect, egui::Color32)>,
 }
 
-fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
+pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
     fn walk(shape: &egui::Shape, out: &mut Painted) {
         match shape {
             egui::Shape::Text(t) => {

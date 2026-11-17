@@ -78,6 +78,43 @@ fn schema_dialog_with_40_columns_keeps_its_footer_inside_the_window_at_both_scal
     }
 }
 
+/// Every heading cell of a grid lies inside its frame, and so does what it may paint.
+fn assert_grid_inside_frame(rep: &crate::ui::table::GridReport, what: &str) -> egui::Rect {
+    let frame = rep.frame.unwrap_or_else(|| panic!("{what}: no frame"));
+    for (kind, cells) in [("header", &rep.header), ("selector", &rep.selector), ("summary", &rep.summary)] {
+        for (name, c) in cells.iter() {
+            let visible = c.layout.intersect(c.clip);
+            assert!(visible.width() < 0.0 || inside(visible, frame), "{what}: {kind} cell '{name}' {visible:?} reaches outside the frame {frame:?}");
+            assert!(inside(c.clip, frame.expand(0.6)), "{what}: {kind} cell '{name}' may paint {:?}, outside the frame {frame:?}", c.clip);
+        }
+    }
+    frame
+}
+
+#[test]
+fn schema_preview_headings_never_pass_the_cards_right_edge_at_both_scales() {
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("r2preview");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        app.pending_csv_modal = Some(schema_modal(5, 40, false));
+        let (ctx, input) = screen(ppp, w, h);
+        frames(&mut app, &ctx, &input, 8);
+        let win = theme::dialog_report(&ctx, crate::ui::schema::SCHEMA_TITLE_CSV).expect("dialog").window;
+        // the preview (tab id 0): 40 headings, scrolled to the start, the middle and the end
+        for x in [0.0f32, 700.0, 1600.0, 5000.0] {
+            crate::ui::table::request_grid_scroll(&ctx, 0, x);
+            frames(&mut app, &ctx, &input, 3);
+            let what = format!("ppp {ppp} {w}x{h} scrolled to {x}");
+            let rep = crate::ui::table::grid_report(&ctx, 0).unwrap_or_else(|| panic!("{what}: the preview was not drawn"));
+            assert_eq!(rep.header.len(), 40, "{what}");
+            let frame = assert_grid_inside_frame(&rep, &what);
+            // the card's padding lies between the frame and the dialog's content edge
+            assert!(frame.right() <= win.right() - theme::SPACE_M + 0.5 && frame.left() >= win.left() + theme::SPACE_M - 0.5, "{what}: the preview frame {frame:?} is inside the dialog {win:?}");
+        }
+    }
+}
+
 #[test]
 fn a_filter_dialog_with_80_conditions_fits_at_both_scales_and_scrolls_inside() {
     for (ppp, w, h) in SCREENS {
@@ -179,4 +216,93 @@ fn every_dialog_comes_from_the_one_shared_helper() {
         modals += text.matches("theme::modal(").count();
     }
     assert!(modals >= 27, "{modals} dialogs use the helper");
+}
+
+// ------------------------------------------------------------------------------ the main table
+
+/// A tab with 40 columns and `rows` rows (text, numbers and dates), like a real loan file.
+fn open_table_tab(app: &mut MicroParquetApp, rows: usize) -> u64 {
+    use polars::prelude::{NamedFrom, Series};
+    let mut cols: Vec<_> = vec![Series::new("Account".into(), (0..rows).map(|i| format!("A{i:05}")).collect::<Vec<_>>()).into()];
+    for c in 1..40 {
+        if c % 4 == 0 {
+            cols.push(Series::new(format!("Text column {c}").into(), (0..rows).map(|i| format!("Branch {} of {}", i % 7, c)).collect::<Vec<_>>()).into());
+        } else {
+            cols.push(Series::new(format!("Balance {c}").into(), (0..rows).map(|i| 1_000_000.0 + (i * c) as f64 * 1.25).collect::<Vec<_>>()).into());
+        }
+    }
+    let df = DataFrame::new(cols).expect("table frame");
+    let src = parquet_source(&app.paths.root_dir.clone(), "table40", df);
+    let idx = open_tab(app, src, vec![]);
+    app.tabs[idx].id
+}
+
+#[test]
+fn the_main_tables_heading_block_stays_inside_its_frame_and_clear_of_the_right_panel() {
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("r3table");
+        let id = open_table_tab(&mut app, 300);
+        let (ctx, input) = screen(ppp, w, h);
+        frames(&mut app, &ctx, &input, 6);
+        let area = theme::dialog_area(&ctx);
+        let screen_rect = ctx.screen_rect();
+        // the right panel is what lies between the area and the window's right edge
+        let right_panel = egui::Rect::from_min_max(egui::pos2(area.right(), area.top()), egui::pos2(screen_rect.right(), screen_rect.bottom()));
+        assert!(right_panel.width() >= theme::RIGHT_PANEL_W - 1.0, "ppp {ppp} {w}x{h}: right panel {right_panel:?}");
+        // at the start, in the middle and at the far end of 40 columns
+        for x in [0.0f32, 900.0, 2400.0, 99_999.0] {
+            crate::ui::table::request_grid_scroll(&ctx, id, x);
+            frames(&mut app, &ctx, &input, 3);
+            let what = format!("ppp {ppp} {w}x{h} scrolled to {x}");
+            let rep = crate::ui::table::grid_report(&ctx, id).unwrap_or_else(|| panic!("{what}: the table was not drawn"));
+            assert_eq!(rep.header.len(), 39 + 1, "{what}");
+            assert_eq!(rep.selector.len(), 40, "{what}: a selector under every heading");
+            assert_eq!(rep.summary.len(), 40, "{what}: a summary under every heading");
+            let frame = assert_grid_inside_frame(&rep, &what);
+            assert!(inside(frame, area), "{what}: the frame {frame:?} is inside the area {area:?}");
+            for (kind, cells) in [("heading", &rep.header), ("selector", &rep.selector), ("summary", &rep.summary)] {
+                for (name, c) in cells {
+                    assert!(!c.clip.intersects(right_panel) || c.clip.intersect(right_panel).width() < 0.5, "{what}: {kind} '{name}' may paint {:?} over the right panel {right_panel:?}", c.clip);
+                }
+            }
+            // the three bands of a column are stacked: name, selector, summary
+            for i in 0..rep.header.len() {
+                let (h, s, m) = (rep.header[i].1.layout, rep.selector[i].1.layout, rep.summary[i].1.layout);
+                assert!((h.left() - s.left()).abs() < 0.5 && (h.left() - m.left()).abs() < 0.5 && (h.width() - m.width()).abs() < 0.5, "{what}: column {i} bands line up");
+                assert!(h.bottom() <= s.top() + 0.5 && s.bottom() <= m.top() + 0.5, "{what}: column {i} bands are stacked");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_heading_block_stays_put_while_the_rows_scroll_up_and_down() {
+    use crate::ui::layout_tests::collect_painted;
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("r3scroll");
+        let id = open_table_tab(&mut app, 500);
+        let (ctx, input) = screen(ppp, w, h);
+        frames(&mut app, &ctx, &input, 6);
+        let painted = |app: &mut MicroParquetApp| {
+            let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+            collect_painted(&out.shapes)
+        };
+        let before = crate::ui::table::grid_report(&ctx, id).expect("table");
+        let p0 = painted(&mut app);
+        assert!(p0.texts.iter().any(|(t, _, _)| t == "A00000"), "ppp {ppp}: the first row is shown before scrolling");
+        crate::ui::table::request_grid_scroll_y(&ctx, id, 4000.0);
+        frames(&mut app, &ctx, &input, 3);
+        let p1 = painted(&mut app);
+        assert!(!p1.texts.iter().any(|(t, _, _)| t == "A00000"), "ppp {ppp}: the first row has scrolled away");
+        assert!(p1.texts.iter().any(|(t, _, _)| t.starts_with('A') && t.len() == 6 && t != "A00000"), "ppp {ppp}: later rows are shown");
+        let after = crate::ui::table::grid_report(&ctx, id).expect("table");
+        for i in 0..before.header.len() {
+            let (b, a) = (before.header[i].1.layout, after.header[i].1.layout);
+            assert!((b.top() - a.top()).abs() < 0.5 && (b.bottom() - a.bottom()).abs() < 0.5, "ppp {ppp}: heading {i} moved from {b:?} to {a:?}");
+            let (b, a) = (before.summary[i].1.layout, after.summary[i].1.layout);
+            assert!((b.top() - a.top()).abs() < 0.5, "ppp {ppp}: summary {i} moved from {b:?} to {a:?}");
+            let (b, a) = (before.selector[i].1.layout, after.selector[i].1.layout);
+            assert!((b.top() - a.top()).abs() < 0.5, "ppp {ppp}: selector {i} moved from {b:?} to {a:?}");
+        }
+    }
 }

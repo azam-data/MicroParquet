@@ -673,20 +673,22 @@ pub fn info_icon(ui: &mut egui::Ui, text: &str) {
 }
 
 /// Fills a heading cell's area with `header_bg` (a little wider than the cell, so the gap
-/// between two cells is filled too).
-pub fn paint_header_bg(ui: &mut egui::Ui, rect: egui::Rect, color: Color32) {
+/// between two cells is filled too). Nothing is painted outside `limit`, the clip rectangle of the
+/// table the cell belongs to (the fill must never reach past the table's frame).
+pub fn paint_header_bg(ui: &mut egui::Ui, rect: egui::Rect, color: Color32, limit: egui::Rect) {
     let gap = ui.spacing().item_spacing.x / 2.0;
     let wide = rect.expand2(egui::vec2(gap, 0.0));
-    // a cell clips to itself; the fill goes into the gap, so widen the clip for this cell
-    let clip = ui.clip_rect().union(wide);
+    // a cell clips to itself; the fill goes into the gap, so widen the clip for this cell, but
+    // only as far as the table's own clip rectangle
+    let clip = ui.clip_rect().union(wide).intersect(limit);
     ui.set_clip_rect(clip);
-    ui.painter().rect_filled(wide, 0.0, color);
+    ui.painter().rect_filled(wide.intersect(limit), 0.0, color);
 }
 
 /// The text of a heading cell in a list: bold ink on `header_bg`.
-pub fn header_cell(ui: &mut egui::Ui, text: &str) {
+pub fn header_cell(ui: &mut egui::Ui, text: &str, limit: egui::Rect) {
     let tk = *t(ui);
-    paint_header_bg(ui, ui.max_rect(), tk.header_bg);
+    paint_header_bg(ui, ui.max_rect(), tk.header_bg, limit);
     ui.add(egui::Label::new(bold(text).color(tk.ink)).truncate());
 }
 
