@@ -376,3 +376,74 @@ fn fix11_totals_row_follows_the_checkbox_and_never_reaches_csv_or_parquet() {
     let back = LazyFrame::scan_parquet(&pq, Default::default()).unwrap().collect().unwrap();
     assert_eq!(back.height(), 3);
 }
+
+// ---------------------------------------------------------------------------------- fix 12
+
+/// The numbers in a sheet's column (`col` letter), rows `rows`, as written.
+fn column_values(sheet: &str, col: &str, rows: std::ops::RangeInclusive<usize>) -> Vec<f64> {
+    rows.map(|r| {
+        let tag = format!("r=\"{col}{r}\"");
+        let at = sheet.find(&tag).unwrap_or_else(|| panic!("no cell {col}{r}"));
+        let rest = &sheet[at..];
+        let end = rest.find("</c>").unwrap();
+        let c = &rest[..end];
+        let v0 = c.find("<v>").unwrap() + 3;
+        let v1 = c[v0..].find("</v>").unwrap() + v0;
+        c[v0..v1].parse::<f64>().unwrap()
+    })
+    .collect()
+}
+
+#[test]
+fn fix12_excel_thousands_and_millions_by_format_lakh_and_crore_divided_and_sums_agree() {
+    use micro_parquet::exporters::*;
+    use micro_parquet::summary::*;
+    let d = dir("f12");
+    let raw = [12_345_678.9f64, -2_500_000.0, 987_654_321.0, 1.0];
+    let df = DataFrame::new(vec![
+        Series::new("Branch".into(), &["DHK", "CTG", "SYL", "KHL"]).into(),
+        Series::new("Balance".into(), &raw).into(),
+    ])
+    .unwrap();
+    let cols: Vec<(String, DataType)> = df.get_columns().iter().map(|s| (s.name().to_string(), s.dtype().clone())).collect();
+    let cells = compute_summary(df.clone().lazy(), &effective_specs(&cols, &Default::default(), None)).unwrap();
+    let raw_total: f64 = raw.iter().sum();
+    for (fmt, unit, divide, code) in [
+        (NumberDisplayFormat::BdtThousand, "BDT K", 1.0, "#,##0.00,"),
+        (NumberDisplayFormat::BdtMillion, "BDT M", 1.0, "#,##0.00,,"),
+        (NumberDisplayFormat::BdtLakh, "BDT L", 100_000.0, "#,##0.00"),
+        (NumberDisplayFormat::BdtCrore, "BDT Cr", 10_000_000.0, "#,##0.00"),
+    ] {
+        let p = d.join(format!("{unit}.xlsx").replace(' ', "_"));
+        let tab = XlsxTab { title: "Loans".into(), df: df.clone(), col_formats: Default::default(), summary: cells.clone() };
+        write_xlsx_tabs(vec![tab], vec![], &p, 1000, Some(XlsxScale { num_format: fmt, decimals: 2 })).unwrap();
+        let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+        let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+        let styles = unzip_entry(&p, "xl/styles.xml");
+        assert!(strings.contains(&format!("Balance ({unit})")), "{unit}: {strings}");
+        // the cells: raw for K and M, divided for Lakh and Crore
+        let cells_b = column_values(&sheet, "B", 2..=5);
+        for (got, r) in cells_b.iter().zip(raw) {
+            assert!((got - r / divide).abs() <= 1e-9 * (r / divide).abs().max(1.0), "{unit}: {got} vs {}", r / divide);
+        }
+        // the number format scales K and M (",", ",,"); Lakh and Crore use the plain one
+        assert!(styles.contains(&format!("formatCode=\"{code}\"")), "{unit}: {styles}");
+        if divide != 1.0 {
+            assert!(!styles.contains("#,##0.00,"), "{unit}: no scaling format for divided values");
+        }
+        // SUM consistency: Excel's SUM of the cells equals the totals row (blank row 6, labels 7, values 8)
+        let excel_sum: f64 = cells_b.iter().sum();
+        let totals = column_values(&sheet, "B", 8..=8)[0];
+        assert!((excel_sum - totals).abs() <= 1e-9 * totals.abs(), "{unit}: SUM {excel_sum} vs totals {totals}");
+        assert!((totals * divide - raw_total).abs() <= 1e-6, "{unit}: the totals row is the raw total in the column's unit");
+    }
+    // CSV and Parquet keep raw values whatever the screen scale
+    let src = parquet(&d, "raw", df.clone());
+    let csv = d.join("raw.csv");
+    export_tab_csv(&src, &[], &d, &csv, false, None, &JobCtx::inert()).unwrap();
+    assert!(std::fs::read_to_string(&csv).unwrap().contains("987654321"));
+    let pq = d.join("raw_out.parquet");
+    export_tab_parquet(&src, &[], &d, &pq, ParquetDialect::ArchiveZstd, None, &JobCtx::inert()).unwrap();
+    let back = LazyFrame::scan_parquet(&pq, Default::default()).unwrap().collect().unwrap();
+    assert_eq!(back.column("Balance").unwrap().f64().unwrap().get(2), Some(987_654_321.0));
+}

@@ -102,9 +102,10 @@ fn l3_excel_headers_name_the_scale_and_values_are_in_that_scale() {
     assert!(strings.contains("Balance (BDT M)"), "{strings}");
     assert!(strings.contains(">Int Rate<") && !strings.contains("Int Rate (BDT"), "the rate column is not scaled");
     assert!(strings.contains(">Actnum<"));
-    // A2 = 25.00 M, A3 = -5.00 M; the rate stays 9.5
-    assert!(sheet.contains("<v>25</v>"), "{sheet}");
-    assert!(sheet.contains("<v>-5</v>"), "{sheet}");
+    // Millions (fix 12): the raw BDT under a format that shows 25.00 and -5.00; the rate stays 9.5
+    assert!(sheet.contains("<v>25000000</v>"), "{sheet}");
+    assert!(sheet.contains("<v>-5000000</v>"), "{sheet}");
+    assert!(unzip_entry(&p, "xl/styles.xml").contains("formatCode=\"#,##0.00,,\""));
     assert!(sheet.contains("<v>9.5</v>"));
     // A column's own format beats the global scale
     let mut formats = HashMap::new();

@@ -261,7 +261,7 @@ fn t3_excel_totals_use_the_chosen_scale_and_sit_on_the_last_sheet() {
     let s3 = unzip_entry(&p, "xl/worksheets/sheet3.xml");
     assert!(cell_value(&s1, "C5").is_none() && !s1.contains("1F3A5F"), "no totals on the first sheet");
     // last sheet holds rows 5-6 (+ header): header 1, data 2-3, blank 4, labels 5, values 6
-    assert_eq!(cell_value(&s3, "C6").as_deref(), Some("0.01"), "10,000 in millions");
+    assert_eq!(cell_value(&s3, "C6").as_deref(), Some("10000"), "10,000 raw, shown in millions by its format (fix 12)");
     assert_eq!(cell_value(&s3, "H6").as_deref(), Some("21"), "a count column is not scaled");
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -128,8 +128,11 @@ pub struct XlsxTab {
     pub summary: Vec<SummaryCell>,
 }
 
-/// The scale the workbook is written in: money columns hold value ÷ divisor and say so in their
-/// header ("Balance (BDT M)"). Data files (Parquet, CSV) never use it; they keep raw values.
+/// The scale the workbook is written in; money columns say it in their header ("Balance (BDT M)").
+/// Thousands and Millions keep the raw BDT value under a scaling number format (`#,##0.00,` and
+/// `#,##0.00,,`), so Excel sums the real amounts; Lakh and Crore, which an Excel format cannot
+/// scale, hold value ÷ divisor (see [`xlsx_scaling`]). Data files (Parquet, CSV) never use it;
+/// they keep raw values.
 #[derive(Clone, Copy, Debug)]
 pub struct XlsxScale {
     pub num_format: NumberDisplayFormat,
@@ -208,6 +211,27 @@ fn xlsx_decimals_format(decimals: usize) -> String {
     }
 }
 
+/// How a money column is put in a workbook: the number the cell holds is value ÷ the first
+/// value, and the second is added to its number format. K and M: raw value, format scaled by
+/// "," / ",,"; Lakh and Crore: divided value, plain format.
+pub fn xlsx_scaling(ms: &MoneyScale) -> (f64, &'static str) {
+    match ms.suffix {
+        "K" => (1.0, ","),
+        "M" => (1.0, ",,"),
+        _ => (ms.divisor, ""),
+    }
+}
+
+/// A money column of a scaled workbook.
+struct ColScale {
+    unit: &'static str,
+    /// The cell holds value ÷ this.
+    divide: f64,
+    /// Appended to the column's number format ("," or ",," for K and M).
+    fmt_suffix: &'static str,
+    fmt: Format,
+}
+
 pub fn write_xlsx_tabs(
     tabs: Vec<XlsxTab>,
     errors: Vec<(String, String)>,
@@ -233,8 +257,8 @@ pub fn write_xlsx_tabs(
         let base_name = sanitize_sheet_name(&raw_title, idx + 1);
         let cols = df.get_columns();
         let height = df.height();
-        // Money columns in the chosen scale: (scale, number format) per column.
-        let col_scales: Vec<Option<(MoneyScale, Format)>> = cols
+        // Money columns in the chosen scale.
+        let col_scales: Vec<Option<ColScale>> = cols
             .iter()
             .map(|c| {
                 let sc = scale?;
@@ -244,7 +268,9 @@ pub fn write_xlsx_tabs(
                 let spec = col_formats.get(c.name().as_str());
                 let ms = resolved_scale(c.name().as_str(), spec, sc.num_format)?;
                 let dec = spec.map(|s| s.decimals).unwrap_or(sc.decimals);
-                Some((ms, Format::new().set_num_format(xlsx_decimals_format(dec))))
+                let (divide, fmt_suffix) = xlsx_scaling(&ms);
+                let fmt = Format::new().set_num_format(format!("{}{}", xlsx_decimals_format(dec), fmt_suffix));
+                Some(ColScale { unit: ms.unit, divide, fmt_suffix, fmt })
             })
             .collect();
         let sheet_count = height.div_ceil(rows_per_sheet).max(1);
@@ -265,7 +291,7 @@ pub fn write_xlsx_tabs(
 
             for (c_idx, series) in cols.iter().enumerate() {
                 let header_text = match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
-                    Some((ms, _)) => format!("{} ({})", series.name().as_str(), ms.unit),
+                    Some(cs) => format!("{} ({})", series.name().as_str(), cs.unit),
                     None => series.name().to_string(),
                 };
                 worksheet.write_string_with_format(0, c_idx as u16, &header_text, &header_fmt)?;
@@ -282,16 +308,16 @@ pub fn write_xlsx_tabs(
                     match series.get(r_idx) {
                         Ok(AnyValue::Null) => {}
                         Ok(AnyValue::Float64(v)) => match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
-                            Some((ms, f)) => {
-                                worksheet.write_number_with_format(xls_row, xls_col, v / ms.divisor, f)?;
+                            Some(cs) => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v / cs.divide, &cs.fmt)?;
                             }
                             None => {
                                 worksheet.write_number_with_format(xls_row, xls_col, v, &num_fmt)?;
                             }
                         },
                         Ok(AnyValue::Float32(v)) => match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
-                            Some((ms, f)) => {
-                                worksheet.write_number_with_format(xls_row, xls_col, v as f64 / ms.divisor, f)?;
+                            Some(cs) => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v as f64 / cs.divide, &cs.fmt)?;
                             }
                             None => {
                                 worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
@@ -396,7 +422,7 @@ fn write_xlsx_totals(
     summary: &[SummaryCell],
     cols: &[Series],
     data_rows: usize,
-    col_scales: &[Option<(MoneyScale, Format)>],
+    col_scales: &[Option<ColScale>],
     col_formats: &HashMap<String, ColumnFormatSpec>,
     scale: Option<XlsxScale>,
 ) -> Result<()> {
@@ -435,8 +461,9 @@ fn write_xlsx_totals(
                 worksheet.write_number_with_format(value_row, col, *n as f64, &f)?;
             }
             Some(SummaryValue::Number(x)) => {
+                // the same rule as the cells above, so the row equals Excel's SUM of the column
                 let (v, code) = match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
-                    Some((ms, _)) => (*x / ms.divisor, num_code.clone()),
+                    Some(cs) => (*x / cs.divide, format!("{}{}", num_code, cs.fmt_suffix)),
                     None => (*x, num_code.clone()),
                 };
                 let f = Format::new().set_bold().set_background_color(bg).set_font_color(fg).set_num_format(code);
