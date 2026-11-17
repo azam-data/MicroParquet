@@ -536,6 +536,8 @@ pub(crate) struct Painted {
     pub(crate) rects: Vec<(egui::Rect, egui::Color32)>,
     /// The colour each text was drawn in (a placeholder where egui picks the default).
     pub(crate) colors: Vec<(String, egui::Color32)>,
+    /// What was really drawn of each text (a label cut with "…" shows less than its text).
+    pub(crate) shown: Vec<(String, egui::Pos2)>,
 }
 
 pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
@@ -544,6 +546,7 @@ pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted 
             egui::Shape::Text(t) => {
                 let fam = t.galley.job.sections.first().map(|s| s.format.font_id.family.clone()).unwrap_or(egui::FontFamily::Proportional);
                 out.colors.push((t.galley.text().to_string(), t.galley.job.sections.first().map(|s| s.format.color).unwrap_or(egui::Color32::PLACEHOLDER)));
+                out.shown.push((t.galley.rows.iter().map(|r| r.text()).collect::<String>(), t.pos));
                 out.texts.push((t.galley.text().to_string(), t.pos, fam));
             }
             egui::Shape::Rect(r) => out.rects.push((r.rect, r.fill)),

@@ -236,6 +236,17 @@ pub const MARGIN_SEARCH_BOX: egui::Margin = egui::Margin::symmetric(10.0, 6.0);
 pub const MARGIN_KEYCAP: egui::Margin = egui::Margin::symmetric(5.0, 1.0);
 pub const MARGIN_STATUS_BAR: egui::Margin = egui::Margin::symmetric(14.0, 0.0);
 pub const STATUS_ITEM_GAP: f32 = 14.0;
+/// The longest a long item of the status bar (a note, a chip) may be, as a share of the bar.
+pub const STATUS_LABEL_SHARE: f32 = 0.3;
+/// The last message is not drawn at all when less than this is left for it.
+pub const STATUS_MIN_MESSAGE_W: f32 = 40.0;
+pub const STATUS_BUTTON_SLACK: f32 = 4.0;
+/// The last message keeps at least this much room while an optional item can be dropped.
+pub const STATUS_MESSAGE_ROOM: f32 = 160.0;
+/// Allowance for the spinner and the buttons' padding when the job line is measured.
+pub const STATUS_JOB_SLACK: f32 = 48.0;
+/// What a running job's progress bar, time and Cancel button take at the end of the bar.
+pub const STATUS_JOB_RESERVE: f32 = 340.0;
 pub const MARGIN_CHIP_ZERO: egui::Margin = egui::Margin::symmetric(6.0, 1.0);
 pub const MARGIN_CHIP_PILL: egui::Margin = egui::Margin::symmetric(8.0, 1.0);
 pub const MARGIN_EDIT_BANNER: egui::Margin = egui::Margin::symmetric(12.0, 6.0);
@@ -652,6 +663,29 @@ pub fn row_label(ui: &mut egui::Ui, text: RichText) -> egui::Response {
     let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
     let w = galley.size().x;
     ui.add_sized([w + 1.0, h], egui::Label::new(egui::WidgetText::Galley(galley)))
+}
+
+/// Width of a text at a font size in the body font.
+pub fn text_width(ui: &egui::Ui, text: &str, size: f32) -> f32 {
+    ui.fonts(|f| f.layout_no_wrap(text.to_owned(), FontId::new(size, FontFamily::Proportional), Color32::WHITE).size().x)
+}
+
+/// Width of a small button in the status bar.
+pub fn status_button_width(ui: &egui::Ui, label: &str) -> f32 {
+    text_width(ui, label, TEXT_SMALL) + 2.0 * ui.spacing().button_padding.x + STATUS_BUTTON_SLACK
+}
+
+/// A label cut with "…" when it is wider than `max_w`; hover for the whole text is for the caller.
+pub fn clipped_label(ui: &mut egui::Ui, text: RichText, max_w: f32) -> egui::Response {
+    let galley = egui::WidgetText::from(text.clone()).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Small);
+    if galley.size().x <= max_w {
+        return ui.label(text);
+    }
+    let h = galley.size().y;
+    ui.allocate_ui_with_layout(egui::vec2(max_w.max(0.0), h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
 }
 
 /// A drop-down in a wrapped row: egui's combo box lays itself out in one line and so never

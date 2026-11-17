@@ -371,3 +371,124 @@ fn the_row_count_note_is_grey_when_quotes_explain_it_and_a_warning_when_not_with
         assert!(p.texts.iter().any(|(t, _, _)| t == "A4,\"Rahim Trading"), "ppp {ppp}: the start of the line is shown");
     }
 }
+
+// ------------------------------------------------------------------------------- status bar
+
+/// Every width the window can have: the four test screens and the smallest window (800 px at 105%).
+fn status_screens() -> Vec<(f32, f32, f32)> {
+    let mut v = SCREENS.to_vec();
+    v.push((1.05, 800.0 / 1.05, 560.0 / 1.05));
+    v
+}
+
+#[test]
+fn the_status_bar_never_passes_the_window_width_and_cuts_a_long_message_with_dots() {
+    use crate::ui::layout_tests::collect_painted;
+    use crate::ui::status::status_report;
+    let long = "Exported multi-tab Excel workbook to \"C:\\Users\\Treasury\\Documents\\ALCO packs\\2026-11\\ALCO_pack_final_v7.xlsx\": 3 tab(s) on 3 sheet(s); \u{26A0} 'Loans' was exported WITHOUT its totals row (the data is on its sheet): The totals row could not be computed (also on the Export_Errors sheet)";
+    for (ppp, w, h) in status_screens() {
+        let what = format!("ppp {ppp} {w}x{h}");
+        let mut app = test_app("r5status");
+        // a tab with a note that is long (a row-count explanation) and a job that is running
+        open_csv_tab(&mut app, "s.csv", &csv_body(1300, &[10, 500, 1200], &[]));
+        app.jobs = JobQueue::new(|| {});
+        let (up_tx, up_rx) = std::sync::mpsc::channel::<()>();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        app.jobs.submit(JobKey::unique(JobKind::Load), "Opening loans.csv", true, move |ctx| {
+            ctx.set_stages(&["Reading", "Parsing", "Checking"]);
+            ctx.set_stage(1);
+            ctx.set_bytes("Counting the file's lines", 1_048_576, 4_194_304);
+            let _ = up_tx.send(());
+            let _ = go_rx.recv_timeout(std::time::Duration::from_secs(20));
+            Ok(JobOutput::Exported(micro_parquet::tab_jobs::ExportOutcome { message: String::new(), path_used: None, written: None }))
+        });
+        up_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("job runs");
+        app.status_message = long.to_string();
+        let (ctx, input) = screen(ppp, w, h);
+        let mut painted = None;
+        for _ in 0..5 {
+            let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+            painted = Some(collect_painted(&out.shapes));
+        }
+        let p = painted.expect("frames");
+        let rep = status_report(&ctx).expect("status bar");
+        let screen_rect = ctx.screen_rect();
+        assert!(inside(rep.bar, screen_rect), "{what}: bar {:?} in window {screen_rect:?}", rep.bar);
+        assert!(inside(rep.messages, rep.bar) && rep.messages.left() >= rep.left.right() - 0.5, "{what}: the Messages button {:?} sits right of {:?}", rep.messages, rep.left);
+        assert!(rep.content.right() <= rep.left.right() + 0.5, "{what}: the items {:?} stay left of the button, inside {:?}", rep.content, rep.left);
+        // every text painted in the bar ends inside the window
+        let bar_top = rep.bar.top();
+        for (t, pos, _) in p.texts.iter().filter(|(_, pos, _)| pos.y >= bar_top - 1.0) {
+            assert!(pos.x >= -0.5 && pos.x < screen_rect.right(), "{what}: '{t}' starts at {pos:?}, outside the window");
+        }
+        // the long message is cut with "…" and ends before the Messages button
+        let cut = p.shown.iter().find(|(t, pos)| pos.y >= bar_top - 1.0 && t.ends_with('\u{2026}') && t.starts_with("Exported"));
+        assert!(cut.is_some(), "{what}: the long message ends in '…': {:?}", p.shown.iter().filter(|(_, pos)| pos.y >= bar_top).map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        let _ = go_tx.send(());
+    }
+}
+
+#[test]
+fn a_short_message_is_whole_and_the_full_text_shows_on_hover_when_it_is_cut() {
+    use crate::ui::layout_tests::collect_painted;
+    let (ctx, input) = screen(1.05, 1219.05, 685.71);
+    let mut app = test_app("r5hover");
+    open_wide_tab(&mut app);
+    app.status_message = "Copied formatted table to clipboard.".into();
+    frames(&mut app, &ctx, &input, 4);
+    let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+    let p = collect_painted(&out.shapes);
+    assert!(p.texts.iter().any(|(t, _, _)| t == "Copied formatted table to clipboard."), "a short message is shown whole");
+    // a long one is cut; hovering it shows all of it
+    let long = "x".repeat(400) + " THE END";
+    app.status_message = long.clone();
+    frames(&mut app, &ctx, &input, 4);
+    let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+    let p = collect_painted(&out.shapes);
+    let (cut, pos) = p.shown.iter().find(|(t, _)| t.starts_with("xxxx") && t.ends_with('\u{2026}')).expect("the cut message").clone();
+    assert!(cut.len() < long.len());
+    let mut shown = false;
+    for i in 0..30 {
+        let mut inp = input.clone();
+        inp.time = Some(10.0 + i as f64 * 0.05);
+        inp.predicted_dt = 0.05;
+        inp.events = vec![egui::Event::PointerMoved(pos + egui::vec2(20.0, 6.0))];
+        let out = ctx.run(inp, |c| app.frame_ui(c));
+        shown = collect_painted(&out.shapes).texts.iter().any(|(t, _, _)| *t == long);
+    }
+    assert!(shown, "the whole text is the tooltip of the cut message");
+}
+
+#[test]
+fn messages_keeps_the_last_fifty_newest_first() {
+    use crate::ui::layout_tests::collect_painted;
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("r5log");
+        open_wide_tab(&mut app);
+        let (ctx, input) = screen(ppp, w, h);
+        for i in 0..60 {
+            app.status_message = format!("message number {i}");
+            frames(&mut app, &ctx, &input, 1);
+        }
+        assert_eq!(app.status_log.len(), 50, "ppp {ppp}");
+        // the same message twice in a row is kept once
+        frames(&mut app, &ctx, &input, 3);
+        assert_eq!(app.status_log.len(), 50);
+        assert_eq!(app.status_log.last().map(|(_, t)| t.as_str()), Some("message number 59"));
+        assert_eq!(app.status_log.first().map(|(_, t)| t.as_str()), Some("message number 10"));
+        app.messages_open = true;
+        frames(&mut app, &ctx, &input, 6);
+        let r = theme::dialog_report(&ctx, "Messages").unwrap_or_else(|| panic!("ppp {ppp}: Messages not drawn"));
+        check_report(&ctx, r, &format!("ppp {ppp} Messages"));
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        let p = collect_painted(&out.shapes);
+        // newest first
+        let bar_top = crate::ui::status::status_report(&ctx).expect("status bar").bar.top();
+        let y = |n: usize| p.texts.iter().find(|(t, pos, _)| *t == format!("message number {n}") && pos.y < bar_top).map(|(_, pos, _)| pos.y);
+        assert!(y(59).is_some(), "ppp {ppp}: the newest is listed");
+        if let (Some(a), Some(b)) = (y(59), y(58)) {
+            assert!(a < b, "ppp {ppp}: newest first");
+        }
+        assert!(y(5).is_none(), "ppp {ppp}: the oldest ones are gone");
+    }
+}

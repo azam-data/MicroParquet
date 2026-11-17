@@ -145,6 +145,10 @@ pub struct MicroParquetApp {
     show_about: bool,
     /// The row-count "Details" dialog is open.
     pub row_details_open: bool,
+    /// The last 50 status messages (time, text), newest last, and the "Messages" list's state.
+    pub status_log: Vec<(String, String)>,
+    pub status_logged: String,
+    pub messages_open: bool,
     /// Closing: the "Export in progress — cancel and quit?" question is open, or was answered yes.
     pub quit_guard: bool,
     pub quit_confirmed: bool,
@@ -214,6 +218,9 @@ impl MicroParquetApp {
             editing: None,
             show_about: false,
             row_details_open: false,
+            status_log: Vec::new(),
+            status_logged: String::new(),
+            messages_open: false,
             quit_guard: false,
             quit_confirmed: false,
             command_open: false,
@@ -307,6 +314,7 @@ impl MicroParquetApp {
         self.render_active_tool_modal(ctx);
         self.render_about(ctx);
         self.render_row_details(ctx);
+        self.render_messages(ctx);
         self.render_command_palette(ctx);
         self.render_quit_guard(ctx);
     }
