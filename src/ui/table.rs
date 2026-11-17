@@ -18,7 +18,7 @@ impl EguiMetrics<'_> {
 
 impl micro_parquet::table_layout::FontMetrics for EguiMetrics<'_> {
     fn header(&self, text: &str) -> f32 {
-        self.width(text, egui::FontId::new(theme::TEXT_BASE, theme::family_semibold()))
+        self.width(text, egui::FontId::new(theme::TEXT_BASE, theme::family_bold()))
     }
     fn selector(&self, text: &str) -> f32 {
         self.width(text, egui::FontId::new(theme::TEXT_LABEL, theme::family_semibold()))
@@ -300,6 +300,11 @@ impl MicroParquetApp {
                     builder
                         .header(head_height, |mut header| {
                             header.col(|ui| {
+                                let band = egui::Rect::from_min_size(
+                                    ui.max_rect().min,
+                                    egui::vec2(ui.max_rect().width(), theme::HEADER_ROW_H),
+                                );
+                                theme::paint_header_bg(ui, band, tk.header_bg);
                                 ui.label(theme::label_text("#").color(tk.muted));
                             });
                             for (c, kind) in cols.iter().zip(&kinds) {
@@ -313,8 +318,9 @@ impl MicroParquetApp {
                                     );
                                     let is_sel = selected == Some(name.as_str());
                                     let resp = ui.interact(rect, ui.id().with(("hdr", name.as_str())), egui::Sense::click());
+                                    // the heading row's background; the selected column's is accent_soft
+                                    theme::paint_header_bg(ui, rect, if is_sel { tk.accent_soft } else { tk.header_bg });
                                     if is_sel {
-                                        ui.painter().rect_filled(rect, 0.0, tk.accent_soft);
                                         ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, egui::Stroke::new(2.0_f32, tk.accent));
                                     }
                                     let layout = if *kind == CellKind::Number {
@@ -335,7 +341,7 @@ impl MicroParquetApp {
                                                 .color(tk.accent),
                                             );
                                         }
-                                        ui.add(egui::Label::new(theme::semibold(name.clone()).color(tk.ink)).truncate());
+                                        ui.add(egui::Label::new(theme::bold(name.clone()).color(tk.ink)).truncate());
                                     });
                                     resp.clone().on_hover_text(format!("{}  \u{b7}  {:?}", name, c.dtype()));
                                     if resp.clicked() {

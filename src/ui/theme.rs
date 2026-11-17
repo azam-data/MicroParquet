@@ -16,6 +16,8 @@ pub struct Tokens {
     pub border: Color32,
     pub grid: Color32,
     pub zebra: Color32,
+    /// Background of a table's heading row (the data grid, the schema lists).
+    pub header_bg: Color32,
     pub ink: Color32,
     pub ink2: Color32,
     pub muted: Color32,
@@ -42,6 +44,7 @@ pub const LIGHT: Tokens = Tokens {
     border: hex(0xE3E6EB),
     grid: hex(0xF0F2F5),
     zebra: hex(0xFAFBFC),
+    header_bg: hex(0xE9EDF3),
     ink: hex(0x1B2430),
     ink2: hex(0x3D4856),
     muted: hex(0x5B6675),
@@ -70,6 +73,7 @@ pub const DARK: Tokens = Tokens {
     border: hex(0x2A3440),
     grid: hex(0x1E2630),
     zebra: hex(0x131920),
+    header_bg: hex(0x1D252E),
     ink: hex(0xE6EAF0),
     ink2: hex(0xB7C2CF),
     muted: hex(0x93A0AF),
@@ -162,13 +166,14 @@ pub const SEARCH_LONG_HINT_W: f32 = 260.0;
 
 impl Tokens {
     /// Every token with its name, in one fixed order (used by the light/dark completeness test).
-    pub fn named(&self) -> [(&'static str, Color32); 23] {
+    pub fn named(&self) -> [(&'static str, Color32); 24] {
         [
             ("bg", self.bg),
             ("surface", self.surface),
             ("border", self.border),
             ("grid", self.grid),
             ("zebra", self.zebra),
+            ("header_bg", self.header_bg),
             ("ink", self.ink),
             ("ink2", self.ink2),
             ("muted", self.muted),
@@ -568,10 +573,22 @@ pub fn info_icon(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(ph::INFO).color(t(ui).muted)).on_hover_text(text);
 }
 
-/// The text of a heading cell in a list: bold, ink.
+/// Fills a heading cell's area with `header_bg` (a little wider than the cell, so the gap
+/// between two cells is filled too).
+pub fn paint_header_bg(ui: &mut egui::Ui, rect: egui::Rect, color: Color32) {
+    let gap = ui.spacing().item_spacing.x / 2.0;
+    let wide = rect.expand2(egui::vec2(gap, 0.0));
+    // a cell clips to itself; the fill goes into the gap, so widen the clip for this cell
+    let clip = ui.clip_rect().union(wide);
+    ui.set_clip_rect(clip);
+    ui.painter().rect_filled(wide, 0.0, color);
+}
+
+/// The text of a heading cell in a list: bold ink on `header_bg`.
 pub fn header_cell(ui: &mut egui::Ui, text: &str) {
-    let ink = t(ui).ink;
-    ui.add(egui::Label::new(bold(text).color(ink)).truncate());
+    let tk = *t(ui);
+    paint_header_bg(ui, ui.max_rect(), tk.header_bg);
+    ui.add(egui::Label::new(bold(text).color(tk.ink)).truncate());
 }
 
 /// A removable chip (filter conditions). Returns (clicked, removed).
@@ -773,11 +790,13 @@ mod tests {
         assert_eq!(LIGHT.accent, Color32::from_rgb(0x1F, 0x5F, 0xAD));
         assert_eq!(LIGHT.summary_bg, Color32::from_rgb(0x1F, 0x3A, 0x5F));
         assert_eq!(LIGHT.danger, Color32::from_rgb(0xB4, 0x23, 0x18));
+        assert_eq!(LIGHT.header_bg, Color32::from_rgb(0xE9, 0xED, 0xF3));
+        assert_eq!(DARK.header_bg, Color32::from_rgb(0x1D, 0x25, 0x2E));
         assert_eq!(DARK.bg, Color32::from_rgb(0x0F, 0x14, 0x19));
         assert_eq!(DARK.accent, Color32::from_rgb(0xE8, 0xA3, 0x3D));
         assert_eq!(DARK.success_soft, Color32::from_rgb(0x15, 0x30, 0x1F));
         let names: Vec<&str> = LIGHT.named().iter().map(|(n, _)| *n).collect();
-        assert_eq!(names.len(), 23);
+        assert_eq!(names.len(), 24);
         assert!(names.contains(&"selector_off_fg") && names.contains(&"accent_soft_border"));
     }
 

@@ -400,3 +400,139 @@ fn parquet_files_show_the_one_option_that_applies() {
     assert!(all.contains(&"Accounting negatives"));
     assert!(!all.contains(&"Separator") && !all.contains(&"Encoding") && !all.contains(&"Heal broken lines"), "{all:?}");
 }
+
+// ------------------------------------------------------------------ table header (header_bg)
+
+/// What one frame painted: texts with their position and font family, and filled rectangles.
+#[derive(Default)]
+struct Painted {
+    texts: Vec<(String, egui::Pos2, egui::FontFamily)>,
+    rects: Vec<(egui::Rect, egui::Color32)>,
+}
+
+fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
+    fn walk(shape: &egui::Shape, out: &mut Painted) {
+        match shape {
+            egui::Shape::Text(t) => {
+                let fam = t.galley.job.sections.first().map(|s| s.format.font_id.family.clone()).unwrap_or(egui::FontFamily::Proportional);
+                out.texts.push((t.galley.text().to_string(), t.pos, fam));
+            }
+            egui::Shape::Rect(r) => out.rects.push((r.rect, r.fill)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut p = Painted::default();
+    for c in shapes {
+        walk(&c.shape, &mut p);
+    }
+    p
+}
+
+fn grid_frame(rows: usize, selected: Option<&str>, events: Vec<egui::Event>, ctx: &egui::Context, input: &egui::RawInput, df: &DataFrame) -> Painted {
+    // time moves on a little each frame (egui's smooth scrolling needs it)
+    // (a counter per context: tests run in parallel and time must not go backwards)
+    let n = ctx.data_mut(|d| {
+        let n = d.get_temp::<u64>(egui::Id::new("test_frame")).unwrap_or(0);
+        d.insert_temp(egui::Id::new("test_frame"), n + 1);
+        n
+    });
+    let mut input = input.clone();
+    input.time = Some(n as f64 * 0.05);
+    input.predicted_dt = 0.05;
+    input.events = events;
+    let out = ctx.run(input, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = MicroParquetApp::render_data_grid(ui, df, &HashMap::new(), 0, NumberDisplayFormat::Raw, 2, 7, selected, &HashMap::new(), None);
+        });
+    });
+    let _ = rows;
+    collect_painted(&out.shapes)
+}
+
+fn grid_df(rows: usize) -> DataFrame {
+    DataFrame::new(vec![
+        polars::prelude::Series::new("Branch".into(), (0..rows).map(|r| format!("B{r}")).collect::<Vec<_>>()).into(),
+        polars::prelude::Series::new("Balance".into(), (0..rows).map(|r| r as f64 * 1000.0).collect::<Vec<_>>()).into(),
+    ])
+    .unwrap_or_default()
+}
+
+#[test]
+fn grid_heading_row_is_bold_ink_on_header_bg_and_the_selected_column_keeps_accent_soft() {
+    let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
+    let df = grid_df(20);
+    let mut p = Painted::default();
+    for _ in 0..3 {
+        p = grid_frame(20, Some("Balance"), vec![], &ctx, &input, &df);
+    }
+    let tk = theme::LIGHT;
+    let branch = p.texts.iter().find(|(t, _, _)| t == "Branch").expect("Branch heading");
+    let balance = p.texts.iter().find(|(t, _, _)| t == "Balance").expect("Balance heading");
+    assert_eq!(branch.2, theme::family_bold(), "heading text is bold");
+    assert_eq!(balance.2, theme::family_bold());
+    // a header_bg rectangle under "Branch", an accent_soft one under the selected "Balance"
+    let under = |pos: egui::Pos2, color: egui::Color32| p.rects.iter().any(|(r, c)| *c == color && r.contains(pos) && r.height() >= theme::HEADER_ROW_H - 1.0);
+    assert!(under(branch.1 + egui::vec2(2.0, 4.0), tk.header_bg), "Branch heading is on header_bg");
+    assert!(under(balance.1 + egui::vec2(2.0, 4.0), tk.accent_soft), "the selected column's heading is on accent_soft");
+    assert!(!under(branch.1 + egui::vec2(2.0, 4.0), tk.accent_soft));
+}
+
+#[test]
+fn grid_heading_row_is_outside_the_scrolling_rows() {
+    // The heading row is drawn above a body that scrolls on its own (egui_extras' table keeps
+    // the header outside the body's scroll area). A synthetic mouse wheel cannot be delivered
+    // to a scroll area in a headless frame, so this checks the structure: with 500 rows only the
+    // rows in view are drawn (the body is virtual and clipped), the heading is above all of
+    // them and drawn at the same place whatever the number of rows.
+    let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
+    let head_y = |rows: usize| {
+        let df = grid_df(rows);
+        let mut p = Painted::default();
+        for _ in 0..3 {
+            p = grid_frame(rows, None, vec![], &ctx, &input, &df);
+        }
+        let y = p.texts.iter().find(|(t, _, _)| t == "Branch").map(|(_, pos, _)| pos.y).expect("heading");
+        let first = p.texts.iter().find(|(t, _, _)| t == "B0").map(|(_, pos, _)| pos.y).expect("first row");
+        let drawn_rows = p.texts.iter().filter(|(t, _, _)| t.len() > 1 && t.starts_with('B') && t[1..].chars().all(|c| c.is_ascii_digit())).count();
+        (y, first, drawn_rows)
+    };
+    let (y_small, first_small, n_small) = head_y(10);
+    let (y_big, first_big, n_big) = head_y(500);
+    assert!((y_small - y_big).abs() < 0.5 && (first_small - first_big).abs() < 0.5, "same layout for 10 and 500 rows");
+    assert!(y_big < first_big, "the heading is above the rows");
+    assert!(n_small == 10 && n_big < 40, "only the rows in view are drawn: {n_small}, {n_big}");
+}
+
+#[test]
+fn schema_preview_and_columns_list_use_the_same_heading_style() {
+    let tk = theme::LIGHT;
+    fn collect_all(modal: PendingCsvModal) -> Painted {
+        let mut app = test_app("hdr");
+        let mut modal = modal;
+        let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
+        let mut p = Painted::default();
+        for _ in 0..3 {
+            let out = ctx.run(input.clone(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.allocate_ui(egui::vec2(1000.0, 600.0), |ui| {
+                        let mut reread = false;
+                        app.schema_cards(ui, &mut modal, &mut reread);
+                    });
+                });
+            });
+            p = collect_painted(&out.shapes);
+        }
+        p
+    }
+    let p = collect_all(schema_modal(5, 10, false));
+    for h in ["Col0", "Column Name", "Target Data Type", "Sample Values"] {
+        let t = p.texts.iter().find(|(t, _, _)| t == h).unwrap_or_else(|| panic!("{h} not painted"));
+        assert_eq!(t.2, theme::family_bold(), "{h} is bold");
+        assert!(
+            p.rects.iter().any(|(r, c)| *c == tk.header_bg && r.contains(t.1 + egui::vec2(2.0, 4.0))),
+            "{h} is on header_bg"
+        );
+    }
+}
+
