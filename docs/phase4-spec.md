@@ -105,6 +105,13 @@ Keep each file under ~2 pages; use the UI's exact labels. When a later task chan
 - Open a PR to main at the end, wait for the Tests check, fix failures, don't merge.
 </workflow>
 
+<accepted_deviations>
+Recorded during the unattended Phase 4 run (each also appears in `docs/phase4-progress.md` and in the report).
+- G0: the guide checker is `tests/phase4/guide.rs`. Each worked-example table is followed by `Test: \`guide_<tool>\``; that test builds the example, runs it through the real engine, asserts the numbers and compares the Markdown tables with the guide file, so a guide cannot drift from the code. Where an older test already had the figures (t05, t07, t09, t10, t11, t12, t16, t17, t25, t28, phase 3 t1) the example reuses its data and says so in a comment; balances were scaled to BDT 1,000,000 in the duration example so DV01 is not rounded to 0.04, and the maturity and hygiene examples add rows for the overdue and ghost cases.
+- G0: UI labels, menu paths and error texts in the guides were taken from the source (`src/commands.rs`, `src/ui/*.rs`, `src/banking.rs`), not from a running window (this container cannot open one). Check the menu paths by eye.
+- G0: guides use the ten headings as `## 1. What it does` … `## 10. Limits and assumptions`; section 4 always has the table header from the spec; a guide over 150 lines fails the test (the "about two pages" limit).
+</accepted_deviations>
+
 <report>
 Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviations), the final `cargo test` summary, questions for the owner, and a "look at by eye" list.
 </report>
