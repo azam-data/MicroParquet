@@ -73,7 +73,7 @@ impl MicroParquetApp {
                     ui.label("Rates, CL codes and segments come from cl_code_map.json, segment_map.json and provision_rules.json in portable_data.");
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E182} Calculate CL Provision & BFP").clicked() {
                             step_to_apply = self.tool_step(&ActiveToolModal::LoanProvision).map(|s| (s, false));
                             close_modal = true;

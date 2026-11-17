@@ -67,7 +67,7 @@ impl MicroParquetApp {
                     });
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let needs_template =
                             self.stack.schema_mode == 2 && self.stack.schema_path.is_none();
                         let run = ui

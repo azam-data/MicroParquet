@@ -188,7 +188,7 @@ impl MicroParquetApp {
                         && self.batch_modal.output_folder.is_some();
                     let batch_running = self.jobs.active_long().is_some_and(|a| a.label == "Batch conversion");
 
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let run = ui
                             .add_enabled(
                                 !needs_template && have_folders && !batch_running,

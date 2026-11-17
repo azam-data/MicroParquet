@@ -99,7 +99,7 @@ impl MicroParquetApp {
                     }
                 });
                 dlg.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if self.tabs.len() >= 2 {
                             if theme::primary_button(ui, "\u{E3FE} Execute Join into New Tab").clicked() {
                                 let (Some(l_tab), Some(r_tab)) = (

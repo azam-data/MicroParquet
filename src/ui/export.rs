@@ -93,7 +93,7 @@ impl MicroParquetApp {
                     });
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if ui
                             .button("\u{E150} Export Selected Tabs to Single .xlsx...")
                             .clicked()
@@ -148,7 +148,7 @@ impl MicroParquetApp {
                     });
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E3FE} Select Output Folder & Split Now...").clicked() {
                             self.run_guarded_export(GuardedExport::Split);
                             close_modal = true;
@@ -280,7 +280,7 @@ impl MicroParquetApp {
                 ui.label("Numbers stored as Text sort wrongly, cannot be summed in Excel and show as text in Power BI.");
             });
             d.footer(|ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if theme::primary_button(ui, "Set to Number").clicked() {
                         set_number = true;
                     }
@@ -373,7 +373,7 @@ impl MicroParquetApp {
                     ui.small("\u{E18A} = control column");
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if ui
                             .button("Export anyway")
                             .on_hover_text("Also writes <output>.parse_failures.csv next to the export")

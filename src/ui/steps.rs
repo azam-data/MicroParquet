@@ -53,7 +53,7 @@ impl MicroParquetApp {
                     );
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if ui.button("\u{E248} Save .mpq.json File...").clicked() {
                             if let Some(tab) = self.tabs.get(self.active_tab) {
                                 let opt_schema = if self.macros.include_schema {
@@ -127,7 +127,7 @@ impl MicroParquetApp {
                         });
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if ui.button("\u{E198} Copy Python Code to Clipboard").clicked() {
                             ctx.copy_text(self.macros.python_code.clone());
                             self.status_message = format!(

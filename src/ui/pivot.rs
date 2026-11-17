@@ -143,7 +143,7 @@ impl MicroParquetApp {
 
             });
             d.footer(|ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if theme::primary_button(ui, "\u{E3FE} Generate Summary / Pivot View").clicked() {
                         step_to_apply = self.tool_step(&ActiveToolModal::GroupByPivot).map(|s| (s, self.pivot.open_in_new_tab));
                         close_modal = true;

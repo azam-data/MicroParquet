@@ -227,7 +227,7 @@ impl MicroParquetApp {
                 }
             });
             d.footer(|ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let problem = filter_problem(&self.filter.conditions);
                     let step = TransformStep::FilterGroup {
                         conditions: self.filter.conditions.clone(),

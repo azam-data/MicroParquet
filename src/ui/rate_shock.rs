@@ -106,7 +106,7 @@ impl MicroParquetApp {
                     ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E182} Run Rate Shock Simulation").clicked() {
                             step_to_apply = self.tool_step(&ActiveToolModal::RateShockSim).map(|s| (s, true));
                             close_modal = true;

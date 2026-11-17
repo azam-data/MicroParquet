@@ -134,16 +134,18 @@ pub const PROGRESS_BAR_W: f32 = 120.0;
 pub const SCHEMA_DIALOG_W: f32 = 1040.0;
 /// Space between the items of the two option rows.
 pub const SCHEMA_ROW_GAP: f32 = 6.0;
+/// The Columns card is never shorter than this: the dialog scrolls instead.
+pub const SCHEMA_COLUMNS_MIN_H: f32 = 260.0;
 pub const PREVIEW_ROWS: usize = 5;
 /// Header row, 5 data rows (each followed by egui's 6 px row spacing) and the frame around them.
 pub const PREVIEW_GRID_H: f32 = HEADER_ROW_H + PREVIEW_ROWS as f32 * (DATA_ROW_H + 6.0) + 8.0;
-pub const SCHEMA_COMBO_W: f32 = 100.0;
-pub const SCHEMA_COL_NAME_W: f32 = 220.0;
-pub const SCHEMA_COL_TYPE_W: f32 = 150.0;
-pub const SCHEMA_COL_PII_W: f32 = 150.0;
-pub const SCHEMA_COL_SIGN_W: f32 = 150.0;
-pub const SCHEMA_COL_FAIL_W: f32 = 110.0;
-pub const SCHEMA_COL_MIN_W: f32 = 80.0;
+pub const SCHEMA_COMBO_W: f32 = 96.0;
+pub const SCHEMA_COL_NAME_W: f32 = 190.0;
+pub const SCHEMA_COL_TYPE_W: f32 = 118.0;
+pub const SCHEMA_COL_PII_W: f32 = 118.0;
+pub const SCHEMA_COL_SIGN_W: f32 = 118.0;
+pub const SCHEMA_COL_FAIL_W: f32 = 84.0;
+pub const SCHEMA_COL_MIN_W: f32 = 60.0;
 /// Top bar pieces.
 pub const APP_MARK_SIZE: f32 = 18.0;
 pub const APP_MARK_RADIUS: f32 = 4.0;
@@ -584,6 +586,12 @@ pub fn icon_button(ui: &mut egui::Ui, icon: &str, hover: &str) -> Response {
     .on_hover_text(hover)
 }
 
+/// The width inside a card drawn in `ui`: what is free less the card's padding and border, so the
+/// card itself is exactly as wide as the space it is given.
+pub fn card_inner_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() - 2.0 * SPACE_M - 2.0).max(0.0)
+}
+
 /// A card: a bordered panel with a heading, as tall as its content.
 pub fn card(ui: &mut egui::Ui, heading: &str, add: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
     card_with(ui, heading, |_| {}, add)
@@ -597,13 +605,14 @@ pub fn card_with(
     add: impl FnOnce(&mut egui::Ui),
 ) -> egui::Rect {
     let tk = *t(ui);
+    let inner_w = card_inner_width(ui);
     egui::Frame::none()
         .fill(tk.surface)
         .stroke(Stroke::new(1.0_f32, tk.border))
         .rounding(Rounding::same(RADIUS_PANEL))
         .inner_margin(egui::Margin::same(SPACE_M))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(inner_w);
             ui.horizontal(|ui| {
                 ui.label(semibold(heading).color(tk.ink));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
@@ -614,19 +623,20 @@ pub fn card_with(
         .rect
 }
 
-/// A card that takes all the height that is left in `ui`.
-pub fn card_fill(ui: &mut egui::Ui, heading: &str, add: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
+/// A card of a fixed outer height (its content scrolls or is cut inside it).
+pub fn card_height(ui: &mut egui::Ui, heading: &str, height: f32, add: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
     let tk = *t(ui);
-    let h = ui.available_height();
+    let inner_w = card_inner_width(ui);
     egui::Frame::none()
         .fill(tk.surface)
         .stroke(Stroke::new(1.0_f32, tk.border))
         .rounding(Rounding::same(RADIUS_PANEL))
         .inner_margin(egui::Margin::same(SPACE_M))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_min_height((h - 2.0 * SPACE_M - 2.0).max(0.0));
-            ui.set_max_height((h - 2.0 * SPACE_M - 2.0).max(0.0));
+            ui.set_width(inner_w);
+            let inner = (height - 2.0 * SPACE_M - 2.0).max(0.0);
+            ui.set_min_height(inner);
+            ui.set_max_height(inner);
             ui.label(semibold(heading).color(tk.ink));
             ui.add_space(SPACE_XS);
             add(ui);
@@ -635,9 +645,26 @@ pub fn card_fill(ui: &mut egui::Ui, heading: &str, add: impl FnOnce(&mut egui::U
         .rect
 }
 
+/// A text in a row of options, as tall as the row's buttons and boxes, so a wrapped row keeps
+/// everything on one baseline.
+pub fn row_label(ui: &mut egui::Ui, text: RichText) {
+    let h = ui.spacing().interact_size.y;
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let w = galley.size().x;
+    ui.add_sized([w + 1.0, h], egui::Label::new(egui::WidgetText::Galley(galley)));
+}
+
+/// A drop-down in a wrapped row: egui's combo box lays itself out in one line and so never
+/// wraps; giving it a box of its own width lets the row wrap before it.
+pub fn sized_combo(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let h = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(egui::vec2(width + SPACE_XS, h), egui::Layout::left_to_right(egui::Align::Center), add);
+}
+
 /// A muted dot between the items of a row of options.
 pub fn dot(ui: &mut egui::Ui) {
-    ui.label(RichText::new("\u{b7}").color(t(ui).muted));
+    let muted = t(ui).muted;
+    row_label(ui, RichText::new("\u{b7}").color(muted));
 }
 
 /// An "i" icon whose hover text explains something at length.
@@ -693,14 +720,33 @@ pub fn chip(ui: &mut egui::Ui, text: &str) -> (bool, bool) {
     (clicked, removed)
 }
 
-/// Space kept free of any dialog: a dialog is at most the window height minus this.
-pub const DIALOG_WINDOW_MARGIN: f32 = 48.0;
-/// Room kept for the fixed footer (separator and one row of buttons).
+/// Space kept free between a dialog and the edge of the area the panels leave.
+pub const DIALOG_EDGE: f32 = 16.0;
+/// Room kept for the fixed footer until it has been measured (separator and one row of buttons).
 pub const DIALOG_FOOTER_H: f32 = 56.0;
 /// A dialog never gets a scrolling middle shorter than this, however small the window.
 pub const DIALOG_BODY_MIN_H: f32 = 80.0;
+/// A dialog without a set width is about this wide.
+pub const DIALOG_DEFAULT_W: f32 = 520.0;
 
-/// The heights of a dialog in a window of a given height.
+/// The area dialogs may use: what is left of the window after the top bar, tab strip, status bar
+/// and right panel, shrunk by `DIALOG_EDGE` on every side.
+pub fn dialog_bounds(available: egui::Rect) -> egui::Rect {
+    available.shrink(DIALOG_EDGE)
+}
+
+/// Remembers the area the panels leave (called by the frame once its panels are drawn; the
+/// central panel then takes the rest, so dialogs cannot ask egui for it later).
+pub fn set_dialog_area(ctx: &egui::Context, available: egui::Rect) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("dialog_area"), available));
+}
+
+/// The area the panels leave, or the whole window before the first frame has set it.
+pub fn dialog_area(ctx: &egui::Context) -> egui::Rect {
+    ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dialog_area"))).filter(|r| r.width() > 1.0 && r.height() > 1.0).unwrap_or_else(|| ctx.screen_rect())
+}
+
+/// The heights of a dialog in an area of a given height.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DialogLayout {
     /// The tallest the whole dialog (title bar, middle, footer, frame) may be.
@@ -711,61 +757,90 @@ pub struct DialogLayout {
     pub body_max_h: f32,
 }
 
-/// Pure layout of a dialog: `window_h` is the window height in points, `title_h` the height of
-/// the title text. The dialog's frame has the window margin above and below its content, and
-/// egui puts one more margin pair between the title bar and the content.
-pub fn dialog_layout(window_h: f32, title_h: f32, item_spacing_y: f32) -> DialogLayout {
-    let overhead = 4.0 * SPACE_M + title_h;
-    let max_total_h = (window_h - DIALOG_WINDOW_MARGIN).max(overhead + DIALOG_FOOTER_H + DIALOG_BODY_MIN_H);
+/// What a dialog's frame and title bar add to its content, estimated from the title text height
+/// (the frame has a margin above and below its content, egui puts one more margin pair between
+/// the title bar and the content, and draws the title in the heading size). The real value is
+/// measured after the dialog's first frame and replaces this.
+pub fn dialog_overhead_estimate(title_h: f32) -> f32 {
+    4.0 * SPACE_M + title_h + DIALOG_TITLE_SLACK
+}
+pub const DIALOG_TITLE_SLACK: f32 = 8.0;
+/// Room egui keeps on each side of a window title for its buttons.
+pub const DIALOG_TITLE_BUTTON_W: f32 = 28.0;
+
+/// Pure layout of a dialog: `bounds_h` is the height of the area it may use (already shrunk by
+/// `DIALOG_EDGE`), `overhead` what the frame and title bar add to the content, `footer_h` the
+/// footer's measured height (its estimate before it has been drawn once).
+pub fn dialog_layout(bounds_h: f32, overhead: f32, item_spacing_y: f32, footer_h: f32) -> DialogLayout {
+    let max_total_h = bounds_h.max(overhead + footer_h + DIALOG_BODY_MIN_H);
     let max_content_h = max_total_h - overhead;
-    let body_max_h = (max_content_h - DIALOG_FOOTER_H - item_spacing_y).max(DIALOG_BODY_MIN_H);
+    let body_max_h = (max_content_h - footer_h - item_spacing_y).max(DIALOG_BODY_MIN_H);
     DialogLayout { max_total_h, max_content_h, body_max_h }
 }
 
-/// A dialog without a set width is about this wide.
-pub const DIALOG_DEFAULT_W: f32 = 520.0;
+/// Where a dialog first opens: horizontally centred in `bounds`, at its top.
+pub fn dialog_start_pos(bounds: egui::Rect, width: f32) -> egui::Pos2 {
+    egui::pos2((bounds.center().x - width / 2.0).max(bounds.left()), bounds.top())
+}
 
-/// Where a dialog first opens: horizontally centred, `DIALOG_WINDOW_MARGIN / 2` below the top, so
-/// a dialog of the largest height has the same space above and below. (An egui pivot is not
-/// used: during the window's first, invisible sizing frame it moves the window away.)
-pub fn dialog_start_pos(screen: egui::Rect, width: f32) -> egui::Pos2 {
-    egui::pos2(
-        (screen.left() + (screen.width() - width) / 2.0).max(screen.left() + DIALOG_WINDOW_MARGIN / 2.0),
-        screen.top() + DIALOG_WINDOW_MARGIN / 2.0,
-    )
+/// What a dialog drew in its last frame (tests read it).
+#[derive(Clone, Copy, Debug)]
+pub struct DialogReport {
+    pub window: egui::Rect,
+    pub footer: egui::Rect,
+    pub body: egui::Rect,
+    pub bounds: egui::Rect,
+}
+
+/// The dialogs drawn since the log was last cleared.
+#[derive(Clone, Default)]
+pub struct DialogLog(pub Vec<(String, DialogReport)>);
+
+/// Forgets the logged dialogs (tests call it before the frame they look at).
+pub fn clear_dialog_log(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("dialog_log"), DialogLog::default()));
+}
+
+/// The dialogs drawn since `clear_dialog_log`: (title, what they drew).
+pub fn dialog_log(ctx: &egui::Context) -> Vec<(String, DialogReport)> {
+    ctx.data(|d| d.get_temp::<DialogLog>(egui::Id::new("dialog_log"))).map(|l| l.0).unwrap_or_default()
+}
+
+/// The last frame's report of the dialog with this title.
+pub fn dialog_report(ctx: &egui::Context, title: &str) -> Option<DialogReport> {
+    ctx.data(|d| d.get_temp::<DialogReport>(egui::Id::new(("dialog_report", title))))
 }
 
 /// A dialog: the title bar (header) and the button footer stay in place, the middle scrolls.
-/// Same title style everywhere; at most the window height minus 48 px, centred at first.
+/// Same title style everywhere; it fits in the area the panels leave, less 16 px on every side.
 pub struct Dialog<'a> {
-    window: egui::Window<'a>,
+    title: String,
     width: f32,
+    collapsible: bool,
+    resizable: Option<bool>,
+    open: Option<&'a mut bool>,
 }
 
 /// The modal window every dialog uses.
 pub fn modal<'a>(title: &str) -> Dialog<'a> {
-    Dialog {
-        window: egui::Window::new(RichText::new(title).family(family_semibold())).collapsible(false),
-        width: DIALOG_DEFAULT_W,
-    }
+    Dialog { title: title.to_string(), width: DIALOG_DEFAULT_W, collapsible: false, resizable: None, open: None }
 }
 
 impl<'a> Dialog<'a> {
     pub fn collapsible(mut self, v: bool) -> Self {
-        self.window = self.window.collapsible(v);
+        self.collapsible = v;
         self
     }
     pub fn default_width(mut self, w: f32) -> Self {
-        self.window = self.window.default_width(w);
         self.width = w;
         self
     }
     pub fn resizable(mut self, v: bool) -> Self {
-        self.window = self.window.resizable(v);
+        self.resizable = Some(v);
         self
     }
     pub fn open(mut self, open: &'a mut bool) -> Self {
-        self.window = self.window.open(open);
+        self.open = Some(open);
         self
     }
 
@@ -776,18 +851,78 @@ impl<'a> Dialog<'a> {
         ctx: &egui::Context,
         add: impl FnOnce(&mut DialogUi<'_>) -> R,
     ) -> Option<egui::InnerResponse<Option<R>>> {
-        let screen = ctx.screen_rect();
+        let bounds = dialog_bounds(dialog_area(ctx));
         // (ctx.fonts holds the context's lock: read the style before, not inside)
         let spacing_y = ctx.style().spacing.item_spacing.y;
         let title_h = ctx.fonts(|f| {
             f.row_height(&FontId::new(TEXT_HEADING, family_semibold()))
                 .max(f.row_height(&FontId::new(TEXT_BASE, family_semibold())))
         });
-        let lay = dialog_layout(screen.height(), title_h, spacing_y);
-        self.window
+        let footer_id = egui::Id::new(("dialog_footer_h", self.title.as_str()));
+        let overhead_id = egui::Id::new(("dialog_overhead", self.title.as_str()));
+        let footer_h = ctx.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(DIALOG_FOOTER_H);
+        let overhead = ctx.data(|d| d.get_temp::<f32>(overhead_id)).unwrap_or_else(|| dialog_overhead_estimate(title_h));
+        let lay = dialog_layout(bounds.height(), overhead, spacing_y, footer_h);
+        // never wider than the area: wide content scrolls sideways inside the dialog
+        // (egui's window width is the content's: the frame's two margins come on top)
+        let max_inner_w = bounds.width() - 2.0 * SPACE_M;
+        let width = self.width.min(max_inner_w);
+        let title = self.title.clone();
+        // A title longer than the dialog is cut with "…": egui makes a window at least as wide as
+        // its title, which would push the dialog out of the area.
+        let title_w = max_inner_w - 2.0 * DIALOG_TITLE_BUTTON_W;
+        let mut job = egui::text::LayoutJob::single_section(
+            self.title.clone(),
+            egui::TextFormat { font_id: FontId::new(TEXT_HEADING, family_semibold()), color: Color32::PLACEHOLDER, ..Default::default() },
+        );
+        job.wrap = egui::text::TextWrapping { max_width: title_w.max(40.0), max_rows: 1, break_anywhere: true, overflow_character: Some('\u{2026}') };
+        let galley = ctx.fonts(|f| f.layout_job(job));
+        let mut window = egui::Window::new(egui::WidgetText::Galley(galley))
+            .id(egui::Id::new(self.title.as_str()))
+            .collapsible(self.collapsible);
+        if let Some(r) = self.resizable {
+            window = window.resizable(r);
+        }
+        if let Some(open) = self.open {
+            window = window.open(open);
+        }
+        let out = window
+            .default_width(width)
+            .max_width(max_inner_w)
             .max_height(lay.max_content_h)
-            .default_pos(dialog_start_pos(screen, self.width))
-            .show(ctx, |ui| add(&mut DialogUi { ui, body_max_h: lay.body_max_h }))
+            .constrain_to(bounds)
+            .default_pos(dialog_start_pos(bounds, width + 2.0 * SPACE_M))
+            .show(ctx, |ui| {
+                let mut d = DialogUi { ui, body_max_h: lay.body_max_h, footer: None, body: None };
+                let r = add(&mut d);
+                let (footer, body) = (d.footer, d.body);
+                if let Some(f) = footer {
+                    ctx.data_mut(|data| data.insert_temp(footer_id, f.height()));
+                }
+                (r, footer, body)
+            });
+        out.map(|o| {
+            let (r, footer, body) = match o.inner {
+                Some((r, f, b)) => (Some(r), f, b),
+                None => (None, None, None),
+            };
+            let window = o.response.rect;
+            // what the frame and title bar really add: the window less its content
+            if let (Some(f), Some(b)) = (footer, body) {
+                let measured = window.height() - (f.bottom() - b.top());
+                if measured > 0.0 {
+                    ctx.data_mut(|d| d.insert_temp(overhead_id, measured));
+                }
+            }
+            let report = DialogReport { window, footer: footer.unwrap_or(egui::Rect::NOTHING), body: body.unwrap_or(egui::Rect::NOTHING), bounds };
+            ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new(("dialog_report", title.as_str())), report);
+                let log = d.get_temp_mut_or_default::<DialogLog>(egui::Id::new("dialog_log"));
+                log.0.retain(|(t, _)| t != &title);
+                log.0.push((title.clone(), report));
+            });
+            egui::InnerResponse::new(r, o.response)
+        })
     }
 }
 
@@ -795,29 +930,68 @@ impl<'a> Dialog<'a> {
 pub struct DialogUi<'a> {
     pub ui: &'a mut egui::Ui,
     body_max_h: f32,
+    footer: Option<egui::Rect>,
+    body: Option<egui::Rect>,
 }
 
 impl DialogUi<'_> {
-    /// The scrolling middle: as tall as its content, up to what the window leaves.
+    /// The scrolling middle, between the title bar and the footer: as tall as its content up to
+    /// what the area leaves, with the vertical bar always shown. Content wider than the dialog
+    /// scrolls sideways inside it; it never makes the dialog wider.
     pub fn body<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-        egui::ScrollArea::vertical()
+        let top = self.ui.cursor().top();
+        let out = egui::ScrollArea::vertical()
             .max_height(self.body_max_h)
-            .auto_shrink([true, true])
-            .show(self.ui, add)
-            .inner
+            .auto_shrink([false, true])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .show(self.ui, |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("dialog_body_x")
+                    .auto_shrink([false, true])
+                    .show(ui, add)
+                    .inner
+            });
+        self.body = Some(self.used_since(top));
+        out.inner
     }
 
-    /// A middle that does not scroll as a whole: it is as tall as the dialog may be, and the
-    /// content shares that height itself (the schema dialog's lists scroll on their own).
-    pub fn body_fill<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-        let w = self.ui.available_width();
-        self.ui.allocate_ui(egui::vec2(w, self.body_max_h), add).inner
+    /// The rectangle the content added since `top`.
+    fn used_since(&self, top: f32) -> egui::Rect {
+        let m = self.ui.min_rect();
+        egui::Rect::from_min_max(egui::pos2(m.left(), top), egui::pos2(m.right(), m.bottom()))
     }
 
-    /// The fixed footer: a separator, then the buttons.
+    /// The height the scrolling middle may have.
+    pub fn body_max_h(&self) -> f32 {
+        self.body_max_h
+    }
+
+    /// A middle that is always as tall as the dialog may be and scrolls as a whole (vertical bar
+    /// always shown) when its content is taller; the content may use `body_max_h()` to fill what
+    /// is left (the schema dialog's lists scroll on their own inside it).
+    pub fn body_scroll<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        let top = self.ui.cursor().top();
+        let out = egui::ScrollArea::vertical()
+            .max_height(self.body_max_h)
+            .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .show(self.ui, add);
+        self.body = Some(self.used_since(top));
+        out.inner
+    }
+
+    /// The fixed footer: a separator, then the buttons (which wrap to a second line when the
+    /// dialog is narrow; the middle then gets less height).
     pub fn footer<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        let top = self.ui.cursor().top();
         self.ui.separator();
-        add(self.ui)
+        let r = add(self.ui);
+        let bottom = self.ui.min_rect().bottom();
+        self.footer = Some(egui::Rect::from_min_max(
+            egui::pos2(self.ui.min_rect().left(), top),
+            egui::pos2(self.ui.min_rect().right(), bottom),
+        ));
+        r
     }
 
     /// Content between the title bar and the footer that must stay in view (a banner).

@@ -69,7 +69,7 @@ impl MicroParquetApp {
                     });
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E182} Add Calculated Column").clicked() {
                             step_to_apply = self.tool_step(&ActiveToolModal::MathFormula).map(|s| (s, false));
                             close_modal = true;

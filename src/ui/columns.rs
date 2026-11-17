@@ -91,7 +91,7 @@ impl MicroParquetApp {
                 });
               });
               dlg.footer(|ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if theme::primary_button(ui, "\u{E182} Apply Column Selection, Order & Formats").clicked() {
                         self.columns.apply_formats =
                             Some(self.columns.list.iter().map(|(c, _, spec)| (c.clone(), *spec)).collect());

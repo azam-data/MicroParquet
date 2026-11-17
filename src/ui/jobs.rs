@@ -73,7 +73,7 @@ impl MicroParquetApp {
                 ui.label("The export is stopped and its unfinished file is deleted; no partial file is left.");
             });
             d.footer(|ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if theme::primary_button(ui, "Cancel export and quit").clicked() {
                         quit = true;
                     }

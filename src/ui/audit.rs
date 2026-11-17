@@ -84,7 +84,7 @@ impl MicroParquetApp {
                     );
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E3FE} Run Audit into New Exception Tab").clicked() {
                             step_to_apply = self.tool_step(&ActiveToolModal::BankingAudit).map(|s| (s, true));
                             close_modal = true;

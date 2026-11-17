@@ -253,6 +253,14 @@ impl MicroParquetApp {
 
 impl eframe::App for MicroParquetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame_ui(ctx);
+    }
+}
+
+impl MicroParquetApp {
+    /// One frame of the whole window: panels, central table, dialogs. (Tests draw it in a
+    /// headless egui context at a given window size and scale.)
+    pub(crate) fn frame_ui(&mut self, ctx: &egui::Context) {
         // A PII key created by a pipeline nobody announced it for is never silent.
         if let Some(note) = take_pii_key_created_note() {
             self.status_message = note;
@@ -270,6 +278,8 @@ impl eframe::App for MicroParquetApp {
         self.render_tab_strip_panel(ctx);
         self.render_status_bar(ctx);
         self.render_right_panel(ctx);
+        // what dialogs may use: the window less the panels (the central panel takes the rest)
+        theme::set_dialog_area(ctx, ctx.available_rect());
 
         // Central workspace: filter chips and paging, then the table.
         let tk = *theme::tokens(self.dark_mode);

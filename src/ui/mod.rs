@@ -34,6 +34,8 @@ pub mod top_bar;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod render_tests;
+#[cfg(test)]
 mod tests;
 pub mod theme;
 

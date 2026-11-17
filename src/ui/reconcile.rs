@@ -89,7 +89,7 @@ impl MicroParquetApp {
                     }
                 });
                 dlg.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if self.tabs.len() >= 2 {
                             if theme::primary_button(ui, "\u{E3FE} Reconcile Periods into New Tab").clicked() {
                                 let (Some(p_tab), Some(c_tab)) = (

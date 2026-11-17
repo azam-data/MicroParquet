@@ -161,7 +161,7 @@ impl MicroParquetApp {
                     }
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let problem = sort_problem(&self.sort.levels);
                         let ok = ui
                             .add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, "\u{E182}  Apply sort"))

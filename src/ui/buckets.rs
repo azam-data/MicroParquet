@@ -193,7 +193,7 @@ impl MicroParquetApp {
                     });
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E182} Generate Maturity Buckets").clicked() {
                             step_to_apply = self.tool_step(&ActiveToolModal::MaturityBucket).map(|s| (s, false));
                             close_modal = true;

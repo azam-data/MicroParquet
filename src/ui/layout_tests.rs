@@ -270,20 +270,22 @@ fn the_version_is_in_help_about_not_in_the_bar() {
 
 // ------------------------------------------------------------------------------- dialogs
 
-const TITLE_H: f32 = 22.0;
+/// What a dialog's frame and title bar add to its content in these tests.
+const OVERHEAD: f32 = 70.0;
 
 #[test]
-fn dialog_layout_leaves_48_px_and_keeps_the_footer_in_the_window() {
-    let screen_h = WIN_H_PX / UI_SCALE;
-    let l = theme::dialog_layout(screen_h, TITLE_H, 6.0);
-    assert!((l.max_total_h - (screen_h - 48.0)).abs() < 0.01, "{l:?}");
-    // title bar + frame + body + spacing + footer add up to the maximum, never more
-    let overhead = 4.0 * theme::SPACE_M + TITLE_H;
-    assert!(overhead + l.body_max_h + 6.0 + theme::DIALOG_FOOTER_H <= l.max_total_h + 0.01, "{l:?}");
-    assert!(l.body_max_h >= theme::DIALOG_BODY_MIN_H);
-    // a taller window gives a taller middle, a tiny one keeps a usable middle
-    assert!(theme::dialog_layout(1200.0, TITLE_H, 6.0).body_max_h > l.body_max_h);
-    assert_eq!(theme::dialog_layout(100.0, TITLE_H, 6.0).body_max_h, theme::DIALOG_BODY_MIN_H);
+fn dialog_layout_adds_up_inside_the_bounds() {
+    let bounds_h = 600.0;
+    for footer in [theme::DIALOG_FOOTER_H, 90.0] {
+        let l = theme::dialog_layout(bounds_h, OVERHEAD, 6.0, footer);
+        assert!((l.max_total_h - bounds_h).abs() < 0.01, "{l:?}");
+        // title bar + frame + middle + spacing + footer add up to the maximum, never more
+        let overhead = OVERHEAD;
+        assert!(overhead + l.body_max_h + 6.0 + footer <= l.max_total_h + 0.01, "{l:?}");
+    }
+    // a taller footer (wrapped buttons) leaves less for the middle
+    assert!(theme::dialog_layout(bounds_h, OVERHEAD, 6.0, 90.0).body_max_h < theme::dialog_layout(bounds_h, OVERHEAD, 6.0, 56.0).body_max_h);
+    assert_eq!(theme::dialog_layout(100.0, OVERHEAD, 6.0, 56.0).body_max_h, theme::DIALOG_BODY_MIN_H);
 }
 
 #[test]
@@ -304,7 +306,7 @@ fn a_tall_dialog_is_capped_and_its_footer_buttons_stay_inside_the_window() {
                         }
                     });
                     d.footer(|ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             buttons.push(theme::primary_button(ui, "Apply").rect);
                             buttons.push(ui.button("Cancel").rect);
                         });
@@ -315,23 +317,23 @@ fn a_tall_dialog_is_capped_and_its_footer_buttons_stay_inside_the_window() {
                 }
             });
         }
-        assert!(win.height() <= screen.height() - 48.0 + 0.5, "{rows} rows: window {win:?} in screen {screen:?}");
+        assert!(win.height() <= screen.height() - 2.0 * theme::DIALOG_EDGE + 0.5, "{rows} rows: window {win:?} in screen {screen:?}");
         assert!(win.top() >= screen.top() - 0.5 && win.bottom() <= screen.bottom() + 0.5, "{rows} rows: {win:?}");
         assert_eq!(buttons.len(), 2);
         for b in &buttons {
             assert!(b.bottom() <= win.bottom() && b.top() >= win.top(), "{rows} rows: button {b:?} outside {win:?}");
-            assert!(b.bottom() <= screen.bottom() - 24.0 + 0.5, "{rows} rows: button {b:?} too low for {screen:?}");
+            assert!(b.bottom() <= screen.bottom() - theme::DIALOG_EDGE + 0.5, "{rows} rows: button {b:?} too low for {screen:?}");
         }
         if rows == 4000 {
             // the middle scrolls: the window is the full height and the footer is at its bottom
-            assert!(win.height() >= screen.height() - 48.0 - 8.0, "{win:?}");
+            assert!(win.height() >= screen.height() - 2.0 * theme::DIALOG_EDGE - 12.0, "{win:?}");
             assert!(buttons[0].bottom() >= win.bottom() - 2.0 * theme::SPACE_M - 1.0, "footer sits at the bottom: {win:?} {:?}", buttons[0]);
         }
         // a short dialog is not stretched and opens horizontally centred, 24 px below the top
         if rows == 3 {
             assert!(win.height() < 220.0, "{win:?}");
         }
-        assert!((win.top() - 24.0).abs() < 1.0, "{rows} rows: opens 24 px below the top: {win:?}");
+        assert!((win.top() - theme::DIALOG_EDGE).abs() < 1.0, "{rows} rows: opens 16 px below the top: {win:?}");
         // (a dialog without a set width opens as if it were 520 wide; its real width is its content's)
         assert!(((win.center().x) - screen.center().x).abs() < 100.0, "{rows} rows: roughly centred: {win:?}");
     }
@@ -354,8 +356,8 @@ fn real_dialogs_with_long_content_keep_their_buttons_in_the_window() {
     }
     let id = egui::Id::new("\u{E30C}  Filter rows");
     let win = ctx.memory(|m| m.area_rect(id)).expect("the filter dialog was shown");
-    assert!(win.height() <= screen.height() - 48.0 + 0.5, "{win:?} in {screen:?}");
-    assert!(win.bottom() <= screen.bottom() - 24.0 + 0.5 && win.top() >= 24.0 - 0.5, "{win:?} in {screen:?}");
+    assert!(win.height() <= screen.height() - 2.0 * theme::DIALOG_EDGE + 0.5, "{win:?} in {screen:?}");
+    assert!(win.bottom() <= screen.bottom() - theme::DIALOG_EDGE + 0.5 && win.top() >= theme::DIALOG_EDGE - 0.5, "{win:?} in {screen:?}");
 }
 
 // ------------------------------------------------------------------------ schema dialog
@@ -364,7 +366,7 @@ use crate::ui::schema::{PendingCsvModal, SchemaCardRects};
 use micro_parquet::models::ColumnSchemaConfig;
 use polars::prelude::NamedFrom;
 
-fn schema_modal(rows: usize, columns: usize, parquet: bool) -> PendingCsvModal {
+pub(crate) fn schema_modal(rows: usize, columns: usize, parquet: bool) -> PendingCsvModal {
     let names: Vec<String> = (0..4).map(|i| format!("Col{i}")).collect();
     let df = DataFrame::new(
         names
@@ -395,6 +397,12 @@ fn schema_modal(rows: usize, columns: usize, parquet: bool) -> PendingCsvModal {
 /// Draws the schema cards in a middle of the height a dialog leaves at 1280×720 / 105%.
 /// Returns the card rectangles, the painted texts with their positions and the middle's rect.
 fn drawn_schema(rows: usize, columns: usize, parquet: bool) -> (SchemaCardRects, Vec<(String, egui::Pos2)>, egui::Rect) {
+    let lay = theme::dialog_layout(WIN_H_PX / UI_SCALE - 2.0 * theme::DIALOG_EDGE, OVERHEAD, 6.0, theme::DIALOG_FOOTER_H);
+    drawn_schema_in(lay.body_max_h, rows, columns, parquet)
+}
+
+/// The same in a middle whose visible height is `view_h`.
+fn drawn_schema_in(view_h: f32, rows: usize, columns: usize, parquet: bool) -> (SchemaCardRects, Vec<(String, egui::Pos2)>, egui::Rect) {
     fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
         match shape {
             egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
@@ -405,7 +413,6 @@ fn drawn_schema(rows: usize, columns: usize, parquet: bool) -> (SchemaCardRects,
     let mut app = test_app("schema");
     let mut modal = schema_modal(rows, columns, parquet);
     let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
-    let lay = theme::dialog_layout(WIN_H_PX / UI_SCALE, 22.0, 6.0);
     let mut rects = None;
     let mut middle = egui::Rect::NOTHING;
     let mut texts = Vec::new();
@@ -413,9 +420,9 @@ fn drawn_schema(rows: usize, columns: usize, parquet: bool) -> (SchemaCardRects,
         let out = ctx.run(input.clone(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let r = ui
-                    .allocate_ui(egui::vec2(theme::SCHEMA_DIALOG_W - 2.0 * theme::SPACE_M, lay.body_max_h), |ui| {
+                    .allocate_ui(egui::vec2(theme::SCHEMA_DIALOG_W - 2.0 * theme::SPACE_M, view_h), |ui| {
                         let mut reread = false;
-                        app.schema_cards(ui, &mut modal, &mut reread)
+                        app.schema_cards(ui, &mut modal, &mut reread, view_h)
                     });
                 middle = r.response.rect;
                 rects = Some(r.inner);
@@ -486,11 +493,15 @@ fn preview_is_five_rows_whatever_the_file_has() {
 }
 
 #[test]
-fn columns_card_takes_the_remaining_height() {
+fn columns_card_takes_the_remaining_height_but_never_less_than_its_minimum() {
     for n in [3usize, 60, 400] {
-        let (r, _, middle) = drawn_schema(5, n, false);
+        // room to spare: it ends where the visible middle ends
+        let (r, _, middle) = drawn_schema_in(1100.0, 5, n, false);
         assert!((r.columns.bottom() - middle.bottom()).abs() < 1.5, "{n} columns: card ends at {} but the middle at {}", r.columns.bottom(), middle.bottom());
-        assert!(r.columns.height() > 150.0, "{n} columns: {:?}", r.columns);
+        assert!(r.columns.height() > theme::SCHEMA_COLUMNS_MIN_H, "{n} columns: {:?}", r.columns);
+        // a short middle: the card keeps its minimum and the dialog scrolls
+        let (r, _, _) = drawn_schema_in(300.0, 5, n, false);
+        assert!((r.columns.height() - theme::SCHEMA_COLUMNS_MIN_H).abs() < 3.0, "{n} columns: {:?}", r.columns);
     }
 }
 
@@ -631,7 +642,7 @@ fn schema_preview_and_columns_list_use_the_same_heading_style() {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.allocate_ui(egui::vec2(1000.0, 600.0), |ui| {
                         let mut reread = false;
-                        app.schema_cards(ui, &mut modal, &mut reread);
+                        app.schema_cards(ui, &mut modal, &mut reread, 600.0);
                     });
                 });
             });
@@ -916,7 +927,7 @@ fn no_size_literal_is_left_outside_theme_rs() {
         .filter(|p| p.extension().is_some_and(|x| x == "rs"))
         .filter(|p| {
             let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs")
+            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs")
         })
         .collect();
     files.push("src/main.rs".into());
@@ -944,3 +955,5 @@ fn no_size_literal_is_left_outside_theme_rs() {
     }
     assert!(bad.is_empty(), "literals that belong in theme.rs:\n{}", bad.join("\n"));
 }
+
+

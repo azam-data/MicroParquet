@@ -2,6 +2,9 @@
 
 use crate::ui::prelude::*;
 
+pub const SCHEMA_TITLE_PARQUET: &str = "\u{E434} Schema & Ingestion (Parquet): Types & PII Masking";
+pub const SCHEMA_TITLE_CSV: &str = "\u{E434} Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock";
+
 pub struct PendingCsvModal {
     pub csv_path: PathBuf,
     pub raw_preview_df: DataFrame,
@@ -27,20 +30,17 @@ impl MicroParquetApp {
         let mut action_direct_convert = false;
         let mut action_reread = false;
 
-        let title = if modal.is_parquet {
-            "\u{E434} Schema & Ingestion (Parquet): Types & PII Masking"
-        } else {
-            "\u{E434} Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock"
-        };
+        let title = if modal.is_parquet { SCHEMA_TITLE_PARQUET } else { SCHEMA_TITLE_CSV };
         theme::modal(title)
             .resizable(true)
             .default_width(theme::SCHEMA_DIALOG_W)
             .show(ctx, |d| {
-                d.body_fill(|ui| {
-                    self.schema_cards(ui, &mut modal, &mut action_reread);
+                let view_h = d.body_max_h();
+                d.body_scroll(|ui| {
+                    self.schema_cards(ui, &mut modal, &mut action_reread, view_h);
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if modal.target_tab.is_some() {
                             if theme::primary_button(ui, "\u{E182} Apply Schema to This Tab").clicked() {
                                 action_apply_to_tab = true;
@@ -219,7 +219,7 @@ pub struct SchemaCardRects {
 impl MicroParquetApp {
     /// The schema dialog's middle: "Reading options", "Preview" (a fixed 5 rows) and "Columns",
     /// which takes the height that is left, with its heading row fixed while the rows scroll.
-    pub(crate) fn schema_cards(&mut self, ui: &mut egui::Ui, modal: &mut PendingCsvModal, reread: &mut bool) -> SchemaCardRects {
+    pub(crate) fn schema_cards(&mut self, ui: &mut egui::Ui, modal: &mut PendingCsvModal, reread: &mut bool, view_h: f32) -> SchemaCardRects {
         let tk = *theme::tokens(ui.visuals().dark_mode);
         let none = egui::Rect::NOTHING;
         let mut rects = SchemaCardRects { reading: none, preview: none, columns: none };
@@ -227,13 +227,13 @@ impl MicroParquetApp {
         // ---- Reading options: two compact rows
         rects.reading = theme::card(ui, "Reading options", |ui| {
             if modal.is_parquet {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.checkbox(&mut modal.config.parse_accounting_negatives, "Accounting negatives")
                         .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)"); // not a size: example text
                     theme::info_icon(ui, "Columns keep their Parquet type unless you change it. Text columns can be set to a number or date type; masks apply to any column.");
                 });
             } else {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = theme::SCHEMA_ROW_GAP;
                     ui.checkbox(&mut modal.config.sanitize_linebreaks, "Clean line breaks")
                         .on_hover_text("Sanitize Linebreaks (\\r, \\n) & Trim Whitespace");
@@ -242,7 +242,7 @@ impl MicroParquetApp {
                     ui.checkbox(&mut modal.config.heal_broken_csv_lines, "Heal broken lines")
                         .on_hover_text("Pre-Heal Broken Unquoted CSV Lines");
                     theme::dot(ui);
-                    ui.label("Separator");
+                    theme::row_label(ui, egui::RichText::new("Separator"));
                     let sep_label = |c: char| match c {
                         ',' => "Comma ,",
                         '|' => "Pipe |",
@@ -250,28 +250,32 @@ impl MicroParquetApp {
                         '\t' => "Tab",
                         _ => "Other",
                     };
-                    egui::ComboBox::from_id_salt("csv_separator")
-                        .width(theme::SCHEMA_COMBO_W)
-                        .selected_text(sep_label(modal.config.separator))
-                        .show_ui(ui, |ui| {
-                            for c in [',', '|', ';', '\t'] {
-                                ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
-                            }
-                        });
+                    theme::sized_combo(ui, theme::SCHEMA_COMBO_W, |ui| {
+                        egui::ComboBox::from_id_salt("csv_separator")
+                            .width(theme::SCHEMA_COMBO_W)
+                            .selected_text(sep_label(modal.config.separator))
+                            .show_ui(ui, |ui| {
+                                for c in [',', '|', ';', '\t'] {
+                                    ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
+                                }
+                            });
+                    });
                     theme::dot(ui);
-                    ui.label("Title lines");
+                    theme::row_label(ui, egui::RichText::new("Title lines"));
                     ui.add(egui::DragValue::new(&mut modal.config.skip_rows).range(0..=100))
                         .on_hover_text("Lines above the header row that are skipped");
                     theme::dot(ui);
-                    ui.label("Encoding");
-                    egui::ComboBox::from_id_salt("csv_encoding")
-                        .width(theme::SCHEMA_COMBO_W)
-                        .selected_text(modal.config.encoding.label())
-                        .show_ui(ui, |ui| {
-                            for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
-                                ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
-                            }
-                        });
+                    theme::row_label(ui, egui::RichText::new("Encoding"));
+                    theme::sized_combo(ui, theme::SCHEMA_COMBO_W, |ui| {
+                        egui::ComboBox::from_id_salt("csv_encoding")
+                            .width(theme::SCHEMA_COMBO_W)
+                            .selected_text(modal.config.encoding.label())
+                            .show_ui(ui, |ui| {
+                                for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
+                                    ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
+                                }
+                            });
+                    });
                     if ui
                         .button("\u{E094} Re-read")
                         .on_hover_text("Reloads the preview and re-detects the columns and their types with these settings")
@@ -284,9 +288,9 @@ impl MicroParquetApp {
 
             // row 2: template and masking key
             let key_path = pii_key_path();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = theme::SCHEMA_ROW_GAP;
-                ui.label(egui::RichText::new("Template:").color(tk.muted));
+                theme::row_label(ui, egui::RichText::new("Template:").color(tk.muted));
                 if ui.button("\u{E248} Save").on_hover_text("Save Schema Template (.schema.json)").clicked() {
                     if let Some(save_path) = rfd::FileDialog::new()
                         .set_directory(&self.paths.schemas_dir)
@@ -314,10 +318,10 @@ impl MicroParquetApp {
                 }
                 theme::dot(ui);
                 // PII masks use the per-install key (the schema's old salt is not used).
-                ui.label(egui::RichText::new("Masking key:").color(tk.muted));
+                theme::row_label(ui, egui::RichText::new("Masking key:").color(tk.muted));
                 match read_pii_key(&key_path) {
                     Ok(Some(k)) => {
-                        ui.label(theme::mono(pii_key_fingerprint(&k)));
+                        theme::row_label(ui, theme::mono(pii_key_fingerprint(&k)));
                     }
                     Ok(None) => {
                         ui.label("not created").on_hover_text("It is created the first time a column is masked.");
@@ -400,13 +404,20 @@ impl MicroParquetApp {
         ui.add_space(theme::SPACE_S);
 
         // ---- Columns: the rest of the height
-        rects.columns = theme::card_fill(ui, "Columns", |ui| {
+        // the rest of the visible height, but never less than a list worth looking at
+        let used = ui.cursor().top() - ui.min_rect().top();
+        let columns_h = (view_h - used).max(theme::SCHEMA_COLUMNS_MIN_H);
+        rects.columns = theme::card_height(ui, "Columns", columns_h, |ui| {
             let n = modal.config.columns.len();
             let is_parquet = modal.is_parquet;
             let failures = &modal.parse_failures;
             let columns = &mut modal.config.columns;
             ui.push_id("schema_columns", |ui| {
+              // a list wider than the card scrolls sideways inside it; the heading row stays above
+              // the rows that scroll up and down
+              egui::ScrollArea::horizontal().id_salt("schema_columns_x").auto_shrink([false, false]).show(ui, |ui| {
                 TableBuilder::new(ui)
+                    .min_scrolled_height(0.0)
                     .striped(true)
                     .resizable(true)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -494,6 +505,7 @@ impl MicroParquetApp {
                             });
                         });
                     });
+              });
             });
         });
         rects

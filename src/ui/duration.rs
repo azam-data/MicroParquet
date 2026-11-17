@@ -98,7 +98,7 @@ impl MicroParquetApp {
                     ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                 });
                 d.footer(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::primary_button(ui, "\u{E182} Compute Duration & ΔEVE Columns").clicked() {
                             step_to_apply = self.tool_step(&ActiveToolModal::DurationAnalysis).map(|s| (s, false));
                             close_modal = true;
