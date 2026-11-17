@@ -647,11 +647,11 @@ pub fn card_height(ui: &mut egui::Ui, heading: &str, height: f32, add: impl FnOn
 
 /// A text in a row of options, as tall as the row's buttons and boxes, so a wrapped row keeps
 /// everything on one baseline.
-pub fn row_label(ui: &mut egui::Ui, text: RichText) {
+pub fn row_label(ui: &mut egui::Ui, text: RichText) -> egui::Response {
     let h = ui.spacing().interact_size.y;
     let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
     let w = galley.size().x;
-    ui.add_sized([w + 1.0, h], egui::Label::new(egui::WidgetText::Galley(galley)));
+    ui.add_sized([w + 1.0, h], egui::Label::new(egui::WidgetText::Galley(galley)))
 }
 
 /// A drop-down in a wrapped row: egui's combo box lays itself out in one line and so never
