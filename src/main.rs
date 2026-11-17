@@ -287,9 +287,12 @@ impl MicroParquetApp {
         self.render_top_bar(ctx);
         self.render_tab_strip_panel(ctx);
         self.render_status_bar(ctx);
-        self.render_right_panel(ctx);
-        // what dialogs may use: the window less the panels (the central panel takes the rest)
+        // Modal dialogs may cover the right panel: their area is the window less the top bar, the
+        // tab strip and the status bar. (The central panel takes the rest, so egui cannot be
+        // asked for it later.) Only the non-modal panels keep clear of the right panel.
         theme::set_dialog_area(ctx, ctx.available_rect());
+        self.render_right_panel(ctx);
+        theme::set_central_area(ctx, ctx.available_rect());
 
         // Central workspace: filter chips and paging, then the table.
         let tk = *theme::tokens(self.dark_mode);

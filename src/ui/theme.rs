@@ -767,8 +767,8 @@ pub const DIALOG_BODY_MIN_H: f32 = 80.0;
 /// A dialog without a set width is about this wide.
 pub const DIALOG_DEFAULT_W: f32 = 520.0;
 
-/// The area dialogs may use: what is left of the window after the top bar, tab strip, status bar
-/// and right panel, shrunk by `DIALOG_EDGE` on every side.
+/// The area dialogs may use: what is left of the window after the top bar, tab strip and status
+/// bar (a modal dialog may cover the right panel), shrunk by `DIALOG_EDGE` on every side.
 pub fn dialog_bounds(available: egui::Rect) -> egui::Rect {
     available.shrink(DIALOG_EDGE)
 }
@@ -779,7 +779,17 @@ pub fn set_dialog_area(ctx: &egui::Context, available: egui::Rect) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("dialog_area"), available));
 }
 
-/// The area the panels leave, or the whole window before the first frame has set it.
+/// Remembers what is left after the right panel too: where the table and the filter bar live.
+pub fn set_central_area(ctx: &egui::Context, available: egui::Rect) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("central_area"), available));
+}
+
+/// The area of the central panel (the window less every panel).
+pub fn central_area(ctx: &egui::Context) -> egui::Rect {
+    ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("central_area"))).unwrap_or_else(|| ctx.screen_rect())
+}
+
+/// The area dialogs may use, or the whole window before the first frame has set it.
 pub fn dialog_area(ctx: &egui::Context) -> egui::Rect {
     ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dialog_area"))).filter(|r| r.width() > 1.0 && r.height() > 1.0).unwrap_or_else(|| ctx.screen_rect())
 }

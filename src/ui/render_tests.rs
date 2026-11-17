@@ -44,7 +44,10 @@ fn check_report(ctx: &egui::Context, r: theme::DialogReport, what: &str) {
     let area = theme::dialog_area(ctx);
     let screen = ctx.screen_rect();
     assert!(inside(area, screen), "{what}: the area {area:?} is inside the window {screen:?}");
-    assert!(area.width() < screen.width() - theme::RIGHT_PANEL_W + 1.0, "{what}: the right panel is not in the area: {area:?}");
+    // the area is the window less the top bar, the tab strip and the status bar: it covers the right panel
+    assert!((area.width() - screen.width()).abs() < 0.5, "{what}: the area spans the window's width (the right panel too): {area:?}");
+    assert!(area.top() >= theme::TOP_BAR_H + theme::TAB_STRIP_H - 0.5, "{what}: the area starts under the top bar and tab strip: {area:?}");
+    assert!(area.bottom() <= screen.bottom() - theme::STATUS_BAR_H + 0.5, "{what}: the area ends above the status bar: {area:?}");
     assert!(inside(r.bounds, area.shrink(theme::DIALOG_EDGE)) && (r.bounds.width() - (area.width() - 32.0)).abs() < 0.6, "{what}: bounds are the area less 16 px: {:?}", r.bounds);
     assert!(inside(r.window, r.bounds), "{what}: the dialog {:?} fits in {:?}", r.window, r.bounds);
     assert!(inside(r.footer, r.window), "{what}: the footer {:?} is inside the dialog {:?}", r.footer, r.window);
@@ -113,6 +116,29 @@ fn schema_preview_headings_never_pass_the_cards_right_edge_at_both_scales() {
             assert!(frame.right() <= win.right() - theme::SPACE_M + 0.5 && frame.left() >= win.left() + theme::SPACE_M - 0.5, "{what}: the preview frame {frame:?} is inside the dialog {win:?}");
         }
     }
+}
+
+#[test]
+fn a_modal_dialog_may_cover_the_right_panel_and_the_schema_dialog_is_not_squeezed() {
+    // 105%: the 1280x720 px window is 1219x686 pt; the right panel is 316 wide
+    let (ppp, w, h) = (1.05, 1219.05, 685.71);
+    let mut app = test_app("r1cover");
+    let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+    open_tab(&mut app, src, vec![]);
+    app.pending_csv_modal = Some(schema_modal(5, 40, false));
+    let (ctx, input) = screen(ppp, w, h);
+    frames(&mut app, &ctx, &input, 8);
+    let r = assert_dialog_fits(&ctx, crate::ui::schema::SCHEMA_TITLE_CSV, "105%");
+    let area = theme::dialog_area(&ctx);
+    let central = theme::central_area(&ctx);
+    assert!((area.width() - 1219.05).abs() < 0.5 && (r.bounds.width() - (1219.05 - 32.0)).abs() < 0.6, "the dialog may be {} wide at most: {:?}", 1219.05 - 32.0, r.bounds);
+    assert!(central.right() < area.right() - theme::RIGHT_PANEL_W + 1.0, "the right panel lies beside the central area: {central:?}");
+    // the Schema dialog asks for 1040 + the frame: it gets it, more than the 871 the central area would allow
+    assert!(r.window.width() > 1000.0 && r.window.width() <= 1187.5, "{:?}", r.window);
+    assert!(r.window.right() > central.right(), "it covers the right panel: dialog {:?}, central area {central:?}", r.window);
+    assert!(inside(r.footer, area.shrink(theme::DIALOG_EDGE)), "the footer {:?} is inside the area {area:?}", r.footer);
+    // on screen
+    assert!(r.footer.right() <= ctx.screen_rect().right() && r.footer.bottom() <= ctx.screen_rect().bottom() - theme::STATUS_BAR_H);
 }
 
 #[test]
@@ -244,9 +270,9 @@ fn the_main_tables_heading_block_stays_inside_its_frame_and_clear_of_the_right_p
         let id = open_table_tab(&mut app, 300);
         let (ctx, input) = screen(ppp, w, h);
         frames(&mut app, &ctx, &input, 6);
-        let area = theme::dialog_area(&ctx);
+        let area = theme::central_area(&ctx);
         let screen_rect = ctx.screen_rect();
-        // the right panel is what lies between the area and the window's right edge
+        // the right panel is what lies between the central area and the window's right edge
         let right_panel = egui::Rect::from_min_max(egui::pos2(area.right(), area.top()), egui::pos2(screen_rect.right(), screen_rect.bottom()));
         assert!(right_panel.width() >= theme::RIGHT_PANEL_W - 1.0, "ppp {ppp} {w}x{h}: right panel {right_panel:?}");
         // at the start, in the middle and at the far end of 40 columns
@@ -514,7 +540,7 @@ fn blank_cells_show_a_muted_dash_never_the_word_null() {
         frames(&mut app, &ctx, &input, 5);
         let out = ctx.run(input.clone(), |c| app.frame_ui(c));
         let p = collect_painted(&out.shapes);
-        let area = theme::dialog_area(&ctx);
+        let area = theme::central_area(&ctx);
         let in_table = |pos: &egui::Pos2| area.contains(*pos);
         // the blanks: 1 in Name, 2 in Balance, 2 in Branch no
         let dashes: Vec<&(String, egui::Color32)> = p.colors.iter().filter(|(t, _)| t == theme::BLANK_CELL).collect();
