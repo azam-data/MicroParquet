@@ -124,6 +124,20 @@ pub const COLUMN_MAX_W: f32 = 420.0;
 /// Heading text style (modal titles); the inspector title is `TEXT_INSPECTOR_TITLE`.
 pub const TEXT_HEADING: f32 = 17.0;
 pub const TEXT_MONO: f32 = 13.0;
+/// The schema dialog: width, the preview's fixed 5 rows, and the columns list.
+pub const SCHEMA_DIALOG_W: f32 = 1040.0;
+/// Space between the items of the two option rows.
+pub const SCHEMA_ROW_GAP: f32 = 6.0;
+pub const PREVIEW_ROWS: usize = 5;
+/// Header row, 5 data rows (each followed by egui's 6 px row spacing) and the frame around them.
+pub const PREVIEW_GRID_H: f32 = HEADER_ROW_H + PREVIEW_ROWS as f32 * (DATA_ROW_H + 6.0) + 8.0;
+pub const SCHEMA_COMBO_W: f32 = 100.0;
+pub const SCHEMA_COL_NAME_W: f32 = 220.0;
+pub const SCHEMA_COL_TYPE_W: f32 = 150.0;
+pub const SCHEMA_COL_PII_W: f32 = 150.0;
+pub const SCHEMA_COL_SIGN_W: f32 = 150.0;
+pub const SCHEMA_COL_FAIL_W: f32 = 110.0;
+pub const SCHEMA_COL_MIN_W: f32 = 80.0;
 /// Top bar pieces.
 pub const APP_MARK_SIZE: f32 = 18.0;
 pub const APP_MARK_RADIUS: f32 = 4.0;
@@ -493,6 +507,73 @@ pub fn icon_button(ui: &mut egui::Ui, icon: &str, hover: &str) -> Response {
     .on_hover_text(hover)
 }
 
+/// A card: a bordered panel with a heading, as tall as its content.
+pub fn card(ui: &mut egui::Ui, heading: &str, add: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
+    card_with(ui, heading, |_| {}, add)
+}
+
+/// A card whose heading row also carries something at its right edge.
+pub fn card_with(
+    ui: &mut egui::Ui,
+    heading: &str,
+    right: impl FnOnce(&mut egui::Ui),
+    add: impl FnOnce(&mut egui::Ui),
+) -> egui::Rect {
+    let tk = *t(ui);
+    egui::Frame::none()
+        .fill(tk.surface)
+        .stroke(Stroke::new(1.0_f32, tk.border))
+        .rounding(Rounding::same(RADIUS_PANEL))
+        .inner_margin(egui::Margin::same(SPACE_M))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(semibold(heading).color(tk.ink));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+            });
+            add(ui);
+        })
+        .response
+        .rect
+}
+
+/// A card that takes all the height that is left in `ui`.
+pub fn card_fill(ui: &mut egui::Ui, heading: &str, add: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
+    let tk = *t(ui);
+    let h = ui.available_height();
+    egui::Frame::none()
+        .fill(tk.surface)
+        .stroke(Stroke::new(1.0_f32, tk.border))
+        .rounding(Rounding::same(RADIUS_PANEL))
+        .inner_margin(egui::Margin::same(SPACE_M))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.set_min_height((h - 2.0 * SPACE_M - 2.0).max(0.0));
+            ui.set_max_height((h - 2.0 * SPACE_M - 2.0).max(0.0));
+            ui.label(semibold(heading).color(tk.ink));
+            ui.add_space(SPACE_XS);
+            add(ui);
+        })
+        .response
+        .rect
+}
+
+/// A muted dot between the items of a row of options.
+pub fn dot(ui: &mut egui::Ui) {
+    ui.label(RichText::new("\u{b7}").color(t(ui).muted));
+}
+
+/// An "i" icon whose hover text explains something at length.
+pub fn info_icon(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(ph::INFO).color(t(ui).muted)).on_hover_text(text);
+}
+
+/// The text of a heading cell in a list: bold, ink.
+pub fn header_cell(ui: &mut egui::Ui, text: &str) {
+    let ink = t(ui).ink;
+    ui.add(egui::Label::new(bold(text).color(ink)).truncate());
+}
+
 /// A removable chip (filter conditions). Returns (clicked, removed).
 pub fn chip(ui: &mut egui::Ui, text: &str) -> (bool, bool) {
     let tk = t(ui);
@@ -635,6 +716,13 @@ impl DialogUi<'_> {
             .auto_shrink([true, true])
             .show(self.ui, add)
             .inner
+    }
+
+    /// A middle that does not scroll as a whole: it is as tall as the dialog may be, and the
+    /// content shares that height itself (the schema dialog's lists scroll on their own).
+    pub fn body_fill<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        let w = self.ui.available_width();
+        self.ui.allocate_ui(egui::vec2(w, self.body_max_h), add).inner
     }
 
     /// The fixed footer: a separator, then the buttons.

@@ -34,294 +34,10 @@ impl MicroParquetApp {
         };
         theme::modal(title)
             .resizable(true)
-            .default_width(980.0)
+            .default_width(theme::SCHEMA_DIALOG_W)
             .show(ctx, |d| {
-                d.body(|ui| {
-                    ui.label(format!("File: {:?}", modal.csv_path));
-                    ui.separator();
-
-                    if modal.is_parquet {
-                        ui.checkbox(
-                            &mut modal.config.parse_accounting_negatives,
-                            "Parse Accounting Negatives (1,234.50 -> -1234.50)",
-                        );
-                        ui.label(
-                            "Columns keep their Parquet type unless you change it. Text columns can be \
-                             set to a number or date type; masks apply to any column.",
-                        );
-                    }
-                    if !modal.is_parquet {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.checkbox(
-                                &mut modal.config.sanitize_linebreaks,
-                                "Sanitize Linebreaks (\\r, \\n) & Trim Whitespace",
-                            );
-                            ui.checkbox(
-                                &mut modal.config.parse_accounting_negatives,
-                                "Parse Accounting Negatives (1,234.50 -> -1234.50)",
-                            );
-                            ui.checkbox(
-                                &mut modal.config.heal_broken_csv_lines,
-                                "Pre-Heal Broken Unquoted CSV Lines",
-                            );
-                        });
-
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Separator:");
-                            let sep_label = |c: char| match c {
-                                ',' => "Comma ,",
-                                '|' => "Pipe |",
-                                ';' => "Semicolon ;",
-                                '\t' => "Tab",
-                                _ => "Other",
-                            };
-                            egui::ComboBox::from_id_salt("csv_separator")
-                                .selected_text(sep_label(modal.config.separator))
-                                .show_ui(ui, |ui| {
-                                    for c in [',', '|', ';', '\t'] {
-                                        ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
-                                    }
-                                });
-                            ui.label("Title lines above header:");
-                            ui.add(egui::DragValue::new(&mut modal.config.skip_rows).range(0..=100));
-                            ui.label("Encoding:");
-                            egui::ComboBox::from_id_salt("csv_encoding")
-                                .selected_text(modal.config.encoding.label())
-                                .show_ui(ui, |ui| {
-                                    for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
-                                        ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
-                                    }
-                                });
-                            if ui
-                                .button("\u{E094} Re-read with these settings")
-                                .on_hover_text("Reloads the preview and re-detects the columns and their types")
-                                .clicked()
-                            {
-                                action_reread = true;
-                            }
-                        });
-                    }
-
-                    ui.horizontal(|ui| {
-                        if ui.button("\u{E248} Save Schema Template (.schema.json)").clicked() {
-                            if let Some(save_path) = rfd::FileDialog::new()
-                                .set_directory(&self.paths.schemas_dir)
-                                .set_file_name("wb_schema.schema.json")
-                                .save_file()
-                            {
-                                if let Ok(json) = serde_json::to_string_pretty(&modal.config) {
-                                    let _ = std::fs::write(save_path, json);
-                                    self.status_message = "Saved schema template.".to_string();
-                                }
-                            }
-                        }
-
-                        if ui.button("\u{E256} Load Saved Schema Template").clicked() {
-                            if let Some(load_path) = rfd::FileDialog::new()
-                                .set_directory(&self.paths.schemas_dir)
-                                .add_filter("Schema JSON", &["json"])
-                                .pick_file()
-                            {
-                                if let Ok(txt) = std::fs::read_to_string(load_path) {
-                                    if let Ok(loaded) = serde_json::from_str::<IngestionConfig>(&txt) {
-                                        modal.config = loaded;
-                                    }
-                                }
-                            }
-                        }
-                    });
-
-                    // PII masks use the per-install key (the schema's old salt is not used).
-                    let key_path = pii_key_path();
-                    ui.horizontal(|ui| {
-                        ui.label("\u{E2D6} Mask Name / Mask Acct use this install's secret key (not a salt in the schema).");
-                        match read_pii_key(&key_path) {
-                            Ok(Some(k)) => {
-                                ui.label(format!("Key fingerprint: {}", pii_key_fingerprint(&k)));
-                            }
-                            Ok(None) => {
-                                ui.label("No key yet: it is created the first time a column is masked.");
-                            }
-                            Err(e) => {
-                                ui.colored_label(theme::danger(ui), format!("{:#}", e));
-                            }
-                        }
-                        if ui
-                            .button("\u{E4C0} Export key...")
-                            .on_hover_text("Saves the 32-byte key file. Keep it as safe as the data: anyone with it can check guesses against the masks.")
-                            .clicked()
-                        {
-                            if let Some(dest) = rfd::FileDialog::new().set_file_name("pii_key.bin").save_file() {
-                                self.status_message = match export_pii_key(&key_path, &dest) {
-                                    Ok(_) => format!("Exported the PII key to {:?}. Keep it safe.", dest),
-                                    Err(e) => format!("Key export failed: {:#}", e),
-                                };
-                            }
-                        }
-                        if ui
-                            .button("\u{E20C} Import key...")
-                            .on_hover_text("Replaces this install's key (the current one is backed up next to it).")
-                            .clicked()
-                        {
-                            if let Some(src) = rfd::FileDialog::new().pick_file() {
-                                self.status_message = match import_pii_key(&key_path, &src) {
-                                    Ok(bak) => format!(
-                                        "Imported the PII key from {:?}.{} Open tabs use it on their next refresh.",
-                                        src,
-                                        bak.map(|b| format!(" The previous key was saved as {:?}.", b))
-                                            .unwrap_or_default()
-                                    ),
-                                    Err(e) => format!("Key import failed: {:#}", e),
-                                };
-                            }
-                        }
-                    });
-                    ui.colored_label(
-                        theme::warning(ui),
-                        "\u{E4E0} Masks made with different keys don't match. To get the same masks on another PC, export the key here and import it there.",
-                    );
-
-                    ui.separator();
-                    ui.strong(if modal.is_parquet {
-                        "1. First 5 Rows:"
-                    } else {
-                        "1. Raw 5-Row Text Preview:"
-                    });
-                    egui::ScrollArea::vertical()
-                        .id_salt("raw_preview_scroll")
-                        .max_height(130.0)
-                        .show(ui, |ui| {
-                            Self::render_data_grid(
-                                ui,
-                                &modal.raw_preview_df,
-                                &HashMap::new(),
-                                0,
-                                NumberDisplayFormat::Raw,
-                                2,
-                                0,
-                                None,
-                                &HashMap::new(),
-                                None,
-                            );
-                        });
-
-                    ui.separator();
-                    ui.strong("2. Set Specific Data Type & Optional PII Masking per Column:");
-
-                    egui::ScrollArea::vertical()
-                        .id_salt("schema_override_scroll")
-                        .max_height(240.0)
-                        .show(ui, |ui| {
-                            egui::Grid::new("schema_grid")
-                                .striped(true)
-                                .min_col_width(150.0)
-                                .show(ui, |ui| {
-                                    ui.strong("Column Name");
-                                    ui.strong("Target Data Type");
-                                    ui.strong("PII Anonymizer");
-                                    ui.strong("Dr/Cr Sign");
-                                    ui.strong("Parse Failures");
-                                    ui.strong("Sample Values");
-                                    ui.end_row();
-
-                                    for (i, col_cfg) in modal.config.columns.iter_mut().enumerate() {
-                                        if col_cfg.has_dr_cr
-                                            && col_cfg.sign_convention == SignConvention::Unset
-                                        {
-                                            ui.colored_label(
-                                                theme::warning(ui),
-                                                format!("\u{E4E0} {} (has Dr/Cr)", col_cfg.name),
-                                            )
-                                            .on_hover_text(
-                                                "Values carry Dr/Cr. Choose 'Dr is +' or 'Cr is +' or the load stops.",
-                                            );
-                                        } else if modal.is_parquet {
-                                            ui.label(format!("{}  [{}]", col_cfg.name, col_cfg.source_dtype));
-                                        } else {
-                                            ui.label(&col_cfg.name);
-                                        }
-                                        // Parquet types with no counterpart here (Boolean, List...)
-                                        // stay as they are.
-                                        let convertible = !modal.is_parquet
-                                            || parquet_native_type(&col_cfg.source_dtype).is_some();
-                                        ui.add_enabled_ui(convertible, |ui| {
-                                            egui::ComboBox::from_id_salt(format!("dtype_{}", i))
-                                                .selected_text(col_cfg.dtype.label())
-                                                .show_ui(ui, |ui| {
-                                                    for dt in ColDataType::all() {
-                                                        ui.selectable_value(
-                                                            &mut col_cfg.dtype,
-                                                            *dt,
-                                                            dt.label(),
-                                                        );
-                                                    }
-                                                });
-                                        });
-                                        ui.add_enabled_ui(convertible, |ui| {
-                                            egui::ComboBox::from_id_salt(format!("pii_{}", i))
-                                                .selected_text(col_cfg.pii_mask.label())
-                                                .show_ui(ui, |ui| {
-                                                    for mode in [
-                                                        PiiMaskMode::None,
-                                                        PiiMaskMode::ClientNameHash,
-                                                        PiiMaskMode::AccountNumber,
-                                                    ] {
-                                                        ui.selectable_value(
-                                                            &mut col_cfg.pii_mask,
-                                                            mode,
-                                                            mode.label(),
-                                                        );
-                                                    }
-                                                });
-                                        });
-                                        if col_cfg.dtype == ColDataType::Float64 {
-                                            egui::ComboBox::from_id_salt(format!("sign_{}", i))
-                                                .selected_text(col_cfg.sign_convention.label())
-                                                .show_ui(ui, |ui| {
-                                                    for sc in SignConvention::all() {
-                                                        ui.selectable_value(
-                                                            &mut col_cfg.sign_convention,
-                                                            *sc,
-                                                            sc.label(),
-                                                        );
-                                                    }
-                                                });
-                                        } else {
-                                            ui.label("—");
-                                        }
-                                        match modal
-                                            .parse_failures
-                                            .iter()
-                                            .find(|f| f.column == col_cfg.name)
-                                        {
-                                            Some(f) => {
-                                                ui.colored_label(
-                                                    theme::warning(ui),
-                                                    format!("\u{E4E0} {}", f.count),
-                                                )
-                                                .on_hover_text(format!(
-                                                    "Could not be converted (now null), e.g.:\n{}",
-                                                    f.examples.join("\n")
-                                                ));
-                                            }
-                                            None => {
-                                                ui.label("");
-                                            }
-                                        }
-                                        ui.label(
-                                            col_cfg
-                                                .sample_values
-                                                .iter()
-                                                .take(3)
-                                                .cloned()
-                                                .collect::<Vec<_>>()
-                                                .join(" | "),
-                                        );
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-
+                d.body_fill(|ui| {
+                    self.schema_cards(ui, &mut modal, &mut action_reread);
                 });
                 d.footer(|ui| {
                     ui.horizontal(|ui| {
@@ -489,5 +205,297 @@ impl MicroParquetApp {
             check_schema_for_tab(req, ctx).map(|s| JobOutput::Schema(Box::new(s)))
         });
         self.status_message = "Applying the schema…".to_string();
+    }
+}
+
+/// Where the three cards of the schema dialog were drawn (tests check how they share the height).
+#[derive(Clone, Copy, Debug)]
+pub struct SchemaCardRects {
+    pub reading: egui::Rect,
+    pub preview: egui::Rect,
+    pub columns: egui::Rect,
+}
+
+impl MicroParquetApp {
+    /// The schema dialog's middle: "Reading options", "Preview" (a fixed 5 rows) and "Columns",
+    /// which takes the height that is left, with its heading row fixed while the rows scroll.
+    pub(crate) fn schema_cards(&mut self, ui: &mut egui::Ui, modal: &mut PendingCsvModal, reread: &mut bool) -> SchemaCardRects {
+        let tk = *theme::tokens(ui.visuals().dark_mode);
+        let none = egui::Rect::NOTHING;
+        let mut rects = SchemaCardRects { reading: none, preview: none, columns: none };
+
+        // ---- Reading options: two compact rows
+        rects.reading = theme::card(ui, "Reading options", |ui| {
+            if modal.is_parquet {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut modal.config.parse_accounting_negatives, "Accounting negatives")
+                        .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)");
+                    theme::info_icon(ui, "Columns keep their Parquet type unless you change it. Text columns can be set to a number or date type; masks apply to any column.");
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme::SCHEMA_ROW_GAP;
+                    ui.checkbox(&mut modal.config.sanitize_linebreaks, "Clean line breaks")
+                        .on_hover_text("Sanitize Linebreaks (\\r, \\n) & Trim Whitespace");
+                    ui.checkbox(&mut modal.config.parse_accounting_negatives, "Accounting negatives")
+                        .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)");
+                    ui.checkbox(&mut modal.config.heal_broken_csv_lines, "Heal broken lines")
+                        .on_hover_text("Pre-Heal Broken Unquoted CSV Lines");
+                    theme::dot(ui);
+                    ui.label("Separator");
+                    let sep_label = |c: char| match c {
+                        ',' => "Comma ,",
+                        '|' => "Pipe |",
+                        ';' => "Semicolon ;",
+                        '\t' => "Tab",
+                        _ => "Other",
+                    };
+                    egui::ComboBox::from_id_salt("csv_separator")
+                        .width(theme::SCHEMA_COMBO_W)
+                        .selected_text(sep_label(modal.config.separator))
+                        .show_ui(ui, |ui| {
+                            for c in [',', '|', ';', '\t'] {
+                                ui.selectable_value(&mut modal.config.separator, c, sep_label(c));
+                            }
+                        });
+                    theme::dot(ui);
+                    ui.label("Title lines");
+                    ui.add(egui::DragValue::new(&mut modal.config.skip_rows).range(0..=100))
+                        .on_hover_text("Lines above the header row that are skipped");
+                    theme::dot(ui);
+                    ui.label("Encoding");
+                    egui::ComboBox::from_id_salt("csv_encoding")
+                        .width(theme::SCHEMA_COMBO_W)
+                        .selected_text(modal.config.encoding.label())
+                        .show_ui(ui, |ui| {
+                            for enc in [CsvTextEncoding::Utf8, CsvTextEncoding::Windows1252] {
+                                ui.selectable_value(&mut modal.config.encoding, enc, enc.label());
+                            }
+                        });
+                    if ui
+                        .button("\u{E094} Re-read")
+                        .on_hover_text("Reloads the preview and re-detects the columns and their types with these settings")
+                        .clicked()
+                    {
+                        *reread = true;
+                    }
+                });
+            }
+
+            // row 2: template and masking key
+            let key_path = pii_key_path();
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::SCHEMA_ROW_GAP;
+                ui.label(egui::RichText::new("Template:").color(tk.muted));
+                if ui.button("\u{E248} Save").on_hover_text("Save Schema Template (.schema.json)").clicked() {
+                    if let Some(save_path) = rfd::FileDialog::new()
+                        .set_directory(&self.paths.schemas_dir)
+                        .set_file_name("wb_schema.schema.json")
+                        .save_file()
+                    {
+                        if let Ok(json) = serde_json::to_string_pretty(&modal.config) {
+                            let _ = std::fs::write(save_path, json);
+                            self.status_message = "Saved schema template.".to_string();
+                        }
+                    }
+                }
+                if ui.button("\u{E256} Load").on_hover_text("Load Saved Schema Template").clicked() {
+                    if let Some(load_path) = rfd::FileDialog::new()
+                        .set_directory(&self.paths.schemas_dir)
+                        .add_filter("Schema JSON", &["json"])
+                        .pick_file()
+                    {
+                        if let Ok(txt) = std::fs::read_to_string(load_path) {
+                            if let Ok(loaded) = serde_json::from_str::<IngestionConfig>(&txt) {
+                                modal.config = loaded;
+                            }
+                        }
+                    }
+                }
+                theme::dot(ui);
+                // PII masks use the per-install key (the schema's old salt is not used).
+                ui.label(egui::RichText::new("Masking key:").color(tk.muted));
+                match read_pii_key(&key_path) {
+                    Ok(Some(k)) => {
+                        ui.label(theme::mono(pii_key_fingerprint(&k)));
+                    }
+                    Ok(None) => {
+                        ui.label("not created").on_hover_text("It is created the first time a column is masked.");
+                    }
+                    Err(e) => {
+                        ui.colored_label(theme::danger(ui), format!("{:#}", e));
+                    }
+                }
+                if ui
+                    .button("\u{E4C0} Export")
+                    .on_hover_text("Saves the 32-byte key file. Keep it as safe as the data: anyone with it can check guesses against the masks.")
+                    .clicked()
+                {
+                    if let Some(dest) = rfd::FileDialog::new().set_file_name("pii_key.bin").save_file() {
+                        self.status_message = match export_pii_key(&key_path, &dest) {
+                            Ok(_) => format!("Exported the PII key to {:?}. Keep it safe.", dest),
+                            Err(e) => format!("Key export failed: {:#}", e),
+                        };
+                    }
+                }
+                if ui
+                    .button("\u{E20C} Import")
+                    .on_hover_text("Replaces this install's key (the current one is backed up next to it).")
+                    .clicked()
+                {
+                    if let Some(src) = rfd::FileDialog::new().pick_file() {
+                        self.status_message = match import_pii_key(&key_path, &src) {
+                            Ok(bak) => format!(
+                                "Imported the PII key from {:?}.{} Open tabs use it on their next refresh.",
+                                src,
+                                bak.map(|b| format!(" The previous key was saved as {:?}.", b)).unwrap_or_default()
+                            ),
+                            Err(e) => format!("Key import failed: {:#}", e),
+                        };
+                    }
+                }
+                theme::info_icon(
+                    ui,
+                    "Mask Name / Mask Acct use this install's secret key (it is not a salt in the schema).\n\nMasks made with different keys don't match. To get the same masks on another PC, export the key here and import it there.",
+                );
+            });
+        });
+
+        ui.add_space(theme::SPACE_S);
+
+        // ---- Preview: always 5 rows high
+        rects.preview = theme::card_with(
+            ui,
+            "Preview",
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(modal.csv_path.display().to_string()).color(tk.muted)).truncate())
+                    .on_hover_text(modal.csv_path.display().to_string());
+            },
+            |ui| {
+                // exactly this high, whatever the file has
+                let (area, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), theme::PREVIEW_GRID_H),
+                    egui::Sense::hover(),
+                );
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        Self::render_data_grid(
+                            ui,
+                            &modal.raw_preview_df,
+                            &HashMap::new(),
+                            0,
+                            NumberDisplayFormat::Raw,
+                            2,
+                            0,
+                            None,
+                            &HashMap::new(),
+                            None,
+                        );
+                    },
+                );
+            },
+        );
+
+        ui.add_space(theme::SPACE_S);
+
+        // ---- Columns: the rest of the height
+        rects.columns = theme::card_fill(ui, "Columns", |ui| {
+            let n = modal.config.columns.len();
+            let is_parquet = modal.is_parquet;
+            let failures = &modal.parse_failures;
+            let columns = &mut modal.config.columns;
+            ui.push_id("schema_columns", |ui| {
+                TableBuilder::new(ui)
+                    .striped(true)
+                    .resizable(true)
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::initial(theme::SCHEMA_COL_NAME_W).at_least(theme::SCHEMA_COL_MIN_W).clip(true))
+                    .column(Column::initial(theme::SCHEMA_COL_TYPE_W).at_least(theme::SCHEMA_COL_MIN_W))
+                    .column(Column::initial(theme::SCHEMA_COL_PII_W).at_least(theme::SCHEMA_COL_MIN_W))
+                    .column(Column::initial(theme::SCHEMA_COL_SIGN_W).at_least(theme::SCHEMA_COL_MIN_W))
+                    .column(Column::initial(theme::SCHEMA_COL_FAIL_W).at_least(theme::SCHEMA_COL_MIN_W))
+                    .column(Column::remainder().at_least(theme::SCHEMA_COL_MIN_W).clip(true))
+                    .header(theme::HEADER_ROW_H, |mut header| {
+                        for title in ["Column Name", "Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Parse Failures", "Sample Values"] {
+                            header.col(|ui| theme::header_cell(ui, title));
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(theme::DATA_ROW_H, n, |mut row| {
+                            let i = row.index();
+                            let Some(col_cfg) = columns.get_mut(i) else {
+                                return;
+                            };
+                            row.col(|ui| {
+                                if col_cfg.has_dr_cr && col_cfg.sign_convention == SignConvention::Unset {
+                                    ui.colored_label(theme::warning(ui), format!("\u{E4E0} {} (has Dr/Cr)", col_cfg.name))
+                                        .on_hover_text("Values carry Dr/Cr. Choose 'Dr is +' or 'Cr is +' or the load stops.");
+                                } else if is_parquet {
+                                    ui.add(egui::Label::new(format!("{}  [{}]", col_cfg.name, col_cfg.source_dtype)).truncate());
+                                } else {
+                                    ui.add(egui::Label::new(&col_cfg.name).truncate());
+                                }
+                            });
+                            // Parquet types with no counterpart here (Boolean, List...) stay as they are.
+                            let convertible = !is_parquet || parquet_native_type(&col_cfg.source_dtype).is_some();
+                            row.col(|ui| {
+                                ui.add_enabled_ui(convertible, |ui| {
+                                    egui::ComboBox::from_id_salt(format!("dtype_{}", i))
+                                        .width(theme::SCHEMA_COMBO_W)
+                                        .selected_text(col_cfg.dtype.label())
+                                        .show_ui(ui, |ui| {
+                                            for dt in ColDataType::all() {
+                                                ui.selectable_value(&mut col_cfg.dtype, *dt, dt.label());
+                                            }
+                                        });
+                                });
+                            });
+                            row.col(|ui| {
+                                ui.add_enabled_ui(convertible, |ui| {
+                                    egui::ComboBox::from_id_salt(format!("pii_{}", i))
+                                        .width(theme::SCHEMA_COMBO_W)
+                                        .selected_text(col_cfg.pii_mask.label())
+                                        .show_ui(ui, |ui| {
+                                            for mode in [PiiMaskMode::None, PiiMaskMode::ClientNameHash, PiiMaskMode::AccountNumber] {
+                                                ui.selectable_value(&mut col_cfg.pii_mask, mode, mode.label());
+                                            }
+                                        });
+                                });
+                            });
+                            row.col(|ui| {
+                                if col_cfg.dtype == ColDataType::Float64 {
+                                    egui::ComboBox::from_id_salt(format!("sign_{}", i))
+                                        .width(theme::SCHEMA_COMBO_W)
+                                        .selected_text(col_cfg.sign_convention.label())
+                                        .show_ui(ui, |ui| {
+                                            for sc in SignConvention::all() {
+                                                ui.selectable_value(&mut col_cfg.sign_convention, *sc, sc.label());
+                                            }
+                                        });
+                                } else {
+                                    ui.label("\u{2014}");
+                                }
+                            });
+                            row.col(|ui| {
+                                if let Some(f) = failures.iter().find(|f| f.column == col_cfg.name) {
+                                    ui.colored_label(theme::warning(ui), format!("\u{E4E0} {}", f.count)).on_hover_text(format!(
+                                        "Could not be converted (now null), e.g.:\n{}",
+                                        f.examples.join("\n")
+                                    ));
+                                }
+                            });
+                            row.col(|ui| {
+                                let text = col_cfg.sample_values.iter().take(3).cloned().collect::<Vec<_>>().join(" | ");
+                                let r = ui.add(egui::Label::new(theme::mono(text.clone())).truncate());
+                                if !text.is_empty() {
+                                    r.on_hover_text(text);
+                                }
+                            });
+                        });
+                    });
+            });
+        });
+        rects
     }
 }

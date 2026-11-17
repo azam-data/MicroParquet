@@ -243,3 +243,160 @@ fn real_dialogs_with_long_content_keep_their_buttons_in_the_window() {
     assert!(win.height() <= screen.height() - 48.0 + 0.5, "{win:?} in {screen:?}");
     assert!(win.bottom() <= screen.bottom() - 24.0 + 0.5 && win.top() >= 24.0 - 0.5, "{win:?} in {screen:?}");
 }
+
+// ------------------------------------------------------------------------ schema dialog
+
+use crate::ui::schema::{PendingCsvModal, SchemaCardRects};
+use micro_parquet::models::ColumnSchemaConfig;
+use polars::prelude::NamedFrom;
+
+fn schema_modal(rows: usize, columns: usize, parquet: bool) -> PendingCsvModal {
+    let names: Vec<String> = (0..4).map(|i| format!("Col{i}")).collect();
+    let df = DataFrame::new(
+        names
+            .iter()
+            .map(|n| polars::prelude::Series::new(n.as_str().into(), (0..rows).map(|r| format!("v{r}")).collect::<Vec<_>>()).into())
+            .collect(),
+    )
+    .unwrap_or_default();
+    let mut config = IngestionConfig::default();
+    config.columns = (0..columns)
+        .map(|i| ColumnSchemaConfig {
+            name: format!("Column {i}"),
+            sample_values: vec![format!("{i}"), "20400-01".into(), "FIXED TERM DEPOSIT".into()],
+            ..Default::default()
+        })
+        .collect();
+    PendingCsvModal {
+        csv_path: PathBuf::from("/data/loans_2026-11-16.csv"),
+        raw_preview_df: df,
+        config,
+        direct_convert_only: false,
+        target_tab: None,
+        parse_failures: Vec::new(),
+        is_parquet: parquet,
+    }
+}
+
+/// Draws the schema cards in a middle of the height a dialog leaves at 1280×720 / 105%.
+/// Returns the card rectangles, the painted texts with their positions and the middle's rect.
+fn drawn_schema(rows: usize, columns: usize, parquet: bool) -> (SchemaCardRects, Vec<(String, egui::Pos2)>, egui::Rect) {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let mut app = test_app("schema");
+    let mut modal = schema_modal(rows, columns, parquet);
+    let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
+    let lay = theme::dialog_layout(WIN_H_PX / UI_SCALE, 22.0, 6.0);
+    let mut rects = None;
+    let mut middle = egui::Rect::NOTHING;
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        let out = ctx.run(input.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let r = ui
+                    .allocate_ui(egui::vec2(theme::SCHEMA_DIALOG_W - 2.0 * theme::SPACE_M, lay.body_max_h), |ui| {
+                        let mut reread = false;
+                        app.schema_cards(ui, &mut modal, &mut reread)
+                    });
+                middle = r.response.rect;
+                rects = Some(r.inner);
+            });
+        });
+        texts.clear();
+        for c in &out.shapes {
+            collect(&c.shape, &mut texts);
+        }
+    }
+    (rects.expect("drawn"), texts, middle)
+}
+
+#[test]
+fn schema_dialog_has_three_cards_with_these_headings() {
+    let (r, texts, _) = drawn_schema(5, 30, false);
+    let all: Vec<&str> = texts.iter().map(|(t, _)| t.as_str()).collect();
+    for h in ["Reading options", "Preview", "Columns"] {
+        assert!(all.contains(&h), "heading {h}: {all:?}");
+    }
+    assert!(r.reading.bottom() <= r.preview.top() + 0.5, "{r:?}");
+    assert!(r.preview.bottom() <= r.columns.top() + 0.5, "{r:?}");
+    // the old numbered headings are gone
+    assert!(!all.iter().any(|t| t.contains("Raw 5-Row") || t.contains("2. Set Specific")), "{all:?}");
+}
+
+#[test]
+fn reading_options_are_two_compact_rows_and_the_key_warning_is_a_tooltip() {
+    let (r, texts, _) = drawn_schema(5, 30, false);
+    let y_of = |label: &str| texts.iter().find(|(t, _)| t == label).map(|(_, p)| p.y).unwrap_or_else(|| panic!("'{label}' not painted: {texts:?}"));
+    // row 1: the three options, separator, title lines, encoding and Re-read are on one line
+    let row1 = y_of("Clean line breaks");
+    for l in ["Accounting negatives", "Heal broken lines", "Separator", "Title lines", "Encoding"] {
+        assert!((y_of(l) - row1).abs() < 4.0, "'{l}' is on row 1 ({} vs {row1})", y_of(l));
+    }
+    let reread_y = texts.iter().find(|(t, _)| t.contains("Re-read")).map(|(_, p)| p.y).expect("Re-read");
+    // the rows fit the card: it is not wider than the dialog's middle
+    let dialog_inner_w = theme::SCHEMA_DIALOG_W - 2.0 * theme::SPACE_M;
+    assert!(r.reading.width() <= dialog_inner_w + 0.5, "row 1 is wider than the dialog: card {:?}", r.reading);
+    assert!((reread_y - row1).abs() < 4.0, "Re-read on row 1");
+    // row 2: template and masking key
+    let row2 = y_of("Template:");
+    assert!(row2 > row1 + 10.0, "row 2 is below row 1");
+    for l in ["Masking key:", "not created"] {
+        if let Some((_, p)) = texts.iter().find(|(t, _)| t == l) {
+            assert!((p.y - row2).abs() < 4.0, "'{l}' is on row 2");
+        }
+    }
+    assert!(texts.iter().any(|(t, p)| t.contains("Save") && (p.y - row2).abs() < 4.0));
+    assert!(texts.iter().any(|(t, p)| t.contains("Import") && (p.y - row2).abs() < 4.0));
+    // the card holds the heading and two rows: compact
+    assert!(r.reading.height() < 4.0 * theme::DATA_ROW_H + 2.0 * theme::SPACE_M, "{:?}", r.reading);
+    // the long warning is not drawn in the dialog
+    assert!(!texts.iter().any(|(t, _)| t.contains("Masks made with different keys")), "warning belongs in a tooltip");
+}
+
+#[test]
+fn preview_is_five_rows_whatever_the_file_has() {
+    let heights: Vec<f32> = [0usize, 1, 5].iter().map(|n| drawn_schema(*n, 30, false).0.preview.height()).collect();
+    assert!((heights[0] - heights[1]).abs() < 0.5 && (heights[1] - heights[2]).abs() < 0.5, "{heights:?}");
+    // 5 rows, the header row and the card's heading and padding
+    assert!(heights[2] >= theme::HEADER_ROW_H + 5.0 * theme::DATA_ROW_H, "{heights:?}");
+    // all five rows are visible without scrolling
+    let (_, texts, _) = drawn_schema(5, 30, false);
+    for r in 0..5 {
+        assert!(texts.iter().any(|(t, _)| *t == format!("v{r}")), "row {r} of the preview is drawn");
+    }
+}
+
+#[test]
+fn columns_card_takes_the_remaining_height() {
+    for n in [3usize, 60, 400] {
+        let (r, _, middle) = drawn_schema(5, n, false);
+        assert!((r.columns.bottom() - middle.bottom()).abs() < 1.5, "{n} columns: card ends at {} but the middle at {}", r.columns.bottom(), middle.bottom());
+        assert!(r.columns.height() > 150.0, "{n} columns: {:?}", r.columns);
+    }
+}
+
+#[test]
+fn columns_heading_row_stays_above_the_rows() {
+    let (r, texts, _) = drawn_schema(5, 400, false);
+    let head_y = texts.iter().find(|(t, _)| t == "Column Name").map(|(_, p)| p.y).expect("heading row");
+    let first_y = texts.iter().find(|(t, _)| t == "Column 0").map(|(_, p)| p.y).expect("first row");
+    assert!(head_y < first_y, "{head_y} < {first_y}");
+    // 400 rows do not make the card taller: it scrolls inside
+    assert!(r.columns.height() < 700.0);
+    for h in ["Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Parse Failures", "Sample Values"] {
+        assert!(texts.iter().any(|(t, _)| t == h), "{h}");
+    }
+}
+
+#[test]
+fn parquet_files_show_the_one_option_that_applies() {
+    let (_, texts, _) = drawn_schema(5, 10, true);
+    let all: Vec<&str> = texts.iter().map(|(t, _)| t.as_str()).collect();
+    assert!(all.contains(&"Accounting negatives"));
+    assert!(!all.contains(&"Separator") && !all.contains(&"Encoding") && !all.contains(&"Heal broken lines"), "{all:?}");
+}
