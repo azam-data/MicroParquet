@@ -532,3 +532,58 @@ fn export_dialog_totals_default_on_for_pdf_and_off_for_excel() {
     assert!(app.export.totals_pdf);
     assert!(!app.export.totals_xlsx);
 }
+
+// ---------------------------------------------------------------------------------- fix 14
+
+/// Every piece of text painted in one frame of the status bar (a 2400 px wide window, no display).
+fn painted_status_bar_text(app: &mut MicroParquetApp) -> String {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    // as the app starts: its fonts (mono-semibold and the rest) and theme
+    theme::load_fonts(&ctx);
+    theme::apply_ui_theme(&ctx, false, 1.05);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2400.0, 600.0))),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    // two frames: the first one only measures some widgets
+    for _ in 0..2 {
+        let out = ctx.run(input.clone(), |ctx| app.render_status_bar(ctx));
+        texts.clear();
+        for clipped in &out.shapes {
+            collect(&clipped.shape, &mut texts);
+        }
+    }
+    texts.join(" | ")
+}
+
+#[test]
+fn a_failed_job_is_painted_in_the_status_bar() {
+    let ctx = egui::Context::default();
+    let mut app = test_app("fix14");
+    // a job of no tab: an export that fails
+    app.jobs.submit(JobKey::unique(JobKind::Export), "Excel export Loans.xlsx", true, failing("the disk is full"));
+    app.poll_jobs(&ctx);
+    let painted = painted_status_bar_text(&mut app);
+    assert!(painted.contains("Excel export Loans.xlsx failed: the disk is full"), "{painted}");
+
+    // a tab whose page cannot be read: the message and the chip that stays after later messages
+    let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+    open_tab(&mut app, src, vec![]);
+    app.push_step_to_active_tab(TransformStep::ConvertToNumber { columns: vec!["Amount".into()] }, false);
+    settle(&mut app);
+    let painted = painted_status_bar_text(&mut app);
+    assert!(painted.contains("Summary row failed:") && painted.contains("Dr/Cr"), "{painted}");
+    assert!(painted.contains("Page out of date"), "{painted}");
+    // a later, unrelated message replaces the text, but the chip stays
+    app.status_message = "Copied formatted table to clipboard.".into();
+    let painted = painted_status_bar_text(&mut app);
+    assert!(painted.contains("Page out of date") && !painted.contains("Summary row failed"), "{painted}");
+}

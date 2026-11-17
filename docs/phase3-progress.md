@@ -38,7 +38,8 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 | 10 Edit in place for every modal step | DONE | 069ee40 | src/ui/tests.rs: each of the 13 modal step types reopens prefilled and its modal rebuilds the identical step; editing a Calc step reopens the modal with the columns that step sees, saving replaces it in place (undoable) and re-runs the later filter, renaming its output marks the later filter broken; a pivot keeps its pivot column and Top-N sort column | see spec |
 | 11 Totals row checkbox | DONE | 3c61b17 | fixes.rs: Excel without / with the totals row (labels row and values row only when on), PDF band only when on, CSV and Parquet carry data rows only; src/ui/tests.rs: defaults PDF on, Excel off | see spec |
 | 12 Excel scaling by format (K, M) or division (L, Cr) | DONE | 18118a8 | fixes.rs: for each of K, M, Lakh, Crore: header unit, cell values (raw / divided), number format (`#,##0.00,`, `#,##0.00,,`, plain), Excel SUM of the cells = the totals row = raw total in the unit; CSV and Parquet raw. l3 and t3 expectations for Millions changed from divided to raw (see spec) | see spec |
-| 13 Genuine old-macro fixtures | DONE | (this) | fixes.rs: the Phase 1 (c6e780d) and Phase 2 (4278ef5) macros, saved by that code with all 15 step types, load (Phase 1 FTP as NextPointUp), pass the step check and replay to the exact CSV their own code produced; tests/fixtures/ holds the 4 files and a README | see spec |
+| 13 Genuine old-macro fixtures | DONE | e3e429c | fixes.rs: the Phase 1 (c6e780d) and Phase 2 (4278ef5) macros, saved by that code with all 15 step types, load (Phase 1 FTP as NextPointUp), pass the step check and replay to the exact CSV their own code produced; tests/fixtures/ holds the 4 files and a README | see spec |
+| 14 Job errors are tested where the status bar paints them | DONE | last commit of part 1 | src/ui/tests.rs: one headless egui frame of the real status bar (app fonts and theme) is painted and its text read: a failed export says "Excel export Loans.xlsx failed: the disk is full"; a page that cannot be read paints the summary failure and the "Page out of date" chip, and the chip stays after a later message replaces the text | none |
 
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).
@@ -63,6 +64,8 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 - Phase 3 deviations are all in `<accepted_deviations>` of `docs/phase3-spec.md`.
 - This container cannot open a window (no `libxkbcommon-x11`; package installs were refused), so nothing was checked by eye.
 
+- Fixes, part 1: items 1–14 DONE, none BLOCKED. `cargo test`: 21 (binary, incl. `src/ui/tests.rs`) + 111 (`tests/phase3`, incl. `fixes.rs`) + 60 (`tests/review.rs`) passed. Changed earlier Phase 3 expectations, each recorded in `<accepted_deviations>`: t3/t5 use the pipeline hash (fix 3), t3 calls take the control column and the totals flag (fixes 9, 11), l3 and t3 Millions values are raw (fix 12).
+
 ## What to look at by eye
 1. The whole window against `docs/design/Combined.dc.html` (title strip, toolbar groups, tab strip, chip bar, table, right panel, status bar), light and dark.
 2. Fonts: drop the three Source Sans 3 TTFs into `assets/fonts/` and restart; check that no icon is an empty box.
@@ -70,3 +73,4 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 4. Table: column widths never wrap, drag a column edge, numbers right-aligned in mono, the header marks of a sort ("1 ↑"), the selector row and the dark summary band lining up with the columns.
 5. Steps tab: timeline, selecting a step, the six buttons, an invalid step in red after deleting a Calc column, undo with Ctrl+Z.
 6. Column tab after clicking a header; Ctrl+K search (type "excel", "nii", a column name).
+7. Fixes, part 1: the "Out of date" line over a dimmed page and the status-bar chip (add Set to Number on a column with "Dr" values); the "—" summary band with its hover; closing during an export (the question, then no `.part` file left); Edit on a banking step (banner, prefilled modal, the columns of that step); the two totals checkboxes in the export dialog; a Millions workbook in Excel (cells show 25.00, the formula bar shows 25000000, SUM agrees with the totals row).
