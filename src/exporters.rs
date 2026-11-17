@@ -144,15 +144,21 @@ pub struct ScaledTabToExport<'a> {
     pub col_formats: &'a HashMap<String, ColumnFormatSpec>,
     /// The tab's summary choices; `None` = no totals rows in the workbook.
     pub summary: Option<&'a HashMap<String, SummarySpec>>,
+    /// The tab's pinned control column (weight of rate-like columns by default).
+    pub control_col: Option<&'a str>,
 }
 
 /// The summary cells of a collected tab (empty when the tab has no summary settings).
-fn summary_for_export(df: &DataFrame, overrides: Option<&HashMap<String, SummarySpec>>) -> Vec<SummaryCell> {
+fn summary_for_export(
+    df: &DataFrame,
+    overrides: Option<&HashMap<String, SummarySpec>>,
+    control_col: Option<&str>,
+) -> Vec<SummaryCell> {
     let Some(over) = overrides else {
         return Vec::new();
     };
     let cols: Vec<(String, DataType)> = df.get_columns().iter().map(|s| (s.name().to_string(), s.dtype().clone())).collect();
-    let specs = crate::summary::effective_specs(&cols, over);
+    let specs = crate::summary::effective_specs(&cols, over, control_col);
     crate::summary::compute_summary(df.clone().lazy(), &specs).unwrap_or_default()
 }
 
@@ -168,7 +174,7 @@ pub fn export_selected_tabs_to_xlsx_scaled(
         match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
             Ok(df) => {
                 // The summary is computed from the same collected data the sheet holds.
-                let summary = summary_for_export(&df, t.summary);
+                let summary = summary_for_export(&df, t.summary, t.control_col);
                 ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone(), summary })
             }
             Err(e) => errors.push((t.title.clone(), format!("{:#}", e))),

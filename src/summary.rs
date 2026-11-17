@@ -42,11 +42,37 @@ fn is_date(dt: &DataType) -> bool {
     matches!(dt, DataType::Date | DataType::Datetime(_, _))
 }
 
-/// The default summary: numbers sum, text counts, dates show their earliest value. Columns named
-/// like IDs (account numbers, codes) count even when they are stored as numbers: their sum is
-/// meaningless.
+/// Name tokens that mark a rate-like number column (owner answer to Q5).
+pub const RATE_NAME_TOKENS: [&str; 5] = ["rate", "pct", "percent", "yield", "spread"];
+
+/// True when a column's name tokens (Phase 1 tokeniser: "IntRate", "Int_Rate", "Yield %")
+/// include rate, pct, percent, yield or spread.
+pub fn is_rate_like_name(col_name: &str) -> bool {
+    crate::models::column_name_tokens(col_name)
+        .iter()
+        .any(|t| RATE_NAME_TOKENS.contains(&t.to_lowercase().as_str()))
+}
+
+/// The default summary of a column. Rate-like number columns (see [`is_rate_like_name`]) are a
+/// weighted average by the pinned control column, or no summary when there is none (a sum of
+/// rates is meaningless). Otherwise as [`default_agg_for`].
+pub fn default_spec_for(dtype: &DataType, col_name: &str, control_col: Option<&str>) -> SummarySpec {
+    if dtype.is_numeric() && is_rate_like_name(col_name) {
+        return match control_col.filter(|c| *c != col_name) {
+            Some(c) => SummarySpec { agg: SummaryAgg::WeightedAvg, weight_col: Some(c.to_string()) },
+            None => SummarySpec { agg: SummaryAgg::None, weight_col: None },
+        };
+    }
+    SummarySpec { agg: default_agg_for(dtype, col_name), weight_col: None }
+}
+
+/// The default summary without a control column: numbers sum, text counts, dates show their
+/// earliest value. Columns named like IDs (account numbers, codes) count even when they are
+/// stored as numbers: their sum is meaningless. Rate-like number columns have none.
 pub fn default_agg_for(dtype: &DataType, col_name: &str) -> SummaryAgg {
-    if dtype.is_numeric() && !TabState::is_likely_id_column(col_name) {
+    if dtype.is_numeric() && is_rate_like_name(col_name) {
+        SummaryAgg::None
+    } else if dtype.is_numeric() && !TabState::is_likely_id_column(col_name) {
         SummaryAgg::Sum
     } else if is_date(dtype) {
         SummaryAgg::Min
@@ -55,10 +81,12 @@ pub fn default_agg_for(dtype: &DataType, col_name: &str) -> SummaryAgg {
     }
 }
 
-/// The summary of every column: the user's choice where there is one, else the default.
+/// The summary of every column: the user's choice where there is one, else the default
+/// (`control_col` = the tab's pinned control column, the weight of rate-like columns).
 pub fn effective_specs(
     columns: &[(String, DataType)],
     overrides: &HashMap<String, SummarySpec>,
+    control_col: Option<&str>,
 ) -> Vec<(String, SummarySpec)> {
     columns
         .iter()
@@ -66,7 +94,7 @@ pub fn effective_specs(
             let spec = overrides
                 .get(name)
                 .cloned()
-                .unwrap_or_else(|| SummarySpec { agg: default_agg_for(dt, name), weight_col: None });
+                .unwrap_or_else(|| default_spec_for(dt, name, control_col));
             (name.clone(), spec)
         })
         .collect()

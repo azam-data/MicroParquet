@@ -262,3 +262,60 @@ fn fix8_python_sort_key_matches_the_app() {
     let want: Vec<String> = samples.iter().map(|s| micro_parquet::engine::natural_sort_key(s)).collect();
     assert_eq!(got, want);
 }
+
+// ---------------------------------------------------------------------------------- fix 9
+
+#[test]
+fn fix9_rate_like_columns_default_to_a_weighted_average_by_the_control_column() {
+    use micro_parquet::summary::*;
+    let f = DataType::Float64;
+    let wavg = |w: &str| SummarySpec { agg: SummaryAgg::WeightedAvg, weight_col: Some(w.into()) };
+    for name in ["Int_Rate", "IntRate", "Yield %", "SpreadBps", "Pct_Change", "Coupon Percent", "rate"] {
+        assert_eq!(default_spec_for(&f, name, Some("Balance")), wavg("Balance"), "{name}");
+        assert_eq!(default_spec_for(&f, name, None).agg, SummaryAgg::None, "{name} without a control column");
+        assert_eq!(default_agg_for(&f, name), SummaryAgg::None);
+    }
+    // not rate-like: the word only inside another word, or not a number
+    assert_eq!(default_spec_for(&f, "Corporate_Exposure", Some("Balance")).agg, SummaryAgg::Sum);
+    assert_eq!(default_spec_for(&f, "Balance", Some("Balance")).agg, SummaryAgg::Sum);
+    assert_eq!(default_spec_for(&DataType::String, "Rate_Type", Some("Balance")).agg, SummaryAgg::Count);
+    // a rate column that is itself the control column has no summary
+    assert_eq!(default_spec_for(&f, "Rate", Some("Rate")).agg, SummaryAgg::None);
+    // the user's choice still wins
+    let mut over = std::collections::HashMap::new();
+    over.insert("Int_Rate".to_string(), SummarySpec { agg: SummaryAgg::Average, weight_col: None });
+    let cols = vec![("Balance".to_string(), f.clone()), ("Int_Rate".to_string(), f.clone())];
+    assert_eq!(effective_specs(&cols, &over, Some("Balance"))[1].1.agg, SummaryAgg::Average);
+
+    // the value: Σ(balance × rate) / Σ balance
+    let df = DataFrame::new(vec![
+        Series::new("Balance".into(), &[100.0f64, 300.0]).into(),
+        Series::new("Int_Rate".into(), &[8.0f64, 12.0]).into(),
+    ])
+    .unwrap();
+    let cells = compute_summary(df.clone().lazy(), &effective_specs(&cols, &Default::default(), Some("Balance"))).unwrap();
+    let rate = cells.iter().find(|c| c.column == "Int_Rate").unwrap();
+    assert_eq!(rate.value, Some(SummaryValue::Number(11.0)));
+    let cells = compute_summary(df.lazy(), &effective_specs(&cols, &Default::default(), None)).unwrap();
+    let rate = cells.iter().find(|c| c.column == "Int_Rate").unwrap();
+    assert_eq!((rate.agg, &rate.value), (SummaryAgg::None, &None));
+}
+
+#[test]
+fn fix9_summary_job_uses_the_control_column_weight() {
+    let d = dir("f9");
+    let df = DataFrame::new(vec![
+        Series::new("Balance".into(), &[100.0f64, 300.0]).into(),
+        Series::new("Int_Rate".into(), &[8.0f64, 12.0]).into(),
+    ])
+    .unwrap();
+    let src = parquet(&d, "r", df);
+    let r = compute_tab_summary(
+        SummaryRequest { tab_id: 1, source: src.clone(), steps: vec![], overrides: Default::default(), control_col: Some("Balance".into()), temp_dir: d.clone() },
+        &JobCtx::inert(),
+    )
+    .unwrap();
+    let cell = r.cells.iter().find(|c| c.column == "Int_Rate").unwrap();
+    assert_eq!((cell.agg, cell.weight_col.as_deref()), (micro_parquet::models::SummaryAgg::WeightedAvg, Some("Balance")));
+    assert_eq!(cell.value, Some(micro_parquet::summary::SummaryValue::Number(11.0)));
+}

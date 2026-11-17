@@ -379,6 +379,7 @@ impl MicroParquetApp {
             steps: t.steps.clone(),
             col_formats: t.col_formats.clone(),
             summary: t.summary.clone(),
+            control_col: t.control_col.clone(),
         }
     }
 

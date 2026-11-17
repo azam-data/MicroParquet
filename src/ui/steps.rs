@@ -798,9 +798,9 @@ impl MicroParquetApp {
                     do_sort = Some(name.clone());
                 }
                 // Summary: the choice for this column, and the weight of a weighted average
-                let current = tab.summary.get(&name).cloned().unwrap_or_else(|| SummarySpec {
-                    agg: dtype.as_ref().map(|d| micro_parquet::summary::default_agg_for(d, &name)).unwrap_or_default(),
-                    weight_col: None,
+                let current = tab.summary.get(&name).cloned().unwrap_or_else(|| match dtype.as_ref() {
+                    Some(d) => micro_parquet::summary::default_spec_for(d, &name, tab.control_col.as_deref()),
+                    None => SummarySpec::default(),
                 });
                 ui.horizontal(|ui| {
                     ui.label(theme::semibold("Summary").size(theme::TEXT_SMALL).color(tk.muted));

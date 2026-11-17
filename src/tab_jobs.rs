@@ -452,6 +452,8 @@ pub struct ExportTab {
     pub col_formats: HashMap<String, ColumnFormatSpec>,
     /// The tab's summary choices; Excel and PDF add them as a totals row.
     pub summary: HashMap<String, SummarySpec>,
+    /// The tab's pinned control column (weight of rate-like columns by default).
+    pub control_col: Option<String>,
 }
 
 /// Excel workbook of the ticked tabs. Money columns are written in the chosen scale with the
@@ -474,6 +476,7 @@ pub fn export_tabs_xlsx(
             steps: t.steps.as_slice(),
             col_formats: &t.col_formats,
             summary: Some(&t.summary),
+            control_col: t.control_col.as_deref(),
         })
         .collect();
     let scale = XlsxScale { num_format, decimals: global_decimals };
@@ -506,7 +509,7 @@ pub fn export_tabs_pdf(
         // The summary is of the whole result; the page shows only the first rows (one past the
         // limit, so the export can say the tab was cut).
         match compile_tab_lazy(&tab.source, &tab.steps, temp_dir).and_then(|lf| {
-            let summary = summary_of_lazy(lf.clone(), &tab.summary)?;
+            let summary = summary_of_lazy(lf.clone(), &tab.summary, tab.control_col.as_deref())?;
             let df = lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?;
             Ok((df, summary))
         }) {
@@ -558,16 +561,18 @@ pub fn export_split(
     Ok(ExportOutcome { message, path_used: None, written: Some(base) })
 }
 
-/// The summary cells of a lazy result: the user's choices where there are some, else defaults.
+/// The summary cells of a lazy result: the user's choices where there are some, else defaults
+/// (rate-like columns weighted by `control_col`).
 pub fn summary_of_lazy(
     lf: polars::prelude::LazyFrame,
     overrides: &HashMap<String, SummarySpec>,
+    control_col: Option<&str>,
 ) -> Result<Vec<crate::summary::SummaryCell>> {
     use polars::prelude::*;
     let mut lf = lf;
     let schema = lf.collect_schema()?;
     let cols: Vec<(String, DataType)> = schema.iter().map(|(n, d)| (n.to_string(), d.clone())).collect();
-    let specs = crate::summary::effective_specs(&cols, overrides);
+    let specs = crate::summary::effective_specs(&cols, overrides, control_col);
     crate::summary::compute_summary(lf, &specs)
 }
 
@@ -646,6 +651,8 @@ pub struct SummaryRequest {
     pub source: TabSource,
     pub steps: Vec<TransformStep>,
     pub overrides: HashMap<String, SummarySpec>,
+    /// The tab's pinned control column (weight of rate-like columns by default).
+    pub control_col: Option<String>,
     pub temp_dir: PathBuf,
 }
 
@@ -661,7 +668,7 @@ pub struct SummaryResult {
 pub fn compute_tab_summary(req: SummaryRequest, ctx: &JobCtx) -> Result<SummaryResult> {
     ctx.check()?;
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
-    let cells = summary_of_lazy(lf, &req.overrides)?;
+    let cells = summary_of_lazy(lf, &req.overrides, req.control_col.as_deref())?;
     ctx.check()?;
     let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
     Ok(SummaryResult { tab_id: req.tab_id, pipeline, cells })

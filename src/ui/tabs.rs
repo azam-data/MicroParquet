@@ -237,6 +237,7 @@ impl MicroParquetApp {
             source: tab.source.clone(),
             steps: tab.steps[..exec].to_vec(),
             overrides: tab.summary.clone(),
+            control_col: tab.control_col.clone(),
             temp_dir: self.paths.temp_dir.clone(),
         };
         let key = JobKey::tab(JobKind::Summary, tab.id);

@@ -1,7 +1,7 @@
 //! Screen module `table` (moved out of main.rs by Phase 3 R1).
 
 use crate::ui::prelude::*;
-use micro_parquet::summary::{default_agg_for, format_summary_value};
+use micro_parquet::summary::{default_spec_for, format_summary_value};
 
 /// Text widths measured with the fonts egui has loaded.
 struct EguiMetrics<'a> {
@@ -41,6 +41,8 @@ pub struct SummaryView<'a> {
     pub overrides: &'a HashMap<String, SummarySpec>,
     /// The summary job failed: the reason (every chosen summary shows "—").
     pub error: Option<&'a str>,
+    /// The pinned control column: the default weight of rate-like columns.
+    pub control_col: Option<&'a str>,
 }
 
 /// The text of one column's summary band and its hover text. `on` = a summary is chosen.
@@ -125,11 +127,11 @@ fn cell_text(
 }
 
 /// The summary choice shown for a column: the user's, else the default for its type.
-fn effective_spec(c: &polars::prelude::Series, overrides: &HashMap<String, SummarySpec>) -> SummarySpec {
-    overrides
+fn effective_spec(c: &polars::prelude::Series, sv: &SummaryView) -> SummarySpec {
+    sv.overrides
         .get(c.name().as_str())
         .cloned()
-        .unwrap_or_else(|| SummarySpec { agg: default_agg_for(c.dtype(), c.name().as_str()), weight_col: None })
+        .unwrap_or_else(|| default_spec_for(c.dtype(), c.name().as_str(), sv.control_col))
 }
 
 /// The selector (a small menu button) and the dark summary value under one column.
@@ -149,7 +151,7 @@ fn draw_summary_cell(
     action: &mut Option<GridAction>,
 ) {
     let name = c.name().to_string();
-    let spec = effective_spec(c, sv.overrides);
+    let spec = effective_spec(c, sv);
     // selector row background and the selector chip
     ui.painter().rect_filled(sel_rect, 0.0, tk.bg);
     ui.painter().hline(sel_rect.x_range(), sel_rect.top() + 0.5, egui::Stroke::new(1.0_f32, tk.border));
@@ -246,7 +248,7 @@ impl MicroParquetApp {
                     .collect();
                 let (sel, sum) = match summary {
                     Some(sv) => {
-                        let spec = effective_spec(c, sv.overrides);
+                        let spec = effective_spec(c, sv);
                         let text = sv
                             .cells
                             .iter()
@@ -542,6 +544,7 @@ impl MicroParquetApp {
                 cells: &tab.summary_cells,
                 overrides: &tab.summary,
                 error: tab.summary_error.as_deref(),
+                control_col: tab.control_col.as_deref(),
             };
             // A page that could not be read: the last one stays, dimmed and marked.
             if let Some(e) = &tab.page_error {

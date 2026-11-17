@@ -134,7 +134,7 @@ fn unreadable_page_is_said_dimmed_and_marked_out_of_date() {
     assert!(tab.summary_cells.is_empty());
     let reason = tab.summary_error.clone().expect("summary error");
     assert!(reason.contains("Amount"), "{}", reason);
-    let view = crate::ui::table::SummaryView { cells: &tab.summary_cells, overrides: &tab.summary, error: tab.summary_error.as_deref() };
+    let view = crate::ui::table::SummaryView { cells: &tab.summary_cells, overrides: &tab.summary, error: tab.summary_error.as_deref(), control_col: None };
     let (text, hover) = crate::ui::table::summary_band_text(&view, "Balance", true, None, NumberDisplayFormat::BdtCrore, 2);
     assert_eq!(text, "\u{2014}");
     assert!(hover.unwrap_or_default().starts_with("The summary row could not be computed:"));

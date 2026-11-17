@@ -111,7 +111,7 @@ fn t3_a_choice_that_does_not_fit_the_column_has_no_value_and_says_why() {
 fn t3_defaults_numbers_sum_text_counts_dates_show_the_earliest() {
     let df = frame();
     let cols: Vec<(String, DataType)> = df.get_columns().iter().map(|s| (s.name().to_string(), s.dtype().clone())).collect();
-    let specs = effective_specs(&cols, &HashMap::new());
+    let specs = effective_specs(&cols, &HashMap::new(), None);
     let agg = |n: &str| specs.iter().find(|(c, _)| c == n).unwrap().1.agg;
     assert_eq!(agg("Balance"), SummaryAgg::Sum);
     assert_eq!(agg("Weight"), SummaryAgg::Sum);
@@ -123,11 +123,11 @@ fn t3_defaults_numbers_sum_text_counts_dates_show_the_earliest() {
     // the user's choice wins, and only for that column
     let mut over = HashMap::new();
     over.insert("Balance".to_string(), SummarySpec { agg: SummaryAgg::Average, weight_col: None });
-    let specs = effective_specs(&cols, &over);
+    let specs = effective_specs(&cols, &over, None);
     assert_eq!(specs.iter().find(|(c, _)| c == "Balance").unwrap().1.agg, SummaryAgg::Average);
     assert_eq!(specs.iter().find(|(c, _)| c == "Weight").unwrap().1.agg, SummaryAgg::Sum);
     // all defaults computed together in one go
-    let cells = compute_summary(df.lazy(), &effective_specs(&cols, &HashMap::new())).unwrap();
+    let cells = compute_summary(df.lazy(), &effective_specs(&cols, &HashMap::new(), None)).unwrap();
     assert_eq!(cells.len(), cols.len());
     let bal = cells.iter().find(|c| c.column == "Balance").unwrap();
     assert_eq!(bal.value, Some(SummaryValue::Number(10_000.0)));
@@ -205,7 +205,7 @@ fn cell_value(sheet: &str, cell: &str) -> Option<String> {
 
 fn summary_for(df: &DataFrame, over: &HashMap<String, SummarySpec>) -> Vec<SummaryCell> {
     let cols: Vec<(String, DataType)> = df.get_columns().iter().map(|s| (s.name().to_string(), s.dtype().clone())).collect();
-    compute_summary(df.clone().lazy(), &effective_specs(&cols, over)).unwrap()
+    compute_summary(df.clone().lazy(), &effective_specs(&cols, over, None)).unwrap()
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
     let src = TabSource::SingleFile { path: p, is_parquet: true, config: IngestionConfig::default() };
     // summary job
     let r = compute_tab_summary(
-        SummaryRequest { tab_id: 3, source: src.clone(), steps: vec![], overrides: HashMap::new(), temp_dir: dir.clone() },
+        SummaryRequest { tab_id: 3, source: src.clone(), steps: vec![], overrides: HashMap::new(), control_col: None, temp_dir: dir.clone() },
         &JobCtx::inert(),
     )
     .unwrap();
@@ -303,7 +303,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
     // after a filter the summary follows the result, not the source
     let step = TransformStep::FilterRows { column: "Brancd".into(), operator: FilterOp::Eq, value: "DHK".into(), keep_matching: true };
     let r = compute_tab_summary(
-        SummaryRequest { tab_id: 3, source: src.clone(), steps: vec![step], overrides: HashMap::new(), temp_dir: dir.clone() },
+        SummaryRequest { tab_id: 3, source: src.clone(), steps: vec![step], overrides: HashMap::new(), control_col: None, temp_dir: dir.clone() },
         &JobCtx::inert(),
     )
     .unwrap();
@@ -311,7 +311,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
     assert_eq!(r.cells.iter().find(|c| c.column == "Balance").unwrap().value, Some(SummaryValue::Number(7_000.0)));
     // the Excel export job writes the totals row
     let out = dir.join("job.xlsx");
-    let tab = ExportTab { title: "Loans".into(), source: src, steps: vec![], col_formats: HashMap::new(), summary: HashMap::new() };
+    let tab = ExportTab { title: "Loans".into(), source: src, steps: vec![], col_formats: HashMap::new(), summary: HashMap::new(), control_col: None };
     export_tabs_xlsx(&[tab], &dir, &out, NumberDisplayFormat::StandardCommas, 2, None, &JobCtx::inert()).unwrap();
     let sheet = unzip_entry(&out, "xl/worksheets/sheet1.xml");
     assert_eq!(cell_value(&sheet, "C10").as_deref(), Some("10000"));
