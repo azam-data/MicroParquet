@@ -194,3 +194,65 @@ fn summary_result_for_another_pipeline_with_the_same_step_count_is_dropped() {
     app.poll_jobs(&ctx);
     assert_eq!(app.tabs[idx].summary_cells, fake);
 }
+
+/// Tests that write output files or delete `.part` files take this lock (the list of unfinished
+/// outputs is per process).
+pub(crate) static FILE_OUTPUT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn closing_during_an_export_asks_then_cancels_and_deletes_the_part_file() {
+    use crate::ui::jobs::CloseDecision;
+    let _guard = FILE_OUTPUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = test_app("fix5");
+    app.jobs = JobQueue::new(|| {});
+    let out = app.paths.root_dir.join("Loans.xlsx");
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<PathBuf>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    // An export stuck in a write that cannot be interrupted (like an Excel workbook build).
+    app.jobs.submit(JobKey::unique(JobKind::Export), "Export Loans.xlsx", true, move |_ctx| {
+        let tmp = micro_parquet::jobs::TempOutput::new(&out);
+        std::fs::write(tmp.path(), b"partial").map_err(anyhow::Error::from)?;
+        let _ = started_tx.send(tmp.path().to_path_buf());
+        let _ = release_rx.recv_timeout(std::time::Duration::from_secs(30));
+        anyhow::bail!("stopped")
+    });
+    let part = started_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("export started");
+    assert!(part.exists() && part.to_string_lossy().ends_with(".part"));
+
+    // First close: the question, nothing cancelled.
+    assert_eq!(app.close_requested(), CloseDecision::Ask);
+    assert!(app.quit_guard);
+    assert!(app.export_running());
+    assert!(part.exists());
+
+    // "Cancel export and quit": jobs cancelled, the part file deleted, then exit.
+    app.quit_guard = false;
+    app.quit_confirmed = true;
+    assert_eq!(app.close_requested(), CloseDecision::Exit);
+    assert!(!part.exists(), "the .part file is deleted before the program ends");
+    assert!(app.status_message.contains("1 unfinished output file(s) deleted"), "{}", app.status_message);
+    assert!(!micro_parquet::jobs::part_files().contains(&part));
+    let _ = release_tx.send(());
+}
+
+#[test]
+fn closing_without_an_export_does_not_ask() {
+    use crate::ui::jobs::CloseDecision;
+    let _guard = FILE_OUTPUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = test_app("fix5b");
+    app.jobs = JobQueue::new(|| {});
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    // A refresh that stops at its next safe point.
+    app.jobs.submit(JobKey::tab(JobKind::Refresh, 1), "Refreshing view", false, move |ctx| {
+        let _ = started_tx.send(());
+        loop {
+            ctx.check()?;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    started_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("job started");
+    assert!(!app.export_running());
+    assert_eq!(app.close_requested(), CloseDecision::Exit);
+    assert!(!app.quit_guard);
+    assert!(app.jobs.wait_idle(std::time::Duration::from_millis(10)), "the job stopped");
+}

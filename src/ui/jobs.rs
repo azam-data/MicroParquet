@@ -10,7 +10,80 @@ pub struct PendingRefresh {
     pub added_status: Option<String>,
 }
 
+/// What happens when the window is asked to close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseDecision {
+    /// An export is running: ask "Export in progress — cancel and quit?" first.
+    Ask,
+    /// Jobs were cancelled and unfinished output files deleted: let the window close.
+    Exit,
+}
+
+/// How long closing waits for a cancelled job to reach a safe point.
+pub const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
 impl MicroParquetApp {
+    /// True while a job that writes files (an export, a conversion or a batch) is queued or running.
+    pub(crate) fn export_running(&self) -> bool {
+        self.jobs.kind_busy(JobKind::Export) || self.jobs.kind_busy(JobKind::Batch)
+    }
+
+    /// The window was asked to close. With an export running (and not yet confirmed), the question
+    /// opens and the close is held; otherwise every job is cancelled and `.part` files are deleted.
+    pub(crate) fn close_requested(&mut self) -> CloseDecision {
+        if self.export_running() && !self.quit_confirmed {
+            self.quit_guard = true;
+            return CloseDecision::Ask;
+        }
+        self.shutdown_jobs();
+        CloseDecision::Exit
+    }
+
+    /// Cancels every job, waits a moment for the running one to stop, then deletes the `.part`
+    /// files of unfinished outputs. Returns the text said about it (also printed to stderr).
+    pub(crate) fn shutdown_jobs(&mut self) -> String {
+        self.jobs.cancel_all();
+        let idle = self.jobs.wait_idle(CLOSE_WAIT);
+        let (removed, failed) = micro_parquet::jobs::remove_part_files();
+        let mut msg = format!("Closing: jobs cancelled, {} unfinished output file(s) deleted.", removed);
+        if !idle {
+            msg.push_str(" A job was still running and is stopped with the program.");
+        }
+        if !failed.is_empty() {
+            msg.push_str(&format!(" Could not delete: {}", failed.join("; ")));
+        }
+        eprintln!("[MicroParquet] {}", msg);
+        self.status_message = msg.clone();
+        msg
+    }
+
+    /// The question shown when the window is closed during an export.
+    pub(crate) fn render_quit_guard(&mut self, ctx: &egui::Context) {
+        if !self.quit_guard {
+            return;
+        }
+        let mut quit = false;
+        let mut stay = false;
+        theme::modal("Export in progress \u{2014} cancel and quit?").show(ctx, |ui| {
+            ui.label("The export is stopped and its unfinished file is deleted; no partial file is left.");
+            ui.horizontal(|ui| {
+                if theme::primary_button(ui, "Cancel export and quit").clicked() {
+                    quit = true;
+                }
+                if ui.button("Keep working").clicked() {
+                    stay = true;
+                }
+            });
+        });
+        if quit {
+            self.quit_guard = false;
+            self.quit_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if stay {
+            self.quit_guard = false;
+        }
+    }
+
     /// Applies every finished job. Called at the start of each frame.
     pub(crate) fn poll_jobs(&mut self, ctx: &egui::Context) {
         let results = self.jobs.poll();

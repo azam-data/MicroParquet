@@ -172,6 +172,7 @@ struct Queued<T> {
 
 struct Running {
     id: JobId,
+    key: JobKey,
     label: String,
     long: bool,
     ctx: JobCtx,
@@ -212,6 +213,7 @@ fn run_one<T: Send + 'static>(shared: &Shared<T>, job: Queued<T>) {
         let mut st = lock(&shared.state);
         st.running = Some(Running {
             id: job.id,
+            key: job.key,
             label: job.label.clone(),
             long: job.long,
             ctx: job.ctx.clone(),
@@ -241,6 +243,8 @@ fn run_one<T: Send + 'static>(shared: &Shared<T>, job: Queued<T>) {
         st.cancels.remove(&id);
         st.results.push(JobResult { id, key, label, outcome });
     }
+    // `wait_idle` and `Drop` wait on this.
+    shared.cv.notify_all();
     (shared.wake)();
 }
 
@@ -393,10 +397,38 @@ impl<T: Send + 'static> JobQueue<T> {
         }
     }
 
-    fn cancel_all(&self) {
+    /// Asks every queued and running job to stop (used when the app closes).
+    pub fn cancel_all(&self) {
         for flag in lock(&self.shared.state).cancels.values() {
             flag.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// True while a job of this kind is running, or queued and not cancelled.
+    pub fn kind_busy(&self, kind: JobKind) -> bool {
+        let st = lock(&self.shared.state);
+        st.running.as_ref().is_some_and(|r| r.key.kind == kind && !r.ctx.is_cancelled())
+            || st.pending.iter().any(|j| j.key.kind == kind && !j.ctx.is_cancelled())
+    }
+
+    /// Waits until no job is running or queued, at most `timeout`. True when the queue is idle.
+    pub fn wait_idle(&self, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut st = lock(&self.shared.state);
+        while st.running.is_some() || !st.pending.is_empty() {
+            if !self.threaded {
+                return false;
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            st = match self.shared.cv.wait_timeout(st, left) {
+                Ok((g, _)) => g,
+                Err(e) => e.into_inner().0,
+            };
+        }
+        true
     }
 }
 
@@ -432,6 +464,39 @@ impl<T: Send + 'static> Drop for JobQueue<T> {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// Temporary files that exist now (created and neither committed nor removed yet).
+static LIVE_PARTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+fn live_parts() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    LIVE_PARTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The `.part` files of unfinished outputs of this process.
+pub fn part_files() -> Vec<PathBuf> {
+    live_parts().clone()
+}
+
+/// Deletes the `.part` file of every unfinished output (the app is closing). Returns how many
+/// were deleted and the files that could not be (with the reason).
+pub fn remove_part_files() -> (usize, Vec<String>) {
+    let mut removed = 0;
+    let mut failed = Vec::new();
+    let mut parts = live_parts();
+    parts.retain(|p| match std::fs::remove_file(p) {
+        Ok(()) => {
+            removed += 1;
+            false
+        }
+        // never written, or already gone
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            failed.push(format!("{}: {}", p.display(), e));
+            true
+        }
+    });
+    (removed, failed)
+}
+
 /// A temporary name next to the final output file. Dropping it without `commit` deletes the
 /// temporary file, so an error, a cancel or a panic leaves nothing behind.
 pub struct TempOutput {
@@ -448,6 +513,7 @@ impl TempOutput {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "output".to_string());
         let temp_path = final_path.with_file_name(format!(".{}.{}-{}.part", name, std::process::id(), n));
+        live_parts().push(temp_path.clone());
         Self { final_path: final_path.to_path_buf(), temp_path, committed: false }
     }
 
@@ -471,6 +537,7 @@ impl Drop for TempOutput {
         if !self.committed {
             let _ = std::fs::remove_file(&self.temp_path);
         }
+        live_parts().retain(|p| p != &self.temp_path);
     }
 }
 

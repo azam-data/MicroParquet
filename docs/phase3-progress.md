@@ -29,7 +29,8 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 | 1 Text check has its own JobKind | DONE | 0163c32 | src/ui/tests.rs: inspector failure keeps a pending export and says "Column statistics failed"; a failed Text check stops it with its own reason; cancel of each | none |
 | 2 Page and summary failures are shown | DONE | 3e162c8 | src/ui/tests.rs: a step whose rows cannot be read (Dr value) keeps the last page, sets "Out of date" and the status, clears the summary band to "—" with the reason; undo clears both. tests/phase3/fixes.rs: refresh and load report the page error | see spec |
 | 3 Staleness by pipeline hash | DONE | 84dae51 | fixes.rs: hash changes with a setting at the same step count, with on/off, with a column type and with a replaced file; src/ui/tests.rs: a summary result for a same-count pipeline (other filter value, filter turned off) is dropped, the current one applied | see spec |
-| 4 Step-check errors surface | DONE | (this) | fixes.rs: a source that cannot be read gives a refresh error starting "Could not check the steps…" with "—" totals and an out-of-date page; Load fails with the same reason | see spec |
+| 4 Step-check errors surface | DONE | 964b714 | fixes.rs: a source that cannot be read gives a refresh error starting "Could not check the steps…" with "—" totals and an out-of-date page; Load fails with the same reason | see spec |
+| 5 Close: cancel, delete .part, ask during export | DONE | (this) | src/ui/tests.rs: closing during a stuck export asks first (nothing cancelled), then after "Cancel export and quit" cancels, deletes the .part file and exits; closing with only a refresh running does not ask and the job stops | see spec |
 
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).

@@ -132,6 +132,9 @@ pub struct MicroParquetApp {
     pub confirm_delete_step: Option<usize>,
     pub insert_after: Option<usize>,
     show_about: bool,
+    /// Closing: the "Export in progress — cancel and quit?" question is open, or was answered yes.
+    pub quit_guard: bool,
+    pub quit_confirmed: bool,
     /// Command search overlay (Ctrl K): open, what is typed, the highlighted row, and the commands
     /// used last (first = most recent).
     pub command_open: bool,
@@ -196,6 +199,8 @@ impl MicroParquetApp {
             confirm_delete_step: None,
             insert_after: None,
             show_about: false,
+            quit_guard: false,
+            quit_confirmed: false,
             command_open: false,
             command_query: String::new(),
             command_cursor: 0,
@@ -241,6 +246,12 @@ impl eframe::App for MicroParquetApp {
             self.status_message = note;
         }
         self.poll_jobs(ctx);
+        if ctx.input(|i| i.viewport().close_requested()) {
+            match self.close_requested() {
+                ui::jobs::CloseDecision::Ask => ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose),
+                ui::jobs::CloseDecision::Exit => {}
+            }
+        }
         self.handle_palette_shortcut(ctx);
         self.handle_step_shortcuts(ctx);
         self.render_title_bar(ctx);
@@ -272,6 +283,7 @@ impl eframe::App for MicroParquetApp {
         self.render_active_tool_modal(ctx);
         self.render_about(ctx);
         self.render_command_palette(ctx);
+        self.render_quit_guard(ctx);
     }
 }
 
