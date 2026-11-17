@@ -29,6 +29,16 @@ impl MicroParquetApp {
                     }
                     JobKind::Load => self.status_message = format!("Pipeline error: {}", msg),
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
+                    // The band must not keep values of an older result: "—" with the reason.
+                    JobKind::Summary => {
+                        if let Some(tab) = r.key.scope.and_then(|id| self.tabs.iter_mut().find(|t| t.id == id)) {
+                            tab.summary_cells.clear();
+                            tab.summary_error = Some(msg.clone());
+                        }
+                        if let Some(l) = line {
+                            self.status_message = l;
+                        }
+                    }
                     JobKind::Batch => {
                         self.batch_modal.last_report = None;
                         self.batch_modal.last_error = Some(msg);
@@ -88,6 +98,10 @@ impl MicroParquetApp {
                     if let Some(slice) = r.slice {
                         tab.cached_slice = slice;
                         tab.slice_offset = r.offset;
+                        tab.page_error = None;
+                    } else if let Some(e) = &r.page_error {
+                        // The last page stays on screen, dimmed and marked "Out of date".
+                        tab.page_error = Some(e.clone());
                     }
                     tab.total_rows = r.totals.rows.unwrap_or(0);
                     tab.control_sum = r.totals.sum;
@@ -99,6 +113,7 @@ impl MicroParquetApp {
                         tab.join_status = j;
                     }
                 }
+                let pipeline_failed = r.error.is_some();
                 match (r.error, r.status) {
                     (Some(e), _) => self.status_message = format!("Step execution failed: {}", e),
                     (None, Some(s)) => self.status_message = s,
@@ -107,6 +122,12 @@ impl MicroParquetApp {
                 // A broken step is always said, whatever else the status was.
                 if let Some(msg) = self.tabs.get(idx).and_then(broken_step_message) {
                     self.status_message = msg;
+                }
+                // A page that could not be read is said last, so it is never hidden.
+                if !pipeline_failed {
+                    if let Some(e) = &r.page_error {
+                        self.status_message = page_error_message(e);
+                    }
                 }
                 if idx == self.active_tab {
                     self.init_tool_defaults_from_active_tab();
@@ -134,6 +155,7 @@ impl MicroParquetApp {
                     // A result for an older pipeline is dropped; the newer job follows.
                     if tab.exec_steps == r.steps_len {
                         tab.summary_cells = r.cells;
+                        tab.summary_error = None;
                     }
                 }
             }
@@ -181,4 +203,9 @@ pub fn broken_step_message(tab: &TabState) -> Option<String> {
         first.reason,
         first.index
     ))
+}
+
+/// The status-bar text when a page could not be read.
+pub fn page_error_message(reason: &str) -> String {
+    format!("The page could not be read: {} The table shows an out-of-date page.", reason)
 }

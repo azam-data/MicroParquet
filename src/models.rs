@@ -1423,6 +1423,11 @@ pub struct TabState {
     pub step_hashes: Vec<u64>,
     /// Statistics of the column the inspector shows (computed on the worker).
     pub column_stats: Option<crate::column_stats::ColumnStats>,
+    /// The page could not be read: the reason. The table keeps the last page, dimmed and marked
+    /// "Out of date", until a page is read again.
+    pub page_error: Option<String>,
+    /// The summary row could not be computed: the reason (the band shows "—" with it on hover).
+    pub summary_error: Option<String>,
 }
 
 /// Rows read from a CSV against its non-empty lines (minus the header and title lines).

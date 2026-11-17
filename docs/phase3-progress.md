@@ -26,7 +26,8 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 
 | Item | Status | Commit | Tests added | Deviations |
 |---|---|---|---|---|
-| 1 Text check has its own JobKind | DONE | (this) | src/ui/tests.rs: inspector failure keeps a pending export and says "Column statistics failed"; a failed Text check stops it with its own reason; cancel of each | none |
+| 1 Text check has its own JobKind | DONE | 0163c32 | src/ui/tests.rs: inspector failure keeps a pending export and says "Column statistics failed"; a failed Text check stops it with its own reason; cancel of each | none |
+| 2 Page and summary failures are shown | DONE | (this) | src/ui/tests.rs: a step whose rows cannot be read (Dr value) keeps the last page, sets "Out of date" and the status, clears the summary band to "—" with the reason; undo clears both. tests/phase3/fixes.rs: refresh and load report the page error | see spec |
 
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).

@@ -72,6 +72,13 @@ impl MicroParquetApp {
                                 .on_hover_text(rc.warning().unwrap_or_default());
                             }
                         }
+                        // Stays while the page is stale, whatever message came after it.
+                        if let Some(e) = &tab.page_error {
+                            ui.label(
+                                theme::semibold(format!("{}  Page out of date", theme::ph::WARNING)).color(tk.warning),
+                            )
+                            .on_hover_text(crate::ui::jobs::page_error_message(e));
+                        }
                         if let Some(js) = tab.join_status.as_ref() {
                             let warn = js.duplicate_keys > 0 || js.rows != js.left_rows;
                             ui.label(

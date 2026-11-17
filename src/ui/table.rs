@@ -39,6 +39,35 @@ impl micro_parquet::table_layout::FontMetrics for EguiMetrics<'_> {
 pub struct SummaryView<'a> {
     pub cells: &'a [micro_parquet::summary::SummaryCell],
     pub overrides: &'a HashMap<String, SummarySpec>,
+    /// The summary job failed: the reason (every chosen summary shows "—").
+    pub error: Option<&'a str>,
+}
+
+/// The text of one column's summary band and its hover text. `on` = a summary is chosen.
+pub fn summary_band_text(
+    sv: &SummaryView,
+    name: &str,
+    on: bool,
+    spec_fmt: Option<&ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    decimals: usize,
+) -> (String, Option<String>) {
+    if let Some(e) = sv.error {
+        return if on {
+            ("\u{2014}".to_string(), Some(format!("The summary row could not be computed: {}", e)))
+        } else {
+            (String::new(), None)
+        };
+    }
+    match sv.cells.iter().find(|x| x.column == name) {
+        Some(cell) if cell.agg != SummaryAgg::None => (
+            format_summary_value(cell, spec_fmt, num_format, decimals),
+            cell.note.clone(),
+        ),
+        Some(_) => (String::new(), None),
+        None if on && sv.cells.is_empty() => ("\u{2026}".to_string(), None),
+        None => (String::new(), None),
+    }
 }
 
 /// What the user did in the grid's header.
@@ -165,16 +194,7 @@ fn draw_summary_cell(
     // summary band
     ui.painter().rect_filled(band_rect, 0.0, tk.summary_bg);
     ui.painter().vline(band_rect.right() - 0.5, band_rect.y_range(), egui::Stroke::new(1.0_f32, tk.summary_divider));
-    let cell = sv.cells.iter().find(|x| x.column == name);
-    let (text, note) = match cell {
-        Some(cell) if cell.agg != SummaryAgg::None => (
-            format_summary_value(cell, spec_fmt, num_format, decimals),
-            cell.note.clone(),
-        ),
-        Some(_) => (String::new(), None),
-        None if on && sv.cells.is_empty() => ("\u{2026}".to_string(), None),
-        None => (String::new(), None),
-    };
+    let (text, note) = summary_band_text(sv, &name, on, spec_fmt, num_format, decimals);
     let layout = if kind == CellKind::Number {
         egui::Layout::right_to_left(egui::Align::Center)
     } else {
@@ -513,9 +533,24 @@ impl MicroParquetApp {
         let mut action: Option<GridAction> = None;
         if let Some(tab) = self.tabs.get(self.active_tab) {
             let marks = sort_marks(&tab.steps);
-            let view = SummaryView { cells: &tab.summary_cells, overrides: &tab.summary };
+            let view = SummaryView {
+                cells: &tab.summary_cells,
+                overrides: &tab.summary,
+                error: tab.summary_error.as_deref(),
+            };
+            // A page that could not be read: the last one stays, dimmed and marked.
+            if let Some(e) = &tab.page_error {
+                ui.horizontal(|ui| {
+                    theme::warning_label(ui, "Out of date");
+                    ui.label(egui::RichText::new("The rows below are from an earlier page; the current one could not be read.").color(theme::tokens(self.dark_mode).muted))
+                        .on_hover_text(e.as_str());
+                })
+                .response
+                .on_hover_text(e.as_str());
+            }
+            let stale = tab.page_error.is_some();
             ui.scope(|ui| {
-                if updating {
+                if updating || stale {
                     ui.set_opacity(0.45);
                 }
                 action = Self::render_data_grid(

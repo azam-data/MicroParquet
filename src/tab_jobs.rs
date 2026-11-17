@@ -102,7 +102,10 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     let issues = validate_steps(&source, &steps, &temp_dir).unwrap_or_default();
     let exec_steps = issues.first().map(|i| i.index).unwrap_or(steps.len());
     let lf = compile_tab_lazy(&source, &steps[..exec_steps], &temp_dir)?;
-    let slice = fetch_viewport_slice(lf.clone(), 0, 100).unwrap_or_default();
+    let (slice, page_error) = match fetch_viewport_slice(lf.clone(), 0, 100) {
+        Ok(df) => (df, None),
+        Err(e) => (DataFrame::empty(), Some(format!("{:#}", e))),
+    };
     let default_ctrl = guess_balance_column(&slice);
     ctx.check()?;
     let totals = control_totals_state(Ok(lf.clone()), default_ctrl.as_deref());
@@ -147,7 +150,10 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
             None
         }
     };
-    let mut status = format!("Tab created and evaluated out-of-core.{}", count_note);
+    let mut status = match &page_error {
+        Some(e) => format!("Tab created, but its first page could not be read: {}.{}", e, count_note),
+        None => format!("Tab created and evaluated out-of-core.{}", count_note),
+    };
     if let Some(n) = key_note {
         status.push_str(&format!(" 🔑 {}", n));
     }
@@ -189,6 +195,8 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         step_counts: Vec::new(),
         step_hashes: Vec::new(),
         column_stats: None,
+        page_error,
+        summary_error: None,
     };
     Ok(LoadedTab { tab, status })
 }
@@ -217,8 +225,10 @@ pub struct RefreshRequest {
 pub struct Refreshed {
     pub tab_id: u64,
     pub offset: usize,
-    /// None when the page could not be read (the tab keeps its last page).
+    /// None when the page could not be read (the tab keeps its last page, marked out of date).
     pub slice: Option<DataFrame>,
+    /// Why the page could not be read (the pipeline failed to build, or reading the rows failed).
+    pub page_error: Option<String>,
     pub totals: ControlTotals,
     /// `Some` when the baseline was recomputed (inner `None` = no control sum).
     pub baseline: Option<Option<f64>>,
@@ -248,7 +258,10 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
     let steps = &req.steps[..exec_steps];
     match compile_tab_lazy(&req.source, steps, &req.temp_dir) {
         Ok(lf) => {
-            let slice = fetch_viewport_slice(lf.clone(), req.offset, req.limit).ok();
+            let (slice, page_error) = match fetch_viewport_slice(lf.clone(), req.offset, req.limit) {
+                Ok(df) => (Some(df), None),
+                Err(e) => (None, Some(format!("{:#}", e))),
+            };
             ctx.check()?;
             let totals = control_totals_state(Ok(lf), ctrl);
             ctx.check()?;
@@ -271,6 +284,7 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
                 tab_id: req.tab_id,
                 offset: req.offset,
                 slice,
+                page_error,
                 totals,
                 baseline,
                 join_status: join,
@@ -286,6 +300,7 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
                 tab_id: req.tab_id,
                 offset: req.offset,
                 slice: None,
+                page_error: Some(msg.clone()),
                 totals: control_totals_state(Err(e), ctrl),
                 baseline: None,
                 join_status: None,
