@@ -367,7 +367,8 @@ use micro_parquet::models::ColumnSchemaConfig;
 use polars::prelude::NamedFrom;
 
 pub(crate) fn schema_modal(rows: usize, columns: usize, parquet: bool) -> PendingCsvModal {
-    let names: Vec<String> = (0..4).map(|i| format!("Col{i}")).collect();
+    // the preview shows as many columns as the file has (up to 60)
+    let names: Vec<String> = (0..columns.clamp(4, 60)).map(|i| format!("Col{i}")).collect();
     let df = DataFrame::new(
         names
             .iter()

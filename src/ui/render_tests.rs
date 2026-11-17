@@ -78,6 +78,43 @@ fn schema_dialog_with_40_columns_keeps_its_footer_inside_the_window_at_both_scal
     }
 }
 
+/// Every heading cell of a grid lies inside its frame, and so does what it may paint.
+fn assert_grid_inside_frame(rep: &crate::ui::table::GridReport, what: &str) -> egui::Rect {
+    let frame = rep.frame.unwrap_or_else(|| panic!("{what}: no frame"));
+    for (kind, cells) in [("header", &rep.header), ("selector", &rep.selector), ("summary", &rep.summary)] {
+        for (name, c) in cells.iter() {
+            let visible = c.layout.intersect(c.clip);
+            assert!(visible.width() < 0.0 || inside(visible, frame), "{what}: {kind} cell '{name}' {visible:?} reaches outside the frame {frame:?}");
+            assert!(inside(c.clip, frame.expand(0.6)), "{what}: {kind} cell '{name}' may paint {:?}, outside the frame {frame:?}", c.clip);
+        }
+    }
+    frame
+}
+
+#[test]
+fn schema_preview_headings_never_pass_the_cards_right_edge_at_both_scales() {
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("r2preview");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        app.pending_csv_modal = Some(schema_modal(5, 40, false));
+        let (ctx, input) = screen(ppp, w, h);
+        frames(&mut app, &ctx, &input, 8);
+        let win = theme::dialog_report(&ctx, crate::ui::schema::SCHEMA_TITLE_CSV).expect("dialog").window;
+        // the preview (tab id 0): 40 headings, scrolled to the start, the middle and the end
+        for x in [0.0f32, 700.0, 1600.0, 5000.0] {
+            crate::ui::table::request_grid_scroll(&ctx, 0, x);
+            frames(&mut app, &ctx, &input, 3);
+            let what = format!("ppp {ppp} {w}x{h} scrolled to {x}");
+            let rep = crate::ui::table::grid_report(&ctx, 0).unwrap_or_else(|| panic!("{what}: the preview was not drawn"));
+            assert_eq!(rep.header.len(), 40, "{what}");
+            let frame = assert_grid_inside_frame(&rep, &what);
+            // the card's padding lies between the frame and the dialog's content edge
+            assert!(frame.right() <= win.right() - theme::SPACE_M + 0.5 && frame.left() >= win.left() + theme::SPACE_M - 0.5, "{what}: the preview frame {frame:?} is inside the dialog {win:?}");
+        }
+    }
+}
+
 #[test]
 fn a_filter_dialog_with_80_conditions_fits_at_both_scales_and_scrolls_inside() {
     for (ppp, w, h) in SCREENS {

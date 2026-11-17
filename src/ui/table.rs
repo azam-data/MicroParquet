@@ -35,6 +35,34 @@ impl micro_parquet::table_layout::FontMetrics for EguiMetrics<'_> {
     }
 }
 
+/// Where one cell of the grid's heading block was laid out and what it may paint (tests check that
+/// neither leaves the table's frame).
+#[derive(Clone, Copy, Debug)]
+pub struct CellRect {
+    pub layout: egui::Rect,
+    pub clip: egui::Rect,
+}
+
+/// What the grid drew in its last frame: its frame, and the name, selector and summary cells of
+/// its heading block, one of each per column.
+#[derive(Clone, Debug, Default)]
+pub struct GridReport {
+    pub frame: Option<egui::Rect>,
+    pub header: Vec<(String, CellRect)>,
+    pub selector: Vec<(String, CellRect)>,
+    pub summary: Vec<(String, CellRect)>,
+}
+
+/// The report of the grid drawn for `tab_id` in the last frame.
+pub fn grid_report(ctx: &egui::Context, tab_id: u64) -> Option<GridReport> {
+    ctx.data(|d| d.get_temp::<GridReport>(egui::Id::new(("grid_report", tab_id))))
+}
+
+/// Asks the grid of `tab_id` to scroll sideways to `x` in its next frame.
+pub fn request_grid_scroll(ctx: &egui::Context, tab_id: u64, x: f32) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid_scroll_x", tab_id)), x));
+}
+
 /// The summary row's data for the grid: the computed cells and the user's choices.
 pub struct SummaryView<'a> {
     pub cells: &'a [micro_parquet::summary::SummaryCell],
@@ -245,6 +273,8 @@ impl MicroParquetApp {
         let ctx = ui.ctx().clone();
         let mut action: Option<GridAction> = None;
         let weight_guess = micro_parquet::tab_jobs::guess_balance_column(df);
+        let mut report = GridReport::default();
+        let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
 
         // Minimum widths: header, selector, summary and the first 100 rows' texts.
         let kinds: Vec<CellKind> = cols.iter().map(cell_kind).collect();
@@ -286,12 +316,22 @@ impl MicroParquetApp {
             theme::HEADER_ROW_H
         };
 
-        egui::Frame::none()
+        let framed = egui::Frame::none()
             .fill(tk.surface)
             .stroke(theme::line(tk.border))
             .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
             .show(ui, |ui| {
-                egui::ScrollArea::horizontal().show(ui, |ui| {
+                // The frame is as wide as the space it is given; what is wider than it scrolls
+                // sideways inside it, heading block and rows together, and is clipped to it.
+                // (egui clips a scroll area 3 px wider than it is; the frame's own edge is the limit)
+                let frame_inner = ui.max_rect();
+                let mut area = egui::ScrollArea::horizontal().id_salt(("grid_x", tab_id)).auto_shrink([false, true]);
+                if let Some(x) = want_x {
+                    area = area.horizontal_scroll_offset(x);
+                }
+                area.show(ui, |ui| {
+                    // nothing of the heading block may be painted outside what the frame shows
+                    let limit = ui.clip_rect().intersect(frame_inner);
                     // The id keeps each tab's dragged column widths apart.
                     let mut builder = TableBuilder::new(ui)
                         .id_salt(("data_grid", tab_id))
@@ -314,7 +354,7 @@ impl MicroParquetApp {
                                     ui.max_rect().min,
                                     egui::vec2(ui.max_rect().width(), theme::HEADER_ROW_H),
                                 );
-                                theme::paint_header_bg(ui, band, tk.header_bg);
+                                theme::paint_header_bg(ui, band, tk.header_bg, limit);
                                 ui.label(theme::label_text("#").color(tk.muted));
                             });
                             for (c, kind) in cols.iter().zip(&kinds) {
@@ -329,7 +369,8 @@ impl MicroParquetApp {
                                     let is_sel = selected == Some(name.as_str());
                                     let resp = ui.interact(rect, ui.id().with(("hdr", name.as_str())), egui::Sense::click());
                                     // the heading row's background; the selected column's is accent_soft
-                                    theme::paint_header_bg(ui, rect, if is_sel { tk.accent_soft } else { tk.header_bg });
+                                    theme::paint_header_bg(ui, rect, if is_sel { tk.accent_soft } else { tk.header_bg }, limit);
+                                    report.header.push((name.clone(), CellRect { layout: rect, clip: ui.clip_rect() }));
                                     if is_sel {
                                         ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, theme::line_thick(tk.accent));
                                     }
@@ -390,6 +431,8 @@ impl MicroParquetApp {
                                             egui::vec2(cell_rect.width(), theme::SUMMARY_BAND_H),
                                         );
                                         draw_summary_cell(ui, c, *kind, sv, sel_rect, band_rect, &tk, col_formats.get(&name), num_format, global_decimals, weight_guess.as_deref(), &mut action);
+                                        report.selector.push((name.clone(), CellRect { layout: sel_rect, clip: ui.clip_rect() }));
+                                        report.summary.push((name.clone(), CellRect { layout: band_rect, clip: ui.clip_rect() }));
                                     }
                                 });
                             }
@@ -429,6 +472,8 @@ impl MicroParquetApp {
                         });
                 });
             });
+        report.frame = Some(framed.response.rect);
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("grid_report", tab_id)), report));
         action
     }
 

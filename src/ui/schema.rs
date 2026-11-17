@@ -416,6 +416,7 @@ impl MicroParquetApp {
               // a list wider than the card scrolls sideways inside it; the heading row stays above
               // the rows that scroll up and down
               egui::ScrollArea::horizontal().id_salt("schema_columns_x").auto_shrink([false, false]).show(ui, |ui| {
+                let limit = ui.clip_rect();
                 TableBuilder::new(ui)
                     .min_scrolled_height(0.0)
                     .striped(true)
@@ -429,7 +430,7 @@ impl MicroParquetApp {
                     .column(Column::remainder().at_least(theme::SCHEMA_COL_MIN_W).clip(true))
                     .header(theme::HEADER_ROW_H, |mut header| {
                         for title in ["Column Name", "Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Parse Failures", "Sample Values"] {
-                            header.col(|ui| theme::header_cell(ui, title));
+                            header.col(|ui| theme::header_cell(ui, title, limit));
                         }
                     })
                     .body(|body| {
