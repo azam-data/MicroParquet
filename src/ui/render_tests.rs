@@ -536,3 +536,56 @@ fn exports_keep_blanks_as_they_were() {
     let txt = micro_parquet::exporters::format_df_for_clipboard(&df, &HashMap::new(), NumberDisplayFormat::Raw, 2, false);
     assert!(!txt.contains(theme::BLANK_CELL), "{txt}");
 }
+
+// -------------------------------------------------------------------------- delta vs source
+
+#[test]
+fn delta_vs_source_is_grey_after_filters_and_a_warning_only_without_one() {
+    use crate::ui::layout_tests::collect_painted;
+    let tk = theme::LIGHT;
+    let filter = || TransformStep::FilterRows { column: "Branch".into(), operator: FilterOp::Eq, value: "DHK".into(), keep_matching: true };
+    for (ppp, w, h) in SCREENS {
+        let (ctx, input) = screen(ppp, w, h);
+        let paint = |app: &mut MicroParquetApp| {
+            let mut p = None;
+            for _ in 0..4 {
+                let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+                p = Some(collect_painted(&out.shapes));
+            }
+            p.expect("frames")
+        };
+        let colour = |p: &crate::ui::layout_tests::Painted, t: &str| p.colors.iter().find(|(x, _)| x == t).map(|(_, c)| *c);
+        let new_app = |name: &str, steps: Vec<TransformStep>| {
+            let mut app = test_app(name);
+            let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+            open_tab(&mut app, src, steps);
+            app
+        };
+        // 1. a filter: the total is 1,000,000 below the source's; label says why and everything is grey
+        let mut app = new_app("r7filter", vec![filter()]);
+        assert!(app.tabs[app.active_tab].has_active_filter());
+        let p = paint(&mut app);
+        assert_eq!(colour(&p, "\u{394} vs source (after filters)"), Some(tk.muted), "ppp {ppp}: the label is grey");
+        let value = p.colors.iter().find(|(t, _)| t.ends_with(" Cr") && t.starts_with('-')).unwrap_or_else(|| panic!("ppp {ppp}: the difference is shown: {:?}", p.colors.iter().map(|c| c.0.clone()).filter(|t| t.contains("Cr")).collect::<Vec<_>>()));
+        assert_eq!(value.1, tk.muted, "ppp {ppp}: the difference is grey, not a warning");
+        assert!(colour(&p, "\u{394} vs source").is_none(), "ppp {ppp}: only the filtered label");
+        // 2. a filter that is turned off does not count
+        let off = TransformStep::Skipped { step: Box::new(filter()) };
+        let mut app = new_app("r7off", vec![off]);
+        assert!(!app.tabs[app.active_tab].has_active_filter());
+        let p = paint(&mut app);
+        assert_eq!(colour(&p, "\u{394} vs source"), Some(tk.muted), "ppp {ppp}: plain label without an active filter");
+        // 3. no filter and the total moved: a warning
+        let mut app = new_app("r7warn", vec![]);
+        let idx = app.active_tab;
+        app.tabs[idx].baseline_control_sum = app.tabs[idx].control_sum.map(|s| s - 25_000_000.0);
+        let p = paint(&mut app);
+        assert_eq!(colour(&p, "\u{394} vs source"), Some(tk.muted), "ppp {ppp}");
+        let value = p.colors.iter().find(|(t, _)| t.starts_with('+') && t.ends_with(" Cr")).unwrap_or_else(|| panic!("ppp {ppp}: +2.50 Cr shown"));
+        assert_eq!((value.0.as_str(), value.1), ("+2.50 Cr", tk.warning), "ppp {ppp}");
+        // 4. no filter and nothing moved: the green zero
+        let mut app = new_app("r7zero", vec![]);
+        let p = paint(&mut app);
+        assert_eq!(colour(&p, "0.00 Cr"), Some(tk.success), "ppp {ppp}");
+    }
+}

@@ -1206,6 +1206,12 @@ impl TransformStep {
         matches!(self, TransformStep::Skipped { .. })
     }
 
+    /// True for a filter that is turned on (rows are removed by it, so the control total is
+    /// expected to differ from the source's).
+    pub fn is_active_filter(&self) -> bool {
+        matches!(self, TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. })
+    }
+
     /// The name of the kind of step ("Filter", "Sort", "Calc column"), for the timeline.
     pub fn title(&self) -> &'static str {
         match self.inner() {
@@ -1576,6 +1582,11 @@ impl JoinStatus {
 }
 
 impl TabState {
+    /// True when the pipeline has a filter step that is turned on.
+    pub fn has_active_filter(&self) -> bool {
+        self.steps.iter().any(|s| s.is_active_filter())
+    }
+
     /// A column is an ID (kept as text) when one whole token is an ID word and no token is a
     /// money, rate or date word. "Account_Balance" is a balance, "Customer_ID" is an ID.
     pub fn is_likely_id_column(col_name: &str) -> bool {

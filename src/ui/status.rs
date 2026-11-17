@@ -93,10 +93,20 @@ impl MicroParquetApp {
                                 .on_hover_text(col_name.clone());
                             ui.label(theme::mono_semibold(format!("{:.2} Cr", sum_val / 10_000_000.0))) // not a size: Crore
                                 .on_hover_text(format!("Raw: {}", format_with_commas(sum_val, 2)));
-                            if let Some(base) = tab.baseline_control_sum.filter(|_| room_for(ui, 2.0 * theme::STATUS_ITEM_GAP + theme::text_width(ui, "\u{394} vs source +000.00 Cr", theme::TEXT_SMALL))) {
+                            // With a filter the total is expected to differ from the source's: say so,
+                            // in grey. Only an unfiltered pipeline whose total moved is a warning.
+                            let filtered = tab.has_active_filter();
+                            let delta_label = if filtered { "\u{394} vs source (after filters)" } else { "\u{394} vs source" };
+                            if let Some(base) = tab.baseline_control_sum.filter(|_| room_for(ui, 2.0 * theme::STATUS_ITEM_GAP + theme::text_width(ui, &format!("{} +000.00 Cr", delta_label), theme::TEXT_SMALL))) {
                                 let diff = sum_val - base;
-                                ui.label(egui::RichText::new("\u{394} vs source").color(tk.muted));
-                                if diff.abs() > 0.01 { // not a size: a difference below a paisa is none
+                                ui.label(egui::RichText::new(delta_label).color(tk.muted));
+                                if filtered {
+                                    ui.label(
+                                        theme::mono_semibold(format!("{:+.2} Cr", diff / 10_000_000.0)) // not a size: Crore
+                                            .color(tk.muted),
+                                    )
+                                    .on_hover_text("The filters remove rows, so the total is expected to differ from the source file's.");
+                                } else if diff.abs() > 0.01 { // not a size: a difference below a paisa is none
                                     ui.label(
                                         theme::mono_semibold(format!("{:+.2} Cr", diff / 10_000_000.0)) // not a size: Crore
                                             .color(tk.warning),
