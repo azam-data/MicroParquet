@@ -205,6 +205,8 @@ impl MicroParquetApp {
         self.command_query.clear();
         self.command_cursor = 0;
         self.command_focus = true;
+        // (a click that opens it must not count as a click outside in the same frame)
+        self.command_opened_pass = u64::MAX;
     }
 
     /// Ctrl+K opens or closes the search.
@@ -285,7 +287,12 @@ impl MicroParquetApp {
             run = results.get(self.command_cursor).copied();
         }
         let mut close = esc;
-        egui::Area::new(egui::Id::new("command_palette"))
+        // the frame it opened in: a click that was meant to open it is not "outside"
+        let pass = ctx.cumulative_pass_nr();
+        if self.command_opened_pass == u64::MAX {
+            self.command_opened_pass = pass;
+        }
+        let area = egui::Area::new(egui::Id::new("command_palette"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_TOP, [0.0, theme::PALETTE_TOP])
             .show(ctx, |ui| {
@@ -352,6 +359,13 @@ impl MicroParquetApp {
                         });
                     });
             });
+        // a click anywhere else (the search box in the bar counts as inside: it toggles), or the
+        // window losing focus, closes it
+        let (pressed_at, focused) = ctx.input(|i| (if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }, i.focused));
+        let outside = pressed_at.is_some_and(|p| !area.response.rect.contains(p) && !self.command_box_rect.contains(p));
+        if (outside && self.command_opened_pass != pass) || !focused {
+            close = true;
+        }
 
         if let Some(idx) = run {
             let it = &items[idx];

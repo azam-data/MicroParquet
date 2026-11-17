@@ -158,6 +158,9 @@ pub struct MicroParquetApp {
     pub command_query: String,
     pub command_cursor: usize,
     pub command_focus: bool,
+    /// The pass the search overlay opened in, and where the search box in the bar is.
+    pub command_opened_pass: u64,
+    pub command_box_rect: egui::Rect,
     pub recent_commands: Vec<micro_parquet::commands::CommandId>,
     dark_mode: bool,
     ui_zoom: f32,
@@ -227,6 +230,8 @@ impl MicroParquetApp {
             command_query: String::new(),
             command_cursor: 0,
             command_focus: false,
+            command_opened_pass: 0,
+            command_box_rect: egui::Rect::NOTHING,
             recent_commands,
             dark_mode: false,
             ui_zoom: theme::UI_ZOOM_DEFAULT,
@@ -447,8 +452,14 @@ impl MicroParquetApp {
             })
             .response
             .interact(egui::Sense::click());
+        self.command_box_rect = resp.rect;
         if resp.clicked() {
-            self.open_command_palette();
+            // the box opens the search and closes it again
+            if self.command_open {
+                self.command_open = false;
+            } else {
+                self.open_command_palette();
+            }
         }
         resp
     }

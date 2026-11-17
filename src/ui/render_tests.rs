@@ -990,3 +990,76 @@ fn the_conditional_column_dialog_offers_a_column_on_the_right_and_a_blank_result
         eprintln!("{what}: dialog {:?} body {:?}", r.window, r.body);
     }
 }
+
+// ------------------------------------------------------- part 4, item 4: search overlay closes
+
+#[test]
+fn the_search_overlay_closes_on_a_click_outside_on_esc_and_when_the_window_loses_focus() {
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)] {
+        let what = format!("ppp {ppp} {w}x{h}");
+        let mut app = test_app("p4palette");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        let (ctx, input) = screen(ppp, w, h);
+        let id = egui::Id::new("command_palette");
+        let area = |ctx: &egui::Context| ctx.memory(|m| m.area_rect(id));
+        let step = |app: &mut MicroParquetApp, events: Vec<egui::Event>, focused: bool| {
+            let mut i = input.clone();
+            i.events = events;
+            i.focused = focused;
+            let _ = ctx.run(i, |c| app.frame_ui(c));
+        };
+        let press = |pos: egui::Pos2| vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
+        let release = |pos: egui::Pos2| vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+        let open = |app: &mut MicroParquetApp| {
+            app.open_command_palette();
+            for _ in 0..3 {
+                step(app, vec![], true);
+            }
+        };
+
+        // 1. a click on the table, outside the overlay
+        open(&mut app);
+        assert!(app.command_open, "{what}");
+        let rect = area(&ctx).expect("the overlay was drawn");
+        eprintln!("{what}: overlay {rect:?}");
+        let outside = egui::pos2(rect.left() + 20.0, rect.bottom() + 150.0);
+        assert!(!rect.contains(outside), "{what}: {outside:?} is outside {rect:?}");
+        step(&mut app, press(outside), true);
+        assert!(!app.command_open, "{what}: a click outside closes the search");
+        step(&mut app, release(outside), true);
+
+        // 2. a click inside it (on its text field) does not
+        open(&mut app);
+        let rect = area(&ctx).expect("drawn");
+        let inside = rect.center_top() + egui::vec2(0.0, 20.0);
+        step(&mut app, press(inside), true);
+        step(&mut app, release(inside), true);
+        assert!(app.command_open, "{what}: a click inside keeps it open");
+
+        // 3. Esc
+        step(&mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }], true);
+        assert!(!app.command_open, "{what}: Esc closes it");
+
+        // 4. the window loses focus
+        open(&mut app);
+        step(&mut app, vec![], true);
+        assert!(app.command_open);
+        step(&mut app, vec![egui::Event::WindowFocused(false)], false);
+        assert!(!app.command_open, "{what}: it closes when the window loses focus");
+        step(&mut app, vec![egui::Event::WindowFocused(true)], true);
+
+        // 5. a click on the search box in the bar opens it, and the next click on it closes it
+        let b = app.command_box_rect;
+        assert!(b.is_positive(), "{what}: the search box was drawn");
+        step(&mut app, press(b.center()), true);
+        step(&mut app, release(b.center()), true);
+        assert!(app.command_open, "{what}: the box opens the search");
+        for _ in 0..2 {
+            step(&mut app, vec![], true);
+        }
+        step(&mut app, press(b.center()), true);
+        step(&mut app, release(b.center()), true);
+        assert!(!app.command_open, "{what}: the box closes it again (it does not close and reopen)");
+    }
+}

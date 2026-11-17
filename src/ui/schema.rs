@@ -55,6 +55,15 @@ impl SchemaKeys {
         Self { enter: enter && !busy && !focused, esc: esc && !busy }
     }
 
+    /// No keys while another overlay (the Ctrl+K search) has them.
+    pub fn unless(self, overlay_open: bool) -> Self {
+        if overlay_open {
+            Self { enter: false, esc: false }
+        } else {
+            self
+        }
+    }
+
     /// Enter is "Lock Schema & Open" (the conversion when that is all the dialog offers), Esc is
     /// Cancel. A click on a button in the same frame wins.
     pub fn apply(&self, modal: &PendingCsvModal, out: &mut SchemaOutcome) {
@@ -126,7 +135,7 @@ impl MicroParquetApp {
         if modal.popped_out {
             self.show_schema_viewport(ctx, &mut modal, title, &mut out);
         } else {
-            let keys = SchemaKeys::read(ctx);
+            let keys = SchemaKeys::read(ctx).unless(self.command_open);
             // a backend that cannot open native windows keeps the dialog in the app
             let can_pop = !ctx.embed_viewports();
             theme::modal(title)
@@ -235,7 +244,7 @@ impl MicroParquetApp {
     /// What fills the pop-out window: the header buttons, then the cards in a middle that
     /// scrolls. (Tests draw it in a headless window the size of the pop-out.)
     pub(crate) fn schema_viewport_ui(&mut self, ctx: &egui::Context, modal: &mut PendingCsvModal, out: &mut SchemaOutcome) -> SchemaCardRects {
-        let keys = SchemaKeys::read(ctx);
+        let keys = SchemaKeys::read(ctx).unless(self.command_open);
         let mut rects = SchemaCardRects { reading: egui::Rect::NOTHING, preview: egui::Rect::NOTHING, columns: egui::Rect::NOTHING };
         egui::CentralPanel::default().show(ctx, |ui| {
             schema_header(ui, modal, true, out);
