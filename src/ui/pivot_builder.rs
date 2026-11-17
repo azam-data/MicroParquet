@@ -840,7 +840,7 @@ impl MicroParquetApp {
         let total_w: f32 = widths.iter().sum();
         let last = cells.len().saturating_sub(1);
         let has_total_row = spec.column_totals && spec.rows.len() > 0 && self.pivot_builder.preview_total_rows <= micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS;
-        let mut draw_row = |ui: &mut egui::Ui, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
+        let draw_row = |ui: &mut egui::Ui, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
             let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, theme::PIVOT_PREVIEW_ROW_H), egui::Sense::hover());
             if let Some(f) = fill {
                 ui.painter().rect_filled(row, 0.0, f);

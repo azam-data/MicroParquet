@@ -783,10 +783,6 @@ fn curves_title() -> String {
     format!("{}  Yield curves", theme::ph::CHART_LINE)
 }
 
-fn press_key(rig: &mut Rig, key: egui::Key) {
-    rig.step(vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
-}
-
 #[test]
 fn the_yield_curves_manager_lists_edits_saves_imports_and_deletes_with_every_part_inside_the_dialog() {
     for (ppp, w, h) in SCREENS {
