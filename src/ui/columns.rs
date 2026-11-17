@@ -74,16 +74,7 @@ impl MicroParquetApp {
                 if theme::primary_button(ui, "\u{E182} Apply Column Selection, Order & Formats").clicked() {
                     self.columns.apply_formats =
                         Some(self.columns.list.iter().map(|(c, _, spec)| (c.clone(), *spec)).collect());
-                    let kept: Vec<String> = self
-                        .columns.list
-                        .iter()
-                        .filter(|(_, k, _)| *k)
-                        .map(|(n, _, _)| n.clone())
-                        .collect();
-                    step_to_apply = Some((
-                        TransformStep::SelectAndReorderColumns { cols: kept },
-                        false,
-                    ));
+                    step_to_apply = self.tool_step(&ActiveToolModal::ManageColumns).map(|s| (s, false));
                     close_modal = true;
                 }
 
@@ -100,13 +91,7 @@ impl MicroParquetApp {
                     ui.label("->");
                     ui.text_edit_singleline(&mut self.columns.rename_new);
                     if ui.button("Rename").clicked() && !self.columns.rename_new.trim().is_empty() {
-                        step_to_apply = Some((
-                            TransformStep::RenameColumn {
-                                old_name: self.columns.rename_old.clone(),
-                                new_name: self.columns.rename_new.trim().to_string(),
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.rename_step().map(|s| (s, false));
                         close_modal = true;
                     }
                 });

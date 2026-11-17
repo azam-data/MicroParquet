@@ -379,15 +379,10 @@ impl MicroParquetApp {
         }
     }
 
-    /// Opens the editor for step `i` when it has one (filters and sorts).
+    /// Opens the editor for step `i`, prefilled (its tool modal, the filter or the sort editor).
     fn edit_step_dialog(&mut self, i: usize) {
-        let Some(step) = self.tabs.get(self.active_tab).and_then(|t| t.steps.get(i)).cloned() else {
-            return;
-        };
-        if step.as_filter_group().is_some() {
-            self.open_filter_editor(Some(i), false);
-        } else if step.sort_levels().is_some() {
-            self.open_sort_editor_at(Some(i), None);
+        if !self.open_step_editor(i) {
+            self.status_message = "This step has no editor (Set to Number, SQL): delete it and add it again.".to_string();
         }
     }
 
@@ -481,11 +476,11 @@ impl MicroParquetApp {
                                     ui.add_space(4.0);
                                     ui.horizontal(|ui| {
                                         ui.spacing_mut().item_spacing.x = 4.0;
-                                        let editable = !skipped && (step.as_filter_group().is_some() || step.sort_levels().is_some());
+                                        let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
                                         let edit = ui.add_enabled(editable, egui::Button::new(theme::ph::PENCIL_SIMPLE));
                                         if edit
                                             .on_hover_text("Edit")
-                                            .on_disabled_hover_text("Filters and sorts can be edited; turn a step on to edit it. Other steps: delete and add again.")
+                                            .on_disabled_hover_text(if skipped { "Turn the step on to edit it." } else { "Set to Number and SQL steps have no editor: delete the step and add it again." })
                                             .clicked()
                                         {
                                             do_edit = Some(i);

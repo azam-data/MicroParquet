@@ -143,27 +143,7 @@ impl MicroParquetApp {
             ui.separator();
             ui.horizontal(|ui| {
                 if theme::primary_button(ui, "\u{E3FE} Generate Summary / Pivot View").clicked() {
-                    let groups: Vec<String> = self
-                        .pivot.group_cols
-                        .iter()
-                        .filter(|(_, c)| *c)
-                        .map(|(n, _)| n.clone())
-                        .collect();
-                    let sort_c = self.pivot.aggs.first().map(|a| a.alias.clone());
-                    step_to_apply = Some((
-                        TransformStep::GroupByPivot {
-                            group_cols: groups,
-                            pivot_col: None,
-                            aggs: self.pivot.aggs.clone(),
-                            sort_by_col: sort_c,
-                            top_n: if self.pivot.top_n > 0 {
-                                Some(self.pivot.top_n)
-                            } else {
-                                None
-                            },
-                        },
-                        self.pivot.open_in_new_tab,
-                    ));
+                    step_to_apply = self.tool_step(&ActiveToolModal::GroupByPivot).map(|s| (s, self.pivot.open_in_new_tab));
                     close_modal = true;
                 }
                 if ui.button("Cancel").clicked() {

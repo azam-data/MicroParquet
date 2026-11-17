@@ -52,14 +52,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Calculate Limit Utilization & Undrawn CCF").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::LoanLimitUtilization {
-                                limit_col: self.limits.col.clone(),
-                                bal_col: self.limits.bal_col.clone(),
-                                ccf_pct: self.limits.ccf_pct,
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::LoanLimitUtil).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

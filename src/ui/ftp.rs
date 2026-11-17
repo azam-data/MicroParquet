@@ -95,18 +95,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Map FTP Rates & Compute Margin").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::FtpCurveMap {
-                                opndat_col: self.ftp.opn_col.clone(),
-                                matdat_col: self.ftp.mat_col.clone(),
-                                bal_col: self.ftp.bal_col.clone(),
-                                rate_col: self.ftp.rate_col.clone(),
-                                curve: self.ftp.curve.clone(),
-                                is_liability: self.ftp.is_liability,
-                                interpolation: self.ftp.interpolation,
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::FtpCurveMap).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

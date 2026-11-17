@@ -193,20 +193,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Generate Maturity Buckets").clicked() {
-                        if let Some(chosen_def) =
-                            self.buckets.presets.get(self.buckets.selected_preset_idx).cloned()
-                        {
-                            step_to_apply = Some((
-                                TransformStep::MaturityBucket {
-                                    mat_col: self.buckets.mat_col.clone(),
-                                    cutoff_date: self.buckets.cutoff.clone(),
-                                    bucket_def: chosen_def,
-                                    null_as_sight: self.buckets.null_sight,
-                                    new_col: self.buckets.new_col.clone(),
-                                },
-                                false,
-                            ));
-                        }
+                        step_to_apply = self.tool_step(&ActiveToolModal::MaturityBucket).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

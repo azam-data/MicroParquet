@@ -84,28 +84,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E3FE} Run Audit into New Exception Tab").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::BankingHygieneAudit {
-                                opndat_col: self.audit.opn_col.clone(),
-                                matdat_col: self.audit.mat_col.clone(),
-                                clsdat_col: self.audit.cls_col.clone(),
-                                acstat_col: self.audit.stat_col.clone(),
-                                bal_col: self.audit.bal_col.clone(),
-                                rate_col: self.audit.rate_col.clone(),
-                                actnum_col: self.audit.key_col.clone(),
-                                cutoff_date: self.buckets.cutoff.clone(),
-                                only_exceptions: self.audit.only_exceptions,
-                                active_statuses: self
-                                    .audit.active_statuses
-                                    .split(',')
-                                    .map(|s| s.trim().to_string())
-                                    .filter(|s| !s.is_empty())
-                                    .collect(),
-                                rate_min_pct: self.audit.rate_min,
-                                rate_max_pct: self.audit.rate_max,
-                            },
-                            true,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::BankingAudit).map(|s| (s, true));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

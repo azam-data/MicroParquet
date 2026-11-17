@@ -93,15 +93,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Add Column").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::ConditionalColumn {
-                                new_col: self.cond.new_col.clone(),
-                                rules: self.cond.rules.clone(),
-                                fallback: self.cond.fallback.clone(),
-                                output_as_float: self.cond.as_float,
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::ConditionalCol).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

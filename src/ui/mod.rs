@@ -26,6 +26,7 @@ pub mod sort;
 pub mod sql;
 pub mod stack;
 pub mod status;
+pub mod step_edit;
 pub mod steps;
 pub mod table;
 pub mod tabs;
@@ -49,11 +50,15 @@ impl MicroParquetApp {
             return;
         }
 
-        let avail_cols = self
-            .tabs
-            .get(self.active_tab)
-            .map(|t| t.available_columns())
-            .unwrap_or_default();
+        // An edit belongs to the modal it was opened in.
+        if self.editing.as_ref().is_some_and(|e| e.tool != self.active_tool) {
+            self.editing = None;
+        }
+        // While a step is edited, its modal lists the columns that step sees.
+        let avail_cols = match &self.editing {
+            Some(ed) => ed.columns.clone(),
+            None => self.tabs.get(self.active_tab).map(|t| t.available_columns()).unwrap_or_default(),
+        };
 
         // Default the side picker whenever the column set changes (not every frame, so a
         // deliberate "none" choice sticks): first column named like side/direction.
@@ -93,10 +98,17 @@ impl MicroParquetApp {
         };
 
         if let Some((step, new_tab)) = outcome.step {
-            self.push_step_to_active_tab(step, new_tab);
+            if self.editing.is_some() {
+                // Edit in place: the step is replaced in its own tab (never a new tab).
+                self.save_edited_step(step);
+            } else {
+                self.push_step_to_active_tab(step, new_tab);
+            }
         }
+        self.render_edit_banner(ctx);
         if outcome.close {
             self.active_tool = ActiveToolModal::None;
+            self.editing = None;
             // "Insert after" applies to the step this modal produced, never to a later one.
             self.insert_after = None;
         }

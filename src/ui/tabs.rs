@@ -140,6 +140,15 @@ impl MicroParquetApp {
             return;
         }
         tab.record_undo();
+        // as when a step is added: a pivot's measure formats and the Columns dialog's formats
+        if let TransformStep::GroupByPivot { aggs, .. } = &step {
+            for a in aggs {
+                tab.col_formats.insert(a.alias.clone(), a.format_spec);
+            }
+        }
+        for (c, spec) in self.columns.apply_formats.take().unwrap_or_default() {
+            tab.col_formats.insert(c, spec);
+        }
         tab.steps[idx] = step;
         tab.viewport_offset = 0;
         self.status_message = status.to_string();

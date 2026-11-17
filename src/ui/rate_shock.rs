@@ -106,21 +106,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Run Rate Shock Simulation").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::RateShockSim {
-                                bal_col: self.shock.bal_col.clone(),
-                                rate_col: self.shock.rate_col.clone(),
-                                mat_col: self.shock.mat_col.clone(),
-                                cutoff_date: self.buckets.cutoff.clone(),
-                                shock_bps: self.shock.bps,
-                                side_col: if self.shock.side_col.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(self.shock.side_col.clone())
-                                },
-                            },
-                            true,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::RateShockSim).map(|s| (s, true));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

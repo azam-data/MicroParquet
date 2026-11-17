@@ -98,23 +98,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Compute Duration & ΔEVE Columns").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::DurationAnalysis {
-                                bal_col: self.duration.bal_col.clone(),
-                                rate_col: self.duration.rate_col.clone(),
-                                mat_col: self.duration.mat_col.clone(),
-                                cutoff_date: self.buckets.cutoff.clone(),
-                                compounding_freq: self.duration.freq,
-                                shock_bps: self.duration.shock_bps,
-                                default_sight_years: self.duration.sight_yrs,
-                                side_col: if self.shock.side_col.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(self.shock.side_col.clone())
-                                },
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::DurationAnalysis).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

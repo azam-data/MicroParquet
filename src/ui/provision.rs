@@ -73,34 +73,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Calculate CL Provision & BFP").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::LoanClassificationProvision {
-                                bal_col: self.provision.bal_col.clone(),
-                                cl_status_col: self.provision.cl_col.clone(),
-                                segment_col: if self.provision.seg_col.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(self.provision.seg_col.trim().to_string())
-                                },
-                                suspense_col: if self.provision.susp_col.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(self.provision.susp_col.trim().to_string())
-                                },
-                                security_col: if self.provision.sec_col.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(self.provision.sec_col.trim().to_string())
-                                },
-                                cutoff_date: self.provision.cutoff.trim().to_string(),
-                                collateral_type_col: if self.provision.coll_type_col.trim().is_empty() {
-                                    None
-                                } else {
-                                    Some(self.provision.coll_type_col.trim().to_string())
-                                },
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::LoanProvision).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

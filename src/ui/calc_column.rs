@@ -69,16 +69,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Add Calculated Column").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::MathFormula {
-                                new_col: self.calc.new_col.clone(),
-                                left_col: self.calc.left_col.clone(),
-                                op: self.calc.op,
-                                right_is_col: self.calc.right_is_col,
-                                right_val_or_col: self.calc.right_val.clone(),
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::MathFormula).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

@@ -359,3 +359,169 @@ fn columns_dialog_formats_are_undone_with_their_step() {
     assert!(app.tabs[idx].steps.is_empty());
     assert!(app.tabs[idx].col_formats.get("Balance").is_none(), "one undo takes back the step and its formats");
 }
+
+// ---------------------------------------------------------------------------------- fix 10
+
+/// One step of every type that a tool modal makes, with settings other than the modals' defaults.
+fn one_step_per_modal() -> Vec<TransformStep> {
+    let bucket = CustomBucketDef::default_presets().into_iter().nth(1).expect("a second preset");
+    vec![
+        TransformStep::SelectAndReorderColumns { cols: vec!["Balance".into(), "Branch".into()] },
+        TransformStep::RenameColumn { old_name: "Branch".into(), new_name: "Brancd".into() },
+        TransformStep::ConditionalColumn {
+            new_col: "Big".into(),
+            rules: vec![CondRule { col_name: "Balance".into(), op: FilterOp::Gt, compare_val: "15".into(), output_val: "Y".into() }],
+            fallback: "N".into(),
+            output_as_float: false,
+        },
+        TransformStep::MathFormula { new_col: "Bal_K".into(), left_col: "Balance".into(), op: MathOp::Mul, right_is_col: false, right_val_or_col: "0.001".into() },
+        TransformStep::NormalizeEntity { source_col: "Branch".into(), new_col: "Branch_N".into() },
+        TransformStep::MaturityBucket { mat_col: "Matdat".into(), cutoff_date: "2026-06-30".into(), bucket_def: bucket, null_as_sight: false, new_col: "Bkt".into() },
+        TransformStep::RateShockSim { bal_col: "Balance".into(), rate_col: "Rate".into(), mat_col: "Matdat".into(), cutoff_date: "2026-06-30".into(), shock_bps: -150.0, side_col: Some("Side".into()) },
+        TransformStep::FtpCurveMap {
+            opndat_col: "Opndat".into(),
+            matdat_col: "Matdat".into(),
+            bal_col: "Balance".into(),
+            rate_col: "Rate".into(),
+            curve: vec![FtpPoint { tenor_days: 30, ftp_rate: 6.5 }, FtpPoint { tenor_days: 365, ftp_rate: 8.25 }],
+            is_liability: false,
+            interpolation: FtpInterpolation::NextPointUp,
+        },
+        TransformStep::BankingHygieneAudit {
+            opndat_col: "Opndat".into(),
+            matdat_col: "Matdat".into(),
+            clsdat_col: "Clsdat".into(),
+            acstat_col: "Acstat".into(),
+            bal_col: "Balance".into(),
+            rate_col: "Rate".into(),
+            actnum_col: "Actnum".into(),
+            cutoff_date: "2026-06-30".into(),
+            only_exceptions: false,
+            active_statuses: vec!["ACT".into(), "DMT".into()],
+            rate_min_pct: 1.5,
+            rate_max_pct: 22.0,
+        },
+        TransformStep::DurationAnalysis {
+            bal_col: "Balance".into(),
+            rate_col: "Rate".into(),
+            mat_col: "Matdat".into(),
+            cutoff_date: "2026-06-30".into(),
+            compounding_freq: 12,
+            shock_bps: 300.0,
+            default_sight_years: 0.25,
+            side_col: None,
+        },
+        TransformStep::LoanClassificationProvision {
+            bal_col: "Balance".into(),
+            cl_status_col: "CL".into(),
+            segment_col: Some("Sector".into()),
+            suspense_col: None,
+            security_col: Some("Security".into()),
+            cutoff_date: "2026-06-30".into(),
+            collateral_type_col: Some("Collateral".into()),
+        },
+        TransformStep::LoanLimitUtilization { limit_col: "Limit".into(), bal_col: "Balance".into(), ccf_pct: 50.0 },
+        TransformStep::GroupByPivot {
+            group_cols: vec!["Branch".into()],
+            pivot_col: None,
+            aggs: vec![AggSpec {
+                target_col: "Balance".into(),
+                func: AggFunc::Sum,
+                weight_col: None,
+                alias: "Bal".into(),
+                format_spec: ColumnFormatSpec { fmt_type: MetricFormatType::BdtCrore, decimals: 2 },
+            }],
+            sort_by_col: Some("Bal".into()),
+            top_n: Some(5),
+        },
+    ]
+}
+
+#[test]
+fn every_modal_step_reopens_prefilled_and_saves_back_unchanged() {
+    use crate::ui::step_edit::{step_is_editable, step_modal};
+    let mut app = test_app("fix10a");
+    let columns: Vec<String> = ["Branch", "Balance", "Rate", "Matdat", "Opndat", "Side"].iter().map(|s| s.to_string()).collect();
+    for step in one_step_per_modal() {
+        assert!(step_is_editable(&step), "{:?}", step);
+        let tool = app.prefill_from_step(&step, &columns).expect("has a modal");
+        assert_eq!(Some(tool), step_modal(&step));
+        let rebuilt = match &step {
+            TransformStep::RenameColumn { .. } => app.rename_step(),
+            _ => app.tool_step(&tool),
+        }
+        .expect("the modal makes a step");
+        assert_eq!(format!("{:?}", rebuilt), format!("{:?}", step), "round trip through {:?}", tool);
+    }
+    // no modal: not editable in place
+    assert!(!step_is_editable(&TransformStep::ConvertToNumber { columns: vec!["A".into()] }));
+    assert!(!step_is_editable(&TransformStep::SqlQuery { query: "SELECT * FROM self".into() }));
+    assert!(!step_is_editable(&TransformStep::Skipped { step: Box::new(one_step_per_modal().remove(3)) }));
+}
+
+#[test]
+fn editing_a_step_replaces_it_and_checks_the_later_steps_again() {
+    let mut app = test_app("fix10b");
+    let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+    let calc = TransformStep::MathFormula { new_col: "Bal_Cr".into(), left_col: "Balance".into(), op: MathOp::Div, right_is_col: false, right_val_or_col: "10000000".into() };
+    let later = TransformStep::FilterRows { column: "Bal_Cr".into(), operator: FilterOp::Gt, value: "1.5".into(), keep_matching: true };
+    let idx = open_tab(&mut app, src, vec![calc, later]);
+    assert_eq!(app.tabs[idx].total_rows, 2);
+
+    // reopen step 1: the Calc modal, prefilled, listing the columns that step sees
+    assert!(app.open_step_editor(0));
+    assert_eq!(app.active_tool, ActiveToolModal::MathFormula);
+    assert_eq!(app.calc.new_col, "Bal_Cr");
+    assert_eq!(app.calc.right_val, "10000000");
+    let ed = app.editing.clone().expect("editing");
+    assert_eq!(ed.index, 0);
+    assert_eq!(ed.columns, vec!["Branch".to_string(), "Amount".into(), "Balance".into()], "not Bal_Cr, which the step itself makes");
+
+    // change the divisor and save: same position, history recorded, later filter re-run
+    app.calc.right_val = "1000000".into();
+    let step = app.tool_step(&ActiveToolModal::MathFormula).expect("step");
+    app.save_edited_step(step);
+    settle(&mut app);
+    let t = &app.tabs[idx];
+    assert_eq!(t.steps.len(), 2);
+    assert!(matches!(&t.steps[0], TransformStep::MathFormula { right_val_or_col, .. } if right_val_or_col == "1000000"));
+    assert_eq!(t.total_rows, 3, "the later filter ran on the edited values");
+    assert!(t.history.can_undo());
+
+    // rename the new column: the later filter needs Bal_Cr, so it is now marked broken
+    assert!(app.open_step_editor(0));
+    app.calc.new_col = "Bal_M".into();
+    let step = app.tool_step(&ActiveToolModal::MathFormula).expect("step");
+    app.save_edited_step(step);
+    settle(&mut app);
+    let t = &app.tabs[idx];
+    assert_eq!(t.issues.first().map(|i| i.index), Some(1));
+    assert!(app.status_message.contains("Step 2"), "{}", app.status_message);
+}
+
+#[test]
+fn an_edited_pivot_keeps_what_its_modal_cannot_show() {
+    use crate::ui::step_edit::keep_uneditable;
+    let agg = |alias: &str| AggSpec { target_col: "Balance".into(), func: AggFunc::Sum, weight_col: None, alias: alias.into(), format_spec: ColumnFormatSpec::default() };
+    let original = TransformStep::GroupByPivot {
+        group_cols: vec!["Branch".into()],
+        pivot_col: Some("Product".into()),
+        aggs: vec![agg("Bal"), agg("Bal2")],
+        sort_by_col: Some("Bal2".into()),
+        top_n: Some(3),
+    };
+    let edited = TransformStep::GroupByPivot { group_cols: vec!["Branch".into()], pivot_col: None, aggs: vec![agg("Bal"), agg("Bal2")], sort_by_col: Some("Bal".into()), top_n: Some(3) };
+    match keep_uneditable(&original, edited) {
+        TransformStep::GroupByPivot { pivot_col, sort_by_col, .. } => {
+            assert_eq!(pivot_col.as_deref(), Some("Product"));
+            assert_eq!(sort_by_col.as_deref(), Some("Bal2"), "the Top-N keeps its order");
+        }
+        other => panic!("{:?}", other),
+    }
+    // the old sort column is gone: the modal's choice is used
+    let edited = TransformStep::GroupByPivot { group_cols: vec!["Branch".into()], pivot_col: None, aggs: vec![agg("Bal")], sort_by_col: Some("Bal".into()), top_n: None };
+    match keep_uneditable(&original, edited) {
+        TransformStep::GroupByPivot { sort_by_col, .. } => assert_eq!(sort_by_col.as_deref(), Some("Bal")),
+        other => panic!("{:?}", other),
+    }
+}

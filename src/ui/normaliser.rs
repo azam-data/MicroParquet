@@ -49,13 +49,7 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "\u{E182} Normalize Counterparty Names").clicked() {
-                        step_to_apply = Some((
-                            TransformStep::NormalizeEntity {
-                                source_col: self.normaliser.source_col.clone(),
-                                new_col: self.normaliser.new_col.clone(),
-                            },
-                            false,
-                        ));
+                        step_to_apply = self.tool_step(&ActiveToolModal::NormalizeEntity).map(|s| (s, false));
                         close_modal = true;
                     }
                     if ui.button("Cancel").clicked() {

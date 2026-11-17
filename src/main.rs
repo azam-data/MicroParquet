@@ -80,7 +80,7 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveToolModal {
     None,
     FilterRows,
@@ -131,6 +131,8 @@ pub struct MicroParquetApp {
     pub selected_step: Option<usize>,
     pub confirm_delete_step: Option<usize>,
     pub insert_after: Option<usize>,
+    /// A step reopened in its modal (edit in place).
+    pub editing: Option<ui::step_edit::EditingStep>,
     show_about: bool,
     /// Closing: the "Export in progress — cancel and quit?" question is open, or was answered yes.
     pub quit_guard: bool,
@@ -198,6 +200,7 @@ impl MicroParquetApp {
             selected_step: None,
             confirm_delete_step: None,
             insert_after: None,
+            editing: None,
             show_about: false,
             quit_guard: false,
             quit_confirmed: false,
