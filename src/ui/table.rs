@@ -63,6 +63,11 @@ pub fn request_grid_scroll(ctx: &egui::Context, tab_id: u64, x: f32) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid_scroll_x", tab_id)), x));
 }
 
+/// Asks the grid of `tab_id` to scroll its rows to `y` in its next frame (the heading block stays).
+pub fn request_grid_scroll_y(ctx: &egui::Context, tab_id: u64, y: f32) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid_scroll_y", tab_id)), y));
+}
+
 /// The summary row's data for the grid: the computed cells and the user's choices.
 pub struct SummaryView<'a> {
     pub cells: &'a [micro_parquet::summary::SummaryCell],
@@ -275,6 +280,7 @@ impl MicroParquetApp {
         let weight_guess = micro_parquet::tab_jobs::guess_balance_column(df);
         let mut report = GridReport::default();
         let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
+        let want_y = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_y", tab_id))));
 
         // Minimum widths: header, selector, summary and the first 100 rows' texts.
         let kinds: Vec<CellKind> = cols.iter().map(cell_kind).collect();
@@ -339,6 +345,9 @@ impl MicroParquetApp {
                         .resizable(true)
                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                         .column(Column::initial(row_no_min.max(theme::ROW_NO_COL_W)).at_least(row_no_min.max(theme::ROW_NO_MIN_W)));
+                    if let Some(y) = want_y {
+                        builder = builder.vertical_scroll_offset(y);
+                    }
                     for w in &min_widths {
                         builder = builder.column(
                             Column::initial((*w).max(theme::COLUMN_INITIAL_MIN_W).min(MAX_COLUMN_WIDTH))
