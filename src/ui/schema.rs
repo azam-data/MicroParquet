@@ -324,7 +324,7 @@ impl MicroParquetApp {
                         theme::row_label(ui, theme::mono(pii_key_fingerprint(&k)));
                     }
                     Ok(None) => {
-                        ui.label("not created").on_hover_text("It is created the first time a column is masked.");
+                        theme::row_label(ui, egui::RichText::new("not created")).on_hover_text("It is created the first time a column is masked.");
                     }
                     Err(e) => {
                         ui.colored_label(theme::danger(ui), format!("{:#}", e));
