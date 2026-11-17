@@ -816,3 +816,137 @@ fn the_pop_out_window_has_the_same_header_and_cards_at_its_default_and_maximised
         }
     }
 }
+
+// -------------------------------------------------------------------- part 4, item 2: steps panel
+
+use crate::ui::steps::{step_row_head, steps_report, StepRowSpec};
+
+fn right_panel_rect(ctx: &egui::Context) -> egui::Rect {
+    let area = theme::dialog_area(ctx);
+    egui::Rect::from_min_max(egui::pos2(theme::central_area(ctx).right(), area.top()), area.right_bottom())
+}
+
+#[test]
+fn nothing_in_the_steps_panel_passes_its_inner_width_at_both_scales() {
+    use crate::ui::layout_tests::collect_painted;
+    let long = "A_Very_Long_Column_Name_That_Keeps_Going_And_Going_Past_The_Panel";
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)] {
+        let mut app = test_app("p4steps");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        let steps = vec![
+            TransformStep::RenameColumn { old_name: "Branch".into(), new_name: long.into() },
+            TransformStep::FilterRows { column: "Branch".into(), operator: FilterOp::Eq, value: "DHK".into(), keep_matching: true },
+            TransformStep::Skipped { step: Box::new(TransformStep::RenameColumn { old_name: "Balance".into(), new_name: long.into() }) },
+            TransformStep::RenameColumn { old_name: "Amount".into(), new_name: "Amt".into() },
+        ];
+        let n = steps.len();
+        open_tab(&mut app, src, steps);
+        let (ctx, input) = screen(ppp, w, h);
+        for sel in [None, Some(0usize), Some(2), Some(3)] {
+            for confirm in [false, true] {
+                let idx = app.active_tab;
+                app.tabs[idx].step_counts = vec![Some(1_234_567); n + 1];
+                app.selected_step = sel;
+                app.confirm_delete_step = if confirm { sel } else { None };
+                let mut p = None;
+                for _ in 0..3 {
+                    let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+                    p = Some(collect_painted(&out.shapes));
+                }
+                let what = format!("ppp {ppp} {w}x{h}, selected {sel:?}, confirm {confirm}");
+                let rep = steps_report(&ctx).unwrap_or_else(|| panic!("{what}: no steps report"));
+                assert_eq!(rep.rows.len(), n, "{what}");
+                let panel = right_panel_rect(&ctx);
+                if ppp > 1.0 && sel.is_none() && !confirm {
+                    eprintln!("{what}: panel {panel:?} inner {:?}", rep.inner);
+                    for (i, r) in rep.rows.iter().enumerate() {
+                        eprintln!("  step {i}: card {:?} title {:?} tag {:?} (on title {}) count {:?} detail {:?} cut {}/{}", rep.cards[i], r.title, r.tag, r.tag_on_title, r.count, r.detail, r.title_cut, r.detail_cut);
+                    }
+                }
+                assert!(rep.inner.right() <= panel.right() + 0.5 && rep.inner.left() >= panel.left(), "{what}: inner {:?} in panel {panel:?}", rep.inner);
+                for (i, r) in rep.rows.iter().enumerate() {
+                    for (name, b) in [("title", Some(r.title)), ("count", Some(r.count)), ("detail", Some(r.detail)), ("tag", r.tag)].into_iter().filter_map(|(n, b)| b.map(|b| (n, b))) {
+                        if b.is_positive() {
+                            assert!(b.right() <= rep.inner.right() + 0.5 && b.left() >= rep.inner.left() - 0.5, "{what}: step {i} {name} {b:?} passes the panel's inner width {:?}", rep.inner);
+                        }
+                    }
+                    // the title and the count never overlap
+                    assert!(r.title.right() <= r.count.left() + 0.5, "{what}: step {i} title {:?} overlaps the count {:?}", r.title, r.count);
+                    assert!(r.count.right() <= rep.inner.right() + 0.5);
+                }
+                for c in rep.cards.iter().chain(rep.buttons.iter()) {
+                    assert!(c.right() <= rep.inner.right() + 0.5, "{what}: {c:?} passes {:?}", rep.inner);
+                }
+                // every text painted in the panel is inside the inner width
+                let p = p.expect("frames");
+                for (t, b) in &p.boxes {
+                    if b.left() >= panel.left() && b.top() >= panel.top() && b.left() < panel.right() {
+                        assert!(b.right() <= panel.right() - 4.0 + 0.5, "{what}: text '{t}' {b:?} reaches the panel's edge {panel:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_60_character_title_and_a_7_digit_count_keep_the_tag_off_the_title_line_and_end_in_an_ellipsis() {
+    use crate::ui::layout_tests::collect_painted;
+    let title60 = "T".repeat(60);
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)] {
+        let (ctx, input) = screen(ppp, w, h);
+        let tk = theme::LIGHT;
+        let mut app = test_app("p4row");
+        let _ = &mut app;
+        // the width a panel gives a step row (316 less the margins, the rail and the card padding)
+        let row_w = theme::RIGHT_PANEL_W - 2.0 * 16.0 - theme::STEP_LIST_INDENT - 16.0;
+        for (title, tag, count, detail) in [
+            (title60.as_str(), Some(("Off", tk.muted)), "1,234,567", "Rename A_long_old_name_here -> and_an_even_longer_new_name_for_it_still"),
+            ("Filter", Some(("Not run", tk.muted)), "1,234,567", "Branch = DHK"),
+            ("Conditional column", Some(("Error", tk.danger)), "1,234,567", "x"),
+            ("Filter", None, "…", ""),
+        ] {
+            let mut rects = None;
+            let mut p = None;
+            for _ in 0..3 {
+                let out = ctx.run(input.clone(), |c| {
+                    egui::CentralPanel::default().show(c, |ui| {
+                        ui.allocate_ui(egui::vec2(row_w, 200.0), |ui| {
+                            let spec = StepRowSpec { title, struck: false, title_color: tk.ink, tag, count, detail, detail_color: tk.muted };
+                            ui.set_width(row_w);
+                            rects = Some((ui.min_rect(), step_row_head(ui, &spec)));
+                        });
+                    });
+                });
+                p = Some(collect_painted(&out.shapes));
+            }
+            let ((area, r), p) = (rects.expect("rects"), p.expect("p"));
+            let what = format!("ppp {ppp}, title '{}' count {count}", &title[..title.len().min(12)]);
+            let right = area.left() + row_w;
+            assert!(r.title.right() <= r.count.left() + 0.5, "{what}: {:?} {:?}", r.title, r.count);
+            assert!(r.count.right() <= right + 0.5, "{what}: count {:?} passes {right}", r.count);
+            assert!(r.detail.right() <= right + 0.5 || !r.detail.is_positive(), "{what}: detail {:?} passes {right}", r.detail);
+            assert!(r.title.right() <= right + 0.5);
+            if let Some(t) = r.tag {
+                assert!(t.right() <= right + 0.5, "{what}: tag {t:?}");
+                if r.tag_on_title {
+                    assert!(t.right() <= r.count.left() + 0.5 && t.left() >= r.title.right() - 0.5, "{what}: tag between title and count");
+                } else {
+                    assert!(t.top() >= r.title.bottom() - 0.5, "{what}: the tag moved to the detail line {t:?} under the title {:?}", r.title);
+                }
+            }
+            match title.len() {
+                60 => {
+                    assert!(r.title_cut && !r.tag_on_title, "{what}: the long title is cut and gives its tag to the detail line");
+                    assert!(r.detail_cut, "{what}: the long detail is cut as well");
+                    // what is painted ends in an ellipsis
+                    let shown = p.shown.iter().find(|(t, _)| t.starts_with("TTT")).map(|(t, _)| t.clone()).expect("title painted");
+                    assert!(shown.ends_with('\u{2026}') && shown.len() < 60, "{what}: shown '{shown}'");
+                }
+                6 if count != "\u{2026}" => assert!(!r.title_cut && r.tag_on_title, "{what}: 'Filter' + 'Not run' + 1,234,567 fit in {row_w} on one line: {r:?}"),
+                _ => {}
+            }
+            eprintln!("{what}: row {row_w} wide: title {:?} tag {:?} on title {} count {:?} detail {:?} cut {}/{}", r.title, r.tag, r.tag_on_title, r.count, r.detail, r.title_cut, r.detail_cut);
+        }
+    }
+}

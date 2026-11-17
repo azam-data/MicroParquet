@@ -26,6 +26,109 @@ impl Default for MacroState {
     }
 }
 
+/// What the head of one row of the steps list shows.
+pub(crate) struct StepRowSpec<'a> {
+    pub title: &'a str,
+    pub struck: bool,
+    pub title_color: egui::Color32,
+    /// A status word ("Off", "Error", "Not run") and its colour.
+    pub tag: Option<(&'a str, egui::Color32)>,
+    /// The row count ("1,234,567", or "…" while it is being counted).
+    pub count: &'a str,
+    pub detail: &'a str,
+    pub detail_color: egui::Color32,
+}
+
+/// Where the parts of a step row were drawn.
+#[derive(Clone, Copy, Debug)]
+pub struct StepRowRects {
+    pub title: egui::Rect,
+    /// The tag, where it was drawn.
+    pub tag: Option<egui::Rect>,
+    /// The tag is on the title line (it fits there); otherwise it starts the detail line.
+    pub tag_on_title: bool,
+    pub count: egui::Rect,
+    pub detail: egui::Rect,
+    /// The title and the detail line were cut with "…".
+    pub title_cut: bool,
+    pub detail_cut: bool,
+}
+
+/// The steps panel as drawn in the last frame.
+#[derive(Clone, Debug)]
+pub struct StepsReport {
+    /// What the panel leaves inside its margins: nothing may reach past its right edge.
+    pub inner: egui::Rect,
+    pub rows: Vec<StepRowRects>,
+    pub cards: Vec<egui::Rect>,
+    /// The button rows of the selected step.
+    pub buttons: Vec<egui::Rect>,
+}
+
+pub fn steps_report(ctx: &egui::Context) -> Option<StepsReport> {
+    ctx.data(|d| d.get_temp::<StepsReport>(egui::Id::new("steps_report")))
+}
+
+/// The title line (title, status tag, row count) and the detail line of a step row. The count
+/// is at the right edge. The tag is on the title line only if title, tag and count all fit; if
+/// not, it moves to the front of the detail line. A title or detail that is still too long ends
+/// in "…" and shows its whole text on hover. Nothing passes the width `ui` has.
+pub(crate) fn step_row_head(ui: &mut egui::Ui, s: &StepRowSpec) -> StepRowRects {
+    let tk = *theme::tokens(ui.visuals().dark_mode);
+    let w = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let width_of = |ui: &egui::Ui, rt: egui::RichText| {
+        egui::WidgetText::from(rt).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x
+    };
+    let mut title_rt = theme::bold(s.title).color(s.title_color);
+    if s.struck {
+        title_rt = title_rt.strikethrough();
+    }
+    let count_rt = theme::mono(s.count).size(theme::TEXT_COUNT).color(tk.muted);
+    let tag_rt = s.tag.map(|(t, c)| theme::semibold(t).size(theme::TEXT_SMALL).color(c));
+    let (title_w, count_w) = (width_of(ui, title_rt.clone()), width_of(ui, count_rt.clone()));
+    let tag_w = tag_rt.as_ref().map_or(0.0, |t| width_of(ui, t.clone()));
+    let tag_on_title = tag_rt.is_some() && title_w + gap + tag_w + gap + count_w <= w;
+    let title_max = (w - count_w - gap - if tag_on_title { tag_w + gap } else { 0.0 }).max(0.0);
+    let mut rects = StepRowRects {
+        title: egui::Rect::NOTHING,
+        tag: None,
+        tag_on_title,
+        count: egui::Rect::NOTHING,
+        detail: egui::Rect::NOTHING,
+        title_cut: title_w > title_max + 0.5,
+        detail_cut: false,
+    };
+    ui.horizontal(|ui| {
+        let r = ui
+            .scope(|ui| {
+                ui.set_max_width(title_max);
+                ui.add(egui::Label::new(title_rt).truncate())
+            })
+            .inner;
+        rects.title = if rects.title_cut { r.clone().on_hover_text(s.title).rect } else { r.rect };
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            rects.count = ui.label(count_rt).rect;
+            if let (true, Some(t)) = (tag_on_title, tag_rt.clone()) {
+                rects.tag = Some(ui.label(t).rect);
+            }
+        });
+    });
+    if !s.detail.is_empty() || (tag_rt.is_some() && !tag_on_title) {
+        let detail_rt = egui::RichText::new(s.detail).size(theme::TEXT_SMALL).color(s.detail_color);
+        ui.horizontal(|ui| {
+            if let (false, Some(t)) = (tag_on_title, tag_rt) {
+                rects.tag = Some(ui.label(t).rect);
+            }
+            let (avail, dw) = (ui.available_width(), width_of(ui, detail_rt.clone()));
+            let r = ui.add(egui::Label::new(detail_rt).truncate());
+            rects.detail_cut = dw > avail + 0.5;
+            rects.detail = if rects.detail_cut { r.on_hover_text(s.detail).rect } else { r.rect };
+        });
+    }
+    rects
+}
+
 impl MicroParquetApp {
     #[allow(unused_variables)]
     pub(crate) fn render_save_macro_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
@@ -408,7 +511,12 @@ impl MicroParquetApp {
         let mut insert_filter = false;
         let selected = self.selected_step;
         let confirm = self.confirm_delete_step;
+        let mut row_rects: Vec<StepRowRects> = Vec::new();
+        let mut card_rects: Vec<egui::Rect> = Vec::new();
+        let mut button_rects: Vec<egui::Rect> = Vec::new();
+        let mut inner_rect = egui::Rect::NOTHING;
         egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
+            inner_rect = ui.available_rect_before_wrap();
             let Some(tab) = self.tabs.get(self.active_tab) else {
                 return;
             };
@@ -453,22 +561,29 @@ impl MicroParquetApp {
                             .inner_margin(theme::MARGIN_STEP_ROW)
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    let mut t = theme::bold(step.title()).color(title_color);
-                                    if skipped {
-                                        t = t.strikethrough();
-                                    }
-                                    ui.label(t);
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let c = if beyond { None } else { tab.step_counts.get(i + 1).copied() };
-                                        ui.label(theme::mono(count_text(c)).size(theme::TEXT_COUNT).color(tk.muted));
-                                    });
-                                });
-                                ui.label(
-                                    egui::RichText::new(step.short_label())
-                                        .size(theme::TEXT_SMALL)
-                                        .color(if issue.is_some() { tk.danger } else { tk.muted }),
-                                );
+                                // (the card sits in a left-to-right row: its lines stack in their own column)
+                                ui.vertical(|ui| {
+                                let tag = if issue.is_some() {
+                                    Some(("Error", tk.danger))
+                                } else if skipped {
+                                    Some(("Off", tk.muted))
+                                } else if beyond {
+                                    Some(("Not run", tk.muted))
+                                } else {
+                                    None
+                                };
+                                let c = if beyond { None } else { tab.step_counts.get(i + 1).copied() };
+                                let detail = step.short_label();
+                                let spec = StepRowSpec {
+                                    title: step.title(),
+                                    struck: skipped,
+                                    title_color,
+                                    tag,
+                                    count: &count_text(c),
+                                    detail: &detail,
+                                    detail_color: if issue.is_some() { tk.danger } else { tk.muted },
+                                };
+                                row_rects.push(step_row_head(ui, &spec));
                                 if let Some(x) = issue {
                                     ui.label(egui::RichText::new(&x.reason).size(theme::TEXT_SMALL).color(tk.danger));
                                 } else if beyond {
@@ -480,7 +595,8 @@ impl MicroParquetApp {
                                 }
                                 if is_sel {
                                     ui.add_space(theme::SPACE_XS);
-                                    ui.horizontal(|ui| {
+                                    // wraps to a second line instead of passing the panel's edge
+                                    let buttons = ui.horizontal_wrapped(|ui| {
                                         ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
                                         let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
                                         let edit = ui.add_enabled(editable, egui::Button::new(theme::ph::PENCIL_SIMPLE));
@@ -519,8 +635,11 @@ impl MicroParquetApp {
                                             ask_delete = Some(i);
                                         }
                                     });
+                                    button_rects.push(buttons.response.rect);
                                 }
+                                });
                             });
+                        card_rects.push(card.response.rect);
                         card.response
                     });
                     let rect = out.inner.rect;
@@ -553,7 +672,10 @@ impl MicroParquetApp {
                 None => "+ Add step at the end".to_string(),
             };
             ui.add_space(theme::SPACE_S);
-            ui.menu_button(egui::RichText::new(label).size(theme::TEXT_SMALL).color(tk.ink2), |ui| {
+            let insert = egui::menu::menu_custom_button(
+                ui,
+                egui::Button::new(egui::RichText::new(&label).size(theme::TEXT_SMALL).color(tk.ink2)).truncate(),
+                |ui| {
                 ui.label(theme::label_text("The next step you apply goes here").color(tk.muted));
                 if ui.button(format!("{}  Filter", theme::ph::FUNNEL)).clicked() {
                     insert_filter = true;
@@ -577,7 +699,9 @@ impl MicroParquetApp {
                         ui.close_menu();
                     }
                 }
-            });
+            },
+            );
+            insert.response.on_hover_text(&label);
             if tab.history.can_undo() || tab.history.can_redo() {
                 ui.horizontal(|ui| {
                     if ui.add_enabled(tab.history.can_undo(), egui::Button::new("Undo")).on_hover_text("Ctrl+Z").clicked() {
@@ -603,6 +727,8 @@ impl MicroParquetApp {
                 });
             });
         });
+
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("steps_report"), StepsReport { inner: inner_rect, rows: row_rects, cards: card_rects, buttons: button_rects }));
 
         if open_schema {
             self.open_schema_modal_for_active_tab();
