@@ -278,6 +278,10 @@ fn guide_rate_shock_nii() {
         cutoff_date: "2026-10-31".into(),
         shock_bps: 100.0,
         side_col: Some("Side".into()),
+        reprice_col: None,
+        beta_file: None,
+        product_col: None,
+        floor_pct: None,
     };
     let out = run_steps("g_nii", &df, &[step]).expect("the rate shock runs");
     // the figures of review.rs t10_nii_shock_signs
@@ -285,10 +289,67 @@ fn guide_rate_shock_nii() {
     close(nii[0], 7_534.25, 0.01, "loan ΔNII");
     close(nii[1], -7_534.25, 0.01, "deposit ΔNII");
     close(floats(&out, "Shocked_Annual_Int")[1], 97_534.25, 0.01, "deposit interest after the shock");
+
+    // Phase 4 V5: a floating loan, a savings account with a beta, and the floor
+    let book = frame(vec![
+        text("Product", &["FLOAT LOAN", "SAVINGS"]),
+        text("Side", &["Asset", "Liability"]),
+        nums("Balance", &[1_000_000.0, 1_000_000.0]),
+        nums("Rate", &[12.0, 1.5]),
+        dates("Matdat", &["2030-06-30", ""]),
+        dates("Reprice", &["2026-11-30", ""]),
+    ]);
+    let base = RateShockSpec {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        shock_bps: 100.0,
+        side_col: Some("Side".into()),
+        reprice_col: None,
+        beta_file: None,
+        product_col: None,
+        floor_pct: None,
+    };
+    let betas = vec![("SAVINGS".to_string(), 0.4)];
+    let run = |s: &RateShockSpec, b: &[(String, f64)]| apply_rate_shock_with(book.clone().lazy(), s, b).expect("runs").collect().expect("collect");
+    let plain = run(&base, &[]);
+    let with = run(&RateShockSpec { reprice_col: Some("Reprice".into()), beta_file: Some("deposit_betas".into()), product_col: Some("Product".into()), ..base.clone() }, &betas);
+    close(floats(&plain, "NII_Impact_BDT")[0], 0.0, 1e-9, "no repricing date: matures after 12 months");
+    close(floats(&with, "NII_Impact_BDT")[0], 9_178.08, 0.005, "reprices in 30 days");
+    close(floats(&with, "NII_Impact_BDT")[1], -4_000.0, 0.005, "savings at a beta of 40%");
+    let fall = RateShockSpec { shock_bps: -200.0, ..base.clone() };
+    let no_floor = run(&fall, &[]);
+    let floored = run(&RateShockSpec { floor_pct: Some(0.0), ..fall.clone() }, &[]);
+    close(floats(&no_floor, "NII_Impact_BDT")[1], 20_000.0, 0.005, "no floor");
+    close(floats(&floored, "NII_Impact_BDT")[1], 15_000.0, 0.005, "floor 0%");
+    let floor_table = format!(
+        "| Floor | NII_Impact_BDT of SAVINGS |\n| --- | ---: |\n| none | {} |\n| 0.00% | {} |",
+        money(floats(&no_floor, "NII_Impact_BDT")[1].unwrap_or(f64::NAN)),
+        money(floats(&floored, "NII_Impact_BDT")[1].unwrap_or(f64::NAN))
+    );
+
+    // the repricing-gap summary
+    let gap_in = frame(vec![
+        text("Side", &["Asset", "Asset", "Liability", "Liability", "Asset", "Liability"]),
+        nums("Balance", &[100.0, 200.0, 50.0, 80.0, 300.0, 40.0]),
+        nums("Rate", &[10.0; 6]),
+        dates("Matdat", &["2026-11-15", "2027-01-15", "2027-03-15", "2027-08-01", "2030-01-01", ""]),
+    ]);
+    let gap = build_repricing_gap(gap_in.clone().lazy(), &base, &[]).expect("the summary builds");
+    assert_eq!(floats(&gap, "Gap")[5], Some(430.0));
     check_guide(
         "rate-shock-nii",
         "guide_rate_shock_nii",
-        &[md(&df, &["Product", "Side", "Balance:2", "Rate:2", "Matdat"]), md(&out, &["Product", "Current_Annual_Int:2", "NII_Impact_BDT:2", "Shocked_Annual_Int:2"])],
+        &[
+            md(&df, &["Product", "Side", "Balance:2", "Rate:2", "Matdat"]),
+            md(&out, &["Product", "Current_Annual_Int:2", "NII_Impact_BDT:2", "Shocked_Annual_Int:2"]),
+            md(&book, &["Product", "Side", "Balance:2", "Rate:2", "Matdat", "Reprice"]),
+            md(&with, &["Product", "NII_Impact_BDT:2"]),
+            floor_table,
+            md(&gap_in, &["Side", "Balance:2", "Matdat"]),
+            md(&gap, &["Repricing bucket", "Assets:2", "Liabilities:2", "Gap:2", "Cumulative gap:2", "\u{394}NII (BDT):2"]),
+        ],
     );
 }
 

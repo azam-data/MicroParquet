@@ -1391,6 +1391,10 @@ fn t15_python_codegen_drops_banking_steps() {
             cutoff_date: "2026-10-31".into(),
             shock_bps: 100.0,
             side_col: Some("Side".into()),
+            reprice_col: None,
+            beta_file: None,
+            product_col: None,
+            floor_pct: None,
         },
     ];
     let col_cfg = |name: &str, dtype, pii_mask| ColumnSchemaConfig {
@@ -2785,6 +2789,10 @@ fn t19c_blank_balance_notes_for_limit_nii_and_duration() {
         cutoff_date: "2026-10-31".into(),
         shock_bps: 200.0,
         side_col: None,
+        reprice_col: None,
+        beta_file: None,
+        product_col: None,
+        floor_pct: None,
     };
     let dur = TransformStep::DurationAnalysis {
         bal_col: "Balance".into(),

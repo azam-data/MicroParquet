@@ -1547,6 +1547,20 @@ pub enum TransformStep {
         /// Asset/liability side column; None = old macro, treated as asset (flagged in output)
         #[serde(default)]
         side_col: Option<String>,
+        /// The date a floating rate reprices (V5): the effective repricing date is the earlier of
+        /// this and the maturity. `None`: the maturity (every step saved before Phase 4).
+        #[serde(default)]
+        reprice_col: Option<String>,
+        /// A file in `portable_data/betas` (without `.json`) with the pass-through % of each
+        /// product; products that are not in it pass through 100%.
+        #[serde(default)]
+        beta_file: Option<String>,
+        /// The column with the product codes the beta file is read against.
+        #[serde(default)]
+        product_col: Option<String>,
+        /// The shocked rate never goes below this (percent); the rate change is cut to fit.
+        #[serde(default)]
+        floor_pct: Option<f64>,
     },
     FtpCurveMap {
         opndat_col: String,
@@ -1894,6 +1908,13 @@ pub enum TabSource {
         bal_col: String,
         rate_col: Option<String>,
         cl_status_col: Option<String>,
+    },
+    /// The repricing-gap summary of a rate shock (Phase 4 V5): the tab's rows (its source and
+    /// steps) put into repricing buckets, with the ΔNII of the shock in `spec`.
+    RepricingGap {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::banking::RateShockSpec,
     },
     /// The liquidity gap ladder (Phase 4 V3): inflows and outflows of the chosen tabs by maturity bucket.
     GapLadder {

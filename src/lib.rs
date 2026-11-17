@@ -1,6 +1,7 @@
 //! Library crate for MicroParquet: the calculation modules used by the UI binary and the tests.
 
 pub mod banking;
+pub mod betas;
 pub mod batch;
 pub mod column_stats;
 pub mod commands;

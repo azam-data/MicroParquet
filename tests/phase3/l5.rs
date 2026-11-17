@@ -174,6 +174,10 @@ fn rich_recipe() -> MacroRecipe {
                 cutoff_date: "2026-10-31".into(),
                 shock_bps: 100.0,
                 side_col: Some("Side".into()),
+                reprice_col: None,
+                beta_file: None,
+                product_col: None,
+                floor_pct: None,
             },
             TransformStep::FtpCurveMap {
                 opndat_col: "Opndat".into(),

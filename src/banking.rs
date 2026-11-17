@@ -228,35 +228,233 @@ pub fn apply_rate_shock_sim(
     shock_bps: f64,
     side_col: Option<&str>,
 ) -> Result<LazyFrame> {
-    let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
-        .context("Cutoff Date must be YYYY-MM-DD")?;
-    let lf = ensure_date(lf, mat_col)?;
-    let (lf, sign) = direction_sign(lf, side_col)?;
+    let spec = RateShockSpec {
+        bal_col: bal_col.to_string(),
+        rate_col: rate_col.to_string(),
+        mat_col: mat_col.to_string(),
+        cutoff_date: cutoff_date.to_string(),
+        shock_bps,
+        side_col: side_col.map(str::to_string),
+        reprice_col: None,
+        beta_file: None,
+        product_col: None,
+        floor_pct: None,
+    };
+    apply_rate_shock_with(lf, &spec, &[])
+}
+
+/// Everything the rate-shock step takes (the dialog, the step and the repricing-gap tab share it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateShockSpec {
+    pub bal_col: String,
+    pub rate_col: String,
+    pub mat_col: String,
+    pub cutoff_date: String,
+    pub shock_bps: f64,
+    pub side_col: Option<String>,
+    pub reprice_col: Option<String>,
+    pub beta_file: Option<String>,
+    pub product_col: Option<String>,
+    pub floor_pct: Option<f64>,
+}
+
+fn given(c: &Option<String>) -> Option<&str> {
+    c.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The beta of each row, as the share of the shock its rate follows: 1.0 for a product that is
+/// not in the file (and for a row with no product).
+fn beta_factor_expr(product_col: &str, betas: &[(String, f64)]) -> Expr {
+    let code = normalise_code_expr(col(product_col));
+    betas.iter().rev().fold(lit(1.0), |acc, (k, b)| when(code.clone().eq(lit(k.clone()))).then(lit(*b)).otherwise(acc))
+}
+
+/// How many rows have a product the beta file does not list (a blank product is one of them).
+pub fn count_unmapped_products(lf: LazyFrame, product_col: &str, betas: &[(String, f64)]) -> Result<usize> {
+    let known = betas.iter().fold(lit(false), |acc, (k, _)| acc.or(normalise_code_expr(col(product_col)).eq(lit(k.clone()))));
+    let df = lf
+        .select([known.fill_null(lit(false)).not().cast(DataType::Int64).sum().alias("n")])
+        .collect()
+        .with_context(|| format!("Could not check the products of '{}' against the beta file", product_col))?;
+    Ok(df.column("n")?.i64()?.get(0).unwrap_or(0) as usize)
+}
+
+/// The effective repricing date of each row as days since 1970 (null when there is none): the
+/// earlier of the repricing date and the maturity, or the maturity when there is no repricing date.
+fn effective_days_expr(spec: &RateShockSpec) -> Expr {
+    let mat = col(spec.mat_col.as_str()).cast(DataType::Int32).cast(DataType::Int64);
+    match given(&spec.reprice_col) {
+        None => mat,
+        Some(r) => {
+            let rep = col(r).cast(DataType::Int32).cast(DataType::Int64);
+            when(rep.clone().is_null())
+                .then(mat.clone())
+                .when(mat.clone().is_null())
+                .then(rep.clone())
+                .when(rep.clone().lt_eq(mat.clone()))
+                .then(rep)
+                .otherwise(mat)
+        }
+    }
+}
+
+/// ΔNII with the options of Phase 4 V5. `betas` is the content of the beta file (`spec.beta_file`
+/// is read by the caller, so a test or a headless run needs no folder). With no option set the
+/// result is exactly what the step gave before.
+///
+/// * `reprice_col`: a deal reprices on the earlier of that date and its maturity.
+/// * betas: the shock is multiplied by the product's pass-through; an unmapped product passes 100%.
+/// * `floor_pct`: a fall in the rate stops at the floor; the change is cut to what fits.
+pub fn apply_rate_shock_with(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<LazyFrame> {
+    let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, &spec.mat_col)?;
+    let lf = match given(&spec.reprice_col) {
+        Some(r) => ensure_date(lf, r)?,
+        None => lf,
+    };
+    let (lf, sign) = direction_sign(lf, spec.side_col.as_deref())?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
+    if let Some(f) = spec.floor_pct {
+        if !f.is_finite() {
+            bail!("ΔNII: the floor is not a number.");
+        }
+    }
+    if given(&spec.beta_file).is_some() && given(&spec.product_col).is_none() {
+        bail!("ΔNII: choose the product column the beta file is read against.");
+    }
 
-    let bal = col(bal_col).cast(DataType::Float64).fill_null(lit(0.0));
-    let rate = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0));
-    let shock_pct = shock_bps / 100.0;
+    let bal = col(spec.bal_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+    let rate = col(spec.rate_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+    let shock_pct = spec.shock_bps / 100.0;
 
-    let rem_days = col(mat_col).cast(DataType::Int32).cast(DataType::Int64) - lit(cutoff_days);
+    // days to the effective repricing date; blank maturity (no date at all) reprices at once
+    let repricing_weight = if given(&spec.reprice_col).is_none() {
+        let rem_days = col(spec.mat_col.as_str()).cast(DataType::Int32).cast(DataType::Int64) - lit(cutoff_days);
+        when(col(spec.mat_col.as_str()).is_null().or(rem_days.clone().lt_eq(lit(0))))
+            .then(lit(1.0))
+            .when(rem_days.clone().gt(lit(365)))
+            .then(lit(0.0))
+            .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0))
+    } else {
+        let eff = effective_days_expr(spec);
+        let rem_days = eff.clone() - lit(cutoff_days);
+        when(eff.is_null().or(rem_days.clone().lt_eq(lit(0))))
+            .then(lit(1.0))
+            .when(rem_days.clone().gt(lit(365)))
+            .then(lit(0.0))
+            .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0))
+    };
 
-    let repricing_weight = when(col(mat_col).is_null().or(rem_days.clone().lt_eq(lit(0))))
-        .then(lit(1.0))
-        .when(rem_days.clone().gt(lit(365)))
-        .then(lit(0.0))
-        .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0));
-
-    let current_int = (bal.clone() * (rate / lit(100.0))).alias("Current_Annual_Int");
-    // Change in the interest amount (income on assets, expense on liabilities), always >= 0 for a rise.
-    let int_change = bal * repricing_weight * lit(shock_pct / 100.0);
-    // NII effect: a rate rise adds income on assets (+) and adds cost on liabilities (-).
+    let current_int = (bal.clone() * (rate.clone() / lit(100.0))).alias("Current_Annual_Int");
+    // the change in the rate, as a fraction: the shock, times the pass-through, cut by the floor
+    let rate_change: Expr = if given(&spec.beta_file).is_none() && spec.floor_pct.is_none() {
+        lit(shock_pct / 100.0)
+    } else {
+        let beta = match (given(&spec.beta_file), given(&spec.product_col)) {
+            (Some(_), Some(p)) => beta_factor_expr(p, betas),
+            _ => lit(1.0),
+        };
+        let delta = lit(shock_pct) * beta;
+        let delta = match spec.floor_pct {
+            // a fall stops at the floor; a rate already at or under it does not fall; a rise is untouched
+            Some(f) => when(delta.clone().lt(lit(0.0)))
+                .then(when((lit(f) - rate.clone()).gt(delta.clone())).then(lit(f) - rate.clone()).otherwise(delta.clone()).clip_max(lit(0.0)))
+                .otherwise(delta),
+            None => delta,
+        };
+        delta / lit(100.0)
+    };
+    // Change in the interest amount (income on assets, expense on liabilities).
+    let int_change = bal * repricing_weight * rate_change;
     let nii_impact = (int_change.clone() * sign).alias("NII_Impact_BDT");
     let shocked_int = (col("Current_Annual_Int") + int_change).alias("Shocked_Annual_Int");
 
-    Ok(lf
-        .with_columns([current_int, nii_impact])
-        .with_column(shocked_int))
+    Ok(lf.with_columns([current_int, nii_impact]).with_column(shocked_int))
+}
+
+// ----------------------------------------------------------------------------- repricing gap
+
+/// The buckets of the repricing-gap summary, nearest first.
+pub const REPRICING_BUCKETS: [&str; 5] = ["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m/non-repricing"];
+pub const REPRICING_TOTAL_ROW: &str = "Total";
+
+/// The repricing-gap summary of a book: for each repricing bucket the assets, the liabilities
+/// (negative), their sum (the gap), the cumulative gap and the ΔNII of the shock (with the same
+/// reprice date, betas and floor as the step), then a Total row. Rows that reprice at once
+/// (blank date, or a date on or before the cutoff) are in the first bucket; days to the
+/// effective repricing date 1 to 30, 31 to 90, 91 to 180 and 181 to 365 are in the next four,
+/// later or never in the last.
+pub fn build_repricing_gap(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<DataFrame> {
+    let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
+    let cutoff_days = (cutoff - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for the repricing gap")?;
+    let dt = schema.get(spec.bal_col.as_str()).cloned().ok_or_else(|| anyhow!("Column '{}' was not found. Choose the balance column again.", spec.bal_col))?;
+    if !dt.is_numeric() {
+        bail!("The balance column '{}' is {}, not a number. Set it to a number in the schema first.", spec.bal_col, dt);
+    }
+    let shocked = apply_rate_shock_with(lf, spec, betas)?;
+    let (shocked, sign) = direction_sign(shocked, spec.side_col.as_deref())?;
+    let _ = sign;
+    let eff = effective_days_expr(spec);
+    let rem = eff.clone() - lit(cutoff_days);
+    let bucket = when(eff.is_null().or(rem.clone().lt_eq(lit(0))))
+        .then(lit(0i32))
+        .when(rem.clone().lt_eq(lit(30)))
+        .then(lit(0i32))
+        .when(rem.clone().lt_eq(lit(90)))
+        .then(lit(1i32))
+        .when(rem.clone().lt_eq(lit(180)))
+        .then(lit(2i32))
+        .when(rem.lt_eq(lit(365)))
+        .then(lit(3i32))
+        .otherwise(lit(4i32))
+        .alias("__bucket");
+    let bal = col(spec.bal_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+    let side = match spec.side_col.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => side_sign_expr(col(s)),
+        None => lit(1.0),
+    };
+    let df = shocked
+        .with_column(bucket)
+        .group_by([col("__bucket")])
+        .agg([
+            when(side.clone().gt(lit(0.0))).then(bal.clone()).otherwise(lit(0.0)).sum().alias("__a"),
+            when(side.lt(lit(0.0))).then(bal).otherwise(lit(0.0)).sum().alias("__l"),
+            col("NII_Impact_BDT").sum().alias("__n"),
+        ])
+        .collect()
+        .context("Could not calculate the repricing gap")?;
+    let idx: Vec<Option<i32>> = df.column("__bucket")?.i32()?.into_iter().collect();
+    let (a, l, n) = (df.column("__a")?.f64()?, df.column("__l")?.f64()?, df.column("__n")?.f64()?);
+    let mut assets = [0.0f64; 5];
+    let mut liabs = [0.0f64; 5];
+    let mut nii = [0.0f64; 5];
+    for (i, b) in idx.iter().enumerate() {
+        let Some(b) = b else { continue };
+        let b = (*b).clamp(0, 4) as usize;
+        assets[b] += a.get(i).unwrap_or(0.0);
+        liabs[b] -= l.get(i).unwrap_or(0.0);
+        nii[b] += n.get(i).unwrap_or(0.0);
+    }
+    let gap: Vec<f64> = assets.iter().zip(&liabs).map(|(x, y)| x + y).collect();
+    let mut run = 0.0;
+    let cum: Vec<f64> = gap.iter().map(|g| { run += g; run }).collect();
+    let mut names: Vec<String> = REPRICING_BUCKETS.iter().map(|s| s.to_string()).collect();
+    names.push(REPRICING_TOTAL_ROW.to_string());
+    let with_total = |v: &[f64]| -> Vec<f64> { let mut o = v.to_vec(); o.push(v.iter().sum()); o };
+    let mut cumulative: Vec<Option<f64>> = cum.iter().map(|x| Some(*x)).collect();
+    cumulative.push(None);
+    DataFrame::new(vec![
+        Series::new("Repricing bucket".into(), names),
+        Series::new("Assets".into(), with_total(&assets)),
+        Series::new("Liabilities".into(), with_total(&liabs)),
+        Series::new("Gap".into(), with_total(&gap)),
+        Series::new("Cumulative gap".into(), cumulative),
+        Series::new("\u{394}NII (BDT)".into(), with_total(&nii)),
+    ])
+    .context("Could not arrange the repricing gap")
 }
 
 /// Feature B2: Automated FTP (Fund Transfer Pricing) Yield Curve Mapper using Tenor Days

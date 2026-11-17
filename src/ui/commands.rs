@@ -163,7 +163,10 @@ impl MicroParquetApp {
                 self.rate_band.presets = RateBandDef::load_all_presets(&self.paths.rate_bands_file());
                 self.active_tool = ActiveToolModal::RateBand;
             }
-            CommandId::RateShock => self.active_tool = ActiveToolModal::RateShockSim,
+            CommandId::RateShock => {
+                self.shock.reload_beta_files();
+                self.active_tool = ActiveToolModal::RateShockSim;
+            }
             CommandId::Duration => self.active_tool = ActiveToolModal::DurationAnalysis,
             CommandId::Ftp => {
                 self.ftp.reload_store();

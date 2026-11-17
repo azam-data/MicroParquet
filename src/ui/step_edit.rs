@@ -129,6 +129,10 @@ impl MicroParquetApp {
                 cutoff_date: self.buckets.cutoff.clone(),
                 shock_bps: self.shock.bps,
                 side_col: side(),
+                reprice_col: self.shock.reprice_choice(),
+                beta_file: self.shock.beta_choice(),
+                product_col: self.shock.product_choice(),
+                floor_pct: self.shock.floor_choice(),
             },
             ActiveToolModal::DurationAnalysis => TransformStep::DurationAnalysis {
                 bal_col: self.duration.bal_col.clone(),
@@ -266,7 +270,13 @@ impl MicroParquetApp {
                 self.buckets.null_sight = null_as_sight;
                 self.buckets.new_col = new_col;
             }
-            TransformStep::RateShockSim { bal_col, rate_col, mat_col, cutoff_date, shock_bps, side_col } => {
+            TransformStep::RateShockSim { bal_col, rate_col, mat_col, cutoff_date, shock_bps, side_col, reprice_col, beta_file, product_col, floor_pct } => {
+                self.shock.reprice_col = reprice_col.unwrap_or_default();
+                self.shock.beta_file = beta_file.unwrap_or_default();
+                self.shock.product_col = product_col.unwrap_or_default();
+                self.shock.use_floor = floor_pct.is_some();
+                self.shock.floor_pct = floor_pct.unwrap_or(0.0);
+                self.shock.reload_beta_files();
                 self.shock.bal_col = bal_col;
                 self.shock.rate_col = rate_col;
                 self.shock.mat_col = mat_col;

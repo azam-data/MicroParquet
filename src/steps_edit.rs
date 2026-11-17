@@ -196,6 +196,7 @@ pub fn source_files(source: &TabSource) -> Vec<&Path> {
             v
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
+        TabSource::RepricingGap { source, .. } => source_files(source),
     }
 }
 
@@ -230,7 +231,16 @@ pub fn pipeline_hash(source: &TabSource, steps: &[TransformStep]) -> u64 {
     if steps.iter().any(uses_curve_store) {
         crate::curves::curves_stamp().hash(&mut h);
     }
+    // so does a rate shock that reads a beta file
+    if steps.iter().any(uses_beta_file) {
+        crate::betas::betas_stamp().hash(&mut h);
+    }
     h.finish()
+}
+
+/// True for a rate-shock step (turned off or not) that reads a beta file.
+fn uses_beta_file(step: &TransformStep) -> bool {
+    matches!(step.inner(), TransformStep::RateShockSim { beta_file: Some(b), .. } if !b.trim().is_empty())
 }
 
 /// True for an FTP step (turned off or not) that takes its curve from the store.

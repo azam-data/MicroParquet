@@ -1,7 +1,7 @@
 use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
-    apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
+    apply_maturity_bucket, apply_rate_shock_with, build_period_reconcile_lazy, RateShockSpec,
     ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
@@ -1625,6 +1625,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(curr_source, out);
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
+        TabSource::RepricingGap { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1641,6 +1642,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
+        TabSource::RepricingGap { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1779,6 +1781,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
+        TabSource::RepricingGap { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2351,6 +2354,11 @@ pub fn compile_tab_lazy(
                 cl_status_col.as_deref(),
             )?
         }
+        TabSource::RepricingGap { source, steps, spec } => {
+            let input = compile_tab_lazy(source, steps, temp_dir)?;
+            let betas = rate_shock_betas(spec)?;
+            crate::banking::build_repricing_gap(input, spec, &betas)?.lazy()
+        }
         TabSource::GapLadder {
             inputs,
             preset,
@@ -2579,15 +2587,26 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             cutoff_date,
             shock_bps,
             side_col,
-        } => apply_rate_shock_sim(
-            lf,
-            bal_col,
-            rate_col,
-            mat_col,
-            cutoff_date,
-            *shock_bps,
-            side_col.as_deref(),
-        ),
+            reprice_col,
+            beta_file,
+            product_col,
+            floor_pct,
+        } => {
+            let spec = RateShockSpec {
+                bal_col: bal_col.clone(),
+                rate_col: rate_col.clone(),
+                mat_col: mat_col.clone(),
+                cutoff_date: cutoff_date.clone(),
+                shock_bps: *shock_bps,
+                side_col: side_col.clone(),
+                reprice_col: reprice_col.clone(),
+                beta_file: beta_file.clone(),
+                product_col: product_col.clone(),
+                floor_pct: *floor_pct,
+            };
+            let betas = rate_shock_betas(&spec)?;
+            apply_rate_shock_with(lf, &spec, &betas)
+        }
         TransformStep::FtpCurveMap {
             opndat_col,
             matdat_col,
@@ -2703,6 +2722,14 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 .context("SQL execution failed (use table name 'self')")?;
             Ok(res_lf)
         }
+    }
+}
+
+/// The betas a rate-shock step reads: the content of its beta file, or none when it has none.
+pub fn rate_shock_betas(spec: &RateShockSpec) -> Result<Vec<(String, f64)>> {
+    match spec.beta_file.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => crate::betas::load_beta_file(&crate::betas::betas_dir(), name),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -3392,6 +3419,21 @@ pub fn blank_balance_notes(
                     n,
                     FTP_MISSING_DATE
                 ));
+            }
+        }
+        if let TransformStep::RateShockSim { beta_file: Some(bf), product_col: Some(pc), .. } = step {
+            if !bf.trim().is_empty() && !pc.trim().is_empty() {
+                let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+                let betas = crate::betas::load_beta_file(&crate::betas::betas_dir(), bf)?;
+                let n = crate::banking::count_unmapped_products(input, pc, &betas)?;
+                if n > 0 {
+                    notes.push(format!(
+                        "{}: {} row(s) have a product that is not in the beta file '{}' (or no product): they pass through 100%",
+                        step.short_label(),
+                        n,
+                        bf
+                    ));
+                }
             }
         }
         let bal = match step {

@@ -11,3 +11,4 @@ mod v3_support {
     pub use micro_parquet::banking::*;
 }
 mod v4;
+mod v5;

@@ -594,7 +594,8 @@ fn gap_preset() -> CustomBucketDef {
 
 fn dated(name: &str, days: &[&str]) -> Series {
     let day = |s: &str| (chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").expect("date") - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch")).num_days() as i32;
-    Series::new(name.into(), days.iter().map(|d| day(d)).collect::<Vec<_>>()).cast(&polars::prelude::DataType::Date).expect("Date")
+    // an empty text is a blank date
+    Series::new(name.into(), days.iter().map(|d| if d.is_empty() { None } else { Some(day(d)) }).collect::<Vec<Option<i32>>>()).cast(&polars::prelude::DataType::Date).expect("Date")
 }
 
 /// An "Assets" and a "Liabilities" tab and the preset "Test ladder" saved for the bucketer.
@@ -971,4 +972,158 @@ fn yield_curves_is_a_banking_command_under_treasury_and_alm_and_the_search_finds
         assert_eq!(COMMANDS[ranked[0]].id, CommandId::YieldCurves, "{q}");
     }
     assert!(command(CommandId::YieldCurves).map(|c| c.needs == Needs::Nothing).unwrap_or(false), "it needs no open tab");
+}
+
+// ------------------------------------------------------------ V5: ΔNII options and repricing gap
+
+fn shock_title() -> &'static str {
+    "\u{E154} Interest Rate Shock / ΔNII Sensitivity Simulator"
+}
+
+fn shock_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let betas = root.join("betas");
+    std::fs::create_dir_all(&betas).expect("betas folder");
+    std::fs::write(betas.join("deposit_betas.json"), r#"{"source":"test","betas":[{"product":"SAVINGS","beta_pct":40}]}"#).expect("beta file");
+    micro_parquet::betas::set_betas_dir_override(Some(betas));
+    let df = DataFrame::new(vec![
+        Series::new("Product".into(), &["FLOAT LOAN", "SAVINGS", "FDR"]),
+        Series::new("Side".into(), &["Asset", "Liability", "Liability"]),
+        Series::new("Balance".into(), &[1_000_000.0, 1_000_000.0, 500_000.0]),
+        Series::new("Rate".into(), &[12.0, 1.5, 7.0]),
+        dated("Matdat", &["2030-06-30", "", "2027-03-15"]),
+        dated("Reprice", &["2026-11-30", "", "2027-03-15"]),
+    ])
+    .expect("book");
+    let src = parquet_source(&root, "book", df);
+    open_tab(&mut app, src, vec![]);
+    app.buckets.cutoff = "2026-10-31".into();
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn scroll_dialog_to_bottom(rig: &mut Rig, body: egui::Rect) -> Painted {
+    for _ in 0..4 {
+        rig.step(vec![egui::Event::PointerMoved(body.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -700.0), modifiers: egui::Modifiers::NONE }]);
+    }
+    rig.draw(2)
+}
+
+#[test]
+fn the_rate_shock_dialog_takes_a_repricing_date_a_beta_file_and_a_floor_and_makes_the_step_and_the_gap_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = shock_rig("p4v5a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::RateShock);
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, shock_title(), &what);
+        assert_eq!(rig.app.shock.beta_files, vec!["deposit_betas".to_string()], "{what}: the beta files are listed");
+        // the new rows, below the old ones
+        let p2 = scroll_dialog_to_bottom(&mut rig, r.body);
+        let r = assert_dialog_fits(&rig.ctx, shock_title(), &what);
+        for t in ["Repricing Date Col:", "Beta file:", "Product Col:", "Floor the shocked rate at", "earlier of this date and its maturity", "portable_data/betas"] {
+            assert!(p2.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        for t in ["Run Rate Shock Simulation", "Repricing gap summary", "Cancel"] {
+            assert!(p2.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.footer)), "{what}: '{t}' is in the footer {:?}", r.footer);
+        }
+        let _ = p;
+        // choose a repricing column, a beta file and a product column by real clicks; floor by state
+        let p = rig.draw(2);
+        let rep = click_text(&mut rig, &p, "(none: use the maturity)", egui::Rect::EVERYTHING);
+        // near the bottom of the window the list is short and scrolls: bring Reprice into it
+        let at = rep.boxes.iter().filter(|(t, _)| t == "Side").map(|(_, b)| b.center()).last().expect("the list is open");
+        let mut rep = rep;
+        for _ in 0..3 {
+            rep = rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -300.0), modifiers: egui::Modifiers::NONE }]);
+        }
+        let _ = rep;
+        let rep = rig.draw(2);
+        let pick = rep.boxes.iter().filter(|(t, b)| t == "Reprice" && b.top() > 400.0).map(|(_, b)| *b).last().expect("the list offers Reprice");
+        rig.click(pick.center());
+        assert_eq!(rig.app.shock.reprice_col, "Reprice", "{what}");
+        let p = rig.draw(2);
+        let beta = click_text(&mut rig, &p, "(none: every product 100%)", egui::Rect::EVERYTHING);
+        let pick = beta.boxes.iter().filter(|(t, _)| t == "deposit_betas").map(|(_, b)| *b).last().expect("the list offers the file");
+        assert!(inside(pick, rig.ctx.screen_rect()), "{what}: the list of files is inside the window");
+        rig.click(pick.center());
+        assert_eq!(rig.app.shock.beta_file, "deposit_betas", "{what}");
+        rig.app.shock.product_col = "Product".into();
+        rig.app.shock.side_col = "Side".into();
+        rig.app.shock.bal_col = "Balance".into();
+        rig.app.shock.rate_col = "Rate".into();
+        rig.app.shock.mat_col = "Matdat".into();
+        rig.app.shock.use_floor = true;
+        rig.app.shock.floor_pct = 0.0;
+        rig.app.shock.bps = -200.0;
+        match rig.app.tool_step(&ActiveToolModal::RateShockSim) {
+            Some(TransformStep::RateShockSim { reprice_col, beta_file, product_col, floor_pct, shock_bps, .. }) => {
+                assert_eq!((reprice_col.as_deref(), beta_file.as_deref(), product_col.as_deref(), floor_pct, shock_bps), (Some("Reprice"), Some("deposit_betas"), Some("Product"), Some(0.0), -200.0), "{what}");
+            }
+            other => panic!("{what}: {other:?}"),
+        }
+        let p = scroll_dialog_to_bottom(&mut rig, r.body);
+        assert_dialog_fits(&rig.ctx, shock_title(), &what);
+        // the repricing-gap summary: a click makes its own tab
+        let tabs = rig.app.tabs.len();
+        click_text(&mut rig, &p, "Repricing gap summary", egui::Rect::EVERYTHING);
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), tabs + 1, "{what}: the summary is a new tab");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        let tab = rig.app.tabs.last().expect("tab");
+        assert!(tab.title.starts_with("Repricing gap ("), "{}", tab.title);
+        let names: Vec<String> = tab.cached_slice.get_column_names().iter().map(|n| n.to_string()).collect();
+        assert_eq!(names, vec!["Repricing bucket", "Assets", "Liabilities", "Gap", "Cumulative gap", "\u{394}NII (BDT)"], "{what}");
+        assert_eq!(tab.cached_slice.height(), 6, "{what}: five buckets and the total");
+        // the summary of the shock the step makes: the same total
+        let total: Vec<Option<f64>> = tab.cached_slice.column("\u{394}NII (BDT)").expect("col").f64().expect("f64").into_iter().collect();
+        // loan: reprices in 30 days, -2% cut by the floor of 0 (rate 12%, so no cut): -2% x 1,000,000 x 335/365; savings 40% of -2% at 0.8% fits above 0: +8,000; FDR (no beta: 100%) 7% to 5%: +10,000 x (365-135)/365
+        let w = |d: f64| (365.0 - d) / 365.0;
+        let want = -1_000_000.0 * 0.02 * w(30.0) + 1_000_000.0 * 0.008 + 500_000.0 * 0.02 * w(135.0);
+        assert!((total[5].unwrap_or(f64::NAN) - want).abs() < 0.01, "{what}: the total ΔNII of the summary {:?} against {want}", total[5]);
+        // run the step itself: a new tab with the same total
+        rig.app.active_tab = 0;
+        rig.app.run_command(&rig.ctx, CommandId::RateShock);
+        rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, shock_title(), &what);
+        let p = scroll_dialog_to_bottom(&mut rig, r.body);
+        click_text(&mut rig, &p, "Run Rate Shock Simulation", egui::Rect::EVERYTHING);
+        rig.draw(6);
+        let tab = rig.app.tabs.last().expect("the shock tab");
+        let nii: f64 = tab.cached_slice.column("NII_Impact_BDT").expect("col").f64().expect("f64").into_iter().flatten().sum();
+        assert!((nii - want).abs() < 0.01, "{what}: the detail {nii} and the summary {want} agree");
+        micro_parquet::betas::set_betas_dir_override(None);
+    }
+}
+
+#[test]
+fn the_repricing_gap_tab_shows_its_table_inside_the_window_and_the_note_counts_unmapped_products() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = shock_rig("p4v5b", ppp, w, h);
+        let what = rig.what.clone();
+        // a step with a beta file that lacks two of the three products: the status line says so
+        let step = TransformStep::RateShockSim {
+            bal_col: "Balance".into(),
+            rate_col: "Rate".into(),
+            mat_col: "Matdat".into(),
+            cutoff_date: "2026-10-31".into(),
+            shock_bps: 100.0,
+            side_col: Some("Side".into()),
+            reprice_col: Some("Reprice".into()),
+            beta_file: Some("deposit_betas".into()),
+            product_col: Some("Product".into()),
+            floor_pct: None,
+        };
+        rig.app.push_step_to_active_tab(step, false);
+        rig.draw(6);
+        assert!(rig.app.status_message.contains("2 row(s)") && rig.app.status_message.contains("not in the beta file 'deposit_betas'"), "{what}: {}", rig.app.status_message);
+        let p = rig.draw(2);
+        // the message is drawn in the status bar inside the window
+        let msg = p.boxes.iter().find(|(t, _)| t.contains("not in the beta file")).map(|(_, b)| *b);
+        if let Some(b) = msg {
+            assert!(inside(b, rig.ctx.screen_rect()), "{what}: the status message {b:?} is inside the window");
+        }
+        micro_parquet::betas::set_betas_dir_override(None);
+    }
 }
