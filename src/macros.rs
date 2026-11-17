@@ -53,6 +53,33 @@ pub fn python_untranslated_steps(steps: &[TransformStep]) -> Vec<String> {
         .collect()
 }
 
+/// Python mirror of `engine::natural_sort_key` and of the sort keys of a sort step.
+const PY_NATURAL_KEY_HELPER: &str = r#"import re as _re
+
+
+def _mp_natural_key(v):
+    """Same order as MicroParquet: case-insensitive, numbers inside text by value."""
+    if v is None:
+        return None
+    out = []
+    for part in _re.split(r"([0-9]+)", v.lower()):
+        if part[:1].isascii() and part[:1].isdigit():
+            d = part.lstrip("0") or "0"
+            out.append("%04d%s" % (min(len(d), 9999), d))
+        else:
+            out.append(part)
+    return "".join(out)
+
+
+def _mp_sort_key(e, dtype):
+    if dtype != pl.Utf8:
+        return e
+    blank = e.str.strip_chars() == ""
+    return pl.when(blank).then(None).otherwise(e).map_elements(_mp_natural_key, return_dtype=pl.Utf8)
+
+
+"#;
+
 /// Python mirror of `engine::parse_banking_amount` (P1 rules), emitted when a column is typed
 /// Float64 or Int64. Keep the two in step.
 const PY_AMOUNT_HELPER: &str = r#"import re as _re
@@ -411,12 +438,16 @@ pub fn generate_python_polars_code(
             }
             TransformStep::SortRows { levels } => {
                 if !levels.is_empty() {
-                    // Blank text counts as blank (last), like the app.
+                    if !py.contains("def _mp_natural_key") {
+                        py.push_str(PY_NATURAL_KEY_HELPER);
+                    }
+                    // Blank text counts as blank (last), like the app; other text sorts by its
+                    // natural key (case-insensitive, numbers by value). Other types sort as they are.
                     let keys: Vec<String> = levels
                         .iter()
                         .map(|l| {
                             format!(
-                                "pl.when(pl.col(\"{c}\").cast(pl.Utf8).str.strip_chars() == \"\").then(None).otherwise(pl.col(\"{c}\"))",
+                                "_mp_sort_key(pl.col(\"{c}\"), lf.collect_schema()[\"{c}\"])",
                                 c = l.column
                             )
                         })

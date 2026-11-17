@@ -32,7 +32,8 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 | 4 Step-check errors surface | DONE | 964b714 | fixes.rs: a source that cannot be read gives a refresh error starting "Could not check the steps…" with "—" totals and an out-of-date page; Load fails with the same reason | see spec |
 | 5 Close: cancel, delete .part, ask during export | DONE | 7434fd4 | src/ui/tests.rs: closing during a stuck export asks first (nothing cancelled), then after "Cancel export and quit" cancels, deletes the .part file and exits; closing with only a refresh running does not ask and the job stops | see spec |
 | 6 Row-count cache keyed on source identity | DONE | d2b84cf | fixes.rs: counts kept when nothing changed, only the source and first-step counts kept when the last step changes, none kept for another ingestion setting, another path or the same path rewritten; src/ui/tests.rs: a replaced file under the same steps is recounted (5, 4 instead of the old 3, 2) | none |
-| 7 Undo covers steps, control column, summary, formats | DONE | (this) | src/ui/tests.rs: control column, summary choice and a pivot with formats undone one by one (baseline recomputed) and redone; Columns-dialog formats undone with their step in one undo | see spec |
+| 7 Undo covers steps, control column, summary, formats | DONE | fdbbff8 | src/ui/tests.rs: control column, summary choice and a pivot with formats undone one by one (baseline recomputed) and redone; Columns-dialog formats undone with their step in one undo | see spec |
+| 8 Text sort: case-insensitive natural order | DONE | (this) | fixes.rs: "Branch 2" < "Branch 10", case and leading zeros ignored, ties stable ascending and descending, blanks last; the Python key gives the same keys as the app (run with python3) | see spec |
 
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).
@@ -41,11 +42,11 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 
 - Q3 (L1): please add `SourceSans3-Regular.ttf`, `-Semibold.ttf`, `-Bold.ttf` to `assets/fonts/` (my session could not fetch them) and look at the whole layout against `docs/design/Combined.dc.html`.
 
-- Q4 (T2): should text sort ignore case ("ctg" next to "CTG")? It is byte order now.
+- Q4 (T2): answered: case-insensitive natural order, stable ties (fix 8).
 
-- Q5 (T3): numeric columns that hold rates ("Int Rate") default to Sum as the spec says; a weighted average or no summary would be more useful. Should rate columns default to Average?
+- Q5 (T3): answered: rate-like columns default to W.Avg by the control column (fix 9).
 
-- Q6 (T4): Edit works for filters and sorts only. Do you want every step type editable in place (the Banking tools included)?
+- Q6 (T4): answered: every step with a modal is editable in place (fix 10).
 
 ## Notes
 - Disk: the test binaries are ~1.5 GB each (debug info). If a build fails with "No space left on device", delete executables in `target/debug/deps` (not rlibs) and `target/debug/incremental`; never `cargo clean`.

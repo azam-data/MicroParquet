@@ -2319,11 +2319,21 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 let dtype = schema.get(l.column.as_str()).ok_or_else(|| {
                     anyhow::anyhow!("Sort: column '{}' was not found. Pick it again in the sort editor.", l.column)
                 })?;
-                // Blank text sorts with the nulls: last, in either direction.
+                // Blank text sorts with the nulls: last, in either direction. Other text sorts by
+                // its natural key: case-insensitive, numbers inside the text by value.
                 keys.push(if dtype.is_string() {
                     when(col(l.column.as_str()).str().strip_chars(lit(NULL)).eq(lit("")))
                         .then(lit(NULL).cast(DataType::String))
                         .otherwise(col(l.column.as_str()))
+                        .map(
+                            |s: Series| {
+                                let ca = s.str()?;
+                                let out: StringChunked =
+                                    ca.into_iter().map(|v| v.map(natural_sort_key)).collect();
+                                Ok(Some(out.with_name(s.name().clone()).into_series()))
+                            },
+                            GetOutput::from_type(DataType::String),
+                        )
                 } else {
                     col(l.column.as_str())
                 });
@@ -2804,6 +2814,37 @@ pub fn mask_pii_value(val: &str, mode: PiiMaskMode, key: &[u8; 32]) -> String {
             format!("ACCT_{}", safe)
         }
     }
+}
+
+/// The key text is sorted by (T2, owner answer Q4): case-insensitive, and every run of digits
+/// compared by its value ("Branch 2" before "Branch 10"). A digit run is written as its length
+/// (four digits) and its digits without leading zeros, so byte order of the keys is the natural
+/// order; equal keys ("CTG" and "ctg", "02" and "2") are ties and keep their earlier order.
+/// The Python export mirrors this (`_mp_natural_key`).
+pub fn natural_sort_key(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut out = String::with_capacity(lower.len() + 8);
+    let mut chars = lower.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            let mut digits = String::new();
+            while let Some(&d) = chars.peek() {
+                if !d.is_ascii_digit() {
+                    break;
+                }
+                digits.push(d);
+                chars.next();
+            }
+            let t = digits.trim_start_matches('0');
+            let t = if t.is_empty() { "0" } else { t };
+            out.push_str(&format!("{:04}", t.len().min(9999)));
+            out.push_str(t);
+        } else {
+            out.push(c);
+            chars.next();
+        }
+    }
+    out
 }
 
 pub fn fetch_viewport_slice(lf: LazyFrame, offset: usize, limit: usize) -> Result<DataFrame> {

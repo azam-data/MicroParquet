@@ -190,3 +190,75 @@ fn fix6_row_counts_are_keyed_on_the_source_and_the_step_prefix() {
     ParquetWriter::new(std::fs::File::create(path).unwrap()).finish(&mut df).unwrap();
     assert_eq!(reusable_counts(&keys, &counts, &count_keys(&src, &steps)), vec![None, None, None]);
 }
+
+// ---------------------------------------------------------------------------------- fix 8
+
+fn sort_rows(df: DataFrame, levels: Vec<SortLevel>) -> Vec<Option<String>> {
+    let d = dir(&format!("f8_{}", levels.len() + levels.iter().filter(|l| l.descending).count() * 10));
+    let src = parquet(&d, "s", df);
+    let lf = micro_parquet::engine::compile_tab_lazy(&src, &[TransformStep::SortRows { levels }], &d).unwrap();
+    let out = lf.collect().unwrap();
+    out.column("Id").unwrap().str().unwrap().into_iter().map(|v| v.map(String::from)).collect()
+}
+
+fn branches() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Id".into(), &["a", "b", "c", "d", "e", "f", "g", "h"]).into(),
+        Series::new(
+            "Branch".into(),
+            &[Some("Branch 10"), Some("branch 2"), Some("Branch 2"), Some("BRANCH 1"), Some(""), None, Some("Branch 02"), Some("ctg")],
+        )
+        .into(),
+    ])
+    .unwrap()
+}
+
+fn ids(v: &[&str]) -> Vec<Option<String>> {
+    v.iter().map(|s| Some(s.to_string())).collect()
+}
+
+#[test]
+fn fix8_text_sorts_case_insensitive_with_numbers_by_value_and_stable_ties() {
+    use micro_parquet::engine::natural_sort_key as k;
+    assert!(k("Branch 2") < k("Branch 10"), "Branch 2 before Branch 10");
+    assert!(k("Branch 9") < k("Branch 10") && k("A1B2") < k("a1b10"));
+    assert_eq!(k("CTG"), k("ctg"), "case is ignored");
+    assert_eq!(k("Branch 02"), k("Branch 2"), "the value of a number counts, not its zeros");
+    assert!(k("DHK") > k("ctg"), "c before D once case is ignored");
+    assert!(k("x0") < k("x00001"));
+
+    let asc = sort_rows(branches(), vec![SortLevel { column: "Branch".into(), descending: false }]);
+    // BRANCH 1; the three 2s in their source order; Branch 10; ctg; blanks last ("" then null)
+    assert_eq!(asc, ids(&["d", "b", "c", "g", "a", "h", "e", "f"]));
+    let desc = sort_rows(branches(), vec![SortLevel { column: "Branch".into(), descending: true }]);
+    // ties keep their source order in either direction; blanks are still last
+    assert_eq!(desc, ids(&["h", "a", "b", "c", "g", "d", "e", "f"]));
+}
+
+#[test]
+fn fix8_python_sort_key_matches_the_app() {
+    use micro_parquet::macros::generate_python_polars_code;
+    let step = TransformStep::SortRows { levels: vec![SortLevel { column: "Branch".into(), descending: false }] };
+    let py = generate_python_polars_code(Path::new("x.parquet"), true, &IngestionConfig::default(), &[step], None).unwrap();
+    assert!(py.contains("_mp_sort_key(pl.col(\"Branch\")"), "{py}");
+    assert!(py.contains("nulls_last=True, maintain_order=True"));
+    // run the helper (it needs no Polars) and compare its keys with the app's
+    let start = py.find("def _mp_natural_key").unwrap();
+    let end = py.find("def _mp_sort_key").unwrap();
+    let samples = ["Branch 10", "branch 2", "Branch 02", "CTG", "A1B10", "x0", "Dhaka-007 Main", "Ünïcode 3"];
+    let script = format!(
+        "import re as _re\n{}\nimport json, sys\nprint(json.dumps([_mp_natural_key(s) for s in json.loads(sys.argv[1])]))\n",
+        &py[start..end]
+    );
+    let out = match std::process::Command::new("python3").arg("-c").arg(&script).arg(serde_json::to_string(&samples).unwrap()).output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("python3 is not available ({e}); the Python key was not compared");
+            return;
+        }
+    };
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got: Vec<String> = serde_json::from_slice(&out.stdout).unwrap();
+    let want: Vec<String> = samples.iter().map(|s| micro_parquet::engine::natural_sort_key(s)).collect();
+    assert_eq!(got, want);
+}
