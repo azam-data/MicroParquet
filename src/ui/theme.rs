@@ -271,89 +271,45 @@ pub fn label_text(text: impl Into<String>) -> RichText {
     RichText::new(text).size(TEXT_LABEL)
 }
 
-/// Where Source Sans 3 is looked for: next to the executable, one level up (development builds),
-/// and the source tree the program was built from.
-fn sans_font_dirs() -> Vec<std::path::PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(d) = exe.parent() {
-            dirs.push(d.join("assets").join("fonts"));
-            if let Some(up) = d.parent() {
-                dirs.push(up.join("assets").join("fonts"));
-                if let Some(up2) = up.parent() {
-                    dirs.push(up2.join("assets").join("fonts"));
-                }
-            }
-        }
-    }
-    dirs.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join("fonts"));
-    dirs
-}
-
-fn read_sans(file: &str) -> Option<Vec<u8>> {
-    sans_font_dirs().into_iter().find_map(|d| std::fs::read(d.join(file)).ok())
-}
-
-/// Loads the fonts: JetBrains Mono (bundled in the program), Source Sans 3 (the TTF files in
-/// `assets/fonts/`; without them the UI keeps egui's default text font) and the Phosphor icons.
-/// Returns true when Source Sans 3 was found.
-pub fn load_fonts(ctx: &egui::Context) -> bool {
+/// The fonts the program draws with, all compiled into it (no font file is read at run time):
+/// Source Sans 3 Regular / SemiBold / Bold for text, JetBrains Mono Regular / SemiBold for
+/// numbers, and Phosphor for icons. Licences: `assets/fonts/OFL-*` and `THIRD_PARTY_NOTICES.md`.
+pub fn font_definitions() -> egui::FontDefinitions {
     use egui::FontData;
     let mut fonts = egui::FontDefinitions::default();
     let proportional_defaults = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mono_defaults = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
 
-    fonts.font_data.insert(
-        "jbm-regular".into(),
-        FontData::from_static(include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf")),
-    );
-    fonts.font_data.insert(
-        "jbm-semibold".into(),
-        FontData::from_static(include_bytes!("../../assets/fonts/JetBrainsMono-SemiBold.ttf")),
-    );
-
-    let mut sans_found = false;
-    let mut sans_keys: [Option<&str>; 3] = [None, None, None];
-    for (i, (key, file)) in [
-        ("sans-regular", "SourceSans3-Regular.ttf"),
-        ("sans-semibold-font", "SourceSans3-Semibold.ttf"),
-        ("sans-bold-font", "SourceSans3-Bold.ttf"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if let Some(bytes) = read_sans(file) {
-            fonts.font_data.insert(key.into(), FontData::from_owned(bytes));
-            sans_keys[i] = Some(key);
-        }
-    }
-    if sans_keys[0].is_some() {
-        sans_found = true;
+    let embedded: [(&str, &'static [u8]); 5] = [
+        ("sans-regular", include_bytes!("../../assets/fonts/SourceSans3-Regular.ttf")),
+        ("sans-semibold-font", include_bytes!("../../assets/fonts/SourceSans3-Semibold.ttf")),
+        ("sans-bold-font", include_bytes!("../../assets/fonts/SourceSans3-Bold.ttf")),
+        ("jbm-regular", include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf")),
+        ("jbm-semibold", include_bytes!("../../assets/fonts/JetBrainsMono-SemiBold.ttf")),
+    ];
+    for (key, bytes) in embedded {
+        fonts.font_data.insert(key.into(), FontData::from_static(bytes));
     }
 
-    // Proportional: Source Sans 3 first, then egui's own fallbacks.
-    if let Some(k) = sans_keys[0] {
-        let mut list = vec![k.to_string()];
-        list.extend(proportional_defaults.iter().cloned());
-        fonts.families.insert(FontFamily::Proportional, list);
-    }
+    // Proportional: Source Sans 3 first, then egui's own fallbacks (symbols, emoji).
+    let mut prop = vec!["sans-regular".to_string()];
+    prop.extend(proportional_defaults.iter().cloned());
+    fonts.families.insert(FontFamily::Proportional, prop.clone());
     // Monospace: JetBrains Mono first.
     let mut mono_list = vec!["jbm-regular".to_string()];
     mono_list.extend(mono_defaults.iter().cloned());
-    fonts.families.insert(FontFamily::Monospace, mono_list);
+    fonts.families.insert(FontFamily::Monospace, mono_list.clone());
 
-    // Named families always exist (egui panics on an unknown family); they fall back to the
-    // regular fonts when a weight is missing.
-    let named = |first: Option<&str>, base: &Vec<String>| -> Vec<String> {
-        let mut v: Vec<String> = first.map(|k| vec![k.to_string()]).unwrap_or_default();
+    // The weights are families of their own (egui has no font-weight): the weight first, then the
+    // regular fonts as fallback.
+    let with_first = |first: &str, base: &[String]| -> Vec<String> {
+        let mut v = vec![first.to_string()];
         v.extend(base.iter().cloned());
         v
     };
-    let prop_now = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    fonts.families.insert(family_semibold(), named(sans_keys[1], &prop_now));
-    fonts.families.insert(family_bold(), named(sans_keys[2].or(sans_keys[1]), &prop_now));
-    let mono_now = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
-    fonts.families.insert(family_mono_semibold(), named(Some("jbm-semibold"), &mono_now));
+    fonts.families.insert(family_semibold(), with_first("sans-semibold-font", &prop));
+    fonts.families.insert(family_bold(), with_first("sans-bold-font", &prop));
+    fonts.families.insert(family_mono_semibold(), with_first("jbm-semibold", &mono_list));
 
     // Icons: Phosphor, as a fallback behind the first font of every family.
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -363,8 +319,12 @@ pub fn load_fonts(ctx: &egui::Context) -> bool {
             list.insert(at, "phosphor".into());
         }
     }
-    ctx.set_fonts(fonts);
-    sans_found
+    fonts
+}
+
+/// Installs the program's fonts.
+pub fn load_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions());
 }
 
 // -------------------------------------------------------------------------------------- style

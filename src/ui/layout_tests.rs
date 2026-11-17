@@ -645,3 +645,69 @@ fn bytes_are_written_in_the_unit_a_banker_reads() {
     assert_eq!(format_bytes(4_194_304), "4.0 MB");
     assert_eq!(format_bytes(5_368_709_120), "5.0 GB");
 }
+
+// ------------------------------------------------------------------------- fonts (layout 7)
+
+#[test]
+fn all_fonts_are_compiled_in_and_wired_to_their_families() {
+    let fonts = theme::font_definitions();
+    for key in ["sans-regular", "sans-semibold-font", "sans-bold-font", "jbm-regular", "jbm-semibold", "phosphor"] {
+        assert!(fonts.font_data.contains_key(key), "font {key}");
+    }
+    let first = |f: egui::FontFamily| fonts.families.get(&f).and_then(|v| v.first().cloned()).unwrap_or_default();
+    assert_eq!(first(egui::FontFamily::Proportional), "sans-regular");
+    assert_eq!(first(theme::family_semibold()), "sans-semibold-font");
+    assert_eq!(first(theme::family_bold()), "sans-bold-font");
+    assert_eq!(first(egui::FontFamily::Monospace), "jbm-regular");
+    assert_eq!(first(theme::family_mono_semibold()), "jbm-semibold");
+    // the compiled-in bytes are the files in assets/fonts (so a changed file is picked up by a build)
+    for (key, file) in [
+        ("sans-regular", "SourceSans3-Regular.ttf"),
+        ("sans-semibold-font", "SourceSans3-Semibold.ttf"),
+        ("sans-bold-font", "SourceSans3-Bold.ttf"),
+        ("jbm-regular", "JetBrainsMono-Regular.ttf"),
+        ("jbm-semibold", "JetBrainsMono-SemiBold.ttf"),
+    ] {
+        let on_disk = std::fs::read(format!("assets/fonts/{file}")).expect("font file in the repository");
+        assert_eq!(fonts.font_data[key].font.as_ref(), on_disk.as_slice(), "{key} is {file}");
+    }
+}
+
+#[test]
+fn the_text_font_really_is_source_sans_3_and_the_number_font_jetbrains_mono() {
+    // Different fonts measure the same text differently; compare with egui's own default font.
+    let width = |fonts: egui::FontDefinitions, family: egui::FontFamily| {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        let _ = ctx.run(Default::default(), |_| {});
+        ctx.fonts(|f| f.layout_no_wrap("Fixed term deposit 20400-01".into(), egui::FontId::new(14.0, family), egui::Color32::WHITE).size().x)
+    };
+    let ours = theme::font_definitions();
+    let sans = width(ours.clone(), egui::FontFamily::Proportional);
+    let default = width(egui::FontDefinitions::default(), egui::FontFamily::Proportional);
+    assert!((sans - default).abs() > 1.0, "Source Sans 3 is not egui's default font: {sans} vs {default}");
+    // JetBrains Mono: every character the same width (26 characters at 14 px)
+    let mono_a = width(ours.clone(), egui::FontFamily::Monospace);
+    assert!((mono_a / 27.0 - 0.6 * 14.0).abs() < 1.0, "mono advance is 0.6 em: {}", mono_a / 27.0);
+}
+
+#[test]
+fn no_font_is_read_from_disk_at_run_time_and_one_licence_file_per_family() {
+    let theme_src = std::fs::read_to_string("src/ui/theme.rs").expect("theme.rs");
+    // (the strings are built here so this test does not match itself)
+    for banned in [["current", "_exe"].concat(), ["CARGO_MANIFEST", "_DIR"].concat(), ["fs::", "read("].concat(), ["read", "_sans"].concat()] {
+        assert!(!theme_src.contains(&banned), "theme.rs still has `{banned}`");
+    }
+    assert!(theme_src.matches("include_bytes!").count() >= 5, "all five fonts are compiled in");
+    let names: Vec<String> = std::fs::read_dir("assets/fonts")
+        .expect("assets/fonts")
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect();
+    let ofl_source_sans = names.iter().filter(|n| n.to_lowercase().contains("ofl") && n.to_lowercase().contains("sourcesans3")).count();
+    assert_eq!(ofl_source_sans, 1, "one Source Sans 3 licence file: {names:?}");
+    assert!(names.iter().any(|n| n == "OFL-SourceSans3.md") && names.iter().any(|n| n == "OFL-JetBrainsMono.txt"));
+    let notices = std::fs::read_to_string("THIRD_PARTY_NOTICES.md").expect("notices");
+    assert!(notices.contains("OFL-SourceSans3.md") && notices.contains("OFL-JetBrainsMono.txt"));
+    assert!(notices.contains("SourceSans3-Regular") || notices.contains("SourceSans3-*.ttf"));
+    assert!(!notices.contains("not in this repository"), "the notices no longer say the TTFs are missing");
+}
