@@ -5,47 +5,105 @@
 use crate::ui::prelude::*;
 use micro_parquet::commands::{self as cmds, CommandGroup, CommandId};
 
-/// A toolbar group, in the order it is drawn (and the reverse of the order it folds).
+/// One item of the toolbar: a command button, or one of the two menus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BarGroup {
-    /// Open / Stack / Batch.
-    Files,
-    /// Filter / Sort / Columns / Calc column / Pivot.
-    Transform,
-    /// The Banking menu.
+pub enum BarKey {
+    Cmd(CommandId),
     Banking,
-    /// The Export menu.
     Export,
 }
 
-pub const BAR_GROUPS: [BarGroup; 4] = [BarGroup::Files, BarGroup::Transform, BarGroup::Banking, BarGroup::Export];
+/// The toolbar items in the order they are drawn, with the group each belongs to (groups are
+/// separated by a thin line): Open / Stack / Batch | Filter / Sort / Columns / Calc column /
+/// Pivot | Banking | Export.
+pub const BAR_ITEMS: [(BarKey, usize); 10] = [
+    (BarKey::Cmd(CommandId::OpenFile), 0),
+    (BarKey::Cmd(CommandId::Stack), 0),
+    (BarKey::Cmd(CommandId::Batch), 0),
+    (BarKey::Cmd(CommandId::Filter), 1),
+    (BarKey::Cmd(CommandId::Sort), 1),
+    (BarKey::Cmd(CommandId::Columns), 1),
+    (BarKey::Cmd(CommandId::CalcColumn), 1),
+    (BarKey::Cmd(CommandId::Pivot), 1),
+    (BarKey::Banking, 2),
+    (BarKey::Export, 3),
+];
 
-/// Which groups are drawn and how wide the search box is.
+/// The order in which items fold into More when space runs out, first to last. Open, Banking and
+/// Export are not in it: they never fold.
+pub const FOLD_ORDER: [BarKey; 7] = [
+    BarKey::Cmd(CommandId::CalcColumn),
+    BarKey::Cmd(CommandId::Columns),
+    BarKey::Cmd(CommandId::Batch),
+    BarKey::Cmd(CommandId::Stack),
+    BarKey::Cmd(CommandId::Sort),
+    BarKey::Cmd(CommandId::Filter),
+    BarKey::Cmd(CommandId::Pivot),
+];
+
+/// The states the bar goes through as the window gets narrower: (items folded, icon-only).
+/// The first item folds, and if space is still short the buttons become icon-only (with
+/// tooltips) before another item folds; from then on items fold one by one in icon-only mode.
+pub const LADDER: [(usize, bool); 8] =
+    [(0, false), (1, false), (1, true), (2, true), (3, true), (4, true), (5, true), (6, true)];
+
+/// How the bar is laid out: how many items of `FOLD_ORDER` are in More, whether the buttons show
+/// only their icons, and how wide the search box is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BarPlan {
-    /// The first `shown` groups are drawn; the rest are in the More menu.
-    pub shown: usize,
+    pub folded: usize,
+    pub icon_only: bool,
     pub search_w: f32,
 }
 
-/// Decides how many groups fit. `avail` is the width of the bar's content, `fixed` the mark and
-/// the File / View / Help menus, `group_w` each group's width, `more_w` the More button and
-/// `gap` what lies between two items (spacing and separator). The search box gets what is left,
-/// at least `SEARCH_MIN_W` while there is room for it.
-pub fn plan_bar(avail: f32, fixed: f32, group_w: &[f32], more_w: f32, gap: f32) -> BarPlan {
-    let left = |k: usize| -> f32 {
-        fixed + group_w.iter().take(k).map(|w| gap + w).sum::<f32>() + gap + more_w
-    };
-    let mut shown = 0;
-    for k in 1..=group_w.len() {
-        if left(k) + gap + theme::SEARCH_MIN_W <= avail {
-            shown = k;
-        } else {
+impl BarPlan {
+    pub fn is_folded(&self, key: BarKey) -> bool {
+        FOLD_ORDER.iter().take(self.folded).any(|k| *k == key)
+    }
+}
+
+/// Width of everything left of the search box in a state of the ladder.
+fn left_width(fixed: f32, label_w: &[f32; 10], icon_w: &[f32; 10], more_w: f32, gap: f32, item_gap: f32, folded: usize, icon_only: bool) -> f32 {
+    let plan = BarPlan { folded, icon_only, search_w: 0.0 };
+    let mut w = fixed;
+    let mut last_group = usize::MAX;
+    let mut in_group = 0;
+    for (i, (key, group)) in BAR_ITEMS.iter().enumerate() {
+        if plan.is_folded(*key) {
+            continue;
+        }
+        if *group != last_group {
+            w += gap;
+            last_group = *group;
+            in_group = 0;
+        }
+        if in_group > 0 {
+            w += item_gap;
+        }
+        in_group += 1;
+        w += if icon_only { icon_w[i] } else { label_w[i] };
+    }
+    w + gap + more_w
+}
+
+/// Decides the state of the bar: the first state of the ladder in which everything fits with the
+/// search box at least `SEARCH_MIN_W` wide. `avail` is the width of the bar's content, `fixed`
+/// the mark and the File / View / Help menus, `label_w` / `icon_w` the width of each item of
+/// `BAR_ITEMS` with its label and icon-only, `more_w` the More button, `gap` what lies between
+/// two groups and `item_gap` between two items. When even the last state does not fit, it is
+/// still the last state: Open, Banking and Export are never folded.
+pub fn plan_bar(avail: f32, fixed: f32, label_w: &[f32; 10], icon_w: &[f32; 10], more_w: f32, gap: f32, item_gap: f32) -> BarPlan {
+    let mut chosen = LADDER[LADDER.len() - 1];
+    for (folded, icon_only) in LADDER {
+        let left = left_width(fixed, label_w, icon_w, more_w, gap, item_gap, folded, icon_only);
+        if left + gap + theme::SEARCH_MIN_W <= avail {
+            chosen = (folded, icon_only);
             break;
         }
     }
-    let room = avail - left(shown) - gap;
-    BarPlan { shown, search_w: room.clamp(theme::SEARCH_ICON_W, theme::SEARCH_MAX_W) }
+    let left = left_width(fixed, label_w, icon_w, more_w, gap, item_gap, chosen.0, chosen.1);
+    let room = avail - left - gap;
+    BarPlan { folded: chosen.0, icon_only: chosen.1, search_w: room.clamp(theme::SEARCH_ICON_W, theme::SEARCH_MAX_W) }
 }
 
 /// Width of a text in the body font.
@@ -66,48 +124,75 @@ fn menu_label(icon: &str, label: &str) -> String {
     format!("{}  {}  {}", icon, label, theme::ph::CARET_DOWN)
 }
 
-fn commands_width(ui: &egui::Ui, ids: &[CommandId]) -> f32 {
-    let texts: Vec<String> = ids
-        .iter()
-        .map(|id| {
-            let label = crate::ui::commands::toolbar_label(*id);
-            let icon = crate::ui::commands::command_icon(*id);
-            if label.is_empty() {
+fn menu_icon_label(icon: &str) -> String {
+    format!("{}  {}", icon, theme::ph::CARET_DOWN)
+}
+
+/// The text of an item's button, with its label or icon-only.
+fn item_text(key: BarKey, icon_only: bool) -> String {
+    match key {
+        BarKey::Cmd(id) => {
+            let label = crate::ui::commands::toolbar_label(id);
+            let icon = crate::ui::commands::command_icon(id);
+            if icon_only || label.is_empty() {
                 icon.to_string()
             } else {
                 format!("{}  {}", icon, label)
             }
-        })
-        .collect();
-    texts.iter().map(|t| button_w(ui, t)).sum::<f32>() + ui.spacing().item_spacing.x * ids.len().saturating_sub(1) as f32
+        }
+        BarKey::Banking => {
+            if icon_only {
+                menu_icon_label(theme::ph::BANK)
+            } else {
+                menu_label(theme::ph::BANK, "Banking")
+            }
+        }
+        BarKey::Export => {
+            if icon_only {
+                menu_icon_label(theme::ph::EXPORT)
+            } else {
+                menu_label(theme::ph::EXPORT, "Export")
+            }
+        }
+    }
+}
+
+/// The name an icon-only item shows as its tooltip.
+fn item_name(key: BarKey) -> &'static str {
+    match key {
+        BarKey::Cmd(id) => crate::ui::commands::toolbar_label(id),
+        BarKey::Banking => "Banking",
+        BarKey::Export => "Export",
+    }
 }
 
 /// The widths the plan needs, measured with the fonts and spacing the bar is drawn with.
 pub struct BarWidths {
     pub fixed: f32,
-    pub groups: [f32; 4],
+    pub label: [f32; 10],
+    pub icon: [f32; 10],
     pub more: f32,
     pub gap: f32,
+    pub item_gap: f32,
 }
 
 fn measure(ui: &egui::Ui) -> BarWidths {
     let sp = ui.spacing().item_spacing.x;
-    let fixed = theme::APP_MARK_SIZE
-        + ["File", "View", "Help"].iter().map(|t| sp + button_w(ui, t)).sum::<f32>();
-    let groups = [
-        commands_width(ui, cmds::TOOLBAR_BUTTONS_FILE),
-        commands_width(ui, cmds::TOOLBAR_BUTTONS_TRANSFORM),
-        button_w(ui, &menu_label(theme::ph::BANK, "Banking")),
-        button_w(ui, &menu_label(theme::ph::EXPORT, "Export")),
-    ];
+    let fixed = theme::APP_MARK_SIZE + ["File", "View", "Help"].iter().map(|t| sp + button_w(ui, t)).sum::<f32>();
+    let mut label = [0.0; 10];
+    let mut icon = [0.0; 10];
+    for (i, (key, _)) in BAR_ITEMS.iter().enumerate() {
+        label[i] = button_w(ui, &item_text(*key, false));
+        icon[i] = button_w(ui, &item_text(*key, true));
+    }
     let more = button_w(ui, &menu_label(theme::ph::DOTS_THREE, "More"));
-    BarWidths { fixed, groups, more, gap: sp + theme::BAR_SEPARATOR_W + sp }
+    BarWidths { fixed, label, icon, more, gap: sp + theme::BAR_SEPARATOR_W + sp, item_gap: sp }
 }
 
 /// The plan for a bar `avail` wide, measured with `ui`'s fonts and spacing.
 pub fn plan_for(ui: &egui::Ui, avail: f32) -> BarPlan {
     let w = measure(ui);
-    plan_bar(avail, w.fixed, &w.groups, w.more, w.gap)
+    plan_bar(avail, w.fixed, &w.label, &w.icon, w.more, w.gap, w.item_gap)
 }
 
 /// A drawn item of the bar and where it is (tests check that none overlap).
@@ -177,55 +262,49 @@ impl MicroParquetApp {
             .response;
         rects.push(("Help".to_string(), r.rect));
 
-        for group in BAR_GROUPS.iter().take(plan.shown) {
-            bar_separator(ui, tk.border);
-            match group {
-                BarGroup::Files => {
-                    for id in cmds::TOOLBAR_BUTTONS_FILE {
-                        let r = self.toolbar_button(ui, ctx, *id);
-                        rects.push((format!("{:?}", id), r.rect));
-                    }
-                }
-                BarGroup::Transform => {
-                    ui.add_enabled_ui(has_tab, |ui| {
-                        for id in cmds::TOOLBAR_BUTTONS_TRANSFORM {
-                            let r = self.toolbar_button(ui, ctx, *id);
-                            rects.push((format!("{:?}", id), r.rect));
-                        }
-                    });
-                }
-                BarGroup::Banking => {
-                    let r = ui
-                        .add_enabled_ui(has_tab, |ui| {
-                            ui.menu_button(menu_label(theme::ph::BANK, "Banking"), |ui| {
-                                for c in cmds::in_group(CommandGroup::Banking) {
-                                    self.command_menu_item(ui, ctx, c.id);
-                                }
-                            })
-                            .response
-                        })
-                        .inner;
-                    rects.push(("Banking".to_string(), r.rect));
-                }
-                BarGroup::Export => {
-                    let r = ui
-                        .add_enabled_ui(has_tab, |ui| {
-                            ui.menu_button(menu_label(theme::ph::EXPORT, "Export"), |ui| {
-                                for c in cmds::in_group(CommandGroup::Export) {
-                                    self.command_menu_item(ui, ctx, c.id);
-                                }
-                            })
-                            .response
-                        })
-                        .inner;
-                    rects.push(("Export".to_string(), r.rect));
-                }
+        // the items that are not folded, group by group, each group after a thin line
+        let mut last_group = usize::MAX;
+        for (key, group) in BAR_ITEMS.iter() {
+            if plan.is_folded(*key) {
+                continue;
             }
+            if *group != last_group {
+                bar_separator(ui, tk.border);
+                last_group = *group;
+            }
+            let (name, rect) = match key {
+                BarKey::Cmd(id) => {
+                    let r = if *group == 1 {
+                        ui.add_enabled_ui(has_tab, |ui| self.toolbar_button(ui, ctx, *id, plan.icon_only)).inner
+                    } else {
+                        self.toolbar_button(ui, ctx, *id, plan.icon_only)
+                    };
+                    (format!("{:?}", id), r.rect)
+                }
+                BarKey::Banking | BarKey::Export => {
+                    let group_id = if *key == BarKey::Banking { CommandGroup::Banking } else { CommandGroup::Export };
+                    let text = item_text(*key, plan.icon_only);
+                    let r = ui
+                        .add_enabled_ui(has_tab, |ui| {
+                            ui.menu_button(text, |ui| {
+                                for c in cmds::in_group(group_id) {
+                                    self.command_menu_item(ui, ctx, c.id);
+                                }
+                            })
+                            .response
+                        })
+                        .inner;
+                    let r = if plan.icon_only { r.on_hover_text(item_name(*key)) } else { r };
+                    (item_name(*key).to_string(), r.rect)
+                }
+            };
+            rects.push((name, rect));
         }
 
-        // More: the groups that did not fit, then the commands that have no button.
+        // More: the items that were folded (in toolbar order), then the commands that have no
+        // toolbar button.
         bar_separator(ui, tk.border);
-        let folded: Vec<BarGroup> = BAR_GROUPS.iter().skip(plan.shown).copied().collect();
+        let folded: Vec<BarKey> = BAR_ITEMS.iter().map(|(k, _)| *k).filter(|k| plan.is_folded(*k)).collect();
         let r = ui
             .add_enabled_ui(has_tab || !folded.is_empty(), |ui| {
                 ui.menu_button(menu_label(theme::ph::DOTS_THREE, "More"), |ui| {
@@ -237,36 +316,14 @@ impl MicroParquetApp {
         rects.push(("More".to_string(), r.rect));
     }
 
-    /// The More menu: folded groups first (buttons as items, menus as sub-menus), then the
-    /// commands without a toolbar button.
-    fn more_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, folded: &[BarGroup]) {
-        for group in folded {
-            match group {
-                BarGroup::Files => {
-                    for id in cmds::TOOLBAR_BUTTONS_FILE {
-                        self.command_menu_item(ui, ctx, *id);
-                    }
-                }
-                BarGroup::Transform => {
-                    for id in cmds::TOOLBAR_BUTTONS_TRANSFORM {
-                        self.command_menu_item(ui, ctx, *id);
-                    }
-                }
-                BarGroup::Banking => {
-                    ui.menu_button(format!("{}  Banking", theme::ph::BANK), |ui| {
-                        for c in cmds::in_group(CommandGroup::Banking) {
-                            self.command_menu_item(ui, ctx, c.id);
-                        }
-                    });
-                }
-                BarGroup::Export => {
-                    ui.menu_button(format!("{}  Export", theme::ph::EXPORT), |ui| {
-                        for c in cmds::in_group(CommandGroup::Export) {
-                            self.command_menu_item(ui, ctx, c.id);
-                        }
-                    });
-                }
+    /// The More menu: the folded items first, then the commands without a toolbar button.
+    fn more_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, folded: &[BarKey]) {
+        for key in folded {
+            if let BarKey::Cmd(id) = key {
+                self.command_menu_item(ui, ctx, *id);
             }
+        }
+        if !folded.is_empty() {
             ui.separator();
         }
         for id in cmds::TOOLBAR_MORE {
