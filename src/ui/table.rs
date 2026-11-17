@@ -84,22 +84,32 @@ pub enum GridAction {
 }
 
 /// How a column's cells are drawn.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CellKind {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CellKind {
     /// Numbers: right-aligned, mono.
     Number,
-    /// Dates and IDs: left-aligned, mono.
+    /// Dates and number-like text (codes, references): left-aligned, mono.
     MonoText,
     /// Everything else: left-aligned, Source Sans 3.
     Text,
 }
 
-fn cell_kind(c: &polars::prelude::Series) -> CellKind {
+/// Mono (JetBrains Mono) is chosen by what a column holds, not by what it is called: Float, Int
+/// and Date columns, and Text columns whose sampled values contain only digits, '-', '/', '.'
+/// and spaces. All other text is Source Sans 3.
+pub(crate) fn cell_kind(c: &polars::prelude::Series) -> CellKind {
     let dt = c.dtype();
     if dt.is_numeric() {
         CellKind::Number
-    } else if dt.is_temporal() || TabState::is_likely_id_column(c.name().as_str()) {
+    } else if dt.is_temporal() {
         CellKind::MonoText
+    } else if let Ok(ca) = c.str() {
+        let sample = (0..ca.len().min(micro_parquet::table_layout::SAMPLE_ROWS)).map(|i| ca.get(i));
+        if micro_parquet::table_layout::text_column_is_mono(sample) {
+            CellKind::MonoText
+        } else {
+            CellKind::Text
+        }
     } else {
         CellKind::Text
     }

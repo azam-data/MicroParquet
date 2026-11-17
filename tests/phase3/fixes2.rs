@@ -158,3 +158,29 @@ fn b_startup_sweep_deletes_recorded_part_files_and_keeps_the_locked_ones() {
     // and with no list there is nothing to say
     assert_eq!(sweep_pending_parts(&root).message(), None);
 }
+
+// ------------------------------------------------------------------------------ layout 5
+
+#[test]
+fn l5_text_is_mono_by_what_it_holds_not_by_the_column_name() {
+    use micro_parquet::table_layout::text_column_is_mono;
+    let col = |v: &[&str]| text_column_is_mono(v.iter().map(|s| Some(*s)));
+    // codes, dates and references: digits, '-', '/', '.' and spaces
+    assert!(col(&["20400-01", "20400-02", "10100-11"]));
+    assert!(col(&["16/11/2026", "01/12/2026"]));
+    assert!(col(&["2026.11 07", "12 3-4/5.6"]));
+    // words, letters, commas and other signs are ordinary text
+    assert!(!col(&["FIXED TERM DEPOSIT", "SAVINGS"]));
+    assert!(!col(&["20400-01", "20400-0A"]), "one letter makes it text");
+    assert!(!col(&["12,345.67", "1,000"]), "a comma is not on the list");
+    assert!(!col(&["(1,234)", "+5"]));
+    assert!(!col(&["Dr 100"]));
+    // blanks and nulls are ignored, but an all-blank column is not mono
+    assert!(text_column_is_mono(vec![None, Some("20400-01"), Some("  "), Some("")]));
+    assert!(!text_column_is_mono(vec![None, Some(""), Some(" ")]));
+    assert!(!text_column_is_mono(Vec::<Option<&str>>::new()));
+    // only the first 100 rows are looked at
+    let mut many: Vec<Option<&str>> = vec![Some("20400-01"); 100];
+    many.push(Some("WORDS AFTER THE SAMPLE"));
+    assert!(text_column_is_mono(many));
+}

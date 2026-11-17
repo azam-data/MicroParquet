@@ -21,6 +21,33 @@ pub const SUMMARY_FG: u32 = 0xFFFFFF;
 /// How many visible rows are measured.
 pub const SAMPLE_ROWS: usize = 100;
 
+/// A character a number-like text may hold: digits, '-', '/', '.' and the space.
+fn is_numeric_text_char(c: char) -> bool {
+    c.is_ascii_digit() || matches!(c, '-' | '/' | '.' | ' ')
+}
+
+/// Whether a Text column is drawn in the mono font: decided by what the first `SAMPLE_ROWS` rows
+/// hold, never by the column's name. Every non-blank sampled value must consist of digits, '-',
+/// '/', '.' and spaces only (account codes "20400-01", dates "16/11/2026", references
+/// "2026.11 07"), and at least one value must be non-blank. Words, letters and commas ("FIXED
+/// TERM DEPOSIT", "12,345.67") make it ordinary text. A value is `None` for a null.
+pub fn text_column_is_mono<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> bool {
+    let mut seen = false;
+    for v in values.into_iter().take(SAMPLE_ROWS) {
+        let Some(v) = v else {
+            continue;
+        };
+        if v.trim().is_empty() {
+            continue;
+        }
+        if !v.chars().all(is_numeric_text_char) {
+            return false;
+        }
+        seen = true;
+    }
+    seen
+}
+
 /// Text widths in the fonts a column uses, in logical pixels.
 pub trait FontMetrics {
     /// Header text (Source Sans 3 SemiBold 14).

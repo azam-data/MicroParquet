@@ -536,3 +536,41 @@ fn schema_preview_and_columns_list_use_the_same_heading_style() {
     }
 }
 
+
+// ------------------------------------------------------------------ mono by content (layout 5)
+
+#[test]
+fn mono_font_follows_the_content_not_the_name() {
+    use crate::ui::table::{cell_kind, CellKind};
+    use polars::prelude::NamedFrom;
+    let s = |name: &str, v: &[&str]| polars::prelude::Series::new(name.into(), v);
+    // "Gl Name" sounds like an ID by its name, but holds words: Source Sans 3
+    assert_eq!(cell_kind(&s("Gl Name", &["FIXED TERM DEPOSIT", "SAVINGS DEPOSIT"])), CellKind::Text);
+    // "Glcode" holds codes: JetBrains Mono
+    assert_eq!(cell_kind(&s("Glcode", &["20400-01", "20400-02"])), CellKind::MonoText);
+    // the name does not matter either way
+    assert_eq!(cell_kind(&s("Customer Name", &["20400-01"])), CellKind::MonoText);
+    assert_eq!(cell_kind(&s("Account No", &["ACC-001", "ACC-002"])), CellKind::Text);
+    // Float, Int and Date columns are mono whatever they are called
+    assert_eq!(cell_kind(&polars::prelude::Series::new("Notes".into(), &[1.5f64])), CellKind::Number);
+    assert_eq!(cell_kind(&polars::prelude::Series::new("Notes".into(), &[1i64])), CellKind::Number);
+    let d = polars::prelude::Series::new("Notes".into(), &[19_000i32]).cast(&polars::prelude::DataType::Date).expect("date");
+    assert_eq!(cell_kind(&d), CellKind::MonoText);
+}
+
+#[test]
+fn the_grid_draws_codes_in_mono_and_words_in_source_sans() {
+    let df = DataFrame::new(vec![
+        polars::prelude::Series::new("Gl Name".into(), &["FIXED TERM DEPOSIT", "SAVINGS DEPOSIT"]).into(),
+        polars::prelude::Series::new("Glcode".into(), &["20400-01", "20400-02"]).into(),
+    ])
+    .unwrap_or_default();
+    let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
+    let mut p = Painted::default();
+    for _ in 0..3 {
+        p = grid_frame(2, None, vec![], &ctx, &input, &df);
+    }
+    let fam = |text: &str| p.texts.iter().find(|(t, _, _)| t == text).map(|(_, _, f)| f.clone()).unwrap_or_else(|| panic!("'{text}' not painted"));
+    assert_eq!(fam("FIXED TERM DEPOSIT"), egui::FontFamily::Proportional, "words are Source Sans 3");
+    assert_eq!(fam("20400-01"), egui::FontFamily::Monospace, "codes are JetBrains Mono");
+}
