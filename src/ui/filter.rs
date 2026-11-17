@@ -26,6 +26,15 @@ impl Default for FilterState {
     }
 }
 
+/// Why the filter cannot be applied yet; `None` when it can.
+fn filter_problem(conditions: &[FilterCondition]) -> Option<String> {
+    if conditions.is_empty() {
+        Some("Add at least one condition.".to_string())
+    } else {
+        conditions.iter().find_map(condition_problem)
+    }
+}
+
 /// Why a condition cannot be applied yet, in words for the user; `None` when it is complete.
 pub fn condition_problem(c: &FilterCondition) -> Option<String> {
     if c.column.trim().is_empty() {
@@ -149,102 +158,102 @@ impl MicroParquetApp {
         } else {
             "\u{E30C}  Filter rows"
         };
-        theme::modal(title).default_width(640.0).show(ctx, |ui| {
-            let mut remove: Option<usize> = None;
-            for (i, c) in self.filter.conditions.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    if i > 0 {
-                        ui.label(egui::RichText::new(self.filter.join.label()).color(theme::muted(ui)));
-                    }
-                    egui::ComboBox::from_id_salt(("flt_col", i))
-                        .width(160.0)
-                        .selected_text(&c.column)
-                        .show_ui(ui, |ui| {
-                            for name in &avail_cols {
-                                ui.selectable_value(&mut c.column, name.clone(), name);
-                            }
-                        });
-                    egui::ComboBox::from_id_salt(("flt_op", i))
-                        .width(120.0)
-                        .selected_text(c.op.label())
-                        .show_ui(ui, |ui| {
-                            for op in CondOp::all() {
-                                ui.selectable_value(&mut c.op, *op, op.label());
-                            }
-                        });
-                    if !c.op.is_unary() {
-                        ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(130.0).hint_text(
-                            match c.op {
-                                CondOp::InList => "a, b, c",
-                                _ => "value",
-                            },
-                        ));
-                        if c.op == CondOp::Between {
-                            ui.label("and");
-                            ui.add(egui::TextEdit::singleline(&mut c.value2).desired_width(130.0).hint_text("upper limit"));
+        theme::modal(title).default_width(640.0).show(ctx, |d| {
+            d.body(|ui| {
+                let mut remove: Option<usize> = None;
+                for (i, c) in self.filter.conditions.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        if i > 0 {
+                            ui.label(egui::RichText::new(self.filter.join.label()).color(theme::muted(ui)));
                         }
-                    }
-                    if theme::icon_button(ui, theme::ph::X, "Remove this condition").clicked() {
-                        remove = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = remove {
-                self.filter.conditions.remove(i);
-            }
-            if ui.button(format!("{}  Add condition", theme::ph::PLUS)).clicked() {
-                let c = FilterCondition {
-                    column: self.filter.col.clone(),
-                    op: CondOp::Equals,
-                    value: String::new(),
-                    value2: String::new(),
-                };
-                self.filter.conditions.push(c);
-            }
-            ui.add_space(theme::SPACE_S);
-            ui.horizontal(|ui| {
-                ui.label("Rows must meet");
-                ui.radio_value(&mut self.filter.join, GroupJoin::And, "all conditions (and)");
-                ui.radio_value(&mut self.filter.join, GroupJoin::Or, "any condition (or)");
-            });
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut self.filter.keep, true, "Keep matching rows");
-                ui.radio_value(&mut self.filter.keep, false, "Delete matching rows");
-            });
-            let problem = if self.filter.conditions.is_empty() {
-                Some("Add at least one condition.".to_string())
-            } else {
-                self.filter.conditions.iter().find_map(condition_problem)
-            };
-            if let Some(p) = &problem {
-                theme::warning_label(ui, p);
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                let step = TransformStep::FilterGroup {
-                    conditions: self.filter.conditions.clone(),
-                    join: self.filter.join,
-                    keep_matching: self.filter.keep,
-                };
-                let apply_label = if editing.is_some() { "\u{E182}  Save filter" } else { "\u{E182}  Apply to current tab" };
-                let apply = ui.add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, apply_label)).inner;
-                if apply.clicked() {
-                    match editing {
-                        Some(i) => replace = Some((i, step.clone())),
-                        None => step_to_apply = Some((step.clone(), false)),
-                    }
-                    close_modal = true;
+                        egui::ComboBox::from_id_salt(("flt_col", i))
+                            .width(160.0)
+                            .selected_text(&c.column)
+                            .show_ui(ui, |ui| {
+                                for name in &avail_cols {
+                                    ui.selectable_value(&mut c.column, name.clone(), name);
+                                }
+                            });
+                        egui::ComboBox::from_id_salt(("flt_op", i))
+                            .width(120.0)
+                            .selected_text(c.op.label())
+                            .show_ui(ui, |ui| {
+                                for op in CondOp::all() {
+                                    ui.selectable_value(&mut c.op, *op, op.label());
+                                }
+                            });
+                        if !c.op.is_unary() {
+                            ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(130.0).hint_text(
+                                match c.op {
+                                    CondOp::InList => "a, b, c",
+                                    _ => "value",
+                                },
+                            ));
+                            if c.op == CondOp::Between {
+                                ui.label("and");
+                                ui.add(egui::TextEdit::singleline(&mut c.value2).desired_width(130.0).hint_text("upper limit"));
+                            }
+                        }
+                        if theme::icon_button(ui, theme::ph::X, "Remove this condition").clicked() {
+                            remove = Some(i);
+                        }
+                    });
                 }
-                if editing.is_none() {
-                    let newtab = ui.add_enabled(problem.is_none(), egui::Button::new("\u{E3D4}  Open filtered view in new tab"));
-                    if newtab.clicked() {
-                        step_to_apply = Some((step, true));
+                if let Some(i) = remove {
+                    self.filter.conditions.remove(i);
+                }
+                if ui.button(format!("{}  Add condition", theme::ph::PLUS)).clicked() {
+                    let c = FilterCondition {
+                        column: self.filter.col.clone(),
+                        op: CondOp::Equals,
+                        value: String::new(),
+                        value2: String::new(),
+                    };
+                    self.filter.conditions.push(c);
+                }
+                ui.add_space(theme::SPACE_S);
+                ui.horizontal(|ui| {
+                    ui.label("Rows must meet");
+                    ui.radio_value(&mut self.filter.join, GroupJoin::And, "all conditions (and)");
+                    ui.radio_value(&mut self.filter.join, GroupJoin::Or, "any condition (or)");
+                });
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut self.filter.keep, true, "Keep matching rows");
+                    ui.radio_value(&mut self.filter.keep, false, "Delete matching rows");
+                });
+                let problem = filter_problem(&self.filter.conditions);
+                if let Some(p) = &problem {
+                    theme::warning_label(ui, p);
+                }
+            });
+            d.footer(|ui| {
+                ui.horizontal(|ui| {
+                    let problem = filter_problem(&self.filter.conditions);
+                    let step = TransformStep::FilterGroup {
+                        conditions: self.filter.conditions.clone(),
+                        join: self.filter.join,
+                        keep_matching: self.filter.keep,
+                    };
+                    let apply_label = if editing.is_some() { "\u{E182}  Save filter" } else { "\u{E182}  Apply to current tab" };
+                    let apply = ui.add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, apply_label)).inner;
+                    if apply.clicked() {
+                        match editing {
+                            Some(i) => replace = Some((i, step.clone())),
+                            None => step_to_apply = Some((step.clone(), false)),
+                        }
                         close_modal = true;
                     }
-                }
-                if ui.button("Cancel").clicked() {
-                    close_modal = true;
-                }
+                    if editing.is_none() {
+                        let newtab = ui.add_enabled(problem.is_none(), egui::Button::new("\u{E3D4}  Open filtered view in new tab"));
+                        if newtab.clicked() {
+                            step_to_apply = Some((step, true));
+                            close_modal = true;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close_modal = true;
+                    }
+                });
             });
         });
         if let Some((i, step)) = replace {

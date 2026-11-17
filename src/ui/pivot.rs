@@ -41,114 +41,117 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E150}  Pivot & WAVG Builder (with Per-Metric Format & Decimal Precision)")
         .default_width(720.0)
-        .show(ctx, |ui| {
-            ui.strong("1. Select Row Grouping Columns:");
-            ui.horizontal_wrapped(|ui| {
-                for (cname, checked) in &mut self.pivot.group_cols {
-                    ui.checkbox(checked, cname.as_str());
-                }
-            });
+        .show(ctx, |d| {
+            d.body(|ui| {
+                ui.strong("1. Select Row Grouping Columns:");
+                ui.horizontal_wrapped(|ui| {
+                    for (cname, checked) in &mut self.pivot.group_cols {
+                        ui.checkbox(checked, cname.as_str());
+                    }
+                });
 
-            ui.separator();
-            ui.strong("2. Configure Value Metric & Display Format (Crore vs % vs Decimals):");
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("piv_func")
-                    .selected_text(self.pivot.new_func.label())
-                    .show_ui(ui, |ui| {
-                        for f in AggFunc::all() {
-                            ui.selectable_value(&mut self.pivot.new_func, *f, f.label());
-                        }
-                    });
-                ui.label("Target:");
-                egui::ComboBox::from_id_salt("piv_tgt")
-                    .selected_text(&self.pivot.new_target)
-                    .show_ui(ui, |ui| {
-                        for c in &avail_cols {
-                            ui.selectable_value(&mut self.pivot.new_target, c.clone(), c);
-                        }
-                    });
-                if self.pivot.new_func == AggFunc::WeightedAvg {
-                    ui.label("Weight:");
-                    egui::ComboBox::from_id_salt("piv_wgt")
-                        .selected_text(&self.pivot.new_weight)
+                ui.separator();
+                ui.strong("2. Configure Value Metric & Display Format (Crore vs % vs Decimals):");
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("piv_func")
+                        .selected_text(self.pivot.new_func.label())
+                        .show_ui(ui, |ui| {
+                            for f in AggFunc::all() {
+                                ui.selectable_value(&mut self.pivot.new_func, *f, f.label());
+                            }
+                        });
+                    ui.label("Target:");
+                    egui::ComboBox::from_id_salt("piv_tgt")
+                        .selected_text(&self.pivot.new_target)
                         .show_ui(ui, |ui| {
                             for c in &avail_cols {
+                                ui.selectable_value(&mut self.pivot.new_target, c.clone(), c);
+                            }
+                        });
+                    if self.pivot.new_func == AggFunc::WeightedAvg {
+                        ui.label("Weight:");
+                        egui::ComboBox::from_id_salt("piv_wgt")
+                            .selected_text(&self.pivot.new_weight)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(
+                                        &mut self.pivot.new_weight,
+                                        c.clone(),
+                                        c,
+                                    );
+                                }
+                            });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Alias:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.pivot.new_alias)
+                            .desired_width(130.0),
+                    );
+                    ui.label("Format:");
+                    egui::ComboBox::from_id_salt("piv_fmt")
+                        .selected_text(self.pivot.new_fmt.fmt_type.label())
+                        .show_ui(ui, |ui| {
+                            for ft in MetricFormatType::all() {
                                 ui.selectable_value(
-                                    &mut self.pivot.new_weight,
-                                    c.clone(),
-                                    c,
+                                    &mut self.pivot.new_fmt.fmt_type,
+                                    *ft,
+                                    ft.label(),
                                 );
                             }
                         });
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Alias:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.pivot.new_alias)
-                        .desired_width(130.0),
-                );
-                ui.label("Format:");
-                egui::ComboBox::from_id_salt("piv_fmt")
-                    .selected_text(self.pivot.new_fmt.fmt_type.label())
-                    .show_ui(ui, |ui| {
-                        for ft in MetricFormatType::all() {
-                            ui.selectable_value(
-                                &mut self.pivot.new_fmt.fmt_type,
-                                *ft,
-                                ft.label(),
-                            );
-                        }
-                    });
-                ui.label("Decimals:");
-                ui.add(
-                    egui::DragValue::new(&mut self.pivot.new_fmt.decimals).range(0..=6),
-                );
-                if ui.button("\u{E3D4} Add Metric").clicked() {
-                    self.pivot.aggs.push(AggSpec {
-                        target_col: self.pivot.new_target.clone(),
-                        func: self.pivot.new_func,
-                        weight_col: if self.pivot.new_func == AggFunc::WeightedAvg {
-                            Some(self.pivot.new_weight.clone())
-                        } else {
-                            None
-                        },
-                        alias: self.pivot.new_alias.clone(),
-                        format_spec: self.pivot.new_fmt,
-                    });
-                }
-            });
+                    ui.label("Decimals:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.pivot.new_fmt.decimals).range(0..=6),
+                    );
+                    if ui.button("\u{E3D4} Add Metric").clicked() {
+                        self.pivot.aggs.push(AggSpec {
+                            target_col: self.pivot.new_target.clone(),
+                            func: self.pivot.new_func,
+                            weight_col: if self.pivot.new_func == AggFunc::WeightedAvg {
+                                Some(self.pivot.new_weight.clone())
+                            } else {
+                                None
+                            },
+                            alias: self.pivot.new_alias.clone(),
+                            format_spec: self.pivot.new_fmt,
+                        });
+                    }
+                });
 
-            for a in &self.pivot.aggs {
-                ui.label(format!(
-                    "  • {}: {:?}({}) — Format: {} ({} dec)",
-                    a.alias,
-                    a.func,
-                    a.target_col,
-                    a.format_spec.fmt_type.label(),
-                    a.format_spec.decimals
-                ));
-            }
-            if !self.pivot.aggs.is_empty() && ui.small_button("Clear Metrics").clicked() {
-                self.pivot.aggs.clear();
-            }
+                for a in &self.pivot.aggs {
+                    ui.label(format!(
+                        "  • {}: {:?}({}) — Format: {} ({} dec)",
+                        a.alias,
+                        a.func,
+                        a.target_col,
+                        a.format_spec.fmt_type.label(),
+                        a.format_spec.decimals
+                    ));
+                }
+                if !self.pivot.aggs.is_empty() && ui.small_button("Clear Metrics").clicked() {
+                    self.pivot.aggs.clear();
+                }
 
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Top-N Limit (0 = All Rows):");
-                ui.add(egui::DragValue::new(&mut self.pivot.top_n).range(0..=10000));
-                ui.checkbox(&mut self.pivot.open_in_new_tab, "Open Pivot in New Tab");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Top-N Limit (0 = All Rows):");
+                    ui.add(egui::DragValue::new(&mut self.pivot.top_n).range(0..=10000));
+                    ui.checkbox(&mut self.pivot.open_in_new_tab, "Open Pivot in New Tab");
+                });
+
             });
-
-            ui.separator();
-            ui.horizontal(|ui| {
-                if theme::primary_button(ui, "\u{E3FE} Generate Summary / Pivot View").clicked() {
-                    step_to_apply = self.tool_step(&ActiveToolModal::GroupByPivot).map(|s| (s, self.pivot.open_in_new_tab));
-                    close_modal = true;
-                }
-                if ui.button("Cancel").clicked() {
-                    close_modal = true;
-                }
+            d.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if theme::primary_button(ui, "\u{E3FE} Generate Summary / Pivot View").clicked() {
+                        step_to_apply = self.tool_step(&ActiveToolModal::GroupByPivot).map(|s| (s, self.pivot.open_in_new_tab));
+                        close_modal = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close_modal = true;
+                    }
+                });
             });
         });
         ModalOutcome { close: close_modal, step: step_to_apply }

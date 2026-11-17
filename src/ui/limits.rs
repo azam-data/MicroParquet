@@ -26,38 +26,41 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E1D2} Loan Limit Utilization, Over-Limit Audit & Undrawn CCF")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Sanctioned Limit Col:");
-                    egui::ComboBox::from_id_salt("lm_lim")
-                        .selected_text(&self.limits.col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.limits.col, c.clone(), c);
-                            }
-                        });
-                    ui.label("Outstanding Balance Col:");
-                    egui::ComboBox::from_id_salt("lm_bal")
-                        .selected_text(&self.limits.bal_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.limits.bal_col, c.clone(), c);
-                            }
-                        });
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Sanctioned Limit Col:");
+                        egui::ComboBox::from_id_salt("lm_lim")
+                            .selected_text(&self.limits.col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.limits.col, c.clone(), c);
+                                }
+                            });
+                        ui.label("Outstanding Balance Col:");
+                        egui::ComboBox::from_id_salt("lm_bal")
+                            .selected_text(&self.limits.bal_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.limits.bal_col, c.clone(), c);
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Credit Conversion Factor (CCF % for Undrawn Portion):");
+                        ui.add(egui::DragValue::new(&mut self.limits.ccf_pct).speed(1.0));
+                    });
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Credit Conversion Factor (CCF % for Undrawn Portion):");
-                    ui.add(egui::DragValue::new(&mut self.limits.ccf_pct).speed(1.0));
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "\u{E182} Calculate Limit Utilization & Undrawn CCF").clicked() {
-                        step_to_apply = self.tool_step(&ActiveToolModal::LoanLimitUtil).map(|s| (s, false));
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "\u{E182} Calculate Limit Utilization & Undrawn CCF").clicked() {
+                            step_to_apply = self.tool_step(&ActiveToolModal::LoanLimitUtil).map(|s| (s, false));
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }

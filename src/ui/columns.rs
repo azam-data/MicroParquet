@@ -30,7 +30,8 @@ impl MicroParquetApp {
         theme::modal("\u{E546} Columns: Drop, Order, Rename & Number Format")
             .collapsible(false)
             .default_width(680.0)
-            .show(ctx, |ui| {
+            .show(ctx, |dlg| {
+              dlg.body(|ui| {
                 ui.strong("1. Keep/Drop, Reorder & Set Per-Column Display Format:");
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
@@ -71,13 +72,6 @@ impl MicroParquetApp {
                         }
                     });
 
-                if theme::primary_button(ui, "\u{E182} Apply Column Selection, Order & Formats").clicked() {
-                    self.columns.apply_formats =
-                        Some(self.columns.list.iter().map(|(c, _, spec)| (c.clone(), *spec)).collect());
-                    step_to_apply = self.tool_step(&ActiveToolModal::ManageColumns).map(|s| (s, false));
-                    close_modal = true;
-                }
-
                 ui.separator();
                 ui.strong("2. Rename a Column:");
                 ui.horizontal(|ui| {
@@ -95,9 +89,20 @@ impl MicroParquetApp {
                         close_modal = true;
                     }
                 });
-                if ui.button("Close").clicked() {
-                    close_modal = true;
-                }
+              });
+              dlg.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if theme::primary_button(ui, "\u{E182} Apply Column Selection, Order & Formats").clicked() {
+                        self.columns.apply_formats =
+                            Some(self.columns.list.iter().map(|(c, _, spec)| (c.clone(), *spec)).collect());
+                        step_to_apply = self.tool_step(&ActiveToolModal::ManageColumns).map(|s| (s, false));
+                        close_modal = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close_modal = true;
+                    }
+                });
+              });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }
     }

@@ -428,12 +428,23 @@ impl MicroParquetApp {
             return;
         }
         let mut open = true;
-        theme::modal("About MicroParquet").open(&mut open).show(ctx, |ui| {
-            ui.label(theme::semibold(format!("MicroParquet {}", env!("CARGO_PKG_VERSION"))));
-            ui.label("Portable Parquet / CSV viewer, converter and editor for treasury, ALM and finance work.");
-            ui.add_space(theme::SPACE_S);
-            ui.label(format!("Data folder: {}", self.paths.root_dir.display()));
+        let mut close = false;
+        theme::modal("About MicroParquet").open(&mut open).show(ctx, |d| {
+            d.body(|ui| {
+                ui.label(theme::semibold(format!("MicroParquet {}", env!("CARGO_PKG_VERSION"))));
+                ui.label("Portable Parquet / CSV viewer, converter and editor for treasury, ALM and finance work.");
+                ui.add_space(theme::SPACE_S);
+                ui.label(format!("Data folder: {}", self.paths.root_dir.display()));
+            });
+            d.footer(|ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
         });
+        if close {
+            open = false;
+        }
         if !open {
             self.show_about = false;
         }

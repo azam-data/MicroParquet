@@ -32,102 +32,109 @@ impl MicroParquetApp {
         let step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E750} Two-Period Variance & Loan CL Migration Reconciler")
             .collapsible(false)
-            .show(ctx, |ui| {
-                if self.tabs.len() < 2 {
-                    ui.label(
-                        "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
-                    );
-                } else {
-                    let prev_title = self
-                        .tabs
-                        .get(self.recon.prev_tab)
-                        .map(|t| t.title.clone())
-                        .unwrap_or_default();
-                    let curr_title = self
-                        .tabs
-                        .get(self.recon.curr_tab)
-                        .map(|t| t.title.clone())
-                        .unwrap_or_default();
-                    let tab_titles: Vec<(usize, String)> = self
-                        .tabs
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| (i, t.title.clone()))
-                        .collect();
-
-                    ui.horizontal(|ui| {
-                        ui.label("Previous Period Tab:");
-                        egui::ComboBox::from_id_salt("rec_p")
-                            .selected_text(&prev_title)
-                            .show_ui(ui, |ui| {
-                                for (i, title) in &tab_titles {
-                                    ui.selectable_value(&mut self.recon.prev_tab, *i, title);
-                                }
-                            });
-                        ui.label("Current Period Tab:");
-                        egui::ComboBox::from_id_salt("rec_c")
-                            .selected_text(&curr_title)
-                            .show_ui(ui, |ui| {
-                                for (i, title) in &tab_titles {
-                                    ui.selectable_value(&mut self.recon.curr_tab, *i, title);
-                                }
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Primary Key (e.g. Actnum):");
-                        ui.text_edit_singleline(&mut self.recon.key_col);
-                        ui.label("Balance Col:");
-                        ui.text_edit_singleline(&mut self.recon.bal_col);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Optional Rate Col (Int Rate):");
-                        ui.text_edit_singleline(&mut self.recon.rate_col);
-                        ui.label("Optional Loan CL Col (CL_Status):");
-                        ui.text_edit_singleline(&mut self.recon.cl_col);
-                    });
-                    ui.separator();
-                    if theme::primary_button(ui, "\u{E3FE} Reconcile Periods into New Tab").clicked() {
-                        let (Some(p_tab), Some(c_tab)) = (
-                            self.tabs.get(self.recon.prev_tab).cloned(),
-                            self.tabs.get(self.recon.curr_tab).cloned(),
-                        ) else {
-                            self.status_message =
-                                "Reconcile: the selected previous or current tab no longer exists. Pick both tabs again.".to_string();
-                            return;
-                        };
-                        let r_col = if self.recon.rate_col.trim().is_empty() {
-                            None
-                        } else {
-                            Some(self.recon.rate_col.trim().to_string())
-                        };
-                        let cl_col = if self.recon.cl_col.trim().is_empty() {
-                            None
-                        } else {
-                            Some(self.recon.cl_col.trim().to_string())
-                        };
-                        let r_col_used = r_col.is_some();
-                        self.create_tab_from_source_with(
-                            format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
-                            TabSource::PeriodReconcile {
-                                prev_source: Box::new(p_tab.source),
-                                prev_steps: p_tab.steps,
-                                curr_source: Box::new(c_tab.source),
-                                curr_steps: c_tab.steps,
-                                key_col: self.recon.key_col.trim().to_string(),
-                                bal_col: self.recon.bal_col.trim().to_string(),
-                                rate_col: r_col,
-                                cl_status_col: cl_col,
-                            },
-                            Vec::new(),
-                            HashMap::new(),
-                            Some(r_col_used),
+            .show(ctx, |dlg| {
+                dlg.body(|ui| {
+                    if self.tabs.len() < 2 {
+                        ui.label(
+                            "Open Previous Period (e.g. Sep) and Current Period (e.g. Oct) in 2 tabs first.",
                         );
-                        close_modal = true;
+                    } else {
+                        let prev_title = self
+                            .tabs
+                            .get(self.recon.prev_tab)
+                            .map(|t| t.title.clone())
+                            .unwrap_or_default();
+                        let curr_title = self
+                            .tabs
+                            .get(self.recon.curr_tab)
+                            .map(|t| t.title.clone())
+                            .unwrap_or_default();
+                        let tab_titles: Vec<(usize, String)> = self
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| (i, t.title.clone()))
+                            .collect();
+
+                        ui.horizontal(|ui| {
+                            ui.label("Previous Period Tab:");
+                            egui::ComboBox::from_id_salt("rec_p")
+                                .selected_text(&prev_title)
+                                .show_ui(ui, |ui| {
+                                    for (i, title) in &tab_titles {
+                                        ui.selectable_value(&mut self.recon.prev_tab, *i, title);
+                                    }
+                                });
+                            ui.label("Current Period Tab:");
+                            egui::ComboBox::from_id_salt("rec_c")
+                                .selected_text(&curr_title)
+                                .show_ui(ui, |ui| {
+                                    for (i, title) in &tab_titles {
+                                        ui.selectable_value(&mut self.recon.curr_tab, *i, title);
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Primary Key (e.g. Actnum):");
+                            ui.text_edit_singleline(&mut self.recon.key_col);
+                            ui.label("Balance Col:");
+                            ui.text_edit_singleline(&mut self.recon.bal_col);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Optional Rate Col (Int Rate):");
+                            ui.text_edit_singleline(&mut self.recon.rate_col);
+                            ui.label("Optional Loan CL Col (CL_Status):");
+                            ui.text_edit_singleline(&mut self.recon.cl_col);
+                        });
                     }
-                }
-                if ui.button("Cancel").clicked() {
-                    close_modal = true;
-                }
+                });
+                dlg.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if self.tabs.len() >= 2 {
+                            if theme::primary_button(ui, "\u{E3FE} Reconcile Periods into New Tab").clicked() {
+                                let (Some(p_tab), Some(c_tab)) = (
+                                    self.tabs.get(self.recon.prev_tab).cloned(),
+                                    self.tabs.get(self.recon.curr_tab).cloned(),
+                                ) else {
+                                    self.status_message =
+                                        "Reconcile: the selected previous or current tab no longer exists. Pick both tabs again.".to_string();
+                                    return;
+                                };
+                                let r_col = if self.recon.rate_col.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(self.recon.rate_col.trim().to_string())
+                                };
+                                let cl_col = if self.recon.cl_col.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(self.recon.cl_col.trim().to_string())
+                                };
+                                let r_col_used = r_col.is_some();
+                                self.create_tab_from_source_with(
+                                    format!("Reconcile({} vs {})", p_tab.title, c_tab.title),
+                                    TabSource::PeriodReconcile {
+                                        prev_source: Box::new(p_tab.source),
+                                        prev_steps: p_tab.steps,
+                                        curr_source: Box::new(c_tab.source),
+                                        curr_steps: c_tab.steps,
+                                        key_col: self.recon.key_col.trim().to_string(),
+                                        bal_col: self.recon.bal_col.trim().to_string(),
+                                        rate_col: r_col,
+                                        cl_status_col: cl_col,
+                                    },
+                                    Vec::new(),
+                                    HashMap::new(),
+                                    Some(r_col_used),
+                                );
+                                close_modal = true;
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
+                });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }
     }

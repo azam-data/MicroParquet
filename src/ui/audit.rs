@@ -43,53 +43,56 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E40C} Core Banking Dirty Data & Ghost Account Auditor")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Open Date:");
-                    ui.text_edit_singleline(&mut self.audit.opn_col);
-                    ui.label("Maturity Date:");
-                    ui.text_edit_singleline(&mut self.audit.mat_col);
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Open Date:");
+                        ui.text_edit_singleline(&mut self.audit.opn_col);
+                        ui.label("Maturity Date:");
+                        ui.text_edit_singleline(&mut self.audit.mat_col);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Close Date:");
+                        ui.text_edit_singleline(&mut self.audit.cls_col);
+                        ui.label("Status (Acstat):");
+                        ui.text_edit_singleline(&mut self.audit.stat_col);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Balance Col:");
+                        ui.text_edit_singleline(&mut self.audit.bal_col);
+                        ui.label("Int Rate Col:");
+                        ui.text_edit_singleline(&mut self.audit.rate_col);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Reporting Cutoff Date (YYYY-MM-DD):");
+                        ui.text_edit_singleline(&mut self.buckets.cutoff);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Active status codes (comma-separated, any case):");
+                        ui.text_edit_singleline(&mut self.audit.active_statuses);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Rate outlier below %:");
+                        ui.add(egui::DragValue::new(&mut self.audit.rate_min).speed(0.1));
+                        ui.label("or above %:");
+                        ui.add(egui::DragValue::new(&mut self.audit.rate_max).speed(0.1));
+                    });
+                    ui.label("Audit_Exception_Flag shows the first flag; Audit_All_Flags lists every flag that applies.");
+                    ui.checkbox(
+                        &mut self.audit.only_exceptions,
+                        "Show Exception Rows Only (Filter out 'OK' accounts)",
+                    );
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Close Date:");
-                    ui.text_edit_singleline(&mut self.audit.cls_col);
-                    ui.label("Status (Acstat):");
-                    ui.text_edit_singleline(&mut self.audit.stat_col);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Balance Col:");
-                    ui.text_edit_singleline(&mut self.audit.bal_col);
-                    ui.label("Int Rate Col:");
-                    ui.text_edit_singleline(&mut self.audit.rate_col);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Reporting Cutoff Date (YYYY-MM-DD):");
-                    ui.text_edit_singleline(&mut self.buckets.cutoff);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Active status codes (comma-separated, any case):");
-                    ui.text_edit_singleline(&mut self.audit.active_statuses);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Rate outlier below %:");
-                    ui.add(egui::DragValue::new(&mut self.audit.rate_min).speed(0.1));
-                    ui.label("or above %:");
-                    ui.add(egui::DragValue::new(&mut self.audit.rate_max).speed(0.1));
-                });
-                ui.label("Audit_Exception_Flag shows the first flag; Audit_All_Flags lists every flag that applies.");
-                ui.checkbox(
-                    &mut self.audit.only_exceptions,
-                    "Show Exception Rows Only (Filter out 'OK' accounts)",
-                );
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "\u{E3FE} Run Audit into New Exception Tab").clicked() {
-                        step_to_apply = self.tool_step(&ActiveToolModal::BankingAudit).map(|s| (s, true));
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "\u{E3FE} Run Audit into New Exception Tab").clicked() {
+                            step_to_apply = self.tool_step(&ActiveToolModal::BankingAudit).map(|s| (s, true));
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }

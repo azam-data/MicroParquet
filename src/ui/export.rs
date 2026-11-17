@@ -71,44 +71,48 @@ impl MicroParquetApp {
         let step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E150} Consolidated Multi-Tab Exporter (.xlsx / .pdf)")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.strong("Select Open Tabs / Views to Include:");
-                if self.export.multi_checks.len() != self.tabs.len() {
-                    self.export.multi_checks = vec![true; self.tabs.len()];
-                }
-                for (i, tab) in self.tabs.iter().enumerate() {
-                    let ref mut is_checked = self.export.multi_checks[i];
-                    ui.checkbox(
-                        is_checked,
-                        format!("Tab {}: {} ({} rows)", i + 1, tab.title, tab.total_rows),
-                    );
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.export.totals_xlsx, "Totals row in Excel")
-                        .on_hover_text("The summary row (as chosen above each column) under each sheet's data.");
-                    ui.checkbox(&mut self.export.totals_pdf, "Totals row in PDF")
-                        .on_hover_text("The summary band under each tab's rows.");
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.strong("Select Open Tabs / Views to Include:");
+                    if self.export.multi_checks.len() != self.tabs.len() {
+                        self.export.multi_checks = vec![true; self.tabs.len()];
+                    }
+                    for (i, tab) in self.tabs.iter().enumerate() {
+                        let ref mut is_checked = self.export.multi_checks[i];
+                        ui.checkbox(
+                            is_checked,
+                            format!("Tab {}: {} ({} rows)", i + 1, tab.title, tab.total_rows),
+                        );
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.export.totals_xlsx, "Totals row in Excel")
+                            .on_hover_text("The summary row (as chosen above each column) under each sheet's data.");
+                        ui.checkbox(&mut self.export.totals_pdf, "Totals row in PDF")
+                            .on_hover_text("The summary band under each tab's rows.");
+                    });
                 });
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("\u{E150} Export Selected Tabs to Single .xlsx...")
-                        .clicked()
-                    {
-                        self.run_guarded_export(GuardedExport::MultiXlsx);
-                        close_modal = true;
-                    }
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("\u{E150} Export Selected Tabs to Single .xlsx...")
+                            .clicked()
+                        {
+                            self.run_guarded_export(GuardedExport::MultiXlsx);
+                            close_modal = true;
+                        }
 
-                    if ui
-                        .button("\u{E702} Export Selected Tabs to Single Landscape .pdf...")
-                        .clicked()
-                    {
-                        self.run_guarded_export(GuardedExport::MultiPdf);
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                        if ui
+                            .button("\u{E702} Export Selected Tabs to Single Landscape .pdf...")
+                            .clicked()
+                        {
+                            self.run_guarded_export(GuardedExport::MultiPdf);
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }
@@ -120,36 +124,39 @@ impl MicroParquetApp {
         let step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E710} Smart Partitioned Split Exporter")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Partition / Split Column:");
-                    egui::ComboBox::from_id_salt("splt_col")
-                        .selected_text(&self.export.split_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.export.split_col, c.clone(), c);
-                            }
-                        });
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Partition / Split Column:");
+                        egui::ComboBox::from_id_salt("splt_col")
+                            .selected_text(&self.export.split_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.export.split_col, c.clone(), c);
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Output File Format:");
+                        for fmt in [
+                            SplitExportFormat::Parquet,
+                            SplitExportFormat::Csv,
+                            SplitExportFormat::Xlsx,
+                        ] {
+                            ui.selectable_value(&mut self.export.split_format, fmt, fmt.label());
+                        }
+                    });
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Output File Format:");
-                    for fmt in [
-                        SplitExportFormat::Parquet,
-                        SplitExportFormat::Csv,
-                        SplitExportFormat::Xlsx,
-                    ] {
-                        ui.selectable_value(&mut self.export.split_format, fmt, fmt.label());
-                    }
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "\u{E3FE} Select Output Folder & Split Now...").clicked() {
-                        self.run_guarded_export(GuardedExport::Split);
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "\u{E3FE} Select Output Folder & Split Now...").clicked() {
+                            self.run_guarded_export(GuardedExport::Split);
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }
@@ -260,27 +267,30 @@ impl MicroParquetApp {
         let mut set_number = false;
         let mut as_is = false;
         let mut cancel = false;
-        theme::modal("\u{E4E0}  Text column that looks like numbers").show(ctx, |ui| {
-            for (title, msg) in &lines {
-                if multi {
-                    ui.label(format!("{}: {}", title, msg));
-                } else {
-                    ui.label(msg.as_str());
+        theme::modal("\u{E4E0}  Text column that looks like numbers").show(ctx, |d| {
+            d.body(|ui| {
+                for (title, msg) in &lines {
+                    if multi {
+                        ui.label(format!("{}: {}", title, msg));
+                    } else {
+                        ui.label(msg.as_str());
+                    }
                 }
-            }
-            ui.add_space(theme::SPACE_S);
-            ui.label("Numbers stored as Text sort wrongly, cannot be summed in Excel and show as text in Power BI.");
-            ui.separator();
-            ui.horizontal(|ui| {
-                if theme::primary_button(ui, "Set to Number").clicked() {
-                    set_number = true;
-                }
-                if ui.button("Export as is").clicked() {
-                    as_is = true;
-                }
-                if ui.button("Cancel").clicked() {
-                    cancel = true;
-                }
+                ui.add_space(theme::SPACE_S);
+                ui.label("Numbers stored as Text sort wrongly, cannot be summed in Excel and show as text in Power BI.");
+            });
+            d.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if theme::primary_button(ui, "Set to Number").clicked() {
+                        set_number = true;
+                    }
+                    if ui.button("Export as is").clicked() {
+                        as_is = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
             });
         });
         if set_number || as_is {
@@ -350,28 +360,31 @@ impl MicroParquetApp {
         let mut cancel = false;
         theme::modal("\u{E4E0} Values could not be converted")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label(
-                    "The control column has values that could not be converted to their type. \
-                     They are null in the export, so its totals will not match the source file.",
-                );
-                ui.separator();
-                for l in &lines {
-                    ui.monospace(l);
-                }
-                ui.small("\u{E18A} = control column");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Export anyway")
-                        .on_hover_text("Also writes <output>.parse_failures.csv next to the export")
-                        .clicked()
-                    {
-                        go = true;
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.label(
+                        "The control column has values that could not be converted to their type. \
+                         They are null in the export, so its totals will not match the source file.",
+                    );
+                    ui.separator();
+                    for l in &lines {
+                        ui.monospace(l);
                     }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
+                    ui.small("\u{E18A} = control column");
+                });
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Export anyway")
+                            .on_hover_text("Also writes <output>.parse_failures.csv next to the export")
+                            .clicked()
+                        {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
                 });
             });
         if go {

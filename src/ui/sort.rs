@@ -10,6 +10,18 @@ pub struct SortState {
     pub levels: Vec<SortLevel>,
 }
 
+/// Why the sort cannot be applied yet; `None` when it can.
+fn sort_problem(levels: &[SortLevel]) -> Option<String> {
+    if levels.is_empty() {
+        return Some("Add at least one level.".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    levels
+        .iter()
+        .find(|l| !seen.insert(l.column.clone()))
+        .map(|l| format!("{} is used twice: a column can be a level once.", l.column))
+}
+
 impl MicroParquetApp {
     fn last_sort_step(&self) -> Option<usize> {
         self.tabs
@@ -99,75 +111,71 @@ impl MicroParquetApp {
         let editing = self.sort.editing;
         theme::modal(if editing.is_some() { "\u{E444}  Edit sort" } else { "\u{E444}  Sort rows" })
             .default_width(560.0)
-            .show(ctx, |ui| {
-                ui.label("Rows are ordered by level 1, then level 2 for ties, and so on. Blanks are always last.");
-                ui.add_space(theme::SPACE_S);
-                let mut remove: Option<usize> = None;
-                let mut swap: Option<(usize, usize)> = None;
-                let n = self.sort.levels.len();
-                for (i, l) in self.sort.levels.iter_mut().enumerate() {
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.label("Rows are ordered by level 1, then level 2 for ties, and so on. Blanks are always last.");
+                    ui.add_space(theme::SPACE_S);
+                    let mut remove: Option<usize> = None;
+                    let mut swap: Option<(usize, usize)> = None;
+                    let n = self.sort.levels.len();
+                    for (i, l) in self.sort.levels.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(theme::mono_semibold(format!("{}", i + 1)));
+                            egui::ComboBox::from_id_salt(("sort_col", i))
+                                .width(180.0)
+                                .selected_text(&l.column)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(&mut l.column, c.clone(), c);
+                                    }
+                                });
+                            ui.radio_value(&mut l.descending, false, "Lowest first");
+                            ui.radio_value(&mut l.descending, true, "Highest first");
+                            if ui.add_enabled(i > 0, egui::Button::new(theme::ph::ARROW_UP)).on_hover_text("Move up").clicked() {
+                                swap = Some((i, i - 1));
+                            }
+                            if ui.add_enabled(i + 1 < n, egui::Button::new(theme::ph::ARROW_DOWN)).on_hover_text("Move down").clicked() {
+                                swap = Some((i, i + 1));
+                            }
+                            if theme::icon_button(ui, theme::ph::X, "Remove this level").clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    }
+                    if let Some((a, b)) = swap {
+                        self.sort.levels.swap(a, b);
+                    }
+                    if let Some(i) = remove {
+                        self.sort.levels.remove(i);
+                    }
+                    if ui.button(format!("{}  Add level", theme::ph::PLUS)).clicked() {
+                        let used: Vec<&str> = self.sort.levels.iter().map(|l| l.column.as_str()).collect();
+                        let next = avail_cols.iter().find(|c| !used.contains(&c.as_str())).or(avail_cols.first()).cloned();
+                        if let Some(column) = next {
+                            self.sort.levels.push(SortLevel { column, descending: false });
+                        }
+                    }
+                    let problem = sort_problem(&self.sort.levels);
+                    if let Some(p) = &problem {
+                        theme::warning_label(ui, p);
+                    }
+                });
+                d.footer(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label(theme::mono_semibold(format!("{}", i + 1)));
-                        egui::ComboBox::from_id_salt(("sort_col", i))
-                            .width(180.0)
-                            .selected_text(&l.column)
-                            .show_ui(ui, |ui| {
-                                for c in &avail_cols {
-                                    ui.selectable_value(&mut l.column, c.clone(), c);
-                                }
-                            });
-                        ui.radio_value(&mut l.descending, false, "Lowest first");
-                        ui.radio_value(&mut l.descending, true, "Highest first");
-                        if ui.add_enabled(i > 0, egui::Button::new(theme::ph::ARROW_UP)).on_hover_text("Move up").clicked() {
-                            swap = Some((i, i - 1));
+                        let problem = sort_problem(&self.sort.levels);
+                        let ok = ui
+                            .add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, "\u{E182}  Apply sort"))
+                            .inner;
+                        if ok.clicked() {
+                            apply = true;
                         }
-                        if ui.add_enabled(i + 1 < n, egui::Button::new(theme::ph::ARROW_DOWN)).on_hover_text("Move down").clicked() {
-                            swap = Some((i, i + 1));
+                        if editing.is_some() && theme::danger_button(ui, "Remove sort").clicked() {
+                            remove_sort = true;
                         }
-                        if theme::icon_button(ui, theme::ph::X, "Remove this level").clicked() {
-                            remove = Some(i);
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
                         }
                     });
-                }
-                if let Some((a, b)) = swap {
-                    self.sort.levels.swap(a, b);
-                }
-                if let Some(i) = remove {
-                    self.sort.levels.remove(i);
-                }
-                if ui.button(format!("{}  Add level", theme::ph::PLUS)).clicked() {
-                    let used: Vec<&str> = self.sort.levels.iter().map(|l| l.column.as_str()).collect();
-                    let next = avail_cols.iter().find(|c| !used.contains(&c.as_str())).or(avail_cols.first()).cloned();
-                    if let Some(column) = next {
-                        self.sort.levels.push(SortLevel { column, descending: false });
-                    }
-                }
-                let dup = {
-                    let mut seen = std::collections::HashSet::new();
-                    self.sort.levels.iter().find(|l| !seen.insert(l.column.clone())).map(|l| l.column.clone())
-                };
-                let problem = if self.sort.levels.is_empty() {
-                    Some("Add at least one level.".to_string())
-                } else {
-                    dup.map(|c| format!("{} is used twice: a column can be a level once.", c))
-                };
-                if let Some(p) = &problem {
-                    theme::warning_label(ui, p);
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    let ok = ui
-                        .add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, "\u{E182}  Apply sort"))
-                        .inner;
-                    if ok.clicked() {
-                        apply = true;
-                    }
-                    if editing.is_some() && theme::danger_button(ui, "Remove sort").clicked() {
-                        remove_sort = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
                 });
             });
         if apply {

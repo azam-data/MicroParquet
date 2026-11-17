@@ -34,73 +34,76 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E538} Automated FTP Yield Curve Tenor Mapper")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Open Date:");
-                    egui::ComboBox::from_id_salt("ftp_opn")
-                        .selected_text(&self.ftp.opn_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.ftp.opn_col, c.clone(), c);
-                            }
-                        });
-                    ui.label("Maturity Date:");
-                    egui::ComboBox::from_id_salt("ftp_mat")
-                        .selected_text(&self.ftp.mat_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.ftp.mat_col, c.clone(), c);
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Balance Col:");
-                    egui::ComboBox::from_id_salt("ftp_bal")
-                        .selected_text(&self.ftp.bal_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.ftp.bal_col, c.clone(), c);
-                            }
-                        });
-                    ui.label("Int Rate Col:");
-                    egui::ComboBox::from_id_salt("ftp_rt")
-                        .selected_text(&self.ftp.rate_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.ftp.rate_col, c.clone(), c);
-                            }
-                        });
-                });
-                ui.checkbox(
-                    &mut self.ftp.is_liability,
-                    "Liability Book (Deposits/Borrowings: Spread = FTP Rate - Account Rate)",
-                );
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Rate between tenor points:");
-                    for m in [FtpInterpolation::Linear, FtpInterpolation::NextPointUp] {
-                        ui.radio_value(&mut self.ftp.interpolation, m, m.label());
-                    }
-                });
-                ui.label("Below the first point the first rate applies; beyond the last point the last rate. The FTP_Method column shows which rule each row used.");
-                ui.strong("Benchmark Yield Curve (Tenor Days -> FTP Rate %):");
-                for pt in &mut self.ftp.curve {
+            .show(ctx, |d| {
+                d.body(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Tenor Days:");
-                        ui.add(egui::DragValue::new(&mut pt.tenor_days));
-                        ui.label("FTP %:");
-                        ui.add(egui::DragValue::new(&mut pt.ftp_rate).speed(0.05));
+                        ui.label("Open Date:");
+                        egui::ComboBox::from_id_salt("ftp_opn")
+                            .selected_text(&self.ftp.opn_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.ftp.opn_col, c.clone(), c);
+                                }
+                            });
+                        ui.label("Maturity Date:");
+                        egui::ComboBox::from_id_salt("ftp_mat")
+                            .selected_text(&self.ftp.mat_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.ftp.mat_col, c.clone(), c);
+                                }
+                            });
                     });
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "\u{E182} Map FTP Rates & Compute Margin").clicked() {
-                        step_to_apply = self.tool_step(&ActiveToolModal::FtpCurveMap).map(|s| (s, false));
-                        close_modal = true;
+                    ui.horizontal(|ui| {
+                        ui.label("Balance Col:");
+                        egui::ComboBox::from_id_salt("ftp_bal")
+                            .selected_text(&self.ftp.bal_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.ftp.bal_col, c.clone(), c);
+                                }
+                            });
+                        ui.label("Int Rate Col:");
+                        egui::ComboBox::from_id_salt("ftp_rt")
+                            .selected_text(&self.ftp.rate_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.ftp.rate_col, c.clone(), c);
+                                }
+                            });
+                    });
+                    ui.checkbox(
+                        &mut self.ftp.is_liability,
+                        "Liability Book (Deposits/Borrowings: Spread = FTP Rate - Account Rate)",
+                    );
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Rate between tenor points:");
+                        for m in [FtpInterpolation::Linear, FtpInterpolation::NextPointUp] {
+                            ui.radio_value(&mut self.ftp.interpolation, m, m.label());
+                        }
+                    });
+                    ui.label("Below the first point the first rate applies; beyond the last point the last rate. The FTP_Method column shows which rule each row used.");
+                    ui.strong("Benchmark Yield Curve (Tenor Days -> FTP Rate %):");
+                    for pt in &mut self.ftp.curve {
+                        ui.horizontal(|ui| {
+                            ui.label("Tenor Days:");
+                            ui.add(egui::DragValue::new(&mut pt.tenor_days));
+                            ui.label("FTP %:");
+                            ui.add(egui::DragValue::new(&mut pt.ftp_rate).speed(0.05));
+                        });
                     }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                });
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "\u{E182} Map FTP Rates & Compute Margin").clicked() {
+                            step_to_apply = self.tool_step(&ActiveToolModal::FtpCurveMap).map(|s| (s, false));
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }

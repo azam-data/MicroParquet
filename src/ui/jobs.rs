@@ -68,15 +68,19 @@ impl MicroParquetApp {
         }
         let mut quit = false;
         let mut stay = false;
-        theme::modal("Export in progress \u{2014} cancel and quit?").show(ctx, |ui| {
-            ui.label("The export is stopped and its unfinished file is deleted; no partial file is left.");
-            ui.horizontal(|ui| {
-                if theme::primary_button(ui, "Cancel export and quit").clicked() {
-                    quit = true;
-                }
-                if ui.button("Keep working").clicked() {
-                    stay = true;
-                }
+        theme::modal("Export in progress \u{2014} cancel and quit?").show(ctx, |d| {
+            d.body(|ui| {
+                ui.label("The export is stopped and its unfinished file is deleted; no partial file is left.");
+            });
+            d.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if theme::primary_button(ui, "Cancel export and quit").clicked() {
+                        quit = true;
+                    }
+                    if ui.button("Keep working").clicked() {
+                        stay = true;
+                    }
+                });
             });
         });
         if quit {

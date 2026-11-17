@@ -30,51 +30,54 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E538} Add Mathematical Calculated Column")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("New Column Name:");
-                    ui.text_edit_singleline(&mut self.calc.new_col);
-                });
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("math_l")
-                        .selected_text(&self.calc.left_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.calc.left_col, c.clone(), c);
-                            }
-                        });
-                    for op in [MathOp::Add, MathOp::Sub, MathOp::Mul, MathOp::Div] {
-                        ui.selectable_value(&mut self.calc.op, op, op.symbol());
-                    }
-                    ui.checkbox(&mut self.calc.right_is_col, "Use Another Column");
-                });
-                ui.horizontal(|ui| {
-                    if self.calc.right_is_col {
-                        egui::ComboBox::from_id_salt("math_r_col")
-                            .selected_text(&self.calc.right_val)
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("New Column Name:");
+                        ui.text_edit_singleline(&mut self.calc.new_col);
+                    });
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("math_l")
+                            .selected_text(&self.calc.left_col)
                             .show_ui(ui, |ui| {
                                 for c in &avail_cols {
-                                    ui.selectable_value(
-                                        &mut self.calc.right_val,
-                                        c.clone(),
-                                        c,
-                                    );
+                                    ui.selectable_value(&mut self.calc.left_col, c.clone(), c);
                                 }
                             });
-                    } else {
-                        ui.label("Scalar Value (e.g. 10000000):");
-                        ui.text_edit_singleline(&mut self.calc.right_val);
-                    }
+                        for op in [MathOp::Add, MathOp::Sub, MathOp::Mul, MathOp::Div] {
+                            ui.selectable_value(&mut self.calc.op, op, op.symbol());
+                        }
+                        ui.checkbox(&mut self.calc.right_is_col, "Use Another Column");
+                    });
+                    ui.horizontal(|ui| {
+                        if self.calc.right_is_col {
+                            egui::ComboBox::from_id_salt("math_r_col")
+                                .selected_text(&self.calc.right_val)
+                                .show_ui(ui, |ui| {
+                                    for c in &avail_cols {
+                                        ui.selectable_value(
+                                            &mut self.calc.right_val,
+                                            c.clone(),
+                                            c,
+                                        );
+                                    }
+                                });
+                        } else {
+                            ui.label("Scalar Value (e.g. 10000000):");
+                            ui.text_edit_singleline(&mut self.calc.right_val);
+                        }
+                    });
                 });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "\u{E182} Add Calculated Column").clicked() {
-                        step_to_apply = self.tool_step(&ActiveToolModal::MathFormula).map(|s| (s, false));
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "\u{E182} Add Calculated Column").clicked() {
+                            step_to_apply = self.tool_step(&ActiveToolModal::MathFormula).map(|s| (s, false));
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }

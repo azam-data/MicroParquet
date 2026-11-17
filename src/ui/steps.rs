@@ -33,71 +33,74 @@ impl MicroParquetApp {
         let step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E248} Save Portable Macro Recipe (.mpq.json)")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Macro Name:");
-                    ui.text_edit_singleline(&mut self.macros.name);
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Macro Name:");
+                        ui.text_edit_singleline(&mut self.macros.name);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Description:");
+                        ui.text_edit_singleline(&mut self.macros.desc);
+                    });
+                    ui.checkbox(
+                        &mut self.macros.enforce_ctrl,
+                        "Enforce Control Column Reconciliation Check during replay",
+                    );
+                    ui.checkbox(
+                        &mut self.macros.include_schema,
+                        "Embed CSV Ingestion Schema Rules inside Macro",
+                    );
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Description:");
-                    ui.text_edit_singleline(&mut self.macros.desc);
-                });
-                ui.checkbox(
-                    &mut self.macros.enforce_ctrl,
-                    "Enforce Control Column Reconciliation Check during replay",
-                );
-                ui.checkbox(
-                    &mut self.macros.include_schema,
-                    "Embed CSV Ingestion Schema Rules inside Macro",
-                );
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("\u{E248} Save .mpq.json File...").clicked() {
-                        if let Some(tab) = self.tabs.get(self.active_tab) {
-                            let opt_schema = if self.macros.include_schema {
-                                match &tab.source {
-                                    TabSource::SingleFile { config, .. } => {
-                                        Some(config.clone())
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("\u{E248} Save .mpq.json File...").clicked() {
+                            if let Some(tab) = self.tabs.get(self.active_tab) {
+                                let opt_schema = if self.macros.include_schema {
+                                    match &tab.source {
+                                        TabSource::SingleFile { config, .. } => {
+                                            Some(config.clone())
+                                        }
+                                        _ => None,
                                     }
-                                    _ => None,
-                                }
-                            } else {
-                                None
-                            };
-                            let recipe = MacroRecipe {
-                                name: self.macros.name.clone(),
-                                description: self.macros.desc.clone(),
-                                created_at: chrono::Local::now()
-                                    .format("%Y-%m-%d %H:%M")
-                                    .to_string(),
-                                enforce_balance_control: self.macros.enforce_ctrl,
-                                control_column: tab.control_col.clone(),
-                                optional_ingestion_schema: opt_schema,
-                                steps: tab.steps.clone(),
-                                summary: tab.summary.clone(),
-                            };
-                            if let Some(save_path) = rfd::FileDialog::new()
-                                .set_directory(&self.paths.macros_dir)
-                                .set_file_name(micro_parquet::paths::default_export_file_name(&self.macros.name, "mpq.json"))
-                                .save_file()
-                            {
-                                match save_macro_to_file(&recipe, &save_path) {
-                                    Ok(_) => {
-                                        self.status_message =
-                                            format!("Saved macro to {:?}", save_path);
-                                    }
-                                    Err(e) => {
-                                        self.status_message =
-                                            format!("Failed to save macro: {}", e);
+                                } else {
+                                    None
+                                };
+                                let recipe = MacroRecipe {
+                                    name: self.macros.name.clone(),
+                                    description: self.macros.desc.clone(),
+                                    created_at: chrono::Local::now()
+                                        .format("%Y-%m-%d %H:%M")
+                                        .to_string(),
+                                    enforce_balance_control: self.macros.enforce_ctrl,
+                                    control_column: tab.control_col.clone(),
+                                    optional_ingestion_schema: opt_schema,
+                                    steps: tab.steps.clone(),
+                                    summary: tab.summary.clone(),
+                                };
+                                if let Some(save_path) = rfd::FileDialog::new()
+                                    .set_directory(&self.paths.macros_dir)
+                                    .set_file_name(micro_parquet::paths::default_export_file_name(&self.macros.name, "mpq.json"))
+                                    .save_file()
+                                {
+                                    match save_macro_to_file(&recipe, &save_path) {
+                                        Ok(_) => {
+                                            self.status_message =
+                                                format!("Saved macro to {:?}", save_path);
+                                        }
+                                        Err(e) => {
+                                            self.status_message =
+                                                format!("Failed to save macro: {}", e);
+                                        }
                                     }
                                 }
                             }
+                            close_modal = true;
                         }
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }
@@ -110,47 +113,50 @@ impl MicroParquetApp {
         theme::modal("\u{EB2C} Export GUI Pipeline as Python Polars Jupyter Code")
             .collapsible(false)
             .default_width(760.0)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(360.0)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.macros.python_code)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(18),
-                        );
-                    });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("\u{E198} Copy Python Code to Clipboard").clicked() {
-                        ctx.copy_text(self.macros.python_code.clone());
-                        self.status_message = format!(
-                            "Copied Python Polars code to clipboard!{}",
-                            self.macros.python_warning
-                        );
-                    }
-                    if ui.button("\u{E248} Save as .py Script...").clicked() {
-                        if let Some(p) = rfd::FileDialog::new()
-                            .set_file_name("micro_parquet_pipeline.py")
-                            .save_file()
-                        {
-                            self.status_message =
-                                match std::fs::write(&p, &self.macros.python_code) {
-                                    Ok(()) => format!(
-                                        "Saved Python script to {:?}{}",
-                                        p, self.macros.python_warning
-                                    ),
-                                    Err(e) => format!(
-                                        "Could not save Python script to {:?}: {}",
-                                        p, e
-                                    ),
-                                };
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.macros.python_code)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(18),
+                            );
+                        });
+                });
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("\u{E198} Copy Python Code to Clipboard").clicked() {
+                            ctx.copy_text(self.macros.python_code.clone());
+                            self.status_message = format!(
+                                "Copied Python Polars code to clipboard!{}",
+                                self.macros.python_warning
+                            );
                         }
-                    }
-                    if ui.button("Close").clicked() {
-                        close_modal = true;
-                    }
+                        if ui.button("\u{E248} Save as .py Script...").clicked() {
+                            if let Some(p) = rfd::FileDialog::new()
+                                .set_file_name("micro_parquet_pipeline.py")
+                                .save_file()
+                            {
+                                self.status_message =
+                                    match std::fs::write(&p, &self.macros.python_code) {
+                                        Ok(()) => format!(
+                                            "Saved Python script to {:?}{}",
+                                            p, self.macros.python_warning
+                                        ),
+                                        Err(e) => format!(
+                                            "Could not save Python script to {:?}: {}",
+                                            p, e
+                                        ),
+                                    };
+                            }
+                        }
+                        if ui.button("Close").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }

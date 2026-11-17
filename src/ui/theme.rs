@@ -523,9 +523,130 @@ pub fn chip(ui: &mut egui::Ui, text: &str) -> (bool, bool) {
     (clicked, removed)
 }
 
-/// A modal window with the same title style everywhere.
-pub fn modal(title: &str) -> egui::Window<'static> {
-    egui::Window::new(RichText::new(title).family(family_semibold())).collapsible(false)
+/// Space kept free of any dialog: a dialog is at most the window height minus this.
+pub const DIALOG_WINDOW_MARGIN: f32 = 48.0;
+/// Room kept for the fixed footer (separator and one row of buttons).
+pub const DIALOG_FOOTER_H: f32 = 56.0;
+/// A dialog never gets a scrolling middle shorter than this, however small the window.
+pub const DIALOG_BODY_MIN_H: f32 = 80.0;
+
+/// The heights of a dialog in a window of a given height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DialogLayout {
+    /// The tallest the whole dialog (title bar, middle, footer, frame) may be.
+    pub max_total_h: f32,
+    /// The tallest the content under the title bar may be (middle + footer).
+    pub max_content_h: f32,
+    /// The tallest the scrolling middle may be.
+    pub body_max_h: f32,
+}
+
+/// Pure layout of a dialog: `window_h` is the window height in points, `title_h` the height of
+/// the title text. The dialog's frame has the window margin above and below its content, and
+/// egui puts one more margin pair between the title bar and the content.
+pub fn dialog_layout(window_h: f32, title_h: f32, item_spacing_y: f32) -> DialogLayout {
+    let overhead = 4.0 * SPACE_M + title_h;
+    let max_total_h = (window_h - DIALOG_WINDOW_MARGIN).max(overhead + DIALOG_FOOTER_H + DIALOG_BODY_MIN_H);
+    let max_content_h = max_total_h - overhead;
+    let body_max_h = (max_content_h - DIALOG_FOOTER_H - item_spacing_y).max(DIALOG_BODY_MIN_H);
+    DialogLayout { max_total_h, max_content_h, body_max_h }
+}
+
+/// A dialog without a set width is about this wide.
+pub const DIALOG_DEFAULT_W: f32 = 520.0;
+
+/// Where a dialog first opens: horizontally centred, `DIALOG_WINDOW_MARGIN / 2` below the top, so
+/// a dialog of the largest height has the same space above and below. (An egui pivot is not
+/// used: during the window's first, invisible sizing frame it moves the window away.)
+pub fn dialog_start_pos(screen: egui::Rect, width: f32) -> egui::Pos2 {
+    egui::pos2(
+        (screen.left() + (screen.width() - width) / 2.0).max(screen.left() + DIALOG_WINDOW_MARGIN / 2.0),
+        screen.top() + DIALOG_WINDOW_MARGIN / 2.0,
+    )
+}
+
+/// A dialog: the title bar (header) and the button footer stay in place, the middle scrolls.
+/// Same title style everywhere; at most the window height minus 48 px, centred at first.
+pub struct Dialog<'a> {
+    window: egui::Window<'a>,
+    width: f32,
+}
+
+/// The modal window every dialog uses.
+pub fn modal<'a>(title: &str) -> Dialog<'a> {
+    Dialog {
+        window: egui::Window::new(RichText::new(title).family(family_semibold())).collapsible(false),
+        width: DIALOG_DEFAULT_W,
+    }
+}
+
+impl<'a> Dialog<'a> {
+    pub fn collapsible(mut self, v: bool) -> Self {
+        self.window = self.window.collapsible(v);
+        self
+    }
+    pub fn default_width(mut self, w: f32) -> Self {
+        self.window = self.window.default_width(w);
+        self.width = w;
+        self
+    }
+    pub fn resizable(mut self, v: bool) -> Self {
+        self.window = self.window.resizable(v);
+        self
+    }
+    pub fn open(mut self, open: &'a mut bool) -> Self {
+        self.window = self.window.open(open);
+        self
+    }
+
+    /// Shows the dialog. `add` calls `body` once for the scrolling middle and `footer` once for
+    /// the buttons.
+    pub fn show<R>(
+        self,
+        ctx: &egui::Context,
+        add: impl FnOnce(&mut DialogUi<'_>) -> R,
+    ) -> Option<egui::InnerResponse<Option<R>>> {
+        let screen = ctx.screen_rect();
+        // (ctx.fonts holds the context's lock: read the style before, not inside)
+        let spacing_y = ctx.style().spacing.item_spacing.y;
+        let title_h = ctx.fonts(|f| {
+            f.row_height(&FontId::new(TEXT_HEADING, family_semibold()))
+                .max(f.row_height(&FontId::new(TEXT_BASE, family_semibold())))
+        });
+        let lay = dialog_layout(screen.height(), title_h, spacing_y);
+        self.window
+            .max_height(lay.max_content_h)
+            .default_pos(dialog_start_pos(screen, self.width))
+            .show(ctx, |ui| add(&mut DialogUi { ui, body_max_h: lay.body_max_h }))
+    }
+}
+
+/// The inside of a dialog under construction.
+pub struct DialogUi<'a> {
+    pub ui: &'a mut egui::Ui,
+    body_max_h: f32,
+}
+
+impl DialogUi<'_> {
+    /// The scrolling middle: as tall as its content, up to what the window leaves.
+    pub fn body<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        egui::ScrollArea::vertical()
+            .max_height(self.body_max_h)
+            .auto_shrink([true, true])
+            .show(self.ui, add)
+            .inner
+    }
+
+    /// The fixed footer: a separator, then the buttons.
+    pub fn footer<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        self.ui.separator();
+        add(self.ui)
+    }
+
+    /// Content between the title bar and the footer that must stay in view (a banner).
+    pub fn header<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        add(self.ui)
+    }
 }
 
 /// Error line shown in modals and panels (danger colour, icon).

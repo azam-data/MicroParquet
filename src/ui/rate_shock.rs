@@ -45,73 +45,76 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E154} Interest Rate Shock / ΔNII Sensitivity Simulator")
             .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
-                ui.label("NII_Impact_BDT is signed (+ asset, − liability). Shocked_Annual_Int is gross income or expense after the shock, unsigned.");
-                ui.horizontal(|ui| {
-                    ui.label("Balance Col:");
-                    egui::ComboBox::from_id_salt("shk_bal")
-                        .selected_text(&self.shock.bal_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.shock.bal_col, c.clone(), c);
-                            }
-                        });
-                    ui.label("Int Rate Col:");
-                    egui::ComboBox::from_id_salt("shk_rt")
-                        .selected_text(&self.shock.rate_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.shock.rate_col, c.clone(), c);
-                            }
-                        });
+            .show(ctx, |d| {
+                d.body(|ui| {
+                    ui.label("Calculates 1-Year repricing-weighted Net Interest Income impact.");
+                    ui.label("NII_Impact_BDT is signed (+ asset, − liability). Shocked_Annual_Int is gross income or expense after the shock, unsigned.");
+                    ui.horizontal(|ui| {
+                        ui.label("Balance Col:");
+                        egui::ComboBox::from_id_salt("shk_bal")
+                            .selected_text(&self.shock.bal_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.shock.bal_col, c.clone(), c);
+                                }
+                            });
+                        ui.label("Int Rate Col:");
+                        egui::ComboBox::from_id_salt("shk_rt")
+                            .selected_text(&self.shock.rate_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.shock.rate_col, c.clone(), c);
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Maturity Date Col:");
+                        egui::ComboBox::from_id_salt("shk_mat")
+                            .selected_text(&self.shock.mat_col)
+                            .show_ui(ui, |ui| {
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.shock.mat_col, c.clone(), c);
+                                }
+                            });
+                        ui.label("Cutoff Date (YYYY-MM-DD):");
+                        ui.text_edit_singleline(&mut self.buckets.cutoff);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
+                        ui.add(egui::DragValue::new(&mut self.shock.bps).speed(5.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Asset/Liability Side Col:");
+                        let shown = if self.shock.side_col.is_empty() {
+                            "(none: treat all rows as assets)".to_string()
+                        } else {
+                            self.shock.side_col.clone()
+                        };
+                        egui::ComboBox::from_id_salt("shk_side")
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.shock.side_col,
+                                    String::new(),
+                                    "(none: treat all rows as assets)",
+                                );
+                                for c in &avail_cols {
+                                    ui.selectable_value(&mut self.shock.side_col, c.clone(), c);
+                                }
+                            });
+                    });
+                    ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Maturity Date Col:");
-                    egui::ComboBox::from_id_salt("shk_mat")
-                        .selected_text(&self.shock.mat_col)
-                        .show_ui(ui, |ui| {
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.shock.mat_col, c.clone(), c);
-                            }
-                        });
-                    ui.label("Cutoff Date (YYYY-MM-DD):");
-                    ui.text_edit_singleline(&mut self.buckets.cutoff);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
-                    ui.add(egui::DragValue::new(&mut self.shock.bps).speed(5.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Asset/Liability Side Col:");
-                    let shown = if self.shock.side_col.is_empty() {
-                        "(none: treat all rows as assets)".to_string()
-                    } else {
-                        self.shock.side_col.clone()
-                    };
-                    egui::ComboBox::from_id_salt("shk_side")
-                        .selected_text(shown)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.shock.side_col,
-                                String::new(),
-                                "(none: treat all rows as assets)",
-                            );
-                            for c in &avail_cols {
-                                ui.selectable_value(&mut self.shock.side_col, c.clone(), c);
-                            }
-                        });
-                });
-                ui.label("Side values: A/ASSET = asset; L/LIABILITY, DEPOSIT, BORROWING = liability.");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "\u{E182} Run Rate Shock Simulation").clicked() {
-                        step_to_apply = self.tool_step(&ActiveToolModal::RateShockSim).map(|s| (s, true));
-                        close_modal = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close_modal = true;
-                    }
+                d.footer(|ui| {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "\u{E182} Run Rate Shock Simulation").clicked() {
+                            step_to_apply = self.tool_step(&ActiveToolModal::RateShockSim).map(|s| (s, true));
+                            close_modal = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_modal = true;
+                        }
+                    });
                 });
             });
         ModalOutcome { close: close_modal, step: step_to_apply }
