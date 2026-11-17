@@ -148,18 +148,19 @@ pub struct ScaledTabToExport<'a> {
     pub control_col: Option<&'a str>,
 }
 
-/// The summary cells of a collected tab (empty when the tab has no summary settings).
+/// The summary cells of a collected tab (empty when no totals row is asked for). A totals row
+/// that cannot be computed is an error, not a missing row.
 fn summary_for_export(
     df: &DataFrame,
     overrides: Option<&HashMap<String, SummarySpec>>,
     control_col: Option<&str>,
-) -> Vec<SummaryCell> {
+) -> Result<Vec<SummaryCell>> {
     let Some(over) = overrides else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let cols: Vec<(String, DataType)> = df.get_columns().iter().map(|s| (s.name().to_string(), s.dtype().clone())).collect();
     let specs = crate::summary::effective_specs(&cols, over, control_col);
-    crate::summary::compute_summary(df.clone().lazy(), &specs).unwrap_or_default()
+    crate::summary::compute_summary(df.clone().lazy(), &specs).context("The totals row could not be computed")
 }
 
 pub fn export_selected_tabs_to_xlsx_scaled(
@@ -171,12 +172,14 @@ pub fn export_selected_tabs_to_xlsx_scaled(
     let mut ok = Vec::new();
     let mut errors = Vec::new();
     for t in tabs {
-        match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
-            Ok(df) => {
-                // The summary is computed from the same collected data the sheet holds.
-                let summary = summary_for_export(&df, t.summary, t.control_col);
-                ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone(), summary })
-            }
+        // The summary is computed from the same collected data the sheet holds.
+        let collected = compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| {
+            let df = lf.collect()?;
+            let summary = summary_for_export(&df, t.summary, t.control_col)?;
+            Ok((df, summary))
+        });
+        match collected {
+            Ok((df, summary)) => ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone(), summary }),
             Err(e) => errors.push((t.title.clone(), format!("{:#}", e))),
         }
     }

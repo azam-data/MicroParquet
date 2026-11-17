@@ -312,7 +312,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
     // the Excel export job writes the totals row
     let out = dir.join("job.xlsx");
     let tab = ExportTab { title: "Loans".into(), source: src, steps: vec![], col_formats: HashMap::new(), summary: HashMap::new(), control_col: None };
-    export_tabs_xlsx(&[tab], &dir, &out, NumberDisplayFormat::StandardCommas, 2, None, &JobCtx::inert()).unwrap();
+    export_tabs_xlsx(&[tab], &dir, &out, NumberDisplayFormat::StandardCommas, 2, true, None, &JobCtx::inert()).unwrap();
     let sheet = unzip_entry(&out, "xl/worksheets/sheet1.xml");
     assert_eq!(cell_value(&sheet, "C10").as_deref(), Some("10000"));
     std::fs::remove_dir_all(&dir).ok();

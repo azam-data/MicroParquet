@@ -458,12 +458,15 @@ pub struct ExportTab {
 
 /// Excel workbook of the ticked tabs. Money columns are written in the chosen scale with the
 /// scale in their header ("Balance (BDT M)"); Parquet and CSV exports keep raw values.
+/// `totals_row`: add each tab's summary under its data (the export dialog's checkbox).
+#[allow(clippy::too_many_arguments)]
 pub fn export_tabs_xlsx(
     tabs: &[ExportTab],
     temp_dir: &Path,
     out_path: &Path,
     num_format: NumberDisplayFormat,
     global_decimals: usize,
+    totals_row: bool,
     sidecar: Option<&[ParseFailure]>,
     ctx: &JobCtx,
 ) -> Result<ExportOutcome> {
@@ -475,7 +478,7 @@ pub fn export_tabs_xlsx(
             source: &t.source,
             steps: t.steps.as_slice(),
             col_formats: &t.col_formats,
-            summary: Some(&t.summary),
+            summary: if totals_row { Some(&t.summary) } else { None },
             control_col: t.control_col.as_deref(),
         })
         .collect();
@@ -489,12 +492,15 @@ pub fn export_tabs_xlsx(
     Ok(ExportOutcome { message, path_used: None, written: Some(out_path.to_path_buf()) })
 }
 
+/// PDF report of the ticked tabs. `totals_row`: a summary band under each tab's rows.
+#[allow(clippy::too_many_arguments)]
 pub fn export_tabs_pdf(
     tabs: &[ExportTab],
     temp_dir: &Path,
     out_path: &Path,
     num_format: NumberDisplayFormat,
     global_decimals: usize,
+    totals_row: bool,
     sidecar: Option<&[ParseFailure]>,
     ctx: &JobCtx,
 ) -> Result<ExportOutcome> {
@@ -509,7 +515,11 @@ pub fn export_tabs_pdf(
         // The summary is of the whole result; the page shows only the first rows (one past the
         // limit, so the export can say the tab was cut).
         match compile_tab_lazy(&tab.source, &tab.steps, temp_dir).and_then(|lf| {
-            let summary = summary_of_lazy(lf.clone(), &tab.summary, tab.control_col.as_deref())?;
+            let summary = if totals_row {
+                summary_of_lazy(lf.clone(), &tab.summary, tab.control_col.as_deref())?
+            } else {
+                Vec::new()
+            };
             let df = lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?;
             Ok((df, summary))
         }) {

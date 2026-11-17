@@ -525,3 +525,10 @@ fn an_edited_pivot_keeps_what_its_modal_cannot_show() {
         other => panic!("{:?}", other),
     }
 }
+
+#[test]
+fn export_dialog_totals_default_on_for_pdf_and_off_for_excel() {
+    let app = test_app("fix11");
+    assert!(app.export.totals_pdf);
+    assert!(!app.export.totals_xlsx);
+}

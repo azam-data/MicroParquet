@@ -319,3 +319,60 @@ fn fix9_summary_job_uses_the_control_column_weight() {
     assert_eq!((cell.agg, cell.weight_col.as_deref()), (micro_parquet::models::SummaryAgg::WeightedAvg, Some("Balance")));
     assert_eq!(cell.value, Some(micro_parquet::summary::SummaryValue::Number(11.0)));
 }
+
+// ---------------------------------------------------------------------------------- fix 11
+
+fn unzip_entry(zip: &Path, entry: &str) -> String {
+    let out = std::process::Command::new("unzip").arg("-p").arg(zip).arg(entry).output().expect("unzip must be installed");
+    assert!(out.status.success(), "unzip {entry}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn loans_tab(d: &Path) -> ExportTab {
+    let df = DataFrame::new(vec![
+        Series::new("Branch".into(), &["DHK", "CTG", "SYL"]).into(),
+        Series::new("Balance".into(), &[10_000_000.0f64, 20_000_000.0, 30_000_000.0]).into(),
+    ])
+    .unwrap();
+    ExportTab {
+        title: "Loans".into(),
+        source: parquet(d, "loans", df),
+        steps: vec![],
+        col_formats: Default::default(),
+        summary: Default::default(),
+        control_col: Some("Balance".into()),
+    }
+}
+
+#[test]
+fn fix11_totals_row_follows_the_checkbox_and_never_reaches_csv_or_parquet() {
+    let d = dir("f11");
+    let tab = loans_tab(&d);
+    let ctx = JobCtx::inert();
+    // Excel: off -> no labels row; on -> "Sum" / "Count" labels and the summary colour
+    let off = d.join("off.xlsx");
+    let on = d.join("on.xlsx");
+    export_tabs_xlsx(std::slice::from_ref(&tab), &d, &off, NumberDisplayFormat::StandardCommas, 2, false, None, &ctx).unwrap();
+    export_tabs_xlsx(std::slice::from_ref(&tab), &d, &on, NumberDisplayFormat::StandardCommas, 2, true, None, &ctx).unwrap();
+    let (s_off, s_on) = (unzip_entry(&off, "xl/sharedStrings.xml"), unzip_entry(&on, "xl/sharedStrings.xml"));
+    assert!(!s_off.contains(">Sum<") && !s_off.contains(">Count<"), "{s_off}");
+    assert!(s_on.contains(">Sum<") && s_on.contains(">Count<"), "{s_on}");
+    let sheet_off = unzip_entry(&off, "xl/worksheets/sheet1.xml");
+    assert!(!sheet_off.contains("r=\"A6\""), "header + 3 rows only: {sheet_off}");
+    assert!(unzip_entry(&on, "xl/worksheets/sheet1.xml").contains("r=\"B6\""), "labels row 5, values row 6");
+    // PDF: the band adds drawing and text
+    let (p_off, p_on) = (d.join("off.pdf"), d.join("on.pdf"));
+    export_tabs_pdf(std::slice::from_ref(&tab), &d, &p_off, NumberDisplayFormat::BdtCrore, 2, false, None, &ctx).unwrap();
+    export_tabs_pdf(std::slice::from_ref(&tab), &d, &p_on, NumberDisplayFormat::BdtCrore, 2, true, None, &ctx).unwrap();
+    let (a, b) = (std::fs::metadata(&p_off).unwrap().len(), std::fs::metadata(&p_on).unwrap().len());
+    assert!(b > a, "{b} vs {a}");
+    // CSV and Parquet: data rows only, whatever the summary choices
+    let csv = d.join("out.csv");
+    export_tab_csv(&tab.source, &[], &d, &csv, false, None, &ctx).unwrap();
+    let text = std::fs::read_to_string(&csv).unwrap();
+    assert_eq!(text.lines().count(), 4, "{text}");
+    let pq = d.join("out.parquet");
+    export_tab_parquet(&tab.source, &[], &d, &pq, ParquetDialect::ArchiveZstd, None, &ctx).unwrap();
+    let back = LazyFrame::scan_parquet(&pq, Default::default()).unwrap().collect().unwrap();
+    assert_eq!(back.height(), 3);
+}

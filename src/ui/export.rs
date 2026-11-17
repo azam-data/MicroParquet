@@ -16,6 +16,10 @@ pub struct ExportState {
     /// Question shown when a Text column of the export looks like numbers.
     pub text_guard: Option<TextGuard>,
     pub check_token: u64,
+    /// The dialog's "Totals row" checkboxes: on for PDF, off for Excel by default. CSV and
+    /// Parquet never get one.
+    pub totals_xlsx: bool,
+    pub totals_pdf: bool,
 }
 
 /// An export that starts when its Text-column check finds nothing (or the user decides).
@@ -44,6 +48,8 @@ impl Default for ExportState {
             pending: None,
             text_guard: None,
             check_token: 0,
+            totals_xlsx: false,
+            totals_pdf: true,
         }
     }
 }
@@ -78,6 +84,12 @@ impl MicroParquetApp {
                     );
                 }
                 ui.separator();
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.export.totals_xlsx, "Totals row in Excel")
+                        .on_hover_text("The summary row (as chosen above each column) under each sheet's data.");
+                    ui.checkbox(&mut self.export.totals_pdf, "Totals row in PDF")
+                        .on_hover_text("The summary band under each tab's rows.");
+                });
                 ui.horizontal(|ui| {
                     if ui
                         .button("\u{E150} Export Selected Tabs to Single .xlsx...")
@@ -452,8 +464,9 @@ impl MicroParquetApp {
         let temp = self.paths.temp_dir.clone();
         let (fmt, dec) = (self.num_format, self.global_decimals);
         let label = format!("Excel export {}", file_label(&out_path));
+        let totals = self.export.totals_xlsx;
         self.submit_export(label, move |ctx| {
-            export_tabs_xlsx(&tabs, &temp, &out_path, fmt, dec, sidecar.as_deref(), ctx)
+            export_tabs_xlsx(&tabs, &temp, &out_path, fmt, dec, totals, sidecar.as_deref(), ctx)
         });
     }
 
@@ -468,8 +481,9 @@ impl MicroParquetApp {
         let temp = self.paths.temp_dir.clone();
         let (fmt, dec) = (self.num_format, self.global_decimals);
         let label = format!("PDF export {}", file_label(&out_path));
+        let totals = self.export.totals_pdf;
         self.submit_export(label, move |ctx| {
-            export_tabs_pdf(&tabs, &temp, &out_path, fmt, dec, sidecar.as_deref(), ctx)
+            export_tabs_pdf(&tabs, &temp, &out_path, fmt, dec, totals, sidecar.as_deref(), ctx)
         });
     }
 
