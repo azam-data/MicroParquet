@@ -14,6 +14,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Calc column](calc-column.md): a new column from one arithmetic step.
 - [Conditional column](conditional-column.md): IF / ELSE IF / ELSE flags and groups.
 - [Counterparty name normaliser](name-normaliser.md): one spelling for each company.
+- [Pivot table](pivot.md): Rows, Columns, Values and Filters with totals.
 - [Summary row](summary-row.md): totals and weighted averages under the table.
 - [Column inspector](column-inspector.md): facts about one column.
 

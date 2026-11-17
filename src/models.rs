@@ -459,7 +459,7 @@ pub fn resolved_scale(
     }
 }
 
-fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
+pub fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
     // Whole-token matches only: "Utility_Bill_Amount" is money, not utilisation
     const BPS_TOKENS: &[&str] = &["bps", "bp"];
     const PLAIN_NUMBER_TOKENS: &[&str] = &[
@@ -1182,6 +1182,184 @@ pub struct AggSpec {
     pub format_spec: ColumnFormatSpec,
 }
 
+// ---------------------------------------------------------------------------- pivot table (V1)
+
+/// How one value field of a pivot table is aggregated.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotAgg {
+    #[default]
+    Sum,
+    Count,
+    CountDistinct,
+    Average,
+    Min,
+    Max,
+    WeightedAvg,
+}
+
+impl PivotAgg {
+    pub fn all() -> &'static [PivotAgg] {
+        &[
+            PivotAgg::Sum,
+            PivotAgg::Count,
+            PivotAgg::CountDistinct,
+            PivotAgg::Average,
+            PivotAgg::Min,
+            PivotAgg::Max,
+            PivotAgg::WeightedAvg,
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotAgg::Sum => "Sum",
+            PivotAgg::Count => "Count",
+            PivotAgg::CountDistinct => "Count distinct",
+            PivotAgg::Average => "Average",
+            PivotAgg::Min => "Min",
+            PivotAgg::Max => "Max",
+            PivotAgg::WeightedAvg => "W.Avg",
+        }
+    }
+
+    /// True when the cells of a row or column add up to its total (so a share of the total means something).
+    pub fn is_additive(&self) -> bool {
+        matches!(self, PivotAgg::Sum | PivotAgg::Count)
+    }
+}
+
+/// One value field of a pivot table.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PivotValue {
+    pub field: String,
+    #[serde(default)]
+    pub agg: PivotAgg,
+    /// The weight column of a weighted average.
+    #[serde(default)]
+    pub weight_col: Option<String>,
+}
+
+impl PivotValue {
+    /// "Sum of Balance", "W.Avg of Rate by Balance".
+    pub fn label(&self) -> String {
+        match (&self.agg, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty())) {
+            (PivotAgg::WeightedAvg, Some(w)) => format!("W.Avg of {} by {}", self.field, w),
+            (a, _) => format!("{} of {}", a.label(), self.field),
+        }
+    }
+}
+
+/// A filter of a pivot table: only rows whose field is one of `values` are used; `None` is a blank value.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PivotFilter {
+    pub field: String,
+    #[serde(default)]
+    pub values: Vec<Option<String>>,
+}
+
+/// "Show values as" of a pivot table.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotShowAs {
+    #[default]
+    NoCalculation,
+    PctOfRowTotal,
+    PctOfColumnTotal,
+    PctOfGrandTotal,
+}
+
+impl PivotShowAs {
+    pub fn all() -> &'static [PivotShowAs] {
+        &[PivotShowAs::NoCalculation, PivotShowAs::PctOfRowTotal, PivotShowAs::PctOfColumnTotal, PivotShowAs::PctOfGrandTotal]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotShowAs::NoCalculation => "No calculation",
+            PivotShowAs::PctOfRowTotal => "% of row total",
+            PivotShowAs::PctOfColumnTotal => "% of column total",
+            PivotShowAs::PctOfGrandTotal => "% of grand total",
+        }
+    }
+}
+
+/// The scale a pivot's value columns are shown in. The numbers stay in BDT; this sets each value
+/// column's display format (so the global scale is not applied a second time).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotScale {
+    /// As set in the View menu.
+    #[default]
+    Global,
+    Plain,
+    Thousand,
+    Lakh,
+    Million,
+    Crore,
+}
+
+impl PivotScale {
+    pub fn all() -> &'static [PivotScale] {
+        &[PivotScale::Global, PivotScale::Plain, PivotScale::Thousand, PivotScale::Lakh, PivotScale::Million, PivotScale::Crore]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotScale::Global => "As in View",
+            PivotScale::Plain => "Plain",
+            PivotScale::Thousand => "Thousand",
+            PivotScale::Lakh => "Lakh",
+            PivotScale::Million => "Million",
+            PivotScale::Crore => "Crore",
+        }
+    }
+
+    /// The column format that shows this scale; `None` follows the global setting.
+    pub fn format_type(&self) -> Option<MetricFormatType> {
+        match self {
+            PivotScale::Global => None,
+            PivotScale::Plain => Some(MetricFormatType::StandardCommas),
+            PivotScale::Thousand => Some(MetricFormatType::BdtThousand),
+            PivotScale::Lakh => Some(MetricFormatType::BdtLakh),
+            PivotScale::Million => Some(MetricFormatType::BdtMillion),
+            PivotScale::Crore => Some(MetricFormatType::BdtCrore),
+        }
+    }
+}
+
+/// "Sort by value": the rows are ordered by the row total of one value field instead of by their labels.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PivotSortByValue {
+    /// Index into the pivot's value fields.
+    pub value_index: usize,
+    /// Highest first.
+    #[serde(default)]
+    pub descending: bool,
+}
+
+/// Everything a pivot table is made of (the step `PivotTable`, the builder dialog and the engine share it).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct PivotSpec {
+    #[serde(default)]
+    pub rows: Vec<String>,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub values: Vec<PivotValue>,
+    #[serde(default)]
+    pub filters: Vec<PivotFilter>,
+    #[serde(default = "default_true")]
+    pub row_totals: bool,
+    #[serde(default = "default_true")]
+    pub column_totals: bool,
+    #[serde(default)]
+    pub subtotals: bool,
+    #[serde(default)]
+    pub show_as: PivotShowAs,
+    #[serde(default)]
+    pub scale: PivotScale,
+    #[serde(default)]
+    pub sort_by_value: Option<PivotSortByValue>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FtpPoint {
     pub tenor_days: i64,
@@ -1416,6 +1594,30 @@ pub enum TransformStep {
         sort_by_col: Option<String>,
         top_n: Option<usize>,
     },
+    /// The pivot builder's table (Phase 4 V1): Rows, Columns, Values and Filters, with totals.
+    /// `GroupByPivot` steps from older macros stay as they were.
+    PivotTable {
+        #[serde(default)]
+        rows: Vec<String>,
+        #[serde(default)]
+        columns: Vec<String>,
+        #[serde(default)]
+        values: Vec<PivotValue>,
+        #[serde(default)]
+        filters: Vec<PivotFilter>,
+        #[serde(default = "default_true")]
+        row_totals: bool,
+        #[serde(default = "default_true")]
+        column_totals: bool,
+        #[serde(default)]
+        subtotals: bool,
+        #[serde(default)]
+        show_as: PivotShowAs,
+        #[serde(default)]
+        scale: PivotScale,
+        #[serde(default)]
+        sort_by_value: Option<PivotSortByValue>,
+    },
     SqlQuery {
         query: String,
     },
@@ -1462,7 +1664,7 @@ impl TransformStep {
             TransformStep::DurationAnalysis { .. } => "Duration / \u{394}EVE",
             TransformStep::LoanClassificationProvision { .. } => "Provision",
             TransformStep::LoanLimitUtilization { .. } => "Limits",
-            TransformStep::GroupByPivot { .. } => "Pivot",
+            TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
             TransformStep::Skipped { .. } => "Off",
         }
@@ -1582,7 +1784,54 @@ impl TransformStep {
             TransformStep::GroupByPivot { group_cols, .. } => {
                 format!("Group/Pivot by {:?}", group_cols)
             }
+            TransformStep::PivotTable { rows, columns, values, .. } => {
+                let mut t = format!("Pivot: {}", values.iter().map(|v| v.label()).collect::<Vec<_>>().join(", "));
+                if !rows.is_empty() {
+                    t.push_str(&format!(" by {}", rows.join(" / ")));
+                }
+                if !columns.is_empty() {
+                    t.push_str(&format!(" across {}", columns.join(" / ")));
+                }
+                t
+            }
             TransformStep::SqlQuery { .. } => "SQL Query Transform".to_string(),
+        }
+    }
+}
+
+impl TransformStep {
+    /// The pivot table settings of a `PivotTable` step.
+    pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
+        match self.inner() {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value } => Some(PivotSpec {
+                rows: rows.clone(),
+                columns: columns.clone(),
+                values: values.clone(),
+                filters: filters.clone(),
+                row_totals: *row_totals,
+                column_totals: *column_totals,
+                subtotals: *subtotals,
+                show_as: *show_as,
+                scale: *scale,
+                sort_by_value: *sort_by_value,
+            }),
+            _ => None,
+        }
+    }
+
+    /// A `PivotTable` step from settings.
+    pub fn from_pivot_spec(spec: PivotSpec) -> TransformStep {
+        TransformStep::PivotTable {
+            rows: spec.rows,
+            columns: spec.columns,
+            values: spec.values,
+            filters: spec.filters,
+            row_totals: spec.row_totals,
+            column_totals: spec.column_totals,
+            subtotals: spec.subtotals,
+            show_as: spec.show_as,
+            scale: spec.scale,
+            sort_by_value: spec.sort_by_value,
         }
     }
 }

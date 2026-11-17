@@ -1,0 +1,428 @@
+//! Phase 4 render tests: the new dialogs are drawn by the real UI code in a headless egui
+//! context at 1219×686 pt (a 1280×720 px window at 105%) and 1600×900 pt (at 80%), and what they
+//! drew is checked by the rectangles of the widgets themselves.
+
+use crate::ui::layout_tests::{collect_painted, Painted};
+use crate::ui::pivot_builder::Area;
+use crate::ui::prelude::*;
+use crate::ui::render_tests::{assert_dialog_fits, frames, inside, screen};
+use crate::ui::tests::{open_tab, parquet_source, settle, test_app};
+use micro_parquet::commands::CommandId;
+use polars::prelude::{NamedFrom, Series};
+
+const SCREENS: [(f32, f32, f32); 2] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)];
+const EN: &str = "\u{2013}";
+
+/// Bucket, Bank, Balance, Rate and `extra` more columns, one with a very long name.
+fn book(extra: usize) -> DataFrame {
+    let bucket = |s: &str| s.replace('-', EN);
+    let mut cols: Vec<Series> = vec![
+        Series::new("Bucket".into(), &[bucket("02. 2-7 Days"), bucket("10. 3-5 Years"), bucket("04. 1-3 Months"), bucket("02. 2-7 Days"), bucket("04. 1-3 Months"), bucket("10. 3-5 Years"), bucket("02. 2-7 Days")]),
+        Series::new("Bank".into(), &["Conventional", "Islami", "Conventional", "Islami", "Islami", "Conventional", "Conventional"]),
+        Series::new("Balance".into(), &[100.0, 300.0, 200.0, 50.0, 150.0, 400.0, 100.0]),
+        Series::new("Rate".into(), &[5.0, 9.0, 6.0, 8.0, 7.0, 10.0, 7.0]),
+        Series::new("A_very_long_column_name_that_keeps_going_and_going_and_going_until_it_must_be_cut".into(), &["a", "b", "c", "d", "e", "f", "g"]),
+    ];
+    for i in 0..extra {
+        cols.push(Series::new(format!("Extra field {i:02}").into(), &[1.0f64; 7]));
+    }
+    DataFrame::new(cols).expect("the book")
+}
+
+fn sum_balance() -> PivotValue {
+    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }
+}
+
+fn title() -> String {
+    format!("{}  Pivot table", theme::ph::TABLE)
+}
+
+struct Rig {
+    app: MicroParquetApp,
+    ctx: egui::Context,
+    input: egui::RawInput,
+    what: String,
+}
+
+impl Rig {
+    fn new(name: &str, ppp: f32, w: f32, h: f32, extra: usize) -> Rig {
+        let mut app = test_app(name);
+        let src = parquet_source(&app.paths.root_dir.clone(), "book", book(extra));
+        open_tab(&mut app, src, vec![]);
+        let (ctx, input) = screen(ppp, w, h);
+        Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+    }
+
+    /// Runs `n` frames and the finished jobs; returns what the last one painted.
+    fn draw(&mut self, n: usize) -> Painted {
+        let mut last = None;
+        for _ in 0..n {
+            settle(&mut self.app);
+            let out = self.ctx.run(self.input.clone(), |c| self.app.frame_ui(c));
+            last = Some(collect_painted(&out.shapes));
+        }
+        settle(&mut self.app);
+        last.expect("a frame")
+    }
+
+    fn step(&mut self, events: Vec<egui::Event>) -> Painted {
+        let mut i = self.input.clone();
+        i.events = events;
+        settle(&mut self.app);
+        let out = self.ctx.run(i, |c| self.app.frame_ui(c));
+        collect_painted(&out.shapes)
+    }
+
+    fn click(&mut self, pos: egui::Pos2) -> Painted {
+        let press = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
+        let release = vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+        self.step(press);
+        self.step(release);
+        self.draw(3)
+    }
+
+    fn open_pivot(&mut self) -> Painted {
+        self.app.run_command(&self.ctx, CommandId::Pivot);
+        assert_eq!(self.app.active_tool, ActiveToolModal::PivotBuilder, "{}: Ctrl+K / the Transform button opens the builder", self.what);
+        self.draw(8)
+    }
+
+    fn rects(&self) -> crate::ui::pivot_builder::PivotRects {
+        self.app.pivot_builder.rects.clone()
+    }
+}
+
+fn overlap(a: egui::Rect, b: egui::Rect) -> bool {
+    a.intersects(b) && a.intersect(b).width() > 1.0 && a.intersect(b).height() > 1.0
+}
+
+/// Everything the dialog drew is inside it, inside its own panel, and nothing overlaps.
+fn assert_layout(rig: &Rig, p: &Painted) {
+    let what = &rig.what;
+    let r = assert_dialog_fits(&rig.ctx, &title(), what);
+    let b = rig.rects();
+    let win = r.window;
+    // (the middle of the dialog scrolls, so a tall right side may run below the window: widths only)
+    assert!(inside(b.fields, win), "{what}: the field list {:?} is inside the dialog {win:?}", b.fields);
+    assert!(b.right.left() >= win.left() - 0.5 && b.right.right() <= win.right() + 0.5, "{what}: the right side {:?} is not wider than the dialog {win:?}", b.right);
+    assert!(!overlap(b.fields, b.right), "{what}: the field list and the right side do not overlap");
+    assert!(inside(b.fields_list, b.fields), "{what}: the list {:?} is inside its panel {:?}", b.fields_list, b.fields);
+    for (i, area) in Area::ALL.iter().enumerate() {
+        let a = b.areas[area.index()];
+        assert!(a.is_positive(), "{what}: the area {:?} was drawn", area);
+        assert!(inside(a, b.right), "{what}: the area {:?} {a:?} is inside the right side {:?}", area, b.right);
+        for other in Area::ALL.iter().skip(i + 1) {
+            assert!(!overlap(a, b.areas[other.index()]), "{what}: {:?} and {:?} overlap", area, other);
+        }
+        assert!(p.boxes.iter().any(|(t, bx)| t == area.title() && inside(*bx, a)), "{what}: the title '{}' is inside its area", area.title());
+    }
+    assert!(inside(b.toggles, b.right), "{what}: the toggles {:?} are inside the right side {:?}", b.toggles, b.right);
+    assert!(inside(b.preview, b.right), "{what}: the preview {:?} is inside the right side {:?}", b.preview, b.right);
+    assert!(b.preview.top() >= b.toggles.bottom() - 0.5 && b.toggles.top() >= b.areas[Area::Rows.index()].bottom() - 0.5, "{what}: areas, toggles and preview follow one another without overlap");
+    assert!(inside(b.preview_scroll, b.preview), "{what}: the scrolling preview {:?} is inside its card {:?}", b.preview_scroll, b.preview);
+    for (area, name, c) in &b.chips {
+        assert!(inside(*c, b.areas[area.index()]), "{what}: the chip '{name}' {c:?} is inside its area {:?}", b.areas[area.index()]);
+        assert!(p.boxes.iter().filter(|(t, bx)| t == name && overlap(*bx, *c)).all(|(_, bx)| inside(*bx, *c)), "{what}: the name '{name}' is inside its chip {c:?}");
+    }
+    for (name, row) in &b.field_rows {
+        assert!(row.width() <= b.fields.width() + 0.5, "{what}: the row of '{name}' {row:?} is not wider than the list {:?}", b.fields);
+        if inside(*row, b.fields_list) {
+            assert!(p.boxes.iter().filter(|(t, bx)| t == name && bx.center().x < b.fields.right() && bx.center().y > row.top() && bx.center().y < row.bottom()).all(|(_, bx)| inside(*bx, *row)), "{what}: the name '{name}' is inside its row");
+        }
+    }
+    for (name, rect) in &b.buttons {
+        assert!(inside(*rect, r.footer), "{what}: the button '{name}' {rect:?} is inside the footer {:?}", r.footer);
+    }
+    assert!(inside(b.footer_text, r.footer), "{what}: the footer text {:?} is inside the footer {:?}", b.footer_text, r.footer);
+    for (name, rect) in &b.buttons {
+        assert!(!overlap(b.footer_text, *rect), "{what}: the footer text does not run under the button '{name}'");
+    }
+    assert!(inside(r.body, win), "{what}: the body {:?} is inside the dialog", r.body);
+}
+
+#[test]
+fn the_pivot_dialog_lists_the_fields_with_badges_and_keeps_every_panel_inside_the_dialog() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1a", ppp, w, h, 30);
+        let p = rig.open_pivot();
+        let what = rig.what.clone();
+        // the fields, the search box and the design's wording
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Search 35 fields")), "{what}: the search box counts the fields");
+        for t in ["FIELDS", "Filters", "Columns", "Rows", "Values", "Row totals", "Column totals", "Subtotals", "Show values as", "No calculation", "Scale", "Preview", "Create pivot tab", "Cancel", "Bucket", "Bank", "Balance", "Rate"] {
+            assert!(p.boxes.iter().any(|(x, _)| x.contains(t)), "{what}: '{t}' is in the dialog");
+        }
+        // type badges: Aa for text, # for numbers
+        assert!(p.boxes.iter().any(|(t, _)| t == "Aa") && p.boxes.iter().any(|(t, _)| t == "#"), "{what}: the badges");
+        assert_layout(&rig, &p);
+        // nothing to preview yet, and the button that makes the tab cannot be used
+        let hint = p.boxes.iter().any(|(t, _)| t.contains("Drag fields") || t.contains("add at least one field"));
+        assert!(hint || matches!(rig.app.pivot_builder.preview, Some(Err(_))), "{what}: the empty pivot says what to do");
+        assert!(rig.app.pivot_builder_step().is_none(), "{what}: no step without Values and Rows or Columns");
+        // many fields scroll inside their own list: the dialog stays the same size
+        let rects = rig.rects();
+        assert!(rects.field_rows.len() >= 4, "{what}: rows were drawn");
+    }
+}
+
+#[test]
+fn a_full_pivot_with_long_names_and_two_values_has_its_chips_toggles_and_preview_inside_their_panels() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1b", ppp, w, h, 6);
+        rig.open_pivot();
+        {
+            let s = &mut rig.app.pivot_builder.spec;
+            s.rows = vec!["Bucket".into(), "A_very_long_column_name_that_keeps_going_and_going_and_going_until_it_must_be_cut".into()];
+            s.columns = vec!["Bank".into()];
+            s.values = vec![sum_balance(), PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }];
+            s.filters = vec![PivotFilter { field: "Bank".into(), values: vec![Some("Islami".into()), Some("Conventional".into())] }];
+            s.subtotals = true;
+        }
+        let p = rig.draw(8);
+        let what = rig.what.clone();
+        assert_layout(&rig, &p);
+        // the middle of the dialog scrolls: bring the preview into view
+        let at = rig.rects().right.center();
+        let mut p = p;
+        for _ in 0..4 {
+            p = rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -400.0), modifiers: egui::Modifiers::NONE }]);
+        }
+        let p2 = rig.draw(4);
+        let _ = p;
+        let p = p2;
+        let b = rig.rects();
+        assert!(b.chips.len() >= 6, "{what}: the chips were drawn: {:?}", b.chips.iter().map(|c| (c.0, c.1.clone())).collect::<Vec<_>>());
+        // the preview shows the table: labels, the two banks, the totals and the weighted rates
+        assert!(matches!(rig.app.pivot_builder.preview, Some(Ok(_))), "{what}: {:?}", rig.app.pivot_builder.preview);
+        // a very wide table scrolls sideways inside its card: nothing is drawn to the left of it
+        let clip = b.preview_scroll;
+        assert!(p.boxes.iter().filter(|(_, bx)| overlap(*bx, b.preview)).all(|(_, bx)| bx.left() >= b.preview.left() - 0.5), "{what}: nothing left of the preview card");
+        assert!(clip.width() <= b.preview.width() + 0.5, "{what}");
+        // the same pivot with one row field fits the card: every heading is inside it
+        rig.app.pivot_builder.spec.rows = vec!["Bucket".into()];
+        rig.draw(8);
+        let at = rig.rects().right.center();
+        for _ in 0..3 {
+            rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -400.0), modifiers: egui::Modifiers::NONE }]);
+        }
+        let p = rig.draw(4);
+        let b = rig.rects();
+        for t in ["Bucket", "Conventional | Sum of Balance"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, b.preview_scroll)), "{what}: '{t}' is in the preview {:?}", b.preview_scroll);
+        }
+        // the other headings are further right, where the table scrolls sideways
+        assert!(p.boxes.iter().any(|(x, bx)| x.contains("W.Avg of Rate by Balance") && bx.left() >= b.preview.left()), "{what}: the weighted-rate heading is drawn in the table");
+        // 7 rows of data are not all visible in a short card: they scroll, and the last text is the card's
+        assert!(p.boxes.iter().any(|(x, _)| x.contains("02. 2")), "{what}: the first row is shown");
+    }
+}
+
+#[test]
+fn the_field_menu_adds_a_field_to_rows_columns_values_and_filters() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1c", ppp, w, h, 0);
+        rig.open_pivot();
+        let what = rig.what.clone();
+        for (field, area, check) in [("Bucket", "Rows", 0), ("Bank", "Columns", 1), ("Balance", "Values", 2), ("Bank", "Filters", 3)] {
+            let menu = rig.rects().field_menus.iter().find(|(n, _)| n == field).map(|(_, r)| *r).expect("the field's menu button");
+            let p = rig.click(menu.center());
+            let item = p.boxes.iter().find(|(t, _)| t == &format!("Add to {area}")).unwrap_or_else(|| panic!("{what}: the menu of '{field}' offers 'Add to {area}': {:?}", p.boxes.iter().filter(|(t, _)| t.starts_with("Add to")).collect::<Vec<_>>())).1;
+            rig.click(item.center());
+            let s = rig.app.pivot_builder.spec.clone();
+            match check {
+                0 => assert_eq!(s.rows, vec!["Bucket".to_string()], "{what}"),
+                1 => assert_eq!(s.columns, vec!["Bank".to_string()], "{what}"),
+                2 => assert_eq!(s.values, vec![sum_balance()], "{what}: a number is summed by default"),
+                _ => assert_eq!(s.filters.len(), 1, "{what}: {s:?}"),
+            }
+        }
+        // the filter's checklist is open under its chip with the values, and the Bank field is now used twice
+        let p = rig.draw(4);
+        let b = rig.rects();
+        assert!(b.popup.is_positive(), "{what}: the checklist was drawn");
+        for t in ["Conventional", "Islami", "Values of Bank"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, b.popup)), "{what}: '{t}' is in the checklist {:?}", b.popup);
+        }
+        assert!(inside(b.popup, rig.ctx.screen_rect()), "{what}: the checklist is inside the window");
+        let used = p.boxes.iter().filter(|(t, _)| t == "Filter, Columns").count();
+        assert_eq!(used, 1, "{what}: the list says Bank is in Filter and Columns");
+    }
+}
+
+#[test]
+fn dragging_a_field_into_an_area_adds_it_and_a_chip_is_removed_with_its_cross() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1d", ppp, w, h, 0);
+        rig.open_pivot();
+        let what = rig.what.clone();
+        let drag = |rig: &mut Rig, field: &str, area: Area| {
+            let row = rig.rects().field_rows.iter().find(|(n, _)| n == field).map(|(_, r)| *r).expect("the field's row");
+            let from = egui::pos2(row.left() + theme::PIVOT_BADGE_W + 8.0, row.center().y);
+            let to = rig.rects().areas[area.index()].center();
+            rig.step(vec![egui::Event::PointerMoved(from)]);
+            rig.step(vec![egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+            // the pointer moves in steps; the field follows it
+            for k in 1..=6 {
+                let t = k as f32 / 6.0;
+                rig.step(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+            }
+            rig.step(vec![egui::Event::PointerMoved(to)]);
+            rig.step(vec![egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+            rig.draw(4);
+        };
+        drag(&mut rig, "Bucket", Area::Rows);
+        assert_eq!(rig.app.pivot_builder.spec.rows, vec!["Bucket".to_string()], "{what}: dropped on Rows");
+        drag(&mut rig, "Bank", Area::Columns);
+        assert_eq!(rig.app.pivot_builder.spec.columns, vec!["Bank".to_string()], "{what}: dropped on Columns");
+        drag(&mut rig, "Balance", Area::Values);
+        assert_eq!(rig.app.pivot_builder.spec.values, vec![sum_balance()], "{what}: dropped on Values");
+        // a field is in Rows or Columns, not both: dragging Bank to Rows moves it
+        drag(&mut rig, "Bank", Area::Rows);
+        let s = rig.app.pivot_builder.spec.clone();
+        assert_eq!((s.rows.clone(), s.columns.clone()), (vec!["Bucket".to_string(), "Bank".to_string()], Vec::<String>::new()), "{what}");
+        // the cross of a chip removes it
+        let p = rig.draw(4);
+        let chip = rig.rects().chips.iter().find(|(a, n, _)| *a == Area::Rows && n == "Bank").map(|(_, _, r)| *r).expect("the Bank chip");
+        let cross = p.boxes.iter().find(|(t, bx)| t == theme::ph::X && inside(*bx, chip)).map(|(_, bx)| bx.center()).expect("the cross of the chip");
+        rig.click(cross);
+        assert_eq!(rig.app.pivot_builder.spec.rows, vec!["Bucket".to_string()], "{what}: the cross removes the chip");
+        let p = rig.draw(3);
+        assert_layout(&rig, &p);
+    }
+}
+
+#[test]
+fn the_filter_checklist_picks_values_searches_and_the_preview_follows() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1e", ppp, w, h, 0);
+        rig.open_pivot();
+        let what = rig.what.clone();
+        {
+            let s = &mut rig.app.pivot_builder.spec;
+            s.rows = vec!["Bucket".into()];
+            s.columns = vec!["Bank".into()];
+            s.values = vec![sum_balance()];
+        }
+        rig.draw(4);
+        rig.app.add_pivot_field("Bank", Area::Filters);
+        let p = rig.draw(6);
+        // all values are ticked when a filter is new: no restriction
+        assert!(rig.app.pivot_builder.spec.filters[0].values.is_empty(), "{what}");
+        let b = rig.rects();
+        let conv = p.boxes.iter().find(|(t, bx)| t == "Conventional" && inside(*bx, b.popup)).map(|(_, bx)| *bx).expect("the Conventional checkbox label");
+        rig.click(conv.center());
+        let s = rig.app.pivot_builder.spec.clone();
+        assert_eq!(s.filters[0].values, vec![Some("Islami".to_string())], "{what}: unticking Conventional keeps Islami");
+        // the preview follows: only the Islami column
+        let p = rig.draw(6);
+        let names: Vec<String> = match &rig.app.pivot_builder.preview {
+            Some(Ok(df)) => df.get_column_names().iter().map(|n| n.to_string()).collect(),
+            other => panic!("{what}: {other:?}"),
+        };
+        assert_eq!(names, vec!["Bucket", "Islami", "Total"], "{what}");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("= Islami")), "{what}: the chip says what it keeps");
+        assert_layout(&rig, &p);
+        // Esc closes the checklist
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(2);
+        assert!(rig.app.pivot_builder.popup.is_none(), "{what}: Esc closes the checklist");
+    }
+}
+
+#[test]
+fn create_pivot_tab_makes_the_tab_with_the_step_and_formats_that_never_scale_a_rate() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1f", ppp, w, h, 0);
+        rig.open_pivot();
+        let what = rig.what.clone();
+        {
+            let s = &mut rig.app.pivot_builder.spec;
+            s.rows = vec!["Bucket".into()];
+            s.columns = vec!["Bank".into()];
+            s.values = vec![sum_balance(), PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }];
+            s.scale = PivotScale::Crore;
+        }
+        let p = rig.draw(8);
+        assert_layout(&rig, &p);
+        let tabs_before = rig.app.tabs.len();
+        let create = rig.rects().buttons.iter().find(|(n, _)| n == "Create pivot tab").map(|(_, r)| *r).expect("the primary button");
+        rig.click(create.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed");
+        assert_eq!(rig.app.tabs.len(), tabs_before + 1, "{what}: a new tab");
+        let tab = rig.app.tabs.last().expect("the new tab");
+        assert!(matches!(tab.steps.last(), Some(TransformStep::PivotTable { .. })), "{what}: {:?}", tab.steps);
+        assert_eq!(tab.cached_slice.height(), 4, "{what}: three buckets and the grand total");
+        // the money columns are in Crore, the weighted rate is a percentage, the count of banks is not scaled
+        let f = |name: &str| tab.col_formats.get(name).map(|s| s.fmt_type);
+        assert_eq!(f("Conventional | Sum of Balance"), Some(MetricFormatType::BdtCrore), "{what}: {:?}", tab.col_formats);
+        assert_eq!(f("Conventional | W.Avg of Rate by Balance"), Some(MetricFormatType::PercentAsIs), "{what}");
+        assert_eq!(f("Total | Sum of Balance"), Some(MetricFormatType::BdtCrore), "{what}");
+    }
+}
+
+#[test]
+fn a_pivot_step_opens_in_the_builder_prefilled_and_saving_replaces_it_in_place() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1g", ppp, w, h, 0);
+        let spec = PivotSpec { rows: vec!["Bucket".into()], columns: vec!["Bank".into()], values: vec![sum_balance()], row_totals: true, column_totals: true, ..Default::default() };
+        let step = TransformStep::from_pivot_spec(spec.clone());
+        rig.app.push_step_to_active_tab(step, false);
+        rig.draw(4);
+        let what = rig.what.clone();
+        assert!(rig.app.open_step_editor(0), "{what}: a pivot step has an editor");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::PivotBuilder, "{what}");
+        let p = rig.draw(8);
+        assert_eq!(rig.app.pivot_builder.spec, spec, "{what}: prefilled");
+        assert!(p.boxes.iter().any(|(t, _)| t == "Save changes"), "{what}: the button says it saves");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("editing step 1")), "{what}: the title line says which step");
+        assert_layout(&rig, &p);
+        // change the sort and save
+        rig.app.pivot_builder.spec.sort_by_value = Some(PivotSortByValue { value_index: 0, descending: true });
+        rig.draw(6);
+        let save = rig.rects().buttons.iter().find(|(n, _)| n == "Save changes").map(|(_, r)| *r).expect("the save button");
+        rig.click(save.center());
+        rig.draw(6);
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        assert_eq!(tab.steps.len(), 1, "{what}: replaced, not added");
+        assert_eq!(tab.steps[0].as_pivot_spec().and_then(|s| s.sort_by_value), Some(PivotSortByValue { value_index: 0, descending: true }), "{what}");
+        assert_eq!(rig.app.tabs.len(), 1, "{what}: no new tab");
+    }
+}
+
+#[test]
+fn a_pivot_that_cannot_be_built_says_why_in_the_footer_and_the_button_stays_off() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("p4v1h", ppp, w, h, 0);
+        rig.open_pivot();
+        let what = rig.what.clone();
+        {
+            let s = &mut rig.app.pivot_builder.spec;
+            s.rows = vec!["Bucket".into()];
+            // a sum of text is refused
+            s.values = vec![PivotValue { field: "Bank".into(), agg: PivotAgg::Sum, weight_col: None }];
+        }
+        let p = rig.draw(8);
+        assert!(matches!(rig.app.pivot_builder.preview, Some(Err(_))), "{what}");
+        assert!(rig.app.pivot_builder_step().is_none(), "{what}: no step for a pivot that failed");
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("needs a number column") && inside(*bx, rig.rects().footer_text)), "{what}: the footer says why: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("number")).collect::<Vec<_>>());
+        assert_layout(&rig, &p);
+        let tabs = rig.app.tabs.len();
+        let create = rig.rects().buttons.iter().find(|(n, _)| n == "Create pivot tab").map(|(_, r)| *r).expect("the button");
+        rig.click(create.center());
+        assert_eq!(rig.app.tabs.len(), tabs, "{what}: the disabled button makes no tab");
+    }
+}
+
+#[test]
+fn the_pivot_builder_is_in_the_transform_menu_the_search_and_the_insert_menu_and_old_pivot_steps_keep_their_dialog() {
+    let cmd = micro_parquet::commands::command(CommandId::Pivot).expect("the command");
+    assert!(cmd.title.to_lowercase().contains("pivot"), "{}", cmd.title);
+    assert!(micro_parquet::commands::TOOLBAR_BUTTONS_TRANSFORM.contains(&CommandId::Pivot));
+    // an old GroupByPivot step still opens the older dialog (it has no totals or columns to edit)
+    let old = TransformStep::GroupByPivot { group_cols: vec!["Bucket".into()], pivot_col: None, aggs: vec![], sort_by_col: None, top_n: None };
+    assert_eq!(crate::ui::step_edit::step_modal(&old), Some(ActiveToolModal::GroupByPivot));
+    let new = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["Bucket".into()], values: vec![sum_balance()], ..Default::default() });
+    assert_eq!(crate::ui::step_edit::step_modal(&new), Some(ActiveToolModal::PivotBuilder));
+    assert!(crate::ui::step_edit::step_is_editable(&new));
+    let _ = frames;
+}

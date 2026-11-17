@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 /// What a finished job hands back to the UI.
 pub enum JobOutput {
     ColumnStats(Box<ColumnStatsResult>),
+    PivotPreview(Box<PivotPreviewResult>),
+    PivotValues(Box<PivotValuesResult>),
     StepCounts(Box<StepCountsResult>),
     TextCheck(Box<TextCheckResult>),
     Summary(Box<SummaryResult>),
@@ -776,4 +778,112 @@ pub fn compute_tab_column_stats(req: ColumnStatsRequest, ctx: &JobCtx) -> Result
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
     let stats = crate::column_stats::compute_column_stats(lf, &req.column, key)?;
     Ok(ColumnStatsResult { tab_id: req.tab_id, stats })
+}
+
+// -------------------------------------------------------------------------- pivot builder (V1)
+
+/// The kind of a field, for the badge in the pivot builder's field list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldKind {
+    Text,
+    Number,
+    Date,
+    Other,
+}
+
+impl FieldKind {
+    pub fn of(dt: &polars::prelude::DataType) -> FieldKind {
+        use polars::prelude::DataType;
+        if dt.is_numeric() {
+            FieldKind::Number
+        } else if matches!(dt, DataType::Date | DataType::Datetime(_, _)) {
+            FieldKind::Date
+        } else if dt.is_string() || dt.is_categorical() {
+            FieldKind::Text
+        } else {
+            FieldKind::Other
+        }
+    }
+
+    /// The badge text: Aa text, # number, D date.
+    pub fn badge(&self) -> &'static str {
+        match self {
+            FieldKind::Text => "Aa",
+            FieldKind::Number => "#",
+            FieldKind::Date => "D",
+            FieldKind::Other => "?",
+        }
+    }
+}
+
+pub struct PivotPreviewRequest {
+    pub tab_id: u64,
+    /// Identifies the settings this preview is for.
+    pub token: u64,
+    pub source: TabSource,
+    /// The steps the pivot sees.
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::models::PivotSpec,
+    pub temp_dir: PathBuf,
+}
+
+pub struct PivotPreviewResult {
+    pub tab_id: u64,
+    pub token: u64,
+    /// The fields the pivot can use, with their kinds.
+    pub fields: Vec<(String, FieldKind)>,
+    /// The first rows of the table, or why there is none.
+    pub table: std::result::Result<DataFrame, String>,
+    /// All rows of the pivot.
+    pub total_rows: usize,
+}
+
+/// How many rows of the pivot the dialog previews.
+pub const PIVOT_PREVIEW_ROWS: usize = 20;
+
+/// The field list of the builder, and the pivot's first rows. A pivot that cannot be built gives
+/// its message in `table`, not an error of the job (the dialog shows it).
+pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<PivotPreviewResult> {
+    ctx.check()?;
+    ctx.set_progress("Pivot preview…".to_string(), None);
+    let mut lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
+    let schema = lf.collect_schema()?;
+    let fields: Vec<(String, FieldKind)> = schema.iter().map(|(n, dt)| (n.to_string(), FieldKind::of(dt))).collect();
+    ctx.check()?;
+    let (table, total_rows) = if req.spec.values.is_empty() || (req.spec.rows.is_empty() && req.spec.columns.is_empty()) {
+        (Err("Drag fields into Rows or Columns, and a field into Values, to see the table.".to_string()), 0)
+    } else {
+        match crate::pivot_table::build_pivot(lf, &req.spec) {
+            Ok(b) => {
+                let n = b.df.height();
+                (Ok(b.df.head(Some(PIVOT_PREVIEW_ROWS))), n)
+            }
+            Err(e) => (Err(format!("{:#}", e)), 0),
+        }
+    };
+    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows })
+}
+
+pub struct PivotValuesRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub field: String,
+    pub temp_dir: PathBuf,
+}
+
+pub struct PivotValuesResult {
+    pub tab_id: u64,
+    pub field: String,
+    pub values: std::result::Result<(Vec<Option<String>>, bool), String>,
+}
+
+/// How many values the Filters checklist lists.
+pub const PIVOT_FILTER_VALUES_MAX: usize = 2000;
+
+pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<PivotValuesResult> {
+    ctx.check()?;
+    let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
+    let values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
+    Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })
 }

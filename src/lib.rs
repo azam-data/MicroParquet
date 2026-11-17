@@ -10,6 +10,7 @@ pub mod jobs;
 pub mod macros;
 pub mod models;
 pub mod paths;
+pub mod pivot_table;
 pub mod steps_edit;
 pub mod summary;
 pub mod table_layout;

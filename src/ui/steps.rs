@@ -684,7 +684,7 @@ impl MicroParquetApp {
                 for (icon, name, tool) in [
                     (theme::ph::CALCULATOR, "Calc column", ActiveToolModal::MathFormula),
                     (theme::ph::PLUS, "Conditional column", ActiveToolModal::ConditionalCol),
-                    (theme::ph::TABLE, "Pivot", ActiveToolModal::GroupByPivot),
+                    (theme::ph::TABLE, "Pivot", ActiveToolModal::PivotBuilder),
                     (theme::ph::BUILDINGS, "Normalise names", ActiveToolModal::NormalizeEntity),
                     (theme::ph::CALENDAR, "Maturity buckets", ActiveToolModal::MaturityBucket),
                     (theme::ph::PERCENT, "Rate profile", ActiveToolModal::RateBand),

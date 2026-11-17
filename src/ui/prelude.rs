@@ -21,6 +21,7 @@ pub use micro_parquet::macros::{
     python_untranslated_steps, save_macro_to_file,
 };
 pub use micro_parquet::models::{
+    PivotAgg, PivotFilter, PivotScale, PivotShowAs, PivotSortByValue, PivotSpec, PivotValue,
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
     format_metric_value, format_with_commas, resolved_scale, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection, BlankRule, RateBandDef, RateBandMode, fmt_pct, parse_rate_edges,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
@@ -34,7 +35,8 @@ pub use micro_parquet::tab_jobs::{
     compute_tab_summary, ColumnStatsRequest, stats_key, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
     export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
     LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest, TabTextFindings, TextCheckRequest,
-    TextCheckResult, StepCountsRequest, SummaryRequest,
+    TextCheckResult, StepCountsRequest, SummaryRequest, compute_pivot_preview, compute_pivot_values, FieldKind,
+    PivotPreviewRequest, PivotValuesRequest,
 };
 pub use polars::datatypes::AnyValue;
 pub use polars::prelude::DataFrame;
@@ -58,6 +60,7 @@ pub use crate::ui::join::JoinState;
 pub use crate::ui::limits::LimitState;
 pub use crate::ui::normaliser::NormState;
 pub use crate::ui::pivot::PivotState;
+pub use crate::ui::pivot_builder::PivotBuilderState;
 pub use crate::ui::provision::ProvisionState;
 pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;

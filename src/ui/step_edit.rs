@@ -26,6 +26,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::LoanClassificationProvision { .. } => ActiveToolModal::LoanProvision,
         TransformStep::LoanLimitUtilization { .. } => ActiveToolModal::LoanLimitUtil,
         TransformStep::GroupByPivot { .. } => ActiveToolModal::GroupByPivot,
+        TransformStep::PivotTable { .. } => ActiveToolModal::PivotBuilder,
         TransformStep::FilterRows { .. }
         | TransformStep::FilterGroup { .. }
         | TransformStep::SortRows { .. }
@@ -189,6 +190,7 @@ impl MicroParquetApp {
                 sort_by_col: self.pivot.aggs.first().map(|a| a.alias.clone()),
                 top_n: if self.pivot.top_n > 0 { Some(self.pivot.top_n) } else { None },
             },
+            ActiveToolModal::PivotBuilder => return self.pivot_builder_step(),
             _ => return None,
         })
     }
@@ -358,6 +360,11 @@ impl MicroParquetApp {
                 self.pivot.aggs = aggs;
                 self.pivot.top_n = top_n.unwrap_or(0);
                 self.pivot.open_in_new_tab = false;
+            }
+            TransformStep::PivotTable { .. } => {
+                if let Some(spec) = step.as_pivot_spec() {
+                    self.open_pivot_builder(Some(spec), true);
+                }
             }
             _ => return None,
         }

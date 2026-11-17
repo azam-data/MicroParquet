@@ -134,6 +134,7 @@ impl MicroParquetApp {
 
     /// Replaces step `idx` of the active tab in place and refreshes the view.
     pub(crate) fn replace_step_in_active_tab(&mut self, idx: usize, step: TransformStep, status: &str) {
+        let pivot_formats = self.pivot_formats_for(&step);
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
@@ -148,6 +149,9 @@ impl MicroParquetApp {
             }
         }
         for (c, spec) in self.columns.apply_formats.take().unwrap_or_default() {
+            tab.col_formats.insert(c, spec);
+        }
+        for (c, spec) in pivot_formats {
             tab.col_formats.insert(c, spec);
         }
         tab.steps[idx] = step;
@@ -171,6 +175,9 @@ impl MicroParquetApp {
             for a in aggs {
                 updated_formats.insert(a.alias.clone(), a.format_spec);
             }
+        }
+        for (c, spec) in self.pivot_formats_for(&step) {
+            updated_formats.insert(c, spec);
         }
 
         let step_label = step.short_label();

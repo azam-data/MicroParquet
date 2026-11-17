@@ -141,7 +141,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Sort, "Sort rows\u{2026}", G::Transform, "order ascending descending", N::Tab),
     c(I::Columns, "Columns: drop, order, rename, format\u{2026}", G::Transform, "select hide rename decimals", N::Tab),
     c(I::CalcColumn, "Calc column\u{2026}", G::Transform, "formula math add divide new", N::Tab),
-    c(I::Pivot, "Pivot and weighted average\u{2026}", G::Transform, "group by aggregate wavg summary", N::Tab),
+    c(I::Pivot, "Pivot table (Rows, Columns, Values)\u{2026}", G::Transform, "group by aggregate wavg weighted average summary crosstab subtotal", N::Tab),
     c(I::Conditional, "Conditional column (IF / ELSE)\u{2026}", G::Transform, "case when flag", N::Tab),
     c(I::Normaliser, "Counterparty name normaliser\u{2026}", G::Transform, "clean entity names ltd", N::Tab),
     c(I::JoinTabs, "SQL join of two open tabs\u{2026}", G::Transform, "merge lookup left right", N::TwoTabs),

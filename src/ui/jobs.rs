@@ -109,6 +109,12 @@ impl MicroParquetApp {
                         self.status_message = format!("Export stopped: could not check the Text columns: {}", msg);
                     }
                     JobKind::Load => self.status_message = format!("Pipeline error: {}", msg),
+                    JobKind::PivotPreview => self.pivot_preview_failed(msg),
+                    JobKind::PivotValues => {
+                        if let Some(p) = self.pivot_builder.popup.as_mut() {
+                            p.values = Some(Err(msg));
+                        }
+                    }
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
                     // The band must not keep values of an older result: "—" with the reason.
                     JobKind::Summary => {
@@ -213,11 +219,14 @@ impl MicroParquetApp {
                 if idx == self.active_tab {
                     self.init_tool_defaults_from_active_tab();
                 }
+                self.apply_pivot_formats(idx);
                 // The summary row is of the whole result, so it follows every refresh.
                 self.submit_summary(idx);
                 self.submit_step_counts(idx);
                 self.submit_column_stats(idx);
             }
+            JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
+            JobOutput::PivotValues(r) => self.apply_pivot_values(*r),
             JobOutput::ColumnStats(r) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
                     tab.column_stats = Some(r.stats);

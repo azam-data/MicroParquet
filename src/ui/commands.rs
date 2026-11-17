@@ -144,7 +144,8 @@ impl MicroParquetApp {
             CommandId::CalcColumn => self.active_tool = ActiveToolModal::MathFormula,
             CommandId::Pivot => {
                 self.init_tool_defaults_from_active_tab();
-                self.active_tool = ActiveToolModal::GroupByPivot;
+                self.open_pivot_builder(None, false);
+                self.active_tool = ActiveToolModal::PivotBuilder;
             }
             CommandId::Conditional => self.active_tool = ActiveToolModal::ConditionalCol,
             CommandId::Normaliser => self.active_tool = ActiveToolModal::NormalizeEntity,

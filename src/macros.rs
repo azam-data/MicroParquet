@@ -40,6 +40,7 @@ fn has_python_translation(step: &TransformStep) -> bool {
             | TransformStep::BankingHygieneAudit { .. }
             | TransformStep::LoanClassificationProvision { .. }
             | TransformStep::LoanLimitUtilization { .. }
+            | TransformStep::PivotTable { .. }
     )
 }
 
@@ -752,7 +753,8 @@ pub fn generate_python_polars_code(
             | TransformStep::FtpCurveMap { .. }
             | TransformStep::BankingHygieneAudit { .. }
             | TransformStep::LoanClassificationProvision { .. }
-            | TransformStep::LoanLimitUtilization { .. } => {
+            | TransformStep::LoanLimitUtilization { .. }
+            | TransformStep::PivotTable { .. } => {
                 py.push_str(&format!(
                     "raise NotImplementedError(\"Step {} '{}' has no Python translation in this version; run it in MicroParquet\")\n\n",
                     idx + 1,

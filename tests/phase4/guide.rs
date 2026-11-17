@@ -28,8 +28,8 @@ pub const SECTIONS: [&str; 10] = [
 
 pub const COLUMN_TABLE_HEADER: &str = "| Column role | Required? | Type the app needs | Example values | Notes |";
 
-/// Tool ids (file names in docs/guide/) of Phase 4 task G0, with the test that proves each one's example.
-pub const G0_TOOLS: [&str; 21] = [
+/// Tool ids (file names in docs/guide/): the 21 tools of Phase 4 task G0, then the tools later tasks added.
+pub const GUIDE_TOOLS: [&str; 22] = [
     "maturity-bucketer",
     "rate-profile",
     "rate-shock-nii",
@@ -51,6 +51,7 @@ pub const G0_TOOLS: [&str; 21] = [
     "join",
     "split-export",
     "batch",
+    "pivot",
 ];
 
 pub fn guide_dir() -> PathBuf {
@@ -172,7 +173,7 @@ pub fn check_guide_file(tool: &str, sources: &str) {
 #[test]
 fn every_g0_tool_has_a_complete_guide_with_proven_examples() {
     let sources = all_test_sources();
-    for tool in G0_TOOLS {
+    for tool in GUIDE_TOOLS {
         check_guide_file(tool, &sources);
         assert!(sources.contains(&format!("fn guide_{}(", tool.replace('-', "_"))), "{tool}: there is no test guide_{}", tool.replace('-', "_"));
     }
@@ -187,7 +188,7 @@ fn the_guide_readme_lists_every_tool_under_the_four_groups() {
         assert!(at >= last, "README: the groups must come in the order Data preparation, Treasury & ALM, Loans & credit, Export & automation");
         last = at;
     }
-    for tool in G0_TOOLS {
+    for tool in GUIDE_TOOLS {
         assert!(readme.contains(&format!("({tool}.md)")), "README: no link to {tool}.md");
     }
 }
@@ -789,4 +790,40 @@ fn guide_batch() {
     let tree = "| Input | Output |\n| --- | --- |\n| deposits.csv | deposits.parquet |\n| 2026-09/loans.csv | 2026-09/loans.parquet |".to_string();
     let _ = std::fs::remove_dir_all(&d);
     check_guide("batch", "guide_batch", &[tree, table]);
+}
+
+fn pivot_book() -> DataFrame {
+    let b = |n: &[&str]| n.iter().map(|x| x.replace('-', "\u{2013}")).collect::<Vec<_>>();
+    frame(vec![
+        Series::new("Bucket".into(), b(&["02. 2-7 Days", "10. 3-5 Years", "04. 1-3 Months", "02. 2-7 Days", "04. 1-3 Months", "10. 3-5 Years", "02. 2-7 Days"])),
+        Series::new("Bank".into(), &["Conventional", "Islami", "Conventional", "Islami", "Islami", "Conventional", "Conventional"]),
+        nums("Balance", &[100.0, 300.0, 200.0, 50.0, 150.0, 400.0, 100.0]),
+        nums("Rate", &[5.0, 9.0, 6.0, 8.0, 7.0, 10.0, 7.0]),
+    ])
+}
+
+#[test]
+fn guide_pivot() {
+    use micro_parquet::pivot_table::build_pivot;
+    let df = pivot_book();
+    let sum = PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None };
+    let spec = PivotSpec { rows: vec!["Bucket".into()], columns: vec!["Bank".into()], values: vec![sum.clone()], row_totals: true, column_totals: true, ..Default::default() };
+    let out = build_pivot(df.clone().lazy(), &spec).expect("the pivot builds").df;
+    assert_eq!(floats(&out, "Total"), vec![Some(250.0), Some(350.0), Some(700.0), Some(1300.0)]);
+    let share = PivotSpec { show_as: PivotShowAs::PctOfRowTotal, ..spec.clone() };
+    let pct = build_pivot(df.clone().lazy(), &share).expect("the share builds").df;
+    close(floats(&pct, "Conventional")[0], 80.0, 1e-9, "02 Conventional share of its row");
+    let wavg = PivotSpec { values: vec![PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }], ..spec.clone() };
+    let rates = build_pivot(df.clone().lazy(), &wavg).expect("the weighted rates build").df;
+    close(floats(&rates, "Conventional")[0], 6.0, 1e-9, "(100 x 5 + 100 x 7) / 200");
+    check_guide(
+        "pivot",
+        "guide_pivot",
+        &[
+            md(&df, &["Bucket", "Bank", "Balance:2", "Rate:2"]),
+            md(&out, &["Bucket", "Conventional:2", "Islami:2", "Total:2"]),
+            md(&pct, &["Bucket", "Conventional:2", "Islami:2", "Total:2"]),
+            md(&rates, &["Bucket", "Conventional:2", "Islami:2", "Total:2"]),
+        ],
+    );
 }

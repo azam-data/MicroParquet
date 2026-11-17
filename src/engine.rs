@@ -2647,6 +2647,10 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             top_n,
             ..
         } => apply_groupby_pivot(lf, group_cols, aggs, sort_by_col.as_deref(), *top_n),
+        TransformStep::PivotTable { .. } => match step.as_pivot_spec() {
+            Some(spec) => crate::pivot_table::apply_pivot_table(lf, &spec),
+            None => Ok(lf),
+        },
         TransformStep::SqlQuery { query } => {
             let mut ctx = SQLContext::new();
             ctx.register("self", lf);
@@ -3376,6 +3380,20 @@ pub fn weighted_mixed_sign_notes(
 ) -> Result<Vec<String>> {
     let mut notes = Vec::new();
     for (i, step) in steps.iter().enumerate() {
+        if let Some(spec) = step.as_pivot_spec() {
+            if spec.values.iter().any(|v| v.agg == crate::models::PivotAgg::WeightedAvg) && !step.is_skipped() {
+                let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+                for (label, n) in crate::pivot_table::pivot_mixed_sign_cells(input, &spec)? {
+                    notes.push(format!(
+                        "{}: {} is blank for {} cell(s) whose weights mix positive and negative",
+                        step.short_label(),
+                        label,
+                        n
+                    ));
+                }
+            }
+            continue;
+        }
         let TransformStep::GroupByPivot { group_cols, aggs, .. } = step else {
             continue;
         };

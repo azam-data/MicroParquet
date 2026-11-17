@@ -158,3 +158,56 @@ pub fn md(df: &DataFrame, cols: &[&str]) -> String {
     }
     out.trim_end().to_string()
 }
+
+// ------------------------------------------------------------------ the old-macro fixtures
+
+/// The synthetic loan book the old-macro fixtures are replayed on (the same as in tests/phase3).
+pub fn fixture_frame() -> DataFrame {
+    let d = |v: &[&str], name: &str| dates(name, v);
+    DataFrame::new(vec![
+        Series::new("Actnum".into(), &["1001", "1002", "1003", "1004", "1005", "1006", "1007", "1008"]),
+        Series::new("Brancd".into(), &["DHK", "DHK", "CTG", "CTG", "SYL", "DHK", "XXX", "CTG"]),
+        Series::new("Acttit".into(), &["Rahim Traders Ltd.", "RAHIM TRADERS LIMITED", "Karim & Sons", "Karim and Sons", "Delta Agro", "Bay Shipping", "Test", "Delta Agro Ltd"]),
+        Series::new("Balance".into(), &[50_000_000.0f64, 25_000_000.0, 120_000_000.0, 8_000_000.0, 0.0, 300_000_000.0, 1.0, 45_000_000.0]),
+        Series::new("Int Rate".into(), &[9.5f64, 10.25, 11.0, 8.75, 12.0, 7.5, 9.0, 10.5]),
+        d(&["2024-01-15", "2025-03-01", "2023-07-10", "2025-11-20", "2022-02-28", "2026-01-05", "2024-09-09", "2025-06-30"], "Opndat"),
+        d(&["2026-07-15", "2026-09-30", "", "2027-12-31", "2026-05-31", "2031-01-05", "2026-08-01", "2028-06-30"], "Matdat"),
+        d(&["", "", "", "", "2026-05-31", "", "", ""], "Clsdat"),
+        Series::new("Acstat".into(), &["ACT", "DMT", "ACT", "ACT", "CLS", "ACT", "ACT", "DMT"]),
+        Series::new("CL_Status".into(), &["UC", "SMA", "UC", "SS", "UC", "UC", "UC", "BL"]),
+        Series::new("Sector".into(), &["SMALL", "MICRO", "OTHER", "SMALL", "AGRI ST", "OTHER", "OTHER", "COTTAGE"]),
+        Series::new("Sanctioned_Limit".into(), &[60_000_000.0f64, 25_000_000.0, 150_000_000.0, 10_000_000.0, 5_000_000.0, 300_000_000.0, 1.0, 50_000_000.0]),
+        Series::new("Side".into(), &["Asset", "Asset", "Asset", "Liability", "Asset", "Asset", "Asset", "Asset"]),
+    ])
+    .expect("the fixture frame")
+}
+
+/// Replays `steps` on the fixture frame and returns the result as CSV text.
+pub fn replay_to_csv(steps: &[TransformStep], d: &Path) -> String {
+    let src = parquet(d, "fixture_loans", &fixture_frame());
+    let mut out = compile_tab_lazy(&src, steps, d).expect("the steps compile").collect().expect("the steps run");
+    let mut buf = Vec::new();
+    CsvWriter::new(&mut buf).finish(&mut out).expect("write the CSV");
+    String::from_utf8(buf).expect("UTF-8")
+}
+
+pub fn fixtures_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+}
+
+/// Loads an old macro fixture, replays it and compares it with the CSV the old code wrote.
+pub fn assert_fixture_replays(name: &str, expected_kinds: &[&str]) {
+    let json = fixtures_dir().join(format!("{name}.mpq.json"));
+    let recipe = micro_parquet::macros::load_macro_from_file(&json).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+    for k in expected_kinds {
+        assert!(recipe.steps.iter().any(|s| format!("{s:?}").starts_with(&format!("{k} "))), "{name} has a {k} step");
+    }
+    let d = dir(&format!("fx_{name}"));
+    let src = parquet(&d, "fixture_loans", &fixture_frame());
+    let issues = micro_parquet::engine::validate_steps(&src, &recipe.steps, &d).expect("validate");
+    assert!(issues.is_empty(), "{name}: {issues:?}");
+    let got = replay_to_csv(&recipe.steps, &d);
+    let want = std::fs::read_to_string(fixtures_dir().join(format!("{name}.expected.csv"))).expect("expected CSV").replace("\r\n", "\n");
+    assert_eq!(got, want, "{name}: today's code gives what the code that saved the macro gave");
+    let _ = std::fs::remove_dir_all(&d);
+}

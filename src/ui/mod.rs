@@ -17,6 +17,7 @@ pub mod join;
 pub mod limits;
 pub mod normaliser;
 pub mod pivot;
+pub mod pivot_builder;
 pub mod prelude;
 pub mod provision;
 pub mod rate_band;
@@ -36,6 +37,8 @@ pub mod top_bar;
 mod layout_tests;
 #[cfg(test)]
 mod render_tests;
+#[cfg(test)]
+mod render_tests_p4;
 #[cfg(test)]
 mod tests;
 pub mod theme;
@@ -86,6 +89,7 @@ impl MicroParquetApp {
             ActiveToolModal::MathFormula => self.render_calc_modal(ctx, cols),
             ActiveToolModal::NormalizeEntity => self.render_normaliser_modal(ctx, cols),
             ActiveToolModal::GroupByPivot => self.render_pivot_modal(ctx, cols),
+            ActiveToolModal::PivotBuilder => self.render_pivot_builder(ctx, cols),
             ActiveToolModal::MaturityBucket => self.render_buckets_modal(ctx, cols),
             ActiveToolModal::RateBand => self.render_rate_band_modal(ctx, cols),
             ActiveToolModal::RateShockSim => self.render_rate_shock_modal(ctx, cols),

@@ -29,12 +29,12 @@ pub(crate) fn frames(app: &mut MicroParquetApp, ctx: &egui::Context, input: &egu
     }
 }
 
-fn inside(inner: egui::Rect, outer: egui::Rect) -> bool {
+pub(crate) fn inside(inner: egui::Rect, outer: egui::Rect) -> bool {
     inner.left() >= outer.left() - 0.5 && inner.right() <= outer.right() + 0.5 && inner.top() >= outer.top() - 0.5 && inner.bottom() <= outer.bottom() + 0.5
 }
 
 /// A dialog's rectangles must lie in the area the panels leave, less 16 px.
-fn assert_dialog_fits(ctx: &egui::Context, title: &str, what: &str) -> theme::DialogReport {
+pub(crate) fn assert_dialog_fits(ctx: &egui::Context, title: &str, what: &str) -> theme::DialogReport {
     let r = theme::dialog_report(ctx, title).unwrap_or_else(|| panic!("{what}: the dialog '{title}' was not drawn"));
     check_report(ctx, r, &format!("{what} '{title}'"));
     r
@@ -237,7 +237,7 @@ fn every_dialog_comes_from_the_one_shared_helper() {
     for f in files {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
         let text = std::fs::read_to_string(&f).expect("read");
-        if !matches!(name.as_str(), "theme.rs" | "layout_tests.rs" | "render_tests.rs" | "tests.rs" | "step_edit.rs") {
+        if !matches!(name.as_str(), "theme.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "tests.rs" | "step_edit.rs") {
             assert!(!text.contains("egui::Window::new"), "{name} builds its own window");
         }
         modals += text.matches("theme::modal(").count();
