@@ -574,3 +574,74 @@ fn the_grid_draws_codes_in_mono_and_words_in_source_sans() {
     assert_eq!(fam("FIXED TERM DEPOSIT"), egui::FontFamily::Proportional, "words are Source Sans 3");
     assert_eq!(fam("20400-01"), egui::FontFamily::Monospace, "codes are JetBrains Mono");
 }
+
+// ------------------------------------------------------------------ load progress (layout 6)
+
+/// Paints the status bar of `app` and returns every text it drew, joined.
+fn status_bar_text(app: &mut MicroParquetApp) -> String {
+    let (ctx, input) = headless(2400.0, 600.0, 1.0);
+    let mut p = Painted::default();
+    for _ in 0..3 {
+        let out = ctx.run(input.clone(), |ctx| app.render_status_bar(ctx));
+        p = collect_painted(&out.shapes);
+    }
+    p.texts.iter().map(|(t, _, _)| t.clone()).collect::<Vec<_>>().join(" | ")
+}
+
+#[test]
+fn the_status_bar_shows_stages_and_elapsed_time_and_a_percentage_only_for_bytes() {
+    let mut app = test_app("l6bar");
+    app.jobs = JobQueue::new(|| {});
+    let (up_tx, up_rx) = std::sync::mpsc::channel::<()>();
+    let (step_tx, step_rx) = std::sync::mpsc::channel::<u8>();
+    app.jobs.submit(JobKey::unique(JobKind::Load), "Opening loans.csv", true, move |ctx| {
+        ctx.set_stages(&["Reading", "Parsing", "Checking"]);
+        ctx.set_stage(1);
+        let _ = up_tx.send(());
+        // 1: a loop reports bytes   2: it finishes   3: leave
+        while let Ok(cmd) = step_rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            match cmd {
+                1 => ctx.set_bytes("Counting the file's lines", 1_048_576, 4_194_304),
+                2 => ctx.set_bytes("Counting the file's lines", 4_194_304, 0),
+                _ => break,
+            }
+            // give the test time to paint
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(JobOutput::Exported(micro_parquet::tab_jobs::ExportOutcome { message: String::new(), path_used: None, written: None }))
+    });
+    up_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the job runs");
+
+    // stages only: every stage is named, with the time; no percentage anywhere
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let t = status_bar_text(&mut app);
+    for lab in ["Reading 1/3", "Parsing 2/3", "Checking 3/3"] {
+        assert!(t.contains(lab), "{lab} in: {t}");
+    }
+    assert!(t.contains("1 s") || t.contains("2 s"), "the elapsed time is shown: {t}");
+    assert!(!t.contains('%'), "no percentage without bytes: {t}");
+
+    // a loop that reads bytes itself: a real percentage (1 MB of 4 MB = 25%), with what it does
+    let _ = step_tx.send(1);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let t = status_bar_text(&mut app);
+    assert!(t.contains("25%"), "25% of the bytes read: {t}");
+    assert!(t.contains("Counting the file's lines"), "{t}");
+    assert!(t.contains("Parsing 2/3"), "the stages stay: {t}");
+
+    // the loop ends: the percentage goes with it
+    let _ = step_tx.send(2);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let t = status_bar_text(&mut app);
+    assert!(!t.contains('%'), "no percentage after the loop: {t}");
+    let _ = step_tx.send(3);
+}
+
+#[test]
+fn bytes_are_written_in_the_unit_a_banker_reads() {
+    use crate::ui::status::format_bytes;
+    assert_eq!(format_bytes(512), "512 B");
+    assert_eq!(format_bytes(1536), "1.5 KB");
+    assert_eq!(format_bytes(4_194_304), "4.0 MB");
+    assert_eq!(format_bytes(5_368_709_120), "5.0 GB");
+}

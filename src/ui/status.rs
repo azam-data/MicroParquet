@@ -2,6 +2,22 @@
 
 use crate::ui::prelude::*;
 
+/// 1536 -> "1.5 KB", 31_000_000 -> "29.6 MB".
+pub fn format_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u + 1 < UNITS.len() {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{} B", n)
+    } else {
+        format!("{:.1} {}", v, UNITS[u])
+    }
+}
+
 impl MicroParquetApp {
     /// Status bar (32 px): rows, control total, change against the source file, parse failures,
     /// scale, and the job progress or last message.
@@ -118,17 +134,41 @@ impl MicroParquetApp {
                     }
                     if let Some(job) = self.jobs.active_long() {
                         ui.spinner();
-                        let text = if job.cancelling {
-                            format!("Cancelling {}\u{2026}", job.label)
+                        if job.cancelling {
+                            ui.label(format!("Cancelling {}\u{2026}", job.label));
+                        } else if !job.progress.stages.is_empty() {
+                            // "Reading 1/3 · Parsing 2/3 · Checking 3/3": the current stage stands out
+                            let labels = job.stage_labels();
+                            for (i, lab) in labels.iter().enumerate() {
+                                if i == job.progress.stage {
+                                    ui.label(theme::semibold(lab.clone()).color(tk.ink));
+                                } else {
+                                    ui.label(egui::RichText::new(lab.clone()).color(tk.muted));
+                                }
+                                if i + 1 < labels.len() {
+                                    ui.label(egui::RichText::new("\u{b7}").color(tk.muted));
+                                }
+                            }
+                            // only a loop that reads the file itself has something more to say
+                            if job.progress.bytes.is_some() {
+                                ui.label(egui::RichText::new(job.progress.text.clone()).color(tk.accent));
+                            }
                         } else if job.progress.text.is_empty() {
-                            format!("{}\u{2026}", job.label)
+                            ui.label(format!("{}\u{2026}", job.label));
                         } else {
-                            job.progress.text.clone()
-                        };
-                        ui.label(text);
-                        if let Some(f) = job.progress.fraction {
-                            ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).desired_width(120.0));
+                            ui.label(job.progress.text.clone());
                         }
+                        if let Some(f) = job.progress.fraction {
+                            let mut bar = egui::ProgressBar::new(f.clamp(0.0, 1.0)).desired_width(theme::PROGRESS_BAR_W);
+                            // a number is written only for bytes really read
+                            if let (Some(pct), Some((read, total))) = (job.percent(), job.progress.bytes) {
+                                bar = bar.text(format!("{}%", pct));
+                                ui.add(bar).on_hover_text(format!("{} of {} read", format_bytes(read), format_bytes(total)));
+                            } else {
+                                ui.add(bar);
+                            }
+                        }
+                        ui.label(theme::mono(micro_parquet::jobs::format_elapsed(job.elapsed())).color(tk.muted));
                         if ui.add_enabled(!job.cancelling, egui::Button::new("Cancel")).clicked() {
                             cancel_job = Some(job.id);
                         }

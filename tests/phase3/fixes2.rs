@@ -184,3 +184,211 @@ fn l5_text_is_mono_by_what_it_holds_not_by_the_column_name() {
     many.push(Some("WORDS AFTER THE SAMPLE"));
     assert!(text_column_is_mono(many));
 }
+
+// ------------------------------------------------------------------------------ layout 6
+
+type Reports = std::rc::Rc<std::cell::RefCell<Vec<(String, u64, u64)>>>;
+
+fn collecting() -> (Reports, impl Fn(&str, u64, u64) + 'static) {
+    let seen: Reports = Default::default();
+    let s2 = seen.clone();
+    (seen, move |what: &str, read, total| s2.borrow_mut().push((what.to_string(), read, total)))
+}
+
+/// A CSV with Windows line ends (a count of "length + 1" per line would fall short of the file).
+fn crlf_csv(d: &Path, rows: usize) -> (PathBuf, u64) {
+    let p = d.join("crlf.csv");
+    let mut body = String::from("Actnum,Balance,Brancd\r\n");
+    for i in 0..rows {
+        body.push_str(&format!("A{i},{}.25,DHK\r\n", 1000 + i));
+    }
+    std::fs::write(&p, &body).unwrap();
+    let len = std::fs::metadata(&p).unwrap().len();
+    (p, len)
+}
+
+/// The reports of one loop are: a start at 0, steadily more bytes of the same file size, the
+/// whole file at the end, then the "finished" marker (file size 0). A call may run the loop more
+/// than once (the file is read again for another check); each run is checked on its own.
+fn assert_exact_byte_progress(seen: &Reports, file_len: u64, what: &str) {
+    let r = seen.borrow();
+    let mut loops = 0;
+    let mut current: Vec<(String, u64, u64)> = Vec::new();
+    for rep in r.iter() {
+        if rep.2 == 0 {
+            // the finished marker
+            assert_eq!(rep.1, file_len, "{what}: the loop says it is finished: {rep:?}");
+            assert!(current.len() >= 2, "{what}: a start and progress came before the end: {current:?}");
+            assert_eq!(current[0].1, 0, "{what}: starts at 0 bytes");
+            let mut last = 0;
+            for (_, read, total) in &current {
+                assert_eq!(*total, file_len, "{what}: every report names the real file size");
+                assert!(*read >= last && *read <= file_len, "{what}: bytes read only grow and never pass the file: {read} after {last}");
+                last = *read;
+            }
+            assert_eq!(last, file_len, "{what}: the last report is the whole file ({last} of {file_len})");
+            loops += 1;
+            current.clear();
+        } else {
+            current.push(rep.clone());
+        }
+    }
+    assert!(current.is_empty(), "{what}: every loop ends with the finished marker");
+    assert!(loops >= 1, "{what}: reported at least once: {r:?}");
+}
+
+#[test]
+fn l6_line_counting_reports_the_real_bytes_read() {
+    use micro_parquet::engine::{count_nonempty_lines, with_byte_progress};
+    let d = dir("l6count");
+    let (p, len) = crlf_csv(&d, 60_000);
+    assert!(len > 1_000_000, "several 256 KB steps");
+    let (seen, sink) = collecting();
+    let n = with_byte_progress(sink, || count_nonempty_lines(&p)).unwrap();
+    assert_eq!(n, 60_001);
+    assert_exact_byte_progress(&seen, len, "line counting");
+    assert!(seen.borrow().iter().any(|(_, r, t)| *t > 0 && *r > 0 && *r < *t), "a percentage strictly between 0 and 100 was reported");
+}
+
+#[test]
+fn l6_healing_reports_the_real_bytes_read_even_with_windows_line_ends() {
+    use micro_parquet::engine::{heal_broken_csv_file, with_byte_progress};
+    let d = dir("l6heal");
+    let (p, len) = crlf_csv(&d, 60_000);
+    let (seen, sink) = collecting();
+    let healed = with_byte_progress(sink, || heal_broken_csv_file(&p, &d, b',', 0)).unwrap();
+    assert!(healed.exists());
+    assert_exact_byte_progress(&seen, len, "healing");
+}
+
+#[test]
+fn l6_transcoding_reports_the_real_bytes_read() {
+    use micro_parquet::engine::{auto_detect_smart_schema_with, build_lazy_pipeline, with_byte_progress};
+    let d = dir("l6enc");
+    let (p, len) = crlf_csv(&d, 60_000);
+    let mut cfg = IngestionConfig::default();
+    cfg.encoding = CsvTextEncoding::Windows1252;
+    let cfg = auto_detect_smart_schema_with(&p, &cfg).unwrap();
+    let (seen, sink) = collecting();
+    let _lf = with_byte_progress(sink, || build_lazy_pipeline(&p, false, &cfg, &d)).unwrap();
+    // the whole file is read once for the conversion
+    assert_exact_byte_progress(&seen, len, "transcoding");
+    assert!(seen.borrow().iter().any(|(w, _, _)| w.contains("encoding")));
+}
+
+#[test]
+fn l6_without_a_sink_nothing_is_reported_and_nothing_breaks() {
+    use micro_parquet::engine::{count_nonempty_lines, with_byte_progress};
+    let d = dir("l6none");
+    let (p, _) = crlf_csv(&d, 100);
+    assert_eq!(count_nonempty_lines(&p).unwrap(), 101);
+    // a sink only lives inside its call
+    let (seen, sink) = collecting();
+    with_byte_progress(sink, || ());
+    count_nonempty_lines(&p).unwrap();
+    assert!(seen.borrow().is_empty(), "the sink was removed after its call");
+}
+
+#[test]
+fn l6_a_percentage_exists_only_for_bytes_read() {
+    use micro_parquet::jobs::JobCtx;
+    let ctx = JobCtx::inert();
+    ctx.set_stages(&["Reading", "Parsing", "Checking"]);
+    let p = ctx.progress();
+    assert_eq!((p.stage, p.fraction, p.bytes), (0, None, None), "a stage alone has no percentage");
+    assert_eq!(p.stages, ["Reading", "Parsing", "Checking"]);
+    ctx.set_bytes("Counting the file's lines", 1, 4);
+    let p = ctx.progress();
+    assert_eq!(p.fraction, Some(0.25));
+    assert_eq!(p.bytes, Some((1, 4)));
+    assert_eq!(p.text, "Counting the file's lines");
+    // the loop finishes: the percentage goes and the stage name is back
+    ctx.set_bytes("Counting the file's lines", 4, 0);
+    let p = ctx.progress();
+    assert_eq!((p.fraction, p.bytes, p.text.as_str()), (None, None, "Reading"));
+    // a new stage clears it as well
+    ctx.set_bytes("x", 2, 4);
+    ctx.set_stage(1);
+    let p = ctx.progress();
+    assert_eq!((p.stage, p.fraction, p.bytes, p.text.as_str()), (1, None, None, "Parsing"));
+    ctx.set_stage(9);
+    assert_eq!(ctx.progress().stage, 2, "past the last stage stays on the last");
+}
+
+#[test]
+fn l6_a_load_goes_through_three_stages_and_never_shows_an_unfounded_percentage() {
+    use micro_parquet::jobs::JobCtx;
+    use micro_parquet::tab_jobs::{load_tab, LoadRequest};
+    let d = dir("l6load");
+    let (p, _) = crlf_csv(&d, 150_000);
+    let cfg = micro_parquet::engine::auto_detect_smart_schema(&p).unwrap();
+    let req = LoadRequest {
+        tab_id: 1,
+        title: "crlf.csv".into(),
+        source: TabSource::SingleFile { path: p.clone(), is_parquet: false, config: cfg },
+        steps: vec![],
+        col_formats: Default::default(),
+        temp_dir: d.clone(),
+        reconcile_rate_used: None,
+    };
+    let ctx = JobCtx::inert();
+    let worker_ctx = ctx.clone();
+    let worker = std::thread::spawn(move || load_tab(req, &worker_ctx).map(|_| ()));
+    // watch what the load reports while it runs
+    let mut seen = Vec::new();
+    while !worker.is_finished() {
+        seen.push(ctx.progress());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    worker.join().expect("no panic").expect("the load works");
+    seen.push(ctx.progress());
+    let mut last_stage = 0;
+    for pr in &seen {
+        if pr.stages.is_empty() {
+            continue; // before the load named its stages
+        }
+        assert_eq!(pr.stages, ["Reading", "Parsing", "Checking"]);
+        assert!(pr.stage >= last_stage, "stages only move forward");
+        last_stage = pr.stage;
+        if pr.fraction.is_some() {
+            let (read, total) = pr.bytes.expect("a percentage comes with the bytes it is made of");
+            assert!(read <= total && total > 0);
+            assert_eq!(pr.fraction, Some((read as f64 / total as f64) as f32), "the fraction is exactly bytes read / file size");
+        }
+    }
+    let end = ctx.progress();
+    assert_eq!((end.stage, end.fraction, end.bytes), (2, None, None), "ends on Checking with no percentage left over");
+}
+
+#[test]
+fn l6_elapsed_time_reads_plainly() {
+    use micro_parquet::jobs::format_elapsed;
+    use std::time::Duration;
+    assert_eq!(format_elapsed(Duration::from_millis(900)), "0 s");
+    assert_eq!(format_elapsed(Duration::from_secs(7)), "7 s");
+    assert_eq!(format_elapsed(Duration::from_secs(65)), "1 min 05 s");
+    assert_eq!(format_elapsed(Duration::from_secs(3720)), "1 h 02 min");
+}
+
+#[test]
+fn l6_the_active_job_carries_stage_labels_and_the_time_it_has_run() {
+    use micro_parquet::jobs::{JobKey, JobKind, JobQueue};
+    let q: JobQueue<u8> = JobQueue::new(|| {});
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let (up_tx, up_rx) = std::sync::mpsc::channel::<()>();
+    q.submit(JobKey::unique(JobKind::Load), "Opening loans.csv", true, move |ctx| {
+        ctx.set_stages(&["Reading", "Parsing", "Checking"]);
+        ctx.set_stage(1);
+        let _ = up_tx.send(());
+        let _ = go_rx.recv_timeout(std::time::Duration::from_secs(10));
+        Ok(0)
+    });
+    up_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the job is running");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let job = q.active_long().expect("a long job is running");
+    assert_eq!(job.stage_labels(), ["Reading 1/3", "Parsing 2/3", "Checking 3/3"]);
+    assert_eq!(job.progress.stage, 1);
+    assert_eq!(job.percent(), None, "no percentage without bytes");
+    assert!(job.elapsed() >= std::time::Duration::from_secs(1), "{:?}", job.elapsed());
+    let _ = go_tx.send(());
+}

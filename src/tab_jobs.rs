@@ -93,9 +93,19 @@ pub struct LoadedTab {
 }
 
 /// Builds a new tab: pipeline, first page, totals, baseline, parse failures and row check.
+/// The stages a load goes through, shown in the status bar with the time it has taken. A
+/// percentage appears only inside a step that reads the file's bytes itself.
+pub const LOAD_STAGES: [&str; 3] = ["Reading", "Parsing", "Checking"];
+
 pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
+    let sink_ctx = ctx.clone();
+    crate::engine::with_byte_progress(move |what, read, total| sink_ctx.set_bytes(what, read, total), || load_tab_staged(req, ctx))
+}
+
+fn load_tab_staged(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     let LoadRequest { tab_id, title, source, steps, col_formats, temp_dir, reconcile_rate_used } = req;
-    ctx.set_progress(format!("Opening {}…", title), None);
+    // 1/3 Reading: open the source, the first page and the control totals.
+    ctx.set_stages(&LOAD_STAGES);
     let key_note = ensure_pii_key_for(&source)?;
     ctx.check()?;
     // Steps that cannot run (a column they need is gone) stop the table before them.
@@ -112,6 +122,8 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     let (total_rows, control_sum) = (totals.rows.unwrap_or(0), totals.sum);
     ctx.check()?;
 
+    // 2/3 Parsing: the baseline total and the values that could not be converted.
+    ctx.set_stage(1);
     // Baseline control sum is always the raw source's (0 steps); it is computed once per
     // unchanged file and reused by every tab on it.
     let baseline_sum = if steps.is_empty() {
@@ -127,6 +139,8 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         Err(e) => (Vec::new(), format!(" ⚠ Could not count parse failures: {:#}", e)),
     };
     ctx.check()?;
+    // 3/3 Checking: rows against the file's lines, the join and the balances.
+    ctx.set_stage(2);
     let row_check = match source_row_check(&source, &temp_dir) {
         Ok(c) => c,
         Err(e) => {

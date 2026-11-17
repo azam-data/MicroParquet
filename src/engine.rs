@@ -1001,6 +1001,88 @@ fn parse_month_name(s: &str) -> Option<u32> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Progress of the loops that read a file's bytes themselves (the line healer, the Windows-1252
+// transcoder and the line counter). Polars reads files on its own and reports nothing, so those
+// steps have no percentage.
+
+/// Receives `(what, bytes read, file size)`; a file size of 0 means that loop is finished.
+pub type ByteSink = Box<dyn Fn(&str, u64, u64)>;
+
+thread_local! {
+    static BYTE_SINK: std::cell::RefCell<Option<ByteSink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with `sink` receiving the byte progress of every such loop that runs on this thread.
+/// The sink is removed afterwards, also when `f` panics.
+pub fn with_byte_progress<R>(sink: impl Fn(&str, u64, u64) + 'static, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<ByteSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            BYTE_SINK.with(|s| *s.borrow_mut() = prev);
+        }
+    }
+    let prev = BYTE_SINK.with(|s| s.borrow_mut().replace(Box::new(sink)));
+    let _restore = Restore(prev);
+    f()
+}
+
+fn report_bytes(what: &str, read: u64, total: u64) {
+    BYTE_SINK.with(|s| {
+        if let Some(sink) = s.borrow().as_ref() {
+            sink(what, read, total);
+        }
+    });
+}
+
+/// One loop over a file: reports the bytes read (at most every 256 KB and at the end) and, when
+/// dropped, that the loop is finished (so no percentage stays on screen).
+struct ByteLoop {
+    what: &'static str,
+    total: u64,
+    read: u64,
+    last_reported: u64,
+}
+
+impl ByteLoop {
+    const STEP: u64 = 256 * 1024;
+
+    fn new(what: &'static str, path: &Path) -> Self {
+        let total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        report_bytes(what, 0, total);
+        Self { what, total, read: 0, last_reported: 0 }
+    }
+
+    fn add(&mut self, n: usize) {
+        self.read += n as u64;
+        if self.read - self.last_reported >= Self::STEP || self.read >= self.total {
+            self.last_reported = self.read;
+            report_bytes(self.what, self.read.min(self.total), self.total);
+        }
+    }
+}
+
+impl Drop for ByteLoop {
+    fn drop(&mut self) {
+        report_bytes(self.what, self.total, 0);
+    }
+}
+
+/// A reader that counts the bytes taken from the file it wraps.
+struct CountingReader<R> {
+    inner: R,
+    counter: std::rc::Rc<std::cell::Cell<u64>>,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.counter.set(self.counter.get() + n as u64);
+        Ok(n)
+    }
+}
+
 /// Joins physical lines until each record has as many unquoted separators as the header.
 /// The first `skip_rows` lines (titles above the header) are dropped.
 pub fn heal_broken_csv_file(
@@ -1013,9 +1095,11 @@ pub fn heal_broken_csv_file(
         "healed_{}",
         input_path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    let reader = BufReader::new(File::open(input_path)?);
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let reader = BufReader::new(CountingReader { inner: File::open(input_path)?, counter: counter.clone() });
     let mut writer = BufWriter::new(File::create(&healed_path)?);
     let sep = separator as char;
+    let mut progress = ByteLoop::new("Healing broken lines", input_path);
 
     let mut lines = reader.lines().skip(skip_rows);
     let Some(Ok(header)) = lines.next() else {
@@ -1027,6 +1111,9 @@ pub fn heal_broken_csv_file(
     let mut pending_line = String::new();
     for line_res in lines {
         let line = line_res?;
+        // bytes the reader has taken from the file so far
+        let seen = counter.get();
+        progress.add(seen.saturating_sub(progress.read) as usize);
         if pending_line.is_empty() {
             pending_line = line;
         } else {
@@ -1042,6 +1129,7 @@ pub fn heal_broken_csv_file(
     if !pending_line.is_empty() {
         writeln!(writer, "{}", pending_line)?;
     }
+    progress.add(counter.get().saturating_sub(progress.read) as usize);
     writer.flush()?;
     Ok(healed_path)
 }
@@ -1125,12 +1213,14 @@ fn transcode_windows_1252(input_path: &Path, temp_dir: &Path) -> Result<PathBuf>
         File::create(&out_path).with_context(|| format!("Failed to create {:?}", out_path))?,
     );
     let mut buf = vec![0u8; 64 * 1024];
+    let mut progress = ByteLoop::new("Converting the file's encoding", input_path);
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
         writer.write_all(decode_windows_1252(&buf[..n]).as_bytes())?;
+        progress.add(n);
     }
     writer.flush()?;
     Ok(out_path)
@@ -2876,6 +2966,7 @@ pub fn count_nonempty_lines(path: &Path) -> Result<usize> {
     );
     let mut buf = Vec::new();
     let mut n = 0usize;
+    let mut progress = ByteLoop::new("Counting the file's lines", path);
     loop {
         buf.clear();
         let read = reader
@@ -2884,6 +2975,7 @@ pub fn count_nonempty_lines(path: &Path) -> Result<usize> {
         if read == 0 {
             break;
         }
+        progress.add(read);
         // A UTF-8 byte-order mark alone does not make a line non-empty.
         let body = buf.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&buf);
         if body.iter().any(|b| !b.is_ascii_whitespace()) {

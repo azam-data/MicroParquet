@@ -128,6 +128,8 @@ pub const COLUMN_MAX_W: f32 = 420.0;
 /// Heading text style (modal titles); the inspector title is `TEXT_INSPECTOR_TITLE`.
 pub const TEXT_HEADING: f32 = 17.0;
 pub const TEXT_MONO: f32 = 13.0;
+/// The progress bar in the status bar.
+pub const PROGRESS_BAR_W: f32 = 120.0;
 /// The schema dialog: width, the preview's fixed 5 rows, and the columns list.
 pub const SCHEMA_DIALOG_W: f32 = 1040.0;
 /// Space between the items of the two option rows.

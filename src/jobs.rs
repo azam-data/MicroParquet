@@ -78,6 +78,14 @@ pub struct Progress {
     pub text: String,
     /// 0.0..=1.0 when the job knows how far it is.
     pub fraction: Option<f32>,
+    /// A job with named stages ("Reading", "Parsing", "Checking"): their names and the current one.
+    pub stages: Vec<String>,
+    pub stage: usize,
+    /// Set while the job reads a file's bytes itself: (bytes read, file size). The fraction of
+    /// such a step is exactly this ratio.
+    pub bytes: Option<(u64, u64)>,
+    /// When the job started running.
+    pub started: Option<std::time::Instant>,
 }
 
 /// Handed to a running job: cancellation flag and progress line.
@@ -116,6 +124,52 @@ impl JobCtx {
         if let Ok(mut p) = self.progress.lock() {
             p.text = text.into();
             p.fraction = fraction;
+            p.bytes = None;
+        }
+    }
+    /// Names the stages of this job; the first one is current. No percentage is shown for a
+    /// stage unless a loop reports the bytes it has read ([`JobCtx::set_bytes`]).
+    pub fn set_stages(&self, names: &[&str]) {
+        if let Ok(mut p) = self.progress.lock() {
+            p.stages = names.iter().map(|s| s.to_string()).collect();
+            p.stage = 0;
+            p.text = names.first().map(|s| s.to_string()).unwrap_or_default();
+            p.fraction = None;
+            p.bytes = None;
+        }
+    }
+    /// Moves to stage `index` (0-based).
+    pub fn set_stage(&self, index: usize) {
+        if let Ok(mut p) = self.progress.lock() {
+            p.stage = index.min(p.stages.len().saturating_sub(1));
+            p.text = p.stages.get(p.stage).cloned().unwrap_or_default();
+            p.fraction = None;
+            p.bytes = None;
+        }
+    }
+    /// A loop that reads the file itself reports `read` of `total` bytes: this is the only way
+    /// a real percentage appears. `total == 0` says the loop is finished; the percentage goes.
+    pub fn set_bytes(&self, what: &str, read: u64, total: u64) {
+        if let Ok(mut p) = self.progress.lock() {
+            if total == 0 {
+                p.fraction = None;
+                p.bytes = None;
+                p.text = p.stages.get(p.stage).cloned().unwrap_or_default();
+            } else {
+                p.fraction = Some((read as f64 / total as f64).clamp(0.0, 1.0) as f32);
+                p.bytes = Some((read.min(total), total));
+                p.text = what.to_string();
+            }
+        }
+    }
+    /// What the job reports now.
+    pub fn progress(&self) -> Progress {
+        self.progress.lock().map(|p| p.clone()).unwrap_or_default()
+    }
+    /// Remembers when the job started running (the queue calls this).
+    fn mark_started(&self) {
+        if let Ok(mut p) = self.progress.lock() {
+            p.started = Some(std::time::Instant::now());
         }
     }
     /// Asks the job to stop (used by tests and by the queue).
@@ -157,6 +211,37 @@ pub struct ActiveJob {
     pub label: String,
     pub progress: Progress,
     pub cancelling: bool,
+}
+
+/// "7 s", "1 min 05 s", "1 h 02 min".
+pub fn format_elapsed(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{} s", s)
+    } else if s < 3600 {
+        format!("{} min {:02} s", s / 60, s % 60)
+    } else {
+        format!("{} h {:02} min", s / 3600, (s % 3600) / 60)
+    }
+}
+
+impl ActiveJob {
+    /// The time the job has been running (zero while it is still queued).
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.progress.started.map(|t| t.elapsed()).unwrap_or_default()
+    }
+
+    /// "Reading 1/3", "Parsing 2/3", ...: one label per stage, empty for a job without stages.
+    pub fn stage_labels(&self) -> Vec<String> {
+        let n = self.progress.stages.len();
+        self.progress.stages.iter().enumerate().map(|(i, s)| format!("{} {}/{}", s, i + 1, n)).collect()
+    }
+
+    /// The percentage to show: only when a loop reported real bytes read, or the job counted
+    /// finished units itself (files, tabs). Never a guess.
+    pub fn percent(&self) -> Option<u32> {
+        self.progress.fraction.map(|f| (f.clamp(0.0, 1.0) * 100.0).floor() as u32)
+    }
 }
 
 type Work<T> = Box<dyn FnOnce(&JobCtx) -> Result<T> + Send>;
@@ -220,6 +305,7 @@ fn run_one<T: Send + 'static>(shared: &Shared<T>, job: Queued<T>) {
         });
     }
     let Queued { id, key, label, ctx, work, .. } = job;
+    ctx.mark_started();
     let outcome = if ctx.is_cancelled() {
         Outcome::Cancelled
     } else {
