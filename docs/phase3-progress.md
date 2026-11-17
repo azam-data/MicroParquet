@@ -41,6 +41,13 @@ One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The 
 | 13 Genuine old-macro fixtures | DONE | e3e429c | fixes.rs: the Phase 1 (c6e780d) and Phase 2 (4278ef5) macros, saved by that code with all 15 step types, load (Phase 1 FTP as NextPointUp), pass the step check and replay to the exact CSV their own code produced; tests/fixtures/ holds the 4 files and a README | see spec |
 | 14 Job errors are tested where the status bar paints them | DONE | last commit of part 1 | src/ui/tests.rs: one headless egui frame of the real status bar (app fonts and theme) is painted and its text read: a failed export says "Excel export Loans.xlsx failed: the disk is full"; a page that cannot be read paints the summary failure and the "Page out of date" chip, and the chip stays after a later message replaces the text | none |
 
+## Fixes, part 2 (layout round)
+One commit per item, "Phase 3 fix <n>: ..." (A, B, then layout items 1–8), full `cargo test` before each. The commit column is filled in by the next commit. Tests are in `tests/phase3/fixes2.rs` and `src/ui/tests.rs`.
+
+| Item | Status | Commit | Tests added | Deviations |
+|---|---|---|---|---|
+| A Excel totals row that cannot be computed | DONE | see `git log` | fixes2.rs: two tabs, the totals computation fails for one: both sheets are in the workbook, the failed one has its data rows and no totals rows, `Export_Errors` and the status text give the reason and say "WITHOUT its totals row", and it is not counted as a failed tab; a failed tab and a kept sheet are listed separately | the report has a new field `totals_errors`; `export_scaled_tabs_with` takes the totals function as a parameter so a test can make it fail (Polars gave no input that fails) |
+
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).
 

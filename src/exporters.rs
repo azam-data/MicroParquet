@@ -44,6 +44,9 @@ pub struct XlsxExportReport {
     /// (tab title, column) of whole-number columns written as text because a value has more
     /// than 15 digits (Excel keeps only 15 significant digits of a number).
     pub text_columns: Vec<(String, String)>,
+    /// Sheets exported WITHOUT their totals row because it could not be computed:
+    /// (tab title, reason). The data is on its sheet; the reason is also on `Export_Errors`.
+    pub totals_errors: Vec<(String, String)>,
 }
 
 impl XlsxExportReport {
@@ -66,6 +69,12 @@ impl XlsxExportReport {
             parts.push(format!(
                 "⚠ whole numbers with more than 15 digits written as text (Excel would round them): {}",
                 cols.join(", ")
+            ));
+        }
+        for (t, why) in &self.totals_errors {
+            parts.push(format!(
+                "⚠ '{}' was exported WITHOUT its totals row (the data is on its sheet): {} (also on the Export_Errors sheet)",
+                t, why
             ));
         }
         if !self.errors.is_empty() {
@@ -172,21 +181,42 @@ pub fn export_selected_tabs_to_xlsx_scaled(
     temp_dir: &Path,
     scale: XlsxScale,
 ) -> Result<XlsxExportReport> {
+    export_scaled_tabs_with(tabs, out_path, temp_dir, scale, &summary_for_export)
+}
+
+/// How a collected tab's totals row is computed (tests pass one that fails).
+pub type SummaryFn = dyn Fn(&DataFrame, Option<&HashMap<String, SummarySpec>>, Option<&str>) -> Result<Vec<SummaryCell>>;
+
+/// `export_selected_tabs_to_xlsx_scaled` with the totals computation as a parameter. A tab whose
+/// totals row cannot be computed is NOT dropped: its sheet is written without the totals row and
+/// the reason goes to `Export_Errors` and the report.
+pub fn export_scaled_tabs_with(
+    tabs: &[ScaledTabToExport],
+    out_path: &Path,
+    temp_dir: &Path,
+    scale: XlsxScale,
+    summarize: &SummaryFn,
+) -> Result<XlsxExportReport> {
     let mut ok = Vec::new();
     let mut errors = Vec::new();
+    let mut totals_errors = Vec::new();
     for t in tabs {
-        // The summary is computed from the same collected data the sheet holds.
-        let collected = compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| {
-            let df = lf.collect()?;
-            let summary = summary_for_export(&df, t.summary, t.control_col)?;
-            Ok((df, summary))
-        });
-        match collected {
-            Ok((df, summary)) => ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone(), summary }),
+        match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
+            Ok(df) => {
+                // The summary is computed from the same collected data the sheet holds.
+                let summary = match summarize(&df, t.summary, t.control_col) {
+                    Ok(cells) => cells,
+                    Err(e) => {
+                        totals_errors.push((t.title.clone(), format!("{:#}", e)));
+                        Vec::new()
+                    }
+                };
+                ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone(), summary });
+            }
             Err(e) => errors.push((t.title.clone(), format!("{:#}", e))),
         }
     }
-    write_xlsx_tabs(ok, errors, out_path, EXCEL_MAX_DATA_ROWS, Some(scale))
+    write_xlsx_tabs_noted(ok, errors, totals_errors, out_path, EXCEL_MAX_DATA_ROWS, Some(scale))
 }
 
 /// `export_tabs_to_xlsx` with the rows-per-sheet limit as a parameter (tests use a small one).
@@ -235,6 +265,19 @@ struct ColScale {
 pub fn write_xlsx_tabs(
     tabs: Vec<XlsxTab>,
     errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
+) -> Result<XlsxExportReport> {
+    write_xlsx_tabs_noted(tabs, errors, Vec::new(), out_path, rows_per_sheet, scale)
+}
+
+/// `write_xlsx_tabs` plus `totals_errors`: (tab title, reason) for sheets whose totals row was
+/// left out. They are written to `Export_Errors` after the failed tabs.
+pub fn write_xlsx_tabs_noted(
+    tabs: Vec<XlsxTab>,
+    errors: Vec<(String, String)>,
+    totals_errors: Vec<(String, String)>,
     out_path: &Path,
     rows_per_sheet: usize,
     scale: Option<XlsxScale>,
@@ -390,7 +433,7 @@ pub fn write_xlsx_tabs(
         report.sheets.push((raw_title, sheet_count));
     }
 
-    if !errors.is_empty() {
+    if !errors.is_empty() || !totals_errors.is_empty() {
         let ws = workbook.add_worksheet();
         ws.set_name("Export_Errors")?;
         ws.write_string_with_format(0, 0, "Tab", &header_fmt)?;
@@ -401,7 +444,17 @@ pub fn write_xlsx_tabs(
             ws.write_string((i + 1) as u32, 0, tab)?;
             ws.write_string((i + 1) as u32, 1, err)?;
         }
+        for (j, (tab, why)) in totals_errors.iter().enumerate() {
+            let row = (errors.len() + j + 1) as u32;
+            ws.write_string(row, 0, tab)?;
+            ws.write_string(
+                row,
+                1,
+                format!("Sheet exported WITHOUT its totals row (the data is complete): {}", why),
+            )?;
+        }
         report.errors = errors;
+        report.totals_errors = totals_errors;
     }
 
     if report.sheets.is_empty() && report.errors.is_empty() {
