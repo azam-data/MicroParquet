@@ -447,3 +447,89 @@ fn fix12_excel_thousands_and_millions_by_format_lakh_and_crore_divided_and_sums_
     let back = LazyFrame::scan_parquet(&pq, Default::default()).unwrap().collect().unwrap();
     assert_eq!(back.column("Balance").unwrap().f64().unwrap().get(2), Some(987_654_321.0));
 }
+
+// ---------------------------------------------------------------------------------- fix 13
+
+/// Macros saved by the Phase 1 (c6e780d) and Phase 2 (4278ef5) merge-commit code, each with
+/// every step type, and the result that code gave on the fixture frame (see tests/fixtures).
+const OLD_MACROS: [(&str, &str); 2] = [
+    ("phase1_every_step.mpq.json", "phase1_every_step.expected.csv"),
+    ("phase2_every_step.mpq.json", "phase2_every_step.expected.csv"),
+];
+
+#[test]
+fn fix13_genuine_old_macros_load_and_replay_to_the_results_their_code_gave() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures");
+    let kinds = [
+        "SelectAndReorderColumns", "RenameColumn", "FilterRows", "ConditionalColumn", "MathFormula",
+        "NormalizeEntity", "MaturityBucket", "RateShockSim", "FtpCurveMap", "BankingHygieneAudit",
+        "DurationAnalysis", "LoanClassificationProvision", "LoanLimitUtilization", "GroupByPivot", "SqlQuery",
+    ];
+    for (json, expected) in OLD_MACROS {
+        let recipe = micro_parquet::macros::load_macro_from_file(&fixtures.join(json)).unwrap_or_else(|e| panic!("{json}: {e:#}"));
+        assert_eq!(recipe.steps.len(), kinds.len(), "{json}");
+        for k in kinds {
+            assert!(recipe.steps.iter().any(|s| format!("{:?}", s).starts_with(&format!("{k} "))), "{json} has a {k} step");
+        }
+        // old fields are filled by their defaults: Phase 1 FTP steps keep the interpolation they had
+        let ftp = recipe.steps.iter().find_map(|s| match s {
+            TransformStep::FtpCurveMap { interpolation, .. } => Some(*interpolation),
+            _ => None,
+        });
+        let want = if json.starts_with("phase1") { FtpInterpolation::NextPointUp } else { FtpInterpolation::Linear };
+        assert_eq!(ftp, Some(want), "{json}");
+        let d = dir(&format!("f13_{}", &json[..6]));
+        let src = parquet(&d, "fixture_loans", fixture_frame());
+        let issues = micro_parquet::engine::validate_steps(&src, &recipe.steps, &d).unwrap();
+        assert!(issues.is_empty(), "{json}: {issues:?}");
+        let got = replay_to_csv(&recipe.steps, &d);
+        // a Windows checkout may turn the file's line ends into CRLF
+        let want = std::fs::read_to_string(fixtures.join(expected)).unwrap().replace("\r\n", "\n");
+        assert_eq!(got, want, "{json}: today's code gives what the code that saved it gave");
+    }
+}
+/// The synthetic loan book the fixtures are replayed on (the same in every version's test).
+pub fn fixture_frame() -> polars::prelude::DataFrame {
+    use polars::prelude::*;
+    let day = |s: &str| (chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+    let dates = |v: &[Option<&str>]| -> Series {
+        let days: Vec<Option<i32>> = v.iter().map(|d| d.map(day)).collect();
+        Series::new("d".into(), days).cast(&DataType::Date).unwrap()
+    };
+    let mut opn = dates(&[Some("2024-01-15"), Some("2025-03-01"), Some("2023-07-10"), Some("2025-11-20"), Some("2022-02-28"), Some("2026-01-05"), Some("2024-09-09"), Some("2025-06-30")]);
+    opn.rename("Opndat".into());
+    let mut mat = dates(&[Some("2026-07-15"), Some("2026-09-30"), None, Some("2027-12-31"), Some("2026-05-31"), Some("2031-01-05"), Some("2026-08-01"), Some("2028-06-30")]);
+    mat.rename("Matdat".into());
+    let mut cls = dates(&[None, None, None, None, Some("2026-05-31"), None, None, None]);
+    cls.rename("Clsdat".into());
+    DataFrame::new(vec![
+        Series::new("Actnum".into(), &["1001", "1002", "1003", "1004", "1005", "1006", "1007", "1008"]).into(),
+        Series::new("Brancd".into(), &["DHK", "DHK", "CTG", "CTG", "SYL", "DHK", "XXX", "CTG"]).into(),
+        Series::new("Acttit".into(), &["Rahim Traders Ltd.", "RAHIM TRADERS LIMITED", "Karim & Sons", "Karim and Sons", "Delta Agro", "Bay Shipping", "Test", "Delta Agro Ltd"]).into(),
+        Series::new("Balance".into(), &[50_000_000.0f64, 25_000_000.0, 120_000_000.0, 8_000_000.0, 0.0, 300_000_000.0, 1.0, 45_000_000.0]).into(),
+        Series::new("Int Rate".into(), &[9.5f64, 10.25, 11.0, 8.75, 12.0, 7.5, 9.0, 10.5]).into(),
+        opn.into(),
+        mat.into(),
+        cls.into(),
+        Series::new("Acstat".into(), &["ACT", "DMT", "ACT", "ACT", "CLS", "ACT", "ACT", "DMT"]).into(),
+        Series::new("CL_Status".into(), &["UC", "SMA", "UC", "SS", "UC", "UC", "UC", "BL"]).into(),
+        Series::new("Sector".into(), &["SMALL", "MICRO", "OTHER", "SMALL", "AGRI ST", "OTHER", "OTHER", "COTTAGE"]).into(),
+        Series::new("Sanctioned_Limit".into(), &[60_000_000.0f64, 25_000_000.0, 150_000_000.0, 10_000_000.0, 5_000_000.0, 300_000_000.0, 1.0, 50_000_000.0]).into(),
+        Series::new("Side".into(), &["Asset", "Asset", "Asset", "Liability", "Asset", "Asset", "Asset", "Asset"]).into(),
+    ])
+    .unwrap()
+}
+
+/// Replays `steps` on the fixture frame and returns the result as CSV text.
+pub fn replay_to_csv(steps: &[micro_parquet::models::TransformStep], dir: &std::path::Path) -> String {
+    use polars::prelude::*;
+    std::fs::create_dir_all(dir).unwrap();
+    let p = dir.join("fixture_loans.parquet");
+    let mut df = fixture_frame();
+    ParquetWriter::new(std::fs::File::create(&p).unwrap()).finish(&mut df).unwrap();
+    let src = micro_parquet::models::TabSource::SingleFile { path: p, is_parquet: true, config: Default::default() };
+    let mut out = micro_parquet::engine::compile_tab_lazy(&src, steps, dir).unwrap().collect().unwrap();
+    let mut buf = Vec::new();
+    CsvWriter::new(&mut buf).finish(&mut out).unwrap();
+    String::from_utf8(buf).unwrap()
+}

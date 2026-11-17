@@ -1,0 +1,269 @@
+{
+  "name": "Phase 2",
+  "description": "Every step type, saved by the Phase 2 code (merge commit 4278ef5).",
+  "created_at": "4278ef5",
+  "enforce_balance_control": true,
+  "control_column": "Balance",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "FilterRows": {
+        "column": "Brancd",
+        "operator": "NotEq",
+        "value": "XXX",
+        "keep_matching": true
+      }
+    },
+    {
+      "ConditionalColumn": {
+        "new_col": "Is_Dormant",
+        "rules": [
+          {
+            "col_name": "Acstat",
+            "op": "Eq",
+            "compare_val": "DMT",
+            "output_val": "Y"
+          }
+        ],
+        "fallback": "N",
+        "output_as_float": false
+      }
+    },
+    {
+      "MathFormula": {
+        "new_col": "Balance_Cr",
+        "left_col": "Balance",
+        "op": "Div",
+        "right_is_col": false,
+        "right_val_or_col": "10000000"
+      }
+    },
+    {
+      "NormalizeEntity": {
+        "source_col": "Acttit",
+        "new_col": "Acttit_Norm"
+      }
+    },
+    {
+      "MaturityBucket": {
+        "mat_col": "Matdat",
+        "cutoff_date": "2026-06-30",
+        "bucket_def": {
+          "name": "Bangladesh Bank SLP (9 Liquidity Buckets)",
+          "rules": [
+            {
+              "max_days": 1,
+              "label": "01. Overnight / 1 Day"
+            },
+            {
+              "max_days": 7,
+              "label": "02. 2 to 7 Days"
+            },
+            {
+              "max_days": 30,
+              "label": "03. 8 to 30 Days"
+            },
+            {
+              "max_days": 90,
+              "label": "04. 1 to 3 Months (31-90d)"
+            },
+            {
+              "max_days": 180,
+              "label": "05. 3 to 6 Months (91-180d)"
+            },
+            {
+              "max_days": 365,
+              "label": "06. 6 to 12 Months (181-365d)"
+            },
+            {
+              "max_days": 1095,
+              "label": "07. 1 to 3 Years"
+            },
+            {
+              "max_days": 1825,
+              "label": "08. 3 to 5 Years"
+            }
+          ],
+          "overflow_label": "09. Over 5 Years",
+          "overdue_label": "10. Overdue / Matured Unencashed",
+          "null_sight_label": "01. Overnight / Sight (Non-Maturing)",
+          "null_long_label": "09. Over 5 Years (Core)"
+        },
+        "null_as_sight": true,
+        "new_col": "Maturity_Bucket"
+      }
+    },
+    {
+      "RateShockSim": {
+        "bal_col": "Balance",
+        "rate_col": "Int Rate",
+        "mat_col": "Matdat",
+        "cutoff_date": "2026-06-30",
+        "shock_bps": 200.0,
+        "side_col": "Side"
+      }
+    },
+    {
+      "FtpCurveMap": {
+        "opndat_col": "Opndat",
+        "matdat_col": "Matdat",
+        "bal_col": "Balance",
+        "rate_col": "Int Rate",
+        "curve": [
+          {
+            "tenor_days": 1,
+            "ftp_rate": 8.0
+          },
+          {
+            "tenor_days": 7,
+            "ftp_rate": 8.25
+          },
+          {
+            "tenor_days": 30,
+            "ftp_rate": 8.75
+          },
+          {
+            "tenor_days": 91,
+            "ftp_rate": 9.5
+          },
+          {
+            "tenor_days": 182,
+            "ftp_rate": 10.1
+          },
+          {
+            "tenor_days": 364,
+            "ftp_rate": 10.65
+          },
+          {
+            "tenor_days": 730,
+            "ftp_rate": 11.2
+          },
+          {
+            "tenor_days": 1825,
+            "ftp_rate": 11.75
+          }
+        ],
+        "is_liability": false,
+        "interpolation": "Linear"
+      }
+    },
+    {
+      "DurationAnalysis": {
+        "bal_col": "Balance",
+        "rate_col": "Int Rate",
+        "mat_col": "Matdat",
+        "cutoff_date": "2026-06-30",
+        "compounding_freq": 4,
+        "shock_bps": 200.0,
+        "default_sight_years": 0.0833,
+        "side_col": "Side"
+      }
+    },
+    {
+      "LoanClassificationProvision": {
+        "bal_col": "Balance",
+        "cl_status_col": "CL_Status",
+        "segment_col": "Sector",
+        "suspense_col": null,
+        "security_col": null,
+        "cutoff_date": "2026-06-30",
+        "collateral_type_col": null
+      }
+    },
+    {
+      "LoanLimitUtilization": {
+        "limit_col": "Sanctioned_Limit",
+        "bal_col": "Balance",
+        "ccf_pct": 20.0
+      }
+    },
+    {
+      "BankingHygieneAudit": {
+        "opndat_col": "Opndat",
+        "matdat_col": "Matdat",
+        "clsdat_col": "Clsdat",
+        "acstat_col": "Acstat",
+        "bal_col": "Balance",
+        "rate_col": "Int Rate",
+        "actnum_col": "Actnum",
+        "cutoff_date": "2026-06-30",
+        "only_exceptions": false,
+        "active_statuses": [
+          "ACT",
+          "ACTIVE",
+          "A",
+          "OPEN"
+        ],
+        "rate_min_pct": 0.5,
+        "rate_max_pct": 24.0
+      }
+    },
+    {
+      "RenameColumn": {
+        "old_name": "Brancd",
+        "new_name": "Branch"
+      }
+    },
+    {
+      "SelectAndReorderColumns": {
+        "cols": [
+          "Branch",
+          "Maturity_Bucket",
+          "Balance",
+          "Balance_Cr",
+          "Int Rate",
+          "Is_Dormant",
+          "Acttit_Norm"
+        ]
+      }
+    },
+    {
+      "GroupByPivot": {
+        "group_cols": [
+          "Branch",
+          "Maturity_Bucket"
+        ],
+        "pivot_col": null,
+        "aggs": [
+          {
+            "target_col": "Balance",
+            "func": "Sum",
+            "weight_col": null,
+            "alias": "Total_Balance",
+            "format_spec": {
+              "fmt_type": "BdtCrore",
+              "decimals": 2
+            }
+          },
+          {
+            "target_col": "Int Rate",
+            "func": "WeightedAvg",
+            "weight_col": "Balance",
+            "alias": "WAvg_Rate",
+            "format_spec": {
+              "fmt_type": "PercentAsIs",
+              "decimals": 2
+            }
+          },
+          {
+            "target_col": "Balance",
+            "func": "Count",
+            "weight_col": null,
+            "alias": "Accounts",
+            "format_spec": {
+              "fmt_type": "Auto",
+              "decimals": 2
+            }
+          }
+        ],
+        "sort_by_col": "Total_Balance",
+        "top_n": null
+      }
+    },
+    {
+      "SqlQuery": {
+        "query": "SELECT * FROM self ORDER BY Total_Balance DESC"
+      }
+    }
+  ]
+}
