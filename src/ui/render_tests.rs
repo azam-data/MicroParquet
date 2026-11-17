@@ -950,3 +950,43 @@ fn a_60_character_title_and_a_7_digit_count_keep_the_tag_off_the_title_line_and_
         }
     }
 }
+
+// ------------------------------------------------------ part 4, item 3: conditional column dialog
+
+#[test]
+fn the_conditional_column_dialog_offers_a_column_on_the_right_and_a_blank_result_and_fits_both_scales() {
+    use crate::ui::layout_tests::collect_painted;
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)] {
+        let what = format!("ppp {ppp} {w}x{h}");
+        let mut app = test_app("p4cond");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        app.cond.rules[0].col_name = "Balance".into();
+        app.cond.rules[0].op = FilterOp::Lte;
+        app.cond.rules[0].compare_is_col = true;
+        app.cond.rules[0].compare_val = "Amount".into();
+        app.active_tool = ActiveToolModal::ConditionalCol;
+        let (ctx, input) = screen(ppp, w, h);
+        let mut p = None;
+        for _ in 0..8 {
+            let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+            p = Some(collect_painted(&out.shapes));
+        }
+        let p = p.expect("frames");
+        let r = assert_dialog_fits(&ctx, "\u{E3D4} Add Conditional Column (IF / ELSE IF / ELSE)", &what);
+        let has = |t: &str| p.boxes.iter().any(|(x, b)| x.contains(t) && inside(*b, r.window));
+        assert!(has("column"), "{what}: the right-hand side says it is a column");
+        assert!(has("Amount"), "{what}: and shows the chosen column");
+        assert!(has("If either side of a rule is blank"), "{what}: the blank result is offered");
+        assert!(has("blank") && has("this value") && has("no match"), "{what}: its three choices in {:?}: {:?}", r.window, p.boxes.iter().filter(|(_, b)| b.intersects(r.window)).collect::<Vec<_>>());
+        // the step the dialog makes carries both
+        match app.tool_step(&ActiveToolModal::ConditionalCol) {
+            Some(TransformStep::ConditionalColumn { rules, blank_result, .. }) => {
+                assert!(rules[0].compare_is_col && rules[0].compare_val == "Amount", "{what}");
+                assert_eq!(blank_result, BlankRule::Result(String::new()), "{what}: the default is a blank cell");
+            }
+            other => panic!("{what}: {other:?}"),
+        }
+        eprintln!("{what}: dialog {:?} body {:?}", r.window, r.body);
+    }
+}

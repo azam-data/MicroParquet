@@ -93,6 +93,7 @@ impl MicroParquetApp {
                 rules: self.cond.rules.clone(),
                 fallback: self.cond.fallback.clone(),
                 output_as_float: self.cond.as_float,
+                blank_result: self.cond.blank_rule(),
             },
             ActiveToolModal::MathFormula => TransformStep::MathFormula {
                 new_col: self.calc.new_col.clone(),
@@ -213,11 +214,12 @@ impl MicroParquetApp {
                 self.columns.rename_old = old_name;
                 self.columns.rename_new = new_name;
             }
-            TransformStep::ConditionalColumn { new_col, rules, fallback, output_as_float } => {
+            TransformStep::ConditionalColumn { new_col, rules, fallback, output_as_float, blank_result } => {
                 self.cond.new_col = new_col;
                 self.cond.rules = rules;
                 self.cond.fallback = fallback;
                 self.cond.as_float = output_as_float;
+                self.cond.set_blank_rule(&blank_result);
             }
             TransformStep::MathFormula { new_col, left_col, op, right_is_col, right_val_or_col } => {
                 self.calc.new_col = new_col;

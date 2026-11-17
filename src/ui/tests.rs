@@ -397,9 +397,10 @@ fn one_step_per_modal() -> Vec<TransformStep> {
         TransformStep::RenameColumn { old_name: "Branch".into(), new_name: "Brancd".into() },
         TransformStep::ConditionalColumn {
             new_col: "Big".into(),
-            rules: vec![CondRule { col_name: "Balance".into(), op: FilterOp::Gt, compare_val: "15".into(), output_val: "Y".into() }],
+            rules: vec![CondRule { col_name: "Balance".into(), op: FilterOp::Gt, compare_val: "15".into(), output_val: "Y".into(), compare_is_col: false }],
             fallback: "N".into(),
             output_as_float: false,
+            blank_result: BlankRule::FallThrough,
         },
         TransformStep::MathFormula { new_col: "Bal_K".into(), left_col: "Balance".into(), op: MathOp::Mul, right_is_col: false, right_val_or_col: "0.001".into() },
         TransformStep::NormalizeEntity { source_col: "Branch".into(), new_col: "Branch_N".into() },

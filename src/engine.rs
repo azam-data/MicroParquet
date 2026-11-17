@@ -5,7 +5,7 @@ use crate::banking::{
     ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
-    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec, CondOp,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec, BlankRule, CondOp, CondRule,
     FilterCondition, GroupJoin,
     ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, LineDetail, LineIssue, RowCountCheck, ROW_DETAILS_LIMIT, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
@@ -2478,6 +2478,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rules,
             fallback,
             output_as_float,
+            blank_result,
         } => {
             if rules.is_empty() {
                 return Ok(lf);
@@ -2486,11 +2487,19 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             let schema = lf
                 .collect_schema()
                 .context("Could not read the column types for this conditional column")?;
+            let blank_value = match blank_result {
+                BlankRule::FallThrough => None,
+                BlankRule::Result(text) => Some(blank_result_expr(new_col, text, *output_as_float)?),
+            };
             let mut expr: Expr = parse_val_expr(fallback, *output_as_float);
             for r in rules.iter().rev() {
-                let c = build_filter_expr(&r.col_name, r.op, &r.compare_val, &schema)?;
+                let c = build_rule_expr(r, &schema)?;
                 let o = parse_val_expr(&r.output_val, *output_as_float);
                 expr = when(c).then(o).otherwise(expr);
+                // a blank on either side gives the blank result before the rule can decide
+                if let (Some(value), Some(blank)) = (&blank_value, rule_blank_expr(r, &schema)?) {
+                    expr = when(blank).then(value.clone()).otherwise(expr);
+                }
             }
             Ok(lf.with_column(expr.alias(new_col)))
         }
@@ -2766,6 +2775,134 @@ fn build_condition_expr(cond: &FilterCondition, schema: &Schema) -> Result<Expr>
                 blank.not()
             }
         }
+    })
+}
+
+/// The value a row gets when a rule looks at a blank: empty text is a blank cell.
+fn blank_result_expr(new_col: &str, text: &str, as_float: bool) -> Result<Expr> {
+    let t = text.trim();
+    Ok(if t.is_empty() {
+        lit(NULL).cast(if as_float { DataType::Float64 } else { DataType::String })
+    } else if as_float {
+        let num = t.parse::<f64>().map_err(|_| {
+            anyhow::anyhow!(
+                "The result for blanks, '{}', is not a number, but column '{}' is numeric. Enter a number or leave it empty.",
+                t,
+                new_col
+            )
+        })?;
+        lit(num)
+    } else {
+        lit(t.to_string())
+    })
+}
+
+/// A blank value: null, or (text) empty after trimming.
+fn blank_of(name: &str, dtype: &DataType) -> Expr {
+    if dtype.is_string() {
+        col(name).is_null().or(col(name).str().strip_chars(lit(NULL)).eq(lit("")))
+    } else {
+        col(name).is_null()
+    }
+}
+
+/// True where a column the rule looks at is blank: its own column, and the column it is
+/// compared with. `None` for the tests "is blank" / "is not blank", which ask that very question.
+fn rule_blank_expr(r: &CondRule, schema: &Schema) -> Result<Option<Expr>> {
+    if matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
+        return Ok(None);
+    }
+    let left = schema
+        .get(&r.col_name)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this conditional column.", r.col_name))?;
+    let mut blank = blank_of(&r.col_name, left);
+    if r.compare_is_col {
+        let right = schema
+            .get(r.compare_val.trim())
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column this rule compares with.", r.compare_val.trim()))?;
+        blank = blank.or(blank_of(r.compare_val.trim(), right));
+    }
+    Ok(Some(blank))
+}
+
+/// What a column holds, for comparing it with another column.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompareKind {
+    Number,
+    Date,
+    Text,
+}
+
+impl CompareKind {
+    fn of(dtype: &DataType) -> Option<Self> {
+        if dtype.is_numeric() {
+            Some(Self::Number)
+        } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
+            Some(Self::Date)
+        } else if dtype.is_string() || dtype.is_categorical() {
+            Some(Self::Text)
+        } else {
+            None
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::Date => "date",
+            Self::Text => "text",
+        }
+    }
+}
+
+/// The test of one rule. A value on the right is checked as in a filter; another column on the
+/// right must be of the same kind (number with number, date with date, text with text).
+fn build_rule_expr(r: &CondRule, schema: &Schema) -> Result<Expr> {
+    if !r.compare_is_col || matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
+        return build_filter_expr(&r.col_name, r.op, &r.compare_val, schema);
+    }
+    let (ln, rn) = (r.col_name.as_str(), r.compare_val.trim());
+    let ld = schema
+        .get(ln)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this conditional column.", ln))?;
+    let rd = schema
+        .get(rn)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column this rule compares with.", rn))?;
+    let describe = |k: Option<CompareKind>, d: &DataType| match k {
+        Some(k) => format!("{} ({})", k.name(), d),
+        None => format!("{}", d),
+    };
+    let (lk, rk) = (CompareKind::of(ld), CompareKind::of(rd));
+    let kind = match (lk, rk) {
+        (Some(a), Some(b)) if a == b => a,
+        _ => anyhow::bail!(
+            "Cannot compare column '{}' ({}) with column '{}' ({}). Only number with number, date with date and text with text can be compared. Change a column's type in the schema, or pick another column.",
+            ln,
+            describe(lk, ld),
+            rn,
+            describe(rk, rd)
+        ),
+    };
+    let (l, rr) = match kind {
+        CompareKind::Number => (col(ln).cast(DataType::Float64), col(rn).cast(DataType::Float64)),
+        CompareKind::Date => (col(ln).cast(DataType::Date), col(rn).cast(DataType::Date)),
+        CompareKind::Text => (col(ln).cast(DataType::String), col(rn).cast(DataType::String)),
+    };
+    Ok(match r.op {
+        FilterOp::Eq => l.eq(rr),
+        FilterOp::NotEq => l.neq(rr),
+        FilterOp::Gt => l.gt(rr),
+        FilterOp::Gte => l.gt_eq(rr),
+        FilterOp::Lt => l.lt(rr),
+        FilterOp::Lte => l.lt_eq(rr),
+        FilterOp::Contains if kind == CompareKind::Text => l.str().contains_literal(rr),
+        FilterOp::StartsWith if kind == CompareKind::Text => l.str().starts_with(rr),
+        op => anyhow::bail!(
+            "'{}' cannot compare column '{}' with column '{}'. Use equals, does not equal, <, \u{2264}, > or \u{2265}{}.",
+            op.label(),
+            ln,
+            rn,
+            if kind == CompareKind::Text { ", contains or starts with" } else { "" }
+        ),
     })
 }
 

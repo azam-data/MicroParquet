@@ -219,6 +219,13 @@ pub const LIST_MAX_H_L: f32 = 240.0;
 pub const PYTHON_PREVIEW_MAX_H: f32 = 360.0;
 // input fields
 pub const FIELD_W_S: f32 = 90.0;
+/// The conditional-column dialog: a column picker, the operator list, "value / column".
+pub const COND_COMBO_W: f32 = 140.0;
+pub const COND_OP_W: f32 = 150.0;
+pub const COND_KIND_W: f32 = 70.0;
+/// The width the conditional-column rows wrap at, and room for the dialog's scroll bar.
+pub const COND_BODY_W: f32 = 720.0;
+pub const DIALOG_SCROLL_BAR_ALLOWANCE: f32 = 16.0;
 pub const FIELD_W_VALUE: f32 = 130.0;
 pub const FIELD_W_OP: f32 = 120.0;
 pub const FIELD_W_COLUMN: f32 = 160.0;

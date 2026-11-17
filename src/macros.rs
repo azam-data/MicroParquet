@@ -1,5 +1,5 @@
 use crate::models::{
-    parquet_native_type, parquet_needs_conversion, AggFunc, ColDataType, ColumnSchemaConfig, CondOp,
+    parquet_native_type, parquet_needs_conversion, AggFunc, BlankRule, ColDataType, ColumnSchemaConfig, CondOp,
     CsvTextEncoding, FilterCondition, FilterOp, GroupJoin, IngestionConfig, MacroRecipe, PiiMaskMode,
     TransformStep,
 };
@@ -482,21 +482,69 @@ pub fn generate_python_polars_code(
                 rules,
                 fallback,
                 output_as_float,
+                blank_result,
             } => {
+                if let Some(r) = rules.iter().find(|r| r.compare_is_col && r.op == FilterOp::InList) {
+                    // the same refusal as the app; never a guessed comparison
+                    py.push_str(&format!(
+                        "raise ValueError({:?})\n\n",
+                        format!("'is in list' cannot compare column '{}' with column '{}'.", r.col_name, r.compare_val.trim())
+                    ));
+                    continue;
+                }
                 if !rules.is_empty() {
-                    py.push_str("lf = lf.with_columns(\n    ");
-                    for (i, r) in rules.iter().enumerate() {
-                        let cond = py_filter_expr(&r.col_name, r.op, &r.compare_val);
+                    let blank_value = match blank_result {
+                        BlankRule::FallThrough => None,
+                        BlankRule::Result(t) if t.trim().is_empty() => Some("pl.lit(None)".to_string()),
+                        BlankRule::Result(t) if *output_as_float => Some(t.trim().to_string()),
+                        BlankRule::Result(t) => Some(format!("pl.lit(\"{}\")", t.trim())),
+                    };
+                    let mut first = true;
+                    let mut chain = String::new();
+                    let mut push = |chain: &mut String, cond: String, out: String| {
+                        if first {
+                            chain.push_str(&format!("pl.when({}).then({})", cond, out));
+                            first = false;
+                        } else {
+                            chain.push_str(&format!("\n    .when({}).then({})", cond, out));
+                        }
+                    };
+                    for r in rules.iter() {
+                        let col_blank = |c: &str| format!("pl.col(\"{}\").is_null() | (pl.col(\"{}\").cast(pl.Utf8).str.strip_chars() == \"\")", c, c);
+                        if let Some(bv) = &blank_value {
+                            if !matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
+                                let mut b = format!("({})", col_blank(&r.col_name));
+                                if r.compare_is_col {
+                                    b.push_str(&format!(" | ({})", col_blank(r.compare_val.trim())));
+                                }
+                                push(&mut chain, b, bv.clone());
+                            }
+                        }
+                        let cond = if r.compare_is_col && !matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
+                            let sym = match r.op {
+                                FilterOp::Eq => "==",
+                                FilterOp::NotEq => "!=",
+                                FilterOp::Gt => ">",
+                                FilterOp::Gte => ">=",
+                                FilterOp::Lt => "<",
+                                FilterOp::Lte => "<=",
+                                _ => "",
+                            };
+                            let (a, b) = (&r.col_name, r.compare_val.trim());
+                            match r.op {
+                                FilterOp::Contains => format!("pl.col(\"{a}\").str.contains(pl.col(\"{b}\"), literal=True)"),
+                                FilterOp::StartsWith => format!("pl.col(\"{a}\").str.starts_with(pl.col(\"{b}\"))"),
+                                _ => format!("pl.col(\"{a}\") {sym} pl.col(\"{b}\")"),
+                            }
+                        } else {
+                            py_filter_expr(&r.col_name, r.op, &r.compare_val)
+                        };
                         let out = if *output_as_float {
                             r.output_val.clone()
                         } else {
                             format!("pl.lit(\"{}\")", r.output_val)
                         };
-                        if i == 0 {
-                            py.push_str(&format!("pl.when({}).then({})", cond, out));
-                        } else {
-                            py.push_str(&format!("\n    .when({}).then({})", cond, out));
-                        }
+                        push(&mut chain, cond, out);
                     }
                     let fb = if *output_as_float {
                         fallback.clone()
@@ -504,8 +552,8 @@ pub fn generate_python_polars_code(
                         format!("pl.lit(\"{}\")", fallback)
                     };
                     py.push_str(&format!(
-                        "\n    .otherwise({})\n    .alias(\"{}\")\n)\n\n",
-                        fb, new_col
+                        "lf = lf.with_columns(\n    {}\n    .otherwise({})\n    .alias(\"{}\")\n)\n\n",
+                        chain, fb, new_col
                     ));
                 }
             }

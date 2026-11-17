@@ -812,8 +812,24 @@ pub struct SortLevel {
 pub struct CondRule {
     pub col_name: String,
     pub op: FilterOp,
+    /// The value to compare with, or (when `compare_is_col`) the name of the column to compare with.
     pub compare_val: String,
     pub output_val: String,
+    /// The right-hand side is another column, not a value.
+    #[serde(default)]
+    pub compare_is_col: bool,
+}
+
+/// What a conditional column gives a row when a column in one of its rules is blank (null, or
+/// text that is empty after trimming).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub enum BlankRule {
+    /// Steps saved before this choice existed: a blank never matches, so the next rule (or
+    /// ELSE) decides.
+    #[default]
+    FallThrough,
+    /// The row gets this value at once, without trying the other rules (empty: a blank cell).
+    Result(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1088,6 +1104,9 @@ pub enum TransformStep {
         rules: Vec<CondRule>,
         fallback: String,
         output_as_float: bool,
+        /// The result when a column a rule looks at is blank on either side.
+        #[serde(default)]
+        blank_result: BlankRule,
     },
     MathFormula {
         new_col: String,
