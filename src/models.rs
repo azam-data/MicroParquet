@@ -14,13 +14,20 @@ pub struct PortablePaths {
     pub temp_dir: PathBuf,
 }
 
-/// `portable_data/` next to the executable (falls back to the working directory).
+/// The data folder (`portable_data`): next to the executable, or on macOS next to the `.app`
+/// bundle (with `~/Library/Application Support/MicroParquet` as the fallback). Falls back to
+/// the working directory when the executable path is unknown. See `paths::choose_portable_root`.
 pub fn portable_root_dir() -> PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    exe_dir.join("portable_data")
+    let exe = std::env::current_exe().unwrap_or_else(|_| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join("MicroParquet")
+    });
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    crate::paths::choose_portable_root(
+        &exe,
+        cfg!(target_os = "macos"),
+        home.as_deref(),
+        &crate::paths::dir_is_writable,
+    )
 }
 
 impl PortablePaths {
@@ -260,6 +267,29 @@ pub enum NumberDisplayFormat {
     StandardCommas,
     BdtLakh,
     BdtCrore,
+    BdtThousand,
+    BdtMillion,
+}
+
+/// A money scale: the value is divided by `divisor` and shown with `suffix`
+/// ("2.50 Cr"); reports name it in the header with `unit` ("Balance (BDT Cr)").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoneyScale {
+    pub divisor: f64,
+    pub suffix: &'static str,
+    pub unit: &'static str,
+}
+
+pub const SCALE_THOUSAND: MoneyScale = MoneyScale { divisor: 1_000.0, suffix: "K", unit: "BDT K" };
+pub const SCALE_MILLION: MoneyScale = MoneyScale { divisor: 1_000_000.0, suffix: "M", unit: "BDT M" };
+pub const SCALE_LAKH: MoneyScale = MoneyScale { divisor: 100_000.0, suffix: "L", unit: "BDT L" };
+pub const SCALE_CRORE: MoneyScale = MoneyScale { divisor: 10_000_000.0, suffix: "Cr", unit: "BDT Cr" };
+
+impl MoneyScale {
+    /// `value` divided by the scale, with thousands separators and the suffix: "25.00 M".
+    pub fn format(&self, value: f64, decimals: usize) -> String {
+        format!("{} {}", format_with_commas(value / self.divisor, decimals), self.suffix)
+    }
 }
 
 impl NumberDisplayFormat {
@@ -267,9 +297,34 @@ impl NumberDisplayFormat {
         match self {
             NumberDisplayFormat::Raw => "Raw Numbers",
             NumberDisplayFormat::StandardCommas => "Commas (1,234.56)",
+            NumberDisplayFormat::BdtThousand => "BDT Thousand (÷ 1,000)",
+            NumberDisplayFormat::BdtMillion => "BDT Million (÷ 1,000,000)",
             NumberDisplayFormat::BdtLakh => "BDT Lakh (÷ 100,000)",
             NumberDisplayFormat::BdtCrore => "BDT Crore (÷ 10,000,000)",
         }
+    }
+
+    /// The scale this format divides by, or `None` for plain numbers.
+    pub fn scale(&self) -> Option<MoneyScale> {
+        match self {
+            NumberDisplayFormat::BdtThousand => Some(SCALE_THOUSAND),
+            NumberDisplayFormat::BdtMillion => Some(SCALE_MILLION),
+            NumberDisplayFormat::BdtLakh => Some(SCALE_LAKH),
+            NumberDisplayFormat::BdtCrore => Some(SCALE_CRORE),
+            NumberDisplayFormat::Raw | NumberDisplayFormat::StandardCommas => None,
+        }
+    }
+
+    /// Every scale in menu order: Crore, Lakh, Million, Thousand, then plain.
+    pub fn all() -> &'static [NumberDisplayFormat] {
+        &[
+            NumberDisplayFormat::BdtCrore,
+            NumberDisplayFormat::BdtLakh,
+            NumberDisplayFormat::BdtMillion,
+            NumberDisplayFormat::BdtThousand,
+            NumberDisplayFormat::StandardCommas,
+            NumberDisplayFormat::Raw,
+        ]
     }
 }
 
@@ -279,6 +334,8 @@ pub enum MetricFormatType {
     Auto,            // Smart-detects Monetary vs Rate (%) vs Duration/Count
     BdtCrore,        // Divide by 10,000,000 + " Cr"
     BdtLakh,         // Divide by 100,000 + " L"
+    BdtThousand,     // Divide by 1,000 + " K"
+    BdtMillion,      // Divide by 1,000,000 + " M"
     StandardCommas,  // 1,234.56
     Raw,             // Unformatted float
     PercentAsIs,     // e.g. 8.5 -> "8.50%"
@@ -291,6 +348,8 @@ impl MetricFormatType {
             MetricFormatType::Auto,
             MetricFormatType::BdtCrore,
             MetricFormatType::BdtLakh,
+            MetricFormatType::BdtMillion,
+            MetricFormatType::BdtThousand,
             MetricFormatType::StandardCommas,
             MetricFormatType::PercentAsIs,
             MetricFormatType::PercentDiv100,
@@ -298,11 +357,24 @@ impl MetricFormatType {
         ]
     }
 
+    /// The money scale of this format, or `None` (percent, plain numbers, Auto).
+    pub fn scale(&self) -> Option<MoneyScale> {
+        match self {
+            MetricFormatType::BdtCrore => Some(SCALE_CRORE),
+            MetricFormatType::BdtLakh => Some(SCALE_LAKH),
+            MetricFormatType::BdtThousand => Some(SCALE_THOUSAND),
+            MetricFormatType::BdtMillion => Some(SCALE_MILLION),
+            _ => None,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             MetricFormatType::Auto => "Auto (Smart Detect)",
             MetricFormatType::BdtCrore => "BDT Crore (Cr)",
             MetricFormatType::BdtLakh => "BDT Lakh (L)",
+            MetricFormatType::BdtThousand => "BDT Thousand (K)",
+            MetricFormatType::BdtMillion => "BDT Million (M)",
             MetricFormatType::StandardCommas => "Decimal / Commas",
             MetricFormatType::PercentAsIs => "Percent (% as-is, e.g. 8.5%)",
             MetricFormatType::PercentDiv100 => "Percent (÷100 & %, e.g. 0.085 -> 8.5%)",
@@ -347,26 +419,43 @@ pub fn format_metric_value(
     };
 
     match resolved_type {
-        MetricFormatType::BdtCrore => {
-            format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
-        }
-        MetricFormatType::BdtLakh => {
-            format!("{} L", format_with_commas(val / 100_000.0, dec))
-        }
+        MetricFormatType::BdtCrore
+        | MetricFormatType::BdtLakh
+        | MetricFormatType::BdtThousand
+        | MetricFormatType::BdtMillion => match resolved_type.scale() {
+            Some(sc) => sc.format(val, dec),
+            None => format_with_commas(val, dec),
+        },
         MetricFormatType::StandardCommas => format_with_commas(val, dec),
         MetricFormatType::PercentAsIs => format!("{}%", format_with_commas(val, dec)),
         MetricFormatType::PercentDiv100 => format!("{}%", format_with_commas(val * 100.0, dec)),
         MetricFormatType::Raw => format!("{}", val),
-        MetricFormatType::Auto => match global_monetary_fmt {
-            NumberDisplayFormat::Raw => format!("{}", val),
-            NumberDisplayFormat::StandardCommas => format_with_commas(val, dec),
-            NumberDisplayFormat::BdtLakh => {
-                format!("{} L", format_with_commas(val / 100_000.0, dec))
-            }
-            NumberDisplayFormat::BdtCrore => {
-                format!("{} Cr", format_with_commas(val / 10_000_000.0, dec))
-            }
+        MetricFormatType::Auto => match global_monetary_fmt.scale() {
+            Some(sc) => sc.format(val, dec),
+            None => match global_monetary_fmt {
+                NumberDisplayFormat::StandardCommas => format_with_commas(val, dec),
+                _ => format!("{}", val),
+            },
         },
+    }
+}
+
+/// The money scale a column is shown in: its own format, or for Auto money columns the global
+/// scale. `None` for percentages, durations, counts and plain-number settings.
+pub fn resolved_scale(
+    col_name: &str,
+    col_spec: Option<&ColumnFormatSpec>,
+    global_monetary_fmt: NumberDisplayFormat,
+) -> Option<MoneyScale> {
+    let fmt_type = col_spec.map(|s| s.fmt_type).unwrap_or(MetricFormatType::Auto);
+    let resolved = if fmt_type == MetricFormatType::Auto {
+        classify_column_auto_format(col_name)
+    } else {
+        fmt_type
+    };
+    match resolved {
+        MetricFormatType::Auto => global_monetary_fmt.scale(),
+        other => other.scale(),
     }
 }
 
@@ -516,12 +605,231 @@ impl FilterOp {
     }
 }
 
+/// Operators of the multi-condition filter (T1).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CondOp {
+    Equals,
+    NotEquals,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Between,
+    Contains,
+    StartsWith,
+    EndsWith,
+    InList,
+    IsBlank,
+    IsNotBlank,
+}
+
+impl CondOp {
+    pub fn all() -> &'static [CondOp] {
+        &[
+            CondOp::Equals,
+            CondOp::NotEquals,
+            CondOp::Gt,
+            CondOp::Gte,
+            CondOp::Lt,
+            CondOp::Lte,
+            CondOp::Between,
+            CondOp::Contains,
+            CondOp::StartsWith,
+            CondOp::EndsWith,
+            CondOp::InList,
+            CondOp::IsBlank,
+            CondOp::IsNotBlank,
+        ]
+    }
+
+    /// Short text for chips and the editor.
+    pub fn label(&self) -> &'static str {
+        match self {
+            CondOp::Equals => "equals",
+            CondOp::NotEquals => "does not equal",
+            CondOp::Gt => ">",
+            CondOp::Gte => "\u{2265}",
+            CondOp::Lt => "<",
+            CondOp::Lte => "\u{2264}",
+            CondOp::Between => "between",
+            CondOp::Contains => "contains",
+            CondOp::StartsWith => "starts with",
+            CondOp::EndsWith => "ends with",
+            CondOp::InList => "is in list",
+            CondOp::IsBlank => "is blank",
+            CondOp::IsNotBlank => "is not blank",
+        }
+    }
+
+    /// Needs no value (is blank / is not blank).
+    pub fn is_unary(&self) -> bool {
+        matches!(self, CondOp::IsBlank | CondOp::IsNotBlank)
+    }
+
+    /// The equivalent of an old single-condition operator.
+    pub fn from_filter_op(op: FilterOp) -> CondOp {
+        match op {
+            FilterOp::Eq => CondOp::Equals,
+            FilterOp::NotEq => CondOp::NotEquals,
+            FilterOp::Gt => CondOp::Gt,
+            FilterOp::Gte => CondOp::Gte,
+            FilterOp::Lt => CondOp::Lt,
+            FilterOp::Lte => CondOp::Lte,
+            FilterOp::Contains => CondOp::Contains,
+            FilterOp::StartsWith => CondOp::StartsWith,
+            FilterOp::IsNull => CondOp::IsBlank,
+            FilterOp::IsNotNull => CondOp::IsNotBlank,
+            FilterOp::InList => CondOp::InList,
+        }
+    }
+}
+
+/// One condition of a filter: "Balance > 1000", "Opndat between 2026-09-01 and 2026-09-30".
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FilterCondition {
+    pub column: String,
+    pub op: CondOp,
+    #[serde(default)]
+    pub value: String,
+    /// Upper bound of `Between` (inclusive).
+    #[serde(default)]
+    pub value2: String,
+}
+
+impl FilterCondition {
+    /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000".
+    pub fn describe(&self) -> String {
+        match self.op {
+            CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", self.column, self.op.label()),
+            CondOp::Between => format!("{} between {} and {}", self.column, self.value.trim(), self.value2.trim()),
+            _ => format!("{} {} {}", self.column, self.op.label(), self.value.trim()),
+        }
+    }
+}
+
+/// How the conditions of a filter combine.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GroupJoin {
+    /// A row must meet every condition.
+    #[default]
+    And,
+    /// A row must meet at least one condition.
+    Or,
+}
+
+impl GroupJoin {
+    pub fn label(&self) -> &'static str {
+        match self {
+            GroupJoin::And => "and",
+            GroupJoin::Or => "or",
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Header mark for each sorted column: its level (1-based) and whether it is highest first. The
+/// last sort step decides the order, so its levels are the ones shown.
+pub fn sort_marks(steps: &[TransformStep]) -> HashMap<String, (usize, bool)> {
+    let mut marks = HashMap::new();
+    if let Some(levels) = steps.iter().rev().find_map(|s| s.sort_levels()) {
+        for (i, l) in levels.iter().enumerate() {
+            marks.entry(l.column.clone()).or_insert((i + 1, l.descending));
+        }
+    }
+    marks
+}
+
+/// The text of a sort mark: "1 \u{2191}" (lowest first) or "2 \u{2193}" (highest first).
+pub fn sort_mark_label(level: usize, descending: bool) -> String {
+    format!("{} {}", level, if descending { "\u{2193}" } else { "\u{2191}" })
+}
+
+/// What a column's summary cell computes (T3).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SummaryAgg {
+    #[default]
+    None,
+    Count,
+    CountDistinct,
+    Sum,
+    Average,
+    Min,
+    Max,
+    WeightedAvg,
+}
+
+impl SummaryAgg {
+    pub fn all() -> &'static [SummaryAgg] {
+        &[
+            SummaryAgg::None,
+            SummaryAgg::Count,
+            SummaryAgg::CountDistinct,
+            SummaryAgg::Sum,
+            SummaryAgg::Average,
+            SummaryAgg::Min,
+            SummaryAgg::Max,
+            SummaryAgg::WeightedAvg,
+        ]
+    }
+
+    /// The label in the selector row and on exported totals rows.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SummaryAgg::None => "None",
+            SummaryAgg::Count => "Count",
+            SummaryAgg::CountDistinct => "Count distinct",
+            SummaryAgg::Sum => "Sum",
+            SummaryAgg::Average => "Average",
+            SummaryAgg::Min => "Min",
+            SummaryAgg::Max => "Max",
+            SummaryAgg::WeightedAvg => "W.Avg",
+        }
+    }
+}
+
+/// A column's summary choice. `weight_col` is the weight of a weighted average.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct SummarySpec {
+    #[serde(default)]
+    pub agg: SummaryAgg,
+    #[serde(default)]
+    pub weight_col: Option<String>,
+}
+
+/// One level of a multi-level sort.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SortLevel {
+    pub column: String,
+    /// false = lowest first (A to Z, smallest, oldest); true = highest first.
+    #[serde(default)]
+    pub descending: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CondRule {
     pub col_name: String,
     pub op: FilterOp,
+    /// The value to compare with, or (when `compare_is_col`) the name of the column to compare with.
     pub compare_val: String,
     pub output_val: String,
+    /// The right-hand side is another column, not a value.
+    #[serde(default)]
+    pub compare_is_col: bool,
+}
+
+/// What a conditional column gives a row when a column in one of its rules is blank (null, or
+/// text that is empty after trimming).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub enum BlankRule {
+    /// Steps saved before this choice existed: a blank never matches, so the next rule (or
+    /// ELSE) decides.
+    #[default]
+    FallThrough,
+    /// The row gets this value at once, without trying the other rules (empty: a blank cell).
+    Result(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -618,6 +926,212 @@ impl CustomBucketDef {
         let json = serde_json::to_string_pretty(&customs)?;
         std::fs::write(buckets_file, json)?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------- rate profile
+
+/// How the rate bands are laid out.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum RateBandMode {
+    /// Equal bands from `start_pct` to `end_pct`, `step_pct` wide (all in percent).
+    Fixed { start_pct: f64, end_pct: f64, step_pct: f64 },
+    /// Bands between the listed edges (percent).
+    Custom { edges: Vec<f64> },
+}
+
+/// A rate profile: the bands of an interest-rate column (saved as a preset in
+/// `portable_data/rate_bands.json`, like the maturity bucket presets).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RateBandDef {
+    pub name: String,
+    pub mode: RateBandMode,
+    /// `false`: a band is (a, b], so 9.00 falls in 8%–9%. `true`: a band is [a, b), so 9.00
+    /// falls in 9%–10%.
+    #[serde(default)]
+    pub lower_inclusive: bool,
+}
+
+/// The most bands a profile may have.
+pub const RATE_BANDS_MAX: usize = 500;
+
+/// The labels of a profile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateBandLabels {
+    /// The band edges in percent, starting at 0.
+    pub edges: Vec<f64>,
+    /// "00. 0%": exactly zero.
+    pub zero: String,
+    /// "Below 0%".
+    pub below: String,
+    /// One label per band: `bands[k]` is the band between `edges[k]` and `edges[k + 1]`.
+    pub bands: Vec<String>,
+    /// "> 15%" (or "≥ 15%" for lower-inclusive bands): beyond the last edge.
+    pub above: String,
+    /// "No rate": blank.
+    pub blank: String,
+}
+
+/// A percentage as a banker writes it: 8, 8.25, 0.5 (no trailing zeros).
+pub fn fmt_pct(x: f64) -> String {
+    let t = format!("{:.4}", x);
+    t.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// "0, 5, 7.5, 9" -> edges. Commas, semicolons and spaces separate; anything that is not a
+/// number is an error that names it.
+pub fn parse_rate_edges(text: &str) -> anyhow::Result<Vec<f64>> {
+    let mut out = Vec::new();
+    for tok in text.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).map(str::trim).filter(|t| !t.is_empty()) {
+        let t = tok.trim_end_matches('%');
+        let v: f64 = t.parse().map_err(|_| anyhow::anyhow!("'{}' is not a number. Write the band edges as numbers in percent, like 0, 5, 7, 9, 12.", tok))?;
+        out.push(v);
+    }
+    Ok(out)
+}
+
+impl RateBandDef {
+    pub fn fixed(name: &str, start_pct: f64, end_pct: f64, step_pct: f64) -> Self {
+        Self { name: name.to_string(), mode: RateBandMode::Fixed { start_pct, end_pct, step_pct }, lower_inclusive: false }
+    }
+
+    pub fn custom(name: &str, edges: Vec<f64>) -> Self {
+        Self { name: name.to_string(), mode: RateBandMode::Custom { edges }, lower_inclusive: false }
+    }
+
+    /// The default profile: 0% to 15% in steps of 1%.
+    pub fn default_profile() -> Self {
+        Self::fixed("0% to 15% by 1%", 0.0, 15.0, 1.0)
+    }
+
+    /// The edges, checked, in ascending order and starting at 0 (a profile that starts above 0
+    /// gets a first band from 0).
+    pub fn edges(&self) -> anyhow::Result<Vec<f64>> {
+        let round = |x: f64| (x * 1_000_000.0).round() / 1_000_000.0;
+        let mut e: Vec<f64> = match &self.mode {
+            RateBandMode::Fixed { start_pct, end_pct, step_pct } => {
+                let (a, b, st) = (*start_pct, *end_pct, *step_pct);
+                if !(a.is_finite() && b.is_finite() && st.is_finite()) {
+                    anyhow::bail!("The start, end and step of the rate bands must be numbers.");
+                }
+                if st <= 0.0 {
+                    anyhow::bail!("The step of the rate bands must be more than 0.");
+                }
+                if b <= a {
+                    anyhow::bail!("The end of the rate bands ({}%) must be above the start ({}%).", fmt_pct(b), fmt_pct(a));
+                }
+                let n = (b - a) / st;
+                if (n - n.round()).abs() > 1e-6 {
+                    anyhow::bail!(
+                        "From {}% to {}% is not a whole number of steps of {}%. Change the end or the step.",
+                        fmt_pct(a),
+                        fmt_pct(b),
+                        fmt_pct(st)
+                    );
+                }
+                let n = n.round() as usize;
+                if n > RATE_BANDS_MAX {
+                    anyhow::bail!("{} bands is too many (the most is {}). Use a wider step.", n, RATE_BANDS_MAX);
+                }
+                (0..=n).map(|i| round(a + i as f64 * st)).collect()
+            }
+            RateBandMode::Custom { edges } => {
+                if edges.iter().any(|x| !x.is_finite()) {
+                    anyhow::bail!("The band edges must be numbers.");
+                }
+                let mut v: Vec<f64> = edges.iter().map(|x| round(*x)).collect();
+                v.sort_by(|a, b| a.total_cmp(b));
+                v.dedup();
+                v
+            }
+        };
+        if let Some(first) = e.first() {
+            if *first < 0.0 {
+                anyhow::bail!("A band edge ({}%) is below 0. Negative rates are put in 'Below 0%'; start the edges at 0 or above.", fmt_pct(*first));
+            }
+        }
+        if e.first().is_some_and(|f| *f > 0.0) {
+            e.insert(0, 0.0);
+        }
+        if e.len() < 2 {
+            anyhow::bail!("Give at least one band edge above 0, like 0, 5, 7, 9, 12.");
+        }
+        if e.len() - 1 > RATE_BANDS_MAX {
+            anyhow::bail!("{} bands is too many (the most is {}).", e.len() - 1, RATE_BANDS_MAX);
+        }
+        Ok(e)
+    }
+
+    /// The labels of every band. They are numbered so that they sort in band order.
+    pub fn labels(&self) -> anyhow::Result<RateBandLabels> {
+        let edges = self.edges()?;
+        let m = edges.len() - 1;
+        let w = m.to_string().len().max(2);
+        let bands = (1..=m).map(|k| format!("{:0w$}. {}%\u{2013}{}%", k, fmt_pct(edges[k - 1]), fmt_pct(edges[k]), w = w)).collect();
+        let last = fmt_pct(edges[m]);
+        Ok(RateBandLabels {
+            zero: format!("{:0w$}. 0%", 0, w = w),
+            below: "Below 0%".to_string(),
+            bands,
+            above: if self.lower_inclusive { format!("\u{2265} {}%", last) } else { format!("> {}%", last) },
+            blank: "No rate".to_string(),
+            edges,
+        })
+    }
+
+    /// The label of one rate (percent; `None` = blank).
+    pub fn label_for(&self, rate: Option<f64>) -> anyhow::Result<String> {
+        let l = self.labels()?;
+        Ok(match rate {
+            None => l.blank,
+            Some(x) if x.is_nan() => l.blank,
+            Some(x) if x == 0.0 => l.zero,
+            Some(x) if x < 0.0 => l.below,
+            Some(x) => {
+                let hit = (1..l.edges.len()).find(|k| if self.lower_inclusive { x < l.edges[*k] } else { x <= l.edges[*k] });
+                match hit {
+                    Some(k) => l.bands[k - 1].clone(),
+                    None => l.above,
+                }
+            }
+        })
+    }
+
+    pub fn default_presets() -> Vec<RateBandDef> {
+        vec![
+            Self::default_profile(),
+            Self::fixed("0% to 20% by 2%", 0.0, 20.0, 2.0),
+            Self::custom("Edges 0, 5, 7, 9, 12", vec![0.0, 5.0, 7.0, 9.0, 12.0]),
+        ]
+    }
+
+    /// The built-in presets and those saved in `rate_bands.json`.
+    pub fn load_all_presets(file: &Path) -> Vec<RateBandDef> {
+        let mut presets = Self::default_presets();
+        if let Ok(txt) = std::fs::read_to_string(file) {
+            if let Ok(customs) = serde_json::from_str::<Vec<RateBandDef>>(&txt) {
+                for c in customs {
+                    presets.retain(|p| !p.name.eq_ignore_ascii_case(&c.name));
+                    presets.push(c);
+                }
+            }
+        }
+        presets
+    }
+
+    pub fn save_custom_preset(file: &Path, new_preset: RateBandDef) -> anyhow::Result<()> {
+        let mut customs: Vec<RateBandDef> = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        customs.retain(|p| !p.name.eq_ignore_ascii_case(&new_preset.name));
+        customs.push(new_preset);
+        std::fs::write(file, serde_json::to_string_pretty(&customs)?)?;
+        Ok(())
+    }
+}
+
+impl PortablePaths {
+    /// Where the rate profile presets are saved.
+    pub fn rate_bands_file(&self) -> PathBuf {
+        self.root_dir.join("rate_bands.json")
     }
 }
 
@@ -761,10 +1275,34 @@ pub enum TransformStep {
         old_name: String,
         new_name: String,
     },
+    /// Text columns read as numbers (Float64) with the rules of a Float64 schema column: the
+    /// pre-export warning offers it ("Set to Number").
+    ConvertToNumber {
+        columns: Vec<String>,
+    },
     FilterRows {
         column: String,
         operator: FilterOp,
         value: String,
+        keep_matching: bool,
+    },
+    /// A step that is turned off: it stays in the list and in macros but changes nothing (T4).
+    Skipped {
+        step: Box<TransformStep>,
+    },
+    /// Sort by several columns, blanks always last, ties keep their earlier order (T2).
+    SortRows {
+        #[serde(default)]
+        levels: Vec<SortLevel>,
+    },
+    /// Several conditions joined by And / Or (T1). Rows whose test is unknown (a null compared
+    /// with a value) do not match: "Keep matching" drops them, "Delete matching" keeps them.
+    FilterGroup {
+        #[serde(default)]
+        conditions: Vec<FilterCondition>,
+        #[serde(default)]
+        join: GroupJoin,
+        #[serde(default = "default_true")]
         keep_matching: bool,
     },
     ConditionalColumn {
@@ -772,6 +1310,9 @@ pub enum TransformStep {
         rules: Vec<CondRule>,
         fallback: String,
         output_as_float: bool,
+        /// The result when a column a rule looks at is blank on either side.
+        #[serde(default)]
+        blank_result: BlankRule,
     },
     MathFormula {
         new_col: String,
@@ -789,6 +1330,12 @@ pub enum TransformStep {
         cutoff_date: String,
         bucket_def: CustomBucketDef,
         null_as_sight: bool,
+        new_col: String,
+    },
+    /// Puts a rate column into labelled bands ("09. 8%–9%"), like the maturity bucketer.
+    RateBand {
+        rate_col: String,
+        band_def: RateBandDef,
         new_col: String,
     },
     RateShockSim {
@@ -875,6 +1422,79 @@ pub enum TransformStep {
 }
 
 impl TransformStep {
+    /// A filter step as conditions, for the chip bar and the editor: a `FilterGroup`, or an old
+    /// single `FilterRows` shown as a one-condition group. `None` for every other step.
+    /// The step with a "turned off" wrapper removed.
+    pub fn inner(&self) -> &TransformStep {
+        match self {
+            TransformStep::Skipped { step } => step.inner(),
+            other => other,
+        }
+    }
+
+    /// True for a step that is turned off.
+    pub fn is_skipped(&self) -> bool {
+        matches!(self, TransformStep::Skipped { .. })
+    }
+
+    /// True for a filter that is turned on (rows are removed by it, so the control total is
+    /// expected to differ from the source's).
+    pub fn is_active_filter(&self) -> bool {
+        matches!(self, TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. })
+    }
+
+    /// The name of the kind of step ("Filter", "Sort", "Calc column"), for the timeline.
+    pub fn title(&self) -> &'static str {
+        match self.inner() {
+            TransformStep::SelectAndReorderColumns { .. } => "Columns",
+            TransformStep::RenameColumn { .. } => "Rename",
+            TransformStep::ConvertToNumber { .. } => "Set to Number",
+            TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } => "Filter",
+            TransformStep::SortRows { .. } => "Sort",
+            TransformStep::ConditionalColumn { .. } => "Conditional column",
+            TransformStep::MathFormula { .. } => "Calc column",
+            TransformStep::NormalizeEntity { .. } => "Normalise names",
+            TransformStep::MaturityBucket { .. } => "Maturity buckets",
+            TransformStep::RateBand { .. } => "Rate profile",
+            TransformStep::RateShockSim { .. } => "Rate shock",
+            TransformStep::FtpCurveMap { .. } => "FTP",
+            TransformStep::BankingHygieneAudit { .. } => "Hygiene audit",
+            TransformStep::DurationAnalysis { .. } => "Duration / \u{394}EVE",
+            TransformStep::LoanClassificationProvision { .. } => "Provision",
+            TransformStep::LoanLimitUtilization { .. } => "Limits",
+            TransformStep::GroupByPivot { .. } => "Pivot",
+            TransformStep::SqlQuery { .. } => "SQL",
+            TransformStep::Skipped { .. } => "Off",
+        }
+    }
+
+    /// The sort levels of a `SortRows` step.
+    pub fn sort_levels(&self) -> Option<&[SortLevel]> {
+        match self {
+            TransformStep::SortRows { levels } => Some(levels),
+            _ => None,
+        }
+    }
+
+    pub fn as_filter_group(&self) -> Option<(Vec<FilterCondition>, GroupJoin, bool)> {
+        match self {
+            TransformStep::FilterGroup { conditions, join, keep_matching } => {
+                Some((conditions.clone(), *join, *keep_matching))
+            }
+            TransformStep::FilterRows { column, operator, value, keep_matching } => Some((
+                vec![FilterCondition {
+                    column: column.clone(),
+                    op: CondOp::from_filter_op(*operator),
+                    value: value.clone(),
+                    value2: String::new(),
+                }],
+                GroupJoin::And,
+                *keep_matching,
+            )),
+            _ => None,
+        }
+    }
+
     pub fn short_label(&self) -> String {
         match self {
             TransformStep::SelectAndReorderColumns { cols } => {
@@ -882,6 +1502,22 @@ impl TransformStep {
             }
             TransformStep::RenameColumn { old_name, new_name } => {
                 format!("Rename {} -> {}", old_name, new_name)
+            }
+            TransformStep::ConvertToNumber { columns } => {
+                format!("Set to Number: {}", columns.join(", "))
+            }
+            TransformStep::Skipped { step } => format!("Off: {}", step.short_label()),
+            TransformStep::SortRows { levels } => {
+                let parts: Vec<String> = levels
+                    .iter()
+                    .map(|l| format!("{} {}", l.column, if l.descending { "\u{2193}" } else { "\u{2191}" }))
+                    .collect();
+                format!("Sort: {}", parts.join(", "))
+            }
+            TransformStep::FilterGroup { conditions, join, keep_matching } => {
+                let mode = if *keep_matching { "Keep" } else { "Delete" };
+                let parts: Vec<String> = conditions.iter().map(|c| c.describe()).collect();
+                format!("{}: {}", mode, parts.join(&format!(" {} ", join.label())))
             }
             TransformStep::FilterRows {
                 column,
@@ -917,6 +1553,9 @@ impl TransformStep {
                 ..
             } => {
                 format!("+Bucket ({}): {}", bucket_def.name, new_col)
+            }
+            TransformStep::RateBand { new_col, band_def, .. } => {
+                format!("+Rate profile ({}): {}", band_def.name, new_col)
             }
             TransformStep::RateShockSim { shock_bps, .. } => {
                 format!("+ΔNII Shock ({:+.0} bps)", shock_bps)
@@ -985,6 +1624,8 @@ pub enum TabSource {
 
 #[derive(Clone)]
 pub struct TabState {
+    /// Stable identity of the tab (survives closing other tabs); background results use it.
+    pub id: u64,
     pub title: String,
     pub source: TabSource,
     pub steps: Vec<TransformStep>,
@@ -994,6 +1635,8 @@ pub struct TabState {
     pub control_sum: Option<f64>,
     pub baseline_control_sum: Option<f64>,
     pub viewport_offset: usize,
+    /// Row offset of `cached_slice` (differs from `viewport_offset` while a new page is loading).
+    pub slice_offset: usize,
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
@@ -1005,17 +1648,101 @@ pub struct TabState {
     pub totals: ControlTotals,
     /// CSV sources: rows read against the file's data lines (status-bar warning when short).
     pub row_check: Option<RowCountCheck>,
+    /// The summary choices the user made per column (saved with the tab and in macros).
+    pub summary: HashMap<String, SummarySpec>,
+    /// The computed summary of the whole result (empty until the background job finishes).
+    pub summary_cells: Vec<crate::summary::SummaryCell>,
+    /// Steps that cannot run against the columns they would see (T4).
+    pub issues: Vec<crate::engine::StepIssue>,
+    /// How many steps the table runs: all of them, or those before the first broken one.
+    pub exec_steps: usize,
+    /// Undo / redo of changes to the steps, control column, summary choices and column formats.
+    pub history: crate::steps_edit::StepHistory<crate::steps_edit::TabSnapshot>,
+    /// Rows after each step: index 0 is the source, index i is after step i. `None` = not counted yet.
+    pub step_counts: Vec<Option<usize>>,
+    /// Key of each entry of `step_counts`: the source identity plus the steps up to it
+    /// (see `steps_edit::count_keys`).
+    pub step_hashes: Vec<u64>,
+    /// Statistics of the column the inspector shows (computed on the worker).
+    pub column_stats: Option<crate::column_stats::ColumnStats>,
+    /// The page could not be read: the reason. The table keeps the last page, dimmed and marked
+    /// "Out of date", until a page is read again.
+    pub page_error: Option<String>,
+    /// The summary row could not be computed: the reason (the band shows "—" with it on hover).
+    pub summary_error: Option<String>,
 }
 
-/// Rows read from a CSV against its non-empty lines (minus the header and title lines).
+/// What kind of line the row-count details list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineIssue {
+    /// A record whose quoted value holds a line break, so it takes several physical lines.
+    QuotedLineBreak,
+    /// A record with another number of fields than the header has.
+    WrongFieldCount,
+}
+
+/// One entry of the row-count details: where it starts in the file and what it looks like.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineDetail {
+    /// 1-based number of the physical line the record starts on.
+    pub line: usize,
+    pub issue: LineIssue,
+    /// Physical lines the record takes.
+    pub span: usize,
+    pub fields: usize,
+    pub expected_fields: usize,
+    /// The first 80 characters of that line.
+    pub text: String,
+}
+
+/// How many entries the details list.
+pub const ROW_DETAILS_LIMIT: usize = 20;
+
+/// Rows read from a CSV against its non-empty lines (minus the header and title lines), and, when
+/// fewer rows were read than there are lines, why.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RowCountCheck {
     pub nonempty_lines: usize,
     pub skip_rows: usize,
     pub parsed_rows: usize,
+    /// Records with a line break inside quotes.
+    pub multiline_records: usize,
+    /// The non-empty lines those records take beyond their first.
+    pub explained_lines: usize,
+    /// Records with the wrong number of fields.
+    pub malformed_records: usize,
+    /// The first `ROW_DETAILS_LIMIT` of both kinds, in file order.
+    pub details: Vec<LineDetail>,
 }
 
 impl RowCountCheck {
+    /// True when every line missing from the row count is the continuation of a record with a line
+    /// break inside quotes, and no record has the wrong number of fields: the file is fine.
+    pub fn is_explained(&self) -> bool {
+        let missing = self.data_lines().saturating_sub(self.parsed_rows);
+        self.parsed_rows > 0 && missing > 0 && self.malformed_records == 0 && self.explained_lines == missing
+    }
+
+    /// The text for the status bar: the quiet explanation (grey) or the short warning; `None` when
+    /// the counts agree.
+    pub fn status_text(&self) -> Option<String> {
+        if self.is_explained() {
+            return Some(format!(
+                "{} rows from {} lines: {} records contain line breaks inside quotes",
+                format_with_commas(self.parsed_rows as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0),
+                format_with_commas(self.multiline_records as f64, 0)
+            ));
+        }
+        self.warning().map(|_| {
+            format!(
+                "\u{26A0} Rows read {} vs file data lines {}",
+                format_with_commas(self.parsed_rows as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0)
+            )
+        })
+    }
+
     /// Non-empty lines minus the header line and the title lines above it.
     pub fn data_lines(&self) -> usize {
         self.nonempty_lines.saturating_sub(1 + self.skip_rows)
@@ -1027,17 +1754,17 @@ impl RowCountCheck {
         if self.nonempty_lines > 0 && self.parsed_rows == 0 {
             return Some(format!(
                 "0 rows read from a file with {} non-empty lines ({} data lines). Check the separator, title lines and encoding.",
-                self.nonempty_lines,
-                self.data_lines()
+                format_with_commas(self.nonempty_lines as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0)
             ));
         }
         if self.parsed_rows < self.data_lines() {
             return Some(format!(
                 "Read {} rows but the file has {} data lines ({} non-empty lines − 1 header − {} title lines). Check for unclosed quotes or broken lines.",
-                self.parsed_rows,
-                self.data_lines(),
-                self.nonempty_lines,
-                self.skip_rows
+                format_with_commas(self.parsed_rows as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0),
+                format_with_commas(self.nonempty_lines as f64, 0),
+                format_with_commas(self.skip_rows as f64, 0)
             ));
         }
         None
@@ -1073,15 +1800,16 @@ impl JoinStatus {
         };
         let mut out = format!(
             "Join: {} rows (left {}), control {} (left {})",
-            self.rows,
-            self.left_rows,
+            format_with_commas(self.rows as f64, 0),
+            format_with_commas(self.left_rows as f64, 0),
             fmt_sum(self.sum),
             fmt_sum(self.left_sum)
         );
         if self.duplicate_keys > 0 {
             out.push_str(&format!(
                 " ⚠ kept first row for {} duplicated right key(s), {} right row(s) dropped",
-                self.duplicate_keys, self.dropped_rows
+                format_with_commas(self.duplicate_keys as f64, 0),
+                format_with_commas(self.dropped_rows as f64, 0)
             ));
         }
         out
@@ -1089,6 +1817,11 @@ impl JoinStatus {
 }
 
 impl TabState {
+    /// True when the pipeline has a filter step that is turned on.
+    pub fn has_active_filter(&self) -> bool {
+        self.steps.iter().any(|s| s.is_active_filter())
+    }
+
     /// A column is an ID (kept as text) when one whole token is an ID word and no token is a
     /// money, rate or date word. "Account_Balance" is a balance, "Customer_ID" is an ID.
     pub fn is_likely_id_column(col_name: &str) -> bool {
@@ -1124,6 +1857,9 @@ pub struct MacroRecipe {
     pub control_column: Option<String>,
     pub optional_ingestion_schema: Option<IngestionConfig>,
     pub steps: Vec<TransformStep>,
+    /// The tab's summary choices per column (columns left out use their default).
+    #[serde(default)]
+    pub summary: HashMap<String, SummarySpec>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

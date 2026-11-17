@@ -5,8 +5,9 @@ use crate::banking::{
     ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
-    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec,
-    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, RowCountCheck, FilterOp, IngestionConfig, JoinStatus, MathOp,
+    column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec, BlankRule, CondOp, CondRule,
+    FilterCondition, GroupJoin,
+    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, LineDetail, LineIssue, RowCountCheck, ROW_DETAILS_LIMIT, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -248,11 +249,19 @@ enum DrCr {
 
 /// Blank, NA, N/A or NULL (any case) after trimming.
 pub fn is_blank_amount_token(s: &str) -> bool {
-    let s = s.trim();
+    let s = strip_leading_apostrophe(s);
     s.is_empty()
         || s.eq_ignore_ascii_case("na")
         || s.eq_ignore_ascii_case("n/a")
         || s.eq_ignore_ascii_case("null")
+}
+
+/// CBS exports put one apostrophe in front of a value to protect it from Excel ("'0012",
+/// "'1,234.50"). Number and date parsing drops that one apostrophe; text columns are never
+/// touched. Returns the trimmed value without it.
+fn strip_leading_apostrophe(s: &str) -> &str {
+    let s = s.trim();
+    s.strip_prefix('\'').unwrap_or(s).trim()
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -307,7 +316,7 @@ fn split_dr_cr(s: &str) -> (Option<DrCr>, &str) {
 
 /// True when the value carries a Dr/Cr marker (after any currency prefix).
 pub fn amount_has_dr_cr(raw: &str) -> bool {
-    split_dr_cr(strip_currency_prefix(raw.trim())).0.is_some()
+    split_dr_cr(strip_currency_prefix(strip_leading_apostrophe(raw))).0.is_some()
 }
 
 /// Cleans an amount down to an unsigned digit string and its sign.
@@ -317,7 +326,7 @@ fn clean_amount(
     sign: SignConvention,
     accounting_negatives: bool,
 ) -> std::result::Result<(String, bool), AmountCell> {
-    let s = raw.trim();
+    let s = strip_leading_apostrophe(raw);
     if is_blank_amount_token(s) {
         return Err(AmountCell::Blank);
     }
@@ -403,57 +412,410 @@ fn dr_cr_unset_message(col_name: &str) -> String {
     )
 }
 
-/// Scans every value of each Float64 column whose sign convention is unset and fails when one
-/// carries Dr/Cr. `text_cols` pairs each column with an expression giving its raw text.
-fn check_dr_cr_conventions(
-    raw_lf: &LazyFrame,
-    text_cols: &[(&ColumnSchemaConfig, Expr)],
-) -> Result<()> {
-    let checked: Vec<(&str, Expr)> = text_cols
-        .iter()
-        .filter(|(c, _)| {
-            c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset
-        })
-        .map(|(c, e)| (c.name.as_str(), e.clone()))
-        .collect();
-    if checked.is_empty() {
-        return Ok(());
+/// What one pass over a source's typed columns found.
+#[derive(Clone, Debug, Default)]
+pub struct TypedScan {
+    /// Float64 columns with no sign convention whose values carry Dr/Cr (in schema order).
+    pub dr_cr_columns: Vec<String>,
+    /// Values that could not be converted, per typed column (columns with none are left out).
+    pub failures: Vec<ParseFailure>,
+}
+
+type ScanCache = std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<TypedScan>>>;
+
+thread_local! {
+    static TYPED_SCAN_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many full typed-column scans this thread has run (cache hits do not count). For tests.
+pub fn typed_scan_runs_on_this_thread() -> usize {
+    TYPED_SCAN_RUNS.with(|c| c.get())
+}
+
+fn scan_cache() -> &'static ScanCache {
+    static CACHE: std::sync::OnceLock<ScanCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Size and modified time of a file, as text, for cache keys. `None` when it cannot be read.
+fn file_stamp(path: &Path) -> Option<String> {
+    let m = std::fs::metadata(path).ok()?;
+    let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}|{}|{}", path.display(), m.len(), t.as_nanos()))
+}
+
+/// The Dr/Cr check and the parse-failure counts need the same full scan of the typed columns.
+/// One aggregation pass answers both, and its answer is kept per (file, size, modified time,
+/// schema), so building a pipeline and opening the tab scan the file once between them.
+pub fn typed_scan(
+    path: &Path,
+    is_parquet: bool,
+    config: &IngestionConfig,
+    temp_dir: &Path,
+) -> Result<std::sync::Arc<TypedScan>> {
+    let key = file_stamp(path).and_then(|st| {
+        serde_json::to_string(config).ok().map(|cfg| format!("{}|{}|{}", st, is_parquet, cfg))
+    });
+    if let Some(k) = &key {
+        if let Some(hit) = scan_cache().lock().ok().and_then(|c| c.get(k).cloned()) {
+            return Ok(hit);
+        }
     }
-    let cols: Vec<&str> = checked.iter().map(|(n, _)| *n).collect();
-    let exprs: Vec<Expr> = checked
-        .into_iter()
-        .map(|(c, text)| {
-            text.map(
-                    |s: Series| {
-                        let ca = s.str()?;
-                        let flags: BooleanChunked = ca
-                            .into_iter()
-                            .map(|v| Some(v.is_some_and(amount_has_dr_cr)))
-                            .collect();
-                        Ok(Some(flags.into_series()))
-                    },
-                    GetOutput::from_type(DataType::Boolean),
-                )
-                .any(true)
-                .alias(c)
-        })
-        .collect();
-    let flags = raw_lf
-        .clone()
+    TYPED_SCAN_RUNS.with(|c| c.set(c.get() + 1));
+    let result = std::sync::Arc::new(run_typed_scan(path, is_parquet, config, temp_dir)?);
+    if let Some(k) = key {
+        if let Ok(mut c) = scan_cache().lock() {
+            if c.len() >= 64 {
+                c.clear();
+            }
+            c.insert(k, result.clone());
+        }
+    }
+    Ok(result)
+}
+
+fn run_typed_scan(
+    path: &Path,
+    is_parquet: bool,
+    config: &IngestionConfig,
+    temp_dir: &Path,
+) -> Result<TypedScan> {
+    // Per column: the schema entry, the raw text (for the Dr/Cr check) and the text the typed
+    // value is parsed from (for the failure count).
+    let (lf, entries): (LazyFrame, Vec<(&ColumnSchemaConfig, Expr, Expr)>) = if is_parquet {
+        let (lf, plan) = parquet_conversion_plan(path, config)?;
+        (lf, plan.into_iter().map(|(c, e)| (c, e.clone(), e)).collect())
+    } else {
+        let lf = scan_csv_text(path, config, temp_dir)?;
+        let entries = config
+            .columns
+            .iter()
+            .map(|c| (c, col(&c.name), raw_text_expr(c, config)))
+            .collect();
+        (lf, entries)
+    };
+
+    let accounting_negatives = config.parse_accounting_negatives;
+    let mut exprs: Vec<Expr> = Vec::new();
+    for (i, (c, raw, text)) in entries.iter().enumerate() {
+        if c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset {
+            exprs.push(
+                raw.clone()
+                    .map(
+                        |s: Series| {
+                            let ca = s.str()?;
+                            let flags: BooleanChunked = ca
+                                .into_iter()
+                                .map(|v| Some(v.is_some_and(amount_has_dr_cr)))
+                                .collect();
+                            Ok(Some(flags.into_series()))
+                        },
+                        GetOutput::from_type(DataType::Boolean),
+                    )
+                    .any(true)
+                    .alias(format!("__dc_{i}")),
+            );
+        }
+        if c.dtype != ColDataType::Utf8 {
+            let (dtype, sign) = (c.dtype, c.sign_convention);
+            let mask = text.clone().map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let flags: BooleanChunked = ca
+                        .into_iter()
+                        .map(|v| Some(v.is_some_and(|v| is_parse_failure(v, dtype, sign, accounting_negatives))))
+                        .collect();
+                    Ok(Some(flags.into_series()))
+                },
+                GetOutput::from_type(DataType::Boolean),
+            );
+            exprs.push(mask.clone().sum().cast(DataType::UInt64).alias(format!("__pf_n_{i}")));
+            exprs.push(text.clone().filter(mask).head(Some(5)).implode().alias(format!("__pf_x_{i}")));
+        }
+    }
+    if exprs.is_empty() {
+        return Ok(TypedScan::default());
+    }
+    let df = lf
         .select(exprs)
         .collect()
-        .context("Failed to scan amount columns for Dr/Cr markers")?;
-    for c in cols {
-        let found = flags
-            .column(c)
+        .context("Failed to scan the file's amount and date columns")?;
+
+    let mut out = TypedScan::default();
+    for (i, (c, _, _)) in entries.iter().enumerate() {
+        let found_dr_cr = df
+            .column(&format!("__dc_{i}"))
             .ok()
             .and_then(|s| s.bool().ok().and_then(|b| b.get(0)))
             .unwrap_or(false);
-        if found {
-            anyhow::bail!(dr_cr_unset_message(c));
+        if found_dr_cr {
+            out.dr_cr_columns.push(c.name.clone());
         }
+        let count = df
+            .column(&format!("__pf_n_{i}"))
+            .ok()
+            .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
+            .unwrap_or(0) as usize;
+        if count == 0 {
+            continue;
+        }
+        let mut examples = Vec::new();
+        if let Some(list) = df
+            .column(&format!("__pf_x_{i}"))
+            .ok()
+            .and_then(|s| s.list().ok().and_then(|l| l.get_as_series(0)))
+        {
+            if let Ok(ca) = list.str() {
+                examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
+            }
+        }
+        out.failures.push(ParseFailure { column: c.name.clone(), count, examples });
+    }
+    Ok(out)
+}
+
+/// Fails when a Float64 column with no sign convention carries Dr/Cr values.
+fn check_dr_cr_conventions(path: &Path, is_parquet: bool, config: &IngestionConfig, temp_dir: &Path) -> Result<()> {
+    let needs_check = config
+        .columns
+        .iter()
+        .any(|c| c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset);
+    if !needs_check {
+        return Ok(());
+    }
+    let scan = typed_scan(path, is_parquet, config, temp_dir)?;
+    if let Some(c) = scan.dr_cr_columns.first() {
+        anyhow::bail!(dr_cr_unset_message(c));
     }
     Ok(())
+}
+
+// ------------------------------------------------------------------- step validation (T4)
+
+/// A step that cannot run against the columns it would see.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepIssue {
+    /// Position in the steps list (0-based).
+    pub index: usize,
+    /// What is wrong, in words that name the column.
+    pub reason: String,
+}
+
+/// Polars says `unable to find column "X"; valid columns: [...]`: keep the part that matters.
+fn friendly_step_error(e: &anyhow::Error) -> String {
+    let full = format!("{:#}", e);
+    if let Some(i) = full.find("unable to find column \"") {
+        let rest = &full[i + "unable to find column \"".len()..];
+        if let Some(j) = rest.find('"') {
+            return format!("Column '{}' does not exist at this step.", &rest[..j]);
+        }
+    }
+    full.lines().next().unwrap_or("").to_string()
+}
+
+/// Checks every step against the columns it would see, in order. A broken step does not change
+/// the columns for the steps after it, so each later step is judged on its own (a step that needs
+/// a column the broken one would have made is reported too). Turned-off steps are not checked.
+/// Fails only when the source itself cannot be read.
+pub fn validate_steps(source: &TabSource, steps: &[TransformStep], temp_dir: &Path) -> Result<Vec<StepIssue>> {
+    let mut lf = compile_tab_lazy(source, &[], temp_dir)?;
+    // A source that cannot be read is an error, not a broken first step.
+    lf.collect_schema().map_err(anyhow::Error::from)?;
+    let mut issues = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        if step.is_skipped() {
+            continue;
+        }
+        let attempt = apply_single_step(lf.clone(), step).and_then(|next| {
+            let mut probe = next.clone();
+            probe.collect_schema().map(|_| next).map_err(anyhow::Error::from)
+        });
+        match attempt {
+            Ok(next) => lf = next,
+            Err(e) => issues.push(StepIssue { index: i, reason: friendly_step_error(&e) }),
+        }
+    }
+    Ok(issues)
+}
+
+// ------------------------------------------------------------ Text columns of numbers (L4)
+
+/// A share of non-blank values at or above this makes a Text column "look like numbers".
+pub const TEXT_NUMBER_SHARE: f64 = 0.95;
+
+/// A Text column in an export whose values mostly parse as numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericLookingColumn {
+    pub column: String,
+    /// Non-blank values.
+    pub non_blank: usize,
+    /// Of those, values that parse as numbers (the amount rules, incl. a leading apostrophe).
+    pub numeric: usize,
+}
+
+impl NumericLookingColumn {
+    /// Whole percent, rounded.
+    pub fn percent(&self) -> usize {
+        if self.non_blank == 0 {
+            0
+        } else {
+            ((self.numeric as f64 * 100.0) / self.non_blank as f64).round() as usize
+        }
+    }
+
+    /// The question shown before an export.
+    pub fn message(&self) -> String {
+        format!(
+            "{} is Text, but {}% of its values look like numbers. Set it to Number before exporting?",
+            self.column,
+            self.percent()
+        )
+    }
+}
+
+/// Text columns of the result where at least 95% of the non-blank values parse as numbers. ID
+/// columns (Phase 1 name tokens: account numbers, branch codes, CIF ...) are left out: their
+/// leading zeros are meaningful. One aggregation pass over the Text columns.
+pub fn text_columns_that_look_numeric(lf: LazyFrame) -> Result<Vec<NumericLookingColumn>> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the column types for the Text check")?;
+    let text_cols: Vec<String> = schema
+        .iter()
+        .filter(|(n, dt)| **dt == DataType::String && !TabState::is_likely_id_column(n.as_str()))
+        .map(|(n, _)| n.to_string())
+        .collect();
+    if text_cols.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut exprs: Vec<Expr> = Vec::with_capacity(text_cols.len() * 2);
+    for (i, name) in text_cols.iter().enumerate() {
+        let counted = |numeric: bool| {
+            col(name.as_str()).map(
+                move |s: Series| {
+                    let ca = s.str()?;
+                    let flags: UInt32Chunked = ca
+                        .into_iter()
+                        .map(|v| {
+                            Some(match v {
+                                None => 0u32,
+                                Some(v) if is_blank_amount_token(v) => 0,
+                                Some(v) => {
+                                    if numeric {
+                                        matches!(
+                                            parse_banking_amount(v, SignConvention::Unset, true),
+                                            AmountCell::Value(_)
+                                        ) as u32
+                                    } else {
+                                        1
+                                    }
+                                }
+                            })
+                        })
+                        .collect();
+                    Ok(Some(flags.into_series()))
+                },
+                GetOutput::from_type(DataType::UInt32),
+            )
+        };
+        exprs.push(counted(false).sum().cast(DataType::UInt64).alias(format!("__tn_b_{i}")));
+        exprs.push(counted(true).sum().cast(DataType::UInt64).alias(format!("__tn_n_{i}")));
+    }
+    let df = lf.select(exprs).collect().context("Failed to check the Text columns for numbers")?;
+    let mut out = Vec::new();
+    for (i, name) in text_cols.iter().enumerate() {
+        let get = |p: &str| {
+            df.column(&format!("{p}{i}"))
+                .ok()
+                .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
+                .unwrap_or(0) as usize
+        };
+        let (non_blank, numeric) = (get("__tn_b_"), get("__tn_n_"));
+        if non_blank > 0 && (numeric as f64) >= TEXT_NUMBER_SHARE * non_blank as f64 {
+            out.push(NumericLookingColumn { column: name.clone(), non_blank, numeric });
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------------------ baseline control sum
+
+/// Where `source_baseline_sum` got its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaselineOrigin {
+    Cached,
+    Computed,
+}
+
+type BaselineCache = std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>;
+
+fn baseline_cache() -> &'static BaselineCache {
+    static CACHE: std::sync::OnceLock<BaselineCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Identity of a source's raw data for the baseline cache: every file's path, size and modified
+/// time, plus the schema and the control column (a different schema or column is a different
+/// number). Joined and reconciled sources are not cached.
+fn baseline_key(source: &TabSource, control_col: &str) -> Option<String> {
+    let one = |path: &Path, is_parquet: bool, config: &IngestionConfig| -> Option<String> {
+        let cfg = serde_json::to_string(config).ok()?;
+        Some(format!("{}|{}|{}", file_stamp(path)?, is_parquet, cfg))
+    };
+    let body = match source {
+        TabSource::SingleFile { path, is_parquet, config } => one(path, *is_parquet, config)?,
+        TabSource::VerticalStack { files, include_source_col } => {
+            let mut parts = vec![format!("stack|{}", include_source_col)];
+            for (p, pq, cfg) in files {
+                parts.push(one(p, *pq, cfg)?);
+            }
+            parts.join("||")
+        }
+        _ => return None,
+    };
+    Some(format!("{}##{}", body, control_col))
+}
+
+/// Control sum of the raw source (no steps). It is computed once per unchanged file: the answer
+/// is kept per (path, size, modified time, schema, column), so a second tab on the same file does
+/// not read it again. No control column means no sum, and no scan.
+pub fn source_baseline_sum(
+    source: &TabSource,
+    control_col: Option<&str>,
+    temp_dir: &Path,
+) -> (Option<f64>, BaselineOrigin) {
+    let Some(ctrl) = control_col else {
+        return (None, BaselineOrigin::Computed);
+    };
+    let key = baseline_key(source, ctrl);
+    if let Some(k) = &key {
+        if let Some(hit) = baseline_cache().lock().ok().and_then(|c| c.get(k).copied()) {
+            return (hit, BaselineOrigin::Cached);
+        }
+    }
+    let computed = compile_tab_lazy(source, &[], temp_dir)
+        .ok()
+        .and_then(|lf| compute_control_totals(lf, Some(ctrl)).ok())
+        .map(|(_, s)| s);
+    if let (Some(k), Some(sum)) = (key, computed) {
+        remember(k, sum);
+    }
+    (computed.flatten(), BaselineOrigin::Computed)
+}
+
+/// Stores a baseline the caller already has (a tab with no steps has just summed the raw source).
+pub fn remember_baseline(source: &TabSource, control_col: Option<&str>, sum: Option<f64>) {
+    if let Some(k) = control_col.and_then(|c| baseline_key(source, c)) {
+        remember(k, sum);
+    }
+}
+
+fn remember(key: String, sum: Option<f64>) {
+    if let Ok(mut c) = baseline_cache().lock() {
+        if c.len() >= 256 {
+            c.clear();
+        }
+        c.insert(key, sum);
+    }
 }
 
 /// Ultra-fast native Rust date parser that handles single-digit or double-digit months/days
@@ -639,6 +1001,88 @@ fn parse_month_name(s: &str) -> Option<u32> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Progress of the loops that read a file's bytes themselves (the line healer, the Windows-1252
+// transcoder and the line counter). Polars reads files on its own and reports nothing, so those
+// steps have no percentage.
+
+/// Receives `(what, bytes read, file size)`; a file size of 0 means that loop is finished.
+pub type ByteSink = Box<dyn Fn(&str, u64, u64)>;
+
+thread_local! {
+    static BYTE_SINK: std::cell::RefCell<Option<ByteSink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with `sink` receiving the byte progress of every such loop that runs on this thread.
+/// The sink is removed afterwards, also when `f` panics.
+pub fn with_byte_progress<R>(sink: impl Fn(&str, u64, u64) + 'static, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<ByteSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            BYTE_SINK.with(|s| *s.borrow_mut() = prev);
+        }
+    }
+    let prev = BYTE_SINK.with(|s| s.borrow_mut().replace(Box::new(sink)));
+    let _restore = Restore(prev);
+    f()
+}
+
+fn report_bytes(what: &str, read: u64, total: u64) {
+    BYTE_SINK.with(|s| {
+        if let Some(sink) = s.borrow().as_ref() {
+            sink(what, read, total);
+        }
+    });
+}
+
+/// One loop over a file: reports the bytes read (at most every 256 KB and at the end) and, when
+/// dropped, that the loop is finished (so no percentage stays on screen).
+struct ByteLoop {
+    what: &'static str,
+    total: u64,
+    read: u64,
+    last_reported: u64,
+}
+
+impl ByteLoop {
+    const STEP: u64 = 256 * 1024;
+
+    fn new(what: &'static str, path: &Path) -> Self {
+        let total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        report_bytes(what, 0, total);
+        Self { what, total, read: 0, last_reported: 0 }
+    }
+
+    fn add(&mut self, n: usize) {
+        self.read += n as u64;
+        if self.read - self.last_reported >= Self::STEP || self.read >= self.total {
+            self.last_reported = self.read;
+            report_bytes(self.what, self.read.min(self.total), self.total);
+        }
+    }
+}
+
+impl Drop for ByteLoop {
+    fn drop(&mut self) {
+        report_bytes(self.what, self.total, 0);
+    }
+}
+
+/// A reader that counts the bytes taken from the file it wraps.
+struct CountingReader<R> {
+    inner: R,
+    counter: std::rc::Rc<std::cell::Cell<u64>>,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.counter.set(self.counter.get() + n as u64);
+        Ok(n)
+    }
+}
+
 /// Joins physical lines until each record has as many unquoted separators as the header.
 /// The first `skip_rows` lines (titles above the header) are dropped.
 pub fn heal_broken_csv_file(
@@ -651,9 +1095,11 @@ pub fn heal_broken_csv_file(
         "healed_{}",
         input_path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    let reader = BufReader::new(File::open(input_path)?);
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let reader = BufReader::new(CountingReader { inner: File::open(input_path)?, counter: counter.clone() });
     let mut writer = BufWriter::new(File::create(&healed_path)?);
     let sep = separator as char;
+    let mut progress = ByteLoop::new("Healing broken lines", input_path);
 
     let mut lines = reader.lines().skip(skip_rows);
     let Some(Ok(header)) = lines.next() else {
@@ -665,6 +1111,9 @@ pub fn heal_broken_csv_file(
     let mut pending_line = String::new();
     for line_res in lines {
         let line = line_res?;
+        // bytes the reader has taken from the file so far
+        let seen = counter.get();
+        progress.add(seen.saturating_sub(progress.read) as usize);
         if pending_line.is_empty() {
             pending_line = line;
         } else {
@@ -680,6 +1129,7 @@ pub fn heal_broken_csv_file(
     if !pending_line.is_empty() {
         writeln!(writer, "{}", pending_line)?;
     }
+    progress.add(counter.get().saturating_sub(progress.read) as usize);
     writer.flush()?;
     Ok(healed_path)
 }
@@ -763,12 +1213,14 @@ fn transcode_windows_1252(input_path: &Path, temp_dir: &Path) -> Result<PathBuf>
         File::create(&out_path).with_context(|| format!("Failed to create {:?}", out_path))?,
     );
     let mut buf = vec![0u8; 64 * 1024];
+    let mut progress = ByteLoop::new("Converting the file's encoding", input_path);
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
         writer.write_all(decode_windows_1252(&buf[..n]).as_bytes())?;
+        progress.add(n);
     }
     writer.flush()?;
     Ok(out_path)
@@ -796,7 +1248,7 @@ pub fn build_lazy_pipeline(
         if plan.is_empty() {
             return Ok(lf);
         }
-        check_dr_cr_conventions(&lf, &plan)?;
+        check_dr_cr_conventions(path, true, config, temp_dir)?;
         let exprs: Vec<Expr> = plan
             .into_iter()
             .map(|(c, text)| typed_expr(text, c, config).alias(&c.name))
@@ -805,9 +1257,7 @@ pub fn build_lazy_pipeline(
     }
 
     let mut lf = scan_csv_text(path, config, temp_dir)?;
-    let text_cols: Vec<(&ColumnSchemaConfig, Expr)> =
-        config.columns.iter().map(|c| (c, col(&c.name))).collect();
-    check_dr_cr_conventions(&lf, &text_cols)?;
+    check_dr_cr_conventions(path, false, config, temp_dir)?;
 
     let exprs: Vec<Expr> = config
         .columns
@@ -1283,86 +1733,7 @@ pub fn compute_parse_failures(
     config: &IngestionConfig,
     temp_dir: &Path,
 ) -> Result<Vec<ParseFailure>> {
-    if is_parquet {
-        let (lf, plan) = parquet_conversion_plan(path, config)?;
-        let typed: Vec<(&ColumnSchemaConfig, Expr)> = plan
-            .into_iter()
-            .filter(|(c, _)| c.dtype != ColDataType::Utf8)
-            .collect();
-        if typed.is_empty() {
-            return Ok(Vec::new());
-        }
-        return failures_from_text(lf, &typed, config.parse_accounting_negatives);
-    }
-    let typed: Vec<&ColumnSchemaConfig> = config
-        .columns
-        .iter()
-        .filter(|c| c.dtype != ColDataType::Utf8)
-        .collect();
-    if typed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let lf = scan_csv_text(path, config, temp_dir)?;
-    let pairs: Vec<(&ColumnSchemaConfig, Expr)> =
-        typed.into_iter().map(|c| (c, raw_text_expr(c, config))).collect();
-    failures_from_text(lf, &pairs, config.parse_accounting_negatives)
-}
-
-/// Shared by CSV and Parquet: `pairs` holds each typed column and its text expression.
-fn failures_from_text(
-    lf: LazyFrame,
-    pairs: &[(&ColumnSchemaConfig, Expr)],
-    accounting_negatives: bool,
-) -> Result<Vec<ParseFailure>> {
-    let mut exprs = Vec::with_capacity(pairs.len() * 2);
-    for (i, (c, text)) in pairs.iter().enumerate() {
-        let (dtype, sign) = (c.dtype, c.sign_convention);
-        let mask = text.clone().map(
-            move |s: Series| {
-                let ca = s.str()?;
-                let flags: BooleanChunked = ca
-                    .into_iter()
-                    .map(|v| Some(v.is_some_and(|v| is_parse_failure(v, dtype, sign, accounting_negatives))))
-                    .collect();
-                Ok(Some(flags.into_series()))
-            },
-            GetOutput::from_type(DataType::Boolean),
-        );
-        exprs.push(mask.clone().sum().cast(DataType::UInt64).alias(format!("__pf_n_{i}")));
-        exprs.push(text.clone().filter(mask).head(Some(5)).implode().alias(format!("__pf_x_{i}")));
-    }
-    let df = lf
-        .select(exprs)
-        .collect()
-        .context("Failed to count values that could not be converted")?;
-
-    let mut out = Vec::new();
-    for (i, (c, _)) in pairs.iter().enumerate() {
-        let count = df
-            .column(&format!("__pf_n_{i}"))
-            .ok()
-            .and_then(|s| s.u64().ok().and_then(|ca| ca.get(0)))
-            .unwrap_or(0) as usize;
-        if count == 0 {
-            continue;
-        }
-        let mut examples = Vec::new();
-        if let Some(list) = df
-            .column(&format!("__pf_x_{i}"))
-            .ok()
-            .and_then(|s| s.list().ok().and_then(|l| l.get_as_series(0)))
-        {
-            if let Ok(ca) = list.str() {
-                examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
-            }
-        }
-        out.push(ParseFailure {
-            column: c.name.clone(),
-            count,
-            examples,
-        });
-    }
-    Ok(out)
+    Ok(typed_scan(path, is_parquet, config, temp_dir)?.failures.clone())
 }
 
 /// Parse failures of everything a tab reads (stacked, joined and reconciled sources included),
@@ -1421,7 +1792,7 @@ pub fn parse_failure_summary(failures: &[ParseFailure]) -> String {
     }
     let parts: Vec<String> = failures
         .iter()
-        .map(|f| format!("{} {}", f.column, f.count))
+        .map(|f| format!("{} {}", f.column, crate::models::format_with_commas(f.count as f64, 0)))
         .collect();
     format!("Parse failures: {}", parts.join(", "))
 }
@@ -1979,12 +2350,114 @@ pub fn compile_tab_lazy(
 
 fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
     match step {
+        TransformStep::Skipped { .. } => Ok(lf),
         TransformStep::SelectAndReorderColumns { cols } => {
             let exprs: Vec<Expr> = cols.iter().map(|c| col(c)).collect();
             Ok(lf.select(exprs))
         }
         TransformStep::RenameColumn { old_name, new_name } => {
             Ok(lf.rename([old_name.as_str()], [new_name.as_str()]))
+        }
+        TransformStep::ConvertToNumber { columns } => {
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for Set to Number")?;
+            let mut exprs: Vec<Expr> = Vec::with_capacity(columns.len());
+            for c in columns {
+                if schema.get(c.as_str()).is_none() {
+                    anyhow::bail!("Set to Number: column '{}' does not exist at this step.", c);
+                }
+                let name = c.clone();
+                exprs.push(
+                    col(c.as_str())
+                        .cast(DataType::String)
+                        .map(
+                            move |s: Series| {
+                                let ca = s.str()?;
+                                let mut out: Vec<Option<f64>> = Vec::with_capacity(ca.len());
+                                for v in ca.into_iter() {
+                                    out.push(match v.map(|v| parse_banking_amount(v, SignConvention::Unset, true)) {
+                                        Some(AmountCell::Value(x)) => Some(x),
+                                        Some(AmountCell::NeedsSignConvention) => {
+                                            return Err(PolarsError::ComputeError(
+                                                dr_cr_unset_message(&name).into(),
+                                            ))
+                                        }
+                                        _ => None,
+                                    });
+                                }
+                                Ok(Some(Float64Chunked::from_iter(out).into_series()))
+                            },
+                            GetOutput::from_type(DataType::Float64),
+                        )
+                        .alias(c.as_str()),
+                );
+            }
+            Ok(lf.with_columns(exprs))
+        }
+        TransformStep::SortRows { levels } => {
+            if levels.is_empty() {
+                return Ok(lf);
+            }
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this sort")?;
+            let mut keys: Vec<Expr> = Vec::with_capacity(levels.len());
+            for l in levels {
+                let dtype = schema.get(l.column.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("Sort: column '{}' was not found. Pick it again in the sort editor.", l.column)
+                })?;
+                // Blank text sorts with the nulls: last, in either direction. Other text sorts by
+                // its natural key: case-insensitive, numbers inside the text by value.
+                keys.push(if dtype.is_string() {
+                    when(col(l.column.as_str()).str().strip_chars(lit(NULL)).eq(lit("")))
+                        .then(lit(NULL).cast(DataType::String))
+                        .otherwise(col(l.column.as_str()))
+                        .map(
+                            |s: Series| {
+                                let ca = s.str()?;
+                                let out: StringChunked =
+                                    ca.into_iter().map(|v| v.map(natural_sort_key)).collect();
+                                Ok(Some(out.with_name(s.name().clone()).into_series()))
+                            },
+                            GetOutput::from_type(DataType::String),
+                        )
+                } else {
+                    col(l.column.as_str())
+                });
+            }
+            let n = levels.len();
+            let options = SortMultipleOptions::default()
+                .with_order_descending_multi(levels.iter().map(|l| l.descending))
+                .with_nulls_last_multi(vec![true; n])
+                .with_maintain_order(true);
+            Ok(lf.sort_by_exprs(keys, options))
+        }
+        TransformStep::FilterGroup { conditions, join, keep_matching } => {
+            if conditions.is_empty() {
+                return Ok(lf);
+            }
+            let mut lf = lf;
+            let schema = lf
+                .collect_schema()
+                .context("Could not read the column types for this filter")?;
+            let mut exprs = Vec::with_capacity(conditions.len());
+            for c in conditions {
+                exprs.push(build_condition_expr(c, &schema)?);
+            }
+            let mut it = exprs.into_iter();
+            let mut combined = it.next().unwrap_or_else(|| lit(true));
+            for e in it {
+                combined = match join {
+                    GroupJoin::And => combined.and(e),
+                    GroupJoin::Or => combined.or(e),
+                };
+            }
+            // An unknown test (a null against a value) is "does not match".
+            let matches = combined.fill_null(lit(false));
+            Ok(lf.filter(if *keep_matching { matches } else { matches.not() }))
         }
         TransformStep::FilterRows {
             column,
@@ -2005,6 +2478,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             rules,
             fallback,
             output_as_float,
+            blank_result,
         } => {
             if rules.is_empty() {
                 return Ok(lf);
@@ -2013,11 +2487,19 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             let schema = lf
                 .collect_schema()
                 .context("Could not read the column types for this conditional column")?;
+            let blank_value = match blank_result {
+                BlankRule::FallThrough => None,
+                BlankRule::Result(text) => Some(blank_result_expr(new_col, text, *output_as_float)?),
+            };
             let mut expr: Expr = parse_val_expr(fallback, *output_as_float);
             for r in rules.iter().rev() {
-                let c = build_filter_expr(&r.col_name, r.op, &r.compare_val, &schema)?;
+                let c = build_rule_expr(r, &schema)?;
                 let o = parse_val_expr(&r.output_val, *output_as_float);
                 expr = when(c).then(o).otherwise(expr);
+                // a blank on either side gives the blank result before the rule can decide
+                if let (Some(value), Some(blank)) = (&blank_value, rule_blank_expr(r, &schema)?) {
+                    expr = when(blank).then(value.clone()).otherwise(expr);
+                }
             }
             Ok(lf.with_column(expr.alias(new_col)))
         }
@@ -2053,6 +2535,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             null_as_sight,
             new_col,
         } => apply_maturity_bucket(lf, mat_col, cutoff_date, bucket_def, *null_as_sight, new_col),
+        TransformStep::RateBand { rate_col, band_def, new_col } => crate::banking::apply_rate_band(lf, rate_col, band_def, new_col),
         TransformStep::RateShockSim {
             bal_col,
             rate_col,
@@ -2203,42 +2686,7 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
             expr
         }
         FilterOp::Eq | FilterOp::NotEq | FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
-            let dtype = schema.get(col_name).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Column '{}' was not found. Check the column chosen in this filter.",
-                    col_name
-                )
-            })?;
-            let (lhs, rhs) = if dtype.is_string() || dtype.is_categorical() {
-                (c.cast(DataType::String), lit(trimmed.to_string()))
-            } else if dtype.is_numeric() {
-                let num = trimmed.parse::<f64>().map_err(|_| {
-                    anyhow::anyhow!(
-                        "'{}' is not a number for numeric column '{}'",
-                        trimmed,
-                        col_name
-                    )
-                })?;
-                (c.cast(DataType::Float64), lit(num))
-            } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
-                let d = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
-                    anyhow::anyhow!(
-                        "'{}' is not a date for date column '{}'. Enter it as YYYY-MM-DD (e.g. 2026-10-31).",
-                        trimmed,
-                        col_name
-                    )
-                })?;
-                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .context("Internal date error (epoch)")?;
-                let days = (d - epoch).num_days() as i32;
-                (c.cast(DataType::Date), lit(days).cast(DataType::Date))
-            } else {
-                anyhow::bail!(
-                    "Column '{}' is {}; comparison filters work on text, number and date columns only",
-                    col_name,
-                    dtype
-                );
-            };
+            let (lhs, rhs) = typed_operand(col_name, trimmed, schema)?;
             match op {
                 FilterOp::Eq => lhs.eq(rhs),
                 FilterOp::NotEq => lhs.neq(rhs),
@@ -2248,6 +2696,214 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
                 _ => lhs.lt_eq(rhs),
             }
         }
+    })
+}
+
+/// The column and the typed value to compare it with: text as text, numbers as numbers (the
+/// value must be one), dates as dates (the value must be YYYY-MM-DD).
+fn typed_operand(col_name: &str, trimmed: &str, schema: &Schema) -> Result<(Expr, Expr)> {
+    let c = col(col_name);
+    let dtype = schema.get(col_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Column '{}' was not found. Check the column chosen in this filter.",
+            col_name
+        )
+    })?;
+    if dtype.is_string() || dtype.is_categorical() {
+        Ok((c.cast(DataType::String), lit(trimmed.to_string())))
+    } else if dtype.is_numeric() {
+        let num = trimmed.parse::<f64>().map_err(|_| {
+            anyhow::anyhow!(
+                "'{}' is not a number for numeric column '{}'",
+                trimmed,
+                col_name
+            )
+        })?;
+        Ok((c.cast(DataType::Float64), lit(num)))
+    } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
+        let d = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
+            anyhow::anyhow!(
+                "'{}' is not a date for date column '{}'. Enter it as YYYY-MM-DD (e.g. 2026-10-31).",
+                trimmed,
+                col_name
+            )
+        })?;
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).context("Internal date error (epoch)")?;
+        let days = (d - epoch).num_days() as i32;
+        Ok((c.cast(DataType::Date), lit(days).cast(DataType::Date)))
+    } else {
+        anyhow::bail!(
+            "Column '{}' is {}; comparison filters work on text, number and date columns only",
+            col_name,
+            dtype
+        );
+    }
+}
+
+/// One condition of a filter group, with the same type-aware comparison as a single filter.
+/// Blank means null, or text that is empty after trimming.
+fn build_condition_expr(cond: &FilterCondition, schema: &Schema) -> Result<Expr> {
+    let name = cond.column.as_str();
+    let dtype = schema.get(name).ok_or_else(|| {
+        anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this filter.", name)
+    })?;
+    let value = cond.value.trim();
+    Ok(match cond.op {
+        CondOp::Equals => build_filter_expr(name, FilterOp::Eq, value, schema)?,
+        CondOp::NotEquals => build_filter_expr(name, FilterOp::NotEq, value, schema)?,
+        CondOp::Gt => build_filter_expr(name, FilterOp::Gt, value, schema)?,
+        CondOp::Gte => build_filter_expr(name, FilterOp::Gte, value, schema)?,
+        CondOp::Lt => build_filter_expr(name, FilterOp::Lt, value, schema)?,
+        CondOp::Lte => build_filter_expr(name, FilterOp::Lte, value, schema)?,
+        CondOp::Contains => build_filter_expr(name, FilterOp::Contains, value, schema)?,
+        CondOp::StartsWith => build_filter_expr(name, FilterOp::StartsWith, value, schema)?,
+        CondOp::InList => build_filter_expr(name, FilterOp::InList, value, schema)?,
+        CondOp::EndsWith => col(name).cast(DataType::String).str().ends_with(lit(value.to_string())),
+        CondOp::Between => {
+            let (lhs, lo) = typed_operand(name, value, schema)?;
+            let (_, hi) = typed_operand(name, cond.value2.trim(), schema)?;
+            lhs.clone().gt_eq(lo).and(lhs.lt_eq(hi))
+        }
+        CondOp::IsBlank | CondOp::IsNotBlank => {
+            let blank = if dtype.is_string() {
+                col(name).is_null().or(col(name).str().strip_chars(lit(NULL)).eq(lit("")))
+            } else {
+                col(name).is_null()
+            };
+            if cond.op == CondOp::IsBlank {
+                blank
+            } else {
+                blank.not()
+            }
+        }
+    })
+}
+
+/// The value a row gets when a rule looks at a blank: empty text is a blank cell.
+fn blank_result_expr(new_col: &str, text: &str, as_float: bool) -> Result<Expr> {
+    let t = text.trim();
+    Ok(if t.is_empty() {
+        lit(NULL).cast(if as_float { DataType::Float64 } else { DataType::String })
+    } else if as_float {
+        let num = t.parse::<f64>().map_err(|_| {
+            anyhow::anyhow!(
+                "The result for blanks, '{}', is not a number, but column '{}' is numeric. Enter a number or leave it empty.",
+                t,
+                new_col
+            )
+        })?;
+        lit(num)
+    } else {
+        lit(t.to_string())
+    })
+}
+
+/// A blank value: null, or (text) empty after trimming.
+fn blank_of(name: &str, dtype: &DataType) -> Expr {
+    if dtype.is_string() {
+        col(name).is_null().or(col(name).str().strip_chars(lit(NULL)).eq(lit("")))
+    } else {
+        col(name).is_null()
+    }
+}
+
+/// True where a column the rule looks at is blank: its own column, and the column it is
+/// compared with. `None` for the tests "is blank" / "is not blank", which ask that very question.
+fn rule_blank_expr(r: &CondRule, schema: &Schema) -> Result<Option<Expr>> {
+    if matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
+        return Ok(None);
+    }
+    let left = schema
+        .get(&r.col_name)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this conditional column.", r.col_name))?;
+    let mut blank = blank_of(&r.col_name, left);
+    if r.compare_is_col {
+        let right = schema
+            .get(r.compare_val.trim())
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column this rule compares with.", r.compare_val.trim()))?;
+        blank = blank.or(blank_of(r.compare_val.trim(), right));
+    }
+    Ok(Some(blank))
+}
+
+/// What a column holds, for comparing it with another column.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompareKind {
+    Number,
+    Date,
+    Text,
+}
+
+impl CompareKind {
+    fn of(dtype: &DataType) -> Option<Self> {
+        if dtype.is_numeric() {
+            Some(Self::Number)
+        } else if matches!(dtype, DataType::Date | DataType::Datetime(_, _)) {
+            Some(Self::Date)
+        } else if dtype.is_string() || dtype.is_categorical() {
+            Some(Self::Text)
+        } else {
+            None
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::Date => "date",
+            Self::Text => "text",
+        }
+    }
+}
+
+/// The test of one rule. A value on the right is checked as in a filter; another column on the
+/// right must be of the same kind (number with number, date with date, text with text).
+fn build_rule_expr(r: &CondRule, schema: &Schema) -> Result<Expr> {
+    if !r.compare_is_col || matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
+        return build_filter_expr(&r.col_name, r.op, &r.compare_val, schema);
+    }
+    let (ln, rn) = (r.col_name.as_str(), r.compare_val.trim());
+    let ld = schema
+        .get(ln)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this conditional column.", ln))?;
+    let rd = schema
+        .get(rn)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column this rule compares with.", rn))?;
+    let describe = |k: Option<CompareKind>, d: &DataType| match k {
+        Some(k) => format!("{} ({})", k.name(), d),
+        None => format!("{}", d),
+    };
+    let (lk, rk) = (CompareKind::of(ld), CompareKind::of(rd));
+    let kind = match (lk, rk) {
+        (Some(a), Some(b)) if a == b => a,
+        _ => anyhow::bail!(
+            "Cannot compare column '{}' ({}) with column '{}' ({}). Only number with number, date with date and text with text can be compared. Change a column's type in the schema, or pick another column.",
+            ln,
+            describe(lk, ld),
+            rn,
+            describe(rk, rd)
+        ),
+    };
+    let (l, rr) = match kind {
+        CompareKind::Number => (col(ln).cast(DataType::Float64), col(rn).cast(DataType::Float64)),
+        CompareKind::Date => (col(ln).cast(DataType::Date), col(rn).cast(DataType::Date)),
+        CompareKind::Text => (col(ln).cast(DataType::String), col(rn).cast(DataType::String)),
+    };
+    Ok(match r.op {
+        FilterOp::Eq => l.eq(rr),
+        FilterOp::NotEq => l.neq(rr),
+        FilterOp::Gt => l.gt(rr),
+        FilterOp::Gte => l.gt_eq(rr),
+        FilterOp::Lt => l.lt(rr),
+        FilterOp::Lte => l.lt_eq(rr),
+        FilterOp::Contains if kind == CompareKind::Text => l.str().contains_literal(rr),
+        FilterOp::StartsWith if kind == CompareKind::Text => l.str().starts_with(rr),
+        op => anyhow::bail!(
+            "'{}' cannot compare column '{}' with column '{}'. Use equals, does not equal, <, \u{2264}, > or \u{2265}{}.",
+            op.label(),
+            ln,
+            rn,
+            if kind == CompareKind::Text { ", contains or starts with" } else { "" }
+        ),
     })
 }
 
@@ -2388,6 +3044,37 @@ pub fn mask_pii_value(val: &str, mode: PiiMaskMode, key: &[u8; 32]) -> String {
     }
 }
 
+/// The key text is sorted by (T2, owner answer Q4): case-insensitive, and every run of digits
+/// compared by its value ("Branch 2" before "Branch 10"). A digit run is written as its length
+/// (four digits) and its digits without leading zeros, so byte order of the keys is the natural
+/// order; equal keys ("CTG" and "ctg", "02" and "2") are ties and keep their earlier order.
+/// The Python export mirrors this (`_mp_natural_key`).
+pub fn natural_sort_key(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut out = String::with_capacity(lower.len() + 8);
+    let mut chars = lower.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            let mut digits = String::new();
+            while let Some(&d) = chars.peek() {
+                if !d.is_ascii_digit() {
+                    break;
+                }
+                digits.push(d);
+                chars.next();
+            }
+            let t = digits.trim_start_matches('0');
+            let t = if t.is_empty() { "0" } else { t };
+            out.push_str(&format!("{:04}", t.len().min(9999)));
+            out.push_str(t);
+        } else {
+            out.push(c);
+            chars.next();
+        }
+    }
+    out
+}
+
 pub fn fetch_viewport_slice(lf: LazyFrame, offset: usize, limit: usize) -> Result<DataFrame> {
     let df = lf
         .slice(offset as i64, limit as IdxSize)
@@ -2417,6 +3104,7 @@ pub fn count_nonempty_lines(path: &Path) -> Result<usize> {
     );
     let mut buf = Vec::new();
     let mut n = 0usize;
+    let mut progress = ByteLoop::new("Counting the file's lines", path);
     loop {
         buf.clear();
         let read = reader
@@ -2425,6 +3113,7 @@ pub fn count_nonempty_lines(path: &Path) -> Result<usize> {
         if read == 0 {
             break;
         }
+        progress.add(read);
         // A UTF-8 byte-order mark alone does not make a line non-empty.
         let body = buf.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&buf);
         if body.iter().any(|b| !b.is_ascii_whitespace()) {
@@ -2447,11 +3136,152 @@ pub fn source_row_check(source: &TabSource, temp_dir: &Path) -> Result<Option<Ro
     };
     let lf = build_lazy_pipeline(path, false, config, temp_dir)?;
     let (parsed_rows, _) = compute_control_totals(lf, None)?;
-    Ok(Some(RowCountCheck {
+    let mut check = RowCountCheck {
         nonempty_lines: count_nonempty_lines(path)?,
         skip_rows: config.skip_rows,
         parsed_rows,
-    }))
+        ..Default::default()
+    };
+    // Fewer rows than lines: find out why (one more pass over the file, only then).
+    if check.parsed_rows < check.data_lines() {
+        let a = analyze_records(path, config)?;
+        check.multiline_records = a.multiline_records;
+        check.explained_lines = a.explained_lines;
+        check.malformed_records = a.malformed_records;
+        check.details = a.details;
+    }
+    Ok(Some(check))
+}
+
+/// What a pass over a CSV file found about its records.
+#[derive(Debug, Default)]
+pub struct RecordAnalysis {
+    pub multiline_records: usize,
+    pub explained_lines: usize,
+    pub malformed_records: usize,
+    pub details: Vec<LineDetail>,
+}
+
+/// Walks the file record by record (a record is a row of fields; a quoted value may hold line
+/// breaks, so a record can take several physical lines) and reports the records that take more
+/// than one line and those whose number of fields differs from the header's. Line numbers are
+/// physical, 1-based, counting title lines and blank lines.
+pub fn analyze_records(path: &Path, config: &IngestionConfig) -> Result<RecordAnalysis> {
+    let sep = separator_byte(config.separator)?;
+    let mut reader = BufReader::new(File::open(path).with_context(|| format!("Failed to open {:?}", path))?);
+    let mut progress = ByteLoop::new("Checking line breaks", path);
+    let mut out = RecordAnalysis::default();
+    let mut buf = Vec::new();
+    let mut line_no = 0usize;
+    // the record being read
+    let mut in_quoted = false;
+    let mut quote_seen = false; // a quote inside a quoted value (an escape or the closing one)
+    let mut at_start = true; // at the start of a field
+    let mut fields = 1usize;
+    let mut start_line = 0usize;
+    let mut first_text = String::new();
+    let mut span = 0usize;
+    let mut nonblank = 0usize;
+    let mut expected: Option<usize> = None;
+    let mut open = false;
+    loop {
+        buf.clear();
+        let n = reader.read_until(b'\n', &mut buf).with_context(|| format!("Failed to read {:?}", path))?;
+        if n == 0 {
+            break;
+        }
+        progress.add(n);
+        line_no += 1;
+        if line_no <= config.skip_rows {
+            continue;
+        }
+        let body = buf.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&buf);
+        let line: &[u8] = {
+            let mut e = body.len();
+            while e > 0 && matches!(body[e - 1], b'\n' | b'\r') {
+                e -= 1;
+            }
+            &body[..e]
+        };
+        let blank = !line.iter().any(|b| !b.is_ascii_whitespace());
+        if !open {
+            if blank {
+                continue; // a blank line between records is not a record
+            }
+            open = true;
+            start_line = line_no;
+            first_text = decode_line(line, config.encoding).chars().take(80).collect();
+            span = 0;
+            nonblank = 0;
+            fields = 1;
+            at_start = true;
+        }
+        span += 1;
+        if !blank {
+            nonblank += 1;
+        }
+        for &b in line {
+            if in_quoted {
+                if quote_seen {
+                    if b == b'"' {
+                        quote_seen = false; // "" is a quote inside the value
+                        continue;
+                    }
+                    in_quoted = false; // the quote before this byte closed the value
+                    quote_seen = false;
+                } else {
+                    if b == b'"' {
+                        quote_seen = true;
+                    }
+                    continue;
+                }
+            }
+            if b == sep {
+                fields += 1;
+                at_start = true;
+            } else if at_start && b == b'"' {
+                in_quoted = true;
+                at_start = false;
+            } else {
+                at_start = false;
+            }
+        }
+        if in_quoted && quote_seen {
+            in_quoted = false; // the closing quote was the last byte of the line
+            quote_seen = false;
+        }
+        if in_quoted {
+            continue; // the record goes on in the next line
+        }
+        // the record is complete
+        open = false;
+        let header_fields = match expected {
+            None => {
+                expected = Some(fields);
+                continue; // the header line
+            }
+            Some(h) => h,
+        };
+        if span > 1 {
+            out.multiline_records += 1;
+            out.explained_lines += nonblank.saturating_sub(1);
+        }
+        let wrong = fields != header_fields;
+        if wrong {
+            out.malformed_records += 1;
+        }
+        if (span > 1 || wrong) && out.details.len() < ROW_DETAILS_LIMIT {
+            out.details.push(LineDetail {
+                line: start_line,
+                issue: if wrong { LineIssue::WrongFieldCount } else { LineIssue::QuotedLineBreak },
+                span,
+                fields,
+                expected_fields: header_fields,
+                text: first_text.clone(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Rows where the open or the maturity date is missing (after conversion to a date).
@@ -2666,15 +3496,81 @@ pub fn compute_control_totals(
     Ok((row_count, control_sum))
 }
 
+/// How an export wrote its file (shown in the status message).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportPath {
+    /// Written batch by batch; the view never has to fit in memory.
+    Streamed,
+    /// The whole view was collected in memory, then written (the plan cannot be streamed).
+    Collected,
+}
+
+impl ExportPath {
+    pub fn note(self) -> &'static str {
+        match self {
+            ExportPath::Streamed => "streamed",
+            ExportPath::Collected => "collected in memory first; this view cannot be streamed",
+        }
+    }
+}
+
+/// `Auto` streams when the plan allows it. `CollectOnly` always collects first (tests, and the
+/// reference for "both ways give the same file").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportMode {
+    Auto,
+    CollectOnly,
+}
+
+/// Polars says one of these, and has written nothing, when a plan has a step that cannot be
+/// streamed (it depends on the step: the whole-plan check, or the in-memory engine refusing a sink).
+fn is_not_streamable(e: &PolarsError) -> bool {
+    let msg = e.to_string();
+    msg.contains("cannot run the whole query in a streaming order")
+        || msg.contains("not yet supported in standard engine")
+}
+
 pub fn export_to_parquet_stream(
     lf: LazyFrame,
     out_path: &Path,
     dialect: ParquetDialect,
 ) -> Result<()> {
-    let compression = match dialect {
+    export_to_parquet(lf, out_path, dialect, ExportMode::Auto).map(|_| ())
+}
+
+fn parquet_compression(dialect: ParquetDialect) -> ParquetCompression {
+    match dialect {
         ParquetDialect::ArchiveZstd => ParquetCompression::Zstd(None),
         ParquetDialect::PowerBiSnappy => ParquetCompression::Snappy,
-    };
+    }
+}
+
+const PARQUET_ROW_GROUP: usize = 122_880;
+
+pub fn export_to_parquet(
+    lf: LazyFrame,
+    out_path: &Path,
+    dialect: ParquetDialect,
+    mode: ExportMode,
+) -> Result<ExportPath> {
+    let compression = parquet_compression(dialect);
+    if mode == ExportMode::Auto {
+        let options = ParquetWriteOptions {
+            compression,
+            statistics: StatisticsOptions::default(),
+            row_group_size: Some(PARQUET_ROW_GROUP),
+            data_page_size: None,
+            maintain_order: true,
+        };
+        match lf.clone().sink_parquet(out_path, options) {
+            Ok(()) => return Ok(ExportPath::Streamed),
+            Err(e) if is_not_streamable(&e) => {} // nothing was written: collect instead
+            Err(e) => {
+                let _ = std::fs::remove_file(out_path);
+                return Err(anyhow::Error::from(e).context("Failed to stream the Parquet export"));
+            }
+        }
+    }
 
     let mut df = lf
         .with_streaming(true)
@@ -2684,14 +3580,44 @@ pub fn export_to_parquet_stream(
     let file = File::create(out_path).context("Failed to create output Parquet file on disk")?;
     ParquetWriter::new(BufWriter::with_capacity(8 * 1024 * 1024, file))
         .with_compression(compression)
-        .with_row_group_size(Some(122_880))
+        .with_row_group_size(Some(PARQUET_ROW_GROUP))
         .finish(&mut df)
         .context("Failed to write Parquet data stream")?;
-    Ok(())
+    Ok(ExportPath::Collected)
 }
 
 pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> Result<()> {
+    export_to_csv(lf, out_path, mdy_dates, ExportMode::Auto).map(|_| ())
+}
+
+pub fn export_to_csv(
+    lf: LazyFrame,
+    out_path: &Path,
+    mdy_dates: bool,
+    mode: ExportMode,
+) -> Result<ExportPath> {
     let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
+
+    if mode == ExportMode::Auto {
+        let options = CsvWriterOptions {
+            include_header: true,
+            maintain_order: true,
+            serialize_options: SerializeOptions {
+                date_format: Some(date_fmt.to_string()),
+                float_scientific: Some(false),
+                ..SerializeOptions::default()
+            },
+            ..CsvWriterOptions::default()
+        };
+        match lf.clone().sink_csv(out_path, options) {
+            Ok(()) => return Ok(ExportPath::Streamed),
+            Err(e) if is_not_streamable(&e) => {} // nothing was written: collect instead
+            Err(e) => {
+                let _ = std::fs::remove_file(out_path);
+                return Err(anyhow::Error::from(e).context("Failed to stream the CSV export"));
+            }
+        }
+    }
 
     let mut df = lf
         .with_streaming(true)
@@ -2705,5 +3631,5 @@ pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> 
         .with_float_scientific(Some(false))
         .finish(&mut df)
         .context("Failed to write CSV data stream")?;
-    Ok(())
+    Ok(ExportPath::Collected)
 }

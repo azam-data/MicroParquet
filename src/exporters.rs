@@ -2,9 +2,13 @@ use crate::engine::{
     compile_tab_lazy, compute_control_totals, export_to_csv_stream, export_to_parquet_stream,
 };
 use crate::models::{
-    format_metric_value, ColumnFormatSpec, NumberDisplayFormat, ParquetDialect, SplitExportFormat,
-    TabSource, TransformStep,
+    format_metric_value, resolved_scale, ColumnFormatSpec, MoneyScale, NumberDisplayFormat,
+    ParquetDialect, SplitExportFormat, SummarySpec, TabSource, TransformStep,
 };
+use crate::jobs::{Cancelled, JobCtx, TempOutput};
+use crate::summary::{date_text, format_summary_value, SummaryCell, SummaryValue};
+use crate::models::SummaryAgg;
+use crate::table_layout::{SUMMARY_BG, SUMMARY_FG};
 use anyhow::{Context, Result};
 use polars::datatypes::AnyValue;
 use polars::prelude::*;
@@ -13,7 +17,7 @@ use rust_xlsxwriter::{Format, Workbook};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Data rows per Excel sheet: 1,048,576 rows minus the header row.
 pub const EXCEL_MAX_DATA_ROWS: usize = 1_048_575;
@@ -40,6 +44,9 @@ pub struct XlsxExportReport {
     /// (tab title, column) of whole-number columns written as text because a value has more
     /// than 15 digits (Excel keeps only 15 significant digits of a number).
     pub text_columns: Vec<(String, String)>,
+    /// Sheets exported WITHOUT their totals row because it could not be computed:
+    /// (tab title, reason). The data is on its sheet; the reason is also on `Export_Errors`.
+    pub totals_errors: Vec<(String, String)>,
 }
 
 impl XlsxExportReport {
@@ -62,6 +69,12 @@ impl XlsxExportReport {
             parts.push(format!(
                 "⚠ whole numbers with more than 15 digits written as text (Excel would round them): {}",
                 cols.join(", ")
+            ));
+        }
+        for (t, why) in &self.totals_errors {
+            parts.push(format!(
+                "⚠ '{}' was exported WITHOUT its totals row (the data is on its sheet): {} (also on the Export_Errors sheet)",
+                t, why
             ));
         }
         if !self.errors.is_empty() {
@@ -115,12 +128,159 @@ pub fn export_tabs_to_xlsx(
     write_xlsx_workbook(tabs, errors, out_path, EXCEL_MAX_DATA_ROWS)
 }
 
+/// A tab for the scaled Excel export: its data and the per-column formats it is shown with.
+pub struct XlsxTab {
+    pub title: String,
+    pub df: DataFrame,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
+    /// The summary row (T3); empty = no totals rows.
+    pub summary: Vec<SummaryCell>,
+}
+
+/// The scale the workbook is written in; money columns say it in their header ("Balance (BDT M)").
+/// Thousands and Millions keep the raw BDT value under a scaling number format (`#,##0.00,` and
+/// `#,##0.00,,`), so Excel sums the real amounts; Lakh and Crore, which an Excel format cannot
+/// scale, hold value ÷ divisor (see [`xlsx_scaling`]). Data files (Parquet, CSV) never use it;
+/// they keep raw values.
+#[derive(Clone, Copy, Debug)]
+pub struct XlsxScale {
+    pub num_format: NumberDisplayFormat,
+    pub decimals: usize,
+}
+
+/// `export_selected_tabs_to_xlsx` for tabs that carry column formats.
+pub struct ScaledTabToExport<'a> {
+    pub title: String,
+    pub source: &'a TabSource,
+    pub steps: &'a [TransformStep],
+    pub col_formats: &'a HashMap<String, ColumnFormatSpec>,
+    /// The tab's summary choices; `None` = no totals rows in the workbook.
+    pub summary: Option<&'a HashMap<String, SummarySpec>>,
+    /// The tab's pinned control column (weight of rate-like columns by default).
+    pub control_col: Option<&'a str>,
+}
+
+/// The summary cells of a collected tab (empty when no totals row is asked for). A totals row
+/// that cannot be computed is an error, not a missing row.
+fn summary_for_export(
+    df: &DataFrame,
+    overrides: Option<&HashMap<String, SummarySpec>>,
+    control_col: Option<&str>,
+) -> Result<Vec<SummaryCell>> {
+    let Some(over) = overrides else {
+        return Ok(Vec::new());
+    };
+    let cols: Vec<(String, DataType)> = df.get_columns().iter().map(|s| (s.name().to_string(), s.dtype().clone())).collect();
+    let specs = crate::summary::effective_specs(&cols, over, control_col);
+    crate::summary::compute_summary(df.clone().lazy(), &specs).context("The totals row could not be computed")
+}
+
+pub fn export_selected_tabs_to_xlsx_scaled(
+    tabs: &[ScaledTabToExport],
+    out_path: &Path,
+    temp_dir: &Path,
+    scale: XlsxScale,
+) -> Result<XlsxExportReport> {
+    export_scaled_tabs_with(tabs, out_path, temp_dir, scale, &summary_for_export)
+}
+
+/// How a collected tab's totals row is computed (tests pass one that fails).
+pub type SummaryFn = dyn Fn(&DataFrame, Option<&HashMap<String, SummarySpec>>, Option<&str>) -> Result<Vec<SummaryCell>>;
+
+/// `export_selected_tabs_to_xlsx_scaled` with the totals computation as a parameter. A tab whose
+/// totals row cannot be computed is NOT dropped: its sheet is written without the totals row and
+/// the reason goes to `Export_Errors` and the report.
+pub fn export_scaled_tabs_with(
+    tabs: &[ScaledTabToExport],
+    out_path: &Path,
+    temp_dir: &Path,
+    scale: XlsxScale,
+    summarize: &SummaryFn,
+) -> Result<XlsxExportReport> {
+    let mut ok = Vec::new();
+    let mut errors = Vec::new();
+    let mut totals_errors = Vec::new();
+    for t in tabs {
+        match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
+            Ok(df) => {
+                // The summary is computed from the same collected data the sheet holds.
+                let summary = match summarize(&df, t.summary, t.control_col) {
+                    Ok(cells) => cells,
+                    Err(e) => {
+                        totals_errors.push((t.title.clone(), format!("{:#}", e)));
+                        Vec::new()
+                    }
+                };
+                ok.push(XlsxTab { title: t.title.clone(), df, col_formats: t.col_formats.clone(), summary });
+            }
+            Err(e) => errors.push((t.title.clone(), format!("{:#}", e))),
+        }
+    }
+    write_xlsx_tabs_noted(ok, errors, totals_errors, out_path, EXCEL_MAX_DATA_ROWS, Some(scale))
+}
+
 /// `export_tabs_to_xlsx` with the rows-per-sheet limit as a parameter (tests use a small one).
 pub fn write_xlsx_workbook(
     tabs: Vec<(String, DataFrame)>,
     errors: Vec<(String, String)>,
     out_path: &Path,
     rows_per_sheet: usize,
+) -> Result<XlsxExportReport> {
+    let tabs = tabs
+        .into_iter()
+        .map(|(title, df)| XlsxTab { title, df, col_formats: HashMap::new(), summary: Vec::new() })
+        .collect();
+    write_xlsx_tabs(tabs, errors, out_path, rows_per_sheet, None)
+}
+
+fn xlsx_decimals_format(decimals: usize) -> String {
+    if decimals == 0 {
+        "#,##0".to_string()
+    } else {
+        format!("#,##0.{}", "0".repeat(decimals.min(6)))
+    }
+}
+
+/// How a money column is put in a workbook: the number the cell holds is value ÷ the first
+/// value, and the second is added to its number format. K and M: raw value, format scaled by
+/// "," / ",,"; Lakh and Crore: divided value, plain format.
+pub fn xlsx_scaling(ms: &MoneyScale) -> (f64, &'static str) {
+    match ms.suffix {
+        "K" => (1.0, ","),
+        "M" => (1.0, ",,"),
+        _ => (ms.divisor, ""),
+    }
+}
+
+/// A money column of a scaled workbook.
+struct ColScale {
+    unit: &'static str,
+    /// The cell holds value ÷ this.
+    divide: f64,
+    /// Appended to the column's number format ("," or ",," for K and M).
+    fmt_suffix: &'static str,
+    fmt: Format,
+}
+
+pub fn write_xlsx_tabs(
+    tabs: Vec<XlsxTab>,
+    errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
+) -> Result<XlsxExportReport> {
+    write_xlsx_tabs_noted(tabs, errors, Vec::new(), out_path, rows_per_sheet, scale)
+}
+
+/// `write_xlsx_tabs` plus `totals_errors`: (tab title, reason) for sheets whose totals row was
+/// left out. They are written to `Export_Errors` after the failed tabs.
+pub fn write_xlsx_tabs_noted(
+    tabs: Vec<XlsxTab>,
+    errors: Vec<(String, String)>,
+    totals_errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
 ) -> Result<XlsxExportReport> {
     let rows_per_sheet = rows_per_sheet.max(1);
     let mut workbook = Workbook::new();
@@ -135,10 +295,27 @@ pub fn write_xlsx_workbook(
     let date_fmt = Format::new().set_num_format("dd-mmm-yyyy");
     let datetime_fmt = Format::new().set_num_format("dd-mmm-yyyy hh:mm:ss");
 
-    for (idx, (raw_title, df)) in tabs.into_iter().enumerate() {
+    for (idx, tab) in tabs.into_iter().enumerate() {
+        let XlsxTab { title: raw_title, df, col_formats, summary } = tab;
         let base_name = sanitize_sheet_name(&raw_title, idx + 1);
         let cols = df.get_columns();
         let height = df.height();
+        // Money columns in the chosen scale.
+        let col_scales: Vec<Option<ColScale>> = cols
+            .iter()
+            .map(|c| {
+                let sc = scale?;
+                if !matches!(c.dtype(), DataType::Float64 | DataType::Float32) {
+                    return None;
+                }
+                let spec = col_formats.get(c.name().as_str());
+                let ms = resolved_scale(c.name().as_str(), spec, sc.num_format)?;
+                let dec = spec.map(|s| s.decimals).unwrap_or(sc.decimals);
+                let (divide, fmt_suffix) = xlsx_scaling(&ms);
+                let fmt = Format::new().set_num_format(format!("{}{}", xlsx_decimals_format(dec), fmt_suffix));
+                Some(ColScale { unit: ms.unit, divide, fmt_suffix, fmt })
+            })
+            .collect();
         let sheet_count = height.div_ceil(rows_per_sheet).max(1);
 
         for part in 0..sheet_count {
@@ -156,12 +333,11 @@ pub fn write_xlsx_workbook(
                 .with_context(|| format!("Excel: invalid sheet name '{}'", name))?;
 
             for (c_idx, series) in cols.iter().enumerate() {
-                worksheet.write_string_with_format(
-                    0,
-                    c_idx as u16,
-                    series.name().as_str(),
-                    &header_fmt,
-                )?;
+                let header_text = match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                    Some(cs) => format!("{} ({})", series.name().as_str(), cs.unit),
+                    None => series.name().to_string(),
+                };
+                worksheet.write_string_with_format(0, c_idx as u16, &header_text, &header_fmt)?;
                 worksheet.set_column_width(c_idx as u16, 18.0)?;
             }
             worksheet.set_freeze_panes(1, 0)?;
@@ -174,12 +350,22 @@ pub fn write_xlsx_workbook(
                     let xls_col = c_idx as u16;
                     match series.get(r_idx) {
                         Ok(AnyValue::Null) => {}
-                        Ok(AnyValue::Float64(v)) => {
-                            worksheet.write_number_with_format(xls_row, xls_col, v, &num_fmt)?;
-                        }
-                        Ok(AnyValue::Float32(v)) => {
-                            worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
-                        }
+                        Ok(AnyValue::Float64(v)) => match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                            Some(cs) => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v / cs.divide, &cs.fmt)?;
+                            }
+                            None => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v, &num_fmt)?;
+                            }
+                        },
+                        Ok(AnyValue::Float32(v)) => match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                            Some(cs) => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v as f64 / cs.divide, &cs.fmt)?;
+                            }
+                            None => {
+                                worksheet.write_number_with_format(xls_row, xls_col, v as f64, &num_fmt)?;
+                            }
+                        },
                         Ok(AnyValue::Int64(v)) if v.unsigned_abs() >= EXCEL_EXACT_INT_LIMIT => {
                             worksheet.write_string(xls_row, xls_col, v.to_string())?;
                             note_text_column(&mut report, &raw_title, series.name().as_str());
@@ -239,11 +425,15 @@ pub fn write_xlsx_workbook(
                     }
                 }
             }
+            // Totals: two rows (what each cell is, then its value) under the last part of the data.
+            if part + 1 == sheet_count && !summary.is_empty() {
+                write_xlsx_totals(worksheet, &summary, cols, last - first, &col_scales, &col_formats, scale)?;
+            }
         }
         report.sheets.push((raw_title, sheet_count));
     }
 
-    if !errors.is_empty() {
+    if !errors.is_empty() || !totals_errors.is_empty() {
         let ws = workbook.add_worksheet();
         ws.set_name("Export_Errors")?;
         ws.write_string_with_format(0, 0, "Tab", &header_fmt)?;
@@ -254,7 +444,17 @@ pub fn write_xlsx_workbook(
             ws.write_string((i + 1) as u32, 0, tab)?;
             ws.write_string((i + 1) as u32, 1, err)?;
         }
+        for (j, (tab, why)) in totals_errors.iter().enumerate() {
+            let row = (errors.len() + j + 1) as u32;
+            ws.write_string(row, 0, tab)?;
+            ws.write_string(
+                row,
+                1,
+                format!("Sheet exported WITHOUT its totals row (the data is complete): {}", why),
+            )?;
+        }
         report.errors = errors;
+        report.totals_errors = totals_errors;
     }
 
     if report.sheets.is_empty() && report.errors.is_empty() {
@@ -265,6 +465,74 @@ pub fn write_xlsx_workbook(
         .save(out_path)
         .context("Failed to save consolidated Excel workbook")?;
     Ok(report)
+}
+
+/// The summary as two rows in the summary colour, one blank row below the data: the label of each
+/// aggregation ("Sum", "W.Avg by Balance", ...), then its value. Money columns use the same scale
+/// as the data above them; counts are plain numbers; dates are dates.
+fn write_xlsx_totals(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    summary: &[SummaryCell],
+    cols: &[Series],
+    data_rows: usize,
+    col_scales: &[Option<ColScale>],
+    col_formats: &HashMap<String, ColumnFormatSpec>,
+    scale: Option<XlsxScale>,
+) -> Result<()> {
+    let bg = rust_xlsxwriter::Color::RGB(SUMMARY_BG);
+    let fg = rust_xlsxwriter::Color::RGB(SUMMARY_FG);
+    let label_fmt = Format::new().set_bold().set_font_size(9).set_background_color(bg).set_font_color(fg);
+    let text_fmt = Format::new().set_bold().set_background_color(bg).set_font_color(fg);
+    let blank_fmt = Format::new().set_background_color(bg);
+    let label_row = (data_rows + 2) as u32;
+    let value_row = (data_rows + 3) as u32;
+    for (c_idx, series) in cols.iter().enumerate() {
+        let col = c_idx as u16;
+        let Some(cell) = summary.iter().find(|c| c.column == series.name().as_str()) else {
+            worksheet.write_blank(label_row, col, &blank_fmt)?;
+            worksheet.write_blank(value_row, col, &blank_fmt)?;
+            continue;
+        };
+        let label = match (&cell.agg, &cell.weight_col) {
+            (SummaryAgg::None, _) => String::new(),
+            (SummaryAgg::WeightedAvg, Some(w)) => format!("{} by {}", cell.agg.label(), w),
+            (agg, _) => agg.label().to_string(),
+        };
+        worksheet.write_string_with_format(label_row, col, &label, &label_fmt)?;
+        let decimals = col_formats
+            .get(series.name().as_str())
+            .map(|s| s.decimals)
+            .or_else(|| scale.map(|s| s.decimals))
+            .unwrap_or(2);
+        let num_code = xlsx_decimals_format(decimals);
+        match &cell.value {
+            None => {
+                worksheet.write_blank(value_row, col, &blank_fmt)?;
+            }
+            Some(SummaryValue::Count(n)) => {
+                let f = Format::new().set_bold().set_background_color(bg).set_font_color(fg).set_num_format("#,##0");
+                worksheet.write_number_with_format(value_row, col, *n as f64, &f)?;
+            }
+            Some(SummaryValue::Number(x)) => {
+                // the same rule as the cells above, so the row equals Excel's SUM of the column
+                let (v, code) = match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
+                    Some(cs) => (*x / cs.divide, format!("{}{}", num_code, cs.fmt_suffix)),
+                    None => (*x, num_code.clone()),
+                };
+                let f = Format::new().set_bold().set_background_color(bg).set_font_color(fg).set_num_format(code);
+                worksheet.write_number_with_format(value_row, col, v, &f)?;
+            }
+            Some(SummaryValue::Date(d)) => {
+                let f = Format::new().set_bold().set_background_color(bg).set_font_color(fg).set_num_format("dd-mmm-yyyy");
+                worksheet.write_number_with_format(value_row, col, *d as f64 + EXCEL_EPOCH_OFFSET_DAYS, &f)?;
+            }
+            Some(SummaryValue::Text(t)) => {
+                worksheet.write_string_with_format(value_row, col, t, &text_fmt)?;
+            }
+        }
+    }
+    let _ = date_text; // dates are written as Excel dates; the text form is for the screen and PDF
+    Ok(())
 }
 
 fn sanitize_sheet_name(name: &str, fallback_idx: usize) -> String {
@@ -375,6 +643,29 @@ pub fn export_tabs_to_pdf(
     num_format: NumberDisplayFormat,
     global_decimals: usize,
 ) -> Result<PdfExportReport> {
+    let tabs = tabs
+        .into_iter()
+        .map(|(title, df, col_formats)| PdfTab { title, df, col_formats, summary: Vec::new() })
+        .collect();
+    export_pdf_tabs(tabs, out_path, num_format, global_decimals)
+}
+
+/// A tab for the PDF report: the rows to print (at most `PDF_MAX_ROWS_PER_TAB` + 1), the column
+/// formats, and the summary of the whole result (computed before the rows were cut).
+pub struct PdfTab {
+    pub title: String,
+    pub df: DataFrame,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
+    /// Empty = no totals band.
+    pub summary: Vec<SummaryCell>,
+}
+
+pub fn export_pdf_tabs(
+    tabs: Vec<PdfTab>,
+    out_path: &Path,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+) -> Result<PdfExportReport> {
     let (doc, page1, layer1) = PdfDocument::new(
         "MicroParquet Banking & ALCO Report",
         Mm(PDF_PAGE_W_MM),
@@ -390,7 +681,7 @@ pub fn export_tabs_to_pdf(
     let mut current_layer = layer1;
     let mut first_section = true;
 
-    for (title, df, col_formats) in tabs {
+    for PdfTab { title, df, col_formats, summary } in tabs {
         if !first_section {
             let (p, l) = doc.add_page(Mm(PDF_PAGE_W_MM), Mm(210.0), "Layer");
             current_page = p;
@@ -449,7 +740,12 @@ pub fn export_tabs_to_pdf(
             y -= 2.0;
             for (c_idx, series) in cols.iter().enumerate() {
                 let x_mm = PDF_LEFT_MM + (c_idx as f32 * col_width_mm);
-                let hdr: String = series.name().as_str().chars().take(18).collect();
+                let hdr = pdf_column_header(
+                    series.name().as_str(),
+                    matches!(series.dtype(), DataType::Float64 | DataType::Float32),
+                    col_formats.get(series.name().as_str()),
+                    num_format,
+                );
                 layer.use_text(hdr, 8.5, Mm(x_mm), Mm(y), &font_bold);
             }
             y - 5.5
@@ -489,6 +785,54 @@ pub fn export_tabs_to_pdf(
             }
             y_mm -= 4.8;
         }
+
+        // The summary of the whole result as a band in the summary colour under the rows.
+        if !summary.is_empty() {
+            if y_mm < 26.0 {
+                let (p, l) = doc.add_page(Mm(PDF_PAGE_W_MM), Mm(210.0), "Layer");
+                current_page = p;
+                current_layer = l;
+                y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
+            }
+            let layer = doc.get_page(current_page).get_layer(current_layer);
+            let rgb = |hex: u32| {
+                Color::Rgb(Rgb::new(
+                    ((hex >> 16) & 0xFF) as f32 / 255.0,
+                    ((hex >> 8) & 0xFF) as f32 / 255.0,
+                    (hex & 0xFF) as f32 / 255.0,
+                    None,
+                ))
+            };
+            let (x0, x1) = (PDF_LEFT_MM - 1.0, PDF_LEFT_MM + cols.len() as f32 * col_width_mm - 1.0);
+            let (y_bottom, y_top) = (y_mm - 5.0, y_mm + 4.5);
+            layer.set_fill_color(rgb(SUMMARY_BG));
+            layer.add_rect(Rect::new(Mm(x0), Mm(y_bottom), Mm(x1), Mm(y_top)).with_mode(printpdf::path::PaintMode::Fill));
+            layer.set_fill_color(rgb(SUMMARY_FG));
+            for (c_idx, series) in cols.iter().enumerate() {
+                let Some(cell) = summary.iter().find(|c| c.column == series.name().as_str()) else {
+                    continue;
+                };
+                if cell.agg == SummaryAgg::None {
+                    continue;
+                }
+                let x_mm = PDF_LEFT_MM + (c_idx as f32 * col_width_mm);
+                let label = match (&cell.agg, &cell.weight_col) {
+                    (SummaryAgg::WeightedAvg, Some(w)) => format!("{} by {}", cell.agg.label(), w),
+                    (agg, _) => agg.label().to_string(),
+                };
+                layer.use_text(label.chars().take(22).collect::<String>(), 6.5, Mm(x_mm), Mm(y_mm + 1.0), &font_bold);
+                let spec = col_formats.get(series.name().as_str());
+                let text = format_summary_value(cell, spec, num_format, global_decimals);
+                if is_num.get(c_idx).copied().unwrap_or(false) {
+                    let w = helvetica_width_mm(&text, PDF_CELL_PT);
+                    let x = (x_mm + col_width_mm - 2.0 - w).max(x_mm);
+                    layer.use_text(text, PDF_CELL_PT, Mm(x), Mm(y_mm - 3.0), &font_bold);
+                } else {
+                    layer.use_text(text.chars().take(20).collect::<String>(), PDF_CELL_PT, Mm(x_mm), Mm(y_mm - 3.0), &font_bold);
+                }
+            }
+            layer.set_fill_color(rgb(0x000000));
+        }
     }
 
     doc.save(&mut BufWriter::new(File::create(out_path)?))
@@ -508,6 +852,24 @@ pub fn split_and_export_by_column(
     dialect: ParquetDialect,
     mdy_dates: bool,
     control_col: Option<&str>,
+) -> Result<usize> {
+    split_and_export_by_column_ctx(
+        lf, split_col, out_dir, format, dialect, mdy_dates, control_col, &JobCtx::inert(),
+    )
+}
+
+/// As `split_and_export_by_column`, with progress and cancel. Each file is written through a
+/// temporary name; a cancel removes the files this run already wrote and writes no manifest.
+#[allow(clippy::too_many_arguments)]
+pub fn split_and_export_by_column_ctx(
+    lf: LazyFrame,
+    split_col: &str,
+    out_dir: &Path,
+    format: SplitExportFormat,
+    dialect: ParquetDialect,
+    mdy_dates: bool,
+    control_col: Option<&str>,
+    ctx: &JobCtx,
 ) -> Result<usize> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("Could not create the output folder {:?}", out_dir))?;
@@ -556,7 +918,19 @@ pub fn split_and_export_by_column(
     let mut manifest_sum: Vec<Option<f64>> = Vec::new();
     let mut total_rows = 0usize;
 
-    for (key, sub_lf) in groups {
+    let mut written_paths: Vec<PathBuf> = Vec::new();
+    let n_groups = groups.len().max(1);
+    for (gi, (key, sub_lf)) in groups.into_iter().enumerate() {
+        if ctx.is_cancelled() {
+            for w in &written_paths {
+                let _ = std::fs::remove_file(w);
+            }
+            return Err(Cancelled.into());
+        }
+        ctx.set_progress(
+            format!("Writing file {} of {}…", gi + 1, n_groups),
+            Some(gi as f32 / n_groups as f32),
+        );
         let (rows, sum) = compute_control_totals(sub_lf.clone(), control_col)?;
         if key.is_none() && rows == 0 {
             continue;
@@ -574,14 +948,17 @@ pub fn split_and_export_by_column(
         used.insert(stem.to_lowercase());
         let file_name = format!("{}.{}", stem, ext);
         let p = out_dir.join(&file_name);
+        let tmp = TempOutput::new(&p);
         match format {
-            SplitExportFormat::Parquet => export_to_parquet_stream(sub_lf, &p, dialect)?,
-            SplitExportFormat::Csv => export_to_csv_stream(sub_lf, &p, mdy_dates)?,
+            SplitExportFormat::Parquet => export_to_parquet_stream(sub_lf, tmp.path(), dialect)?,
+            SplitExportFormat::Csv => export_to_csv_stream(sub_lf, tmp.path(), mdy_dates)?,
             SplitExportFormat::Xlsx => {
                 let sub_df = sub_lf.collect()?;
-                export_tabs_to_xlsx(vec![(stem.clone(), sub_df)], Vec::new(), &p)?;
+                export_tabs_to_xlsx(vec![(stem.clone(), sub_df)], Vec::new(), tmp.path())?;
             }
         }
+        tmp.commit()?;
+        written_paths.push(p.clone());
         total_rows += rows;
         manifest_key.push(key);
         manifest_file.push(file_name);
@@ -589,6 +966,12 @@ pub fn split_and_export_by_column(
         manifest_sum.push(sum);
     }
 
+    if ctx.is_cancelled() {
+        for w in &written_paths {
+            let _ = std::fs::remove_file(w);
+        }
+        return Err(Cancelled.into());
+    }
     let files = manifest_file.len();
     let mut manifest = DataFrame::new(vec![
         Series::new("key".into(), manifest_key).into(),
@@ -704,6 +1087,23 @@ pub fn format_df_for_clipboard(
     }
 
     out
+}
+
+/// The PDF column header: the name (cut to 18 characters) and, for money columns, the scale in
+/// brackets ("Balance (BDT M)"). The unit is never cut off.
+pub fn pdf_column_header(
+    name: &str,
+    is_float: bool,
+    spec: Option<&ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+) -> String {
+    let unit = if is_float {
+        resolved_scale(name, spec, num_format).map(|m| format!(" ({})", m.unit)).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let keep = 18usize.saturating_sub(unit.chars().count()).max(6);
+    name.chars().take(keep).chain(unit.chars()).collect()
 }
 
 fn format_cell_val(

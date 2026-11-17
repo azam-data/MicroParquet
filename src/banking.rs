@@ -1,4 +1,4 @@
-use crate::models::{portable_root_dir, CustomBucketDef, FtpInterpolation, FtpPoint};
+use crate::models::{portable_root_dir, CustomBucketDef, FtpInterpolation, FtpPoint, RateBandDef};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDate;
 use polars::prelude::*;
@@ -172,6 +172,41 @@ pub fn apply_maturity_bucket(
     Ok(lf_with_days
         .with_column(final_bucket_expr)
         .drop([rem_days_col]))
+}
+
+/// Rate profile: puts a rate column (percent) into the bands of `def`, labelled so that the
+/// labels sort in band order. Exactly 0 is its own band, below 0 and beyond the last edge have
+/// their own labels, and a blank rate is "No rate". A rate column that is not numeric is an
+/// error: a text rate would otherwise be read as blank.
+pub fn apply_rate_band(lf: LazyFrame, rate_col: &str, def: &RateBandDef, new_col: &str) -> Result<LazyFrame> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the column types for this rate profile")?;
+    let dtype = schema
+        .get(rate_col)
+        .ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Choose the rate column of this rate profile.", rate_col))?;
+    if !dtype.is_numeric() {
+        anyhow::bail!(
+            "Rate column '{}' is {}, not a number. Set it to a number in the schema first; a text rate cannot be put into bands.",
+            rate_col,
+            dtype
+        );
+    }
+    let labels = def.labels()?;
+    let x = col(rate_col).cast(DataType::Float64);
+    let mut chain: Expr = lit(labels.above.as_str());
+    for k in (1..labels.edges.len()).rev() {
+        let hi = lit(labels.edges[k]);
+        let within = if def.lower_inclusive { x.clone().lt(hi) } else { x.clone().lt_eq(hi) };
+        chain = when(within).then(lit(labels.bands[k - 1].as_str())).otherwise(chain);
+    }
+    let band = when(x.clone().is_null().or(x.clone().is_nan()))
+        .then(lit(labels.blank.as_str()))
+        .when(x.clone().eq(lit(0.0)))
+        .then(lit(labels.zero.as_str()))
+        .when(x.lt(lit(0.0)))
+        .then(lit(labels.below.as_str()))
+        .otherwise(chain);
+    Ok(lf.with_column(band.alias(new_col)))
 }
 
 /// Feature B1: Interest Rate Shock / ΔNII Sensitivity Simulator (1-Year Repricing Horizon)

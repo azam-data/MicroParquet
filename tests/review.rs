@@ -376,6 +376,7 @@ fn t22b_headless_stops_on_control_column_failures() {
             ..Default::default()
         }),
         steps: vec![],
+        summary: Default::default(),
     };
     let m = tmpdir().join("pf_headless.mpq.json");
     std::fs::write(&m, serde_json::to_string(&recipe).unwrap()).unwrap();
@@ -593,6 +594,7 @@ fn t24b_headless_parquet_applies_macro_schema() {
         control_column: Some("Balance".into()),
         optional_ingestion_schema: Some(saved),
         steps: vec![],
+        summary: Default::default(),
     };
     let m = tmpdir().join("p5_headless.mpq.json");
     std::fs::write(&m, serde_json::to_string(&recipe).unwrap()).unwrap();
@@ -2290,7 +2292,7 @@ fn t27b_row_count_warnings() {
     let c2 = source_row_check(&TabSource::SingleFile { path: p2, is_parquet: false, config: cfg2 }, &tmpdir()).unwrap().unwrap();
     assert_eq!((c2.data_lines(), c2.parsed_rows, c2.warning()), (2, 2, None));
     // 0 rows from a non-empty file.
-    let zero = RowCountCheck { nonempty_lines: 1, skip_rows: 0, parsed_rows: 0 };
+    let zero = RowCountCheck { nonempty_lines: 1, skip_rows: 0, parsed_rows: 0, ..Default::default() };
     assert!(zero.warning().unwrap().starts_with("0 rows read"));
     // Parquet sources are not checked.
     let pq = write_parquet("t27b.parquet", &df!("A" => [1]).unwrap());

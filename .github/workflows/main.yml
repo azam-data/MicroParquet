@@ -68,16 +68,16 @@ jobs:
         shell: bash
         run: |
           APP_DIR="dist/MicroParquet.app"
-          mkdir -p "${APP_DIR}/Contents/MacOS/portable_data/macros"
-          mkdir -p "${APP_DIR}/Contents/MacOS/portable_data/schemas"
-          mkdir -p "${APP_DIR}/Contents/MacOS/portable_data/curves"
-          mkdir -p "${APP_DIR}/Contents/MacOS/portable_data/temp_scratch"
+          # portable_data is created next to the .app (or in ~/Library/Application Support/MicroParquet
+          # when that folder is read-only) on first run; nothing is packed inside the bundle.
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          mkdir -p "${APP_DIR}/Contents/MacOS"
           mkdir -p "${APP_DIR}/Contents/Resources"
 
           cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "${APP_DIR}/Contents/MacOS/MicroParquet"
           chmod +x "${APP_DIR}/Contents/MacOS/MicroParquet"
 
-          cat > "${APP_DIR}/Contents/Info.plist" << 'EOF'
+          cat > "${APP_DIR}/Contents/Info.plist" << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -91,9 +91,9 @@ jobs:
               <key>CFBundleDisplayName</key>
               <string>MicroParquet</string>
               <key>CFBundleVersion</key>
-              <string>1.1.0</string>
+              <string>${VERSION}</string>
               <key>CFBundleShortVersionString</key>
-              <string>1.1.0</string>
+              <string>${VERSION}</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>LSMinimumSystemVersion</key>
