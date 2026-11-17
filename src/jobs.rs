@@ -28,6 +28,9 @@ pub enum JobKind {
     Refresh,
     /// Column statistics for the inspector.
     Stats,
+    /// The pre-export check for Text columns that look like numbers. Its own kind, so an
+    /// inspector failure can never stop an export (or say the wrong reason).
+    TextCheck,
     /// The summary row of a tab.
     Summary,
     /// Row counts after each step.

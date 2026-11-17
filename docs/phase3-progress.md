@@ -21,6 +21,13 @@ Test baseline before R1: `cargo test` = 2 (main.rs unit) + 60 (tests/review.rs) 
 | T5 | DONE | 613f4c1 | tests/phase3/t5.rs: 7 tests (number stats with nulls; histogram bins add up to the non-null count, equal values, maximum in the last bin; dates min / max; text distinct and top 5 incl. ties and blanks; other types and a missing column; all-blank column; worker job follows the steps and carries a key; found and fixed a bug: equal values gave one count not N) | blank text is not a value; change type/format is a menu | |
 | T6 | DONE | 5c37be6 | tests/phase3/t6.rs: 7 tests (word start beats mid-word, exact word beats longer, label beats extra words, earlier word wins; recently used breaks ties only and orders an empty query; every word must match, letters in order, case; the real list finds filter / excel / nii / eve / lakh / undo / a column; every toolbar action, banking tool, export type, theme toggle and menu item is listed and the toolbar draws from the list; unavailable reasons; recent list kept and saved) | one command list drives toolbar and menus; Ctrl+K overlay | |
 
+## Fixes, part 1 (correctness: review defects and owner answers)
+One commit per item, "Phase 3 fix <n>: ...", full `cargo test` before each. The commit column is filled in by the next commit. UI-state tests are unit tests of the binary (`src/ui/tests.rs`: the app is built without a window and with an inline job queue).
+
+| Item | Status | Commit | Tests added | Deviations |
+|---|---|---|---|---|
+| 1 Text check has its own JobKind | DONE | (this) | src/ui/tests.rs: inspector failure keeps a pending export and says "Column statistics failed"; a failed Text check stops it with its own reason; cancel of each | none |
+
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).
 

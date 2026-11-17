@@ -23,7 +23,7 @@ impl MicroParquetApp {
             match r.outcome {
                 Outcome::Done(out) => self.apply_job_output(out),
                 Outcome::Failed(msg) => match kind {
-                    JobKind::Stats if self.export.pending.is_some() => {
+                    JobKind::TextCheck => {
                         self.drop_pending_export();
                         self.status_message = format!("Export stopped: could not check the Text columns: {}", msg);
                     }
@@ -43,7 +43,7 @@ impl MicroParquetApp {
                     }
                 },
                 Outcome::Cancelled => {
-                    if kind == JobKind::Stats {
+                    if kind == JobKind::TextCheck {
                         self.drop_pending_export();
                     }
                     if let Some(l) = line {

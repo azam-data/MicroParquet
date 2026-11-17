@@ -194,7 +194,7 @@ impl MicroParquetApp {
         let token = self.export.check_token;
         self.export.pending = Some(PendingExport { token, kind, sidecar });
         let req = TextCheckRequest { token, tabs: list, temp_dir: self.paths.temp_dir.clone() };
-        self.jobs.submit(JobKey::unique(JobKind::Stats), "Checking Text columns", true, move |ctx| {
+        self.jobs.submit(JobKey::unique(JobKind::TextCheck), "Checking Text columns", true, move |ctx| {
             check_text_columns(req, ctx).map(|r| JobOutput::TextCheck(Box::new(r)))
         });
         self.status_message = "Checking Text columns before the export…".to_string();

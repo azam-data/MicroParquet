@@ -29,6 +29,8 @@ pub mod status;
 pub mod steps;
 pub mod table;
 pub mod tabs;
+#[cfg(test)]
+mod tests;
 pub mod theme;
 
 use crate::ui::prelude::*;
