@@ -929,6 +929,212 @@ impl CustomBucketDef {
     }
 }
 
+// ---------------------------------------------------------------------------- rate profile
+
+/// How the rate bands are laid out.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum RateBandMode {
+    /// Equal bands from `start_pct` to `end_pct`, `step_pct` wide (all in percent).
+    Fixed { start_pct: f64, end_pct: f64, step_pct: f64 },
+    /// Bands between the listed edges (percent).
+    Custom { edges: Vec<f64> },
+}
+
+/// A rate profile: the bands of an interest-rate column (saved as a preset in
+/// `portable_data/rate_bands.json`, like the maturity bucket presets).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RateBandDef {
+    pub name: String,
+    pub mode: RateBandMode,
+    /// `false`: a band is (a, b], so 9.00 falls in 8%–9%. `true`: a band is [a, b), so 9.00
+    /// falls in 9%–10%.
+    #[serde(default)]
+    pub lower_inclusive: bool,
+}
+
+/// The most bands a profile may have.
+pub const RATE_BANDS_MAX: usize = 500;
+
+/// The labels of a profile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateBandLabels {
+    /// The band edges in percent, starting at 0.
+    pub edges: Vec<f64>,
+    /// "00. 0%": exactly zero.
+    pub zero: String,
+    /// "Below 0%".
+    pub below: String,
+    /// One label per band: `bands[k]` is the band between `edges[k]` and `edges[k + 1]`.
+    pub bands: Vec<String>,
+    /// "> 15%" (or "≥ 15%" for lower-inclusive bands): beyond the last edge.
+    pub above: String,
+    /// "No rate": blank.
+    pub blank: String,
+}
+
+/// A percentage as a banker writes it: 8, 8.25, 0.5 (no trailing zeros).
+pub fn fmt_pct(x: f64) -> String {
+    let t = format!("{:.4}", x);
+    t.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// "0, 5, 7.5, 9" -> edges. Commas, semicolons and spaces separate; anything that is not a
+/// number is an error that names it.
+pub fn parse_rate_edges(text: &str) -> anyhow::Result<Vec<f64>> {
+    let mut out = Vec::new();
+    for tok in text.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).map(str::trim).filter(|t| !t.is_empty()) {
+        let t = tok.trim_end_matches('%');
+        let v: f64 = t.parse().map_err(|_| anyhow::anyhow!("'{}' is not a number. Write the band edges as numbers in percent, like 0, 5, 7, 9, 12.", tok))?;
+        out.push(v);
+    }
+    Ok(out)
+}
+
+impl RateBandDef {
+    pub fn fixed(name: &str, start_pct: f64, end_pct: f64, step_pct: f64) -> Self {
+        Self { name: name.to_string(), mode: RateBandMode::Fixed { start_pct, end_pct, step_pct }, lower_inclusive: false }
+    }
+
+    pub fn custom(name: &str, edges: Vec<f64>) -> Self {
+        Self { name: name.to_string(), mode: RateBandMode::Custom { edges }, lower_inclusive: false }
+    }
+
+    /// The default profile: 0% to 15% in steps of 1%.
+    pub fn default_profile() -> Self {
+        Self::fixed("0% to 15% by 1%", 0.0, 15.0, 1.0)
+    }
+
+    /// The edges, checked, in ascending order and starting at 0 (a profile that starts above 0
+    /// gets a first band from 0).
+    pub fn edges(&self) -> anyhow::Result<Vec<f64>> {
+        let round = |x: f64| (x * 1_000_000.0).round() / 1_000_000.0;
+        let mut e: Vec<f64> = match &self.mode {
+            RateBandMode::Fixed { start_pct, end_pct, step_pct } => {
+                let (a, b, st) = (*start_pct, *end_pct, *step_pct);
+                if !(a.is_finite() && b.is_finite() && st.is_finite()) {
+                    anyhow::bail!("The start, end and step of the rate bands must be numbers.");
+                }
+                if st <= 0.0 {
+                    anyhow::bail!("The step of the rate bands must be more than 0.");
+                }
+                if b <= a {
+                    anyhow::bail!("The end of the rate bands ({}%) must be above the start ({}%).", fmt_pct(b), fmt_pct(a));
+                }
+                let n = (b - a) / st;
+                if (n - n.round()).abs() > 1e-6 {
+                    anyhow::bail!(
+                        "From {}% to {}% is not a whole number of steps of {}%. Change the end or the step.",
+                        fmt_pct(a),
+                        fmt_pct(b),
+                        fmt_pct(st)
+                    );
+                }
+                let n = n.round() as usize;
+                if n > RATE_BANDS_MAX {
+                    anyhow::bail!("{} bands is too many (the most is {}). Use a wider step.", n, RATE_BANDS_MAX);
+                }
+                (0..=n).map(|i| round(a + i as f64 * st)).collect()
+            }
+            RateBandMode::Custom { edges } => {
+                if edges.iter().any(|x| !x.is_finite()) {
+                    anyhow::bail!("The band edges must be numbers.");
+                }
+                let mut v: Vec<f64> = edges.iter().map(|x| round(*x)).collect();
+                v.sort_by(|a, b| a.total_cmp(b));
+                v.dedup();
+                v
+            }
+        };
+        if let Some(first) = e.first() {
+            if *first < 0.0 {
+                anyhow::bail!("A band edge ({}%) is below 0. Negative rates are put in 'Below 0%'; start the edges at 0 or above.", fmt_pct(*first));
+            }
+        }
+        if e.first().is_some_and(|f| *f > 0.0) {
+            e.insert(0, 0.0);
+        }
+        if e.len() < 2 {
+            anyhow::bail!("Give at least one band edge above 0, like 0, 5, 7, 9, 12.");
+        }
+        if e.len() - 1 > RATE_BANDS_MAX {
+            anyhow::bail!("{} bands is too many (the most is {}).", e.len() - 1, RATE_BANDS_MAX);
+        }
+        Ok(e)
+    }
+
+    /// The labels of every band. They are numbered so that they sort in band order.
+    pub fn labels(&self) -> anyhow::Result<RateBandLabels> {
+        let edges = self.edges()?;
+        let m = edges.len() - 1;
+        let w = m.to_string().len().max(2);
+        let bands = (1..=m).map(|k| format!("{:0w$}. {}%\u{2013}{}%", k, fmt_pct(edges[k - 1]), fmt_pct(edges[k]), w = w)).collect();
+        let last = fmt_pct(edges[m]);
+        Ok(RateBandLabels {
+            zero: format!("{:0w$}. 0%", 0, w = w),
+            below: "Below 0%".to_string(),
+            bands,
+            above: if self.lower_inclusive { format!("\u{2265} {}%", last) } else { format!("> {}%", last) },
+            blank: "No rate".to_string(),
+            edges,
+        })
+    }
+
+    /// The label of one rate (percent; `None` = blank).
+    pub fn label_for(&self, rate: Option<f64>) -> anyhow::Result<String> {
+        let l = self.labels()?;
+        Ok(match rate {
+            None => l.blank,
+            Some(x) if x.is_nan() => l.blank,
+            Some(x) if x == 0.0 => l.zero,
+            Some(x) if x < 0.0 => l.below,
+            Some(x) => {
+                let hit = (1..l.edges.len()).find(|k| if self.lower_inclusive { x < l.edges[*k] } else { x <= l.edges[*k] });
+                match hit {
+                    Some(k) => l.bands[k - 1].clone(),
+                    None => l.above,
+                }
+            }
+        })
+    }
+
+    pub fn default_presets() -> Vec<RateBandDef> {
+        vec![
+            Self::default_profile(),
+            Self::fixed("0% to 20% by 2%", 0.0, 20.0, 2.0),
+            Self::custom("Edges 0, 5, 7, 9, 12", vec![0.0, 5.0, 7.0, 9.0, 12.0]),
+        ]
+    }
+
+    /// The built-in presets and those saved in `rate_bands.json`.
+    pub fn load_all_presets(file: &Path) -> Vec<RateBandDef> {
+        let mut presets = Self::default_presets();
+        if let Ok(txt) = std::fs::read_to_string(file) {
+            if let Ok(customs) = serde_json::from_str::<Vec<RateBandDef>>(&txt) {
+                for c in customs {
+                    presets.retain(|p| !p.name.eq_ignore_ascii_case(&c.name));
+                    presets.push(c);
+                }
+            }
+        }
+        presets
+    }
+
+    pub fn save_custom_preset(file: &Path, new_preset: RateBandDef) -> anyhow::Result<()> {
+        let mut customs: Vec<RateBandDef> = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        customs.retain(|p| !p.name.eq_ignore_ascii_case(&new_preset.name));
+        customs.push(new_preset);
+        std::fs::write(file, serde_json::to_string_pretty(&customs)?)?;
+        Ok(())
+    }
+}
+
+impl PortablePaths {
+    /// Where the rate profile presets are saved.
+    pub fn rate_bands_file(&self) -> PathBuf {
+        self.root_dir.join("rate_bands.json")
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AggFunc {
     Sum,
@@ -1126,6 +1332,12 @@ pub enum TransformStep {
         null_as_sight: bool,
         new_col: String,
     },
+    /// Puts a rate column into labelled bands ("09. 8%–9%"), like the maturity bucketer.
+    RateBand {
+        rate_col: String,
+        band_def: RateBandDef,
+        new_col: String,
+    },
     RateShockSim {
         bal_col: String,
         rate_col: String,
@@ -1243,6 +1455,7 @@ impl TransformStep {
             TransformStep::MathFormula { .. } => "Calc column",
             TransformStep::NormalizeEntity { .. } => "Normalise names",
             TransformStep::MaturityBucket { .. } => "Maturity buckets",
+            TransformStep::RateBand { .. } => "Rate profile",
             TransformStep::RateShockSim { .. } => "Rate shock",
             TransformStep::FtpCurveMap { .. } => "FTP",
             TransformStep::BankingHygieneAudit { .. } => "Hygiene audit",
@@ -1340,6 +1553,9 @@ impl TransformStep {
                 ..
             } => {
                 format!("+Bucket ({}): {}", bucket_def.name, new_col)
+            }
+            TransformStep::RateBand { new_col, band_def, .. } => {
+                format!("+Rate profile ({}): {}", band_def.name, new_col)
             }
             TransformStep::RateShockSim { shock_bps, .. } => {
                 format!("+ΔNII Shock ({:+.0} bps)", shock_bps)

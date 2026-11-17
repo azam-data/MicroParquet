@@ -22,7 +22,7 @@ pub use micro_parquet::macros::{
 };
 pub use micro_parquet::models::{
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
-    format_metric_value, format_with_commas, resolved_scale, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection, BlankRule,
+    format_metric_value, format_with_commas, resolved_scale, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection, BlankRule, RateBandDef, RateBandMode, fmt_pct, parse_rate_edges,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
     CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
@@ -44,6 +44,7 @@ pub use std::path::{Path, PathBuf};
 pub use crate::ui::audit::AuditState;
 pub use crate::ui::batch::BatchModalState;
 pub use crate::ui::buckets::BucketState;
+pub use crate::ui::rate_band::RateBandState;
 pub use crate::ui::calc_column::CalcState;
 pub use crate::ui::chart::ChartState;
 pub use crate::ui::columns::ColumnsState;

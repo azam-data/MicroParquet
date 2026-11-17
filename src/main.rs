@@ -103,6 +103,7 @@ pub enum ActiveToolModal {
     JoinTabs,
     ReconcilePeriods,
     MaturityBucket,
+    RateBand,
     RateShockSim,
     FtpCurveMap,
     BankingAudit,
@@ -181,6 +182,7 @@ pub struct MicroParquetApp {
     pub join: JoinState,
     pub recon: ReconcileState,
     pub buckets: BucketState,
+    pub rate_band: RateBandState,
     pub shock: ShockState,
     pub ftp: FtpState,
     pub audit: AuditState,
@@ -195,6 +197,7 @@ pub struct MicroParquetApp {
 impl MicroParquetApp {
     pub fn new(paths: PortablePaths, egui_ctx: egui::Context) -> Self {
         let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
+        let rate_presets = RateBandDef::load_all_presets(&paths.rate_bands_file());
         let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
             .map(|t| micro_parquet::commands::recent_from_text(&t))
             .unwrap_or_default();
@@ -253,6 +256,7 @@ impl MicroParquetApp {
             join: JoinState::default(),
             recon: ReconcileState::default(),
             buckets: BucketState { presets, ..BucketState::default() },
+            rate_band: RateBandState { presets: rate_presets, ..RateBandState::default() },
             shock: ShockState::default(),
             ftp: FtpState::default(),
             audit: AuditState::default(),

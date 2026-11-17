@@ -27,6 +27,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::JoinTabs => ph::LINK,
         CommandId::CopyTable => ph::CLIPBOARD_TEXT,
         CommandId::Buckets => ph::CALENDAR,
+        CommandId::RateProfile => ph::PERCENT,
         CommandId::RateShock => ph::CHART_LINE,
         CommandId::Duration => ph::TIMER,
         CommandId::Ftp => ph::CALCULATOR,
@@ -152,6 +153,10 @@ impl MicroParquetApp {
             CommandId::Buckets => {
                 self.buckets.presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
                 self.active_tool = ActiveToolModal::MaturityBucket;
+            }
+            CommandId::RateProfile => {
+                self.rate_band.presets = RateBandDef::load_all_presets(&self.paths.rate_bands_file());
+                self.active_tool = ActiveToolModal::RateBand;
             }
             CommandId::RateShock => self.active_tool = ActiveToolModal::RateShockSim,
             CommandId::Duration => self.active_tool = ActiveToolModal::DurationAnalysis,

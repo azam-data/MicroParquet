@@ -223,6 +223,15 @@ pub const FIELD_W_S: f32 = 90.0;
 pub const COND_COMBO_W: f32 = 140.0;
 pub const COND_OP_W: f32 = 150.0;
 pub const COND_KIND_W: f32 = 70.0;
+/// The Rate profile dialog: the preset picker, and how many band labels its preview lists.
+pub const RATE_PRESET_W: f32 = 220.0;
+pub const RATE_LABELS_SHOWN: usize = 24;
+/// The Rate profile's start / end / step fields (percent): how fast a drag changes them and
+/// what they may be.
+pub const RATE_DRAG_SPEED: f64 = 0.1;
+pub const RATE_STEP_DRAG_SPEED: f64 = 0.05;
+pub const RATE_PCT_RANGE: std::ops::RangeInclusive<f64> = 0.0..=100.0;
+pub const RATE_STEP_RANGE: std::ops::RangeInclusive<f64> = 0.01..=50.0;
 /// The width the conditional-column rows wrap at, and room for the dialog's scroll bar.
 pub const COND_BODY_W: f32 = 720.0;
 pub const DIALOG_SCROLL_BAR_ALLOWANCE: f32 = 16.0;

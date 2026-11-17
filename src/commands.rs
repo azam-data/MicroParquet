@@ -31,6 +31,7 @@ pub enum CommandId {
     CopyTable,
     // Banking
     Buckets,
+    RateProfile,
     RateShock,
     Duration,
     Ftp,
@@ -146,6 +147,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::JoinTabs, "SQL join of two open tabs\u{2026}", G::Transform, "merge lookup left right", N::TwoTabs),
     c(I::CopyTable, "Copy the table to the clipboard", G::Transform, "excel powerpoint slides paste spreadsheet", N::Tab),
     c(I::Buckets, "Maturity bucketer (SLP / LCR / custom)\u{2026}", G::Banking, "alm gap liquidity tenor", N::Tab),
+    c(I::RateProfile, "Rate profile (rate bands)\u{2026}", G::Banking, "rate band bucket interest lending deposit yield cost profile", N::Tab),
     c(I::RateShock, "Interest rate shock / \u{394}NII\u{2026}", G::Banking, "nii irrbb bps delta income", N::Tab),
     c(I::Duration, "Duration, DV01 and \u{394}EVE\u{2026}", G::Banking, "eve irrbb modified macaulay", N::Tab),
     c(I::Ftp, "FTP yield curve mapper\u{2026}", G::Banking, "funds transfer pricing margin", N::Tab),

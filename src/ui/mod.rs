@@ -19,6 +19,7 @@ pub mod normaliser;
 pub mod pivot;
 pub mod prelude;
 pub mod provision;
+pub mod rate_band;
 pub mod rate_shock;
 pub mod reconcile;
 pub mod schema;
@@ -86,6 +87,7 @@ impl MicroParquetApp {
             ActiveToolModal::NormalizeEntity => self.render_normaliser_modal(ctx, cols),
             ActiveToolModal::GroupByPivot => self.render_pivot_modal(ctx, cols),
             ActiveToolModal::MaturityBucket => self.render_buckets_modal(ctx, cols),
+            ActiveToolModal::RateBand => self.render_rate_band_modal(ctx, cols),
             ActiveToolModal::RateShockSim => self.render_rate_shock_modal(ctx, cols),
             ActiveToolModal::DurationAnalysis => self.render_duration_modal(ctx, cols),
             ActiveToolModal::LoanProvision => self.render_provision_modal(ctx, cols),

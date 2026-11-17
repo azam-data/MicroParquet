@@ -626,6 +626,34 @@ pub fn generate_python_polars_code(
                     bucket_def.overflow_label, new_col
                 ));
             }
+            TransformStep::RateBand { rate_col, band_def, new_col } => {
+                let labels = match band_def.labels() {
+                    Ok(l) => l,
+                    Err(e) => {
+                        // Same error as the app; never a guessed band.
+                        py.push_str(&format!("raise ValueError({:?})\n\n", format!("{:#}", e)));
+                        continue;
+                    }
+                };
+                // labels are plain ASCII in the script: "\u2013" escapes for the en dash
+                let lit = |t: &str| {
+                    let esc: String = t.chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{:04x}", c as u32) }).collect();
+                    format!("pl.lit(\"{}\")", esc)
+                };
+                py.push_str(&format!("# Rate profile ({}): bands of the rate column, {}\n", band_def.name, if band_def.lower_inclusive { "[a, b)" } else { "(a, b]" }));
+                py.push_str(&format!("_r = pl.col(\"{}\").cast(pl.Float64)\n", rate_col));
+                py.push_str(&format!(
+                    "lf = lf.with_columns(\n    pl.when(_r.is_null() | _r.is_nan()).then({})\n      .when(_r == 0).then({})\n      .when(_r < 0).then({})",
+                    lit(&labels.blank),
+                    lit(&labels.zero),
+                    lit(&labels.below)
+                ));
+                for k in 1..labels.edges.len() {
+                    let op = if band_def.lower_inclusive { "<" } else { "<=" };
+                    py.push_str(&format!("\n      .when(_r {} {:?}).then({})", op, labels.edges[k], lit(&labels.bands[k - 1])));
+                }
+                py.push_str(&format!("\n      .otherwise({})\n      .alias(\"{}\")\n)\n\n", lit(&labels.above), new_col));
+            }
             TransformStep::DurationAnalysis {
                 bal_col,
                 rate_col,

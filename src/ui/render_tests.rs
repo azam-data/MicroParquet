@@ -174,7 +174,7 @@ fn every_tool_dialog_fits_the_area_at_every_scale() {
     use crate::ActiveToolModal as T;
     let tools = [
         T::FilterRows, T::SortRows, T::ManageColumns, T::ConditionalCol, T::MathFormula, T::NormalizeEntity,
-        T::GroupByPivot, T::StackFiles, T::JoinTabs, T::ReconcilePeriods, T::MaturityBucket, T::RateShockSim,
+        T::GroupByPivot, T::StackFiles, T::JoinTabs, T::ReconcilePeriods, T::MaturityBucket, T::RateBand, T::RateShockSim,
         T::FtpCurveMap, T::BankingAudit, T::DurationAnalysis, T::LoanProvision, T::LoanLimitUtil, T::SaveMacro,
         T::PythonCodePreview, T::MultiTabExport, T::SplitByColumn,
     ];
@@ -1062,4 +1062,70 @@ fn the_search_overlay_closes_on_a_click_outside_on_esc_and_when_the_window_loses
         step(&mut app, release(b.center()), true);
         assert!(!app.command_open, "{what}: the box closes it again (it does not close and reopen)");
     }
+}
+
+// ------------------------------------------------------------ part 4, item 6: Rate profile dialog
+
+#[test]
+fn the_rate_profile_dialog_shows_its_settings_and_the_labels_and_makes_the_step() {
+    use crate::ui::layout_tests::collect_painted;
+    let en = "\u{2013}";
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)] {
+        let what = format!("ppp {ppp} {w}x{h}");
+        let mut app = test_app("p4rate");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        let (ctx, input) = screen(ppp, w, h);
+        app.run_command(&ctx, micro_parquet::commands::CommandId::RateProfile);
+        assert_eq!(app.active_tool, ActiveToolModal::RateBand, "{what}: Ctrl+K / the Banking menu opens it");
+        let mut p = None;
+        for _ in 0..8 {
+            let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+            p = Some(collect_painted(&out.shapes));
+        }
+        let p = p.expect("frames");
+        let r = assert_dialog_fits(&ctx, "\u{E0B4} Rate profile: put a rate column into bands", &what);
+        let has = |t: &str| p.boxes.iter().any(|(x, b)| x.contains(t) && inside(*b, r.window));
+        for t in ["Rate column", "Output column", "Preset:", "Fixed width", "Custom edges", "Start %", "End %", "Step %", "the lower band", "the upper band", "Add Rate Profile"] {
+            assert!(has(t), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        assert!(has(&format!("01. 0%{en}1%")) && has("00. 0%"), "{what}: the preview lists the labels");
+        assert!(has("15 bands"), "{what}: and counts them");
+        // the dialog's step: default (a, b], 0 to 15 by 1, output Rate_Band
+        match app.tool_step(&ActiveToolModal::RateBand) {
+            Some(TransformStep::RateBand { band_def, new_col, .. }) => {
+                assert_eq!(new_col, "Rate_Band");
+                assert!(!band_def.lower_inclusive);
+                assert_eq!(band_def.label_for(Some(9.0)).unwrap(), format!("09. 8%{en}9%"), "{what}");
+            }
+            other => panic!("{what}: {other:?}"),
+        }
+        // a bad setting: the step cannot be made and the dialog says why
+        app.rate_band.step = 4.0;
+        assert!(app.tool_step(&ActiveToolModal::RateBand).is_none());
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        let p = collect_painted(&out.shapes);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("whole number of steps")), "{what}: the error is shown");
+        eprintln!("{what}: dialog {:?} body {:?}", r.window, r.body);
+    }
+}
+
+#[test]
+fn the_en_dash_and_the_at_least_sign_of_the_rate_labels_exist_in_every_font_the_table_uses() {
+    let ctx = egui::Context::default();
+    theme::load_fonts(&ctx);
+    let _ = ctx.run(Default::default(), |_| {});
+    let missing: Vec<String> = ctx.fonts(|f| {
+        let mut m = Vec::new();
+        for fam in [egui::FontFamily::Proportional, theme::family_semibold(), theme::family_bold(), egui::FontFamily::Monospace] {
+            let id = egui::FontId::new(14.0, fam.clone());
+            for c in ['\u{2013}', '\u{2265}', '%', '>'] {
+                if !f.has_glyph(&id, c) {
+                    m.push(format!("{c:?} in {fam:?}"));
+                }
+            }
+        }
+        m
+    });
+    assert!(missing.is_empty(), "{missing:?}");
 }

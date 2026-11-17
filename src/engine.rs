@@ -2535,6 +2535,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             null_as_sight,
             new_col,
         } => apply_maturity_bucket(lf, mat_col, cutoff_date, bucket_def, *null_as_sight, new_col),
+        TransformStep::RateBand { rate_col, band_def, new_col } => crate::banking::apply_rate_band(lf, rate_col, band_def, new_col),
         TransformStep::RateShockSim {
             bal_col,
             rate_col,

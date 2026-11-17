@@ -18,6 +18,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::MathFormula { .. } => ActiveToolModal::MathFormula,
         TransformStep::NormalizeEntity { .. } => ActiveToolModal::NormalizeEntity,
         TransformStep::MaturityBucket { .. } => ActiveToolModal::MaturityBucket,
+        TransformStep::RateBand { .. } => ActiveToolModal::RateBand,
         TransformStep::RateShockSim { .. } => ActiveToolModal::RateShockSim,
         TransformStep::FtpCurveMap { .. } => ActiveToolModal::FtpCurveMap,
         TransformStep::BankingHygieneAudit { .. } => ActiveToolModal::BankingAudit,
@@ -106,6 +107,13 @@ impl MicroParquetApp {
                 source_col: self.normaliser.source_col.clone(),
                 new_col: self.normaliser.new_col.clone(),
             },
+            ActiveToolModal::RateBand => {
+                let band_def = self.rate_band.def().ok()?;
+                if self.rate_band.new_col.trim().is_empty() {
+                    return None;
+                }
+                TransformStep::RateBand { rate_col: self.rate_band.rate_col.clone(), band_def, new_col: self.rate_band.new_col.trim().to_string() }
+            }
             ActiveToolModal::MaturityBucket => TransformStep::MaturityBucket {
                 mat_col: self.buckets.mat_col.clone(),
                 cutoff_date: self.buckets.cutoff.clone(),
@@ -231,6 +239,11 @@ impl MicroParquetApp {
             TransformStep::NormalizeEntity { source_col, new_col } => {
                 self.normaliser.source_col = source_col;
                 self.normaliser.new_col = new_col;
+            }
+            TransformStep::RateBand { rate_col, band_def, new_col } => {
+                self.rate_band.load(&band_def);
+                self.rate_band.rate_col = rate_col;
+                self.rate_band.new_col = new_col;
             }
             TransformStep::MaturityBucket { mat_col, cutoff_date, bucket_def, null_as_sight, new_col } => {
                 // The step's own bucket definition; added to the list (not saved) when it is

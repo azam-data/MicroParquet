@@ -687,6 +687,7 @@ impl MicroParquetApp {
                     (theme::ph::TABLE, "Pivot", ActiveToolModal::GroupByPivot),
                     (theme::ph::BUILDINGS, "Normalise names", ActiveToolModal::NormalizeEntity),
                     (theme::ph::CALENDAR, "Maturity buckets", ActiveToolModal::MaturityBucket),
+                    (theme::ph::PERCENT, "Rate profile", ActiveToolModal::RateBand),
                     (theme::ph::CHART_LINE, "Rate shock", ActiveToolModal::RateShockSim),
                     (theme::ph::TIMER, "Duration / \u{394}EVE", ActiveToolModal::DurationAnalysis),
                     (theme::ph::CALCULATOR, "FTP", ActiveToolModal::FtpCurveMap),
