@@ -139,7 +139,7 @@ impl MicroParquetApp {
         if idx >= tab.steps.len() {
             return;
         }
-        tab.history.record(&tab.steps);
+        tab.record_undo();
         tab.steps[idx] = step;
         tab.viewport_offset = 0;
         self.status_message = status.to_string();
@@ -151,8 +151,12 @@ impl MicroParquetApp {
             return;
         };
 
-        // Inherit per-metric format specifications if this is a Pivot step
+        // Inherit per-metric format specifications if this is a Pivot step; formats chosen in the
+        // Columns dialog arrive with its step (so one undo takes back both).
         let mut updated_formats = curr.col_formats.clone();
+        for (c, spec) in self.columns.apply_formats.take().unwrap_or_default() {
+            updated_formats.insert(c, spec);
+        }
         if let TransformStep::GroupByPivot { ref aggs, .. } = step {
             for a in aggs {
                 updated_formats.insert(a.alias.clone(), a.format_spec);
@@ -168,7 +172,7 @@ impl MicroParquetApp {
         } else {
             let after = self.insert_after.take();
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                tab.history.record(&tab.steps);
+                tab.record_undo();
                 let at = micro_parquet::steps_edit::insert_after(&mut tab.steps, after, step);
                 tab.col_formats = updated_formats;
                 tab.viewport_offset = 0;
@@ -304,11 +308,26 @@ impl MicroParquetApp {
     /// The user picked a summary (or a weight column) for a column of the active tab.
     pub(crate) fn set_summary(&mut self, column: &str, spec: SummarySpec) {
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            tab.record_undo();
             tab.summary.insert(column.to_string(), spec);
             // The old values no longer match the choice; the job replaces them.
             tab.summary_cells.retain(|c| c.column != column);
         }
         self.submit_summary(self.active_tab);
+    }
+
+    /// Picks the active tab's control column (undoable). True when it changed; the caller
+    /// refreshes with a new baseline.
+    pub(crate) fn set_control_column(&mut self, column: Option<String>) -> bool {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return false;
+        };
+        if tab.control_col == column {
+            return false;
+        }
+        tab.record_undo();
+        tab.control_col = column;
+        true
     }
 
     /// A tab id nobody has used (ids are never reused, unlike positions).

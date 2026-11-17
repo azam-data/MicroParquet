@@ -1415,8 +1415,8 @@ pub struct TabState {
     pub issues: Vec<crate::engine::StepIssue>,
     /// How many steps the table runs: all of them, or those before the first broken one.
     pub exec_steps: usize,
-    /// Undo / redo of changes to the steps.
-    pub history: crate::steps_edit::StepHistory,
+    /// Undo / redo of changes to the steps, control column, summary choices and column formats.
+    pub history: crate::steps_edit::StepHistory<crate::steps_edit::TabSnapshot>,
     /// Rows after each step: index 0 is the source, index i is after step i. `None` = not counted yet.
     pub step_counts: Vec<Option<usize>>,
     /// Key of each entry of `step_counts`: the source identity plus the steps up to it

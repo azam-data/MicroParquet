@@ -424,6 +424,7 @@ impl MicroParquetApp {
         let mut page_next = false;
         let mut page_first = false;
         let mut ctrl_changed = false;
+        let mut picked_ctrl: Option<String> = None;
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             ui.horizontal_wrapped(|ui| {
                 ui.label(theme::semibold("Filters").size(theme::TEXT_SMALL).color(tk.muted));
@@ -486,14 +487,18 @@ impl MicroParquetApp {
                         .show_ui(ui, |ui| {
                             for col_series in tab.cached_slice.get_columns() {
                                 let cname = col_series.name().to_string();
-                                if ui.selectable_value(&mut tab.control_col, Some(cname.clone()), &cname).clicked() {
-                                    ctrl_changed = true;
+                                let on = tab.control_col.as_deref() == Some(cname.as_str());
+                                if ui.selectable_label(on, &cname).clicked() {
+                                    picked_ctrl = Some(cname);
                                 }
                             }
                         });
                     ui.label(egui::RichText::new("Control column").color(tk.muted));
                 });
             });
+        }
+        if let Some(c) = picked_ctrl {
+            ctrl_changed = self.set_control_column(Some(c));
         }
         let mut refresh = ctrl_changed;
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {

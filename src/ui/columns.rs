@@ -7,6 +7,8 @@ pub struct ColumnsState {
     pub list: Vec<(String, bool, ColumnFormatSpec)>,
     pub rename_old: String,
     pub rename_new: String,
+    /// Formats chosen with "Apply": applied together with the column step it adds.
+    pub apply_formats: Option<Vec<(String, ColumnFormatSpec)>>,
 }
 
 impl Default for ColumnsState {
@@ -15,6 +17,7 @@ impl Default for ColumnsState {
             list: Vec::new(),
             rename_old: String::new(),
             rename_new: String::new(),
+            apply_formats: None,
         }
     }
 }
@@ -69,11 +72,8 @@ impl MicroParquetApp {
                     });
 
                 if theme::primary_button(ui, "\u{E182} Apply Column Selection, Order & Formats").clicked() {
-                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                        for (cname, _, spec) in &self.columns.list {
-                            tab.col_formats.insert(cname.clone(), *spec);
-                        }
-                    }
+                    self.columns.apply_formats =
+                        Some(self.columns.list.iter().map(|(c, _, spec)| (c.clone(), *spec)).collect());
                     let kept: Vec<String> = self
                         .columns.list
                         .iter()

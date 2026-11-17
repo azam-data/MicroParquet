@@ -279,3 +279,83 @@ fn row_counts_are_recounted_when_the_file_changes_under_the_same_steps() {
     settle(&mut app);
     assert_eq!(app.tabs[idx].step_counts, vec![Some(5), Some(4)], "no count of the old file is kept");
 }
+
+#[test]
+fn undo_and_redo_restore_steps_control_column_summary_and_formats_together() {
+    let mut app = test_app("fix7");
+    let df = DataFrame::new(vec![
+        Series::new("Branch".into(), &["DHK", "CTG", "DHK"]).into(),
+        Series::new("Balance".into(), &[10.0f64, 20.0, 30.0]).into(),
+        Series::new("Limit".into(), &[100.0f64, 200.0, 300.0]).into(),
+    ])
+    .expect("frame");
+    let src = parquet_source(&app.paths.root_dir.clone(), "loans", df);
+    let idx = open_tab(&mut app, src, vec![]);
+    assert_eq!(app.tabs[idx].control_col.as_deref(), Some("Balance"));
+
+    // 1: control column; 2: a summary choice; 3: a pivot step that brings its formats
+    assert!(app.set_control_column(Some("Limit".into())));
+    settle(&mut app);
+    app.set_summary("Balance", SummarySpec { agg: SummaryAgg::Average, weight_col: None });
+    settle(&mut app);
+    let fmt = ColumnFormatSpec { fmt_type: MetricFormatType::BdtLakh, decimals: 1 };
+    let pivot = TransformStep::GroupByPivot {
+        group_cols: vec!["Branch".into()],
+        pivot_col: None,
+        aggs: vec![AggSpec { target_col: "Balance".into(), func: AggFunc::Sum, weight_col: None, alias: "Bal_Sum".into(), format_spec: fmt }],
+        sort_by_col: None,
+        top_n: None,
+    };
+    app.push_step_to_active_tab(pivot, false);
+    settle(&mut app);
+    let after = app.tabs[idx].snapshot();
+    assert_eq!(after.steps.len(), 1);
+    assert!(after.col_formats.contains_key("Bal_Sum"));
+
+    // undo the pivot: its step and its format go together; the earlier changes stay
+    app.undo_steps();
+    settle(&mut app);
+    let t = &app.tabs[idx];
+    assert!(t.steps.is_empty());
+    assert!(!t.col_formats.contains_key("Bal_Sum"));
+    assert_eq!(t.summary.get("Balance").map(|s| s.agg), Some(SummaryAgg::Average));
+    assert_eq!(t.control_col.as_deref(), Some("Limit"));
+    // undo the summary choice, then the control column (its baseline is recomputed)
+    app.undo_steps();
+    settle(&mut app);
+    assert!(app.tabs[idx].summary.is_empty());
+    app.undo_steps();
+    settle(&mut app);
+    let t = &app.tabs[idx];
+    assert_eq!(t.control_col.as_deref(), Some("Balance"));
+    assert_eq!(t.control_sum, Some(60.0));
+    assert_eq!(t.baseline_control_sum, Some(60.0));
+    assert!(!t.history.can_undo());
+
+    // redo all three: back to the same state
+    for _ in 0..3 {
+        app.redo_steps();
+        settle(&mut app);
+    }
+    let t = &app.tabs[idx];
+    assert_eq!(format!("{:?}", t.snapshot().steps), format!("{:?}", after.steps));
+    assert_eq!(t.control_col, after.control_col);
+    assert_eq!(t.summary.get("Balance").map(|s| s.agg), Some(SummaryAgg::Average));
+    assert_eq!(t.col_formats.get("Bal_Sum").map(|f| f.fmt_type), Some(MetricFormatType::BdtLakh));
+}
+
+#[test]
+fn columns_dialog_formats_are_undone_with_their_step() {
+    let mut app = test_app("fix7b");
+    let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+    let idx = open_tab(&mut app, src, vec![]);
+    let spec = ColumnFormatSpec { fmt_type: MetricFormatType::BdtCrore, decimals: 3 };
+    app.columns.apply_formats = Some(vec![("Balance".into(), spec)]);
+    app.push_step_to_active_tab(TransformStep::SelectAndReorderColumns { cols: vec!["Balance".into(), "Branch".into()] }, false);
+    settle(&mut app);
+    assert_eq!(app.tabs[idx].col_formats.get("Balance").map(|f| f.decimals), Some(3));
+    app.undo_steps();
+    settle(&mut app);
+    assert!(app.tabs[idx].steps.is_empty());
+    assert!(app.tabs[idx].col_formats.get("Balance").is_none(), "one undo takes back the step and its formats");
+}

@@ -74,7 +74,7 @@ impl MicroParquetApp {
     pub(crate) fn clear_sort(&mut self) {
         if let Some(i) = self.last_sort_step() {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                tab.history.record(&tab.steps);
+                tab.record_undo();
                 tab.steps.remove(i);
                 tab.viewport_offset = 0;
             }

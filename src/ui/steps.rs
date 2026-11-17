@@ -186,8 +186,8 @@ impl MicroParquetApp {
                     }
                 } else {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.record_undo();
                         tab.summary.extend(recipe.summary.clone());
-                        tab.history.record(&tab.steps);
                         tab.steps.extend(recipe.steps);
                         if recipe.enforce_balance_control && recipe.control_column.is_some() {
                             tab.control_col = recipe.control_column;
@@ -306,7 +306,7 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get_mut(idx) else {
             return;
         };
-        let before = tab.steps.clone();
+        let before = tab.snapshot();
         let Some(sel) = f(&mut tab.steps) else {
             return;
         };
@@ -323,13 +323,17 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get_mut(idx) else {
             return;
         };
-        match tab.history.undo(&tab.steps) {
-            Some(prev) => {
-                tab.steps = prev;
+        let current = tab.snapshot();
+        match tab.history.undo(&current) {
+            Some(state) => {
+                // Steps, control column, summary choices and formats go back together.
+                let ctrl_changed = tab.restore(state);
+                tab.summary_cells.clear();
                 tab.viewport_offset = 0;
                 self.selected_step = None;
                 self.status_message = "Undone.".to_string();
-                self.refresh_tab_at(idx, false, Some("Undone.".to_string()));
+                self.refresh_tab_at(idx, ctrl_changed, Some("Undone.".to_string()));
+                self.init_tool_defaults_from_active_tab();
             }
             None => self.status_message = "Nothing to undo.".to_string(),
         }
@@ -340,13 +344,17 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get_mut(idx) else {
             return;
         };
-        match tab.history.redo(&tab.steps) {
-            Some(next) => {
-                tab.steps = next;
+        let current = tab.snapshot();
+        match tab.history.redo(&current) {
+            Some(state) => {
+                // Steps, control column, summary choices and formats go back together.
+                let ctrl_changed = tab.restore(state);
+                tab.summary_cells.clear();
                 tab.viewport_offset = 0;
                 self.selected_step = None;
                 self.status_message = "Redone.".to_string();
-                self.refresh_tab_at(idx, false, Some("Redone.".to_string()));
+                self.refresh_tab_at(idx, ctrl_changed, Some("Redone.".to_string()));
+                self.init_tool_defaults_from_active_tab();
             }
             None => self.status_message = "Nothing to redo.".to_string(),
         }

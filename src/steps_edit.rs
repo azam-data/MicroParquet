@@ -1,7 +1,8 @@
 //! Editing the list of steps (Phase 3 T4): move, delete, duplicate, turn off, insert, and the
 //! undo / redo history. All of it works on plain lists, so it is tested without the UI.
 
-use crate::models::{TabSource, TransformStep};
+use crate::models::{ColumnFormatSpec, SummarySpec, TabSource, TabState, TransformStep};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::collections::VecDeque;
@@ -75,17 +76,63 @@ pub fn insert_after(steps: &mut Vec<TransformStep>, after: Option<usize>, step: 
     at
 }
 
-/// Undo / redo of step-list changes: the lists as they were before each change.
+/// Everything a change to a tab's steps can touch: the steps, the control column, the summary
+/// choices and the column formats. Undo and redo restore all of it together.
 #[derive(Clone, Debug, Default)]
-pub struct StepHistory {
-    undo: VecDeque<Vec<TransformStep>>,
-    redo: Vec<Vec<TransformStep>>,
+pub struct TabSnapshot {
+    pub steps: Vec<TransformStep>,
+    pub control_col: Option<String>,
+    pub summary: HashMap<String, SummarySpec>,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
 }
 
-impl StepHistory {
-    /// Call before a change, with the list as it is now. A new change ends the redo chain.
-    pub fn record(&mut self, before: &[TransformStep]) {
-        self.undo.push_back(before.to_vec());
+impl TabState {
+    /// The tab's undoable state as it is now.
+    pub fn snapshot(&self) -> TabSnapshot {
+        TabSnapshot {
+            steps: self.steps.clone(),
+            control_col: self.control_col.clone(),
+            summary: self.summary.clone(),
+            col_formats: self.col_formats.clone(),
+        }
+    }
+
+    /// Puts back a snapshot. Returns true when the control column changed (its baseline must
+    /// then be recomputed).
+    pub fn restore(&mut self, s: TabSnapshot) -> bool {
+        let ctrl_changed = self.control_col != s.control_col;
+        self.steps = s.steps;
+        self.control_col = s.control_col;
+        self.summary = s.summary;
+        self.col_formats = s.col_formats;
+        ctrl_changed
+    }
+
+    /// Call before an undoable change: keeps the state as it is now.
+    pub fn record_undo(&mut self) {
+        let s = self.snapshot();
+        self.history.record(&s);
+    }
+}
+
+/// Undo / redo: the states as they were before each change (a tab keeps [`TabSnapshot`]s; the
+/// default is a plain list of steps).
+#[derive(Clone, Debug)]
+pub struct StepHistory<T = Vec<TransformStep>> {
+    undo: VecDeque<T>,
+    redo: Vec<T>,
+}
+
+impl<T> Default for StepHistory<T> {
+    fn default() -> Self {
+        Self { undo: VecDeque::new(), redo: Vec::new() }
+    }
+}
+
+impl<T: Clone> StepHistory<T> {
+    /// Call before a change, with the state as it is now. A new change ends the redo chain.
+    pub fn record(&mut self, before: &T) {
+        self.undo.push_back(before.clone());
         while self.undo.len() > HISTORY_LEVELS {
             self.undo.pop_front();
         }
@@ -100,17 +147,17 @@ impl StepHistory {
         !self.redo.is_empty()
     }
 
-    /// The list to go back to; `current` is kept for redo.
-    pub fn undo(&mut self, current: &[TransformStep]) -> Option<Vec<TransformStep>> {
+    /// The state to go back to; `current` is kept for redo.
+    pub fn undo(&mut self, current: &T) -> Option<T> {
         let prev = self.undo.pop_back()?;
-        self.redo.push(current.to_vec());
+        self.redo.push(current.clone());
         Some(prev)
     }
 
-    /// The list to go forward to; `current` is kept for undo.
-    pub fn redo(&mut self, current: &[TransformStep]) -> Option<Vec<TransformStep>> {
+    /// The state to go forward to; `current` is kept for undo.
+    pub fn redo(&mut self, current: &T) -> Option<T> {
         let next = self.redo.pop()?;
-        self.undo.push_back(current.to_vec());
+        self.undo.push_back(current.clone());
         Some(next)
     }
 
