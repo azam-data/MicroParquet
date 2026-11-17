@@ -35,20 +35,20 @@ impl MicroParquetApp {
                 Err(_) => format!("{}", i),
             };
             let val_cr = match y_series.get(i) {
-                Ok(AnyValue::Float64(v)) => v / 10_000_000.0,
-                Ok(AnyValue::Float32(v)) => (v as f64) / 10_000_000.0,
-                Ok(AnyValue::Int64(v)) => (v as f64) / 10_000_000.0,
-                Ok(AnyValue::UInt32(v)) => (v as f64) / 10_000_000.0,
+                Ok(AnyValue::Float64(v)) => v / 10_000_000.0, // not a size: Crore
+                Ok(AnyValue::Float32(v)) => (v as f64) / 10_000_000.0, // not a size: Crore
+                Ok(AnyValue::Int64(v)) => (v as f64) / 10_000_000.0, // not a size: Crore
+                Ok(AnyValue::UInt32(v)) => (v as f64) / 10_000_000.0, // not a size: Crore
                 _ => 0.0,
             };
             bars.push(Bar::new(i as f64, val_cr).name(label));
         }
 
         Plot::new("alco_bar_plot")
-            .height(175.0)
+            .height(theme::CHART_H)
             .show_axes([true, true])
             .show(ui, |plot_ui| {
-                plot_ui.bar_chart(BarChart::new(bars).width(0.65));
+                plot_ui.bar_chart(BarChart::new(bars).width(theme::CHART_BAR_W));
             });
     }
 

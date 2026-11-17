@@ -40,7 +40,7 @@ impl MicroParquetApp {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E150}  Pivot & WAVG Builder (with Per-Metric Format & Decimal Precision)")
-        .default_width(720.0)
+        .default_width(theme::DIALOG_W_PIVOT)
         .show(ctx, |d| {
             d.body(|ui| {
                 ui.strong("1. Select Row Grouping Columns:");
@@ -87,7 +87,7 @@ impl MicroParquetApp {
                     ui.label("Alias:");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.pivot.new_alias)
-                            .desired_width(130.0),
+                            .desired_width(theme::FIELD_W_VALUE),
                     );
                     ui.label("Format:");
                     egui::ComboBox::from_id_salt("piv_fmt")

@@ -12,7 +12,7 @@ impl MicroParquetApp {
                     ui.strong("SQL (`self`):");
                     ui.add(
                         egui::TextEdit::singleline(&mut tab.sql_scratchpad)
-                            .desired_width(520.0),
+                            .desired_width(theme::SQL_BAR_W),
                     );
                     if ui.button("\u{E3D0} Apply Here").clicked() {
                         sql_to_run = Some((tab.sql_scratchpad.clone(), false));

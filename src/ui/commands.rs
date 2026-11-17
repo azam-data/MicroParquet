@@ -177,11 +177,11 @@ impl MicroParquetApp {
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
             CommandId::ZoomIn => {
-                self.ui_zoom = (self.ui_zoom + 0.10).clamp(0.80, 1.50);
+                self.ui_zoom = theme::zoom_in(self.ui_zoom);
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
             CommandId::ZoomOut => {
-                self.ui_zoom = (self.ui_zoom - 0.10).clamp(0.80, 1.50);
+                self.ui_zoom = theme::zoom_out(self.ui_zoom);
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
             CommandId::ScaleCrore => self.num_format = NumberDisplayFormat::BdtCrore,
@@ -287,16 +287,16 @@ impl MicroParquetApp {
         let mut close = esc;
         egui::Area::new(egui::Id::new("command_palette"))
             .order(egui::Order::Foreground)
-            .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
+            .anchor(egui::Align2::CENTER_TOP, [0.0, theme::PALETTE_TOP])
             .show(ctx, |ui| {
                 egui::Frame::none()
                     .fill(tk.surface)
-                    .stroke(egui::Stroke::new(1.0_f32, tk.border))
-                    .rounding(egui::Rounding::same(10.0))
-                    .shadow(egui::Shadow { offset: egui::vec2(0.0, 8.0), blur: 24.0, spread: 0.0, color: egui::Color32::from_black_alpha(60) })
+                    .stroke(theme::line(tk.border))
+                    .rounding(egui::Rounding::same(theme::RADIUS_PALETTE))
+                    .shadow(theme::palette_shadow())
                     .inner_margin(egui::Margin::same(theme::SPACE_M))
                     .show(ui, |ui| {
-                        ui.set_width(560.0);
+                        ui.set_width(theme::PALETTE_W);
                         let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.command_query)
                                 .hint_text("Search actions and columns")
@@ -310,7 +310,7 @@ impl MicroParquetApp {
                             self.command_cursor = 0;
                         }
                         ui.add_space(theme::SPACE_S);
-                        egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(theme::PALETTE_LIST_MAX_H).show(ui, |ui| {
                             if results.is_empty() {
                                 ui.label(egui::RichText::new("Nothing matches.").color(tk.muted));
                             }
@@ -322,7 +322,7 @@ impl MicroParquetApp {
                                 let r = egui::Frame::none()
                                     .fill(fill)
                                     .rounding(egui::Rounding::same(theme::RADIUS_CONTROL))
-                                    .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                                    .inner_margin(theme::MARGIN_PALETTE_ROW)
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
                                         ui.horizontal(|ui| {

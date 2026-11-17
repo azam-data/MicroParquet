@@ -229,7 +229,7 @@ impl MicroParquetApp {
             if modal.is_parquet {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut modal.config.parse_accounting_negatives, "Accounting negatives")
-                        .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)");
+                        .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)"); // not a size: example text
                     theme::info_icon(ui, "Columns keep their Parquet type unless you change it. Text columns can be set to a number or date type; masks apply to any column.");
                 });
             } else {
@@ -238,7 +238,7 @@ impl MicroParquetApp {
                     ui.checkbox(&mut modal.config.sanitize_linebreaks, "Clean line breaks")
                         .on_hover_text("Sanitize Linebreaks (\\r, \\n) & Trim Whitespace");
                     ui.checkbox(&mut modal.config.parse_accounting_negatives, "Accounting negatives")
-                        .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)");
+                        .on_hover_text("Parse Accounting Negatives (1,234.50 -> -1234.50)"); // not a size: example text
                     ui.checkbox(&mut modal.config.heal_broken_csv_lines, "Heal broken lines")
                         .on_hover_text("Pre-Heal Broken Unquoted CSV Lines");
                     theme::dot(ui);

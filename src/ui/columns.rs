@@ -29,12 +29,12 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E546} Columns: Drop, Order, Rename & Number Format")
             .collapsible(false)
-            .default_width(680.0)
+            .default_width(theme::DIALOG_W_TOOL)
             .show(ctx, |dlg| {
               dlg.body(|ui| {
                 ui.strong("1. Keep/Drop, Reorder & Set Per-Column Display Format:");
                 egui::ScrollArea::vertical()
-                    .max_height(240.0)
+                    .max_height(theme::LIST_MAX_H_L)
                     .show(ui, |ui| {
                         let len = self.columns.list.len();
                         let mut swap_pair: Option<(usize, usize)> = None;

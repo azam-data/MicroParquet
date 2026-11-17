@@ -14,7 +14,7 @@ impl Default for LimitState {
         Self {
             col: "Sanctioned_Limit".to_string(),
             bal_col: "Balance".to_string(),
-            ccf_pct: 20.0,
+            ccf_pct: 20.0, // not a size: a percentage
         }
     }
 }

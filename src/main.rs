@@ -69,8 +69,8 @@ fn main() -> eframe::Result<()> {
                 "MicroParquet v{} — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
                 env!("CARGO_PKG_VERSION")
             ))
-            .with_inner_size([1320.0, 740.0])
-            .with_min_inner_size([800.0, 560.0]),
+            .with_inner_size(theme::WINDOW_SIZE)
+            .with_min_inner_size(theme::WINDOW_MIN_SIZE),
         ..Default::default()
     };
 
@@ -79,7 +79,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             theme::load_fonts(&cc.egui_ctx);
-            theme::apply_ui_theme(&cc.egui_ctx, false, 1.05);
+            theme::apply_ui_theme(&cc.egui_ctx, false, theme::UI_ZOOM_DEFAULT);
             let mut app = MicroParquetApp::new(paths, cc.egui_ctx.clone());
             if let Some(n) = rule_notice {
                 app.status_message = n;
@@ -219,7 +219,7 @@ impl MicroParquetApp {
             command_focus: false,
             recent_commands,
             dark_mode: false,
-            ui_zoom: 1.05,
+            ui_zoom: theme::UI_ZOOM_DEFAULT,
             pending_csv_modal: None,
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
@@ -274,7 +274,7 @@ impl eframe::App for MicroParquetApp {
         // Central workspace: filter chips and paging, then the table.
         let tk = *theme::tokens(self.dark_mode);
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(tk.bg).inner_margin(egui::Margin { left: 16.0, right: 16.0, top: 14.0, bottom: 8.0 }))
+            .frame(egui::Frame::none().fill(tk.bg).inner_margin(theme::MARGIN_CENTRAL))
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     self.render_empty_state(ui);
@@ -322,12 +322,12 @@ impl MicroParquetApp {
             ui.horizontal(|ui| {
                 ui.label("UI Scale:");
                 if ui.small_button("\u{E30C}-").clicked() {
-                    self.ui_zoom = (self.ui_zoom - 0.10).clamp(0.80, 1.50);
+                    self.ui_zoom = theme::zoom_out(self.ui_zoom);
                     theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
                 }
-                ui.strong(format!("{:.0}%", self.ui_zoom * 100.0));
+                ui.strong(format!("{:.0}%", self.ui_zoom * 100.0)); // not a size: percent
                 if ui.small_button("\u{E30C}+").clicked() {
-                    self.ui_zoom = (self.ui_zoom + 0.10).clamp(0.80, 1.50);
+                    self.ui_zoom = theme::zoom_in(self.ui_zoom);
                     theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
                 }
             });
@@ -394,9 +394,9 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         let resp = egui::Frame::none()
             .fill(tk.bg)
-            .stroke(egui::Stroke::new(1.0_f32, tk.border))
+            .stroke(theme::line(tk.border))
             .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
-            .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+            .inner_margin(theme::MARGIN_SEARCH_BOX)
             .show(ui, |ui| {
                 ui.set_width((width - theme::SEARCH_FRAME_PAD).max(0.0));
                 ui.horizontal(|ui| {
@@ -406,9 +406,9 @@ impl MicroParquetApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::Frame::none()
                             .fill(tk.surface)
-                            .stroke(egui::Stroke::new(1.0_f32, tk.border))
-                            .rounding(egui::Rounding::same(4.0))
-                            .inner_margin(egui::Margin::symmetric(5.0, 1.0))
+                            .stroke(theme::line(tk.border))
+                            .rounding(egui::Rounding::same(theme::RADIUS_SMALL))
+                            .inner_margin(theme::MARGIN_KEYCAP)
                             .show(ui, |ui| {
                                 ui.label(theme::mono("Ctrl K").size(theme::TEXT_KEYCAP).color(tk.muted));
                             });

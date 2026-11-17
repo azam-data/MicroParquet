@@ -7,8 +7,8 @@ pub fn format_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;
     let mut u = 0;
-    while v >= 1024.0 && u + 1 < UNITS.len() {
-        v /= 1024.0;
+    while v >= 1024.0 && u + 1 < UNITS.len() { // not a size: bytes per KB
+        v /= 1024.0; // not a size: bytes per KB
         u += 1;
     }
     if u == 0 {
@@ -27,11 +27,11 @@ impl MicroParquetApp {
         let mut cancel_job: Option<u64> = None;
         egui::TopBottomPanel::bottom("status_bar")
             .exact_height(theme::STATUS_BAR_H)
-            .frame(egui::Frame::none().fill(tk.surface).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
+            .frame(egui::Frame::none().fill(tk.surface).inner_margin(theme::MARGIN_STATUS_BAR))
             .show(ctx, |ui| {
                 theme::top_border(ui, tk.border);
                 ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
+                    ui.spacing_mut().item_spacing.x = theme::STATUS_ITEM_GAP;
                     ui.style_mut().override_text_style = Some(egui::TextStyle::Small);
                     if let Some(tab) = self.tabs.get(self.active_tab) {
                         let count = |n: Option<usize>| {
@@ -47,19 +47,19 @@ impl MicroParquetApp {
                         }
                         if let (Some(col_name), Some(sum_val)) = (&tab.control_col, tab.control_sum) {
                             ui.label(egui::RichText::new(format!("Control [{}]", col_name)).color(tk.muted));
-                            ui.label(theme::mono_semibold(format!("{:.2} Cr", sum_val / 10_000_000.0)))
+                            ui.label(theme::mono_semibold(format!("{:.2} Cr", sum_val / 10_000_000.0))) // not a size: Crore
                                 .on_hover_text(format!("Raw: {}", format_with_commas(sum_val, 2)));
                             if let Some(base) = tab.baseline_control_sum {
                                 let diff = sum_val - base;
                                 ui.label(egui::RichText::new("\u{394} vs source").color(tk.muted));
-                                if diff.abs() > 0.01 {
+                                if diff.abs() > 0.01 { // not a size: a difference below a paisa is none
                                     ui.label(
-                                        theme::mono_semibold(format!("{:+.2} Cr", diff / 10_000_000.0))
+                                        theme::mono_semibold(format!("{:+.2} Cr", diff / 10_000_000.0)) // not a size: Crore
                                             .color(tk.warning),
                                     );
                                     if ui
                                         .small_button(theme::ph::ARROWS_CLOCKWISE)
-                                        .on_hover_text("Pin the current total as the new baseline (0.00 Cr)")
+                                        .on_hover_text("Pin the current total as the new baseline (0.00 Cr)") // not a size: text
                                         .clicked()
                                     {
                                         reset_baseline_clicked = true;
@@ -67,10 +67,10 @@ impl MicroParquetApp {
                                 } else {
                                     egui::Frame::none()
                                         .fill(tk.success_soft)
-                                        .rounding(egui::Rounding::same(4.0))
-                                        .inner_margin(egui::Margin::symmetric(6.0, 1.0))
+                                        .rounding(egui::Rounding::same(theme::RADIUS_SMALL))
+                                        .inner_margin(theme::MARGIN_CHIP_ZERO)
                                         .show(ui, |ui| {
-                                            ui.label(theme::mono_semibold("0.00 Cr").color(tk.success));
+                                            ui.label(theme::mono_semibold("0.00 Cr").color(tk.success)); // not a size: text
                                         });
                                 }
                             }
@@ -105,8 +105,8 @@ impl MicroParquetApp {
                         if tab.parse_failures.is_empty() {
                             egui::Frame::none()
                                 .fill(tk.success_soft)
-                                .rounding(egui::Rounding::same(10.0))
-                                .inner_margin(egui::Margin::symmetric(8.0, 1.0))
+                                .rounding(egui::Rounding::same(theme::RADIUS_PILL))
+                                .inner_margin(theme::MARGIN_CHIP_PILL)
                                 .show(ui, |ui| {
                                     ui.label(theme::semibold("0 parse failures").color(tk.success));
                                 });

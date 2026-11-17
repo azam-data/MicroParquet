@@ -110,7 +110,7 @@ impl MicroParquetApp {
         let mut remove_sort = false;
         let editing = self.sort.editing;
         theme::modal(if editing.is_some() { "\u{E444}  Edit sort" } else { "\u{E444}  Sort rows" })
-            .default_width(560.0)
+            .default_width(theme::DIALOG_W_SORT)
             .show(ctx, |d| {
                 d.body(|ui| {
                     ui.label("Rows are ordered by level 1, then level 2 for ties, and so on. Blanks are always last.");
@@ -122,7 +122,7 @@ impl MicroParquetApp {
                         ui.horizontal(|ui| {
                             ui.label(theme::mono_semibold(format!("{}", i + 1)));
                             egui::ComboBox::from_id_salt(("sort_col", i))
-                                .width(180.0)
+                                .width(theme::FIELD_W_SORT_COLUMN)
                                 .selected_text(&l.column)
                                 .show_ui(ui, |ui| {
                                     for c in &avail_cols {

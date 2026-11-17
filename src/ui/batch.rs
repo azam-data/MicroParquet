@@ -37,7 +37,7 @@ impl MicroParquetApp {
         let mut s = strat;
         theme::modal("\u{E094} Recursive Folder-Tree Mirror Batch Converter")
             .collapsible(false)
-            .default_width(680.0)
+            .default_width(theme::DIALOG_W_TOOL)
             .show(ctx, |dlg| {
                 dlg.body(|ui| {
                     ui.horizontal(|ui| {
@@ -137,8 +137,8 @@ impl MicroParquetApp {
                             micro_parquet::table_layout::format_count(rep.files_converted),
                             micro_parquet::table_layout::format_count(rep.companion_files_copied),
                             micro_parquet::table_layout::format_count(rep.errors.len()),
-                            rep.bytes_before as f64 / 1_048_576.0,
-                            rep.bytes_after as f64 / 1_048_576.0
+                            rep.bytes_before as f64 / 1_048_576.0, // not a size: bytes per MB
+                            rep.bytes_after as f64 / 1_048_576.0 // not a size: bytes per MB
                         ));
                         if let Some(p) = &rep.log_path {
                             ui.label(format!("Log: {:?}", p));
@@ -160,7 +160,7 @@ impl MicroParquetApp {
                             );
                             egui::ScrollArea::vertical()
                                 .id_salt("batch_warnings")
-                                .max_height(120.0)
+                                .max_height(theme::LIST_MAX_H_S)
                                 .show(ui, |ui| {
                                     for w in &rep.warnings {
                                         ui.label(format!("• {}", w));
@@ -170,7 +170,7 @@ impl MicroParquetApp {
                         if !rep.errors.is_empty() {
                             ui.colored_label(theme::danger(ui), "Errors:");
                             egui::ScrollArea::vertical()
-                                .max_height(180.0)
+                                .max_height(theme::LIST_MAX_H_M)
                                 .show(ui, |ui| {
                                     for e in &rep.errors {
                                         ui.label(format!("• {}", e));

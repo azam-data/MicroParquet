@@ -166,6 +166,114 @@ pub const SEARCH_FRAME_PAD: f32 = 22.0;
 pub const SEARCH_LONG_HINT_W: f32 = 260.0;
 
 
+// ---- Window, scale, lines, radii and the remaining layout sizes (Phase 3 fixes, part 2, item 8).
+// Every pixel size the screens use is here; the screens name them. (`0.0`, `0.5`, `1.0` and `2.0`
+// are arithmetic, not sizes: zero, a half-pixel line offset, one, a half.)
+pub const WINDOW_SIZE: [f32; 2] = [1320.0, 740.0];
+pub const WINDOW_MIN_SIZE: [f32; 2] = [800.0, 560.0];
+pub const UI_ZOOM_DEFAULT: f32 = 1.05;
+pub const UI_ZOOM_MIN: f32 = 0.80;
+pub const UI_ZOOM_MAX: f32 = 1.50;
+pub const UI_ZOOM_STEP: f32 = 0.10;
+/// The UI scale one step larger / smaller, kept between the minimum and the maximum.
+pub fn zoom_in(z: f32) -> f32 {
+    (z + UI_ZOOM_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+}
+pub fn zoom_out(z: f32) -> f32 {
+    (z - UI_ZOOM_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+}
+/// A 1 px line (borders, dividers) and a 2 px line (the selected column's underline, the active
+/// tab's top line, the steps rail).
+pub fn line(color: Color32) -> Stroke {
+    Stroke::new(1.0_f32, color)
+}
+pub fn line_thick(color: Color32) -> Stroke {
+    Stroke::new(2.0_f32, color)
+}
+pub const RADIUS_SMALL: f32 = 4.0;
+pub const RADIUS_PILL: f32 = 10.0;
+pub const RADIUS_CHIP: f32 = 14.0;
+pub const RADIUS_PALETTE: f32 = 10.0;
+pub const RADIUS_BAR: f32 = 3.0;
+/// Rounded at the top only: the tabs and the histogram bars.
+pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL, ne: RADIUS_CONTROL, sw: 0.0, se: 0.0 };
+pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
+// dialogs: widths (the schema dialog's is above) and the lists inside them
+pub const DIALOG_W_SORT: f32 = 560.0;
+pub const DIALOG_W_FILTER: f32 = 640.0;
+pub const DIALOG_W_TOOL: f32 = 680.0;
+pub const DIALOG_W_PIVOT: f32 = 720.0;
+pub const DIALOG_W_PYTHON: f32 = 760.0;
+pub const LIST_MAX_H_S: f32 = 120.0;
+pub const LIST_MAX_H_M: f32 = 180.0;
+pub const LIST_MAX_H_L: f32 = 240.0;
+pub const PYTHON_PREVIEW_MAX_H: f32 = 360.0;
+// input fields
+pub const FIELD_W_S: f32 = 90.0;
+pub const FIELD_W_VALUE: f32 = 130.0;
+pub const FIELD_W_OP: f32 = 120.0;
+pub const FIELD_W_COLUMN: f32 = 160.0;
+pub const FIELD_W_SORT_COLUMN: f32 = 180.0;
+pub const SQL_BAR_W: f32 = 520.0;
+// chart
+pub const CHART_H: f32 = 175.0;
+pub const CHART_BAR_W: f64 = 0.65;
+// command palette
+pub const PALETTE_W: f32 = 560.0;
+pub const PALETTE_TOP: f32 = 90.0;
+pub const PALETTE_LIST_MAX_H: f32 = 380.0;
+pub const PALETTE_SHADOW_ALPHA: u8 = 60;
+pub fn palette_shadow() -> egui::Shadow {
+    egui::Shadow { offset: egui::vec2(0.0, 8.0), blur: 24.0, spread: 0.0, color: Color32::from_black_alpha(PALETTE_SHADOW_ALPHA) }
+}
+// paddings
+pub const MARGIN_CENTRAL: egui::Margin = egui::Margin { left: 16.0, right: 16.0, top: 14.0, bottom: 8.0 };
+pub const MARGIN_SEARCH_BOX: egui::Margin = egui::Margin::symmetric(10.0, 6.0);
+pub const MARGIN_KEYCAP: egui::Margin = egui::Margin::symmetric(5.0, 1.0);
+pub const MARGIN_STATUS_BAR: egui::Margin = egui::Margin::symmetric(14.0, 0.0);
+pub const STATUS_ITEM_GAP: f32 = 14.0;
+pub const MARGIN_CHIP_ZERO: egui::Margin = egui::Margin::symmetric(6.0, 1.0);
+pub const MARGIN_CHIP_PILL: egui::Margin = egui::Margin::symmetric(8.0, 1.0);
+pub const MARGIN_EDIT_BANNER: egui::Margin = egui::Margin::symmetric(12.0, 6.0);
+pub const EDIT_BANNER_GAP: f32 = 6.0;
+pub const MARGIN_PALETTE_ROW: egui::Margin = egui::Margin::symmetric(8.0, 5.0);
+pub const MARGIN_TAB_STRIP: egui::Margin = egui::Margin { left: 12.0, right: 12.0, top: 0.0, bottom: 0.0 };
+pub fn margin_tab(active: bool) -> egui::Margin {
+    egui::Margin::symmetric(14.0, if active { 7.0 } else { 5.0 })
+}
+pub const EMPTY_STATE_TOP: f32 = 90.0;
+pub const EMPTY_STATE_GAP: f32 = 20.0;
+// right panel
+pub const MARGIN_SEGMENTED: egui::Margin = egui::Margin::same(3.0);
+pub const MARGIN_SEGMENTED_OUTER: egui::Margin = egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 };
+pub const SEGMENT_BTN_H: f32 = 30.0;
+pub const PANEL_BTN_H: f32 = 32.0;
+pub const WIDE_BTN_H: f32 = 34.0;
+pub const MARGIN_PANEL_STEPS: egui::Margin = egui::Margin::symmetric(16.0, 8.0);
+pub const MARGIN_PANEL_COLUMN: egui::Margin = egui::Margin::symmetric(16.0, 14.0);
+pub const TEXT_COUNT: f32 = 11.0;
+pub const STEPS_FOOTER_RESERVE: f32 = 110.0;
+pub const STEPS_LIST_MIN_H: f32 = 100.0;
+pub const STEP_LIST_INDENT: f32 = 26.0;
+pub const MARGIN_STEP_ROW: egui::Margin = egui::Margin { left: 8.0, right: 8.0, top: 3.0, bottom: 8.0 };
+pub const STEP_RAIL_X: f32 = 18.0;
+pub const STEP_DOT_Y: f32 = 12.0;
+pub const STEP_DOT_R: f32 = 6.0;
+pub const MARGIN_TILE: egui::Margin = egui::Margin::same(10.0);
+pub const TILE_W: f32 = 118.0;
+pub const HISTOGRAM_H: f32 = 70.0;
+pub const HISTOGRAM_BAR_ALPHA: f32 = 0.8;
+pub const HISTOGRAM_BAR_GAP: f32 = 2.0;
+pub const DISABLED_OPACITY: f32 = 0.45;
+// table: selector row, summary band, row-number column, minimum column width
+pub const SELECTOR_INSET: egui::Vec2 = egui::vec2(8.0, 4.0);
+pub const SELECTOR_BTN_PAD: egui::Vec2 = egui::vec2(8.0, 1.0);
+pub const BAND_INSET: egui::Vec2 = egui::vec2(12.0, 0.0);
+pub const ROW_NO_PAD: f32 = 24.0;
+pub const ROW_NO_COL_W: f32 = 48.0;
+pub const ROW_NO_MIN_W: f32 = 40.0;
+pub const COLUMN_INITIAL_MIN_W: f32 = 96.0;
+
 impl Tokens {
     /// Every token with its name, in one fixed order (used by the light/dark completeness test).
     pub fn named(&self) -> [(&'static str, Color32); 24] {

@@ -48,7 +48,7 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{E108} Maturity Bucketer & Custom Preset Creator")
             .collapsible(false)
-            .default_width(680.0)
+            .default_width(theme::DIALOG_W_TOOL)
             .show(ctx, |d| {
                 d.body(|ui| {
                     ui.horizontal(|ui| {

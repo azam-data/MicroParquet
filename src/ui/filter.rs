@@ -158,7 +158,7 @@ impl MicroParquetApp {
         } else {
             "\u{E30C}  Filter rows"
         };
-        theme::modal(title).default_width(640.0).show(ctx, |d| {
+        theme::modal(title).default_width(theme::DIALOG_W_FILTER).show(ctx, |d| {
             d.body(|ui| {
                 let mut remove: Option<usize> = None;
                 for (i, c) in self.filter.conditions.iter_mut().enumerate() {
@@ -167,7 +167,7 @@ impl MicroParquetApp {
                             ui.label(egui::RichText::new(self.filter.join.label()).color(theme::muted(ui)));
                         }
                         egui::ComboBox::from_id_salt(("flt_col", i))
-                            .width(160.0)
+                            .width(theme::FIELD_W_COLUMN)
                             .selected_text(&c.column)
                             .show_ui(ui, |ui| {
                                 for name in &avail_cols {
@@ -175,7 +175,7 @@ impl MicroParquetApp {
                                 }
                             });
                         egui::ComboBox::from_id_salt(("flt_op", i))
-                            .width(120.0)
+                            .width(theme::FIELD_W_OP)
                             .selected_text(c.op.label())
                             .show_ui(ui, |ui| {
                                 for op in CondOp::all() {
@@ -183,7 +183,7 @@ impl MicroParquetApp {
                                 }
                             });
                         if !c.op.is_unary() {
-                            ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(130.0).hint_text(
+                            ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(theme::FIELD_W_VALUE).hint_text(
                                 match c.op {
                                     CondOp::InList => "a, b, c",
                                     _ => "value",
@@ -191,7 +191,7 @@ impl MicroParquetApp {
                             ));
                             if c.op == CondOp::Between {
                                 ui.label("and");
-                                ui.add(egui::TextEdit::singleline(&mut c.value2).desired_width(130.0).hint_text("upper limit"));
+                                ui.add(egui::TextEdit::singleline(&mut c.value2).desired_width(theme::FIELD_W_VALUE).hint_text("upper limit"));
                             }
                         }
                         if theme::icon_button(ui, theme::ph::X, "Remove this condition").clicked() {

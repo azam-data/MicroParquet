@@ -112,11 +112,11 @@ impl MicroParquetApp {
         let step_to_apply: Option<(TransformStep, bool)> = None;
         theme::modal("\u{EB2C} Export GUI Pipeline as Python Polars Jupyter Code")
             .collapsible(false)
-            .default_width(760.0)
+            .default_width(theme::DIALOG_W_PYTHON)
             .show(ctx, |d| {
                 d.body(|ui| {
                     egui::ScrollArea::vertical()
-                        .max_height(360.0)
+                        .max_height(theme::PYTHON_PREVIEW_MAX_H)
                         .show(ui, |ui| {
                             ui.add(
                                 egui::TextEdit::multiline(&mut self.macros.python_code)
@@ -276,12 +276,12 @@ impl MicroParquetApp {
                 egui::Frame::none()
                     .fill(tk.grid)
                     .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
-                    .inner_margin(egui::Margin::same(3.0))
-                    .outer_margin(egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 })
+                    .inner_margin(theme::MARGIN_SEGMENTED)
+                    .outer_margin(theme::MARGIN_SEGMENTED_OUTER)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            let w = (ui.available_width() - 4.0) / 2.0;
+                            ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+                            let w = (ui.available_width() - theme::SPACE_XS) / 2.0;
                             for (tab, label) in [
                                 (RightTab::Steps, format!("Steps \u{b7} {}", n_steps)),
                                 (RightTab::Column, "Column".to_string()),
@@ -292,7 +292,7 @@ impl MicroParquetApp {
                                     .fill(if on { tk.surface } else { egui::Color32::TRANSPARENT })
                                     .stroke(egui::Stroke::NONE)
                                     .rounding(egui::Rounding::same(theme::RADIUS_CONTROL));
-                                if ui.add_sized([w, 30.0], btn).clicked() {
+                                if ui.add_sized([w, theme::SEGMENT_BTN_H], btn).clicked() {
                                     self.right_tab = tab;
                                 }
                             }
@@ -408,7 +408,7 @@ impl MicroParquetApp {
         let mut insert_filter = false;
         let selected = self.selected_step;
         let confirm = self.confirm_delete_step;
-        egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 8.0)).show(ui, |ui| {
+        egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
             let Some(tab) = self.tabs.get(self.active_tab) else {
                 return;
             };
@@ -428,10 +428,10 @@ impl MicroParquetApp {
                     open_schema = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(theme::mono(count_text(tab.step_counts.first().copied())).size(11.0).color(tk.muted));
+                    ui.label(theme::mono(count_text(tab.step_counts.first().copied())).size(theme::TEXT_COUNT).color(tk.muted));
                 });
             });
-            let list_height = (ui.available_height() - 110.0).max(100.0);
+            let list_height = (ui.available_height() - theme::STEPS_FOOTER_RESERVE).max(theme::STEPS_LIST_MIN_H);
             egui::ScrollArea::vertical().max_height(list_height).show(ui, |ui| {
                 for (i, step) in tab.steps.iter().enumerate() {
                     let is_sel = selected == Some(i);
@@ -446,11 +446,11 @@ impl MicroParquetApp {
                         tk.ink
                     };
                     let out = ui.horizontal_top(|ui| {
-                        ui.add_space(26.0);
+                        ui.add_space(theme::STEP_LIST_INDENT);
                         let card = egui::Frame::none()
                             .fill(if is_sel { tk.accent_soft } else { egui::Color32::TRANSPARENT })
                             .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
-                            .inner_margin(egui::Margin { left: 8.0, right: 8.0, top: 3.0, bottom: 8.0 })
+                            .inner_margin(theme::MARGIN_STEP_ROW)
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
@@ -461,7 +461,7 @@ impl MicroParquetApp {
                                     ui.label(t);
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         let c = if beyond { None } else { tab.step_counts.get(i + 1).copied() };
-                                        ui.label(theme::mono(count_text(c)).size(11.0).color(tk.muted));
+                                        ui.label(theme::mono(count_text(c)).size(theme::TEXT_COUNT).color(tk.muted));
                                     });
                                 });
                                 ui.label(
@@ -479,9 +479,9 @@ impl MicroParquetApp {
                                     );
                                 }
                                 if is_sel {
-                                    ui.add_space(4.0);
+                                    ui.add_space(theme::SPACE_XS);
                                     ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = 4.0;
+                                        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
                                         let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
                                         let edit = ui.add_enabled(editable, egui::Button::new(theme::ph::PENCIL_SIMPLE));
                                         if edit
@@ -528,8 +528,8 @@ impl MicroParquetApp {
                         select = Some(i);
                     }
                     // timeline: dot, and the line down to the next step
-                    let x = rect.left() - 18.0;
-                    let dot_y = rect.top() + 12.0;
+                    let x = rect.left() - theme::STEP_RAIL_X;
+                    let dot_y = rect.top() + theme::STEP_DOT_Y;
                     let dot_color = if issue.is_some() {
                         tk.danger
                     } else if skipped || beyond {
@@ -539,10 +539,10 @@ impl MicroParquetApp {
                     };
                     let painter = ui.painter();
                     painter.line_segment(
-                        [egui::pos2(x, dot_y), egui::pos2(x, rect.bottom() + 4.0)],
-                        egui::Stroke::new(2.0_f32, tk.border),
+                        [egui::pos2(x, dot_y), egui::pos2(x, rect.bottom() + theme::SPACE_XS)],
+                        theme::line_thick(tk.border),
                     );
-                    painter.circle(egui::pos2(x, dot_y), 6.0, tk.surface, egui::Stroke::new(2.0_f32, dot_color));
+                    painter.circle(egui::pos2(x, dot_y), theme::STEP_DOT_R, tk.surface, theme::line_thick(dot_color));
                 }
                 // The line above the first step starts at the source.
             });
@@ -590,14 +590,14 @@ impl MicroParquetApp {
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 ui.horizontal(|ui| {
-                    let w = (ui.available_width() - 12.0) / 3.0;
-                    if ui.add_sized([w, 32.0], egui::Button::new(theme::semibold("Save macro").size(theme::TEXT_SMALL))).clicked() {
+                    let w = (ui.available_width() - theme::SPACE_M) / 3.0; // not a size: three buttons
+                    if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("Save macro").size(theme::TEXT_SMALL))).clicked() {
                         self.active_tool = ActiveToolModal::SaveMacro;
                     }
-                    if ui.add_sized([w, 32.0], egui::Button::new(theme::semibold("Load").size(theme::TEXT_SMALL))).clicked() {
+                    if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("Load").size(theme::TEXT_SMALL))).clicked() {
                         self.load_and_apply_macro_interactive(false);
                     }
-                    if ui.add_sized([w, 32.0], egui::Button::new(theme::semibold("To .py").size(theme::TEXT_SMALL))).clicked() {
+                    if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("To .py").size(theme::TEXT_SMALL))).clicked() {
                         self.prepare_python_preview_for_active_tab();
                     }
                 });
@@ -663,7 +663,7 @@ impl MicroParquetApp {
         let mut do_type = false;
         let (num_format, decimals) = (self.num_format, self.global_decimals);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 14.0)).show(ui, |ui| {
+            egui::Frame::none().inner_margin(theme::MARGIN_PANEL_COLUMN).show(ui, |ui| {
                 let Some(tab) = self.tabs.get(self.active_tab) else {
                     return;
                 };
@@ -711,7 +711,7 @@ impl MicroParquetApp {
                 if let Some(st) = stats {
                     ui.scope(|ui| {
                         if stale {
-                            ui.set_opacity(0.45);
+                            ui.set_opacity(theme::DISABLED_OPACITY);
                         }
                         let count = |n: u64| format_with_commas(n as f64, 0);
                         let fails = tab.parse_failures.iter().find(|f| f.column == name).map(|f| f.count as u64).unwrap_or(0);
@@ -735,14 +735,14 @@ impl MicroParquetApp {
                         if let Some(t) = &st.text {
                             tiles.push(("Distinct", count(t.distinct), None));
                         }
-                        egui::Grid::new("col_tiles").num_columns(2).spacing([8.0, 8.0]).show(ui, |ui| {
+                        egui::Grid::new("col_tiles").num_columns(2).spacing([theme::SPACE_S, theme::SPACE_S]).show(ui, |ui| {
                             for (i, (k, v, color)) in tiles.iter().enumerate() {
                                 egui::Frame::none()
                                     .fill(tk.bg)
                                     .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
-                                    .inner_margin(egui::Margin::same(10.0))
+                                    .inner_margin(theme::MARGIN_TILE)
                                     .show(ui, |ui| {
-                                        ui.set_width(118.0);
+                                        ui.set_width(theme::TILE_W);
                                         ui.label(theme::semibold(*k).size(theme::TEXT_LABEL).color(tk.muted));
                                         ui.add(egui::Label::new(theme::mono_semibold(v.clone()).color(color.unwrap_or(tk.ink))).truncate());
                                     });
@@ -756,15 +756,15 @@ impl MicroParquetApp {
                             ui.add_space(theme::SPACE_M);
                             ui.label(theme::semibold("Distribution").size(theme::TEXT_LABEL).color(tk.muted));
                             let max = n.histogram.iter().copied().max().unwrap_or(1).max(1) as f32;
-                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 70.0), egui::Sense::hover());
+                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), theme::HISTOGRAM_H), egui::Sense::hover());
                             let w = rect.width() / n.histogram.len() as f32;
                             for (i, c) in n.histogram.iter().enumerate() {
                                 let h = (*c as f32 / max) * rect.height();
                                 let bar = egui::Rect::from_min_max(
-                                    egui::pos2(rect.left() + i as f32 * w + 2.0, rect.bottom() - h),
-                                    egui::pos2(rect.left() + (i as f32 + 1.0) * w - 2.0, rect.bottom()),
+                                    egui::pos2(rect.left() + i as f32 * w + theme::HISTOGRAM_BAR_GAP, rect.bottom() - h),
+                                    egui::pos2(rect.left() + (i as f32 + 1.0) * w - theme::HISTOGRAM_BAR_GAP, rect.bottom()),
                                 );
-                                ui.painter().rect_filled(bar, egui::Rounding { nw: 3.0, ne: 3.0, sw: 0.0, se: 0.0 }, tk.accent.gamma_multiply(0.8));
+                                ui.painter().rect_filled(bar, theme::ROUNDING_BAR_TOP, tk.accent.gamma_multiply(theme::HISTOGRAM_BAR_ALPHA));
                             }
                             resp.on_hover_text(format!(
                                 "{} bars from {} to {}; the bars add up to {} values",
@@ -781,7 +781,7 @@ impl MicroParquetApp {
                                 ui.horizontal(|ui| {
                                     ui.add(egui::Label::new(egui::RichText::new(v.clone()).color(tk.ink)).truncate());
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.label(theme::mono(count(*c)).size(11.0).color(tk.muted));
+                                        ui.label(theme::mono(count(*c)).size(theme::TEXT_COUNT).color(tk.muted));
                                     });
                                 });
                             }
@@ -791,7 +791,7 @@ impl MicroParquetApp {
 
                 // actions
                 ui.add_space(theme::SPACE_M);
-                let wide = |ui: &mut egui::Ui, text: String| ui.add_sized([ui.available_width(), 34.0], egui::Button::new(theme::semibold(text)));
+                let wide = |ui: &mut egui::Ui, text: String| ui.add_sized([ui.available_width(), theme::WIDE_BTN_H], egui::Button::new(theme::semibold(text)));
                 if wide(ui, format!("{}  Filter on this column\u{2026}", theme::ph::FUNNEL)).clicked() {
                     do_filter = Some(name.clone());
                 }

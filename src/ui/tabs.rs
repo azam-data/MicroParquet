@@ -348,21 +348,21 @@ impl MicroParquetApp {
 
     pub(crate) fn render_empty_state(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
-            ui.add_space(90.0);
+            ui.add_space(theme::EMPTY_STATE_TOP);
             ui.heading(format!(
                 "MicroParquet {}: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
                 env!("CARGO_PKG_VERSION")
             ));
             ui.label("Out-of-Core Polars Engine • Multi-Tab Views • Custom Maturity Buckets • Per-Metric Formats");
-            ui.add_space(20.0);
+            ui.add_space(theme::EMPTY_STATE_GAP);
             if theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...").clicked() {
                 self.initiate_file_open(false);
             }
-            ui.add_space(8.0);
+            ui.add_space(theme::SPACE_S);
             if ui.button("\u{E466} Stack / Merge Multiple Files...").clicked() {
                 self.active_tool = ActiveToolModal::StackFiles;
             }
-            ui.add_space(8.0);
+            ui.add_space(theme::SPACE_S);
             if ui
                 .button("\u{E094} Launch Recursive Folder Batch Converter...")
                 .clicked()
@@ -387,20 +387,20 @@ impl MicroParquetApp {
             .frame(
                 egui::Frame::none()
                     .fill(tk.bg)
-                    .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 0.0, bottom: 0.0 }),
+                    .inner_margin(theme::MARGIN_TAB_STRIP),
             )
             .show(ctx, |ui| {
                 theme::bottom_border(ui, tk.border);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.spacing_mut().item_spacing.x = theme::BAR_ITEM_GAP;
                     for idx in 0..self.tabs.len() {
                         let active = idx == self.active_tab;
                         let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
                         let frame = egui::Frame::none()
                             .fill(if active { tk.surface } else { egui::Color32::TRANSPARENT })
-                            .stroke(if active { egui::Stroke::new(1.0_f32, tk.border) } else { egui::Stroke::NONE })
-                            .rounding(egui::Rounding { nw: 6.0, ne: 6.0, sw: 0.0, se: 0.0 })
-                            .inner_margin(egui::Margin::symmetric(14.0, if active { 7.0 } else { 5.0 }));
+                            .stroke(if active { theme::line(tk.border) } else { egui::Stroke::NONE })
+                            .rounding(theme::ROUNDING_TAB_TOP)
+                            .inner_margin(theme::margin_tab(active));
                         let out = frame.show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = theme::SPACE_S;
@@ -420,7 +420,7 @@ impl MicroParquetApp {
                         });
                         if active {
                             let r = out.response.rect;
-                            ui.painter().hline(r.x_range(), r.top() + 1.0, egui::Stroke::new(2.0_f32, tk.accent));
+                            ui.painter().hline(r.x_range(), r.top() + 1.0, theme::line_thick(tk.accent));
                         }
                         let resp = out.response.interact(egui::Sense::click());
                         if resp.clicked() {

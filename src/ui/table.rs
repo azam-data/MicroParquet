@@ -164,24 +164,24 @@ fn draw_summary_cell(
     let spec = effective_spec(c, sv);
     // selector row background and the selector chip
     ui.painter().rect_filled(sel_rect, 0.0, tk.bg);
-    ui.painter().hline(sel_rect.x_range(), sel_rect.top() + 0.5, egui::Stroke::new(1.0_f32, tk.border));
+    ui.painter().hline(sel_rect.x_range(), sel_rect.top() + 0.5, theme::line(tk.border));
     let on = spec.agg != SummaryAgg::None;
     let (fg, bg, stroke) = if on {
         (tk.selector_on_fg, tk.selector_on_bg, tk.selector_on_border)
     } else {
         (tk.selector_off_fg, egui::Color32::TRANSPARENT, tk.border)
     };
-    let inner = sel_rect.shrink2(egui::vec2(8.0, 4.0));
+    let inner = sel_rect.shrink2(theme::SELECTOR_INSET);
     let layout = if kind == CellKind::Number {
         egui::Layout::right_to_left(egui::Align::Center)
     } else {
         egui::Layout::left_to_right(egui::Align::Center)
     };
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(layout), |ui| {
-        ui.spacing_mut().button_padding = egui::vec2(8.0, 1.0);
+        ui.spacing_mut().button_padding = theme::SELECTOR_BTN_PAD;
         ui.visuals_mut().widgets.inactive.weak_bg_fill = bg;
-        ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, stroke);
-        ui.visuals_mut().widgets.inactive.rounding = egui::Rounding::same(4.0);
+        ui.visuals_mut().widgets.inactive.bg_stroke = theme::line(stroke);
+        ui.visuals_mut().widgets.inactive.rounding = egui::Rounding::same(theme::RADIUS_SMALL);
         let label = format!("{} {}", spec.agg.label(), theme::ph::CARET_DOWN);
         ui.menu_button(theme::semibold(label).size(theme::TEXT_LABEL).color(fg), |ui| {
             let numeric = c.dtype().is_numeric();
@@ -205,14 +205,14 @@ fn draw_summary_cell(
 
     // summary band
     ui.painter().rect_filled(band_rect, 0.0, tk.summary_bg);
-    ui.painter().vline(band_rect.right() - 0.5, band_rect.y_range(), egui::Stroke::new(1.0_f32, tk.summary_divider));
+    ui.painter().vline(band_rect.right() - 0.5, band_rect.y_range(), theme::line(tk.summary_divider));
     let (text, note) = summary_band_text(sv, &name, on, spec_fmt, num_format, decimals);
     let layout = if kind == CellKind::Number {
         egui::Layout::right_to_left(egui::Align::Center)
     } else {
         egui::Layout::left_to_right(egui::Align::Center)
     };
-    let inner = band_rect.shrink2(egui::vec2(12.0, 0.0));
+    let inner = band_rect.shrink2(theme::BAND_INSET);
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(layout), |ui| {
         let r = ui.add(
             egui::Label::new(theme::mono_semibold(text).color(tk.summary_fg)).truncate(),
@@ -275,7 +275,7 @@ impl MicroParquetApp {
         let row_no_width = EguiMetrics { ctx: &ctx, mono_cells: true };
         let row_no_min = {
             use micro_parquet::table_layout::FontMetrics;
-            row_no_width.cell(&format_with_commas((row_offset + num_rows.max(1)) as f64, 0)) + 24.0
+            row_no_width.cell(&format_with_commas((row_offset + num_rows.max(1)) as f64, 0)) + theme::ROW_NO_PAD
         };
 
         // One tall header row holds three bands: names (38), the summary selectors (30) and the
@@ -288,7 +288,7 @@ impl MicroParquetApp {
 
         egui::Frame::none()
             .fill(tk.surface)
-            .stroke(egui::Stroke::new(1.0_f32, tk.border))
+            .stroke(theme::line(tk.border))
             .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
             .show(ui, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -298,10 +298,10 @@ impl MicroParquetApp {
                         .striped(true)
                         .resizable(true)
                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                        .column(Column::initial(row_no_min.max(48.0)).at_least(row_no_min.max(40.0)));
+                        .column(Column::initial(row_no_min.max(theme::ROW_NO_COL_W)).at_least(row_no_min.max(theme::ROW_NO_MIN_W)));
                     for w in &min_widths {
                         builder = builder.column(
-                            Column::initial((*w).max(96.0).min(MAX_COLUMN_WIDTH))
+                            Column::initial((*w).max(theme::COLUMN_INITIAL_MIN_W).min(MAX_COLUMN_WIDTH))
                                 .at_least(*w)
                                 .clip(true)
                                 .resizable(true),
@@ -331,7 +331,7 @@ impl MicroParquetApp {
                                     // the heading row's background; the selected column's is accent_soft
                                     theme::paint_header_bg(ui, rect, if is_sel { tk.accent_soft } else { tk.header_bg });
                                     if is_sel {
-                                        ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, egui::Stroke::new(2.0_f32, tk.accent));
+                                        ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, theme::line_thick(tk.accent));
                                     }
                                     let layout = if *kind == CellKind::Number {
                                         egui::Layout::right_to_left(egui::Align::Center)
@@ -468,8 +468,8 @@ impl MicroParquetApp {
                     .add(
                         egui::Button::new(egui::RichText::new("+ Add condition").size(theme::TEXT_SMALL).color(tk.ink2))
                             .fill(egui::Color32::TRANSPARENT)
-                            .stroke(egui::Stroke::new(1.0_f32, tk.border))
-                            .rounding(egui::Rounding::same(14.0)),
+                            .stroke(theme::line(tk.border))
+                            .rounding(egui::Rounding::same(theme::RADIUS_CHIP)),
                     )
                     .clicked()
                 {
@@ -575,7 +575,7 @@ impl MicroParquetApp {
             let stale = tab.page_error.is_some();
             ui.scope(|ui| {
                 if updating || stale {
-                    ui.set_opacity(0.45);
+                    ui.set_opacity(theme::DISABLED_OPACITY);
                 }
                 action = Self::render_data_grid(
                     ui,

@@ -20,7 +20,7 @@ impl Default for ShockState {
             bal_col: "Balance".to_string(),
             rate_col: "Int Rate".to_string(),
             mat_col: "Matdat".to_string(),
-            bps: 100.0,
+            bps: 100.0, // not a size: basis points or a drag speed
         }
     }
 }
@@ -81,7 +81,7 @@ impl MicroParquetApp {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Parallel Rate Shock (bps, e.g. +100, +200, -150):");
-                        ui.add(egui::DragValue::new(&mut self.shock.bps).speed(5.0));
+                        ui.add(egui::DragValue::new(&mut self.shock.bps).speed(5.0)); // not a size: basis points or a drag speed
                     });
                     ui.horizontal(|ui| {
                         ui.label("Asset/Liability Side Col:");

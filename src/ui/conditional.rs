@@ -62,12 +62,12 @@ impl MicroParquetApp {
                                 });
                             ui.add(
                                 egui::TextEdit::singleline(&mut rule.compare_val)
-                                    .desired_width(90.0),
+                                    .desired_width(theme::FIELD_W_S),
                             );
                             ui.label("THEN");
                             ui.add(
                                 egui::TextEdit::singleline(&mut rule.output_val)
-                                    .desired_width(90.0),
+                                    .desired_width(theme::FIELD_W_S),
                             );
                             if ui.small_button("\u{E4F6}").clicked() {
                                 remove_idx = Some(idx);

@@ -429,14 +429,14 @@ impl MicroParquetApp {
             .map(|s| s.short_label())
             .unwrap_or_default();
         egui::Area::new(egui::Id::new("edit_step_banner"))
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, theme::TOP_BAR_H + 6.0))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, theme::TOP_BAR_H + theme::EDIT_BANNER_GAP))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::none()
                     .fill(tk.accent_soft)
-                    .stroke(egui::Stroke::new(1.0_f32, tk.accent))
+                    .stroke(theme::line(tk.accent))
                     .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
-                    .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                    .inner_margin(theme::MARGIN_EDIT_BANNER)
                     .show(ui, |ui| {
                         ui.label(theme::semibold(format!(
                             "Editing step {} '{}': the modal's main button saves it in place; the steps after it are checked again.",

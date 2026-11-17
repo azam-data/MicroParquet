@@ -90,7 +90,7 @@ impl MicroParquetApp {
                             ui.label("Tenor Days:");
                             ui.add(egui::DragValue::new(&mut pt.tenor_days));
                             ui.label("FTP %:");
-                            ui.add(egui::DragValue::new(&mut pt.ftp_rate).speed(0.05));
+                            ui.add(egui::DragValue::new(&mut pt.ftp_rate).speed(0.05)); // not a size: drag speed
                         });
                     }
                 });

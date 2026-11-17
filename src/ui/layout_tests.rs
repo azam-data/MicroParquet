@@ -711,3 +711,122 @@ fn no_font_is_read_from_disk_at_run_time_and_one_licence_file_per_family() {
     assert!(notices.contains("SourceSans3-Regular") || notices.contains("SourceSans3-*.ttf"));
     assert!(!notices.contains("not in this repository"), "the notices no longer say the TTFs are missing");
 }
+
+// ------------------------------------------------------------- no size literals outside theme.rs
+
+/// The float literals of one line of Rust, outside strings, characters and `//` comments, and
+/// whether the line carries the marker that says its numbers are not sizes.
+fn float_literals(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut in_str = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_str {
+            if c == '\\' {
+                i += 2;
+                continue;
+            }
+            if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if c == '/' && chars.get(i + 1) == Some(&'/') {
+            break;
+        }
+        if c == '\'' {
+            // a character literal such as '\n' or 'x' (a lifetime has no closing quote soon)
+            if let Some(close) = chars[i + 1..].iter().take(4).position(|&k| k == '\'') {
+                i += close + 2;
+                continue;
+            }
+        }
+        let prev_is_word = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_' || chars[i - 1] == '.');
+        if c.is_ascii_digit() && !prev_is_word {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '_') {
+                i += 1;
+            }
+            let mut is_float = false;
+            if chars.get(i) == Some(&'.') && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
+                is_float = true;
+                i += 1;
+                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '_') {
+                    i += 1;
+                }
+            }
+            let rest: String = chars[i..].iter().take(4).collect();
+            if rest.starts_with("_f32") || rest.starts_with("f32") {
+                is_float = true;
+                i += if rest.starts_with('_') { 4 } else { 3 };
+            }
+            if is_float {
+                out.push(chars[start..i].iter().collect());
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+#[test]
+fn the_literal_scanner_finds_sizes_and_skips_strings_comments_and_arithmetic() {
+    assert_eq!(float_literals("ui.add_space(8.0);"), ["8.0"]);
+    assert_eq!(float_literals("x.size(11.0).color(c); // 12.0"), ["11.0"]);
+    assert_eq!(float_literals("ui.label(\"1,234.50 and 7.5\");"), Vec::<String>::new());
+    assert_eq!(float_literals("let a = 10_000_000.0 / 3.0;"), ["10_000_000.0", "3.0"]);
+    assert_eq!(float_literals("Stroke::new(1.0_f32, c)"), ["1.0_f32"]);
+    assert_eq!(float_literals("v.min(5f32)"), ["5f32"]);
+    assert_eq!(float_literals("let c = '.'; self.0.5"), Vec::<String>::new());
+    assert_eq!(float_literals("a[0].0 + b.1"), Vec::<String>::new());
+}
+
+#[test]
+fn no_size_literal_is_left_outside_theme_rs() {
+    // The acceptance check of the layout round. Colours: no hex colour, `from_rgb`, `from_black_alpha`
+    // and the like outside theme.rs. Sizes: no float literal other than 0.0, 0.5, 1.0 and 2.0 (zero,
+    // a half-pixel line offset, one and a half) in the UI sources, except on a line that says
+    // `// not a size: <why>` (a rate, a unit, a drag speed, an example in a text).
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir("src/ui")
+        .expect("src/ui")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .filter(|p| {
+            let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs")
+        })
+        .collect();
+    files.push("src/main.rs".into());
+    let mut bad = Vec::new();
+    for f in files {
+        let text = std::fs::read_to_string(&f).expect("read source");
+        for (n, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            let code = line.split("//").next().unwrap_or(line);
+            if code.contains("Color32::from_") && !code.contains("Color32::from_black_alpha(theme::") {
+                bad.push(format!("{}:{}: colour literal: {}", f.display(), n + 1, line.trim()));
+            }
+            if line.contains("not a size") {
+                continue;
+            }
+            for lit in float_literals(line) {
+                if !matches!(lit.as_str(), "0.0" | "0.5" | "1.0" | "2.0") {
+                    bad.push(format!("{}:{}: size literal {}: {}", f.display(), n + 1, lit, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "literals that belong in theme.rs:\n{}", bad.join("\n"));
+}

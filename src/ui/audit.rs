@@ -73,9 +73,9 @@ impl MicroParquetApp {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Rate outlier below %:");
-                        ui.add(egui::DragValue::new(&mut self.audit.rate_min).speed(0.1));
+                        ui.add(egui::DragValue::new(&mut self.audit.rate_min).speed(0.1)); // not a size: drag speed
                         ui.label("or above %:");
-                        ui.add(egui::DragValue::new(&mut self.audit.rate_max).speed(0.1));
+                        ui.add(egui::DragValue::new(&mut self.audit.rate_max).speed(0.1)); // not a size: drag speed
                     });
                     ui.label("Audit_Exception_Flag shows the first flag; Audit_All_Flags lists every flag that applies.");
                     ui.checkbox(

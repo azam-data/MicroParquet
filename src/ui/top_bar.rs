@@ -278,5 +278,5 @@ impl MicroParquetApp {
 /// A thin vertical line between two groups.
 fn bar_separator(ui: &mut egui::Ui, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(theme::BAR_SEPARATOR_W, theme::BAR_SEPARATOR_H), egui::Sense::hover());
-    ui.painter().vline(rect.center().x, rect.y_range(), egui::Stroke::new(1.0_f32, color));
+    ui.painter().vline(rect.center().x, rect.y_range(), theme::line(color));
 }

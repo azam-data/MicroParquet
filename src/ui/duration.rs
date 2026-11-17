@@ -19,8 +19,8 @@ impl Default for DurationState {
             rate_col: "Int Rate".to_string(),
             mat_col: "Matdat".to_string(),
             freq: 4,
-            shock_bps: 200.0,
-            sight_yrs: 0.0833,
+            shock_bps: 200.0, // not a size: a rate or a drag speed
+            sight_yrs: 0.0833, // not a size: a rate or a drag speed
         }
     }
 }
@@ -71,9 +71,9 @@ impl MicroParquetApp {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Parallel Rate Shock for ΔEVE (bps):");
-                        ui.add(egui::DragValue::new(&mut self.duration.shock_bps).speed(10.0));
+                        ui.add(egui::DragValue::new(&mut self.duration.shock_bps).speed(10.0)); // not a size: a rate or a drag speed
                         ui.label("Null Matdat Tenor (Yrs):");
-                        ui.add(egui::DragValue::new(&mut self.duration.sight_yrs).speed(0.05));
+                        ui.add(egui::DragValue::new(&mut self.duration.sight_yrs).speed(0.05)); // not a size: a rate or a drag speed
                     });
                     ui.horizontal(|ui| {
                         ui.label("Asset/Liability Side Col:");
