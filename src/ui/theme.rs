@@ -132,6 +132,11 @@ pub const TEXT_MONO: f32 = 13.0;
 pub const PROGRESS_BAR_W: f32 = 120.0;
 /// The schema dialog: width, the preview's fixed 5 rows, and the columns list.
 pub const SCHEMA_DIALOG_W: f32 = 1040.0;
+/// The narrowest the schema dialog can be made: its header buttons still fit.
+pub const SCHEMA_DIALOG_MIN_W: f32 = 640.0;
+/// The size of the schema dialog's own native window, and the smallest it can be made.
+pub const SCHEMA_POPOUT_SIZE: [f32; 2] = [1100.0, 800.0];
+pub const SCHEMA_POPOUT_MIN_SIZE: [f32; 2] = [640.0, 480.0];
 /// Space between the items of the two option rows.
 pub const SCHEMA_ROW_GAP: f32 = 6.0;
 /// The Columns card is never shorter than this: the dialog scrolls instead.
@@ -835,6 +840,9 @@ pub fn dialog_start_pos(bounds: egui::Rect, width: f32) -> egui::Pos2 {
 #[derive(Clone, Copy, Debug)]
 pub struct DialogReport {
     pub window: egui::Rect,
+    /// The fixed buttons row under the title bar (`NOTHING` when the dialog has none).
+    pub header: egui::Rect,
+    /// The fixed footer (`NOTHING` when the dialog has none).
     pub footer: egui::Rect,
     pub body: egui::Rect,
     pub bounds: egui::Rect,
@@ -867,11 +875,13 @@ pub struct Dialog<'a> {
     collapsible: bool,
     resizable: Option<bool>,
     open: Option<&'a mut bool>,
+    min_width: f32,
+    fill_height: bool,
 }
 
 /// The modal window every dialog uses.
 pub fn modal<'a>(title: &str) -> Dialog<'a> {
-    Dialog { title: title.to_string(), width: DIALOG_DEFAULT_W, collapsible: false, resizable: None, open: None }
+    Dialog { title: title.to_string(), width: DIALOG_DEFAULT_W, collapsible: false, resizable: None, open: None, min_width: 0.0, fill_height: false }
 }
 
 impl<'a> Dialog<'a> {
@@ -885,6 +895,18 @@ impl<'a> Dialog<'a> {
     }
     pub fn resizable(mut self, v: bool) -> Self {
         self.resizable = Some(v);
+        self
+    }
+    /// The dialog opens as tall as the area allows (for a middle made with `body_scroll`, which
+    /// always fills the height it is given: egui would otherwise open the window at its default
+    /// height, as a resizable window never grows by itself).
+    pub fn fill_height(mut self) -> Self {
+        self.fill_height = true;
+        self
+    }
+    /// The narrowest the dialog can be made (never more than the area allows).
+    pub fn min_width(mut self, w: f32) -> Self {
+        self.min_width = w;
         self
     }
     pub fn open(mut self, open: &'a mut bool) -> Self {
@@ -906,7 +928,8 @@ impl<'a> Dialog<'a> {
             f.row_height(&FontId::new(TEXT_HEADING, family_semibold()))
                 .max(f.row_height(&FontId::new(TEXT_BASE, family_semibold())))
         });
-        let footer_id = egui::Id::new(("dialog_footer_h", self.title.as_str()));
+        // the height of what stays in place around the scrolling middle: the footer and the header
+        let footer_id = egui::Id::new(("dialog_fixed_h", self.title.as_str()));
         let overhead_id = egui::Id::new(("dialog_overhead", self.title.as_str()));
         let footer_h = ctx.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(DIALOG_FOOTER_H);
         let overhead = ctx.data(|d| d.get_temp::<f32>(overhead_id)).unwrap_or_else(|| dialog_overhead_estimate(title_h));
@@ -934,35 +957,43 @@ impl<'a> Dialog<'a> {
         if let Some(open) = self.open {
             window = window.open(open);
         }
+        if self.fill_height {
+            window = window.default_height(lay.max_content_h);
+        }
         let out = window
             .default_width(width)
+            .min_width(self.min_width.min(max_inner_w))
             .max_width(max_inner_w)
             .max_height(lay.max_content_h)
             .constrain_to(bounds)
             .default_pos(dialog_start_pos(bounds, width + 2.0 * SPACE_M))
             .show(ctx, |ui| {
-                let mut d = DialogUi { ui, body_max_h: lay.body_max_h, footer: None, body: None };
+                let mut d = DialogUi { ui, body_max_h: lay.body_max_h, footer: None, header: None, body: None };
                 let r = add(&mut d);
-                let (footer, body) = (d.footer, d.body);
-                if let Some(f) = footer {
-                    ctx.data_mut(|data| data.insert_temp(footer_id, f.height()));
+                let (footer, header, body) = (d.footer, d.header, d.body);
+                if footer.is_some() || header.is_some() {
+                    let fixed = footer.map_or(0.0, |f| f.height()) + header.map_or(0.0, |h| h.height() + spacing_y);
+                    ctx.data_mut(|data| data.insert_temp(footer_id, fixed));
                 }
-                (r, footer, body)
+                (r, footer, header, body)
             });
         out.map(|o| {
-            let (r, footer, body) = match o.inner {
-                Some((r, f, b)) => (Some(r), f, b),
-                None => (None, None, None),
+            let (r, footer, header, body) = match o.inner {
+                Some((r, f, h, b)) => (Some(r), f, h, b),
+                None => (None, None, None, None),
             };
             let window = o.response.rect;
-            // what the frame and title bar really add: the window less its content
-            if let (Some(f), Some(b)) = (footer, body) {
-                let measured = window.height() - (f.bottom() - b.top());
+            // what the frame and title bar really add: the window less its content (the middle and
+            // the footer; the header is counted with the fixed parts, not here)
+            if let Some(b) = body {
+                let last = footer.map_or(b.bottom(), |f| f.bottom());
+                let first = header.map_or(b.top(), |h| h.top());
+                let measured = window.height() - (last - first);
                 if measured > 0.0 {
                     ctx.data_mut(|d| d.insert_temp(overhead_id, measured));
                 }
             }
-            let report = DialogReport { window, footer: footer.unwrap_or(egui::Rect::NOTHING), body: body.unwrap_or(egui::Rect::NOTHING), bounds };
+            let report = DialogReport { window, header: header.unwrap_or(egui::Rect::NOTHING), footer: footer.unwrap_or(egui::Rect::NOTHING), body: body.unwrap_or(egui::Rect::NOTHING), bounds };
             ctx.data_mut(|d| {
                 d.insert_temp(egui::Id::new(("dialog_report", title.as_str())), report);
                 let log = d.get_temp_mut_or_default::<DialogLog>(egui::Id::new("dialog_log"));
@@ -979,6 +1010,7 @@ pub struct DialogUi<'a> {
     pub ui: &'a mut egui::Ui,
     body_max_h: f32,
     footer: Option<egui::Rect>,
+    header: Option<egui::Rect>,
     body: Option<egui::Rect>,
 }
 
@@ -1042,9 +1074,14 @@ impl DialogUi<'_> {
         r
     }
 
-    /// Content between the title bar and the footer that must stay in view (a banner).
+    /// Content between the title bar and the scrolling middle that must stay in view (a row of
+    /// buttons, a banner). Call it before `body`; it takes height from the middle.
     pub fn header<R>(&mut self, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-        add(self.ui)
+        let top = self.ui.cursor().top();
+        let r = add(self.ui);
+        let m = self.ui.min_rect();
+        self.header = Some(egui::Rect::from_min_max(egui::pos2(m.left(), top), egui::pos2(m.right(), m.bottom())));
+        r
     }
 }
 

@@ -392,6 +392,7 @@ pub(crate) fn schema_modal(rows: usize, columns: usize, parquet: bool) -> Pendin
         target_tab: None,
         parse_failures: Vec::new(),
         is_parquet: parquet,
+        popped_out: false,
     }
 }
 
@@ -444,8 +445,9 @@ fn schema_dialog_has_three_cards_with_these_headings() {
     for h in ["Reading options", "Preview", "Columns"] {
         assert!(all.contains(&h), "heading {h}: {all:?}");
     }
-    assert!(r.reading.bottom() <= r.preview.top() + 0.5, "{r:?}");
-    assert!(r.preview.bottom() <= r.columns.top() + 0.5, "{r:?}");
+    // order: Reading options, Columns, Preview
+    assert!(r.reading.bottom() <= r.columns.top() + 0.5, "{r:?}");
+    assert!(r.columns.bottom() <= r.preview.top() + 0.5, "{r:?}");
     // the old numbered headings are gone
     assert!(!all.iter().any(|t| t.contains("Raw 5-Row") || t.contains("2. Set Specific")), "{all:?}");
 }
@@ -496,9 +498,12 @@ fn preview_is_five_rows_whatever_the_file_has() {
 #[test]
 fn columns_card_takes_the_remaining_height_but_never_less_than_its_minimum() {
     for n in [3usize, 60, 400] {
-        // room to spare: it ends where the visible middle ends
+        // room to spare: it takes what the Preview card under it leaves, so the Preview ends
+        // where the visible middle ends
         let (r, _, middle) = drawn_schema_in(1100.0, 5, n, false);
-        assert!((r.columns.bottom() - middle.bottom()).abs() < 1.5, "{n} columns: card ends at {} but the middle at {}", r.columns.bottom(), middle.bottom());
+        assert!((r.preview.bottom() - middle.bottom()).abs() < 1.5, "{n} columns: the Preview ends at {} but the middle at {}", r.preview.bottom(), middle.bottom());
+        let gap = r.preview.top() - r.columns.bottom();
+        assert!(gap >= theme::SPACE_S && gap <= theme::SPACE_S + 8.0, "{n} columns: gap {gap}: {r:?}");
         assert!(r.columns.height() > theme::SCHEMA_COLUMNS_MIN_H, "{n} columns: {:?}", r.columns);
         // a short middle: the card keeps its minimum and the dialog scrolls
         let (r, _, _) = drawn_schema_in(300.0, 5, n, false);
@@ -538,6 +543,8 @@ pub(crate) struct Painted {
     pub(crate) colors: Vec<(String, egui::Color32)>,
     /// What was really drawn of each text (a label cut with "…" shows less than its text).
     pub(crate) shown: Vec<(String, egui::Pos2)>,
+    /// The rectangle each text occupies.
+    pub(crate) boxes: Vec<(String, egui::Rect)>,
 }
 
 pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
@@ -547,6 +554,7 @@ pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted 
                 let fam = t.galley.job.sections.first().map(|s| s.format.font_id.family.clone()).unwrap_or(egui::FontFamily::Proportional);
                 out.colors.push((t.galley.text().to_string(), t.galley.job.sections.first().map(|s| s.format.color).unwrap_or(egui::Color32::PLACEHOLDER)));
                 out.shown.push((t.galley.rows.iter().map(|r| r.text()).collect::<String>(), t.pos));
+                out.boxes.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2())));
                 out.texts.push((t.galley.text().to_string(), t.pos, fam));
             }
             egui::Shape::Rect(r) => out.rects.push((r.rect, r.fill)),

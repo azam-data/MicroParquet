@@ -56,7 +56,7 @@ fn check_report(ctx: &egui::Context, r: theme::DialogReport, what: &str) {
 }
 
 #[test]
-fn schema_dialog_with_40_columns_keeps_its_footer_inside_the_window_at_both_scales() {
+fn schema_dialog_with_40_columns_keeps_its_header_and_cards_inside_the_window_at_both_scales() {
     for (ppp, w, h) in SCREENS {
         let what = format!("ppp {ppp}, {w}x{h} pt");
         let mut app = test_app("r1schema");
@@ -73,8 +73,9 @@ fn schema_dialog_with_40_columns_keeps_its_footer_inside_the_window_at_both_scal
             }
         }
         let r = assert_dialog_fits(&ctx, crate::ui::schema::SCHEMA_TITLE_CSV, &what);
-        // the footer is a row of real buttons, not an empty strip
-        assert!(r.footer.height() >= 30.0, "{what}: {:?}", r.footer);
+        // this dialog has no bottom footer: its buttons are in the header
+        assert!(!r.footer.is_positive(), "{what}: no footer expected: {:?}", r.footer);
+        assert!(r.header.is_positive() && inside(r.header, r.window), "{what}: header {:?} in {:?}", r.header, r.window);
         // the dialog is as tall as the area allows: the 40 columns scroll inside it
         assert!(r.window.height() > r.bounds.height() - 40.0, "{what}: {:?} in {:?}", r.window, r.bounds);
         assert!(app.pending_csv_modal.is_some(), "still open");
@@ -613,5 +614,205 @@ fn delta_vs_source_is_grey_after_filters_and_a_warning_only_without_one() {
         let mut app = new_app("r7zero", vec![]);
         let p = paint(&mut app);
         assert_eq!(colour(&p, "0.00 Cr"), Some(tk.success), "ppp {ppp}");
+    }
+}
+
+
+// ------------------------------------------------------------ part 4, item 1: schema dialog header
+
+use crate::ui::layout_tests::collect_painted;
+use crate::ui::schema::{SchemaKeys, SchemaOutcome};
+
+fn key(k: egui::Key) -> Vec<egui::Event> {
+    vec![egui::Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]
+}
+
+/// The box of the text `t` painted in this frame.
+fn box_of(p: &crate::ui::layout_tests::Painted, t: &str) -> egui::Rect {
+    p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, r)| *r).unwrap_or_else(|| panic!("'{t}' was not painted: {:?}", p.boxes.iter().map(|b| b.0.clone()).collect::<Vec<_>>()))
+}
+
+#[test]
+fn schema_dialog_buttons_are_in_the_header_right_aligned_and_the_cards_come_in_order() {
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)] {
+        let what = format!("ppp {ppp}, {w}x{h} pt");
+        let mut app = test_app("p4header");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        app.pending_csv_modal = Some(schema_modal(5, 40, false));
+        let (ctx, input) = screen(ppp, w, h);
+        ctx.set_embed_viewports(false); // as eframe's windows: the Pop out button is offered
+        let mut p = None;
+        for _ in 0..8 {
+            let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+            p = Some(collect_painted(&out.shapes));
+        }
+        let p = p.expect("frames");
+        let r = assert_dialog_fits(&ctx, crate::ui::schema::SCHEMA_TITLE_CSV, &what);
+        let (lock, convert, cancel) = (box_of(&p, "Lock Schema & Open"), box_of(&p, "Convert to Parquet"), box_of(&p, "Cancel"));
+        let pop = box_of(&p, "Pop out");
+        eprintln!("{what}: window {:?}\n  header {:?}\n  Pop out {pop:?}\n  Lock {lock:?}\n  Convert {convert:?}\n  Cancel {cancel:?}\n  body {:?}", r.window, r.header, r.body);
+        // in the header row, left to right: Lock, Convert, Cancel, at its right edge
+        for (n, b) in [("Pop out", pop), ("Lock", lock), ("Convert", convert), ("Cancel", cancel)] {
+            assert!(inside(b, r.header.expand2(egui::vec2(0.0, 6.0))), "{what}: {n} {b:?} is in the header {:?}", r.header);
+            assert!((b.center().y - r.header.center().y).abs() < 6.0, "{what}: {n} is on the header row");
+        }
+        assert!(pop.right() <= lock.left() && lock.right() <= convert.left() && convert.right() <= cancel.left(), "{what}: order Pop out, Lock, Convert, Cancel");
+        // right-aligned: Cancel ends at the dialog's content edge (its button padding is a few points)
+        assert!(r.header.right() - cancel.right() < 16.0 && r.header.right() - cancel.right() > 0.0, "{what}: Cancel {cancel:?} at the right edge of {:?}", r.header);
+        // the middle starts under the header, and nothing but the middle's scroll bar is below it
+        assert!(r.body.top() >= r.header.bottom() - 0.5, "{what}: body {:?} under header {:?}", r.body, r.header);
+        assert!(r.window.bottom() - r.body.bottom() < 2.0 * theme::SPACE_M + 14.0, "{what}: no footer strip under the middle: {:?} {:?}", r.window, r.body);
+        // no button at the bottom any more
+        assert!(cancel.bottom() < r.body.top(), "{what}: Cancel is above the cards");
+        // cards: Reading options, Columns, Preview from top to bottom
+        let exact = |t: &str| p.boxes.iter().find(|(x, b)| x == t && b.left() >= r.window.left() && b.right() <= r.window.right()).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: heading '{t}' not drawn"));
+        let (ro, co) = (exact("Reading options"), exact("Columns"));
+        assert!(ro.top() < co.top() && co.bottom() < r.window.bottom(), "{what}: order {ro:?} {co:?}");
+        // The Columns card keeps its minimum height, so in a short window (the 686 pt one) the
+        // Preview under it is below the fold: the middle scrolls to it (egui does not paint what
+        // is scrolled out). In a tall window it is in view, last.
+        if h > 800.0 {
+            let pv = exact("Preview");
+            assert!(co.top() < pv.top() && pv.top() - co.top() >= theme::SCHEMA_COLUMNS_MIN_H - 1.0, "{what}: Columns keeps at least its minimum: {co:?} {pv:?}");
+            assert!(pv.bottom() <= r.window.bottom(), "{what}: Preview heading {pv:?} is inside the dialog {:?}", r.window);
+        } else {
+            assert!(p.boxes.iter().all(|(t, _)| t != "Preview"), "{what}: the Preview is scrolled out of view");
+        }
+    }
+}
+
+#[test]
+fn enter_locks_the_schema_and_esc_cancels_it() {
+    for (key_pressed, opens) in [(egui::Key::Enter, true), (egui::Key::Escape, false)] {
+        let mut app = test_app("p4keys");
+        let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+        open_tab(&mut app, src, vec![]);
+        app.status_message.clear();
+        app.pending_csv_modal = Some(schema_modal(5, 6, false));
+        let (ctx, input) = screen(1.05, 1219.05, 685.71);
+        frames(&mut app, &ctx, &input, 5);
+        assert!(app.pending_csv_modal.is_some());
+        let mut with_key = input.clone();
+        with_key.events = key(key_pressed);
+        let _ = ctx.run(with_key, |c| app.frame_ui(c));
+        assert!(app.pending_csv_modal.is_none(), "{key_pressed:?} closes the dialog");
+        // Enter starts opening the file in a tab (the job says "Loading…"), Esc starts nothing
+        assert_eq!(app.status_message.starts_with("Loading"), opens, "{key_pressed:?}: status '{}'", app.status_message);
+    }
+}
+
+#[test]
+fn keys_decide_only_when_no_button_was_clicked_and_convert_only_dialogs_convert() {
+    let mut modal = schema_modal(1, 3, false);
+    let enter = SchemaKeys { enter: true, esc: false };
+    let esc = SchemaKeys { enter: false, esc: true };
+    let mut out = SchemaOutcome::default();
+    enter.apply(&modal, &mut out);
+    assert_eq!(out, SchemaOutcome { lock: true, ..Default::default() });
+    let mut out = SchemaOutcome::default();
+    esc.apply(&modal, &mut out);
+    assert_eq!(out, SchemaOutcome { cancel: true, ..Default::default() });
+    // a click in the same frame wins
+    let mut out = SchemaOutcome { reread: true, ..Default::default() };
+    enter.apply(&modal, &mut out);
+    assert_eq!(out, SchemaOutcome { reread: true, ..Default::default() });
+    // the dialog opened only to convert has no Lock button: Enter converts
+    modal.direct_convert_only = true;
+    let mut out = SchemaOutcome::default();
+    enter.apply(&modal, &mut out);
+    assert_eq!(out, SchemaOutcome { convert: true, ..Default::default() });
+}
+
+#[test]
+fn enter_in_a_text_field_or_with_a_list_open_does_not_close_the_dialog() {
+    let (ctx, input) = screen(1.05, 1219.05, 685.71);
+    // a focused widget (a button reached with Tab, a field being edited) takes Enter itself
+    let id = egui::Id::new("some_field");
+    let mut with_key = input.clone();
+    with_key.events = key(egui::Key::Enter);
+    let mut keys = None;
+    let _ = ctx.run(input.clone(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let mut s = String::new();
+            let r = ui.add(egui::TextEdit::singleline(&mut s).id(id));
+            r.request_focus();
+        });
+    });
+    let _ = ctx.run(with_key, |ctx| {
+        keys = Some(SchemaKeys::read(ctx));
+    });
+    let k = keys.expect("read");
+    assert!(!k.enter, "Enter belongs to the text field");
+}
+
+#[test]
+fn pop_out_shows_a_button_only_where_native_windows_work_and_docks_back_where_they_do_not() {
+    let (ctx, input) = screen(1.05, 1219.05, 685.71);
+    let mut app = test_app("p4pop");
+    app.pending_csv_modal = Some(schema_modal(5, 6, false));
+    // a headless context embeds viewports: no native windows, so no Pop out button
+    assert!(ctx.embed_viewports());
+    let mut p = None;
+    for _ in 0..4 {
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        p = Some(collect_painted(&out.shapes));
+    }
+    assert!(!p.expect("p").texts.iter().any(|(t, _, _)| t.contains("Pop out")), "no Pop out when windows cannot be opened");
+    // a native backend (eframe) turns embedding off: the button is there; a click pops the dialog out
+    ctx.set_embed_viewports(false);
+    let mut p = None;
+    for _ in 0..3 {
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        p = Some(collect_painted(&out.shapes));
+    }
+    let b = box_of(&p.expect("p"), "Pop out");
+    let click = |pressed: bool| egui::Event::PointerButton { pos: b.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let mut run = |events: Vec<egui::Event>, app: &mut MicroParquetApp| {
+        let mut i = input.clone();
+        i.events = events;
+        let _ = ctx.run(i, |c| app.frame_ui(c));
+    };
+    run(vec![egui::Event::PointerMoved(b.center())], &mut app);
+    run(vec![click(true)], &mut app);
+    run(vec![click(false)], &mut app);
+    // this backend has no renderer for a second window, so the dialog is told "embedded" and docks
+    // back at once; a real one keeps it out until Dock or closing the window
+    assert!(app.pending_csv_modal.is_some(), "the dialog is not lost");
+    run(vec![], &mut app);
+    run(vec![], &mut app);
+    let m = app.pending_csv_modal.as_ref().expect("modal");
+    assert!(!m.popped_out, "docked back: no second window on this backend");
+}
+
+#[test]
+fn the_pop_out_window_has_the_same_header_and_cards_at_its_default_and_maximised_sizes() {
+    for (ppp, w, h) in [(1.0, 1100.0, 800.0), (0.8, 1600.0, 900.0), (1.05, 1219.05, 685.71), (1.0, 1920.0, 1080.0)] {
+        let what = format!("ppp {ppp}, pop-out {w}x{h} pt");
+        let mut app = test_app("p4viewport");
+        let mut modal = schema_modal(5, 40, false);
+        modal.popped_out = true;
+        let (ctx, input) = screen(ppp, w, h);
+        let mut rects = None;
+        let mut p = None;
+        for _ in 0..6 {
+            let mut out = SchemaOutcome::default();
+            let o = ctx.run(input.clone(), |c| rects = Some(app.schema_viewport_ui(c, &mut modal, &mut out)));
+            p = Some(collect_painted(&o.shapes));
+        }
+        let (r, p) = (rects.expect("rects"), p.expect("p"));
+        let win = ctx.screen_rect();
+        let (dock, lock, cancel) = (box_of(&p, "Dock"), box_of(&p, "Lock Schema & Open"), box_of(&p, "Cancel"));
+        eprintln!("{what}: reading {:?}\n  columns {:?}\n  preview {:?}\n  Dock {dock:?} Lock {lock:?} Cancel {cancel:?}", r.reading, r.columns, r.preview);
+        assert!(inside(dock, win) && inside(lock, win) && inside(cancel, win), "{what}: header buttons are in the window {win:?}");
+        assert!(dock.right() <= lock.left() && lock.right() <= cancel.left(), "{what}: order");
+        assert!(win.right() - cancel.right() < 24.0, "{what}: right-aligned: {cancel:?} in {win:?}");
+        assert!(r.reading.right() <= win.right() && r.columns.right() <= win.right() && r.preview.right() <= win.right(), "{what}: cards inside the window width");
+        assert!(r.reading.bottom() <= r.columns.top() + 0.5 && r.columns.bottom() <= r.preview.top() + 0.5, "{what}: order Reading, Columns, Preview");
+        if h >= 780.0 {
+            // room enough: all three cards are in view, the Preview last
+            assert!(r.preview.bottom() <= win.bottom() + 0.5, "{what}: Preview {:?} in {win:?}", r.preview);
+            assert!(r.columns.height() >= theme::SCHEMA_COLUMNS_MIN_H, "{what}");
+        }
     }
 }

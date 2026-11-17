@@ -51,6 +51,7 @@ impl MicroParquetApp {
                         target_tab: None,
                         parse_failures: Vec::new(),
                         is_parquet: false,
+                        popped_out: false,
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {

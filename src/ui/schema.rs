@@ -16,6 +16,103 @@ pub struct PendingCsvModal {
     pub parse_failures: Vec<ParseFailure>,
     /// The file is Parquet: CSV reading options are hidden and file types are shown.
     pub is_parquet: bool,
+    /// The dialog is shown in its own native window (an egui immediate viewport) instead of
+    /// inside the app window.
+    pub popped_out: bool,
+}
+
+/// What the user asked for in one frame of the schema dialog (header buttons, Enter, Esc).
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct SchemaOutcome {
+    pub reread: bool,
+    /// "Lock Schema & Open" (or "Apply Schema to This Tab" when the dialog edits an open tab).
+    pub lock: bool,
+    pub convert: bool,
+    pub cancel: bool,
+    pub toggle_pop: bool,
+}
+
+impl SchemaOutcome {
+    pub fn any(&self) -> bool {
+        *self != Self::default()
+    }
+}
+
+/// The keys of this frame, read before the dialog is drawn: a text field or an open list that
+/// takes Enter or Esc itself must not also close the dialog.
+#[derive(Clone, Copy, Debug)]
+pub struct SchemaKeys {
+    pub enter: bool,
+    pub esc: bool,
+}
+
+impl SchemaKeys {
+    pub fn read(ctx: &egui::Context) -> Self {
+        let busy = ctx.wants_keyboard_input() || ctx.memory(|m| m.any_popup_open());
+        let focused = ctx.memory(|m| m.focused().is_some());
+        let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        // a focused button takes Enter itself
+        Self { enter: enter && !busy && !focused, esc: esc && !busy }
+    }
+
+    /// Enter is "Lock Schema & Open" (the conversion when that is all the dialog offers), Esc is
+    /// Cancel. A click on a button in the same frame wins.
+    pub fn apply(&self, modal: &PendingCsvModal, out: &mut SchemaOutcome) {
+        if out.any() {
+            return;
+        }
+        if self.esc {
+            out.cancel = true;
+        } else if self.enter {
+            if modal.direct_convert_only && !modal.is_parquet {
+                out.convert = true;
+            } else {
+                out.lock = true;
+            }
+        }
+    }
+}
+
+/// The buttons at the right of the dialog's header, in the order they read left to right:
+/// [Pop out] [Lock Schema & Open] [Convert to Parquet…] [Cancel]. Returns the row's rectangle.
+pub fn schema_header(ui: &mut egui::Ui, modal: &PendingCsvModal, can_pop: bool, out: &mut SchemaOutcome) -> egui::Rect {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // added right to left
+            if ui.button("Cancel").on_hover_text("Close without changes (Esc)").clicked() {
+                out.cancel = true;
+            }
+            if !modal.is_parquet
+                && ui
+                    .button("\u{E2DE} Convert to Parquet\u{2026}")
+                    .on_hover_text("Convert the file to Parquet now, without opening a tab")
+                    .clicked()
+            {
+                out.convert = true;
+            }
+            if modal.target_tab.is_some() {
+                if theme::primary_button(ui, "\u{E182} Apply Schema to This Tab").on_hover_text("Apply and reload the tab (Enter)").clicked() {
+                    out.lock = true;
+                }
+            } else if !modal.direct_convert_only
+                && theme::primary_button(ui, "\u{E182} Lock Schema & Open").on_hover_text("Lock this schema and open the file in a viewer tab (Enter)").clicked()
+            {
+                out.lock = true;
+            }
+            if can_pop || modal.popped_out {
+                let (label, tip) = if modal.popped_out {
+                    (format!("{} Dock", egui_phosphor::regular::ARROW_SQUARE_IN), "Put the dialog back inside the app window")
+                } else {
+                    (format!("{} Pop out", egui_phosphor::regular::ARROW_SQUARE_OUT), "Show this dialog in its own window, which you can move to another monitor or maximise")
+                };
+                if ui.button(label).on_hover_text(tip).clicked() {
+                    out.toggle_pop = true;
+                }
+            }
+        });
+    })
+    .response
+    .rect
 }
 
 impl MicroParquetApp {
@@ -24,48 +121,37 @@ impl MicroParquetApp {
             return;
         };
 
-        let mut keep_open = true;
-        let mut action_open_tab = false;
-        let mut action_apply_to_tab = false;
-        let mut action_direct_convert = false;
-        let mut action_reread = false;
-
+        let mut out = SchemaOutcome::default();
         let title = if modal.is_parquet { SCHEMA_TITLE_PARQUET } else { SCHEMA_TITLE_CSV };
-        theme::modal(title)
-            .resizable(true)
-            .default_width(theme::SCHEMA_DIALOG_W)
-            .show(ctx, |d| {
-                let view_h = d.body_max_h();
-                d.body_scroll(|ui| {
-                    self.schema_cards(ui, &mut modal, &mut action_reread, view_h);
-                });
-                d.footer(|ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        if modal.target_tab.is_some() {
-                            if theme::primary_button(ui, "\u{E182} Apply Schema to This Tab").clicked() {
-                                action_apply_to_tab = true;
-                                keep_open = false;
-                            }
-                        } else if !modal.direct_convert_only
-                            && theme::primary_button(ui, "\u{E182} Lock Schema & Open in Viewer Tab").clicked()
-                        {
-                            action_open_tab = true;
-                            keep_open = false;
-                        }
-                        if !modal.is_parquet
-                            && ui
-                                .button("\u{E2DE} Convert Directly to Parquet File Now...")
-                                .clicked()
-                        {
-                            action_direct_convert = true;
-                            keep_open = false;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            keep_open = false;
-                        }
+        if modal.popped_out {
+            self.show_schema_viewport(ctx, &mut modal, title, &mut out);
+        } else {
+            let keys = SchemaKeys::read(ctx);
+            // a backend that cannot open native windows keeps the dialog in the app
+            let can_pop = !ctx.embed_viewports();
+            theme::modal(title)
+                .resizable(true)
+                .default_width(theme::SCHEMA_DIALOG_W)
+                .min_width(theme::SCHEMA_DIALOG_MIN_W)
+                .fill_height()
+                .show(ctx, |d| {
+                    d.header(|ui| schema_header(ui, &modal, can_pop, &mut out));
+                    let view_h = d.body_max_h();
+                    d.body_scroll(|ui| {
+                        self.schema_cards(ui, &mut modal, &mut out.reread, view_h);
                     });
                 });
-            });
+            keys.apply(&modal, &mut out);
+        }
+
+        let action_reread = out.reread;
+        let action_apply_to_tab = out.lock && modal.target_tab.is_some();
+        let action_open_tab = out.lock && modal.target_tab.is_none();
+        let action_direct_convert = out.convert;
+        let keep_open = !(out.lock || out.convert || out.cancel);
+        if out.toggle_pop && keep_open {
+            modal.popped_out = !modal.popped_out;
+        }
 
         if action_reread {
             match (
@@ -126,6 +212,46 @@ impl MicroParquetApp {
         }
     }
 
+    /// The dialog in its own native window (an immediate viewport): the same header, cards and
+    /// keys as the in-app dialog. Closing the window docks the dialog back into the app.
+    fn show_schema_viewport(&mut self, ctx: &egui::Context, modal: &mut PendingCsvModal, title: &str, out: &mut SchemaOutcome) {
+        let builder = egui::ViewportBuilder::default()
+            .with_title(title.to_string())
+            .with_inner_size(theme::SCHEMA_POPOUT_SIZE)
+            .with_min_inner_size(theme::SCHEMA_POPOUT_MIN_SIZE)
+            .with_resizable(true)
+            .with_maximize_button(true)
+            .with_minimize_button(true);
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("schema_popout"), builder, |ctx, class| {
+            if class == egui::ViewportClass::Embedded || ctx.input(|i| i.viewport().close_requested()) {
+                // no native windows on this backend, or the window was closed: back into the app
+                out.toggle_pop = true;
+                return;
+            }
+            self.schema_viewport_ui(ctx, modal, out);
+        });
+    }
+
+    /// What fills the pop-out window: the header buttons, then the cards in a middle that
+    /// scrolls. (Tests draw it in a headless window the size of the pop-out.)
+    pub(crate) fn schema_viewport_ui(&mut self, ctx: &egui::Context, modal: &mut PendingCsvModal, out: &mut SchemaOutcome) -> SchemaCardRects {
+        let keys = SchemaKeys::read(ctx);
+        let mut rects = SchemaCardRects { reading: egui::Rect::NOTHING, preview: egui::Rect::NOTHING, columns: egui::Rect::NOTHING };
+        egui::CentralPanel::default().show(ctx, |ui| {
+            schema_header(ui, modal, true, out);
+            ui.add_space(theme::SPACE_S);
+            let view_h = ui.available_height();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    rects = self.schema_cards(ui, modal, &mut out.reread, view_h);
+                });
+        });
+        keys.apply(modal, out);
+        rects
+    }
+
     /// Reopens the schema modal for the active single-file tab, with its parse failures.
     pub(crate) fn open_schema_modal_for_active_tab(&mut self) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
@@ -171,6 +297,7 @@ impl MicroParquetApp {
                     target_tab: Some(self.active_tab),
                     parse_failures: tab.parse_failures.clone(),
                     is_parquet: *is_parquet,
+                    popped_out: false,
                 });
             }
             Err(e) => self.status_message = format!("Error reading the file preview: {:#}", e),
@@ -367,46 +494,16 @@ impl MicroParquetApp {
 
         ui.add_space(theme::SPACE_S);
 
-        // ---- Preview: always 5 rows high
-        rects.preview = theme::card_with(
-            ui,
-            "Preview",
-            |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(modal.csv_path.display().to_string()).color(tk.muted)).truncate())
-                    .on_hover_text(modal.csv_path.display().to_string());
-            },
-            |ui| {
-                // exactly this high, whatever the file has
-                let (area, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), theme::PREVIEW_GRID_H),
-                    egui::Sense::hover(),
-                );
-                ui.allocate_new_ui(
-                    egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)),
-                    |ui| {
-                        Self::render_data_grid(
-                            ui,
-                            &modal.raw_preview_df,
-                            &HashMap::new(),
-                            0,
-                            NumberDisplayFormat::Raw,
-                            2,
-                            0,
-                            None,
-                            &HashMap::new(),
-                            None,
-                        );
-                    },
-                );
-            },
-        );
-
-        ui.add_space(theme::SPACE_S);
-
-        // ---- Columns: the rest of the height
+        // ---- Columns: the rest of the height (the Preview card under it keeps its own)
         // the rest of the visible height, but never less than a list worth looking at
         let used = ui.cursor().top() - ui.min_rect().top();
-        let columns_h = (view_h - used).max(theme::SCHEMA_COLUMNS_MIN_H);
+        let preview_id = egui::Id::new("schema_preview_card_h");
+        let preview_h = ui.ctx().data(|d| d.get_temp::<f32>(preview_id)).unwrap_or_else(|| {
+            // until the card has been drawn once: its padding, heading row and grid
+            2.0 * theme::SPACE_M + 2.0 + ui.spacing().interact_size.y + ui.spacing().item_spacing.y + theme::PREVIEW_GRID_H
+        });
+        let gap = theme::SPACE_S + ui.spacing().item_spacing.y; // between two cards
+        let columns_h = (view_h - used - gap - preview_h).max(theme::SCHEMA_COLUMNS_MIN_H);
         rects.columns = theme::card_height(ui, "Columns", columns_h, |ui| {
             let n = modal.config.columns.len();
             let is_parquet = modal.is_parquet;
@@ -509,6 +606,42 @@ impl MicroParquetApp {
               });
             });
         });
+
+        // ---- Preview: always 5 rows high, last
+        ui.add_space(theme::SPACE_S);
+        rects.preview = theme::card_with(
+            ui,
+            "Preview",
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(modal.csv_path.display().to_string()).color(tk.muted)).truncate())
+                    .on_hover_text(modal.csv_path.display().to_string());
+            },
+            |ui| {
+                // exactly this high, whatever the file has
+                let (area, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), theme::PREVIEW_GRID_H),
+                    egui::Sense::hover(),
+                );
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        Self::render_data_grid(
+                            ui,
+                            &modal.raw_preview_df,
+                            &HashMap::new(),
+                            0,
+                            NumberDisplayFormat::Raw,
+                            2,
+                            0,
+                            None,
+                            &HashMap::new(),
+                            None,
+                        );
+                    },
+                );
+            },
+        );
+        ui.ctx().data_mut(|d| d.insert_temp(preview_id, rects.preview.height()));
         rects
     }
 }
