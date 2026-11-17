@@ -1594,10 +1594,12 @@ pub fn cl_grades() -> [&'static str; 5] {
     CL_GRADES
 }
 
-/// How a cell of the matrix is shaded.
+/// How a cell of a result table is shaded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shade {
     None,
+    /// A limit is breached (the liquidity gap ladder).
+    Breach,
     /// To a better grade.
     Upgrade,
     /// To a worse grade.
@@ -1828,4 +1830,222 @@ pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrat
         }
     }
     DataFrame::new(series).context("Could not arrange the CL migration matrix")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Liquidity gap ladder (Phase 4 V3)
+// ---------------------------------------------------------------------------------------------
+
+/// How the rows of one tab count in the ladder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GapRole {
+    /// Every row is an asset (an inflow).
+    Asset,
+    /// Every row is a liability (an outflow).
+    Liability,
+    /// A column says which: A / ASSET for assets; L / LIABILITY / DEPOSIT / BORROWING for liabilities.
+    Side(String),
+}
+
+/// What a tab contributes to the ladder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GapInputSpec {
+    pub role: GapRole,
+    pub amount_col: String,
+    pub maturity_col: String,
+}
+
+/// One minimum cumulative gap, in percent of total assets, for one bucket.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct GapLimit {
+    pub bucket: String,
+    pub min_cumulative_gap_pct: f64,
+}
+
+/// `portable_data/gap_limits/<preset>.json`: the limits ALCO set for a bucket preset.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct GapLimitsFile {
+    #[serde(default)]
+    pub preset: String,
+    /// Where the limits come from (the ALCO paper, the circular).
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub effective_from: String,
+    #[serde(default)]
+    pub limits: Vec<GapLimit>,
+}
+
+/// The name of the folder of gap limit files.
+pub const GAP_LIMITS_DIR: &str = "gap_limits";
+/// The ladder's columns.
+pub const GAP_COLUMNS: [&str; 7] = [
+    "Bucket",
+    "Inflows",
+    "Outflows",
+    "Net gap",
+    "Cumulative gap",
+    "Net gap % of total assets",
+    "Cumulative gap % of total assets",
+];
+pub const GAP_LIMIT_COLUMN: &str = "Cumulative gap limit %";
+pub const GAP_BREACH_COLUMN: &str = "Breach";
+pub const GAP_BREACH_FLAG: &str = "BREACH";
+
+/// The limits file of a preset in `dir`.
+pub fn gap_limits_path(dir: &Path, preset_name: &str) -> std::path::PathBuf {
+    dir.join(format!("{}.json", crate::paths::sanitize_file_name(preset_name)))
+}
+
+/// The buckets of a preset in the order of the ladder: the sight bucket (or the long bucket for
+/// a blank maturity), the buckets by their day limit, the overflow bucket, then overdue; a label
+/// that appears twice is kept at its first place.
+pub fn gap_bucket_order(def: &crate::models::CustomBucketDef, null_as_sight: bool) -> Vec<String> {
+    let mut rules = def.rules.clone();
+    rules.sort_by_key(|r| r.max_days);
+    let mut order: Vec<String> = Vec::new();
+    let mut push = |l: &str| {
+        if !order.iter().any(|x| x == l) {
+            order.push(l.to_string());
+        }
+    };
+    if null_as_sight {
+        push(&def.null_sight_label);
+    }
+    for r in &rules {
+        push(&r.label);
+    }
+    push(&def.overflow_label);
+    if !null_as_sight {
+        push(&def.null_long_label);
+    }
+    push(&def.overdue_label);
+    order
+}
+
+/// Reads the limits of a preset. `None` when there is no file; a file that is not valid, lists a
+/// bucket the preset does not have, lists one twice or has a limit that is not a number is an
+/// error that says what to fix.
+pub fn load_gap_limits(dir: &Path, def: &crate::models::CustomBucketDef) -> Result<Option<GapLimitsFile>> {
+    let path = gap_limits_path(dir, &def.name);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let txt = std::fs::read_to_string(&path).with_context(|| format!("Could not read the gap limits file {}", path.display()))?;
+    let file: GapLimitsFile = serde_json::from_str(&txt).map_err(|e| anyhow!("The gap limits file {} is not valid: {}. Expected {{\"limits\": [{{\"bucket\": \"...\", \"min_cumulative_gap_pct\": -10}}]}}.", path.display(), e))?;
+    validate_gap_limits(&file, def, &path.display().to_string())?;
+    Ok(Some(file))
+}
+
+fn validate_gap_limits(file: &GapLimitsFile, def: &crate::models::CustomBucketDef, name: &str) -> Result<()> {
+    let known: Vec<String> = gap_bucket_order(def, true).into_iter().chain(gap_bucket_order(def, false)).collect();
+    let mut seen: Vec<&str> = Vec::new();
+    for l in &file.limits {
+        if !known.iter().any(|k| *k == l.bucket) {
+            bail!("The gap limits file {} has a limit for '{}', which is not a bucket of the preset '{}'. Use the bucket names exactly as the bucketer writes them.", name, l.bucket, def.name);
+        }
+        if seen.contains(&l.bucket.as_str()) {
+            bail!("The gap limits file {} has two limits for '{}'. Keep one.", name, l.bucket);
+        }
+        seen.push(&l.bucket);
+        if !l.min_cumulative_gap_pct.is_finite() {
+            bail!("The gap limits file {} has no valid number for the limit of '{}'.", name, l.bucket);
+        }
+    }
+    Ok(())
+}
+
+/// The liquidity gap ladder: for each bucket of the preset, the inflows (assets), the outflows
+/// (liabilities), the net gap, the cumulative gap and both as a percentage of total assets (the
+/// sum of all inflows). With limits, also the limit of each bucket and a BREACH flag where the
+/// cumulative gap % is below it. A blank maturity goes to the preset's sight bucket (or its long
+/// bucket); a maturity before the cutoff goes to the overdue bucket.
+pub fn build_gap_ladder(
+    inputs: Vec<(LazyFrame, GapInputSpec)>,
+    def: &crate::models::CustomBucketDef,
+    cutoff_date: &str,
+    null_as_sight: bool,
+    limits: Option<&GapLimitsFile>,
+) -> Result<DataFrame> {
+    if inputs.is_empty() {
+        bail!("Gap ladder: add at least one tab (assets or liabilities).");
+    }
+    if let Some(l) = limits {
+        validate_gap_limits(l, def, "of this preset")?;
+    }
+    let mut parts: Vec<LazyFrame> = Vec::new();
+    for (lf, spec) in inputs {
+        let mut lf = lf;
+        let schema = lf.collect_schema().context("Could not read the columns of a tab of the gap ladder")?;
+        let amount_dt = schema.get(spec.amount_col.as_str()).cloned().ok_or_else(|| anyhow!("Gap ladder: a tab has no column '{}'. Choose its amount column again.", spec.amount_col))?;
+        if !amount_dt.is_numeric() {
+            bail!("Gap ladder: the amount column '{}' is {}, not a number. Set it to a number in the schema first.", spec.amount_col, amount_dt);
+        }
+        // +1 for an asset, -1 for a liability
+        let (lf, sign) = match &spec.role {
+            GapRole::Asset => (lf, lit(1.0)),
+            GapRole::Liability => (lf, lit(-1.0)),
+            GapRole::Side(c) => direction_sign(lf, Some(c))?,
+        };
+        let lf = apply_maturity_bucket(lf, &spec.maturity_col, cutoff_date, def, null_as_sight, "__bucket")?;
+        let amt = col(spec.amount_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+        parts.push(lf.select([
+            col("__bucket"),
+            when(sign.clone().gt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__in"),
+            when(sign.lt(lit(0.0))).then(amt).otherwise(lit(0.0)).alias("__out"),
+        ]));
+    }
+    let grouped = concat(parts, UnionArgs::default())?
+        .group_by([col("__bucket")])
+        .agg([col("__in").sum(), col("__out").sum()])
+        .collect()
+        .context("Could not calculate the gap ladder")?;
+    let names: Vec<Option<String>> = grouped.column("__bucket")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+    let ins: Vec<Option<f64>> = grouped.column("__in")?.f64()?.into_iter().collect();
+    let outs: Vec<Option<f64>> = grouped.column("__out")?.f64()?.into_iter().collect();
+    let order = gap_bucket_order(def, null_as_sight);
+    let mut inflow = vec![0.0f64; order.len()];
+    let mut outflow = vec![0.0f64; order.len()];
+    for (i, n) in names.iter().enumerate() {
+        let Some(n) = n else { continue };
+        let Some(pos) = order.iter().position(|o| o == n) else {
+            bail!("Gap ladder: the bucket '{}' is not in the preset '{}'.", n, def.name);
+        };
+        inflow[pos] += ins[i].unwrap_or(0.0);
+        outflow[pos] += outs[i].unwrap_or(0.0);
+    }
+    let total_assets: f64 = inflow.iter().sum();
+    let net: Vec<f64> = inflow.iter().zip(&outflow).map(|(a, b)| a - b).collect();
+    let mut cum = Vec::with_capacity(net.len());
+    let mut run = 0.0;
+    for n in &net {
+        run += n;
+        cum.push(run);
+    }
+    let pct = |x: f64| -> Option<f64> { if total_assets != 0.0 { Some(x / total_assets * 100.0) } else { None } };
+    let net_pct: Vec<Option<f64>> = net.iter().map(|x| pct(*x)).collect();
+    let cum_pct: Vec<Option<f64>> = cum.iter().map(|x| pct(*x)).collect();
+    let mut series = vec![
+        Series::new(GAP_COLUMNS[0].into(), order.clone()),
+        Series::new(GAP_COLUMNS[1].into(), inflow),
+        Series::new(GAP_COLUMNS[2].into(), outflow),
+        Series::new(GAP_COLUMNS[3].into(), net),
+        Series::new(GAP_COLUMNS[4].into(), cum),
+        Series::new(GAP_COLUMNS[5].into(), net_pct),
+        Series::new(GAP_COLUMNS[6].into(), cum_pct.clone()),
+    ];
+    if let Some(l) = limits {
+        if total_assets == 0.0 && !l.limits.is_empty() {
+            bail!("Gap ladder: total assets are 0, so the limits (percent of total assets) cannot be checked. Add an asset tab with amounts.");
+        }
+        let limit_for = |b: &str| l.limits.iter().find(|x| x.bucket == b).map(|x| x.min_cumulative_gap_pct);
+        let lim: Vec<Option<f64>> = order.iter().map(|b| limit_for(b)).collect();
+        let breach: Vec<String> = lim.iter().zip(&cum_pct).map(|(l, c)| match (l, c) {
+            (Some(l), Some(c)) if c < l => GAP_BREACH_FLAG.to_string(),
+            _ => String::new(),
+        }).collect();
+        series.push(Series::new(GAP_LIMIT_COLUMN.into(), lim));
+        series.push(Series::new(GAP_BREACH_COLUMN.into(), breach));
+    }
+    DataFrame::new(series).context("Could not arrange the gap ladder")
 }

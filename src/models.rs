@@ -1129,6 +1129,11 @@ impl RateBandDef {
 }
 
 impl PortablePaths {
+    /// The folder of the gap limit files (`gap_limits/<preset>.json`).
+    pub fn gap_limits_dir(&self) -> PathBuf {
+        self.root_dir.join(crate::banking::GAP_LIMITS_DIR)
+    }
+
     /// Where the rate profile presets are saved.
     pub fn rate_bands_file(&self) -> PathBuf {
         self.root_dir.join("rate_bands.json")
@@ -1869,6 +1874,15 @@ pub enum TabSource {
         rate_col: Option<String>,
         cl_status_col: Option<String>,
     },
+    /// The liquidity gap ladder (Phase 4 V3): inflows and outflows of the chosen tabs by maturity bucket.
+    GapLadder {
+        inputs: Vec<GapTabInput>,
+        preset: CustomBucketDef,
+        cutoff_date: String,
+        null_as_sight: bool,
+        /// The limits read from `portable_data/gap_limits` when the tab was built.
+        limits: Option<crate::banking::GapLimitsFile>,
+    },
     /// The CL migration matrix of two months (Phase 4 V2).
     ClMigration {
         prev_source: Box<TabSource>,
@@ -1877,6 +1891,14 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// A tab that feeds the liquidity gap ladder: where its rows come from and how they count.
+#[derive(Clone, Debug)]
+pub struct GapTabInput {
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::banking::GapInputSpec,
 }
 
 #[derive(Clone)]

@@ -13,6 +13,7 @@ pub mod duration;
 pub mod export;
 pub mod filter;
 pub mod ftp;
+pub mod gap_ladder;
 pub mod jobs;
 pub mod join;
 pub mod limits;
@@ -103,6 +104,7 @@ impl MicroParquetApp {
             ActiveToolModal::JoinTabs => self.render_join_modal(ctx, cols),
             ActiveToolModal::ReconcilePeriods => self.render_reconcile_modal(ctx, cols),
             ActiveToolModal::ClMigration => self.render_cl_migration_modal(ctx, cols),
+            ActiveToolModal::GapLadder => self.render_gap_ladder_modal(ctx, cols),
             ActiveToolModal::SaveMacro => self.render_save_macro_modal(ctx, cols),
             ActiveToolModal::PythonCodePreview => self.render_python_preview_modal(ctx, cols),
             ActiveToolModal::MultiTabExport => self.render_multi_export_modal(ctx, cols),

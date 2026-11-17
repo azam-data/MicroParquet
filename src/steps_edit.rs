@@ -195,6 +195,7 @@ pub fn source_files(source: &TabSource) -> Vec<&Path> {
             v.extend(source_files(curr_source));
             v
         }
+        TabSource::GapLadder { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
     }
 }
 

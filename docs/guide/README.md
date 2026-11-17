@@ -22,6 +22,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 
 - [Maturity bucketer](maturity-bucketer.md): residual maturity buckets (SLP, LCR, your own).
 - [Rate profile](rate-profile.md): put a rate column into bands.
+- [Liquidity gap ladder](gap-ladder.md): inflows, outflows, net and cumulative gap by bucket, with limits.
 - [Interest-rate shock / ΔNII](rate-shock-nii.md): one-year earnings sensitivity.
 - [Duration, DV01 and ΔEVE](duration-dv01-eve.md): economic-value sensitivity.
 - [FTP curve mapper](ftp-curve-mapper.md): funds-transfer-pricing rate, spread and margin.

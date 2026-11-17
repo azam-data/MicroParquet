@@ -29,7 +29,7 @@ pub const SECTIONS: [&str; 10] = [
 pub const COLUMN_TABLE_HEADER: &str = "| Column role | Required? | Type the app needs | Example values | Notes |";
 
 /// Tool ids (file names in docs/guide/): the 21 tools of Phase 4 task G0, then the tools later tasks added.
-pub const GUIDE_TOOLS: [&str; 23] = [
+pub const GUIDE_TOOLS: [&str; 24] = [
     "maturity-bucketer",
     "rate-profile",
     "rate-shock-nii",
@@ -53,6 +53,7 @@ pub const GUIDE_TOOLS: [&str; 23] = [
     "batch",
     "pivot",
     "cl-migration",
+    "gap-ladder",
 ];
 
 pub fn guide_dir() -> PathBuf {
@@ -849,5 +850,25 @@ fn guide_cl_migration() {
         "cl-migration",
         "guide_cl_migration",
         &[md(&prev, &["Actnum", "Balance:2", "CL_Status"]), md(&curr, &["Actnum", "Balance:2", "CL_Status"]), md(&m, &cols), md(&counts, &count_cols)],
+    );
+}
+
+#[test]
+fn guide_gap_ladder() {
+    use crate::v3_support::*;
+    let assets = frame(vec![nums("Balance", &[100.0, 200.0]), dates("Matdat", &["2026-11-15", "2026-12-31"])]);
+    let liab = frame(vec![nums("Balance", &[150.0, 50.0]), dates("Matdat", &["2026-11-20", "2026-12-15"])]);
+    let limits = GapLimitsFile { preset: "Test ladder".into(), source: "test".into(), effective_from: String::new(), limits: vec![GapLimit { bucket: "0\u{2013}1 month".into(), min_cumulative_gap_pct: -10.0 }] };
+    let spec = |role| GapInputSpec { role, amount_col: "Balance".into(), maturity_col: "Matdat".into() };
+    let ladder = build_gap_ladder(vec![(assets.clone().lazy(), spec(GapRole::Asset)), (liab.clone().lazy(), spec(GapRole::Liability))], &two_bucket_preset(), "2026-10-31", true, Some(&limits)).expect("the ladder builds");
+    assert_eq!(strings(&ladder, "Breach")[0].as_deref(), Some("BREACH"));
+    check_guide(
+        "gap-ladder",
+        "guide_gap_ladder",
+        &[
+            md(&assets, &["Balance:2", "Matdat"]),
+            md(&liab, &["Balance:2", "Matdat"]),
+            md(&ladder, &["Bucket", "Inflows:2", "Outflows:2", "Net gap:2", "Cumulative gap:2", "Net gap % of total assets:2", "Cumulative gap % of total assets:2", "Cumulative gap limit %:2", "Breach"]),
+        ],
     );
 }

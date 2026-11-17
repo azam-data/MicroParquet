@@ -27,6 +27,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::JoinTabs => ph::LINK,
         CommandId::CopyTable => ph::CLIPBOARD_TEXT,
         CommandId::Buckets => ph::CALENDAR,
+        CommandId::GapLadder => ph::CHART_BAR,
         CommandId::RateProfile => ph::PERCENT,
         CommandId::RateShock => ph::CHART_LINE,
         CommandId::Duration => ph::TIMER,
@@ -152,6 +153,7 @@ impl MicroParquetApp {
             CommandId::Normaliser => self.active_tool = ActiveToolModal::NormalizeEntity,
             CommandId::JoinTabs => self.active_tool = ActiveToolModal::JoinTabs,
             CommandId::CopyTable => self.copy_table_to_clipboard(ctx),
+            CommandId::GapLadder => self.open_gap_ladder(),
             CommandId::Buckets => {
                 self.buckets.presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
                 self.active_tool = ActiveToolModal::MaturityBucket;

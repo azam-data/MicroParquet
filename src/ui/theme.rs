@@ -238,7 +238,12 @@ pub const PIVOT_FOOTER_BUTTONS_W: f32 = 250.0;
 pub const PIVOT_GAP: f32 = 12.0;
 /// How much of the warning colour tints a downgrade in the CL migration matrix (green uses `success_soft`).
 pub const SHADE_AMBER_STRENGTH: f32 = 0.22;
+/// How much of the danger colour tints a breached limit in the liquidity gap ladder.
+pub const SHADE_DANGER_STRENGTH: f32 = 0.18;
 pub const MIGRATION_DIALOG_W: f32 = 640.0;
+pub const GAP_DIALOG_W: f32 = 940.0;
+pub const GAP_COMBO_W: f32 = 150.0;
+pub const GAP_COMBO_NARROW_W: f32 = 120.0;
 pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
 pub const LIST_MAX_H_S: f32 = 120.0;
@@ -385,6 +390,7 @@ pub fn migration_fill(tk: &Tokens, shade: micro_parquet::banking::Shade) -> Opti
     match shade {
         micro_parquet::banking::Shade::Upgrade => Some(tk.success_soft),
         micro_parquet::banking::Shade::Downgrade => Some(tk.warning.gamma_multiply(SHADE_AMBER_STRENGTH)),
+        micro_parquet::banking::Shade::Breach => Some(tk.danger.gamma_multiply(SHADE_DANGER_STRENGTH)),
         micro_parquet::banking::Shade::None => None,
     }
 }

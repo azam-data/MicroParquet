@@ -1,0 +1,10 @@
+{
+  "preset": "Bangladesh Bank SLP (9 Liquidity Buckets)",
+  "source": "SAMPLE ONLY: the numbers below are invented to show the format. Replace them with the limits ALCO has approved before use.",
+  "effective_from": "2026-01-01",
+  "limits": [
+    { "bucket": "01. Overnight / 1 Day", "min_cumulative_gap_pct": -5.0 },
+    { "bucket": "03. 8 to 30 Days", "min_cumulative_gap_pct": -10.0 },
+    { "bucket": "06. 6 to 12 Months (181-365d)", "min_cumulative_gap_pct": -20.0 }
+  ]
+}

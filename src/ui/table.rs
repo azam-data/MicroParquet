@@ -665,34 +665,55 @@ impl MicroParquetApp {
     }
 }
 
-/// The shading of the CL migration matrix of `tab`: for each cell of the page, an upgrade, a
-/// downgrade or nothing (a cell without an amount is not shaded). Other tabs have none.
+/// The shading of the result tables that have one: the CL migration matrix (an upgrade green, a
+/// downgrade amber; a cell without an amount is not shaded) and the liquidity gap ladder (the cells
+/// of a row whose limit is breached). Other tabs have none.
 pub(crate) fn migration_shading_for(ctx: &egui::Context, tab: &TabState) {
+    use micro_parquet::banking::*;
     let id = egui::Id::new(("grid_shading", tab.id));
-    if !matches!(tab.source, TabSource::ClMigration { .. }) {
-        ctx.data_mut(|d| d.remove_temp::<Vec<Vec<micro_parquet::banking::Shade>>>(id));
-        return;
-    }
     let df = &tab.cached_slice;
-    let Some(row_col) = df.get_columns().iter().position(|c| c.name().as_str() == micro_parquet::banking::MIGRATION_ROW_HEADING) else {
-        return;
-    };
-    let labels: Vec<Option<String>> = match df.get_columns()[row_col].str() {
-        Ok(s) => s.into_iter().map(|v| v.map(str::to_string)).collect(),
-        Err(_) => return,
-    };
-    let mut shades: Vec<Vec<micro_parquet::banking::Shade>> = Vec::with_capacity(df.height());
-    for (r, label) in labels.iter().enumerate() {
-        let mut row = Vec::with_capacity(df.width());
-        for c in df.get_columns() {
-            let has_amount = match c.get(r) {
-                Ok(AnyValue::Float64(x)) => x.abs() > 0.0,
-                Ok(AnyValue::Int64(x)) => x != 0,
-                _ => false,
+    let mut shades: Vec<Vec<Shade>> = Vec::with_capacity(df.height());
+    match &tab.source {
+        TabSource::ClMigration { .. } => {
+            let Some(row_col) = df.get_columns().iter().position(|c| c.name().as_str() == MIGRATION_ROW_HEADING) else {
+                return;
             };
-            row.push(if has_amount { micro_parquet::banking::migration_shade(label.as_deref().unwrap_or(""), c.name().as_str()) } else { micro_parquet::banking::Shade::None });
+            let labels: Vec<Option<String>> = match df.get_columns()[row_col].str() {
+                Ok(s) => s.into_iter().map(|v| v.map(str::to_string)).collect(),
+                Err(_) => return,
+            };
+            for (r, label) in labels.iter().enumerate() {
+                let mut row = Vec::with_capacity(df.width());
+                for c in df.get_columns() {
+                    let has_amount = match c.get(r) {
+                        Ok(AnyValue::Float64(x)) => x.abs() > 0.0,
+                        Ok(AnyValue::Int64(x)) => x != 0,
+                        _ => false,
+                    };
+                    row.push(if has_amount { migration_shade(label.as_deref().unwrap_or(""), c.name().as_str()) } else { Shade::None });
+                }
+                shades.push(row);
+            }
         }
-        shades.push(row);
+        TabSource::GapLadder { .. } => {
+            let Some(breach) = df.get_columns().iter().find(|c| c.name().as_str() == GAP_BREACH_COLUMN).and_then(|c| c.str().ok().map(|s| s.into_iter().map(|v| v.map(str::to_string)).collect::<Vec<_>>())) else {
+                ctx.data_mut(|d| d.remove_temp::<Vec<Vec<Shade>>>(id));
+                return;
+            };
+            for flag in breach {
+                let on = flag.as_deref() == Some(GAP_BREACH_FLAG);
+                shades.push(
+                    df.get_columns()
+                        .iter()
+                        .map(|c| if on && matches!(c.name().as_str(), GAP_BREACH_COLUMN | GAP_LIMIT_COLUMN) || on && c.name().as_str() == GAP_COLUMNS[6] { Shade::Breach } else { Shade::None })
+                        .collect(),
+                );
+            }
+        }
+        _ => {
+            ctx.data_mut(|d| d.remove_temp::<Vec<Vec<Shade>>>(id));
+            return;
+        }
     }
     ctx.data_mut(|d| d.insert_temp(id, shades));
 }

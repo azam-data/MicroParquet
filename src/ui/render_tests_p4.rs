@@ -6,6 +6,7 @@ use crate::ui::layout_tests::{collect_painted, Painted};
 use crate::ui::pivot_builder::Area;
 use crate::ui::prelude::*;
 use crate::ui::render_tests::{assert_dialog_fits, frames, inside, screen};
+use micro_parquet::models::BucketRuleItem;
 use crate::ui::tests::{open_tab, parquet_source, settle, test_app};
 use micro_parquet::commands::CommandId;
 use polars::prelude::{NamedFrom, Series};
@@ -571,5 +572,180 @@ fn the_banking_menu_has_two_headings_and_lists_the_new_tool_under_loans_and_cred
         }
         // the item is not greyed: two tabs are open
         assert!(rig.app.command_unavailable(CommandId::ClMigration).is_none(), "{what}");
+    }
+}
+
+// ------------------------------------------------------------------ V3: liquidity gap ladder
+
+fn gap_title() -> String {
+    format!("{}  Liquidity gap ladder", theme::ph::CHART_BAR)
+}
+
+fn gap_preset() -> CustomBucketDef {
+    CustomBucketDef {
+        name: "Test ladder".into(),
+        rules: vec![BucketRuleItem { max_days: 30, label: format!("0{EN}1 month") }, BucketRuleItem { max_days: 90, label: format!("1{EN}3 months") }],
+        overflow_label: "Over 3 months".into(),
+        overdue_label: "Overdue".into(),
+        null_sight_label: format!("0{EN}1 month"),
+        null_long_label: "Over 3 months".into(),
+    }
+}
+
+fn dated(name: &str, days: &[&str]) -> Series {
+    let day = |s: &str| (chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").expect("date") - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch")).num_days() as i32;
+    Series::new(name.into(), days.iter().map(|d| day(d)).collect::<Vec<_>>()).cast(&polars::prelude::DataType::Date).expect("Date")
+}
+
+/// An "Assets" and a "Liabilities" tab and the preset "Test ladder" saved for the bucketer.
+fn gap_rig(name: &str, ppp: f32, w: f32, h: f32, limits: Option<f64>) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    std::fs::write(&app.paths.buckets_file, serde_json::to_string(&vec![gap_preset()]).expect("json")).expect("preset file");
+    if let Some(pct) = limits {
+        let dir = app.paths.gap_limits_dir();
+        std::fs::create_dir_all(&dir).expect("limits folder");
+        let body = format!(r#"{{"preset":"Test ladder","source":"test paper","limits":[{{"bucket":"0{EN}1 month","min_cumulative_gap_pct":{pct}}}]}}"#);
+        std::fs::write(micro_parquet::banking::gap_limits_path(&dir, "Test ladder"), body).expect("limits file");
+    }
+    let assets = DataFrame::new(vec![Series::new("Balance".into(), &[100.0, 200.0]), dated("Matdat", &["2026-11-15", "2026-12-31"])]).expect("assets");
+    let liab = DataFrame::new(vec![Series::new("Balance".into(), &[150.0, 50.0]), dated("Matdat", &["2026-11-20", "2026-12-15"])]).expect("liabilities");
+    for (title, df) in [("Assets", assets), ("Liabilities", liab)] {
+        let src = parquet_source(&root, title, df);
+        app.create_tab_from_source(title.into(), src, vec![], HashMap::new());
+        settle(&mut app);
+    }
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn click_text(rig: &mut Rig, p: &Painted, text: &str, after: egui::Rect) -> Painted {
+    let b = p.boxes.iter().filter(|(t, bx)| t.contains(text) && bx.top() >= after.top() - 1.0).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{}: '{text}' is on screen", rig.what));
+    rig.click(b.center())
+}
+
+#[test]
+fn the_gap_ladder_dialog_takes_tabs_roles_and_columns_and_builds_the_ladder() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = gap_rig("p4v3a", ppp, w, h, None);
+        let what = rig.what.clone();
+        // the active tab is the last one (Liabilities): the dialog starts with it
+        rig.app.run_command(&rig.ctx, CommandId::GapLadder);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::GapLadder, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &gap_title(), &what);
+        for t in ["Tab", "Counts as", "Amount", "Maturity date", "Bucket preset:", "Cutoff date (YYYY-MM-DD):", "Treat a blank maturity as sight", "Add tab", "Build gap ladder", "Cancel", "Phase 5"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        let g = rig.app.gap.rects.clone();
+        assert!(inside(g.grid, r.window) && inside(g.notes, r.window), "{what}: the lines {:?} and the notes {:?} are inside {:?}", g.grid, g.notes, r.window);
+        for (i, name, c) in &g.row_controls {
+            assert!(inside(*c, g.grid), "{what}: line {i} '{name}' {c:?} is inside the grid {:?}", g.grid);
+        }
+        for (name, b) in &g.buttons {
+            assert!(inside(*b, r.footer), "{what}: '{name}' is inside the footer");
+        }
+        // the cutoff date must be a date: today's default is the end of last month
+        assert!(chrono::NaiveDate::parse_from_str(&rig.app.gap.cutoff, "%Y-%m-%d").is_ok(), "{what}: {}", rig.app.gap.cutoff);
+        rig.app.gap.cutoff = "2026-10-31".into();
+        // the first line is Liabilities, counts as an asset by default: choose "Liability / outflow" by a real click
+        let role = g.row_controls.iter().find(|(i, n, _)| *i == 0 && n == "Counts as").map(|(_, _, r)| *r).expect("role combo");
+        rig.click(role.center());
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Liability / outflow", role);
+        assert_eq!(rig.app.gap.rows[0].role, crate::ui::gap_ladder::RoleChoice::Liability, "{what}: the choice was taken");
+        // add the assets as a second line (the button adds the next tab, here none, so pick Assets)
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Add tab", egui::Rect::EVERYTHING);
+        assert_eq!(rig.app.gap.rows.len(), 2, "{what}");
+        rig.app.gap.rows[1].tab = 0;
+        rig.app.gap.rows[1].role = crate::ui::gap_ladder::RoleChoice::Asset;
+        rig.draw(4);
+        let p = rig.draw(2);
+        assert_dialog_fits(&rig.ctx, &gap_title(), &what);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("Type the cutoff")), "{what}: no error with a valid date");
+        // the preset is the saved one
+        let idx = rig.app.gap.presets.iter().position(|p| p.name == "Test ladder").expect("the saved preset is listed");
+        rig.app.gap.preset_idx = idx;
+        rig.draw(3);
+        let build = rig.app.gap.rects.buttons.iter().find(|(n, _)| n == "Build gap ladder").map(|(_, r)| *r).expect("button");
+        rig.click(build.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed");
+        let tab = rig.app.tabs.last().expect("the ladder tab");
+        assert_eq!(tab.title, "Gap ladder (Test ladder)", "{what}");
+        let net: Vec<Option<f64>> = tab.cached_slice.column("Net gap").expect("col").f64().expect("f64").into_iter().collect();
+        assert_eq!(&net[..2], &[Some(-50.0), Some(150.0)], "{what}");
+        let pct = tab.col_formats.get("Cumulative gap % of total assets").map(|f| f.fmt_type);
+        assert_eq!(pct, Some(MetricFormatType::PercentAsIs), "{what}: the percentages are not scaled");
+    }
+}
+
+#[test]
+fn a_breached_limit_tints_its_row_in_the_danger_colour_under_the_right_headings() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = gap_rig("p4v3b", ppp, w, h, Some(-10.0));
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::GapLadder);
+        rig.app.gap.cutoff = "2026-10-31".into();
+        rig.app.gap.preset_idx = rig.app.gap.presets.iter().position(|p| p.name == "Test ladder").expect("preset");
+        rig.app.gap.rows = vec![rig.app.gap.rows[0].clone(), rig.app.gap.rows[0].clone()];
+        rig.app.gap.rows[0].tab = 0;
+        rig.app.gap.rows[0].role = crate::ui::gap_ladder::RoleChoice::Asset;
+        rig.app.gap.rows[1].tab = 1;
+        rig.app.gap.rows[1].role = crate::ui::gap_ladder::RoleChoice::Liability;
+        let p = rig.draw(6);
+        // the dialog says the limits were found
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Limits: 1 bucket(s)") && t.contains("test paper")), "{what}: the limits line is shown: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("imits")).collect::<Vec<_>>());
+        let build = rig.app.gap.rects.buttons.iter().find(|(n, _)| n == "Build gap ladder").map(|(_, r)| *r).expect("button");
+        rig.click(build.center());
+        rig.draw(6);
+        let tab = rig.app.tabs.last().expect("the ladder tab");
+        let names: Vec<String> = tab.cached_slice.get_column_names().iter().map(|n| n.to_string()).collect();
+        assert!(names.contains(&"Breach".to_string()) && names.contains(&"Cumulative gap limit %".to_string()), "{what}: {names:?}");
+        let breach: Vec<Option<String>> = tab.cached_slice.column("Breach").expect("col").str().expect("str").into_iter().map(|v| v.map(str::to_string)).collect();
+        assert_eq!(&breach[..2], &[Some("BREACH".to_string()), Some(String::new())], "{what}");
+        // a wide table: close the right panel and scroll to the right end
+        rig.app.show_steps_sidebar = false;
+        let id = rig.app.tabs.last().map(|t| t.id).expect("id");
+        rig.ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid_scroll_x", id)), 10_000.0f32));
+        rig.draw(4);
+        let p = rig.draw(3);
+        let tk = *theme::tokens(false);
+        let danger = theme::migration_fill(&tk, micro_parquet::banking::Shade::Breach).expect("danger fill");
+        let table_top = theme::TOP_BAR_H + theme::TAB_STRIP_H;
+        let cells: Vec<egui::Rect> = p.rects.iter().filter(|(r, f)| *f == danger && r.top() > table_top && r.bottom() < rig.ctx.screen_rect().bottom() - theme::STATUS_BAR_H && (r.height() - theme::DATA_ROW_H).abs() < theme::SPACE_L).map(|(r, _)| *r).collect();
+        assert_eq!(cells.len(), 3, "{what}: the percentage, the limit and the flag of the one breached row: {cells:?}");
+        let top = cells.iter().map(|c| c.top()).fold(f32::MAX, f32::min);
+        assert!(cells.iter().all(|c| (c.top() - top).abs() < 1.0), "{what}: all three are in the same row: {cells:?}");
+        let first_row_label = p.boxes.iter().filter(|(t, bx)| t.starts_with(&format!("0{EN}1 month")) && bx.top() > table_top).map(|(_, b)| *b).next();
+        // (the label column may have scrolled out; the row is the first data row when it is shown)
+        if let Some(l) = first_row_label {
+            assert!(l.center().y > top && l.center().y < top + theme::DATA_ROW_H + theme::SPACE_L, "{what}: the tinted row is the first bucket's: {l:?} vs {top}");
+        }
+        for heading in ["Breach", "Cumulative gap limit %"] {
+            let hb = p.boxes.iter().filter(|(t, bx)| t == heading && bx.top() > table_top).map(|(_, b)| *b).min_by(|a, b| a.top().total_cmp(&b.top())).unwrap_or_else(|| panic!("{what}: heading {heading}"));
+            assert!(cells.iter().any(|c| hb.center().x > c.left() - 0.5 && hb.center().x < c.right() + 0.5), "{what}: a tinted cell is under '{heading}' {hb:?}: {cells:?}");
+        }
+    }
+}
+
+#[test]
+fn the_gap_ladder_is_listed_under_treasury_and_alm_and_found_by_the_search() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::GapLadder), Some("Treasury & ALM"));
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["gap ladder", "slp cumulative", "liquidity gap"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::GapLadder, "{q}");
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = gap_rig("p4v3c", ppp, w, h, None);
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
+        assert!(at("Treasury & ALM").top() < at("Liquidity gap ladder").top() && at("Liquidity gap ladder").top() < at("Loans & credit").top(), "{}", rig.what);
     }
 }

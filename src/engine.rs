@@ -1624,6 +1624,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(prev_source, out);
             collect_masked_columns(curr_source, out);
         }
+        TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
     }
 }
 
@@ -1639,6 +1640,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
+        TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
     }
 }
 
@@ -1771,6 +1773,11 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
         } => {
             parts.extend(source_parse_failures(prev_source, temp_dir)?);
             parts.extend(source_parse_failures(curr_source, temp_dir)?);
+        }
+        TabSource::GapLadder { inputs, .. } => {
+            for i in inputs {
+                parts.extend(source_parse_failures(&i.source, temp_dir)?);
+            }
         }
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
@@ -2343,6 +2350,19 @@ pub fn compile_tab_lazy(
                 rate_col.as_deref(),
                 cl_status_col.as_deref(),
             )?
+        }
+        TabSource::GapLadder {
+            inputs,
+            preset,
+            cutoff_date,
+            null_as_sight,
+            limits,
+        } => {
+            let mut lfs = Vec::with_capacity(inputs.len());
+            for i in inputs {
+                lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
+            }
+            crate::banking::build_gap_ladder(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref())?.lazy()
         }
         TabSource::ClMigration {
             prev_source,
