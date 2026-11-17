@@ -30,6 +30,9 @@ pub mod step_edit;
 pub mod steps;
 pub mod table;
 pub mod tabs;
+pub mod top_bar;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod tests;
 pub mod theme;

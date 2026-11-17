@@ -126,7 +126,7 @@ fn t6_every_toolbar_action_is_in_the_command_list() {
         assert!(ids.contains(&want), "{want:?}");
     }
     // the app draws its toolbar from this list
-    let main = std::fs::read_to_string("src/main.rs").unwrap();
+    let main = std::fs::read_to_string("src/ui/top_bar.rs").unwrap(); // the single top bar draws it
     assert!(main.contains("TOOLBAR_BUTTONS_FILE") && main.contains("TOOLBAR_BUTTONS_TRANSFORM") && main.contains("TOOLBAR_MORE"));
     assert!(main.contains("CommandGroup::Banking") && main.contains("CommandGroup::Export"));
 }

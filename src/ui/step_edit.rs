@@ -429,7 +429,7 @@ impl MicroParquetApp {
             .map(|s| s.short_label())
             .unwrap_or_default();
         egui::Area::new(egui::Id::new("edit_step_banner"))
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, theme::TITLE_BAR_H + theme::TOOLBAR_H + 6.0))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, theme::TOP_BAR_H + 6.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::none()

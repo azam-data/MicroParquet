@@ -104,8 +104,9 @@ pub const TEXT_BASE: f32 = 14.0;
 pub const TEXT_SMALL: f32 = 13.0;
 pub const TEXT_LABEL: f32 = 12.0;
 pub const TEXT_INSPECTOR_TITLE: f32 = 20.0;
-pub const TITLE_BAR_H: f32 = 36.0;
-pub const TOOLBAR_H: f32 = 52.0;
+/// The single top bar (app mark, menus, toolbar groups, search); replaces the 36 px title strip
+/// and the 52 px toolbar.
+pub const TOP_BAR_H: f32 = 44.0;
 pub const TAB_STRIP_H: f32 = 40.0;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
@@ -123,6 +124,26 @@ pub const COLUMN_MAX_W: f32 = 420.0;
 /// Heading text style (modal titles); the inspector title is `TEXT_INSPECTOR_TITLE`.
 pub const TEXT_HEADING: f32 = 17.0;
 pub const TEXT_MONO: f32 = 13.0;
+/// Top bar pieces.
+pub const APP_MARK_SIZE: f32 = 18.0;
+pub const APP_MARK_RADIUS: f32 = 4.0;
+pub const TEXT_MARK: f32 = 11.0;
+pub const TEXT_KEYCAP: f32 = 11.0;
+pub const BAR_ITEM_GAP: f32 = 2.0;
+/// Side padding of the buttons in the top bar (the default is 12), so more groups fit.
+pub const BAR_BUTTON_PAD_X: f32 = 8.0;
+pub const BAR_SEPARATOR_W: f32 = 17.0;
+pub const BAR_SEPARATOR_H: f32 = 20.0;
+/// Added to a measured button width, so a rounding difference never makes two items touch.
+pub const BAR_WIDTH_SLACK: f32 = 2.0;
+/// The command search box: preferred, smallest, and the icon-only width.
+pub const SEARCH_MAX_W: f32 = 310.0;
+pub const SEARCH_MIN_W: f32 = 170.0;
+pub const SEARCH_ICON_W: f32 = 44.0;
+/// The box's own padding and border (10 + 10 + 1 + 1).
+pub const SEARCH_FRAME_PAD: f32 = 22.0;
+/// From this width the box says "Search actions and columns"; narrower it says "Search…".
+pub const SEARCH_LONG_HINT_W: f32 = 260.0;
 
 
 impl Tokens {
@@ -553,7 +574,8 @@ mod tests {
 
     #[test]
     fn sizes_follow_the_spec() {
-        assert_eq!((TITLE_BAR_H, TOOLBAR_H, TAB_STRIP_H, STATUS_BAR_H, RIGHT_PANEL_W), (36.0, 52.0, 40.0, 32.0, 316.0));
+        // the single top bar (44) replaced the 36 px title strip and the 52 px toolbar
+        assert_eq!((TOP_BAR_H, TAB_STRIP_H, STATUS_BAR_H, RIGHT_PANEL_W), (44.0, 40.0, 32.0, 316.0));
         assert_eq!((HEADER_ROW_H, SELECTOR_ROW_H, SUMMARY_BAND_H, DATA_ROW_H), (38.0, 30.0, 38.0, 32.0));
         assert_eq!((TEXT_BASE, TEXT_SMALL, TEXT_LABEL, TEXT_INSPECTOR_TITLE), (14.0, 13.0, 12.0, 20.0));
     }

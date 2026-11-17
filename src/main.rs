@@ -266,8 +266,7 @@ impl eframe::App for MicroParquetApp {
         }
         self.handle_palette_shortcut(ctx);
         self.handle_step_shortcuts(ctx);
-        self.render_title_bar(ctx);
-        self.render_toolbar_panel(ctx);
+        self.render_top_bar(ctx);
         self.render_tab_strip_panel(ctx);
         self.render_status_bar(ctx);
         self.render_right_panel(ctx);
@@ -300,46 +299,7 @@ impl eframe::App for MicroParquetApp {
 }
 
 impl MicroParquetApp {
-    /// Title strip: logo, name, the File / View / Help menus and the active tab's name.
-    fn render_title_bar(&mut self, ctx: &egui::Context) {
-        let tk = *theme::tokens(self.dark_mode);
-        egui::TopBottomPanel::top("title_bar")
-            .exact_height(theme::TITLE_BAR_H)
-            .frame(egui::Frame::none().fill(tk.surface).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
-            .show(ctx, |ui| {
-                theme::bottom_border(ui, tk.border);
-                egui::menu::bar(ui, |ui| {
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 4.0, tk.accent);
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "M",
-                        egui::FontId::new(11.0, theme::family_bold()),
-                        theme::on_accent(self.dark_mode),
-                    );
-                    ui.label(theme::semibold("MicroParquet"));
-                    ui.add_space(theme::SPACE_S);
-                    self.file_menu(ui, ctx);
-                    self.view_menu(ui, ctx);
-                    ui.menu_button("Help", |ui| {
-                        if ui.button("About MicroParquet").clicked() {
-                            ui.close_menu();
-                            self.show_about = true;
-                        }
-                    });
-                    if let Some(t) = self.tabs.get(self.active_tab) {
-                        ui.add_space(theme::SPACE_M);
-                        ui.label(egui::RichText::new(&t.title).color(tk.muted));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(theme::label_text(format!("v{}", env!("CARGO_PKG_VERSION"))).color(tk.muted));
-                    });
-                });
-            });
-    }
-
-    fn file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
         use micro_parquet::commands::{CommandGroup, CommandId};
         ui.menu_button("File", |ui| {
             for c in micro_parquet::commands::in_group(CommandGroup::File) {
@@ -348,10 +308,11 @@ impl MicroParquetApp {
                 }
                 self.command_menu_item(ui, ctx, c.id);
             }
-        });
+        })
+        .response
     }
 
-    fn view_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn view_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
         ui.menu_button("View", |ui| {
             let theme_label = if self.dark_mode { "Switch to Light Theme" } else { "Switch to Dark Theme" };
             if ui.button(format!("{}  {}", if self.dark_mode { theme::ph::SUN } else { theme::ph::MOON }, theme_label)).clicked() {
@@ -390,60 +351,9 @@ impl MicroParquetApp {
             ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
             ui.checkbox(&mut self.show_sql_bar, "SQL scratchpad bar");
             ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
-        });
+        })
+        .response
     }
-
-    /// Toolbar (52 px): Open / Stack / Batch | Filter / Columns / Calc column / Pivot | Banking |
-    /// Export, and the command search box on the right.
-    fn render_toolbar_panel(&mut self, ctx: &egui::Context) {
-        let tk = *theme::tokens(self.dark_mode);
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(theme::TOOLBAR_H)
-            .frame(egui::Frame::none().fill(tk.surface).inner_margin(egui::Margin::symmetric(12.0, 0.0)))
-            .show(ctx, |ui| {
-                theme::bottom_border(ui, tk.border);
-                ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-                ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    let has_tab = !self.tabs.is_empty();
-                    for id in micro_parquet::commands::TOOLBAR_BUTTONS_FILE {
-                        self.toolbar_button(ui, ctx, *id);
-                    }
-                    ui.separator();
-                    ui.add_enabled_ui(has_tab, |ui| {
-                        for id in micro_parquet::commands::TOOLBAR_BUTTONS_TRANSFORM {
-                            self.toolbar_button(ui, ctx, *id);
-                        }
-                        ui.menu_button(format!("{}  More", theme::ph::DOTS_THREE), |ui| {
-                            for id in micro_parquet::commands::TOOLBAR_MORE {
-                                self.command_menu_item(ui, ctx, *id);
-                            }
-                        });
-                    });
-                    ui.separator();
-                    ui.add_enabled_ui(has_tab, |ui| {
-                        ui.menu_button(format!("{}  Banking  {}", theme::ph::BANK, theme::ph::CARET_DOWN), |ui| {
-                            for c in micro_parquet::commands::in_group(micro_parquet::commands::CommandGroup::Banking) {
-                                self.command_menu_item(ui, ctx, c.id);
-                            }
-                        });
-                    });
-                    ui.separator();
-                    ui.add_enabled_ui(has_tab, |ui| {
-                        ui.menu_button(format!("{}  Export  {}", theme::ph::EXPORT, theme::ph::CARET_DOWN), |ui| {
-                            for c in micro_parquet::commands::in_group(micro_parquet::commands::CommandGroup::Export) {
-                                self.command_menu_item(ui, ctx, c.id);
-                            }
-                        });
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        self.command_box(ui);
-                    });
-                });
-            });
-    }
-
 
     fn copy_table_to_clipboard(&mut self, ctx: &egui::Context) {
         if let Some(tab) = self.tabs.get(self.active_tab) {
@@ -462,7 +372,7 @@ impl MicroParquetApp {
 
 
     /// A flat toolbar button for a command; greyed with the reason when it cannot run.
-    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId) {
+    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId) -> egui::Response {
         let reason = self.command_unavailable(id);
         let btn = ui
             .add_enabled_ui(reason.is_none(), |ui| {
@@ -476,10 +386,11 @@ impl MicroParquetApp {
         if btn.clicked() {
             self.run_command(ctx, id);
         }
+        btn
     }
 
     /// The search box on the right of the toolbar ("Search actions and columns", Ctrl K).
-    fn command_box(&mut self, ui: &mut egui::Ui) {
+    fn command_box(&mut self, ui: &mut egui::Ui, width: f32) -> egui::Response {
         let tk = *theme::tokens(self.dark_mode);
         let resp = egui::Frame::none()
             .fill(tk.bg)
@@ -487,10 +398,11 @@ impl MicroParquetApp {
             .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
             .inner_margin(egui::Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
-                ui.set_width(310.0);
+                ui.set_width((width - theme::SEARCH_FRAME_PAD).max(0.0));
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(theme::ph::MAGNIFYING_GLASS).color(tk.muted));
-                    ui.label(egui::RichText::new("Search actions and columns").color(tk.muted));
+                    let hint = if width >= theme::SEARCH_LONG_HINT_W { "Search actions and columns" } else { "Search\u{2026}" };
+                    ui.add(egui::Label::new(egui::RichText::new(hint).color(tk.muted)).truncate());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::Frame::none()
                             .fill(tk.surface)
@@ -498,7 +410,7 @@ impl MicroParquetApp {
                             .rounding(egui::Rounding::same(4.0))
                             .inner_margin(egui::Margin::symmetric(5.0, 1.0))
                             .show(ui, |ui| {
-                                ui.label(theme::mono("Ctrl K").size(11.0).color(tk.muted));
+                                ui.label(theme::mono("Ctrl K").size(theme::TEXT_KEYCAP).color(tk.muted));
                             });
                     });
                 });
@@ -508,6 +420,7 @@ impl MicroParquetApp {
         if resp.clicked() {
             self.open_command_palette();
         }
+        resp
     }
 
     fn render_about(&mut self, ctx: &egui::Context) {
