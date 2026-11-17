@@ -73,3 +73,45 @@ fn fix2_load_reports_a_first_page_that_cannot_be_read() {
     assert!(l.tab.page_error.as_deref().is_some_and(|e| e.contains("Amount")));
     assert!(l.status.starts_with("Tab created, but its first page could not be read:"), "{}", l.status);
 }
+
+// ---------------------------------------------------------------------------------- fix 3
+
+fn filter(value: &str) -> TransformStep {
+    TransformStep::FilterRows { column: "Branch".into(), operator: FilterOp::Eq, value: value.into(), keep_matching: true }
+}
+
+#[test]
+fn fix3_pipeline_hash_sees_settings_on_off_and_source_not_just_the_count() {
+    use micro_parquet::steps_edit::{pipeline_hash, toggle_skip};
+    let d = dir("f3");
+    let src = parquet(&d, "a", dr_frame());
+    let base = pipeline_hash(&src, &[filter("DHK")]);
+    assert_eq!(base, pipeline_hash(&src, &[filter("DHK")]), "same pipeline, same hash");
+    assert_ne!(base, pipeline_hash(&src, &[filter("CTG")]), "same count, other setting");
+    let mut off = vec![filter("DHK")];
+    toggle_skip(&mut off, 0);
+    assert_ne!(base, pipeline_hash(&src, &off), "turned off");
+    // another column type in the ingestion settings (the source schema)
+    let typed = match &src {
+        TabSource::SingleFile { path, is_parquet, config } => {
+            let mut config = config.clone();
+            config.columns.push(ColumnSchemaConfig { name: "Amount".into(), ..Default::default() });
+            TabSource::SingleFile { path: path.clone(), is_parquet: *is_parquet, config }
+        }
+        _ => unreachable!(),
+    };
+    assert_ne!(base, pipeline_hash(&typed, &[filter("DHK")]), "schema changed");
+    // the file replaced with other content
+    let mut df = df_with_three_rows();
+    let TabSource::SingleFile { path, .. } = &src else { unreachable!() };
+    ParquetWriter::new(std::fs::File::create(path).unwrap()).finish(&mut df).unwrap();
+    assert_ne!(base, pipeline_hash(&src, &[filter("DHK")]), "file replaced");
+}
+
+fn df_with_three_rows() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Branch".into(), &["DHK", "CTG", "SYL"]).into(),
+        Series::new("Amount".into(), &["1", "2", "3"]).into(),
+    ])
+    .unwrap()
+}

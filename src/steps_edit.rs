@@ -1,7 +1,9 @@
 //! Editing the list of steps (Phase 3 T4): move, delete, duplicate, turn off, insert, and the
 //! undo / redo history. All of it works on plain lists, so it is tested without the UI.
 
-use crate::models::TransformStep;
+use crate::models::{TabSource, TransformStep};
+use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::collections::VecDeque;
 
 /// How many changes can be undone.
@@ -129,4 +131,52 @@ pub fn prefix_hashes(steps: &[TransformStep]) -> Vec<u64> {
             hasher.finish()
         })
         .collect()
+}
+
+/// Every file a source reads: the file, the stacked files, both sides of a join or reconcile.
+pub fn source_files(source: &TabSource) -> Vec<&Path> {
+    match source {
+        TabSource::SingleFile { path, .. } => vec![path.as_path()],
+        TabSource::VerticalStack { files, .. } => files.iter().map(|(p, _, _)| p.as_path()).collect(),
+        TabSource::JoinedTabs { left_source, right_source, .. } => {
+            let mut v = source_files(left_source);
+            v.extend(source_files(right_source));
+            v
+        }
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+            let mut v = source_files(prev_source);
+            v.extend(source_files(curr_source));
+            v
+        }
+    }
+}
+
+/// Identity of a source: its settings (paths, ingestion configuration with the column types,
+/// join and reconcile settings and their steps) and each file's size and modified time, so a
+/// replaced file or a schema change gives another value.
+pub fn source_fingerprint(source: &TabSource) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", source).hash(&mut h);
+    for p in source_files(source) {
+        match std::fs::metadata(p) {
+            Ok(m) => {
+                m.len().hash(&mut h);
+                m.modified().ok().hash(&mut h);
+            }
+            Err(_) => "missing".hash(&mut h),
+        }
+    }
+    h.finish()
+}
+
+/// A fingerprint of a whole pipeline: the source (see [`source_fingerprint`]) and every step
+/// with its settings and on/off state. Background results carry it, so a result for another
+/// pipeline (even one with the same number of steps) is never shown.
+pub fn pipeline_hash(source: &TabSource, steps: &[TransformStep]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source_fingerprint(source).hash(&mut h);
+    for s in steps {
+        format!("{:?}", s).hash(&mut h);
+    }
+    h.finish()
 }

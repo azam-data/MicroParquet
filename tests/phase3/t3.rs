@@ -298,7 +298,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
         &JobCtx::inert(),
     )
     .unwrap();
-    assert_eq!((r.tab_id, r.steps_len), (3, 0));
+    assert_eq!((r.tab_id, r.pipeline), (3, micro_parquet::steps_edit::pipeline_hash(&src, &[])));
     assert_eq!(r.cells.iter().find(|c| c.column == "Balance").unwrap().value, Some(SummaryValue::Number(10_000.0)));
     // after a filter the summary follows the result, not the source
     let step = TransformStep::FilterRows { column: "Brancd".into(), operator: FilterOp::Eq, value: "DHK".into(), keep_matching: true };
@@ -307,7 +307,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
         &JobCtx::inert(),
     )
     .unwrap();
-    assert_eq!(r.steps_len, 1);
+    assert_ne!(r.pipeline, micro_parquet::steps_edit::pipeline_hash(&src, &[]));
     assert_eq!(r.cells.iter().find(|c| c.column == "Balance").unwrap().value, Some(SummaryValue::Number(7_000.0)));
     // the Excel export job writes the totals row
     let out = dir.join("job.xlsx");

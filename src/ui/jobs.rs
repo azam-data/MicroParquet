@@ -152,8 +152,10 @@ impl MicroParquetApp {
             }
             JobOutput::Summary(r) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
-                    // A result for an older pipeline is dropped; the newer job follows.
-                    if tab.exec_steps == r.steps_len {
+                    // A result for another pipeline (steps, settings, on/off, source) is
+                    // dropped; the newer job follows.
+                    let exec = tab.exec_steps.min(tab.steps.len());
+                    if micro_parquet::steps_edit::pipeline_hash(&tab.source, &tab.steps[..exec]) == r.pipeline {
                         tab.summary_cells = r.cells;
                         tab.summary_error = None;
                     }

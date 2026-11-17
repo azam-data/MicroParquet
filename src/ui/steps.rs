@@ -665,7 +665,7 @@ impl MicroParquetApp {
                 };
                 let dtype = tab.cached_slice.column(&name).map(|c| c.dtype().clone()).ok();
                 let spec = tab.col_formats.get(&name);
-                let key = stats_key(&tab.steps[..tab.exec_steps.min(tab.steps.len())]);
+                let key = stats_key(&tab.source, &tab.steps[..tab.exec_steps.min(tab.steps.len())]);
                 let stats = tab.column_stats.as_ref().filter(|s| s.column == name);
                 let stale = stats.is_none_or(|s| s.key != key);
 

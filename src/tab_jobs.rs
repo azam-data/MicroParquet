@@ -628,8 +628,9 @@ pub struct SummaryRequest {
 
 pub struct SummaryResult {
     pub tab_id: u64,
-    /// The pipeline's steps when the job started (a result for older steps is ignored).
-    pub steps_len: usize,
+    /// The pipeline the summary is of (`steps_edit::pipeline_hash`); a result for another
+    /// pipeline is ignored.
+    pub pipeline: u64,
     pub cells: Vec<crate::summary::SummaryCell>,
 }
 
@@ -639,7 +640,8 @@ pub fn compute_tab_summary(req: SummaryRequest, ctx: &JobCtx) -> Result<SummaryR
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
     let cells = summary_of_lazy(lf, &req.overrides)?;
     ctx.check()?;
-    Ok(SummaryResult { tab_id: req.tab_id, steps_len: req.steps.len(), cells })
+    let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
+    Ok(SummaryResult { tab_id: req.tab_id, pipeline, cells })
 }
 
 // ----------------------------------------------------------------------------- step row counts
@@ -700,16 +702,16 @@ pub struct ColumnStatsResult {
     pub stats: crate::column_stats::ColumnStats,
 }
 
-/// The fingerprint that ties a statistics result to the steps it was computed for.
-pub fn stats_key(steps: &[TransformStep]) -> u64 {
-    crate::steps_edit::prefix_hashes(steps).last().copied().unwrap_or(0)
+/// The fingerprint that ties a statistics result to the pipeline it was computed for.
+pub fn stats_key(source: &TabSource, steps: &[TransformStep]) -> u64 {
+    crate::steps_edit::pipeline_hash(source, steps)
 }
 
 /// Statistics of one column over the whole result.
 pub fn compute_tab_column_stats(req: ColumnStatsRequest, ctx: &JobCtx) -> Result<ColumnStatsResult> {
     ctx.check()?;
     ctx.set_progress(format!("Statistics of {}…", req.column), None);
-    let key = stats_key(&req.steps);
+    let key = stats_key(&req.source, &req.steps);
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
     let stats = crate::column_stats::compute_column_stats(lf, &req.column, key)?;
     Ok(ColumnStatsResult { tab_id: req.tab_id, stats })

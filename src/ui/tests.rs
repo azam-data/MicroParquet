@@ -149,3 +149,48 @@ fn unreadable_page_is_said_dimmed_and_marked_out_of_date() {
     assert!(tab.summary_error.is_none());
     assert!(!tab.summary_cells.is_empty());
 }
+
+#[test]
+fn summary_result_for_another_pipeline_with_the_same_step_count_is_dropped() {
+    use micro_parquet::summary::{SummaryCell, SummaryValue};
+    use micro_parquet::tab_jobs::SummaryResult;
+    let ctx = egui::Context::default();
+    let mut app = test_app("fix3");
+    let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
+    let dhk = TransformStep::FilterRows { column: "Branch".into(), operator: FilterOp::Eq, value: "DHK".into(), keep_matching: true };
+    let ctg = TransformStep::FilterRows { column: "Branch".into(), operator: FilterOp::Eq, value: "CTG".into(), keep_matching: true };
+    let idx = open_tab(&mut app, src.clone(), vec![dhk.clone()]);
+    let good = app.tabs[idx].summary_cells.clone();
+    assert!(!good.is_empty());
+    let tab_id = app.tabs[idx].id;
+    let fake = vec![SummaryCell { column: "Balance".into(), agg: SummaryAgg::Sum, weight_col: None, value: Some(SummaryValue::Number(1.0)), note: None }];
+
+    // one step either way, but a different filter value: dropped
+    let stale = micro_parquet::steps_edit::pipeline_hash(&src, &[ctg]);
+    let cells = fake.clone();
+    app.jobs.submit(JobKey::tab(JobKind::Summary, tab_id), "Summary row", false, move |_| {
+        Ok(JobOutput::Summary(Box::new(SummaryResult { tab_id, pipeline: stale, cells })))
+    });
+    app.poll_jobs(&ctx);
+    assert_eq!(app.tabs[idx].summary_cells, good);
+
+    // the same filter turned off: dropped too
+    let mut off = vec![dhk.clone()];
+    micro_parquet::steps_edit::toggle_skip(&mut off, 0);
+    let stale = micro_parquet::steps_edit::pipeline_hash(&src, &off);
+    let cells = fake.clone();
+    app.jobs.submit(JobKey::tab(JobKind::Summary, tab_id), "Summary row", false, move |_| {
+        Ok(JobOutput::Summary(Box::new(SummaryResult { tab_id, pipeline: stale, cells })))
+    });
+    app.poll_jobs(&ctx);
+    assert_eq!(app.tabs[idx].summary_cells, good);
+
+    // the current pipeline: applied
+    let current = micro_parquet::steps_edit::pipeline_hash(&src, &[dhk]);
+    let cells = fake.clone();
+    app.jobs.submit(JobKey::tab(JobKind::Summary, tab_id), "Summary row", false, move |_| {
+        Ok(JobOutput::Summary(Box::new(SummaryResult { tab_id, pipeline: current, cells })))
+    });
+    app.poll_jobs(&ctx);
+    assert_eq!(app.tabs[idx].summary_cells, fake);
+}

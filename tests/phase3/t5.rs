@@ -165,14 +165,14 @@ fn t5_the_job_runs_over_the_whole_result_after_the_steps_and_carries_a_key() {
     let r = run(vec![], "Balance");
     assert_eq!(r.tab_id, 4);
     assert_eq!(r.stats.rows, 12);
-    assert_eq!(r.stats.key, stats_key(&[]));
+    assert_eq!(r.stats.key, stats_key(&src, &[]));
     // after a filter the statistics follow the result, and the key changes
     let step = TransformStep::FilterRows { column: "Brancd".into(), operator: FilterOp::Eq, value: "DHK".into(), keep_matching: true };
     let r2 = run(vec![step.clone()], "Balance");
     assert_eq!(r2.stats.rows, 5);
     assert_eq!(r2.stats.number.as_ref().unwrap().sum, 100.0 + 200.0 + 300.0 + 600.0 + 700.0, "the five DHK rows");
     assert_ne!(r2.stats.key, r.stats.key, "a result for older steps can be told apart");
-    assert_eq!(r2.stats.key, stats_key(&[step]));
+    assert_eq!(r2.stats.key, stats_key(&src, &[step]));
     // a column the steps removed
     let err = compute_tab_column_stats(
         ColumnStatsRequest { tab_id: 4, source: src.clone(), steps: vec![], column: "Gone".into(), temp_dir: dir.clone() },
