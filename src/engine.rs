@@ -619,6 +619,8 @@ fn friendly_step_error(e: &anyhow::Error) -> String {
 /// Fails only when the source itself cannot be read.
 pub fn validate_steps(source: &TabSource, steps: &[TransformStep], temp_dir: &Path) -> Result<Vec<StepIssue>> {
     let mut lf = compile_tab_lazy(source, &[], temp_dir)?;
+    // A source that cannot be read is an error, not a broken first step.
+    lf.collect_schema().map_err(anyhow::Error::from)?;
     let mut issues = Vec::new();
     for (i, step) in steps.iter().enumerate() {
         if step.is_skipped() {

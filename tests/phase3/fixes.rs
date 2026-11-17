@@ -115,3 +115,47 @@ fn df_with_three_rows() -> DataFrame {
     ])
     .unwrap()
 }
+
+// ---------------------------------------------------------------------------------- fix 4
+
+#[test]
+fn fix4_a_step_check_that_cannot_run_is_reported() {
+    let d = dir("f4");
+    let src = parquet(&d, "gone", dr_frame());
+    let TabSource::SingleFile { path, .. } = &src else { unreachable!() };
+    std::fs::remove_file(path).unwrap();
+    let req = RefreshRequest {
+        tab_id: 1,
+        source: src.clone(),
+        steps: vec![filter("DHK")],
+        offset: 0,
+        limit: 100,
+        control_col: Some("Amount".into()),
+        recalculate_baseline: false,
+        check_join: false,
+        added_status: None,
+        temp_dir: d.clone(),
+        validate: true,
+        exec_steps: 1,
+    };
+    let r = refresh_tab(req, &JobCtx::inert()).unwrap();
+    let e = r.error.expect("the failed check is an error, not 'no issues'");
+    assert!(e.starts_with(STEP_CHECK_FAILED), "{e}");
+    assert!(r.slice.is_none() && r.page_error.is_some());
+    assert_eq!(r.totals.rows, None, "rows show — instead of a number");
+
+    let load = LoadRequest {
+        tab_id: 2,
+        title: "Gone".into(),
+        source: src,
+        steps: vec![filter("DHK")],
+        col_formats: Default::default(),
+        temp_dir: d.clone(),
+        reconcile_rate_used: None,
+    };
+    let err = match load_tab(load, &JobCtx::inert()) {
+        Ok(_) => panic!("a tab whose steps cannot be checked must not open"),
+        Err(e) => format!("{:#}", e),
+    };
+    assert!(err.starts_with(STEP_CHECK_FAILED), "{err}");
+}

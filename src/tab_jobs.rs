@@ -99,7 +99,7 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     let key_note = ensure_pii_key_for(&source)?;
     ctx.check()?;
     // Steps that cannot run (a column they need is gone) stop the table before them.
-    let issues = validate_steps(&source, &steps, &temp_dir).unwrap_or_default();
+    let issues = validate_steps(&source, &steps, &temp_dir).map_err(|e| e.context(STEP_CHECK_FAILED))?;
     let exec_steps = issues.first().map(|i| i.index).unwrap_or(steps.len());
     let lf = compile_tab_lazy(&source, &steps[..exec_steps], &temp_dir)?;
     let (slice, page_error) = match fetch_viewport_slice(lf.clone(), 0, 100) {
@@ -203,6 +203,9 @@ pub fn load_tab(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
 
 // ----------------------------------------------------------------------------------- refresh
 
+/// Said when the steps could not be checked against the columns they would see.
+pub const STEP_CHECK_FAILED: &str = "Could not check the steps against the source's columns (the source could not be read)";
+
 pub struct RefreshRequest {
     pub tab_id: u64,
     pub source: TabSource,
@@ -249,7 +252,27 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
     ctx.check()?;
     // Steps that cannot run stop the table before them; the rest of the list is kept and shown.
     let (issues, exec_steps) = if req.validate {
-        let issues = validate_steps(&req.source, &req.steps, &req.temp_dir).unwrap_or_default();
+        let issues = match validate_steps(&req.source, &req.steps, &req.temp_dir) {
+            Ok(i) => i,
+            Err(e) => {
+                // Without the check nobody knows which steps can run: nothing is shown as current.
+                let e = e.context(STEP_CHECK_FAILED);
+                let msg = format!("{:#}", e);
+                return Ok(Refreshed {
+                    tab_id: req.tab_id,
+                    offset: req.offset,
+                    slice: None,
+                    page_error: Some(msg.clone()),
+                    totals: control_totals_state(Err(e), ctrl),
+                    baseline: None,
+                    join_status: None,
+                    error: Some(msg),
+                    status: None,
+                    issues: Vec::new(),
+                    exec_steps: req.exec_steps.min(req.steps.len()),
+                });
+            }
+        };
         let n = issues.first().map(|i| i.index).unwrap_or(req.steps.len());
         (issues, n)
     } else {
