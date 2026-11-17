@@ -47,6 +47,7 @@ One commit per item, "Phase 3 fix <n>: ..." (A, B, then layout items 1–8), ful
 | Item | Status | Commit | Tests added | Deviations |
 |---|---|---|---|---|
 | A Excel totals row that cannot be computed | DONE | see `git log` | fixes2.rs: two tabs, the totals computation fails for one: both sheets are in the workbook, the failed one has its data rows and no totals rows, `Export_Errors` and the status text give the reason and say "WITHOUT its totals row", and it is not counted as a failed tab; a failed tab and a kept sheet are listed separately | the report has a new field `totals_errors`; `export_scaled_tabs_with` takes the totals function as a parameter so a test can make it fail (Polars gave no input that fails) |
+| B `.part` files that cannot be deleted at close | DONE | see `git log` | fixes2.rs: the start-up sweep deletes a recorded file, keeps one that still cannot be deleted (a directory stands in for a file Windows holds), drops one already gone, never deletes a listed path that is not a `.part` file, removes the list when empty and says nothing when there is no list; src/ui/tests.rs: closing with an undeletable `.part` records it in portable_data, names it in the status text, and the sweep then deletes it | the list is `portable_data/pending_part_deletes.txt`; the sweep also runs before a headless run (message on stderr); only names of the form `.<name>.<pid>-<n>.part` are ever deleted |
 
 ## Questions for the owner
 - Q1 (R1): please confirm the derived dark-theme values for tokens the spec does not give (see `<accepted_deviations>`).

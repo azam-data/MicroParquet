@@ -44,13 +44,17 @@ impl MicroParquetApp {
     pub(crate) fn shutdown_jobs(&mut self) -> String {
         self.jobs.cancel_all();
         let idle = self.jobs.wait_idle(CLOSE_WAIT);
-        let (removed, failed) = micro_parquet::jobs::remove_part_files();
-        let mut msg = format!("Closing: jobs cancelled, {} unfinished output file(s) deleted.", removed);
+        let cleanup = micro_parquet::jobs::remove_part_files_recording(&self.paths.root_dir);
+        let mut msg = format!("Closing: jobs cancelled, {} unfinished output file(s) deleted.", cleanup.removed);
         if !idle {
             msg.push_str(" A job was still running and is stopped with the program.");
         }
-        if !failed.is_empty() {
-            msg.push_str(&format!(" Could not delete: {}", failed.join("; ")));
+        if !cleanup.failed.is_empty() {
+            msg.push_str(&format!(" Could not delete now: {}.", cleanup.failed.join("; ")));
+            match &cleanup.record_error {
+                None => msg.push_str(" They are listed in portable_data and will be deleted at the next start."),
+                Some(e) => msg.push_str(&format!(" They could not be listed for the next start ({}); delete them by hand.", e)),
+            }
         }
         eprintln!("[MicroParquet] {}", msg);
         self.status_message = msg.clone();

@@ -236,6 +236,33 @@ fn closing_during_an_export_asks_then_cancels_and_deletes_the_part_file() {
 }
 
 #[test]
+fn a_part_file_that_cannot_be_deleted_is_recorded_for_the_next_start() {
+    let _guard = FILE_OUTPUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = test_app("fixb");
+    let out = app.paths.root_dir.join("Loans.xlsx");
+    // A temporary output whose file cannot be deleted (a directory stands in for a file that
+    // Windows still holds open).
+    let tmp = micro_parquet::jobs::TempOutput::new(&out);
+    std::fs::create_dir_all(tmp.path()).unwrap();
+    std::fs::write(tmp.path().join("inner"), b"x").unwrap();
+    let part = tmp.path().to_path_buf();
+
+    let msg = app.shutdown_jobs();
+    assert!(msg.contains("Could not delete now") && msg.contains("deleted at the next start"), "{msg}");
+    assert!(msg.contains(".part"), "the path is named: {msg}");
+    let list = std::fs::read_to_string(app.paths.root_dir.join(micro_parquet::jobs::PENDING_PARTS_FILE)).unwrap();
+    assert_eq!(list.trim(), part.display().to_string());
+
+    // the lock goes away; the next start's sweep deletes it
+    std::fs::remove_dir_all(&part).unwrap();
+    std::fs::write(&part, b"partial").unwrap();
+    let rep = micro_parquet::jobs::sweep_pending_parts(&app.paths.root_dir);
+    assert_eq!(rep.deleted, 1);
+    assert!(!part.exists());
+    drop(tmp);
+}
+
+#[test]
 fn closing_without_an_export_does_not_ask() {
     use crate::ui::jobs::CloseDecision;
     let _guard = FILE_OUTPUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());

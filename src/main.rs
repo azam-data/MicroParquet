@@ -45,6 +45,15 @@ fn main() -> eframe::Result<()> {
     if let Some(n) = &rule_notice {
         eprintln!("[MicroParquet] {}", n);
     }
+    // .part files the last session could not delete (for example Windows still held one).
+    let sweep_notice = micro_parquet::jobs::sweep_pending_parts(&paths.root_dir).message();
+    if let Some(n) = &sweep_notice {
+        eprintln!("[MicroParquet] {}", n);
+    }
+    let rule_notice = match (rule_notice, sweep_notice) {
+        (Some(a), Some(b)) => Some(format!("{} | {}", a, b)),
+        (a, b) => a.or(b),
+    };
 
     if args.headless {
         if let Err(e) = headless::run_headless_cli(&args, &paths) {

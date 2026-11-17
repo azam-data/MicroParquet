@@ -108,3 +108,53 @@ fn a_failed_tab_and_a_missing_totals_row_are_listed_separately() {
     assert!(s.contains("1 tab(s) failed") && s.contains("Broken") && s.contains("'Loans' was exported WITHOUT"), "{s}");
 }
 
+// ------------------------------------------------------------------------------------ B
+
+#[test]
+fn b_startup_sweep_deletes_recorded_part_files_and_keeps_the_locked_ones() {
+    use micro_parquet::jobs::*;
+    let d = dir("b");
+    let root = d.join("portable_data");
+    std::fs::create_dir_all(&root).unwrap();
+    // one that can be deleted, one that cannot (a directory stands in for a file Windows holds),
+    // one that is already gone, and one that is not ours and must never be deleted
+    let ok = d.join(".Loans.xlsx.1-1.part");
+    std::fs::write(&ok, b"partial").unwrap();
+    let locked = d.join(".Loans.xlsx.1-2.part");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("inner"), b"x").unwrap();
+    let gone = d.join(".Loans.xlsx.1-3.part");
+    let precious = d.join("Balance_Sheet.xlsx");
+    std::fs::write(&precious, b"keep me").unwrap();
+
+    record_pending_parts(&root, &[ok.clone(), locked.clone(), gone.clone()]).unwrap();
+    // recording twice does not duplicate; a hand-edited list may contain any path
+    record_pending_parts(&root, &[ok.clone()]).unwrap();
+    let list = std::fs::read_to_string(root.join(PENDING_PARTS_FILE)).unwrap();
+    assert_eq!(list.lines().count(), 3, "{list}");
+    std::fs::write(root.join(PENDING_PARTS_FILE), format!("{list}{}\n", precious.display())).unwrap();
+
+    let rep = sweep_pending_parts(&root);
+    assert_eq!(rep.deleted, 1, "{rep:?}");
+    assert_eq!(rep.still_locked.len(), 1, "{rep:?}");
+    assert!(rep.still_locked[0].contains(".Loans.xlsx.1-2.part"));
+    assert!(!ok.exists(), "the deletable file is deleted");
+    assert!(locked.exists(), "the locked one stays");
+    assert!(precious.exists(), "a file that is not a .part file is never deleted");
+    let msg = rep.message().unwrap();
+    assert!(msg.contains("1 unfinished output file(s)") && msg.contains("tried again at the next start"), "{msg}");
+    // the list keeps only the locked file
+    let left = std::fs::read_to_string(root.join(PENDING_PARTS_FILE)).unwrap();
+    assert_eq!(left.trim(), locked.display().to_string());
+
+    // once it can be deleted (the lock is gone), the next start deletes it and the list goes away
+    std::fs::remove_dir_all(&locked).unwrap();
+    std::fs::write(&locked, b"now a plain file").unwrap();
+    let rep2 = sweep_pending_parts(&root);
+    assert_eq!(rep2.deleted, 1, "{rep2:?}");
+    assert!(rep2.still_locked.is_empty());
+    assert!(!locked.exists());
+    assert!(!root.join(PENDING_PARTS_FILE).exists(), "an empty list is removed");
+    // and with no list there is nothing to say
+    assert_eq!(sweep_pending_parts(&root).message(), None);
+}

@@ -497,6 +497,129 @@ pub fn remove_part_files() -> (usize, Vec<String>) {
     (removed, failed)
 }
 
+/// File in the data folder listing `.part` files that could not be deleted when the program
+/// closed (for example Windows still holds one). One path per line.
+pub const PENDING_PARTS_FILE: &str = "pending_part_deletes.txt";
+
+/// A path the sweep may delete: only the program's own temporary names (`.<name>.<pid>-<n>.part`).
+/// The list is a plain text file; a path in it that is not one of ours is ignored, never deleted.
+fn is_our_part_file(p: &Path) -> bool {
+    p.file_name()
+        .map(|n| {
+            let n = n.to_string_lossy();
+            n.starts_with('.') && n.ends_with(".part")
+        })
+        .unwrap_or(false)
+}
+
+fn read_pending(root: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(root.join(PENDING_PARTS_FILE))
+        .map(|t| t.lines().map(str::trim).filter(|l| !l.is_empty()).map(PathBuf::from).collect())
+        .unwrap_or_default()
+}
+
+fn write_pending(root: &Path, paths: &[PathBuf]) -> Result<()> {
+    let file = root.join(PENDING_PARTS_FILE);
+    if paths.is_empty() {
+        return match std::fs::remove_file(&file) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("Could not update {:?}", file)),
+        };
+    }
+    std::fs::create_dir_all(root).with_context(|| format!("Could not create {:?}", root))?;
+    let text: String = paths.iter().map(|p| format!("{}\n", p.display())).collect();
+    std::fs::write(&file, text).with_context(|| format!("Could not write {:?}", file))
+}
+
+/// Adds `paths` to the list of `.part` files to delete at the next start (no duplicates).
+pub fn record_pending_parts(root: &Path, paths: &[PathBuf]) -> Result<()> {
+    let mut all = read_pending(root);
+    for p in paths {
+        if !all.contains(p) {
+            all.push(p.clone());
+        }
+    }
+    write_pending(root, &all)
+}
+
+/// What the closing step did with unfinished output files.
+#[derive(Debug, Default, PartialEq)]
+pub struct PartCleanup {
+    /// Deleted now.
+    pub removed: usize,
+    /// Could not be deleted now (path and reason). They are recorded for the next start.
+    pub failed: Vec<String>,
+    /// Set when the failed files could not even be recorded (the reason).
+    pub record_error: Option<String>,
+}
+
+/// Closing: deletes the `.part` file of every unfinished output; any that cannot be deleted
+/// (Windows still holds it) are recorded in `<root>/pending_part_deletes.txt` and swept at the
+/// next start by [`sweep_pending_parts`].
+pub fn remove_part_files_recording(root: &Path) -> PartCleanup {
+    let (removed, failed) = remove_part_files();
+    let mut out = PartCleanup { removed, failed, record_error: None };
+    if !out.failed.is_empty() {
+        let left = part_files();
+        if let Err(e) = record_pending_parts(root, &left) {
+            out.record_error = Some(format!("{:#}", e));
+        }
+    }
+    out
+}
+
+/// What the start-up sweep did.
+#[derive(Debug, Default, PartialEq)]
+pub struct SweepReport {
+    pub deleted: usize,
+    /// Still cannot be deleted (path and reason); they stay on the list for the next start.
+    pub still_locked: Vec<String>,
+}
+
+impl SweepReport {
+    /// Text for the status bar; `None` when there was nothing on the list.
+    pub fn message(&self) -> Option<String> {
+        if self.deleted == 0 && self.still_locked.is_empty() {
+            return None;
+        }
+        let mut m = format!("Start-up: {} unfinished output file(s) left by the last session deleted.", self.deleted);
+        if !self.still_locked.is_empty() {
+            m.push_str(&format!(
+                " {} still cannot be deleted and will be tried again at the next start: {}",
+                self.still_locked.len(),
+                self.still_locked.join("; ")
+            ));
+        }
+        Some(m)
+    }
+}
+
+/// Start-up sweep: deletes the `.part` files the last session could not delete. Files already
+/// gone are dropped from the list; files that still cannot be deleted stay on it.
+pub fn sweep_pending_parts(root: &Path) -> SweepReport {
+    let listed = read_pending(root);
+    let mut report = SweepReport::default();
+    let mut keep: Vec<PathBuf> = Vec::new();
+    for p in listed {
+        if !is_our_part_file(&p) {
+            continue;
+        }
+        match std::fs::remove_file(&p) {
+            Ok(()) => report.deleted += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                report.still_locked.push(format!("{}: {}", p.display(), e));
+                keep.push(p);
+            }
+        }
+    }
+    if let Err(e) = write_pending(root, &keep) {
+        report.still_locked.push(format!("the list {} could not be updated: {:#}", PENDING_PARTS_FILE, e));
+    }
+    report
+}
+
 /// A temporary name next to the final output file. Dropping it without `commit` deletes the
 /// temporary file, so an error, a cancel or a panic leaves nothing behind.
 pub struct TempOutput {
