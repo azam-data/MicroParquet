@@ -405,16 +405,19 @@ impl MicroParquetApp {
                     ui.label(egui::RichText::new(theme::ph::MAGNIFYING_GLASS).color(tk.muted));
                     let hint = if width >= theme::SEARCH_LONG_HINT_W { "Search actions and columns" } else { "Search\u{2026}" };
                     ui.add(egui::Label::new(egui::RichText::new(hint).color(tk.muted)).truncate());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        egui::Frame::none()
-                            .fill(tk.surface)
-                            .stroke(theme::line(tk.border))
-                            .rounding(egui::Rounding::same(theme::RADIUS_SMALL))
-                            .inner_margin(theme::MARGIN_KEYCAP)
-                            .show(ui, |ui| {
-                                ui.label(theme::mono("Ctrl K").size(theme::TEXT_KEYCAP).color(tk.muted));
-                            });
-                    });
+                    // a very narrow box keeps the icon and "Search…"; the Ctrl K badge needs room
+                    if width >= theme::SEARCH_BADGE_MIN_W {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            egui::Frame::none()
+                                .fill(tk.surface)
+                                .stroke(theme::line(tk.border))
+                                .rounding(egui::Rounding::same(theme::RADIUS_SMALL))
+                                .inner_margin(theme::MARGIN_KEYCAP)
+                                .show(ui, |ui| {
+                                    ui.label(theme::mono("Ctrl K").size(theme::TEXT_KEYCAP).color(tk.muted));
+                                });
+                        });
+                    }
                 });
             })
             .response

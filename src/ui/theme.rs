@@ -158,10 +158,12 @@ pub const BAR_SEPARATOR_H: f32 = 20.0;
 pub const BAR_WIDTH_SLACK: f32 = 2.0;
 /// The command search box: preferred, smallest, and the icon-only width.
 pub const SEARCH_MAX_W: f32 = 310.0;
-pub const SEARCH_MIN_W: f32 = 170.0;
+pub const SEARCH_MIN_W: f32 = 120.0;
 pub const SEARCH_ICON_W: f32 = 44.0;
-/// The box's own padding and border (10 + 10 + 1 + 1).
-pub const SEARCH_FRAME_PAD: f32 = 22.0;
+/// The box's own side padding (10 + 10); egui adds nothing for the border.
+pub const SEARCH_FRAME_PAD: f32 = 20.0;
+/// From this width the box also shows its "Ctrl K" badge.
+pub const SEARCH_BADGE_MIN_W: f32 = 170.0;
 /// From this width the box says "Search actions and columns"; narrower it says "Search…".
 pub const SEARCH_LONG_HINT_W: f32 = 260.0;
 

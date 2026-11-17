@@ -42,6 +42,20 @@ fn bar_rects_at(px_w: f32) -> (egui::Rect, Vec<(String, egui::Rect)>) {
     (input.screen_rect.unwrap_or(egui::Rect::NOTHING), rects)
 }
 
+/// Every text the bar paints at this window width.
+fn bar_texts_at(px_w: f32) -> Vec<String> {
+    let mut app = test_app("bartexts");
+    let (ctx, input) = headless(px_w, WIN_H_PX, UI_SCALE);
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        let out = ctx.run(input.clone(), |ctx| {
+            app.render_top_bar(ctx);
+        });
+        texts = collect_painted(&out.shapes).texts.into_iter().map(|(t, _, _)| t).collect();
+    }
+    texts
+}
+
 fn assert_no_overlap(rects: &[(String, egui::Rect)], bar: egui::Rect, what: &str) {
     for (name, r) in rects {
         assert!(
@@ -163,6 +177,12 @@ fn at_1280_by_720_and_105_percent_open_banking_export_and_search_are_all_visible
         assert!(r.width() > 20.0 && r.right() <= screen.right() && r.left() >= 0.0, "{n}: {r:?}");
     }
     assert!(rect("Search").width() >= theme::SEARCH_MIN_W - 1.0, "{:?}", rect("Search"));
+    // the narrow box keeps its icon and "Search…" (the Ctrl K badge needs more room)
+    let texts = bar_texts_at(WIN_W_PX);
+    assert!(texts.iter().any(|t| t == "Search\u{2026}"), "{texts:?}");
+    // the buttons keep their labels (only Calc column is in More), not icons only
+    assert!(rect("Filter").width() > 50.0 && rect("OpenFile").width() > 50.0, "labelled buttons: Filter {:?}", rect("Filter"));
+    assert!(!rects.iter().any(|(n, _)| n == "CalcColumn") && rects.iter().any(|(n, _)| n == "Columns" || n == "Pivot"), "only Calc column is folded: {rects:?}");
     assert_no_overlap(&rects, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), theme::TOP_BAR_H)), "1280");
 }
 
@@ -220,7 +240,7 @@ fn the_version_is_in_help_about_not_in_the_bar() {
         }
     }
     let mut app = test_app("barv");
-    let (ctx, input) = headless(WIN_W_PX, WIN_H_PX, UI_SCALE);
+    let (ctx, input) = headless(1600.0, WIN_H_PX, UI_SCALE); // wide enough for the Ctrl K badge
     let mut texts = Vec::new();
     for _ in 0..2 {
         let out = ctx.run(input.clone(), |ctx| {
