@@ -180,3 +180,28 @@ pub fn pipeline_hash(source: &TabSource, steps: &[TransformStep]) -> u64 {
     }
     h.finish()
 }
+
+/// The keys of the per-step row counts: index 0 is the source (its identity: paths, ingestion
+/// settings, file size and modified time), index i + 1 the source plus steps 0..=i. A count is
+/// reused only while its key is unchanged, so a replaced file or a new schema recounts everything.
+pub fn count_keys(source: &TabSource, steps: &[TransformStep]) -> Vec<u64> {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source_fingerprint(source).hash(&mut h);
+    let mut keys = Vec::with_capacity(steps.len() + 1);
+    keys.push(h.finish());
+    for s in steps {
+        format!("{:?}", s).hash(&mut h);
+        keys.push(h.finish());
+    }
+    keys
+}
+
+/// The counts that can be kept for `new_keys`: a count whose key is the same as when it was
+/// counted, `None` (to count) for every other position.
+pub fn reusable_counts(old_keys: &[u64], old_counts: &[Option<usize>], new_keys: &[u64]) -> Vec<Option<usize>> {
+    new_keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| if old_keys.get(i) == Some(k) { old_counts.get(i).copied().flatten() } else { None })
+        .collect()
+}

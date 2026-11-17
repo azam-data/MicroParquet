@@ -248,15 +248,10 @@ impl MicroParquetApp {
             return;
         };
         let exec = tab.exec_steps.min(tab.steps.len());
-        let hashes = micro_parquet::steps_edit::prefix_hashes(&tab.steps[..exec]);
-        // Keep a count when the steps up to it are the same as when it was counted.
-        let mut known: Vec<Option<usize>> = vec![None; exec + 1];
-        known[0] = tab.step_counts.first().copied().flatten();
-        for i in 0..exec {
-            if tab.step_hashes.get(i) == Some(&hashes[i]) {
-                known[i + 1] = tab.step_counts.get(i + 1).copied().flatten();
-            }
-        }
+        // Keep a count while the source (path, size, modified time, ingestion settings) and the
+        // steps up to it are the same as when it was counted.
+        let hashes = micro_parquet::steps_edit::count_keys(&tab.source, &tab.steps[..exec]);
+        let known = micro_parquet::steps_edit::reusable_counts(&tab.step_hashes, &tab.step_counts, &hashes);
         tab.step_hashes = hashes.clone();
         tab.step_counts = known.clone();
         let req = StepCountsRequest {

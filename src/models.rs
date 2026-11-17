@@ -1419,7 +1419,8 @@ pub struct TabState {
     pub history: crate::steps_edit::StepHistory,
     /// Rows after each step: index 0 is the source, index i is after step i. `None` = not counted yet.
     pub step_counts: Vec<Option<usize>>,
-    /// Fingerprint of the steps up to each position (see `steps_edit::prefix_hashes`).
+    /// Key of each entry of `step_counts`: the source identity plus the steps up to it
+    /// (see `steps_edit::count_keys`).
     pub step_hashes: Vec<u64>,
     /// Statistics of the column the inspector shows (computed on the worker).
     pub column_stats: Option<crate::column_stats::ColumnStats>,

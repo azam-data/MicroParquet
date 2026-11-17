@@ -159,3 +159,34 @@ fn fix4_a_step_check_that_cannot_run_is_reported() {
     };
     assert!(err.starts_with(STEP_CHECK_FAILED), "{err}");
 }
+
+// ---------------------------------------------------------------------------------- fix 6
+
+#[test]
+fn fix6_row_counts_are_keyed_on_the_source_and_the_step_prefix() {
+    use micro_parquet::steps_edit::{count_keys, reusable_counts};
+    let d = dir("f6");
+    let src = parquet(&d, "a", dr_frame());
+    let steps = vec![filter("DHK"), filter("CTG")];
+    let keys = count_keys(&src, &steps);
+    assert_eq!(keys.len(), 3);
+    let counts = vec![Some(2), Some(1), Some(0)];
+    assert_eq!(reusable_counts(&keys, &counts, &count_keys(&src, &steps)), counts, "nothing changed");
+    // the last step changes: the source and first-step counts stay
+    let other = vec![filter("DHK"), filter("SYL")];
+    assert_eq!(reusable_counts(&keys, &counts, &count_keys(&src, &other)), vec![Some(2), Some(1), None]);
+    // another ingestion setting (same path, same steps): nothing is reused
+    let TabSource::SingleFile { path, is_parquet, config } = &src else { unreachable!() };
+    let mut cfg = config.clone();
+    cfg.skip_rows = 1;
+    let src_cfg = TabSource::SingleFile { path: path.clone(), is_parquet: *is_parquet, config: cfg };
+    assert_eq!(reusable_counts(&keys, &counts, &count_keys(&src_cfg, &steps)), vec![None, None, None]);
+    // another file at another path: nothing is reused
+    let src_b = parquet(&d, "b", dr_frame());
+    assert_eq!(reusable_counts(&keys, &counts, &count_keys(&src_b, &steps)), vec![None, None, None]);
+    // the same path rewritten with more rows (size and modified time change): nothing is reused
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let mut df = df_with_three_rows();
+    ParquetWriter::new(std::fs::File::create(path).unwrap()).finish(&mut df).unwrap();
+    assert_eq!(reusable_counts(&keys, &counts, &count_keys(&src, &steps)), vec![None, None, None]);
+}

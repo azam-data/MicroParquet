@@ -256,3 +256,26 @@ fn closing_without_an_export_does_not_ask() {
     assert!(!app.quit_guard);
     assert!(app.jobs.wait_idle(std::time::Duration::from_millis(10)), "the job stopped");
 }
+
+#[test]
+fn row_counts_are_recounted_when_the_file_changes_under_the_same_steps() {
+    let mut app = test_app("fix6");
+    let root = app.paths.root_dir.clone();
+    let src = parquet_source(&root, "loans", loans_frame());
+    let idx = open_tab(&mut app, src.clone(), vec![]);
+    app.push_step_to_active_tab(TransformStep::FilterRows { column: "Branch".into(), operator: FilterOp::NotEq, value: "SYL".into(), keep_matching: true }, false);
+    settle(&mut app);
+    assert_eq!(app.tabs[idx].step_counts, vec![Some(3), Some(2)]);
+    // The file is replaced by one with five rows; the steps are the same.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let five = DataFrame::new(vec![
+        Series::new("Branch".into(), &["DHK", "CTG", "SYL", "DHK", "KHL"]).into(),
+        Series::new("Amount".into(), &["1", "2", "3", "4", "5"]).into(),
+        Series::new("Balance".into(), &[1.0f64, 2.0, 3.0, 4.0, 5.0]).into(),
+    ])
+    .expect("frame");
+    parquet_source(&root, "loans", five);
+    app.refresh_tab_at(idx, false, None);
+    settle(&mut app);
+    assert_eq!(app.tabs[idx].step_counts, vec![Some(5), Some(4)], "no count of the old file is kept");
+}
