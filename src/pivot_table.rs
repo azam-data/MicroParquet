@@ -280,8 +280,8 @@ fn read_cells(
         let mut rk: Key = Vec::new();
         let mut ck: Key = Vec::new();
         for (pos, &i) in keys.iter().enumerate() {
-            let text = key_cols[pos][r].clone();
-            if let Some(Some(oc)) = order_cols[pos].as_ref().map(|c| c[r]) {
+            let text = key_cols.get(pos).and_then(|c| c.get(r)).cloned().flatten();
+            if let Some(Some(oc)) = order_cols.get(pos).and_then(|o| o.as_ref()).map(|c| c.get(r).copied().flatten()) {
                 orders[i].insert(text.clone(), oc);
             }
             if i < row_n {
@@ -292,12 +292,12 @@ fn read_cells(
         }
         for (j, m) in mixed_cols.iter().enumerate() {
             if let Some(m) = m {
-                if m[r].unwrap_or(0) > 0 {
+                if m.get(r).copied().flatten().unwrap_or(0) > 0 {
                     mixed[j] += 1;
                 }
             }
         }
-        out.insert((rk, ck), value_cols.iter().map(|c| c[r]).collect());
+        out.insert((rk, ck), value_cols.iter().map(|c| c.get(r).copied().flatten()).collect());
     }
     Ok(())
 }

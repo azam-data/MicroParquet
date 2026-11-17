@@ -387,7 +387,7 @@ pub const REPRICING_TOTAL_ROW: &str = "Total";
 /// later or never in the last.
 pub fn build_repricing_gap(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<DataFrame> {
     let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
-    let cutoff_days = (cutoff - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+    let cutoff_days = days_since_epoch(cutoff);
     let mut lf = lf;
     let schema = lf.collect_schema().context("Could not read the columns for the repricing gap")?;
     let dt = schema.get(spec.bal_col.as_str()).cloned().ok_or_else(|| anyhow!("Column '{}' was not found. Choose the balance column again.", spec.bal_col))?;

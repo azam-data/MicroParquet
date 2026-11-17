@@ -1,7 +1,7 @@
 # Phase 4 progress
 
 Branch: `phase4` (from `main` at c01b78b). Run unattended; resume from the first task that is not DONE.
-Each task is one commit "Phase 4 <ID>: ..." (the hash column is filled in by the next commit). The new tests are in one binary, `tests/phase4/` (modules `guide`, then one per task; helpers in `common.rs`).
+Each task is one commit "Phase 4 <ID>: ..." (the hash column is filled in by the next commit). The new tests are in `tests/phase4/` (modules `guide`, then one per task; helpers in `common.rs`); they are compiled into the `phase3` test binary (`tests/phase3/main.rs` includes them with `#[path]`), because every integration test binary links all of Polars and the CI runner's disk is small. Run them with `cargo test --test phase3`.
 Test baseline before G0: see the first line under "Test counts".
 
 | Task | Status | Commit | Tests added | Deviations | Open questions |
@@ -21,10 +21,10 @@ Test baseline before G0: see the first line under "Test counts".
 - After V2: 91 (binary) + 140 + 45 (`tests/phase4`) + 60 passed (confirmed by the full run).
 - After V3: 94 (binary) + 140 + 53 (`tests/phase4`) + 60 passed.
 - After V4: 97 (binary) + 140 + 62 (`tests/phase4`) + 60 passed.
-- After V5: 99 (binary) + 140 + 69 (`tests/phase4`) + 60 passed.
+- After V5: 99 (binary) + 140 + 69 (`tests/phase4`, inside the `phase3` binary, which therefore runs 209 tests) + 60 passed.
 
 ## Final state
-- All six tasks DONE; none BLOCKED. `cargo test`: 99 (binary, incl. `src/ui/render_tests_p4.rs`) + 140 (`tests/phase3`) + 69 (`tests/phase4`) + 60 (`tests/review.rs`) passed. No expected value of an earlier test changed; the only edits to older tests are the new fields in struct literals (`curve_mode`, and `reprice_col`, `beta_file`, `product_col`, `floor_pct`) in `src/ui/tests.rs`, `tests/phase3/l5.rs` and `tests/review.rs`.
+- All six tasks DONE; none BLOCKED. `cargo test`: 99 (binary, incl. `src/ui/render_tests_p4.rs`) + 140 (`tests/phase3`) + 69 (`tests/phase4`, inside the `phase3` binary, which therefore runs 209 tests) + 60 (`tests/review.rs`) passed. No expected value of an earlier test changed; the only edits to older tests are the new fields in struct literals (`curve_mode`, and `reprice_col`, `beta_file`, `product_col`, `floor_pct`) in `src/ui/tests.rs`, `tests/phase3/l5.rs` and `tests/review.rs`.
 - Old-macro fixtures made by the code of `main`: `tests/fixtures/phase4_*` (see its README).
 - Every deviation is in `<accepted_deviations>` of `docs/phase4-spec.md`.
 - This container cannot open a window, so nothing was looked at by eye; the render tests draw the real UI in a headless egui context at 1219×686 pt (105%) and 1600×900 pt (80%) and check the rectangles of what was drawn.
