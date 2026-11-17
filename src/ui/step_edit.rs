@@ -145,9 +145,11 @@ impl MicroParquetApp {
                 matdat_col: self.ftp.mat_col.clone(),
                 bal_col: self.ftp.bal_col.clone(),
                 rate_col: self.ftp.rate_col.clone(),
-                curve: self.ftp.curve.clone(),
+                // the typed points belong to the step only when it uses them; a step that reads the store has none
+                curve: if self.ftp.curve_source == crate::ui::ftp::CurveSource::Typed { self.ftp.curve.clone() } else { Vec::new() },
                 is_liability: self.ftp.is_liability,
                 interpolation: self.ftp.interpolation,
+                curve_mode: self.ftp.curve_mode(),
             },
             ActiveToolModal::BankingAudit => TransformStep::BankingHygieneAudit {
                 opndat_col: self.audit.opn_col.clone(),
@@ -294,14 +296,18 @@ impl MicroParquetApp {
                 self.shock.side_col = side_col.unwrap_or_default();
                 self.shock.side_cols_seen = columns.to_vec();
             }
-            TransformStep::FtpCurveMap { opndat_col, matdat_col, bal_col, rate_col, curve, is_liability, interpolation } => {
+            TransformStep::FtpCurveMap { opndat_col, matdat_col, bal_col, rate_col, curve, is_liability, interpolation, curve_mode } => {
                 self.ftp.opn_col = opndat_col;
                 self.ftp.mat_col = matdat_col;
                 self.ftp.bal_col = bal_col;
                 self.ftp.rate_col = rate_col;
-                self.ftp.curve = curve;
+                if !curve.is_empty() {
+                    self.ftp.curve = curve;
+                }
                 self.ftp.is_liability = is_liability;
                 self.ftp.interpolation = interpolation;
+                self.ftp.set_curve_mode(&curve_mode);
+                self.ftp.reload_store();
             }
             TransformStep::BankingHygieneAudit {
                 opndat_col,

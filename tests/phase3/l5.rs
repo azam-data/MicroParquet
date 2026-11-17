@@ -183,6 +183,8 @@ fn rich_recipe() -> MacroRecipe {
                 curve: default_bd_ftp_curve(),
                 is_liability: true,
                 interpolation: FtpInterpolation::Linear,
+
+                curve_mode: Default::default(),
             },
         ],
         summary: Default::default(),

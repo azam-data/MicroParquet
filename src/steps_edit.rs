@@ -226,7 +226,16 @@ pub fn pipeline_hash(source: &TabSource, steps: &[TransformStep]) -> u64 {
     for s in steps {
         format!("{:?}", s).hash(&mut h);
     }
+    // an FTP step that reads the curve store follows the curve files too
+    if steps.iter().any(uses_curve_store) {
+        crate::curves::curves_stamp().hash(&mut h);
+    }
     h.finish()
+}
+
+/// True for an FTP step (turned off or not) that takes its curve from the store.
+fn uses_curve_store(step: &TransformStep) -> bool {
+    matches!(step.inner(), TransformStep::FtpCurveMap { curve_mode, .. } if *curve_mode != crate::models::FtpCurveMode::Inline)
 }
 
 /// The keys of the per-step row counts: index 0 is the source (its identity: paths, ingestion

@@ -749,3 +749,226 @@ fn the_gap_ladder_is_listed_under_treasury_and_alm_and_found_by_the_search() {
         assert!(at("Treasury & ALM").top() < at("Liquidity gap ladder").top() && at("Liquidity gap ladder").top() < at("Loans & credit").top(), "{}", rig.what);
     }
 }
+
+// -------------------------------------------------------------------- V4: yield curves and FTP
+
+fn curves_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let dir = app.paths.curves_dir.clone();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("curves folder");
+    micro_parquet::curves::set_curves_dir_override(Some(dir.clone()));
+    let pts = |a: f64, b: f64| vec![FtpPoint { tenor_days: 30, ftp_rate: a }, FtpPoint { tenor_days: 365, ftp_rate: b }];
+    for (date, p) in [("2026-01-01", pts(8.0, 10.0)), ("2026-07-01", pts(9.0, 11.0))] {
+        let c = micro_parquet::curves::YieldCurve { date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("date"), currency: "BDT".into(), source: "test".into(), points: p };
+        micro_parquet::curves::save_curve(&dir, &c).expect("saves");
+    }
+    // deals that the FTP step can price
+    let deals = DataFrame::new(vec![
+        Series::new("Deal".into(), &["D1", "D2"]),
+        dated("Opndat", &["2026-03-15", "2026-08-01"]),
+        dated("Matdat", &["2026-09-28", "2027-02-14"]),
+        Series::new("Balance".into(), &[1_000_000.0, 1_000_000.0]),
+        Series::new("Int Rate".into(), &[9.0, 9.0]),
+    ])
+    .expect("deals");
+    let src = parquet_source(&app.paths.root_dir.clone(), "deals", deals);
+    open_tab(&mut app, src, vec![]);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn curves_title() -> String {
+    format!("{}  Yield curves", theme::ph::CHART_LINE)
+}
+
+fn press_key(rig: &mut Rig, key: egui::Key) {
+    rig.step(vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+}
+
+#[test]
+fn the_yield_curves_manager_lists_edits_saves_imports_and_deletes_with_every_part_inside_the_dialog() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = curves_rig("p4v4a", ppp, w, h);
+        let what = rig.what.clone();
+        let dir = rig.app.paths.curves_dir.clone();
+        rig.app.run_command(&rig.ctx, CommandId::YieldCurves);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::YieldCurves, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &curves_title(), &what);
+        for t in ["CURVES", "2026-01-01", "2026-07-01", "Date (YYYY-MM-DD):", "Currency:", "Source:", "Save curve", "New curve", "Import CSV", "Delete", "Close"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        let c = rig.app.curves.rects.clone();
+        assert!(inside(c.list, r.window) && inside(c.editor, r.window), "{what}: the list {:?} and the editor {:?} are inside {:?}", c.list, c.editor, r.window);
+        assert!(!c.list.intersects(c.editor) || c.list.intersect(c.editor).width() < 1.0, "{what}: the list and the editor do not overlap");
+        for (d, row) in &c.list_rows {
+            assert!(inside(*row, c.list), "{what}: the row of {d} {row:?} is inside the list {:?}", c.list);
+        }
+        for row in &c.point_rows {
+            assert!(inside(*row, c.editor), "{what}: a point row {row:?} is inside the editor {:?}", c.editor);
+        }
+        for (n, b) in &c.buttons {
+            assert!(inside(*b, r.footer), "{what}: '{n}' is inside the footer");
+        }
+        // the latest curve is open; click the other one in the list
+        assert_eq!(rig.app.curves.editor.date, "2026-07-01", "{what}");
+        let first = c.list_rows.iter().find(|(d, _)| d == "2026-01-01").map(|(_, r)| *r).expect("row");
+        rig.click(first.center());
+        assert_eq!(rig.app.curves.editor.date, "2026-01-01", "{what}: the click opened it");
+        assert_eq!(rig.app.curves.editor.points[0].ftp_rate, 8.0, "{what}");
+        // two points with the same tenor: the message names them and Save does nothing
+        rig.app.curves.editor.points[1].tenor_days = 30;
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("both have the tenor 30 days") && inside(*bx, rig.app.curves.rects.editor)), "{what}: the message is shown in the editor");
+        let save = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Save curve").map(|(_, r)| *r).expect("save");
+        let before = std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file");
+        rig.click(save.center());
+        assert_eq!(std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file"), before, "{what}: an invalid curve is not saved");
+        // fix it, change a rate and save by a click
+        rig.app.curves.editor.points[1].tenor_days = 365;
+        rig.app.curves.editor.points[1].ftp_rate = 10.5;
+        rig.draw(3);
+        let save = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Save curve").map(|(_, r)| *r).expect("save");
+        rig.click(save.center());
+        let text = std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file");
+        assert!(text.contains("10.5"), "{what}: saved: {text}");
+        // a new curve typed by real key input: its date, then save
+        let new = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "New curve").map(|(_, r)| *r).expect("new");
+        rig.click(new.center());
+        assert!(rig.app.curves.editor.date.is_empty() && rig.app.curves.editor.opened_from.is_none(), "{what}");
+        let date_field = rig.app.curves.rects.fields.iter().find(|(n, _)| n == "Date").map(|(_, r)| *r).expect("date field");
+        rig.click(date_field.center());
+        rig.step(vec![egui::Event::Text("2026-09-01".into())]);
+        rig.draw(3);
+        assert_eq!(rig.app.curves.editor.date, "2026-09-01", "{what}: typed into the date field");
+        rig.app.curves.editor.points = vec![FtpPoint { tenor_days: 90, ftp_rate: 9.5 }, FtpPoint { tenor_days: 180, ftp_rate: 9.8 }];
+        rig.draw(3);
+        let save = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Save curve").map(|(_, r)| *r).expect("save");
+        rig.click(save.center());
+        assert!(dir.join("2026-09-01.json").exists(), "{what}: the new curve is a file");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("2026-09-01") && inside(*bx, rig.app.curves.rects.list)), "{what}: it is in the list");
+        // a CSV with the same tenor twice is refused, and one with a heading is taken
+        let e = rig.app.curves.import_csv_text("tenor_days,rate_pct\n30,8\n30,9\n").err().expect("refused");
+        assert!(e.contains("both have the tenor 30 days"), "{what}: {e}");
+        assert_eq!(rig.app.curves.editor.points.len(), 2, "{what}: the points were not replaced");
+        assert_eq!(rig.app.curves.import_csv_text("tenor_days,rate_pct\n30,7.5\n180,8.5\n365,9\n"), Ok(3));
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("Imported 3 points") && inside(*bx, rig.app.curves.rects.editor)), "{what}");
+        // delete needs a second click
+        let list = rig.app.curves.rects.list_rows.iter().find(|(d, _)| d == "2026-09-01").map(|(_, r)| *r).expect("row");
+        rig.click(list.center());
+        let del = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Delete").map(|(_, r)| *r).expect("delete");
+        rig.click(del.center());
+        assert!(dir.join("2026-09-01.json").exists(), "{what}: one click does not delete");
+        let p = rig.draw(3);
+        let yes = p.boxes.iter().find(|(t, _)| t.contains("Yes, delete it")).map(|(_, b)| *b).expect("the question");
+        rig.click(yes.center());
+        assert!(!dir.join("2026-09-01.json").exists(), "{what}: the second click deletes");
+        // an existing date is not overwritten by a new curve
+        rig.app.curves.new_curve();
+        rig.app.curves.editor.date = "2026-07-01".into();
+        let e = rig.app.curves.save().err().expect("exists");
+        assert!(e.contains("already exists"), "{what}: {e}");
+        micro_parquet::curves::set_curves_dir_override(None);
+    }
+}
+
+#[test]
+fn the_ftp_dialog_chooses_the_curve_source_and_the_step_prices_each_deal_on_its_curve() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = curves_rig("p4v4b", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Ftp);
+        let p = rig.draw(6);
+        let ftp_title = "\u{E538} Automated FTP Yield Curve Tenor Mapper";
+        let r = assert_dialog_fits(&rig.ctx, ftp_title, &what);
+        for t in ["Yield curve:", "The curve typed below", "The curve on or before one date:", "Each deal's own curve", "Use the earliest curve for older deals", "Yield curves\u{2026}"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        // a fixed date that is not a date: the message, and the button does nothing
+        rig.app.ftp.curve_source = crate::ui::ftp::CurveSource::FixedDate;
+        rig.app.ftp.opn_col = "Opndat".into();
+        rig.app.ftp.mat_col = "Matdat".into();
+        rig.app.ftp.rate_col = "Int Rate".into();
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("Type the curve date as YYYY-MM-DD") && inside(*bx, r.window)), "{what}");
+        assert!(rig.app.ftp_curve_problem().is_some());
+        rig.app.ftp.fixed_date = "2025-06-30".into();
+        assert!(rig.app.ftp_curve_problem().expect("none that early").contains("No curve is dated on or before 2025-06-30"), "{what}");
+        rig.app.ftp.fixed_date = "2026-06-30".into();
+        assert!(rig.app.ftp_curve_problem().is_none(), "{what}");
+        // origination: choose it with a real click on its radio button
+        rig.app.ftp.curve_source = crate::ui::ftp::CurveSource::Typed;
+        let p = rig.draw(4);
+        let body_at = r.body.center();
+        for _ in 0..3 {
+            rig.step(vec![egui::Event::PointerMoved(body_at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -600.0), modifiers: egui::Modifiers::NONE }]);
+        }
+        let scrolled = rig.draw(2);
+        assert!(scrolled.boxes.iter().any(|(t, bx)| t.contains("Benchmark Yield Curve") && inside(*bx, r.window)), "{what}: the typed curve is there when it is chosen");
+        for _ in 0..3 {
+            rig.step(vec![egui::Event::PointerMoved(body_at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 900.0), modifiers: egui::Modifiers::NONE }]);
+        }
+        let _ = rig.draw(3);
+        let _ = p;
+        let p = rig.draw(1);
+        let radio = p.boxes.iter().find(|(t, _)| t.contains("Each deal's own curve")).map(|(_, b)| *b).expect("radio text");
+        rig.click(egui::pos2(radio.left() - theme::SPACE_L, radio.center().y));
+        assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Origination, "{what}: the click chose it");
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("2 curve(s) in portable_data/curves, dated 2026-01-01 to 2026-07-01") && inside(*bx, r.window)), "{what}: the store is described");
+        // (the typed points are further down: scroll the dialog to look for them)
+        let at = r.body.center();
+        let scroll_down = |rig: &mut Rig| {
+            for _ in 0..3 {
+                rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -600.0), modifiers: egui::Modifiers::NONE }]);
+            }
+            rig.draw(2)
+        };
+        let p = scroll_down(&mut rig);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("Benchmark Yield Curve")), "{what}: the typed points are hidden when the store is used");
+        let r = assert_dialog_fits(&rig.ctx, ftp_title, &what);
+        // the step it makes
+        match rig.app.tool_step(&ActiveToolModal::FtpCurveMap) {
+            Some(TransformStep::FtpCurveMap { curve, curve_mode, interpolation, .. }) => {
+                assert!(curve.is_empty(), "{what}: no typed points in a step that reads the store");
+                assert_eq!(curve_mode, FtpCurveMode::OriginationDate { use_earliest_for_older: false });
+                assert_eq!(interpolation, FtpInterpolation::Linear, "{what}: new steps interpolate");
+            }
+            other => panic!("{what}: {other:?}"),
+        }
+        let go = p.boxes.iter().find(|(t, _)| t.contains("Map FTP Rates")).map(|(_, b)| *b).expect("button");
+        assert!(inside(go, r.footer), "{what}: the button is in the footer");
+        rig.click(go.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        assert!(matches!(tab.steps.last(), Some(TransformStep::FtpCurveMap { curve_mode: FtpCurveMode::OriginationDate { .. }, .. })), "{what}");
+        let names: Vec<String> = tab.cached_slice.get_column_names().iter().map(|n| n.to_string()).collect();
+        assert!(names.contains(&"FTP_Curve_Date".to_string()), "{what}: {names:?}");
+        let ftp: Vec<Option<f64>> = tab.cached_slice.column("Benchmark_FTP_Rate").expect("col").f64().expect("f64").into_iter().collect();
+        assert!((ftp[0].unwrap_or(0.0) - 8.99701).abs() < 0.00001 && (ftp[1].unwrap_or(0.0) - 9.99701).abs() < 0.00001, "{what}: {ftp:?}");
+        // the Edit button opens the same dialog with the choice
+        assert!(rig.app.open_step_editor(tab_last_step(&rig)), "{what}");
+        assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Origination, "{what}: prefilled");
+        micro_parquet::curves::set_curves_dir_override(None);
+    }
+}
+
+fn tab_last_step(rig: &Rig) -> usize {
+    rig.app.tabs[rig.app.active_tab].steps.len() - 1
+}
+
+#[test]
+fn yield_curves_is_a_banking_command_under_treasury_and_alm_and_the_search_finds_it() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::YieldCurves), Some("Treasury & ALM"));
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["yield curves", "dated curve", "curve csv"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::YieldCurves, "{q}");
+    }
+    assert!(command(CommandId::YieldCurves).map(|c| c.needs == Needs::Nothing).unwrap_or(false), "it needs no open tab");
+}

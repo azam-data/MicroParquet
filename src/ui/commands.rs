@@ -32,6 +32,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::RateShock => ph::CHART_LINE,
         CommandId::Duration => ph::TIMER,
         CommandId::Ftp => ph::CALCULATOR,
+        CommandId::YieldCurves => ph::CHART_LINE,
         CommandId::Provision => ph::BANK,
         CommandId::Limits => ph::CREDIT_CARD,
         CommandId::Reconcile => ph::SCALES,
@@ -164,7 +165,11 @@ impl MicroParquetApp {
             }
             CommandId::RateShock => self.active_tool = ActiveToolModal::RateShockSim,
             CommandId::Duration => self.active_tool = ActiveToolModal::DurationAnalysis,
-            CommandId::Ftp => self.active_tool = ActiveToolModal::FtpCurveMap,
+            CommandId::Ftp => {
+                self.ftp.reload_store();
+                self.active_tool = ActiveToolModal::FtpCurveMap;
+            }
+            CommandId::YieldCurves => self.open_yield_curves(),
             CommandId::Provision => self.active_tool = ActiveToolModal::LoanProvision,
             CommandId::Limits => self.active_tool = ActiveToolModal::LoanLimitUtil,
             CommandId::Reconcile => self.active_tool = ActiveToolModal::ReconcilePeriods,

@@ -10,3 +10,4 @@ mod v3_support {
     pub use crate::v3::two_bucket_preset;
     pub use micro_parquet::banking::*;
 }
+mod v4;

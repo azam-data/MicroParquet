@@ -2596,16 +2596,24 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             curve,
             is_liability,
             interpolation,
-        } => apply_ftp_curve_map(
-            lf,
-            opndat_col,
-            matdat_col,
-            bal_col,
-            rate_col,
-            curve,
-            *is_liability,
-            *interpolation,
-        ),
+            curve_mode,
+        } => match curve_mode {
+            crate::models::FtpCurveMode::Inline => apply_ftp_curve_map(
+                lf,
+                opndat_col,
+                matdat_col,
+                bal_col,
+                rate_col,
+                curve,
+                *is_liability,
+                *interpolation,
+            ),
+            dated => {
+                let store = crate::curves::CurveStore::load(&crate::curves::curves_dir());
+                let curves = store.strict()?.to_vec();
+                crate::banking::apply_ftp_dated_curves(lf, opndat_col, matdat_col, bal_col, rate_col, &curves, dated, *is_liability, *interpolation)
+            }
+        },
         TransformStep::BankingHygieneAudit {
             opndat_col,
             matdat_col,

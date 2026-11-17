@@ -29,7 +29,7 @@ pub const SECTIONS: [&str; 10] = [
 pub const COLUMN_TABLE_HEADER: &str = "| Column role | Required? | Type the app needs | Example values | Notes |";
 
 /// Tool ids (file names in docs/guide/): the 21 tools of Phase 4 task G0, then the tools later tasks added.
-pub const GUIDE_TOOLS: [&str; 24] = [
+pub const GUIDE_TOOLS: [&str; 25] = [
     "maturity-bucketer",
     "rate-profile",
     "rate-shock-nii",
@@ -54,6 +54,7 @@ pub const GUIDE_TOOLS: [&str; 24] = [
     "pivot",
     "cl-migration",
     "gap-ladder",
+    "yield-curves",
 ];
 
 pub fn guide_dir() -> PathBuf {
@@ -343,18 +344,44 @@ fn guide_ftp_curve_mapper() {
         curve: default_bd_ftp_curve(),
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
+
+        curve_mode: Default::default(),
     };
     let out = run_steps("g_ftp", &df, &[step]).expect("the FTP mapper runs");
     // review.rs t11_ftp_step_vs_interpolation: 100 days = 9.50 + 9/91 × 0.60, 31 days = 8.75 + 1/61 × 0.75
     close(floats(&out, "Benchmark_FTP_Rate")[0], 9.50 + 9.0 / 91.0 * 0.60, 1e-9, "100-day FTP");
     close(floats(&out, "Benchmark_FTP_Rate")[1], 8.75 + 1.0 / 61.0 * 0.75, 1e-9, "31-day FTP");
     assert_eq!(strings(&out, "FTP_Method"), vec![Some("Linear 91d-182d".to_string()), Some("Linear 30d-91d".to_string())]);
+    // the dated curves of Phase 4 V4: three 197-day deals, opened before, between and after the curves' dates
+    let deals = frame(vec![
+        text("Account", &["D1", "D2", "D3"]),
+        dates("Opndat", &["2026-03-15", "2026-08-01", "2025-12-01"]),
+        dates("Matdat", &["2026-09-28", "2027-02-14", "2026-06-16"]),
+        nums("Balance", &[1_000_000.0, 1_000_000.0, 1_000_000.0]),
+        nums("Rate", &[9.0, 9.0, 9.0]),
+    ]);
+    let curve = |date: &str, a: f64, b: f64| micro_parquet::curves::YieldCurve {
+        date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("date"),
+        currency: "BDT".into(),
+        source: "example".into(),
+        points: vec![FtpPoint { tenor_days: 30, ftp_rate: a }, FtpPoint { tenor_days: 365, ftp_rate: b }],
+    };
+    let curves = vec![curve("2026-01-01", 8.0, 10.0), curve("2026-07-01", 9.0, 11.0)];
+    let dated = apply_ftp_dated_curves(deals.clone().lazy(), "Opndat", "Matdat", "Balance", "Rate", &curves, &FtpCurveMode::OriginationDate { use_earliest_for_older: true }, true, FtpInterpolation::Linear)
+        .expect("the dated FTP runs")
+        .collect()
+        .expect("collect");
+    close(floats(&dated, "Benchmark_FTP_Rate")[0], 8.99701, 0.00001, "D1 on the January curve");
+    close(floats(&dated, "Benchmark_FTP_Rate")[1], 9.99701, 0.00001, "D2 on the July curve");
+    assert_eq!(strings(&dated, "FTP_Note"), vec![None, None, Some("earliest curve used".to_string())]);
     check_guide(
         "ftp-curve-mapper",
         "guide_ftp_curve_mapper",
         &[
             md(&df, &["Account", "Opndat", "Matdat", "Balance:2", "Rate:2"]),
             md(&out, &["Account", "Tenor_Days", "Benchmark_FTP_Rate:~4", "FTP_Method", "FTP_Spread_Pct:~4", "Annual_FTP_Margin_BDT:2"]),
+            md(&deals, &["Account", "Opndat", "Matdat", "Balance:2", "Rate:2"]),
+            md(&dated, &["Account", "Tenor_Days", "Benchmark_FTP_Rate:~5", "FTP_Curve_Date", "FTP_Note"]),
         ],
     );
 }
@@ -870,5 +897,42 @@ fn guide_gap_ladder() {
             md(&liab, &["Balance:2", "Matdat"]),
             md(&ladder, &["Bucket", "Inflows:2", "Outflows:2", "Net gap:2", "Cumulative gap:2", "Net gap % of total assets:2", "Cumulative gap % of total assets:2", "Cumulative gap limit %:2", "Breach"]),
         ],
+    );
+}
+
+#[test]
+fn guide_yield_curves() {
+    use micro_parquet::curves::*;
+    let csv = "tenor_days,rate_pct\n30,8.00\n91,8.60\n365,10.00\n";
+    let points = parse_curve_csv(csv).expect("the CSV is a curve");
+    let raw: Vec<Vec<&str>> = csv.lines().skip(1).map(|l| l.split(',').collect()).collect();
+    let raw_table = format!("| tenor_days | rate_pct |\n| ---: | ---: |\n{}", raw.iter().map(|r| format!("| {} | {} |", r[0], r[1])).collect::<Vec<_>>().join("\n"));
+    let pts = frame(vec![
+        Series::new("tenor_days".into(), points.iter().map(|p| p.tenor_days).collect::<Vec<_>>()),
+        nums("rate_pct", &points.iter().map(|p| p.ftp_rate).collect::<Vec<_>>()),
+    ]);
+    // the rates the curve gives to a 60-day and a 200-day deal (linear between the points)
+    let curve = YieldCurve { date: chrono::NaiveDate::parse_from_str("2026-01-01", "%Y-%m-%d").expect("date"), currency: "BDT".into(), source: "example".into(), points: points.clone() };
+    let deals = frame(vec![
+        text("Account", &["T60", "T200"]),
+        dates("Opndat", &["2026-02-01", "2026-02-01"]),
+        dates("Matdat", &["2026-04-02", "2026-08-20"]),
+        nums("Balance", &[1.0, 1.0]),
+        nums("Rate", &[9.0, 9.0]),
+    ]);
+    let priced = micro_parquet::banking::apply_ftp_dated_curves(deals.lazy(), "Opndat", "Matdat", "Balance", "Rate", &[curve], &FtpCurveMode::FixedDate { date: "2026-06-30".into() }, true, FtpInterpolation::Linear)
+        .expect("priced")
+        .collect()
+        .expect("collect");
+    close(floats(&priced, "Tenor_Days")[0], 60.0, 0.0, "60 days");
+    close(floats(&priced, "Benchmark_FTP_Rate")[0], 8.0 + 30.0 / 61.0 * 0.6, 1e-9, "between 30 and 91 days");
+    close(floats(&priced, "Benchmark_FTP_Rate")[1], 8.6 + 109.0 / 274.0 * 1.4, 1e-9, "between 91 and 365 days");
+    let refused = format!("{:#}", parse_curve_csv("tenor_days,rate_pct\n30,8.00\n30,8.50\n").err().expect("two rates for 30 days"));
+    assert!(refused.contains("Lines 2 and 3 both have the tenor 30 days"), "{refused}");
+    let dup_table = "| tenor_days | rate_pct |\n| ---: | ---: |\n| 30 | 8.00 |\n| 30 | 8.50 |".to_string();
+    check_guide(
+        "yield-curves",
+        "guide_yield_curves",
+        &[raw_table, md(&pts, &["tenor_days", "rate_pct:2"]), md(&priced, &["Account", "Tenor_Days", "Benchmark_FTP_Rate:~4", "FTP_Curve_Date"]), dup_table],
     );
 }

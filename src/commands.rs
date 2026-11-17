@@ -36,6 +36,7 @@ pub enum CommandId {
     RateShock,
     Duration,
     Ftp,
+    YieldCurves,
     Provision,
     Limits,
     Reconcile,
@@ -154,6 +155,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::RateShock, "Interest rate shock / \u{394}NII\u{2026}", G::Banking, "nii irrbb bps delta income", N::Tab),
     c(I::Duration, "Duration, DV01 and \u{394}EVE\u{2026}", G::Banking, "eve irrbb modified macaulay", N::Tab),
     c(I::Ftp, "FTP yield curve mapper\u{2026}", G::Banking, "funds transfer pricing margin", N::Tab),
+    c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
@@ -187,7 +189,7 @@ pub const COMMANDS: &[Command] = &[
 /// order, so the commands of one heading are next to each other).
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
-        CommandId::Buckets | CommandId::GapLadder | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp => Some("Treasury & ALM"),
+        CommandId::Buckets | CommandId::GapLadder | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
         CommandId::Provision | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
         _ => None,
     }

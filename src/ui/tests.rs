@@ -414,6 +414,8 @@ fn one_step_per_modal() -> Vec<TransformStep> {
             curve: vec![FtpPoint { tenor_days: 30, ftp_rate: 6.5 }, FtpPoint { tenor_days: 365, ftp_rate: 8.25 }],
             is_liability: false,
             interpolation: FtpInterpolation::NextPointUp,
+
+            curve_mode: Default::default(),
         },
         TransformStep::BankingHygieneAudit {
             opndat_col: "Opndat".into(),

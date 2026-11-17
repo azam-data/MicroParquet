@@ -1365,7 +1365,7 @@ pub struct PivotSpec {
     pub sort_by_value: Option<PivotSortByValue>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct FtpPoint {
     pub tenor_days: i64,
     pub ftp_rate: f64,
@@ -1407,6 +1407,23 @@ pub fn default_active_statuses() -> Vec<String> {
 /// Hygiene audit: rates above this (percent) are outliers by default.
 pub fn default_rate_max_pct() -> f64 {
     25.0
+}
+
+/// Which yield curve an FTP step uses (Phase 4 V4).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub enum FtpCurveMode {
+    /// The points typed in the step (its `curve`): what every step saved before Phase 4 does.
+    #[default]
+    Inline,
+    /// The curve of the store dated on or before `date` (YYYY-MM-DD), for every deal.
+    FixedDate { date: String },
+    /// For each deal, the latest curve of the store dated on or before its open date. A deal opened
+    /// before the earliest curve is an error, unless `use_earliest_for_older`: then the earliest
+    /// curve is used and `FTP_Note` says so.
+    OriginationDate {
+        #[serde(default)]
+        use_earliest_for_older: bool,
+    },
 }
 
 /// Interpolation of an FTP step saved without the field (before Phase 2): the old step lookup.
@@ -1542,6 +1559,10 @@ pub enum TransformStep {
         /// their past results; new steps from the FTP modal default to Linear.
         #[serde(default = "legacy_ftp_interpolation")]
         interpolation: FtpInterpolation,
+        /// Which curve: the points typed in the step (`curve`; every step saved before Phase 4), the
+        /// curve of the store on a fixed date, or each deal's own curve by its open date (V4).
+        #[serde(default)]
+        curve_mode: FtpCurveMode,
     },
     BankingHygieneAudit {
         opndat_col: String,

@@ -539,7 +539,7 @@ impl MicroParquetApp {
         }
         let gap = if used.is_empty() { 0.0 } else { theme::SPACE_S };
         let name_rect = egui::Rect::from_min_max(egui::pos2(badge.right() + theme::SPACE_S, drag_rect.top()), egui::pos2((used_rect.left() - gap).max(badge.right() + theme::SPACE_S), drag_rect.bottom()));
-        ui.put(name_rect, egui::Label::new(egui::RichText::new(name).color(tk.ink)).truncate());
+        ui.put(name_rect, egui::Label::new(egui::RichText::new(name).color(tk.ink)).truncate().selectable(false));
         // the menu: Add to Rows / Columns / Values / Filters
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(menu_rect), |ui| {
             // a button as small as its cell: the default minimum size would push the row wider
@@ -1105,7 +1105,7 @@ fn simple_chip(ui: &mut egui::Ui, name: &str, extra: &str, w: f32, tk: &theme::T
         right -= ew + theme::SPACE_S;
     }
     let name_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + theme::SPACE_S, rect.top()), egui::pos2((right - theme::SPACE_XS).max(rect.left() + theme::SPACE_S), rect.bottom()));
-    ui.put(name_rect, egui::Label::new(egui::RichText::new(name).font(egui::FontId::new(theme::TEXT_BASE, theme::family_semibold())).color(tk.accent_dark)).truncate());
+    ui.put(name_rect, egui::Label::new(egui::RichText::new(name).font(egui::FontId::new(theme::TEXT_BASE, theme::family_semibold())).color(tk.accent_dark)).truncate().selectable(false));
     let removed = ui
         .put(cross, egui::Button::new(egui::RichText::new(theme::ph::X).size(theme::TEXT_MARK).color(tk.muted)).frame(false))
         .on_hover_text("Remove field")

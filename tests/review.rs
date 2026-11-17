@@ -2587,6 +2587,8 @@ fn t11c_ftp_missing_date_is_not_a_one_day_tenor() {
         curve: default_bd_ftp_curve(),
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
+
+        curve_mode: Default::default(),
     };
     let notes = blank_balance_notes(&src, &[step], &tmpdir()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
