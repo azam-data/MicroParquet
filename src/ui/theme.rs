@@ -267,6 +267,8 @@ pub const WIDE_BTN_H: f32 = 34.0;
 pub const MARGIN_PANEL_STEPS: egui::Margin = egui::Margin::symmetric(16.0, 8.0);
 pub const MARGIN_PANEL_COLUMN: egui::Margin = egui::Margin::symmetric(16.0, 14.0);
 pub const TEXT_COUNT: f32 = 11.0;
+/// What a blank (null) cell of the table shows, in the muted colour. Exports are not affected.
+pub const BLANK_CELL: &str = "\u{2013}";
 pub const STEPS_FOOTER_RESERVE: f32 = 110.0;
 pub const STEPS_LIST_MIN_H: f32 = 100.0;
 pub const STEP_LIST_INDENT: f32 = 26.0;

@@ -159,7 +159,7 @@ fn cell_text(
     let cname = c.name().as_str();
     let spec = col_formats.get(cname);
     match c.get(r_idx) {
-        Ok(AnyValue::Null) => "null".to_string(),
+        Ok(AnyValue::Null) => theme::BLANK_CELL.to_string(),
         Ok(AnyValue::Float64(v)) => format_metric_value(v, cname, spec, num_format, global_decimals),
         Ok(AnyValue::Float32(v)) => format_metric_value(v as f64, cname, spec, num_format, global_decimals),
         Ok(AnyValue::String(s)) => s.to_string(),
@@ -455,7 +455,9 @@ impl MicroParquetApp {
                                 for (c, kind) in cols.iter().zip(&kinds) {
                                     row.col(|ui| {
                                         let text = cell_text(c, r_idx, col_formats, num_format, global_decimals);
-                                        let is_null = text == "null";
+                                        // a blank cell shows a muted dash, never the word "null" (a text that
+                                        // really says "null" is data and keeps its colour)
+                                        let is_null = matches!(c.get(r_idx), Ok(AnyValue::Null));
                                         let rich = match kind {
                                             CellKind::Text => egui::RichText::new(text.clone()),
                                             _ => theme::mono(text.clone()),

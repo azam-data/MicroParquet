@@ -492,3 +492,47 @@ fn messages_keeps_the_last_fifty_newest_first() {
         assert!(y(5).is_none(), "ppp {ppp}: the oldest ones are gone");
     }
 }
+
+// ------------------------------------------------------------------------------- blank cells
+
+#[test]
+fn blank_cells_show_a_muted_dash_never_the_word_null() {
+    use crate::ui::layout_tests::collect_painted;
+    use polars::prelude::{NamedFrom, Series};
+    let tk = theme::LIGHT;
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("r6blank");
+        let df = DataFrame::new(vec![
+            Series::new("Name".into(), &[Some("Rahim"), None, Some("null"), Some("Karim")]).into(),
+            Series::new("Balance".into(), &[Some(1_500_000.0f64), None, Some(2.5), None]).into(),
+            Series::new("Branch no".into(), &[None::<i64>, Some(12), None, Some(7)]).into(),
+        ])
+        .expect("frame");
+        let src = parquet_source(&app.paths.root_dir.clone(), "blanks", df);
+        open_tab(&mut app, src, vec![]);
+        let (ctx, input) = screen(ppp, w, h);
+        frames(&mut app, &ctx, &input, 5);
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        let p = collect_painted(&out.shapes);
+        let area = theme::dialog_area(&ctx);
+        let in_table = |pos: &egui::Pos2| area.contains(*pos);
+        // the blanks: 1 in Name, 2 in Balance, 2 in Branch no
+        let dashes: Vec<&(String, egui::Color32)> = p.colors.iter().filter(|(t, _)| t == theme::BLANK_CELL).collect();
+        assert!(dashes.len() >= 5, "ppp {ppp}: {} dashes drawn", dashes.len());
+        assert!(dashes.iter().all(|(_, c)| *c == tk.muted), "ppp {ppp}: the dashes are muted");
+        // the word null appears only as the data of the cell that really says "null", in the ink colour
+        let nulls: Vec<_> = p.texts.iter().zip(p.colors.iter()).filter(|((t, pos, _), _)| t == "null" && in_table(pos)).collect();
+        assert_eq!(nulls.len(), 1, "ppp {ppp}: only the text that says null: {nulls:?}");
+        assert_eq!(nulls[0].1 .1, tk.ink, "ppp {ppp}: real data keeps the ink colour");
+    }
+}
+
+#[test]
+fn exports_keep_blanks_as_they_were() {
+    // the table's dash is only how the grid shows a blank: the clipboard text and exports are not
+    // touched (a blank is still written as it was before)
+    use polars::prelude::{NamedFrom, Series};
+    let df = DataFrame::new(vec![Series::new("A".into(), &[Some(1.0f64), None]).into()]).expect("frame");
+    let txt = micro_parquet::exporters::format_df_for_clipboard(&df, &HashMap::new(), NumberDisplayFormat::Raw, 2, false);
+    assert!(!txt.contains(theme::BLANK_CELL), "{txt}");
+}
