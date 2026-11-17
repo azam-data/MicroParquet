@@ -151,8 +151,15 @@ fn load_tab_staged(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
             None
         }
     };
-    if let Some(w) = row_check.as_ref().and_then(|c| c.warning()) {
-        count_note.push_str(&format!(" ⚠ {}", w));
+    if let Some(c) = row_check.as_ref() {
+        if c.is_explained() {
+            // nothing is wrong: the file has line breaks inside quotes
+            if let Some(t) = c.status_text() {
+                count_note.push_str(&format!(" {}.", t));
+            }
+        } else if let Some(w) = c.warning() {
+            count_note.push_str(&format!(" ⚠ {}", w));
+        }
     }
     let join_stat = match join_status(&source, &steps, default_ctrl.as_deref(), &temp_dir) {
         Ok(j) => j,

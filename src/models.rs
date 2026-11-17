@@ -1431,15 +1431,77 @@ pub struct TabState {
     pub summary_error: Option<String>,
 }
 
-/// Rows read from a CSV against its non-empty lines (minus the header and title lines).
+/// What kind of line the row-count details list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineIssue {
+    /// A record whose quoted value holds a line break, so it takes several physical lines.
+    QuotedLineBreak,
+    /// A record with another number of fields than the header has.
+    WrongFieldCount,
+}
+
+/// One entry of the row-count details: where it starts in the file and what it looks like.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineDetail {
+    /// 1-based number of the physical line the record starts on.
+    pub line: usize,
+    pub issue: LineIssue,
+    /// Physical lines the record takes.
+    pub span: usize,
+    pub fields: usize,
+    pub expected_fields: usize,
+    /// The first 80 characters of that line.
+    pub text: String,
+}
+
+/// How many entries the details list.
+pub const ROW_DETAILS_LIMIT: usize = 20;
+
+/// Rows read from a CSV against its non-empty lines (minus the header and title lines), and, when
+/// fewer rows were read than there are lines, why.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RowCountCheck {
     pub nonempty_lines: usize,
     pub skip_rows: usize,
     pub parsed_rows: usize,
+    /// Records with a line break inside quotes.
+    pub multiline_records: usize,
+    /// The non-empty lines those records take beyond their first.
+    pub explained_lines: usize,
+    /// Records with the wrong number of fields.
+    pub malformed_records: usize,
+    /// The first `ROW_DETAILS_LIMIT` of both kinds, in file order.
+    pub details: Vec<LineDetail>,
 }
 
 impl RowCountCheck {
+    /// True when every line missing from the row count is the continuation of a record with a line
+    /// break inside quotes, and no record has the wrong number of fields: the file is fine.
+    pub fn is_explained(&self) -> bool {
+        let missing = self.data_lines().saturating_sub(self.parsed_rows);
+        self.parsed_rows > 0 && missing > 0 && self.malformed_records == 0 && self.explained_lines == missing
+    }
+
+    /// The text for the status bar: the quiet explanation (grey) or the short warning; `None` when
+    /// the counts agree.
+    pub fn status_text(&self) -> Option<String> {
+        if self.is_explained() {
+            return Some(format!(
+                "{} rows from {} lines: {} records contain line breaks inside quotes",
+                format_with_commas(self.parsed_rows as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0),
+                format_with_commas(self.multiline_records as f64, 0)
+            ));
+        }
+        self.warning().map(|_| {
+            format!(
+                "\u{26A0} Rows read {} vs file data lines {}",
+                format_with_commas(self.parsed_rows as f64, 0),
+                format_with_commas(self.data_lines() as f64, 0)
+            )
+        })
+    }
+
     /// Non-empty lines minus the header line and the title lines above it.
     pub fn data_lines(&self) -> usize {
         self.nonempty_lines.saturating_sub(1 + self.skip_rows)

@@ -24,6 +24,7 @@ impl MicroParquetApp {
     pub(crate) fn render_status_bar(&mut self, ctx: &egui::Context) {
         let tk = *theme::tokens(self.dark_mode);
         let mut reset_baseline_clicked = false;
+        let mut open_row_details = false;
         let mut cancel_job: Option<u64> = None;
         egui::TopBottomPanel::bottom("status_bar")
             .exact_height(theme::STATUS_BAR_H)
@@ -76,16 +77,15 @@ impl MicroParquetApp {
                             }
                         }
                         if let Some(rc) = tab.row_check.as_ref() {
-                            if rc.warning().is_some() {
-                                ui.label(
-                                    egui::RichText::new(theme::icons_in_text(&format!(
-                                        "\u{26A0} Rows read {} vs file data lines {}",
-                                        format_with_commas(rc.parsed_rows as f64, 0),
-                                        format_with_commas(rc.data_lines() as f64, 0)
-                                    )))
-                                    .color(tk.warning),
-                                )
-                                .on_hover_text(rc.warning().unwrap_or_default());
+                            // rows read against the file's lines: grey when line breaks inside
+                            // quotes explain every missing line, a warning otherwise
+                            if let Some(text) = rc.status_text() {
+                                let color = if rc.is_explained() { tk.muted } else { tk.warning };
+                                ui.label(egui::RichText::new(theme::icons_in_text(&text)).color(color))
+                                    .on_hover_text(rc.warning().unwrap_or_default());
+                                if ui.small_button("Details").on_hover_text("Which lines differ").clicked() {
+                                    open_row_details = true;
+                                }
                             }
                         }
                         // Stays while the page is stale, whatever message came after it.
@@ -187,10 +187,74 @@ impl MicroParquetApp {
         if let Some(id) = cancel_job {
             self.jobs.cancel(id);
         }
+        if open_row_details {
+            self.row_details_open = true;
+        }
         if reset_baseline_clicked {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.baseline_control_sum = tab.control_sum;
             }
+        }
+    }
+
+    /// "Details": up to 20 physical lines where a record spans several lines (a quoted line break)
+    /// or has the wrong number of fields, with the first 80 characters of each.
+    pub(crate) fn render_row_details(&mut self, ctx: &egui::Context) {
+        if !self.row_details_open {
+            return;
+        }
+        let tk = *theme::tokens(self.dark_mode);
+        let Some(rc) = self.tabs.get(self.active_tab).and_then(|t| t.row_check.clone()) else {
+            self.row_details_open = false;
+            return;
+        };
+        let mut close = false;
+        theme::modal("Row count details").default_width(theme::DIALOG_W_TOOL).show(ctx, |d| {
+            d.body(|ui| {
+                ui.label(
+                    rc.status_text()
+                        .map(|t| theme::icons_in_text(&t))
+                        .unwrap_or_default(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} records contain line breaks inside quotes ({} extra lines); {} records have another number of fields than the header.",
+                        format_with_commas(rc.multiline_records as f64, 0),
+                        format_with_commas(rc.explained_lines as f64, 0),
+                        format_with_commas(rc.malformed_records as f64, 0)
+                    ))
+                    .color(tk.muted),
+                );
+                ui.add_space(theme::SPACE_S);
+                if rc.details.is_empty() {
+                    ui.label("No single line stands out. Check the separator, title lines and encoding.");
+                }
+                for e in &rc.details {
+                    let what = match e.issue {
+                        micro_parquet::models::LineIssue::QuotedLineBreak => format!("record over {} lines (line break inside quotes)", e.span),
+                        micro_parquet::models::LineIssue::WrongFieldCount => format!("did not parse: {} fields, the header has {}", e.fields, e.expected_fields),
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(theme::mono_semibold(format!("Line {}", format_with_commas(e.line as f64, 0))));
+                        ui.label(egui::RichText::new(what).color(tk.muted));
+                    });
+                    ui.label(theme::mono(e.text.clone()));
+                    ui.add_space(theme::SPACE_XS);
+                }
+                let shown = rc.details.len();
+                let total = rc.multiline_records + rc.malformed_records;
+                if total > shown {
+                    ui.label(egui::RichText::new(format!("Showing the first {} of {}.", shown, format_with_commas(total as f64, 0))).color(tk.muted));
+                }
+            });
+            d.footer(|ui| {
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            self.row_details_open = false;
         }
     }
 }

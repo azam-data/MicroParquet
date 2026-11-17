@@ -534,6 +534,8 @@ fn parquet_files_show_the_one_option_that_applies() {
 pub(crate) struct Painted {
     pub(crate) texts: Vec<(String, egui::Pos2, egui::FontFamily)>,
     pub(crate) rects: Vec<(egui::Rect, egui::Color32)>,
+    /// The colour each text was drawn in (a placeholder where egui picks the default).
+    pub(crate) colors: Vec<(String, egui::Color32)>,
 }
 
 pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
@@ -541,6 +543,7 @@ pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted 
         match shape {
             egui::Shape::Text(t) => {
                 let fam = t.galley.job.sections.first().map(|s| s.format.font_id.family.clone()).unwrap_or(egui::FontFamily::Proportional);
+                out.colors.push((t.galley.text().to_string(), t.galley.job.sections.first().map(|s| s.format.color).unwrap_or(egui::Color32::PLACEHOLDER)));
                 out.texts.push((t.galley.text().to_string(), t.pos, fam));
             }
             egui::Shape::Rect(r) => out.rects.push((r.rect, r.fill)),

@@ -392,3 +392,93 @@ fn l6_the_active_job_carries_stage_labels_and_the_time_it_has_run() {
     assert!(job.elapsed() >= std::time::Duration::from_secs(1), "{:?}", job.elapsed());
     let _ = go_tx.send(());
 }
+
+// ------------------------------------------------------------------------ fix 4 (part 3)
+
+fn write_csv(d: &Path, name: &str, body: &str) -> TabSource {
+    let p = d.join(name);
+    std::fs::write(&p, body).unwrap();
+    TabSource::SingleFile { path: p.clone(), is_parquet: false, config: micro_parquet::engine::auto_detect_smart_schema(&p).unwrap() }
+}
+
+/// Header, `rows` plain records, and the records listed in `quirky` (index → text) put in place.
+fn csv_with(rows: usize, multiline_at: &[usize], malformed_at: &[usize]) -> String {
+    let mut s = String::from("Account,Name,Balance\n");
+    for i in 0..rows {
+        if multiline_at.contains(&i) {
+            s.push_str(&format!("A{i},\"Rahim Trading\nDhaka branch {i}\",{}.25\n", 1000 + i));
+        } else if malformed_at.contains(&i) {
+            s.push_str(&format!("A{i},{}\n", "x".repeat(100)));
+        } else {
+            s.push_str(&format!("A{i},Customer {i},{}.25\n", 1000 + i));
+        }
+    }
+    s
+}
+
+#[test]
+fn row_count_details_list_quoted_line_breaks_and_the_malformed_line() {
+    use micro_parquet::engine::source_row_check;
+    use micro_parquet::models::LineIssue;
+    let d = dir("rowcheck1");
+    // 2 quoted multi-line fields (records 4 and 11) and 1 malformed line (record 7)
+    let src = write_csv(&d, "a.csv", &csv_with(20, &[4, 11], &[7]));
+    let c = source_row_check(&src, &d).unwrap().unwrap();
+    assert_eq!(c.data_lines(), 22, "{c:?}");
+    assert_eq!(c.parsed_rows, 20, "20 records");
+    assert_eq!((c.multiline_records, c.explained_lines, c.malformed_records), (2, 2, 1), "{c:?}");
+    assert!(!c.is_explained(), "a malformed line is not explained by line breaks");
+    assert!(c.warning().is_some() && c.status_text().unwrap().starts_with('\u{26A0}'));
+    // the details: physical line numbers (header is line 1), in file order, with the first 80 characters
+    let got: Vec<(usize, LineIssue, usize)> = c.details.iter().map(|e| (e.line, e.issue, e.span)).collect();
+    assert_eq!(
+        got,
+        vec![(6, LineIssue::QuotedLineBreak, 2), (10, LineIssue::WrongFieldCount, 1), (14, LineIssue::QuotedLineBreak, 2)],
+        "{c:?}"
+    );
+    assert_eq!(c.details[0].text, "A4,\"Rahim Trading", "the first physical line of the record");
+    assert!(c.details[1].text.chars().count() == 80 && c.details[1].text.starts_with("A7,xxx"), "{:?}", c.details[1].text);
+    assert_eq!((c.details[1].fields, c.details[1].expected_fields), (2, 3));
+}
+
+#[test]
+fn only_line_breaks_inside_quotes_make_a_grey_note_with_thousands_separators() {
+    use micro_parquet::engine::source_row_check;
+    let d = dir("rowcheck2");
+    let src = write_csv(&d, "b.csv", &csv_with(1300, &[10, 500, 1200], &[]));
+    let c = source_row_check(&src, &d).unwrap().unwrap();
+    assert!(c.is_explained(), "{c:?}");
+    assert_eq!(c.status_text().unwrap(), "1,300 rows from 1,303 lines: 3 records contain line breaks inside quotes");
+    assert_eq!(c.details.len(), 3);
+    // a file whose counts agree is not analysed and says nothing
+    let src = write_csv(&d, "c.csv", &csv_with(50, &[], &[]));
+    let ok = source_row_check(&src, &d).unwrap().unwrap();
+    assert_eq!((ok.status_text(), ok.details.len(), ok.multiline_records), (None, 0, 0));
+}
+
+#[test]
+fn row_count_details_stop_at_twenty_but_count_all() {
+    use micro_parquet::engine::source_row_check;
+    let d = dir("rowcheck3");
+    let at: Vec<usize> = (0..30).map(|i| i * 3).collect();
+    let src = write_csv(&d, "d.csv", &csv_with(100, &at, &[]));
+    let c = source_row_check(&src, &d).unwrap().unwrap();
+    assert_eq!((c.multiline_records, c.details.len()), (30, 20), "{}", c.details.len());
+    assert!(c.details.windows(2).all(|w| w[0].line < w[1].line), "in file order");
+    assert!(c.is_explained());
+}
+
+#[test]
+fn quotes_inside_a_value_and_doubled_quotes_do_not_open_a_record() {
+    use micro_parquet::engine::analyze_records;
+    let d = dir("rowcheck4");
+    let p = d.join("q.csv");
+    // a quote in the middle of an unquoted value, a doubled quote in a quoted value, and a value
+    // that ends the line right after its closing quote
+    std::fs::write(&p, "A,B\n5\" pipe,x\n\"say \"\"hi\"\"\",y\n\"closed\",\"two\nlines\"\nlast,z\n").unwrap();
+    let cfg = micro_parquet::engine::auto_detect_smart_schema(&p).unwrap();
+    let a = analyze_records(&p, &cfg).unwrap();
+    assert_eq!((a.multiline_records, a.explained_lines, a.malformed_records), (1, 1, 0), "{a:?}");
+    assert_eq!(a.details.len(), 1);
+    assert_eq!(a.details[0].line, 4);
+}

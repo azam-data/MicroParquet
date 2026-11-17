@@ -310,6 +310,7 @@ pub fn run_folder_mirror_batch_ctx(
                         nonempty_lines: count_nonempty_lines(src_path)?,
                         skip_rows: cfg.skip_rows,
                         parsed_rows: rows,
+                        ..Default::default()
                     };
                     Ok((rows, sum, Some(fails), Some(check)))
                 });

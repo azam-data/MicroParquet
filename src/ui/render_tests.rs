@@ -306,3 +306,68 @@ fn the_heading_block_stays_put_while_the_rows_scroll_up_and_down() {
         }
     }
 }
+
+// ------------------------------------------------------------------------ row-count warning
+
+fn open_csv_tab(app: &mut MicroParquetApp, name: &str, body: &str) {
+    let p = app.paths.root_dir.join(name);
+    std::fs::write(&p, body).expect("csv");
+    let config = micro_parquet::engine::auto_detect_smart_schema(&p).expect("schema");
+    open_tab(app, TabSource::SingleFile { path: p, is_parquet: false, config }, vec![]);
+}
+
+fn csv_body(rows: usize, multiline_at: &[usize], malformed_at: &[usize]) -> String {
+    let mut s = String::from("Account,Name,Balance\n");
+    for i in 0..rows {
+        if multiline_at.contains(&i) {
+            s.push_str(&format!("A{i},\"Rahim Trading\nDhaka branch {i}\",{}.25\n", 1000 + i));
+        } else if malformed_at.contains(&i) {
+            s.push_str(&format!("A{i},{}\n", "x".repeat(100)));
+        } else {
+            s.push_str(&format!("A{i},Customer {i},{}.25\n", 1000 + i));
+        }
+    }
+    s
+}
+
+#[test]
+fn the_row_count_note_is_grey_when_quotes_explain_it_and_a_warning_when_not_with_a_details_button() {
+    use crate::ui::layout_tests::collect_painted;
+    let tk = theme::LIGHT;
+    for (ppp, w, h) in SCREENS {
+        let (ctx, input) = screen(ppp, w, h);
+        let paint = |app: &mut MicroParquetApp| {
+            let mut p = None;
+            for _ in 0..4 {
+                let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+                p = Some(collect_painted(&out.shapes));
+            }
+            p.expect("frames")
+        };
+        // only line breaks inside quotes: grey, no warning sign
+        let mut app = test_app("r4grey");
+        open_csv_tab(&mut app, "grey.csv", &csv_body(1300, &[10, 500, 1200], &[]));
+        let p = paint(&mut app);
+        let note = "1,300 rows from 1,303 lines: 3 records contain line breaks inside quotes";
+        let c = p.colors.iter().find(|(t, _)| t == note).unwrap_or_else(|| panic!("ppp {ppp}: '{note}' not painted: {:?}", p.texts.iter().map(|(t, _, _)| t.clone()).filter(|t| t.contains("rows")).collect::<Vec<_>>()));
+        assert_eq!(c.1, tk.muted, "ppp {ppp}: the note is grey");
+        assert!(p.texts.iter().any(|(t, _, _)| t == "Details"), "ppp {ppp}: a Details button");
+        // a malformed line as well: a warning in the warning colour
+        let mut app = test_app("r4warn");
+        open_csv_tab(&mut app, "warn.csv", &csv_body(40, &[4, 11], &[7]));
+        let p = paint(&mut app);
+        let warn = p.colors.iter().find(|(t, _)| t.contains("Rows read 40 vs file data lines 42")).unwrap_or_else(|| panic!("ppp {ppp}: warning not painted"));
+        assert_eq!(warn.1, tk.warning, "ppp {ppp}");
+        assert!(p.texts.iter().any(|(t, _, _)| t == "Details"));
+        // Details: the dialog lists the lines, with the start of each, and fits
+        app.row_details_open = true;
+        frames(&mut app, &ctx, &input, 6);
+        let r = theme::dialog_report(&ctx, "Row count details").unwrap_or_else(|| panic!("ppp {ppp}: the details dialog was not drawn"));
+        check_report(&ctx, r, &format!("ppp {ppp} details"));
+        let p = paint(&mut app);
+        for want in ["Line 6", "Line 10", "Line 14"] {
+            assert!(p.texts.iter().any(|(t, _, _)| t == want), "ppp {ppp}: '{want}' is listed");
+        }
+        assert!(p.texts.iter().any(|(t, _, _)| t == "A4,\"Rahim Trading"), "ppp {ppp}: the start of the line is shown");
+    }
+}

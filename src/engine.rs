@@ -7,7 +7,7 @@ use crate::banking::{
 use crate::models::{
     column_name_tokens, parquet_native_type, parquet_needs_conversion, portable_root_dir, AggFunc, AggSpec, CondOp,
     FilterCondition, GroupJoin,
-    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, RowCountCheck, FilterOp, IngestionConfig, JoinStatus, MathOp,
+    ColDataType, ColumnSchemaConfig, ControlTotals, CsvTextEncoding, LineDetail, LineIssue, RowCountCheck, ROW_DETAILS_LIMIT, FilterOp, IngestionConfig, JoinStatus, MathOp,
     ParquetDialect, ParseFailure, PiiMaskMode, SignConvention, SqlJoinKind, TabSource, TabState,
     TransformStep,
 };
@@ -2998,11 +2998,152 @@ pub fn source_row_check(source: &TabSource, temp_dir: &Path) -> Result<Option<Ro
     };
     let lf = build_lazy_pipeline(path, false, config, temp_dir)?;
     let (parsed_rows, _) = compute_control_totals(lf, None)?;
-    Ok(Some(RowCountCheck {
+    let mut check = RowCountCheck {
         nonempty_lines: count_nonempty_lines(path)?,
         skip_rows: config.skip_rows,
         parsed_rows,
-    }))
+        ..Default::default()
+    };
+    // Fewer rows than lines: find out why (one more pass over the file, only then).
+    if check.parsed_rows < check.data_lines() {
+        let a = analyze_records(path, config)?;
+        check.multiline_records = a.multiline_records;
+        check.explained_lines = a.explained_lines;
+        check.malformed_records = a.malformed_records;
+        check.details = a.details;
+    }
+    Ok(Some(check))
+}
+
+/// What a pass over a CSV file found about its records.
+#[derive(Debug, Default)]
+pub struct RecordAnalysis {
+    pub multiline_records: usize,
+    pub explained_lines: usize,
+    pub malformed_records: usize,
+    pub details: Vec<LineDetail>,
+}
+
+/// Walks the file record by record (a record is a row of fields; a quoted value may hold line
+/// breaks, so a record can take several physical lines) and reports the records that take more
+/// than one line and those whose number of fields differs from the header's. Line numbers are
+/// physical, 1-based, counting title lines and blank lines.
+pub fn analyze_records(path: &Path, config: &IngestionConfig) -> Result<RecordAnalysis> {
+    let sep = separator_byte(config.separator)?;
+    let mut reader = BufReader::new(File::open(path).with_context(|| format!("Failed to open {:?}", path))?);
+    let mut progress = ByteLoop::new("Checking line breaks", path);
+    let mut out = RecordAnalysis::default();
+    let mut buf = Vec::new();
+    let mut line_no = 0usize;
+    // the record being read
+    let mut in_quoted = false;
+    let mut quote_seen = false; // a quote inside a quoted value (an escape or the closing one)
+    let mut at_start = true; // at the start of a field
+    let mut fields = 1usize;
+    let mut start_line = 0usize;
+    let mut first_text = String::new();
+    let mut span = 0usize;
+    let mut nonblank = 0usize;
+    let mut expected: Option<usize> = None;
+    let mut open = false;
+    loop {
+        buf.clear();
+        let n = reader.read_until(b'\n', &mut buf).with_context(|| format!("Failed to read {:?}", path))?;
+        if n == 0 {
+            break;
+        }
+        progress.add(n);
+        line_no += 1;
+        if line_no <= config.skip_rows {
+            continue;
+        }
+        let body = buf.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(&buf);
+        let line: &[u8] = {
+            let mut e = body.len();
+            while e > 0 && matches!(body[e - 1], b'\n' | b'\r') {
+                e -= 1;
+            }
+            &body[..e]
+        };
+        let blank = !line.iter().any(|b| !b.is_ascii_whitespace());
+        if !open {
+            if blank {
+                continue; // a blank line between records is not a record
+            }
+            open = true;
+            start_line = line_no;
+            first_text = decode_line(line, config.encoding).chars().take(80).collect();
+            span = 0;
+            nonblank = 0;
+            fields = 1;
+            at_start = true;
+        }
+        span += 1;
+        if !blank {
+            nonblank += 1;
+        }
+        for &b in line {
+            if in_quoted {
+                if quote_seen {
+                    if b == b'"' {
+                        quote_seen = false; // "" is a quote inside the value
+                        continue;
+                    }
+                    in_quoted = false; // the quote before this byte closed the value
+                    quote_seen = false;
+                } else {
+                    if b == b'"' {
+                        quote_seen = true;
+                    }
+                    continue;
+                }
+            }
+            if b == sep {
+                fields += 1;
+                at_start = true;
+            } else if at_start && b == b'"' {
+                in_quoted = true;
+                at_start = false;
+            } else {
+                at_start = false;
+            }
+        }
+        if in_quoted && quote_seen {
+            in_quoted = false; // the closing quote was the last byte of the line
+            quote_seen = false;
+        }
+        if in_quoted {
+            continue; // the record goes on in the next line
+        }
+        // the record is complete
+        open = false;
+        let header_fields = match expected {
+            None => {
+                expected = Some(fields);
+                continue; // the header line
+            }
+            Some(h) => h,
+        };
+        if span > 1 {
+            out.multiline_records += 1;
+            out.explained_lines += nonblank.saturating_sub(1);
+        }
+        let wrong = fields != header_fields;
+        if wrong {
+            out.malformed_records += 1;
+        }
+        if (span > 1 || wrong) && out.details.len() < ROW_DETAILS_LIMIT {
+            out.details.push(LineDetail {
+                line: start_line,
+                issue: if wrong { LineIssue::WrongFieldCount } else { LineIssue::QuotedLineBreak },
+                span,
+                fields,
+                expected_fields: header_fields,
+                text: first_text.clone(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Rows where the open or the maturity date is missing (after conversion to a date).
