@@ -1869,6 +1869,14 @@ pub enum TabSource {
         rate_col: Option<String>,
         cl_status_col: Option<String>,
     },
+    /// The CL migration matrix of two months (Phase 4 V2).
+    ClMigration {
+        prev_source: Box<TabSource>,
+        prev_steps: Vec<TransformStep>,
+        curr_source: Box<TabSource>,
+        curr_steps: Vec<TransformStep>,
+        spec: crate::banking::ClMigrationSpec,
+    },
 }
 
 #[derive(Clone)]

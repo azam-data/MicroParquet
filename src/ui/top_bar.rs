@@ -287,7 +287,17 @@ impl MicroParquetApp {
                     let r = ui
                         .add_enabled_ui(has_tab, |ui| {
                             ui.menu_button(text, |ui| {
+                                let mut last_section: Option<&str> = None;
                                 for c in cmds::in_group(group_id) {
+                                    // the Banking menu has two headings: Treasury & ALM and Loans & credit
+                                    let section = if group_id == CommandGroup::Banking { cmds::banking_section(c.id) } else { None };
+                                    if section.is_some() && section != last_section {
+                                        if last_section.is_some() {
+                                            ui.separator();
+                                        }
+                                        ui.label(theme::label_text(section.unwrap_or_default()).color(tk.muted));
+                                        last_section = section;
+                                    }
                                     self.command_menu_item(ui, ctx, c.id);
                                 }
                             })

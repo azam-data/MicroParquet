@@ -49,6 +49,7 @@ pub use crate::ui::buckets::BucketState;
 pub use crate::ui::rate_band::RateBandState;
 pub use crate::ui::calc_column::CalcState;
 pub use crate::ui::chart::ChartState;
+pub use crate::ui::cl_migration::ClMigrationState;
 pub use crate::ui::columns::ColumnsState;
 pub use crate::ui::conditional::CondState;
 pub use crate::ui::duration::DurationState;

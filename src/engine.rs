@@ -1620,7 +1620,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(left_source, out);
             collect_masked_columns(right_source, out);
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
             collect_masked_columns(prev_source, out);
             collect_masked_columns(curr_source, out);
         }
@@ -1636,7 +1636,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::JoinedTabs { left_source, right_source, .. } => {
             source_masks_pii(left_source) || source_masks_pii(right_source)
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
     }
@@ -1760,6 +1760,11 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             parts.extend(source_parse_failures(right_source, temp_dir)?);
         }
         TabSource::PeriodReconcile {
+            prev_source,
+            curr_source,
+            ..
+        }
+        | TabSource::ClMigration {
             prev_source,
             curr_source,
             ..
@@ -2338,6 +2343,17 @@ pub fn compile_tab_lazy(
                 rate_col.as_deref(),
                 cl_status_col.as_deref(),
             )?
+        }
+        TabSource::ClMigration {
+            prev_source,
+            prev_steps,
+            curr_source,
+            curr_steps,
+            spec,
+        } => {
+            let prev_lf = compile_tab_lazy(prev_source, prev_steps, temp_dir)?;
+            let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
+            crate::banking::build_cl_migration(prev_lf, curr_lf, spec)?.lazy()
         }
     };
 

@@ -5,6 +5,7 @@ pub mod batch;
 pub mod buckets;
 pub mod calc_column;
 pub mod chart;
+pub mod cl_migration;
 pub mod columns;
 pub mod commands;
 pub mod conditional;
@@ -101,6 +102,7 @@ impl MicroParquetApp {
             ActiveToolModal::StackFiles => self.render_stack_modal(ctx, cols),
             ActiveToolModal::JoinTabs => self.render_join_modal(ctx, cols),
             ActiveToolModal::ReconcilePeriods => self.render_reconcile_modal(ctx, cols),
+            ActiveToolModal::ClMigration => self.render_cl_migration_modal(ctx, cols),
             ActiveToolModal::SaveMacro => self.render_save_macro_modal(ctx, cols),
             ActiveToolModal::PythonCodePreview => self.render_python_preview_modal(ctx, cols),
             ActiveToolModal::MultiTabExport => self.render_multi_export_modal(ctx, cols),

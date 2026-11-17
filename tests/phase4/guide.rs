@@ -29,7 +29,7 @@ pub const SECTIONS: [&str; 10] = [
 pub const COLUMN_TABLE_HEADER: &str = "| Column role | Required? | Type the app needs | Example values | Notes |";
 
 /// Tool ids (file names in docs/guide/): the 21 tools of Phase 4 task G0, then the tools later tasks added.
-pub const GUIDE_TOOLS: [&str; 22] = [
+pub const GUIDE_TOOLS: [&str; 23] = [
     "maturity-bucketer",
     "rate-profile",
     "rate-shock-nii",
@@ -52,6 +52,7 @@ pub const GUIDE_TOOLS: [&str; 22] = [
     "split-export",
     "batch",
     "pivot",
+    "cl-migration",
 ];
 
 pub fn guide_dir() -> PathBuf {
@@ -825,5 +826,28 @@ fn guide_pivot() {
             md(&pct, &["Bucket", "Conventional:2", "Islami:2", "Total:2"]),
             md(&rates, &["Bucket", "Conventional:2", "Islami:2", "Total:2"]),
         ],
+    );
+}
+
+#[test]
+fn guide_cl_migration() {
+    use micro_parquet::banking::*;
+    let mk = |keys: &[&str], bal: &[f64], cl: &[&str]| frame(vec![text("Actnum", keys), nums("Balance", bal), text("CL_Status", cl)]);
+    let prev = mk(&["A1", "A2", "A3"], &[100.0, 50.0, 30.0], &["STD", "SS", "STD"]);
+    let curr = mk(&["A1", "A2", "A4"], &[100.0, 50.0, 20.0], &["SMA", "DF", "STD"]);
+    let spec = ClMigrationSpec { key_col: "Actnum".into(), bal_col: "Balance".into(), cl_col: "CL_Status".into(), segment_col: None, measure: MigrationMeasure::Balance, pct_of_row: false };
+    let cl_map = ProvisionConfig::defaults().cl_code_map;
+    let m = build_cl_migration_with(prev.clone().lazy(), curr.clone().lazy(), &spec, &cl_map).expect("the matrix builds");
+    let cols = ["Previous grade", "STD:2", "SMA:2", "SS:2", "DF:2", "BL:2", "Closed/Repaid:2", "Total:2"];
+    let counts = build_cl_migration_with(prev.clone().lazy(), curr.clone().lazy(), &ClMigrationSpec { measure: MigrationMeasure::Count, ..spec.clone() }, &cl_map).expect("the counts build");
+    let count_cols = ["Previous grade", "STD", "SMA", "SS", "DF", "BL", "Closed/Repaid", "Total"];
+    // the figures of the acceptance example
+    assert_eq!(floats(&m, "Total"), vec![Some(130.0), Some(0.0), Some(50.0), Some(0.0), Some(0.0), Some(180.0), Some(20.0), Some(200.0)]);
+    assert_eq!(floats(&m, "SMA")[0], Some(100.0));
+    assert_eq!(floats(&counts, "Total")[0], Some(2.0));
+    check_guide(
+        "cl-migration",
+        "guide_cl_migration",
+        &[md(&prev, &["Actnum", "Balance:2", "CL_Status"]), md(&curr, &["Actnum", "Balance:2", "CL_Status"]), md(&m, &cols), md(&counts, &count_cols)],
     );
 }

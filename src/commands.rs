@@ -38,6 +38,7 @@ pub enum CommandId {
     Provision,
     Limits,
     Reconcile,
+    ClMigration,
     Audit,
     // Export
     ExportParquet,
@@ -154,6 +155,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
+    c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
     c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Banking, "hygiene ghost exceptions quality", N::Tab),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
@@ -178,6 +180,16 @@ pub const COMMANDS: &[Command] = &[
     c(I::ToggleChart, "Show or hide the ALCO bar chart", G::View, "graph plot", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
+
+/// The heading a Banking command is listed under in the menu (the Banking menu lists them in
+/// order, so the commands of one heading are next to each other).
+pub fn banking_section(id: CommandId) -> Option<&'static str> {
+    match id {
+        CommandId::Buckets | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp => Some("Treasury & ALM"),
+        CommandId::Provision | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        _ => None,
+    }
+}
 
 pub fn command(id: CommandId) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.id == id)

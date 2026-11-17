@@ -426,3 +426,150 @@ fn the_pivot_builder_is_in_the_transform_menu_the_search_and_the_insert_menu_and
     assert!(crate::ui::step_edit::step_is_editable(&new));
     let _ = frames;
 }
+
+// ----------------------------------------------------------------------------- V2: CL migration
+
+fn month(keys: &[&str], bal: &[f64], cl: &[&str]) -> DataFrame {
+    DataFrame::new(vec![Series::new("Actnum".into(), keys), Series::new("Balance".into(), bal), Series::new("CL_Status".into(), cl)]).expect("month")
+}
+
+/// Two month tabs: A1 STD→SMA (down), A2 SS→DF (down), A3 STD closed, A4 new, A5 DF→STD (up).
+fn migration_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let prev = parquet_source(&root, "sep", month(&["A1", "A2", "A3", "A5"], &[100.0, 50.0, 30.0, 40.0], &["STD", "SS", "STD", "DF"]));
+    let curr = parquet_source(&root, "oct", month(&["A1", "A2", "A4", "A5"], &[100.0, 50.0, 20.0, 40.0], &["SMA", "DF", "STD", "STD"]));
+    app.create_tab_from_source("Sep".into(), prev, vec![], HashMap::new());
+    settle(&mut app);
+    app.create_tab_from_source("Oct".into(), curr, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn migration_title() -> String {
+    format!("{}  CL migration matrix", theme::ph::ARROWS_LEFT_RIGHT)
+}
+
+#[test]
+fn the_cl_migration_dialog_picks_the_months_and_columns_and_keeps_everything_inside_the_dialog() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = migration_rig("p4v2a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::ClMigration);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ClMigration, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &migration_title(), &what);
+        for t in ["Previous-month tab:", "Current-month tab:", "Account key:", "Balance:", "CL status:", "Segment (optional):", "Show:", "Balance (BDT)", "Number of accounts", "As % of the previous grade's row total", "Build migration matrix", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        // the active tab (Oct) is the current month, the one before it the previous; the columns were guessed
+        let s = &rig.app.cl_migration;
+        assert_eq!((s.prev_tab, s.curr_tab), (0, 1), "{what}");
+        assert_eq!((s.key_col.as_str(), s.bal_col.as_str(), s.cl_col.as_str()), ("Actnum", "Balance", "CL_Status"), "{what}");
+        let m = rig.app.cl_migration.rects.clone();
+        assert!(inside(m.grid, r.window) && inside(m.legend, r.window), "{what}: the settings {:?} and the note {:?} are inside the dialog {:?}", m.grid, m.legend, r.window);
+        for (name, c) in &m.combos {
+            assert!(inside(*c, m.grid), "{what}: the choice '{name}' {c:?} is inside the settings {:?}", m.grid);
+        }
+        for (name, b) in &m.buttons {
+            assert!(inside(*b, r.footer), "{what}: the button '{name}' is inside the footer");
+        }
+        // a real click on a combo box opens its list; choosing a tab changes the setting
+        let prev_combo = m.combos.iter().find(|(n, _)| n.starts_with("Previous")).map(|(_, r)| *r).expect("the combo");
+        rig.click(prev_combo.center());
+        let p = rig.draw(3);
+        let sep = p.boxes.iter().filter(|(t, _)| t == "Sep").map(|(_, b)| *b).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the list offers the tab Sep");
+        let oct = p.boxes.iter().filter(|(t, bx)| t == "Oct" && bx.top() > prev_combo.bottom()).map(|(_, b)| *b).last().expect("and the tab Oct");
+        assert!(inside(oct, rig.ctx.screen_rect()) && inside(sep, rig.ctx.screen_rect()), "{what}: the list is inside the window");
+        rig.click(oct.center());
+        assert_eq!(rig.app.cl_migration.prev_tab, 1, "{what}: the choice was taken");
+        // the same tab twice cannot be built, and the dialog says so
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("two different tabs")), "{what}: the message");
+        assert!(rig.app.cl_migration_source().is_err());
+        rig.app.cl_migration.prev_tab = 0;
+        rig.draw(3);
+        assert!(rig.app.cl_migration_source().is_ok(), "{what}");
+    }
+}
+
+#[test]
+fn the_cl_migration_tab_shades_upgrades_green_and_downgrades_amber_on_the_right_cells() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = migration_rig("p4v2b", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::ClMigration);
+        rig.draw(6);
+        let b = rig.app.cl_migration.rects.buttons.iter().find(|(n, _)| n == "Build migration matrix").map(|(_, r)| *r).expect("the button");
+        rig.click(b.center());
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), 3, "{what}: the matrix is a new tab");
+        let tab = rig.app.tabs.last().expect("tab");
+        let names: Vec<String> = tab.cached_slice.get_column_names().iter().map(|n| n.to_string()).collect();
+        assert_eq!(names, vec!["Previous grade", "STD", "SMA", "SS", "DF", "BL", "Closed/Repaid", "Total"], "{what}");
+        assert!(tab.title.starts_with("CL migration (Sep to Oct)"), "{}", tab.title);
+        let p = rig.draw(4);
+        let tk = *theme::tokens(false);
+        let green = theme::migration_fill(&tk, micro_parquet::banking::Shade::Upgrade).expect("green");
+        let amber = theme::migration_fill(&tk, micro_parquet::banking::Shade::Downgrade).expect("amber");
+        let table_top = theme::TOP_BAR_H + theme::TAB_STRIP_H;
+        let cells = |fill: egui::Color32| -> Vec<egui::Rect> {
+            p.rects.iter().filter(|(r, f)| *f == fill && r.top() > table_top && r.bottom() < rig.ctx.screen_rect().bottom() - theme::STATUS_BAR_H && (r.height() - theme::DATA_ROW_H).abs() < theme::SPACE_L).map(|(r, _)| *r).collect()
+        };
+        let (g, a) = (cells(green), cells(amber));
+        assert_eq!(g.len(), 1, "{what}: one upgrade (DF to STD): {g:?}");
+        assert_eq!(a.len(), 2, "{what}: two downgrades (STD to SMA, SS to DF): {a:?}");
+        // each shaded cell is under the heading of its column and beside the label of its row
+        let right_edge = rig.ctx.screen_rect().right() - theme::RIGHT_PANEL_W;
+        let heading = |name: &str| p.boxes.iter().filter(|(t, bx)| t == name && bx.top() > table_top && bx.right() < right_edge).map(|(_, b)| *b).min_by(|a, b| a.top().total_cmp(&b.top())).unwrap_or_else(|| panic!("{what}: heading {name}"));
+        let row_label = |name: &str, near: egui::Rect| p.boxes.iter().filter(|(t, bx)| t == name && bx.center().y > near.top() && bx.center().y < near.bottom() && bx.center().x < near.left()).map(|(_, b)| *b).next();
+        let under = |cell: egui::Rect, col: &str| {
+            let h = heading(col);
+            assert!(h.center().x > cell.left() - 0.5 && h.center().x < cell.right() + 0.5, "{what}: the cell {cell:?} is under the heading '{col}' {h:?}");
+        };
+        let green_cell = g[0];
+        under(green_cell, "STD");
+        assert!(row_label("DF", green_cell).is_some(), "{what}: the green cell is in the DF row");
+        let mut amber_cols: Vec<&str> = Vec::new();
+        for cell in &a {
+            let col = ["SMA", "DF"].into_iter().find(|c| {
+                let h = heading(c);
+                h.center().x > cell.left() - 0.5 && h.center().x < cell.right() + 0.5
+            });
+            amber_cols.push(col.unwrap_or_else(|| panic!("{what}: an amber cell {cell:?} is under no heading")));
+        }
+        amber_cols.sort();
+        assert_eq!(amber_cols, vec!["DF", "SMA"], "{what}");
+        assert!(row_label("STD", *a.iter().find(|c| heading("SMA").center().x > c.left() && heading("SMA").center().x < c.right()).expect("the SMA cell")).is_some(), "{what}: STD to SMA is in the STD row");
+        assert!(row_label("SS", *a.iter().find(|c| heading("DF").center().x > c.left() && heading("DF").center().x < c.right()).expect("the DF cell")).is_some(), "{what}: SS to DF is in the SS row");
+        // nothing outside the table is tinted: no shaded rect leaves the table area
+        let screen = rig.ctx.screen_rect();
+        assert!(g.iter().chain(a.iter()).all(|r| inside(*r, screen)), "{what}");
+        // a tab that is not a matrix has no shading
+        rig.app.active_tab = 0;
+        let p0 = rig.draw(4);
+        assert!(p0.rects.iter().all(|(r, f)| !(*f == amber && r.top() > table_top && (r.height() - theme::DATA_ROW_H).abs() < theme::SPACE_L)), "{what}: no amber cells on an ordinary tab");
+    }
+}
+
+#[test]
+fn the_banking_menu_has_two_headings_and_lists_the_new_tool_under_loans_and_credit() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = migration_rig("p4v2c", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Banking button"));
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let find = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{t}' is in the Banking menu"));
+        let (alm, loans, mig, rate) = (find("Treasury & ALM"), find("Loans & credit"), find("CL migration matrix"), find("Interest rate shock"));
+        assert!(alm.top() < rate.top() && rate.top() < loans.top() && loans.top() < mig.top(), "{what}: the headings come before their tools: {alm:?} {rate:?} {loans:?} {mig:?}");
+        let screen = rig.ctx.screen_rect();
+        for b in [alm, loans, mig] {
+            assert!(inside(b, screen), "{what}: {b:?} is inside the window");
+        }
+        // the item is not greyed: two tabs are open
+        assert!(rig.app.command_unavailable(CommandId::ClMigration).is_none(), "{what}");
+    }
+}

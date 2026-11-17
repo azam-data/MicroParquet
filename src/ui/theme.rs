@@ -236,6 +236,10 @@ pub const PIVOT_COMBO_WEIGHT_W: f32 = 120.0;
 pub const PIVOT_COMBO_SORT_W: f32 = 210.0;
 pub const PIVOT_FOOTER_BUTTONS_W: f32 = 250.0;
 pub const PIVOT_GAP: f32 = 12.0;
+/// How much of the warning colour tints a downgrade in the CL migration matrix (green uses `success_soft`).
+pub const SHADE_AMBER_STRENGTH: f32 = 0.22;
+pub const MIGRATION_DIALOG_W: f32 = 640.0;
+pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
 pub const LIST_MAX_H_S: f32 = 120.0;
 pub const LIST_MAX_H_M: f32 = 180.0;
@@ -376,6 +380,15 @@ fn t(ui: &egui::Ui) -> &'static Tokens {
 pub fn danger(ui: &egui::Ui) -> Color32 {
     t(ui).danger
 }
+/// The fill of an upgrade (green) and of a downgrade (amber) in the CL migration matrix.
+pub fn migration_fill(tk: &Tokens, shade: micro_parquet::banking::Shade) -> Option<Color32> {
+    match shade {
+        micro_parquet::banking::Shade::Upgrade => Some(tk.success_soft),
+        micro_parquet::banking::Shade::Downgrade => Some(tk.warning.gamma_multiply(SHADE_AMBER_STRENGTH)),
+        micro_parquet::banking::Shade::None => None,
+    }
+}
+
 pub fn warning(ui: &egui::Ui) -> Color32 {
     t(ui).warning
 }

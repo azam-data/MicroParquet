@@ -1396,30 +1396,9 @@ pub fn apply_loan_classification_provision_with(
     };
 
     // 1. CL grade: every code must be in cl_code_map.json; unknown codes are an error, never 1%.
-    let bad = lf
-        .clone()
-        .select([col(cl_status_col).cast(DataType::String).alias("__cl")])
-        .filter(map_codes_expr(normalise_code_expr(col("__cl")), &config.cl_code_map).is_null())
-        .unique_stable(None, UniqueKeepStrategy::First)
-        .limit(20)
-        .collect()
-        .with_context(|| format!("Could not read the CL status column '{}'", cl_status_col))?;
-    if bad.height() > 0 {
-        let codes: Vec<String> = bad
-            .column("__cl")?
-            .str()?
-            .into_iter()
-            .map(|v| match v {
-                Some(s) if !s.trim().is_empty() => format!("'{}'", s),
-                _ => "(blank)".to_string(),
-            })
-            .collect();
-        bail!(
-            "CL status column '{}' has codes not in {}: {}. Add each code with its grade (STD, SMA, SS, DF or BL) to that file.",
-            cl_status_col,
-            CL_CODE_MAP_FILE,
-            codes.join(", ")
-        );
+    let bad = unmapped_cl_codes(&lf, cl_status_col, &config.cl_code_map)?;
+    if !bad.is_empty() {
+        bail!("{}", cl_code_error(cl_status_col, &bad));
     }
     let grade_expr = map_codes_expr(normalise_code_expr(col(cl_status_col)), &config.cl_code_map);
 
@@ -1548,4 +1527,305 @@ pub fn apply_loan_limit_utilization(
     Ok(lf
         .with_columns([util_pct, undrawn, over_limit])
         .with_columns([ccf_equiv, status_flag]))
+}
+
+/// The CL codes of `column` that `cl_map` does not know (at most 20, as they are written in the
+/// data; a blank is "(blank)").
+pub fn unmapped_cl_codes(lf: &LazyFrame, column: &str, cl_map: &[(String, String)]) -> Result<Vec<String>> {
+    let bad = lf
+        .clone()
+        .select([col(column).cast(DataType::String).alias("__cl")])
+        .filter(map_codes_expr(normalise_code_expr(col("__cl")), cl_map).is_null())
+        .unique_stable(None, UniqueKeepStrategy::First)
+        .limit(20)
+        .collect()
+        .with_context(|| format!("Could not read the CL status column '{}'", column))?;
+    Ok(bad
+        .column("__cl")?
+        .str()?
+        .into_iter()
+        .map(|v| match v {
+            Some(s) if !s.trim().is_empty() => format!("'{}'", s),
+            _ => "(blank)".to_string(),
+        })
+        .collect())
+}
+
+/// The message for codes that are not in `cl_code_map.json` (the Phase 1 wording).
+pub fn cl_code_error(column: &str, codes: &[String]) -> String {
+    format!(
+        "CL status column '{}' has codes not in {}: {}. Add each code with its grade (STD, SMA, SS, DF or BL) to that file.",
+        column,
+        CL_CODE_MAP_FILE,
+        codes.join(", ")
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// CL migration matrix (Phase 4 V2)
+// ---------------------------------------------------------------------------------------------
+
+/// What the cells of the migration matrix hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MigrationMeasure {
+    /// Balance in BDT: the previous month's balance of an account that was there, the current
+    /// month's for a new one.
+    #[default]
+    Balance,
+    /// Number of accounts.
+    Count,
+}
+
+/// The row of accounts that exist only in the current month.
+pub const MIGRATION_NEW_ROW: &str = "New";
+/// The column of accounts that exist only in the previous month.
+pub const MIGRATION_CLOSED_COL: &str = "Closed/Repaid";
+/// The last row and column.
+pub const MIGRATION_TOTAL: &str = "Total";
+/// The row that adds up the five grades: the previous month's total.
+pub const MIGRATION_PREV_TOTAL_ROW: &str = "Previous month total";
+/// The first column of the matrix (after "Segment", when there is one).
+pub const MIGRATION_ROW_HEADING: &str = "Previous grade";
+/// The label of the block that adds up all segments.
+pub const MIGRATION_ALL_SEGMENTS: &str = "All segments";
+
+/// The grades in `cl_code_map.json` order.
+pub fn cl_grades() -> [&'static str; 5] {
+    CL_GRADES
+}
+
+/// How a cell of the matrix is shaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shade {
+    None,
+    /// To a better grade.
+    Upgrade,
+    /// To a worse grade.
+    Downgrade,
+}
+
+/// Upgrade (to a grade earlier in STD, SMA, SS, DF, BL), downgrade, or neither (the diagonal,
+/// New, Closed/Repaid, totals).
+pub fn migration_shade(from: &str, to: &str) -> Shade {
+    let rank = |g: &str| CL_GRADES.iter().position(|x| *x == g);
+    match (rank(from), rank(to)) {
+        (Some(a), Some(b)) if b < a => Shade::Upgrade,
+        (Some(a), Some(b)) if b > a => Shade::Downgrade,
+        _ => Shade::None,
+    }
+}
+
+/// The settings of a migration matrix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClMigrationSpec {
+    pub key_col: String,
+    pub bal_col: String,
+    pub cl_col: String,
+    pub segment_col: Option<String>,
+    pub measure: MigrationMeasure,
+    /// Each cell as a percentage of its row's total.
+    pub pct_of_row: bool,
+}
+
+/// The migration matrix of two months, with the code map of `portable_data`.
+pub fn build_cl_migration(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrationSpec) -> Result<DataFrame> {
+    let cl_map = ProvisionConfig::load_or_create(&portable_root_dir())?.cl_code_map;
+    build_cl_migration_with(prev, curr, spec, &cl_map)
+}
+
+/// One account per row: its balance, its worst grade (the worst-graded row decides, as in the
+/// reconcile tool) and its segment.
+fn migration_per_key(lf: LazyFrame, spec: &ClMigrationSpec, cl_map: &[(String, String)], suffix: &str) -> LazyFrame {
+    let bal = format!("__bal_{suffix}");
+    let grade = format!("__grade_{suffix}");
+    let seg = format!("__seg_{suffix}");
+    let g = map_codes_expr(normalise_code_expr(col(spec.cl_col.as_str())), cl_map);
+    let mut rank: Expr = lit(NULL).cast(DataType::Int32);
+    for (i, name) in CL_GRADES.iter().enumerate().rev() {
+        rank = when(g.clone().eq(lit(*name))).then(lit(i as i32)).otherwise(rank);
+    }
+    let mut select = vec![
+        col(spec.key_col.as_str()).cast(DataType::String).alias("__key"),
+        col(spec.bal_col.as_str()).cast(DataType::Float64).alias(&bal),
+        g.alias("__g"),
+        rank.alias("__r"),
+    ];
+    if let Some(sc) = &spec.segment_col {
+        let t = col(sc.as_str()).cast(DataType::String).str().strip_chars(lit(NULL));
+        select.push(when(t.clone().is_null().or(t.clone().eq(lit("")))).then(lit(NULL).cast(DataType::String)).otherwise(t).alias("__seg"));
+    }
+    let mut agg = vec![
+        col(&bal).sum().alias(&bal),
+        col("__g")
+            .sort_by(
+                [col("__r"), col(&bal)],
+                SortMultipleOptions::default().with_order_descending_multi([true, true]).with_nulls_last(true).with_maintain_order(true),
+            )
+            .first()
+            .alias(&grade),
+    ];
+    if spec.segment_col.is_some() {
+        agg.push(col("__seg").drop_nulls().first().alias(&seg));
+    }
+    lf.select(select).group_by([col("__key")]).agg(agg)
+}
+
+/// The migration matrix with an explicit code map: rows = the previous month's grade (STD, SMA,
+/// SS, DF, BL), then "New" (only in the current month); columns = the current month's grade, then
+/// "Closed/Repaid" (only in the previous month). A code that is not in the map is an error that
+/// lists it. With a segment column there is one block per segment and a last block for all.
+pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrationSpec, cl_map: &[(String, String)]) -> Result<DataFrame> {
+    let (mut prev, mut curr) = (prev, curr);
+    for (name, lf) in [("previous month", &mut prev), ("current month", &mut curr)] {
+        let schema = lf.collect_schema().with_context(|| format!("Could not read the columns of the {name}"))?;
+        let mut wanted = vec![spec.key_col.as_str(), spec.bal_col.as_str(), spec.cl_col.as_str()];
+        if let Some(sc) = &spec.segment_col {
+            wanted.push(sc.as_str());
+        }
+        for c in wanted {
+            if schema.get(c).is_none() {
+                bail!("CL migration: the {} has no column '{}'. Choose columns that both months have.", name, c);
+            }
+        }
+        let dt = schema.get(spec.bal_col.as_str()).cloned().unwrap_or(DataType::String);
+        if !dt.is_numeric() {
+            bail!("CL migration: the balance column '{}' of the {} is {}, not a number. Set it to a number in the schema first.", spec.bal_col, name, dt);
+        }
+        let blank_keys = lf
+            .clone()
+            .filter(col(spec.key_col.as_str()).is_null())
+            .select([len().alias("n")])
+            .collect()
+            .with_context(|| format!("Could not check the account keys of the {name}"))?
+            .column("n")?
+            .cast(&DataType::Int64)?
+            .i64()?
+            .get(0)
+            .unwrap_or(0);
+        if blank_keys > 0 {
+            bail!("CL migration: the account key column '{}' has {} blank value(s) in the {}. Every row needs an account key.", spec.key_col, blank_keys, name);
+        }
+    }
+    // unmapped codes of either month, in one message
+    let mut bad = unmapped_cl_codes(&prev, &spec.cl_col, cl_map)?;
+    for c in unmapped_cl_codes(&curr, &spec.cl_col, cl_map)? {
+        if !bad.contains(&c) {
+            bad.push(c);
+        }
+    }
+    if !bad.is_empty() {
+        bail!("{}", cl_code_error(&spec.cl_col, &bad));
+    }
+
+    let p = migration_per_key(prev, spec, cl_map, "p");
+    let c = migration_per_key(curr, spec, cl_map, "c");
+    let joined = p.join(c, [col("__key")], [col("__key")], JoinArgs::new(JoinType::Full).with_coalesce(JoinCoalesce::CoalesceColumns));
+    let from = col("__grade_p");
+    let to = col("__grade_c");
+    // the previous month's balance of an account that was there; the current month's for a new one
+    let cell_bal = when(from.clone().is_not_null()).then(col("__bal_p")).otherwise(col("__bal_c")).fill_null(lit(0.0));
+    let mut keys: Vec<Expr> = vec![from.clone().fill_null(lit(MIGRATION_NEW_ROW)).alias("__from"), to.clone().fill_null(lit(MIGRATION_CLOSED_COL)).alias("__to")];
+    if spec.segment_col.is_some() {
+        keys.push(col("__seg_c").fill_null(col("__seg_p")).fill_null(lit(crate::pivot_table::BLANK_LABEL)).alias("__seg"));
+    }
+    let mut group_by: Vec<Expr> = vec![col("__from"), col("__to")];
+    if spec.segment_col.is_some() {
+        group_by.push(col("__seg"));
+    }
+    let grouped = joined
+        .with_columns(keys)
+        .with_column(cell_bal.alias("__cell"))
+        .group_by(group_by)
+        .agg([col("__cell").sum().alias("__sum"), len().cast(DataType::Int64).alias("__n")])
+        .collect()
+        .context("Could not calculate the CL migration matrix")?;
+
+    let froms: Vec<Option<String>> = grouped.column("__from")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+    let tos: Vec<Option<String>> = grouped.column("__to")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+    let sums: Vec<Option<f64>> = grouped.column("__sum")?.f64()?.into_iter().collect();
+    let counts: Vec<Option<i64>> = grouped.column("__n")?.i64()?.into_iter().collect();
+    let segs: Vec<Option<String>> = if spec.segment_col.is_some() {
+        grouped.column("__seg")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect()
+    } else {
+        vec![None; grouped.height()]
+    };
+
+    // the blocks: one per segment (natural order), then all of them
+    let mut seg_names: Vec<String> = Vec::new();
+    if spec.segment_col.is_some() {
+        for s in segs.iter().flatten() {
+            if !seg_names.contains(s) {
+                seg_names.push(s.clone());
+            }
+        }
+        seg_names.sort_by(|a, b| crate::engine::natural_sort_key(a).cmp(&crate::engine::natural_sort_key(b)).then_with(|| a.cmp(b)));
+    }
+    let blocks: Vec<Option<String>> = if spec.segment_col.is_some() {
+        seg_names.iter().cloned().map(Some).chain(std::iter::once(Some(MIGRATION_ALL_SEGMENTS.to_string()))).collect()
+    } else {
+        vec![None]
+    };
+
+    let col_labels: Vec<&str> = CL_GRADES.iter().copied().chain(std::iter::once(MIGRATION_CLOSED_COL)).collect();
+    let mut seg_out: Vec<String> = Vec::new();
+    let mut row_out: Vec<String> = Vec::new();
+    let mut values: Vec<Vec<Option<f64>>> = vec![Vec::new(); col_labels.len() + 1];
+    for block in &blocks {
+        // the matrix of this block: [row][col] of the measure
+        let mut m = vec![vec![0.0f64; col_labels.len()]; CL_GRADES.len() + 1];
+        for i in 0..grouped.height() {
+            let in_block = match block {
+                Some(b) if b == MIGRATION_ALL_SEGMENTS => true,
+                Some(b) => segs[i].as_deref() == Some(b.as_str()),
+                None => true,
+            };
+            if !in_block {
+                continue;
+            }
+            let (Some(f), Some(t)) = (froms[i].as_deref(), tos[i].as_deref()) else {
+                continue;
+            };
+            let r = if f == MIGRATION_NEW_ROW { Some(CL_GRADES.len()) } else { CL_GRADES.iter().position(|g| *g == f) };
+            let c = col_labels.iter().position(|g| *g == t);
+            if let (Some(r), Some(c)) = (r, c) {
+                m[r][c] += match spec.measure {
+                    MigrationMeasure::Balance => sums[i].unwrap_or(0.0),
+                    MigrationMeasure::Count => counts[i].unwrap_or(0) as f64,
+                };
+            }
+        }
+        // rows: the five grades, the previous month's total, New, the grand total
+        let grade_rows: Vec<Vec<f64>> = m[..CL_GRADES.len()].to_vec();
+        let prev_total: Vec<f64> = (0..col_labels.len()).map(|c| grade_rows.iter().map(|r| r[c]).sum()).collect();
+        let new_row = m[CL_GRADES.len()].clone();
+        let grand: Vec<f64> = prev_total.iter().zip(new_row.iter()).map(|(a, b)| a + b).collect();
+        let mut lines: Vec<(String, Vec<f64>)> = CL_GRADES.iter().zip(grade_rows).map(|(g, r)| (g.to_string(), r)).collect();
+        lines.push((MIGRATION_PREV_TOTAL_ROW.to_string(), prev_total));
+        lines.push((MIGRATION_NEW_ROW.to_string(), new_row));
+        lines.push((MIGRATION_TOTAL.to_string(), grand));
+        for (label, cells) in lines {
+            let total: f64 = cells.iter().sum();
+            seg_out.push(block.clone().unwrap_or_default());
+            row_out.push(label);
+            for (c, v) in cells.iter().enumerate() {
+                values[c].push(Some(if spec.pct_of_row { if total != 0.0 { v / total * 100.0 } else { 0.0 } } else { *v }));
+            }
+            values[col_labels.len()].push(Some(if spec.pct_of_row { if total != 0.0 { 100.0 } else { 0.0 } } else { total }));
+        }
+    }
+    let mut series: Vec<Series> = Vec::new();
+    if spec.segment_col.is_some() {
+        series.push(Series::new("Segment".into(), seg_out));
+    }
+    series.push(Series::new(MIGRATION_ROW_HEADING.into(), row_out));
+    let names: Vec<&str> = col_labels.iter().copied().chain(std::iter::once(MIGRATION_TOTAL)).collect();
+    for (name, vals) in names.iter().zip(values) {
+        if spec.measure == MigrationMeasure::Count && !spec.pct_of_row {
+            let ints: Vec<Option<i64>> = vals.iter().map(|v| v.map(|x| x.round() as i64)).collect();
+            series.push(Series::new((*name).into(), ints));
+        } else {
+            series.push(Series::new((*name).into(), vals));
+        }
+    }
+    DataFrame::new(series).context("Could not arrange the CL migration matrix")
 }
