@@ -1,7 +1,7 @@
 use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
-    apply_maturity_bucket, apply_rate_shock_with, build_period_reconcile_lazy, RateShockSpec,
+    apply_maturity_bucket, build_period_reconcile_lazy, RateShockSpec,
     ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{

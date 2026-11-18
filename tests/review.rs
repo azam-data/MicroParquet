@@ -2050,18 +2050,26 @@ fn t26_excel_dates_sheets_and_errors() {
 }
 
 #[test]
-fn t26b_pdf_omitted_columns_and_rows() {
+fn t26b_pdf_wide_tables_continue_on_further_pages_and_long_tables_are_cut() {
     use micro_parquet::exporters::*;
-    assert_eq!(pdf_column_layout(4).0, 4);
-    let (shown, w) = pdf_column_layout(20);
-    assert_eq!(shown, 15);
-    assert!(w >= 18.0 && shown as f32 * w <= 273.0 + 0.01);
-    let cols: Vec<Series> = (0..20).map(|i| Series::new(format!("C{i:02}").into(), vec![1.0f64, 2.0])).collect();
+    use micro_parquet::pdf_layout::*;
+    // 20 numeric columns do not fit one page width: they go to further parts, none is left out
+    let mut cols: Vec<Series> = vec![Series::new("Branch".into(), vec!["DHK", "CTG"])];
+    cols.extend((0..20).map(|i| Series::new(format!("C{i:02}").into(), vec![12_345_678_901.25f64, 2.0])));
     let df = DataFrame::new(cols).unwrap();
+    let layout = layout_pdf_tab("Wide", &df, &Default::default(), NumberDisplayFormat::Raw, 2, &[], PDF_MAX_ROWS_PER_TAB);
+    assert!(layout.parts.len() >= 2, "{} part(s)", layout.parts.len());
+    let mut seen: Vec<String> = Vec::new();
+    for part in &layout.parts {
+        assert_eq!(part.columns[0].name, "Branch", "the row labels are repeated in every part");
+        let right = part.columns.last().map(|c| c.x + c.w).unwrap();
+        assert!(right <= LEFT_MM + USABLE_W_MM + 0.01, "a part is within the page width: {right}");
+        seen.extend(part.columns.iter().skip(1).map(|c| c.name.clone()));
+    }
+    assert_eq!(seen, (0..20).map(|i| format!("C{i:02}")).collect::<Vec<_>>(), "every column is printed, in order");
     let p = tmpdir().join("t26b.pdf");
     let rep = export_tabs_to_pdf(vec![("Wide".into(), df, Default::default())], &p, NumberDisplayFormat::Raw, 2).unwrap();
-    assert_eq!(rep.omitted_columns, vec![("Wide".to_string(), (15..20).map(|i| format!("C{i:02}")).collect::<Vec<_>>())]);
-    assert!(rep.summary().contains("C15, C16, C17, C18, C19 omitted"), "{}", rep.summary());
+    assert!(rep.omitted_columns.is_empty(), "nothing is omitted any more");
     assert!(rep.truncated_tabs.is_empty());
 
     let long = df!("Balance" => vec![1.0f64; PDF_MAX_ROWS_PER_TAB + 1]).unwrap();

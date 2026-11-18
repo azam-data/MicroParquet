@@ -6,7 +6,7 @@ use crate::models::{
     ParquetDialect, SplitExportFormat, SummarySpec, TabSource, TransformStep,
 };
 use crate::jobs::{Cancelled, JobCtx, TempOutput};
-use crate::summary::{date_text, format_summary_value, SummaryCell, SummaryValue};
+use crate::summary::{date_text, SummaryCell, SummaryValue};
 use crate::models::SummaryAgg;
 use crate::table_layout::{SUMMARY_BG, SUMMARY_FG};
 use anyhow::{Context, Result};
@@ -583,60 +583,6 @@ impl PdfExportReport {
     }
 }
 
-const PDF_PAGE_W_MM: f32 = 297.0;
-const PDF_LEFT_MM: f32 = 12.0;
-const PDF_USABLE_W_MM: f32 = 273.0;
-const PDF_MIN_COL_MM: f32 = 18.0;
-const PDF_MAX_COL_MM: f32 = 55.0;
-const PDF_CELL_PT: f32 = 8.0;
-
-/// Width of `text` in Helvetica at `size_pt`, in mm (Adobe AFM widths for the characters
-/// numbers use; other characters count as 556/1000 em).
-fn helvetica_width_mm(text: &str, size_pt: f32) -> f32 {
-    let units: u32 = text
-        .chars()
-        .map(|c| match c {
-            '0'..='9' | '$' | '#' => 556,
-            ',' | '.' | ' ' | ':' | ';' | '/' => 278,
-            '-' | '(' | ')' => 333,
-            '+' | '=' | '<' | '>' => 584,
-            '%' => 889,
-            '\u{0394}' => 667,
-            'C' => 722,
-            'r' => 333,
-            _ => 556,
-        })
-        .sum();
-    units as f32 / 1000.0 * size_pt * 25.4 / 72.0
-}
-
-/// How many of `col_count` columns fit the page, and the width each gets.
-pub fn pdf_column_layout(col_count: usize) -> (usize, f32) {
-    let max_fit = (PDF_USABLE_W_MM / PDF_MIN_COL_MM).floor() as usize;
-    let shown = col_count.min(max_fit).max(1);
-    let width = (PDF_USABLE_W_MM / shown as f32).clamp(PDF_MIN_COL_MM, PDF_MAX_COL_MM);
-    (shown, width)
-}
-
-/// Splits a long note into lines of at most `max_chars` characters at ", " boundaries.
-fn wrap_note(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    for word in text.split(' ') {
-        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > max_chars {
-            lines.push(std::mem::take(&mut cur));
-        }
-        if !cur.is_empty() {
-            cur.push(' ');
-        }
-        cur.push_str(word);
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-    lines
-}
-
 pub fn export_tabs_to_pdf(
     tabs: Vec<(String, DataFrame, HashMap<String, ColumnFormatSpec>)>,
     out_path: &Path,
@@ -666,12 +612,8 @@ pub fn export_pdf_tabs(
     num_format: NumberDisplayFormat,
     global_decimals: usize,
 ) -> Result<PdfExportReport> {
-    let (doc, page1, layer1) = PdfDocument::new(
-        "MicroParquet Banking & ALCO Report",
-        Mm(PDF_PAGE_W_MM),
-        Mm(210.0),
-        "Layer 1",
-    );
+    use crate::pdf_layout::*;
+    let (doc, page1, layer1) = PdfDocument::new("MicroParquet Banking & ALCO Report", Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer 1");
 
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_reg = doc.add_builtin_font(BuiltinFont::Helvetica)?;
@@ -679,159 +621,131 @@ pub fn export_pdf_tabs(
     let mut report = PdfExportReport::default();
     let mut current_page = page1;
     let mut current_layer = layer1;
-    let mut first_section = true;
+    let mut first_page = true;
+    let black = Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None));
+    let rgb = |hex: u32| {
+        Color::Rgb(Rgb::new(((hex >> 16) & 0xFF) as f32 / 255.0, ((hex >> 8) & 0xFF) as f32 / 255.0, (hex & 0xFF) as f32 / 255.0, None))
+    };
+    // a horizontal rule from x1 to x2 (mm) at y (mm)
+    let rule = |layer: &PdfLayerReference, x1: f32, x2: f32, y: f32, thickness: f32| {
+        layer.set_outline_color(black.clone());
+        layer.set_outline_thickness(thickness);
+        layer.add_line(Line { points: vec![(Point::new(Mm(x1), Mm(y)), false), (Point::new(Mm(x2), Mm(y)), false)], is_closed: false });
+    };
 
     for PdfTab { title, df, col_formats, summary } in tabs {
-        if !first_section {
-            let (p, l) = doc.add_page(Mm(PDF_PAGE_W_MM), Mm(210.0), "Layer");
-            current_page = p;
-            current_layer = l;
-        }
-        first_section = false;
-
-        let all_cols = df.get_columns();
-        let (shown, col_width_mm) = pdf_column_layout(all_cols.len());
-        let cols = &all_cols[..shown.min(all_cols.len())];
-        let omitted: Vec<String> = all_cols
-            .iter()
-            .skip(shown)
-            .map(|c| c.name().to_string())
-            .collect();
         let truncated = df.height() > PDF_MAX_ROWS_PER_TAB;
-        let total_rows = df.height().min(PDF_MAX_ROWS_PER_TAB);
-
-        let mut notes: Vec<String> = Vec::new();
-        if !omitted.is_empty() {
-            notes.extend(wrap_note(
-                &format!("Columns {} omitted — use Excel export", omitted.join(", ")),
-                160,
-            ));
-            report.omitted_columns.push((title.clone(), omitted));
-        }
         if truncated {
-            notes.push(format!(
-                "Only the first {} of {} rows are printed — use Excel export",
-                PDF_MAX_ROWS_PER_TAB,
-                df.height()
-            ));
             report.truncated_tabs.push(title.clone());
         }
-        let is_num: Vec<bool> = cols.iter().map(|c| c.dtype().is_numeric()).collect();
+        let layout = layout_pdf_tab(&title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB);
+        let n_parts = layout.parts.len();
+        let total_height = df.height();
 
-        // Title, omission notes and column headers at the top of every page of the tab.
-        let page_header = |layer: &PdfLayerReference| -> f32 {
-            let mut y = 194.0f32;
-            layer.use_text(
-                format!(
-                    "MicroParquet Report — {} (Scale: {})",
-                    title,
-                    num_format.label()
-                ),
-                12.0,
-                Mm(PDF_LEFT_MM),
-                Mm(y),
-                &font_bold,
-            );
-            y -= 6.0;
-            for n in &notes {
-                layer.use_text(n.clone(), 8.0, Mm(PDF_LEFT_MM), Mm(y), &font_bold);
-                y -= 4.5;
-            }
-            y -= 2.0;
-            for (c_idx, series) in cols.iter().enumerate() {
-                let x_mm = PDF_LEFT_MM + (c_idx as f32 * col_width_mm);
-                let hdr = pdf_column_header(
-                    series.name().as_str(),
-                    matches!(series.dtype(), DataType::Float64 | DataType::Float32),
-                    col_formats.get(series.name().as_str()),
-                    num_format,
-                );
-                layer.use_text(hdr, 8.5, Mm(x_mm), Mm(y), &font_bold);
-            }
-            y - 5.5
-        };
-
-        let mut y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
-
-        for r_idx in 0..total_rows {
-            if y_mm < 15.0 {
-                let (p, l) = doc.add_page(Mm(PDF_PAGE_W_MM), Mm(210.0), "Layer");
+        for (pi, part) in layout.parts.iter().enumerate() {
+            if !first_page {
+                let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
                 current_page = p;
                 current_layer = l;
-                y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
             }
+            first_page = false;
+            let width_mm: f32 = part.columns.iter().map(|c| c.w).sum();
+            let right_mm = LEFT_MM + width_mm;
 
-            let active_layer = doc.get_page(current_page).get_layer(current_layer);
-            for (c_idx, series) in cols.iter().enumerate() {
-                let x_mm = PDF_LEFT_MM + (c_idx as f32 * col_width_mm);
-                let cname = series.name().as_str();
-                let spec = col_formats.get(cname);
-                let cell_str = format_cell_val(
-                    series.get(r_idx).ok(),
-                    cname,
-                    spec,
-                    num_format,
-                    global_decimals,
-                );
-                if is_num.get(c_idx).copied().unwrap_or(false) {
-                    let w = helvetica_width_mm(&cell_str, PDF_CELL_PT);
-                    let right = x_mm + col_width_mm - 2.0;
-                    let x = (right - w).max(x_mm);
-                    active_layer.use_text(cell_str, PDF_CELL_PT, Mm(x), Mm(y_mm), &font_reg);
-                } else {
-                    let truncated: String = cell_str.chars().take(20).collect();
-                    active_layer.use_text(truncated, PDF_CELL_PT, Mm(x_mm), Mm(y_mm), &font_reg);
+            // Title, unit, notes and the column headers at the top of every page of the part.
+            let page_header = |layer: &PdfLayerReference| -> f32 {
+                let mut y = 194.0f32;
+                layer.use_text(format!("MicroParquet Report — {}", title), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
+                y -= 5.5;
+                if let Some(u) = &layout.unit_line {
+                    layer.use_text(u.clone(), NOTE_PT, Mm(LEFT_MM), Mm(y), &font_reg);
+                    y -= 4.5;
                 }
-            }
-            y_mm -= 4.8;
-        }
-
-        // The summary of the whole result as a band in the summary colour under the rows.
-        if !summary.is_empty() {
-            if y_mm < 26.0 {
-                let (p, l) = doc.add_page(Mm(PDF_PAGE_W_MM), Mm(210.0), "Layer");
-                current_page = p;
-                current_layer = l;
-                y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
-            }
-            let layer = doc.get_page(current_page).get_layer(current_layer);
-            let rgb = |hex: u32| {
-                Color::Rgb(Rgb::new(
-                    ((hex >> 16) & 0xFF) as f32 / 255.0,
-                    ((hex >> 8) & 0xFF) as f32 / 255.0,
-                    (hex & 0xFF) as f32 / 255.0,
-                    None,
-                ))
+                if n_parts > 1 {
+                    layer.use_text(
+                        format!("Part {} of {}: columns {} to {} (the row labels are repeated)", pi + 1, n_parts, part.first_data, part.last_data),
+                        NOTE_PT,
+                        Mm(LEFT_MM),
+                        Mm(y),
+                        &font_reg,
+                    );
+                    y -= 4.5;
+                }
+                if truncated {
+                    layer.use_text(
+                        format!("Only the first {} of {} rows are printed — use Excel export", PDF_MAX_ROWS_PER_TAB, total_height),
+                        NOTE_PT,
+                        Mm(LEFT_MM),
+                        Mm(y),
+                        &font_bold,
+                    );
+                    y -= 4.5;
+                }
+                y -= 2.0;
+                if let Some(groups) = &part.group_header {
+                    for g in groups {
+                        for l in &g.lines {
+                            layer.use_text(l.text.clone(), HEADER_PT, Mm(l.x), Mm(y), &font_bold);
+                        }
+                        rule(layer, g.col_x + PAD_MM, g.col_x + g.col_w - PAD_MM, y - 1.0, 0.2);
+                    }
+                    y -= HEADER_LINE_MM + 1.2;
+                }
+                let max_lines = part.header.iter().map(|h| h.lines.len()).max().unwrap_or(1).max(1);
+                for h in &part.header {
+                    // a one-line header sits on the last line, next to the values
+                    let skip = max_lines - h.lines.len();
+                    for (j, l) in h.lines.iter().enumerate() {
+                        layer.use_text(l.text.clone(), HEADER_PT, Mm(l.x), Mm(y - (skip + j) as f32 * HEADER_LINE_MM), &font_bold);
+                    }
+                }
+                y -= (max_lines - 1) as f32 * HEADER_LINE_MM;
+                rule(layer, LEFT_MM, right_mm, y - 1.4, 0.4);
+                y - 6.0
             };
-            let (x0, x1) = (PDF_LEFT_MM - 1.0, PDF_LEFT_MM + cols.len() as f32 * col_width_mm - 1.0);
-            let (y_bottom, y_top) = (y_mm - 5.0, y_mm + 4.5);
-            layer.set_fill_color(rgb(SUMMARY_BG));
-            layer.add_rect(Rect::new(Mm(x0), Mm(y_bottom), Mm(x1), Mm(y_top)).with_mode(printpdf::path::PaintMode::Fill));
-            layer.set_fill_color(rgb(SUMMARY_FG));
-            for (c_idx, series) in cols.iter().enumerate() {
-                let Some(cell) = summary.iter().find(|c| c.column == series.name().as_str()) else {
-                    continue;
-                };
-                if cell.agg == SummaryAgg::None {
-                    continue;
+
+            let mut y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
+
+            for row in &part.rows {
+                if y_mm < 15.0 {
+                    let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                    current_page = p;
+                    current_layer = l;
+                    y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
                 }
-                let x_mm = PDF_LEFT_MM + (c_idx as f32 * col_width_mm);
-                let label = match (&cell.agg, &cell.weight_col) {
-                    (SummaryAgg::WeightedAvg, Some(w)) => format!("{} by {}", cell.agg.label(), w),
-                    (agg, _) => agg.label().to_string(),
-                };
-                layer.use_text(label.chars().take(22).collect::<String>(), 6.5, Mm(x_mm), Mm(y_mm + 1.0), &font_bold);
-                let spec = col_formats.get(series.name().as_str());
-                let text = format_summary_value(cell, spec, num_format, global_decimals);
-                if is_num.get(c_idx).copied().unwrap_or(false) {
-                    let w = helvetica_width_mm(&text, PDF_CELL_PT);
-                    let x = (x_mm + col_width_mm - 2.0 - w).max(x_mm);
-                    layer.use_text(text, PDF_CELL_PT, Mm(x), Mm(y_mm - 3.0), &font_bold);
-                } else {
-                    layer.use_text(text.chars().take(20).collect::<String>(), PDF_CELL_PT, Mm(x_mm), Mm(y_mm - 3.0), &font_bold);
+                let layer = doc.get_page(current_page).get_layer(current_layer);
+                if row.total {
+                    rule(&layer, LEFT_MM, right_mm, y_mm + 3.4, 0.4);
                 }
+                for cell in &row.cells {
+                    if cell.text.text.is_empty() {
+                        continue;
+                    }
+                    layer.use_text(cell.text.text.clone(), CELL_PT, Mm(cell.text.x), Mm(y_mm), if row.total { &font_bold } else { &font_reg });
+                }
+                y_mm -= ROW_H_MM;
             }
-            layer.set_fill_color(rgb(0x000000));
+
+            // The summary of the whole result as a band in the summary colour under the rows.
+            if part.summary.iter().any(|c| c.is_some()) {
+                if y_mm < 26.0 {
+                    let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                    current_page = p;
+                    current_layer = l;
+                    y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
+                }
+                let layer = doc.get_page(current_page).get_layer(current_layer);
+                let (x0, x1) = (LEFT_MM - 1.0, right_mm - 1.0);
+                let (y_bottom, y_top) = (y_mm - 5.0, y_mm + 4.5);
+                layer.set_fill_color(rgb(SUMMARY_BG));
+                layer.add_rect(Rect::new(Mm(x0), Mm(y_bottom), Mm(x1), Mm(y_top)).with_mode(printpdf::path::PaintMode::Fill));
+                layer.set_fill_color(rgb(SUMMARY_FG));
+                for c in part.summary.iter().flatten() {
+                    layer.use_text(c.label.text.clone(), 6.5, Mm(c.label.x), Mm(y_mm + 1.0), &font_bold);
+                    layer.use_text(c.value.text.text.clone(), CELL_PT, Mm(c.value.text.x), Mm(y_mm - 3.0), &font_bold);
+                }
+                layer.set_fill_color(rgb(0x000000));
+            }
         }
     }
 
@@ -1089,22 +1003,6 @@ pub fn format_df_for_clipboard(
     out
 }
 
-/// The PDF column header: the name (cut to 18 characters) and, for money columns, the scale in
-/// brackets ("Balance (BDT M)"). The unit is never cut off.
-pub fn pdf_column_header(
-    name: &str,
-    is_float: bool,
-    spec: Option<&ColumnFormatSpec>,
-    num_format: NumberDisplayFormat,
-) -> String {
-    let unit = if is_float {
-        resolved_scale(name, spec, num_format).map(|m| format!(" ({})", m.unit)).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let keep = 18usize.saturating_sub(unit.chars().count()).max(6);
-    name.chars().take(keep).chain(unit.chars()).collect()
-}
 
 fn format_cell_val(
     val: Option<AnyValue>,

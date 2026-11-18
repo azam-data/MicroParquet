@@ -804,3 +804,174 @@ fn i20_a_pivot_filter_removes_the_other_rows_before_the_aggregation_and_the_fiel
     let out = run_steps("i20s", &df, &back.steps).expect("replays");
     close(floats(&out, "Sum of Balance")[out.height() - 1], 470.0, 1e-9, "the replayed macro gives CMSME's totals");
 }
+
+// ------------------------------------------------------------------------------------------ 17
+
+fn pivot_for_pdf(banks: usize, scale: PivotScale) -> (DataFrame, std::collections::HashMap<String, ColumnFormatSpec>) {
+    let n = banks * 3;
+    let df = DataFrame::new(vec![
+        Series::new("Segment".into(), (0..n).map(|i| ["CMSME", "Retail", "Corporate"][i % 3].to_string()).collect::<Vec<_>>()),
+        Series::new("Bank".into(), (0..n).map(|i| format!("Bank {:02}", i / 3)).collect::<Vec<_>>()),
+        Series::new("Balance".into(), (0..n).map(|i| 25_000_000.0 + 1_234_567_890.0 * ((i % 7) as f64 + 1.0)).collect::<Vec<_>>()),
+        Series::new("Rate".into(), (0..n).map(|i| 6.0 + (i % 5) as f64 * 0.75).collect::<Vec<_>>()),
+    ])
+    .expect("book");
+    let spec = PivotSpec {
+        rows: vec!["Segment".into()],
+        columns: vec!["Bank".into()],
+        values: vec![
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None },
+            PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) },
+        ],
+        row_totals: true,
+        column_totals: true,
+        scale,
+        ..Default::default()
+    };
+    let out = build_pivot(df.lazy(), &spec).expect("pivot").df;
+    let cols: Vec<String> = out.get_column_names().iter().map(|s| s.to_string()).collect();
+    let formats = pivot_column_formats(&spec, &cols, 2).into_iter().collect();
+    (out, formats)
+}
+
+const UNIT_WORDS: [&str; 6] = ["BDT", "Crore", " Cr", "(Cr", "Lakh", "Million"];
+
+#[test]
+fn i17_every_pdf_column_has_one_x_and_width_for_header_and_values_numbers_end_where_their_header_ends_and_no_cell_has_the_unit() {
+    use micro_parquet::pdf_layout::*;
+    // Helvetica's widths: "0" is 556/1000 em; at 10 pt that is 5.56 pt
+    let mm = |pt: f32| pt * 25.4 / 72.0;
+    assert!((text_width_mm("0", 10.0, FontKind::Regular) - mm(5.56)).abs() < 1e-4);
+    // Bold is wider than regular for the same text
+    assert!(text_width_mm("Total", 10.0, FontKind::Bold) > text_width_mm("Total", 10.0, FontKind::Regular));
+    for banks in [2usize, 6, 40] {
+        let (df, formats) = pivot_for_pdf(banks, PivotScale::Crore);
+        let lay = layout_pdf_tab("Exposure", &df, &formats, NumberDisplayFormat::Raw, 2, &[], 5000);
+        assert_eq!(lay.unit_line.as_deref(), Some("Figures in BDT Crore"), "{banks} banks: the unit is stated once under the title");
+        if banks == 40 {
+            assert!(lay.parts.len() >= 2, "80 value columns do not fit one page: {} part(s)", lay.parts.len());
+        }
+        let mut printed: Vec<String> = Vec::new();
+        for (pn, part) in lay.parts.iter().enumerate() {
+            let what = format!("{banks} banks, part {}", pn + 1);
+            assert_eq!(part.columns[0].name, "Segment", "{what}: the row labels are repeated");
+            let right_edge = part.columns.last().map(|c| c.x + c.w).expect("columns");
+            assert!(right_edge <= LEFT_MM + USABLE_W_MM + 0.01, "{what}: inside the page width ({right_edge})");
+            for (k, col) in part.columns.iter().enumerate() {
+                // header: same x and width as the column
+                let h = &part.header[k];
+                assert!((h.col_x - col.x).abs() < 1e-4 && (h.col_w - col.w).abs() < 1e-4, "{what}: header of '{}' is in its column", col.name);
+                assert!(h.lines.len() <= 2, "{what}: at most 2 header lines");
+                for row in &part.rows {
+                    let c = &row.cells[k];
+                    // values: same x and width as the column
+                    assert!((c.col_x - col.x).abs() < 1e-4 && (c.col_w - col.w).abs() < 1e-4, "{what}: a value of '{}' is in its column", col.name);
+                    assert_eq!(c.align, col.align);
+                    let right = col.x + col.w - PAD_MM;
+                    match col.align {
+                        PdfAlign::Right => {
+                            assert!((c.text.x + c.text.w - right).abs() < 1e-3, "{what}: '{}' ends at the column's right edge", c.text.text);
+                            for l in &h.lines {
+                                assert!((l.x + l.w - right).abs() < 1e-3, "{what}: header '{}' ends at the same x as the numbers", l.text);
+                            }
+                        }
+                        PdfAlign::Left => {
+                            assert!((c.text.x - (col.x + PAD_MM)).abs() < 1e-3);
+                            for l in &h.lines {
+                                assert!((l.x - (col.x + PAD_MM)).abs() < 1e-3, "{what}: a text header starts where its values start");
+                            }
+                        }
+                        PdfAlign::Center => unreachable!(),
+                    }
+                    // the unit is not in any cell
+                    assert!(UNIT_WORDS.iter().all(|u| !c.text.text.contains(u)), "{what}: no unit in '{}'", c.text.text);
+                    assert!(c.text.x >= col.x - 1e-3 && c.text.x + c.text.w <= col.x + col.w + 1e-3, "{what}: '{}' is inside its column", c.text.text);
+                }
+                for l in &h.lines {
+                    assert!(UNIT_WORDS.iter().all(|u| !l.text.contains(u)), "{what}: no unit in the header '{}'", l.text);
+                    assert!(l.x >= col.x - 1e-3 && l.x + l.w <= col.x + col.w + 1e-3, "{what}: the header '{}' does not overflow its column", l.text);
+                }
+                // the width is the widest header line or value plus the padding
+                let widest_value = part.rows.iter().map(|r| r.cells[k].text.w).fold(0.0f32, f32::max);
+                let widest_header = h.lines.iter().map(|l| l.w).fold(0.0f32, f32::max);
+                let want = widest_value.max(widest_header) + 2.0 * PAD_MM;
+                assert!((col.w - want.clamp(MIN_COL_MM, MAX_COL_MM)).abs() < 0.2 || col.w > want, "{what}: '{}' is {} wide, content needs {}", col.name, col.w, want);
+                if k >= 1 {
+                    printed.push(col.name.clone());
+                }
+            }
+            // two levels: a bank spans its two value columns, and sits over them
+            let groups = part.group_header.as_ref().expect("a pivot with columns has two header levels");
+            for g in groups {
+                assert_eq!(g.span, 2, "{what}: '{}' spans its two value columns", g.lines[0].text);
+                let kids = &part.columns[g.first_col..g.first_col + g.span];
+                assert!((g.col_x - kids[0].x).abs() < 1e-4 && (g.col_w - kids.iter().map(|c| c.w).sum::<f32>()).abs() < 1e-3);
+                let l = &g.lines[0];
+                assert!((l.x + l.w / 2.0 - (g.col_x + g.col_w / 2.0)).abs() < 1e-3, "{what}: centred over its columns");
+                assert!(l.x >= g.col_x - 1e-3 && l.x + l.w <= g.col_x + g.col_w + 1e-3, "{what}: the group label fits its span");
+            }
+            // the bottom level holds the value names, not "Bank | Sum of Balance"
+            assert!(part.header.iter().skip(1).all(|h| !h.lines[0].text.contains(" | ")), "{what}");
+            // the grand total row is bold with a rule above it, and only it
+            let totals: Vec<&PdfRow> = part.rows.iter().filter(|r| r.total).collect();
+            assert_eq!(totals.len(), 1, "{what}");
+            assert_eq!(totals[0].cells[0].text.text, "Grand total");
+            assert!(part.rows.last().map(|r| r.total).unwrap_or(false), "{what}: it is the last row");
+        }
+        // every value column of the pivot is printed once, in order
+        assert_eq!(printed.len(), df.width() - 1, "{banks} banks: every column is on some page");
+    }
+}
+
+#[test]
+fn i17_a_header_wider_than_its_values_wraps_to_two_lines_and_a_text_column_is_left_aligned_in_both() {
+    use micro_parquet::pdf_layout::*;
+    let df = DataFrame::new(vec![
+        Series::new("Account holder name".into(), &["A", "B"]),
+        Series::new("Cumulative gap % of total assets".into(), &[1.5, -2.5]),
+        Series::new("Outstanding_Balance_Amount_Total_In_Taka_And_More".into(), &[10.0, 20.0]),
+        Series::new("N".into(), &[1.0, 2.0]),
+    ])
+    .expect("frame");
+    let lay = layout_pdf_tab("T", &df, &Default::default(), NumberDisplayFormat::StandardCommas, 2, &[], 100);
+    let part = &lay.parts[0];
+    assert_eq!(part.header[1].lines.len(), 2, "wrapped: {:?}", part.header[1].lines);
+    assert_eq!(part.header[1].lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), "Cumulative gap % of total assets");
+    assert!(part.header[2].lines.len() <= 2, "{:?}", part.header[2].lines);
+    for h in &part.header {
+        for l in &h.lines {
+            assert!(l.x >= h.col_x - 1e-3 && l.x + l.w <= h.col_x + h.col_w + 1e-3, "'{}' stays inside its column {:?}", l.text, (h.col_x, h.col_w));
+        }
+    }
+    assert_eq!(part.columns[0].align, PdfAlign::Left);
+    assert_eq!(part.columns[1].align, PdfAlign::Right);
+    // a short header is on one line and the column is as wide as the values need
+    assert_eq!(part.header[3].lines.len(), 1);
+    assert!(part.columns[3].w <= MIN_COL_MM + 0.01, "{}", part.columns[3].w);
+    // no unit: the table has no scaled column
+    assert_eq!(lay.unit_line, None);
+}
+
+#[test]
+fn i17_the_pdf_file_says_the_unit_once_under_the_title_and_has_no_unit_in_headers_or_cells() {
+    use micro_parquet::exporters::*;
+    let (df, formats) = pivot_for_pdf(3, PivotScale::Crore);
+    let d = dir("i17pdf");
+    let p = d.join("pivot.pdf");
+    let rep = export_pdf_tabs(vec![PdfTab { title: "Pivot: Segment".into(), df, col_formats: formats, summary: Vec::new() }], &p, NumberDisplayFormat::BdtCrore, 2).expect("pdf");
+    assert!(rep.omitted_columns.is_empty() && rep.truncated_tabs.is_empty());
+    assert!(std::fs::metadata(&p).map(|m| m.len() > 800).unwrap_or(false));
+    // the text of the file, when pdftotext is installed
+    if let Ok(o) = std::process::Command::new("pdftotext").arg("-layout").arg(&p).arg("-").output() {
+        if o.status.success() {
+            let text = String::from_utf8_lossy(&o.stdout).to_string();
+            assert_eq!(text.matches("Figures in BDT Crore").count(), 1, "{text}");
+            assert!(!text.contains("(BDT Cr)") && !text.contains(" Cr\n") && !text.contains("BDT Cr)"), "{text}");
+            assert!(!text.lines().any(|l| l.trim_end().ends_with(" Cr")), "no unit after a value: {text}");
+            assert!(text.contains("Grand total") && text.contains("Sum of Balance"), "{text}");
+            if let Ok(dir) = std::env::var("MP_PDF_OUT") {
+                let _ = std::fs::copy(&p, std::path::Path::new(&dir).join("pivot.pdf"));
+            }
+        }
+    }
+}
