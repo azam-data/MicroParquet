@@ -491,7 +491,9 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
             match row.repayment {
                 Repayment::Bullet => 0.0,
                 Repayment::EqualPrincipal => after_prepay / n_rem as f64,
-                Repayment::EqualInstalment => (annuity_payment(bal, i, n_rem) - bal * i).clamp(0.0, after_prepay),
+                // an annuity over the remaining periods on the balance left after the prepayment: its principal
+                // part is the instalment less the interest on that balance (the interest paid is on the opening balance)
+                Repayment::EqualInstalment => (annuity_payment(after_prepay, i, n_rem) - after_prepay * i).clamp(0.0, after_prepay),
             }
         };
         let principal = prepay + sched;

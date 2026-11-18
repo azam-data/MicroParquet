@@ -525,3 +525,33 @@ fn d3_payment_dates_come_from_the_maturity_each_time_and_a_month_end_maturity_gi
     let dates: Vec<String> = rf.flows.iter().map(|f| f.date.format("%Y-%m-%d").to_string()).collect();
     assert_eq!(dates, vec!["2027-02-28", "2027-05-31", "2027-08-31", "2027-11-30", "2028-02-29"], "{dates:?}");
 }
+
+// ------------------------------------------------------------------- D4: prepayment before the schedule
+
+#[test]
+fn d4_interest_on_the_opening_balance_then_the_prepayment_then_the_schedule_on_what_is_left() {
+    // 120,000 at 12%, monthly, 12 left, CPR 10%, an equal-instalment loan
+    let mut r = row(Side::Asset, 120_000.0, 12.0, "2027-10-31");
+    r.repayment = Repayment::EqualInstalment;
+    r.frequency = Frequency::Monthly;
+    let cpr = beh(|b| b.cpr_pct = 10.0);
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), Some(&cpr)).expect("flows");
+    let f = &rf.flows[0];
+    close_to(f.interest, 1200.00, 0.005, "month-1 interest on the opening balance");
+    // the prepayment is 1 - 0.9^(1/12) of the opening balance: 1,048.99
+    let q = 1.0 - 0.9f64.powf(1.0 / 12.0);
+    close_to(120_000.0 * q, 1048.99, 0.005, "the prepayment");
+    close_to(f.principal, 10_428.14, 0.01, "prepayment plus the scheduled principal");
+    close_to(f.principal - 120_000.0 * q, 9_379.15, 0.01, "scheduled principal on the balance after prepayment");
+    // everything is paid in the end
+    close_to(rf.flows.iter().map(|x| x.principal).sum::<f64>(), 120_000.0, 0.01, "all principal");
+    // equal principal: a twelfth of the balance after the prepayment
+    let mut e = r.clone();
+    e.repayment = Repayment::EqualPrincipal;
+    let rf = generate_flows(&e, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), Some(&cpr)).expect("flows");
+    close_to(rf.flows[0].principal, 120_000.0 * q + (120_000.0 - 120_000.0 * q) / 12.0, 0.01, "equal principal after the prepayment");
+    close_to(rf.flows.iter().map(|x| x.principal).sum::<f64>(), 120_000.0, 0.01, "all principal");
+    // without a prepayment rate the annuity is the one of the opening balance
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("flows");
+    close_to(rf.flows[0].principal, 9_461.85, 0.005, "the unchanged annuity");
+}
