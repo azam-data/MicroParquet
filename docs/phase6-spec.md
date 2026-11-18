@@ -350,4 +350,9 @@ U3 (details in docs/phase6-progress.md):
 - Values not in a list or not a tenor follow the others in natural A→Z order, also for Z→A.
 - The count of values that are not tenors is taken from the first 2,000 distinct values.
 - The fixture `phase6_sort_pivot_unset` was written by hand in the Phase 5 form.
+U1:
+- A blank "Rename to" keeps the file's name; "empty after trimming" is reported for a file column with no name and no rename.
+- A Parquet file that matches a saved schema opens straight away with a status message (no dialog, no Undo).
+- The warning lists steps the worker found would break, before the tab changes; "Apply anyway" keeps them as broken steps.
+- Parse failures, masked-column names and the inspector use the final names; "Convert to Parquet…" is disabled with a bad name.
 </accepted_deviations>

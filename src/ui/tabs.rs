@@ -19,12 +19,39 @@ impl MicroParquetApp {
         else {
             return;
         };
+        self.open_data_file(path, direct_convert_only);
+    }
 
+    /// Opens a CSV or Parquet file: with the saved schema that matches its columns (Phase 6 U1),
+    /// else as before (a CSV through the Schema dialog, a Parquet file straight into a tab).
+    pub(crate) fn open_data_file(&mut self, path: PathBuf, direct_convert_only: bool) {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+
+        // the saved schemas whose original column names are this file's header names
+        let templates = micro_parquet::schema_templates::load_templates(&self.paths.schemas_dir);
+        if !templates.is_empty() {
+            if let Ok(detected) = detect_file_schema(&path) {
+                let headers: Vec<String> = detected.columns.iter().map(|c| c.name.clone()).collect();
+                let matched: Vec<micro_parquet::schema_templates::SchemaTemplate> =
+                    micro_parquet::schema_templates::matching_templates(&templates, &headers).into_iter().cloned().collect();
+                match matched.len() {
+                    0 => {}
+                    1 => {
+                        self.open_with_template(path, direct_convert_only, detected, &matched[0], false);
+                        return;
+                    }
+                    _ => {
+                        self.status_message = format!("{} saved schemas match this file. Choose one.", matched.len());
+                        self.template_pick = Some(crate::ui::schema::TemplatePick { path, direct_convert_only, detected, candidates: matched, rects: Vec::new() });
+                        return;
+                    }
+                }
+            }
+        }
 
         if ext == "parquet" {
             self.create_tab_from_source(
@@ -52,12 +79,72 @@ impl MicroParquetApp {
                         parse_failures: Vec::new(),
                         is_parquet: false,
                         popped_out: false,
+                        applied: None,
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {
                     self.status_message = format!("Error reading CSV preview: {}", e);
                 }
             }
+        }
+    }
+
+    /// Opens a file with a saved schema whose columns match it. A CSV shows the Schema dialog
+    /// with the schema applied and an Undo button, unless the template is ticked "Apply without
+    /// asking" (and the choice was not made from the list of several): then the tab opens at
+    /// once. A Parquet file opens at once (its dialog is the tab's Schema button).
+    pub(crate) fn open_with_template(
+        &mut self,
+        path: PathBuf,
+        direct_convert_only: bool,
+        detected: IngestionConfig,
+        template: &micro_parquet::schema_templates::SchemaTemplate,
+        chosen_from_list: bool,
+    ) {
+        let applied_config = micro_parquet::schema_templates::apply_template(&detected, &template.config);
+        let n = applied_config.columns.len();
+        let title = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let is_parquet = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("parquet"));
+        let note = format!("Applied saved schema '{}' (all {} columns matched)", template.name, n);
+        let fine = applied_config.rename_problems().is_empty();
+        if is_parquet && !direct_convert_only {
+            if !fine {
+                self.status_message = format!("The saved schema '{}' was not applied: {}", template.name, applied_config.rename_problems().first().map(|p| p.1.clone()).unwrap_or_default());
+                self.create_tab_from_source(title, TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, Vec::new(), HashMap::new());
+                return;
+            }
+            let id = self.create_tab_from_source_with(title, TabSource::SingleFile { path, is_parquet: true, config: applied_config }, Vec::new(), HashMap::new(), None);
+            self.open_notes.insert(id, format!("{}.", note));
+            return;
+        }
+        if !is_parquet && template.config.auto_apply && !direct_convert_only && !chosen_from_list && fine {
+            let mut config = applied_config;
+            let mut steps = Vec::new();
+            hoist_clean_line_breaks(&mut config, false, &mut steps);
+            let id = self.create_tab_from_source_with(title, TabSource::SingleFile { path, is_parquet: false, config }, steps, HashMap::new(), None);
+            self.open_notes.insert(id, format!("{}, opened without asking.", note));
+            return;
+        }
+        if is_parquet {
+            // converting a Parquet file is not offered here: open it as it is
+            self.create_tab_from_source(title, TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, Vec::new(), HashMap::new());
+            return;
+        }
+        match preview_csv_raw(&path, 5) {
+            Ok(preview_df) => {
+                self.pending_csv_modal = Some(PendingCsvModal {
+                    csv_path: path,
+                    raw_preview_df: preview_df,
+                    config: applied_config,
+                    direct_convert_only,
+                    target_tab: None,
+                    parse_failures: Vec::new(),
+                    is_parquet: false,
+                    popped_out: false,
+                    applied: Some(crate::ui::schema::AppliedTemplate { name: template.name.clone(), columns: n, before: detected }),
+                });
+            }
+            Err(e) => self.status_message = format!("Error reading CSV preview: {}", e),
         }
     }
 

@@ -844,6 +844,9 @@ impl MicroParquetApp {
                 let stale = stats.is_none_or(|s| s.key != key);
 
                 ui.label(theme::bold(name.clone()).size(theme::TEXT_INSPECTOR_TITLE));
+                if let Some(original) = tab.source.file_name_of(&name) {
+                    ui.add(egui::Label::new(egui::RichText::new(format!("From file: {}", original)).size(theme::TEXT_LABEL).color(tk.muted)).truncate()).on_hover_text(format!("From file: {}", original));
+                }
                 let kind_label = match stats.map(|s| &s.kind) {
                     Some(ColumnKind::Number) => "Number",
                     Some(ColumnKind::Date) => "Date",

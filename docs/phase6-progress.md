@@ -7,7 +7,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 | Task | Status | Commit | Tests added | Deviations |
 |---|---|---|---|---|
 | U3 | DONE | (this commit) | tests/phase6/u3.rs ×11, guide_custom_sort_lists + completeness, render_tests_p6 ×3 (both screens) | D1–D4 below |
-| U1 | | | | |
+| U1 | DONE | (this commit) | tests/phase6/u1.rs ×10 (rename order and typing, header match and no match, duplicate names, stack, batch, Python, old schema, warning with the step named, parse failures and masks, swap), render_tests_p6 ×5 (both screens; real clicks on Undo, Lock Schema & Open, picker buttons, Apply anyway / Cancel) | D7–D10 |
 | U2 | | | | |
 | U6 | | | | |
 | U4 | | | | |
@@ -21,3 +21,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 - D4 (U3): with a list or Tenor, values that are not in the list are always after the listed ones, in natural A→Z order, also for Z→A (the spec's example: Low, Medium, High, Other, blank).
 - D5 (U3): the Tenor count of values that are not tenors is read from the first 2,000 distinct values of the column (the existing value-list job); the status line says so when the column has more.
 - D6 (U3 fixture): `phase6_sort_pivot_unset` was written by hand in the Phase 5 form (see tests/fixtures/README.md).
+- D7 (U1): a blank "Rename to" keeps the file's name, so "a name that is empty after trimming" is reported for a file column that has no name and no rename. Two columns with the same final name are both marked.
+- D8 (U1): a Parquet file that matches a saved schema opens straight away with a status message naming it (the Parquet dialog is the tab's Schema button, so there is no dialog and no Undo for it at open).
+- D9 (U1): the warning about steps is shown once the worker has checked the new schema, before the tab changes. "Apply anyway" keeps the steps (shown as broken), Cancel leaves the tab as it was. Steps that were already broken are not listed.
+- D10 (U1): parse failures, the masked-column list and the Column inspector use the final names; "Convert to Parquet…" is disabled with a bad name, like Apply and Save.

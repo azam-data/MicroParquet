@@ -427,6 +427,17 @@ pub fn generate_python_polars_code(
         }
     }
 
+    // The schema's "Rename to" names, applied after typing and before any step (Phase 6 U1).
+    let renames = ingestion.rename_pairs();
+    if !renames.is_empty() {
+        py.push_str("# 2c. Rename columns (Schema & Ingestion, \"Rename to\")\n");
+        py.push_str("lf = lf.rename({\n");
+        for (old, new) in &renames {
+            py.push_str(&format!("    \"{}\": \"{}\",\n", py_escape(old), py_escape(new)));
+        }
+        py.push_str("})\n\n");
+    }
+
     py.push_str("# 3. Applied Transformation Pipeline Steps\n");
     for (idx, step) in steps.iter().enumerate() {
         py.push_str(&format!("# Step {}: {}\n", idx + 1, step.short_label()));

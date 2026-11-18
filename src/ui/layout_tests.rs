@@ -393,6 +393,7 @@ pub(crate) fn schema_modal(rows: usize, columns: usize, parquet: bool) -> Pendin
         parse_failures: Vec::new(),
         is_parquet: parquet,
         popped_out: false,
+        applied: None,
     }
 }
 

@@ -153,6 +153,7 @@ pub const PREVIEW_ROWS: usize = 5;
 pub const PREVIEW_GRID_H: f32 = HEADER_ROW_H + PREVIEW_ROWS as f32 * (DATA_ROW_H + 6.0) + 8.0;
 pub const SCHEMA_COMBO_W: f32 = 96.0;
 pub const SCHEMA_COL_NAME_W: f32 = 190.0;
+pub const SCHEMA_COL_RENAME_W: f32 = 150.0;
 pub const SCHEMA_COL_TYPE_W: f32 = 118.0;
 pub const SCHEMA_COL_PII_W: f32 = 118.0;
 pub const SCHEMA_COL_SIGN_W: f32 = 118.0;

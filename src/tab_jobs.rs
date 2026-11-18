@@ -366,6 +366,8 @@ pub struct SchemaRequest {
     pub new_source: TabSource,
     pub steps: Vec<TransformStep>,
     pub temp_dir: PathBuf,
+    /// The steps that are already broken (by index): only a step the new schema breaks is reported.
+    pub already_broken: Vec<usize>,
 }
 
 pub struct SchemaApplied {
@@ -378,15 +380,27 @@ pub struct SchemaApplied {
     pub status: String,
     /// The tab's steps after the schema: the "Clean line breaks" check box adds or removes the first one.
     pub steps: Vec<TransformStep>,
+    /// Steps that worked before and would stop working with the new schema (index, reason), for
+    /// example a filter on a column the schema renames. The app asks before applying (Phase 6 U1).
+    pub new_breaks: Vec<(usize, String)>,
 }
 
 /// Checks that a tab's pipeline still builds with new ingestion settings and recounts its parse
 /// failures and rows. The tab is only changed when this succeeds (`Err` = "Schema not applied").
 pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaApplied> {
-    let SchemaRequest { tab_id, new_source, steps, temp_dir } = req;
+    let SchemaRequest { tab_id, new_source, steps, temp_dir, already_broken } = req;
     ctx.set_progress("Checking the new schema…", None);
     let key_note = ensure_pii_key_for(&new_source)?;
-    let _ = compile_tab_lazy(&new_source, &steps, &temp_dir)?;
+    // the file itself must build with the new settings
+    let _ = compile_tab_lazy(&new_source, &[], &temp_dir)?;
+    ctx.check()?;
+    // steps that worked and would stop: the app lists them and asks first. When every step still
+    // runs, the whole pipeline is built as a last check.
+    let issues = crate::engine::validate_steps(&new_source, &steps, &temp_dir).unwrap_or_default();
+    if issues.is_empty() {
+        let _ = compile_tab_lazy(&new_source, &steps, &temp_dir)?;
+    }
+    let new_breaks: Vec<(usize, String)> = issues.into_iter().filter(|i| !already_broken.contains(&i.index)).map(|i| (i.index, i.reason)).collect();
     ctx.check()?;
     let (parse_failures, parse_note) = match source_parse_failures(&new_source, &temp_dir) {
         Ok(f) => (f, None),
@@ -410,7 +424,7 @@ pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaAp
     if let Some(n) = key_note {
         status.push_str(&format!(" 🔑 {}", n));
     }
-    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status, steps })
+    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status, steps, new_breaks })
 }
 
 // ------------------------------------------------------------------------------------ exports

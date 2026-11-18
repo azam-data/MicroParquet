@@ -136,6 +136,7 @@ pub fn auto_detect_smart_schema_with(path: &Path, base: &IngestionConfig) -> Res
             sign_convention: SignConvention::Unset,
             has_dr_cr,
             source_dtype: String::new(),
+            rename_to: None,
         });
     }
 
@@ -569,7 +570,7 @@ fn run_typed_scan(
                 examples = ca.into_iter().flatten().map(|v| v.to_string()).collect();
             }
         }
-        out.failures.push(ParseFailure { column: c.name.clone(), count, examples });
+        out.failures.push(ParseFailure { column: c.final_name(), count, examples });
     }
     Ok(out)
 }
@@ -1246,14 +1247,14 @@ pub fn build_lazy_pipeline(
     if is_parquet {
         let (lf, plan) = parquet_conversion_plan(path, config)?;
         if plan.is_empty() {
-            return Ok(lf);
+            return apply_renames(lf, config);
         }
         check_dr_cr_conventions(path, true, config, temp_dir)?;
         let exprs: Vec<Expr> = plan
             .into_iter()
             .map(|(c, text)| typed_expr(text, c, config).alias(&c.name))
             .collect();
-        return Ok(lf.with_columns(exprs));
+        return apply_renames(lf.with_columns(exprs), config);
     }
 
     let mut lf = scan_csv_text(path, config, temp_dir)?;
@@ -1268,7 +1269,40 @@ pub fn build_lazy_pipeline(
         lf = lf.with_columns(exprs);
     }
 
-    Ok(lf)
+    apply_renames(lf, config)
+}
+
+/// The schema's "Rename to" names (Phase 6 U1), applied after typing, Dr/Cr and masking and before
+/// any step. A name that is empty or used twice stops the load with the reason.
+fn apply_renames(lf: LazyFrame, config: &IngestionConfig) -> Result<LazyFrame> {
+    if let Some((_, why)) = config.rename_problems().first() {
+        anyhow::bail!("Schema & Ingestion: {}", why);
+    }
+    let pairs = config.rename_pairs();
+    if pairs.is_empty() {
+        return Ok(lf);
+    }
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns to rename them")?;
+    for (old, _) in &pairs {
+        if schema.get(old.as_str()).is_none() {
+            anyhow::bail!("Schema & Ingestion: the schema renames the column '{}', which is not in the file. Open the Schema dialog and check the names.", old);
+        }
+    }
+    // a column the schema does not list must not take a name a renamed column gets
+    let renamed: std::collections::HashMap<&str, &str> = pairs.iter().map(|(o, n)| (o.as_str(), n.as_str())).collect();
+    let finals: Vec<String> = schema.iter_names().map(|n| renamed.get(n.as_str()).map(|s| s.to_string()).unwrap_or_else(|| n.to_string())).collect();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = finals.iter().find(|n| !seen.insert((*n).clone())) {
+        anyhow::bail!("Schema & Ingestion: after the renames two columns are called '{}'. Change one \"Rename to\".", dup);
+    }
+    // one select: names can swap without clashing, and the column order stays
+    let exprs: Vec<Expr> = schema
+        .iter_names()
+        .zip(finals.iter())
+        .map(|(old, new)| if old.as_str() == new { col(old.as_str()) } else { col(old.as_str()).alias(new.as_str()) })
+        .collect();
+    Ok(lf.select(exprs))
 }
 
 /// True for the step the Schema & Ingestion box makes: all text columns, with "Trim spaces on all
@@ -1639,8 +1673,10 @@ pub fn ensure_pii_key_for(source: &TabSource) -> Result<Option<String>> {
 pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
     let mut add = |c: &IngestionConfig| {
         for col in c.columns.iter().filter(|c| c.pii_mask != PiiMaskMode::None) {
-            if !out.contains(&col.name) {
-                out.push(col.name.clone());
+            // the column as the steps and exports see it: after the rename
+            let name = col.final_name();
+            if !out.contains(&name) {
+                out.push(name);
             }
         }
     };

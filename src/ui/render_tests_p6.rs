@@ -214,3 +214,239 @@ fn u3_the_pivot_field_menu_has_the_order_choice_and_a_suggested_list_is_preselec
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ U1
+
+use crate::ui::schema::SCHEMA_TITLE_CSV;
+
+const U1_FILE_A: &str = "ACNO,CRIRTE,BAL\n1001,9.5,100.00\n1002,12.0,250.50\n1003,7.25,80.00\n";
+const U1_FILE_B: &str = "BAL,ACNO,CRIRTE\n300.00,2001,11.0\n40.00,2002,6.5\n";
+
+/// An app with the saved schema "loans" (the renames of the acceptance item) in its schemas folder.
+fn u1_rig(name: &str, ppp: f32, w: f32, h: f32, auto_apply: bool, second_template: bool) -> (Rig, PathBuf, PathBuf) {
+    let app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let a = root.join("a.csv");
+    let b = root.join("b.csv");
+    std::fs::write(&a, U1_FILE_A).expect("a");
+    std::fs::write(&b, U1_FILE_B).expect("b");
+    let mut cfg = micro_parquet::engine::auto_detect_smart_schema(&a).expect("detected");
+    for c in cfg.columns.iter_mut() {
+        c.rename_to = match c.name.as_str() {
+            "ACNO" => {
+                c.dtype = micro_parquet::models::ColDataType::Utf8;
+                Some("Account_No".into())
+            }
+            "CRIRTE" => Some("Int_Rate".into()),
+            _ => Some("Balance".into()),
+        };
+    }
+    cfg.auto_apply = auto_apply;
+    std::fs::create_dir_all(&app.paths.schemas_dir).expect("schemas");
+    std::fs::write(app.paths.schemas_dir.join("loans.schema.json"), serde_json::to_string_pretty(&cfg).expect("json")).expect("save");
+    if second_template {
+        let mut other = cfg.clone();
+        other.auto_apply = false;
+        other.columns[0].rename_to = Some("Acct".into());
+        std::fs::write(app.paths.schemas_dir.join("loans_alt.schema.json"), serde_json::to_string_pretty(&other).expect("json")).expect("save");
+    }
+    let (ctx, input) = screen(ppp, w, h);
+    (Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }, a, b)
+}
+
+/// A dialog drawn before any tab is open (there is no tab strip yet): inside the window, footer inside the dialog.
+fn dialog_in_window(rig: &Rig, title: &str) -> theme::DialogReport {
+    let r = theme::dialog_report(&rig.ctx, title).unwrap_or_else(|| panic!("{}: the dialog '{title}' was not drawn", rig.what));
+    let screen = rig.ctx.screen_rect();
+    assert!(inside(r.window, screen), "{}: the dialog {:?} is inside the window {screen:?}", rig.what, r.window);
+    assert!(inside(r.footer, r.window) && r.footer.top() >= r.body.bottom() - 0.5, "{}: the footer {:?} is in the dialog {:?}, below its middle", rig.what, r.footer, r.window);
+    r
+}
+
+fn text_box(p: &Painted, text: &str) -> egui::Rect {
+    // a button's text may start with its icon
+    p.boxes.iter().find(|(t, _)| t == text || (t.ends_with(text) && t.chars().count() <= text.chars().count() + 3)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{text}' is on screen"))
+}
+
+#[test]
+fn u1_a_matching_file_opens_the_dialog_with_the_saved_schema_and_undo_works_by_a_real_click() {
+    for (ppp, w, h) in SCREENS {
+        let (mut rig, _a, b) = u1_rig("p6u1a", ppp, w, h, false, false);
+        let what = rig.what.clone();
+        rig.app.open_data_file(b.clone(), false);
+        let modal = rig.app.pending_csv_modal.as_ref().unwrap_or_else(|| panic!("{what}: the Schema dialog opened"));
+        assert_eq!(modal.applied.as_ref().map(|a| (a.name.as_str(), a.columns)), Some(("loans", 3)), "{what}");
+        assert_eq!(modal.config.final_names(), vec!["Balance", "Account_No", "Int_Rate"], "{what}: the file's own column order");
+        let p = rig.draw(6);
+        let r = dialog_in_window(&rig, SCHEMA_TITLE_CSV);
+        assert!(p.boxes.iter().any(|(t, bx)| t == "Applied saved schema 'loans' (all 3 columns matched)" && inside(*bx, r.window)), "{what}: the applied line is in the dialog");
+        assert!(p.boxes.iter().any(|(t, bx)| t == "Rename to" && inside(*bx, r.window)), "{what}: the Rename to heading");
+        for n in ["Account_No", "Int_Rate", "Balance"] {
+            assert!(p.boxes.iter().any(|(t, bx)| t == n && inside(*bx, r.window)), "{what}: the rename '{n}' shows in its cell");
+        }
+        let undo = p.boxes.iter().find(|(t, _)| t == "Undo").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Undo"));
+        assert!(inside(undo, r.window), "{what}");
+        rig.click(undo.center());
+        let modal = rig.app.pending_csv_modal.as_ref().expect("still open");
+        assert!(modal.applied.is_none() && modal.config.rename_pairs().is_empty(), "{what}: Undo goes back to the detected schema");
+        let p = rig.draw(3);
+        assert!(!p.boxes.iter().any(|(t, _)| t.starts_with("Applied saved schema")), "{what}");
+    }
+}
+
+#[test]
+fn u1_lock_and_open_makes_a_tab_with_the_renamed_columns_and_a_filter_on_the_new_name_works() {
+    for (ppp, w, h) in SCREENS {
+        let (mut rig, _a, b) = u1_rig("p6u1b", ppp, w, h, false, false);
+        let what = rig.what.clone();
+        rig.app.open_data_file(b, false);
+        let p = rig.draw(6);
+        let lock = text_box(&p, "Lock Schema & Open");
+        rig.click(lock.center());
+        settle(&mut rig.app);
+        assert!(rig.app.pending_csv_modal.is_none(), "{what}: the dialog closed");
+        assert_eq!(rig.app.tabs.len(), 1, "{what}");
+        assert_eq!(rig.app.tabs[0].available_columns(), vec!["Balance", "Account_No", "Int_Rate"], "{what}");
+        let step = TransformStep::FilterRows { column: "Int_Rate".into(), operator: micro_parquet::models::FilterOp::Gt, value: "8".into(), keep_matching: true };
+        rig.app.push_step_to_active_tab(step, false);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs[0].cached_slice.height(), 1, "{what}: {}", rig.app.status_message);
+        // the Column inspector says where the column came from
+        rig.app.selected_column = Some("Balance".to_string());
+        rig.app.right_tab = crate::ui::steps::RightTab::Column;
+        let p = rig.draw(6);
+        assert!(p.boxes.iter().any(|(t, _)| t == "From file: BAL"), "{what}: the inspector shows 'From file: BAL'");
+    }
+}
+
+#[test]
+fn u1_bad_names_are_red_with_the_reason_and_apply_and_save_stay_disabled() {
+    for (ppp, w, h) in SCREENS {
+        let (mut rig, _a, b) = u1_rig("p6u1c", ppp, w, h, false, false);
+        let what = rig.what.clone();
+        rig.app.open_data_file(b, false);
+        // two columns called "Balance"
+        if let Some(m) = rig.app.pending_csv_modal.as_mut() {
+            m.config.columns[1].rename_to = Some("Balance".into());
+        }
+        let p = rig.draw(6);
+        let r = dialog_in_window(&rig, SCHEMA_TITLE_CSV);
+        let reason = p.boxes.iter().find(|(t, _)| t.contains("is also the name of")).unwrap_or_else(|| panic!("{what}: the reason is on screen"));
+        assert!(inside(reason.1, r.window), "{what}: the reason {:?} is in the dialog", reason.1);
+        let danger = theme::tokens(false).danger;
+        assert!(p.colors.iter().any(|(t, c)| t.contains("is also the name of") && *c == danger), "{what}: the reason is red");
+        // the apply button does not work by a click
+        let lock = text_box(&p, "Lock Schema & Open");
+        rig.click(lock.center());
+        settle(&mut rig.app);
+        assert!(rig.app.pending_csv_modal.is_some() && rig.app.tabs.is_empty(), "{what}: Lock Schema & Open is disabled");
+        // nor does Enter
+        rig.input.events = vec![egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }];
+        rig.draw(2);
+        rig.input.events.clear();
+        assert!(rig.app.pending_csv_modal.is_some() && rig.app.tabs.is_empty(), "{what}: Enter does not apply it either");
+        // fixing the name enables it again
+        if let Some(m) = rig.app.pending_csv_modal.as_mut() {
+            m.config.columns[1].rename_to = Some("Account_Number".into());
+        }
+        let p = rig.draw(4);
+        rig.click(text_box(&p, "Lock Schema & Open").center());
+        settle(&mut rig.app);
+        assert!(rig.app.pending_csv_modal.is_none() && rig.app.tabs.len() == 1, "{what}: fixed, it applies");
+    }
+}
+
+#[test]
+fn u1_several_matching_schemas_ask_and_a_template_ticked_apply_without_asking_opens_at_once() {
+    for (ppp, w, h) in SCREENS {
+        // two templates match: a picker with a button for each
+        let (mut rig, _a, b) = u1_rig("p6u1d", ppp, w, h, false, true);
+        let what = rig.what.clone();
+        rig.app.open_data_file(b.clone(), false);
+        assert!(rig.app.template_pick.is_some() && rig.app.pending_csv_modal.is_none(), "{what}: a picker opened");
+        rig.draw(5);
+        let rects = rig.app.template_pick.as_ref().map(|p| p.rects.clone()).unwrap_or_default();
+        let names: Vec<&str> = rects.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["loans", "loans_alt", "None of these", "Cancel"], "{what}");
+        let alt = rects.iter().find(|(n, _)| n == "loans_alt").map(|(_, r)| *r).expect("button");
+        rig.click(alt.center());
+        let modal = rig.app.pending_csv_modal.as_ref().unwrap_or_else(|| panic!("{what}: the dialog opened with the chosen schema"));
+        assert_eq!(modal.applied.as_ref().map(|a| a.name.as_str()), Some("loans_alt"), "{what}");
+        assert_eq!(modal.config.final_names(), vec!["Balance", "Acct", "Int_Rate"], "{what}");
+        assert!(rig.app.template_pick.is_none(), "{what}");
+
+        // "None of these": today's way in
+        let (mut rig, _a, b) = u1_rig("p6u1e", ppp, w, h, false, true);
+        rig.app.open_data_file(b, false);
+        rig.draw(5);
+        let none = rig.app.template_pick.as_ref().and_then(|p| p.rects.iter().find(|(n, _)| n == "None of these").map(|(_, r)| *r)).expect("button");
+        rig.click(none.center());
+        let modal = rig.app.pending_csv_modal.as_ref().expect("the dialog opened");
+        assert!(modal.applied.is_none() && modal.config.rename_pairs().is_empty(), "{what}: detected as before");
+
+        // "Apply without asking": the tab opens, the status names the template
+        let (mut rig, _a, b) = u1_rig("p6u1f", ppp, w, h, true, false);
+        rig.app.open_data_file(b, false);
+        settle(&mut rig.app);
+        assert!(rig.app.pending_csv_modal.is_none() && rig.app.template_pick.is_none(), "{what}");
+        assert_eq!(rig.app.tabs.len(), 1, "{what}");
+        assert_eq!(rig.app.tabs[0].available_columns(), vec!["Balance", "Account_No", "Int_Rate"], "{what}");
+        assert!(rig.app.status_message.contains("'loans'") && rig.app.status_message.contains("all 3 columns matched"), "{what}: {}", rig.app.status_message);
+
+        // no match (one extra column): today's behaviour, no applied line
+        let (mut rig, a, _b) = u1_rig("p6u1g", ppp, w, h, true, false);
+        let extra = a.with_file_name("extra.csv");
+        std::fs::write(&extra, "ACNO,CRIRTE,BAL,NOTE\n1,2,3,x\n").expect("extra");
+        rig.app.open_data_file(extra, false);
+        let modal = rig.app.pending_csv_modal.as_ref().expect("the dialog opened as before");
+        assert!(modal.applied.is_none() && rig.app.tabs.is_empty(), "{what}");
+    }
+}
+
+#[test]
+fn u1_changing_a_rename_on_an_open_tab_warns_naming_the_step_before_it_is_applied() {
+    for (ppp, w, h) in SCREENS {
+        let (mut rig, a, _b) = u1_rig("p6u1h", ppp, w, h, true, false);
+        let what = rig.what.clone();
+        rig.app.open_data_file(a, false);
+        settle(&mut rig.app);
+        let step = TransformStep::FilterRows { column: "Int_Rate".into(), operator: micro_parquet::models::FilterOp::Gt, value: "8".into(), keep_matching: true };
+        rig.app.push_step_to_active_tab(step, false);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs[0].cached_slice.height(), 2, "{what}: {}", rig.app.status_message);
+        // reopen the Schema dialog and clear the rename of CRIRTE
+        rig.app.open_schema_modal_for_active_tab();
+        if let Some(m) = rig.app.pending_csv_modal.as_mut() {
+            m.config.columns[1].rename_to = None;
+        }
+        let p = rig.draw(6);
+        rig.click(text_box(&p, "Apply Schema to This Tab").center());
+        settle(&mut rig.app);
+        assert!(rig.app.schema_confirm.is_some(), "{what}: the change waits for an answer: {}", rig.app.status_message);
+        let TabSource::SingleFile { config, .. } = &rig.app.tabs[0].source else { panic!("single file") };
+        assert_eq!(config.final_names()[1], "Int_Rate", "{what}: nothing was applied yet");
+        let p = rig.draw(5);
+        let _r = dialog_in_window(&rig, "\u{E4E0}  These steps would stop working");
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("Step 2") && t.contains("Int_Rate")), "{what}: the step is named: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.starts_with("Step")).collect::<Vec<_>>());
+        // Cancel keeps the tab as it was
+        rig.click(text_box(&p, "Cancel").center());
+        assert!(rig.app.schema_confirm.is_none(), "{what}");
+        let TabSource::SingleFile { config, .. } = &rig.app.tabs[0].source else { panic!("single file") };
+        assert_eq!(config.final_names()[1], "Int_Rate", "{what}: Cancel leaves the schema alone");
+        // again, and "Apply anyway"
+        rig.app.open_schema_modal_for_active_tab();
+        if let Some(m) = rig.app.pending_csv_modal.as_mut() {
+            m.config.columns[1].rename_to = None;
+        }
+        let p = rig.draw(6);
+        rig.click(text_box(&p, "Apply Schema to This Tab").center());
+        settle(&mut rig.app);
+        let p = rig.draw(5);
+        rig.click(text_box(&p, "Apply anyway").center());
+        settle(&mut rig.app);
+        assert!(rig.app.schema_confirm.is_none(), "{what}");
+        let TabSource::SingleFile { config, .. } = &rig.app.tabs[0].source else { panic!("single file") };
+        assert_eq!(config.final_names()[1], "CRIRTE", "{what}: applied");
+        assert!(rig.app.tabs[0].issues.iter().any(|i| i.index == 1), "{what}: the filter now shows as broken");
+    }
+}

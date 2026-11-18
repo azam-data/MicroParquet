@@ -190,6 +190,13 @@ pub struct MicroParquetApp {
     dark_mode: bool,
     ui_zoom: f32,
     pending_csv_modal: Option<PendingCsvModal>,
+    /// Several saved schemas match the file that was opened: which one? (Phase 6 U1)
+    pub template_pick: Option<crate::ui::schema::TemplatePick>,
+    /// A schema change that would break steps, waiting for "Apply anyway" or "Cancel" (U1).
+    pub schema_confirm: Option<SchemaApplied>,
+    /// A line that starts the status message of a tab that is still loading (by tab id): the
+    /// saved schema it opened with (Phase 6 U1).
+    pub open_notes: HashMap<u64, String>,
     batch_modal: BatchModalState,
     active_tool: ActiveToolModal,
     status_message: String,
@@ -283,6 +290,9 @@ impl MicroParquetApp {
             dark_mode: false,
             ui_zoom: theme::UI_ZOOM_DEFAULT,
             pending_csv_modal: None,
+            template_pick: None,
+            schema_confirm: None,
+            open_notes: HashMap::new(),
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
             status_message:
@@ -382,6 +392,8 @@ impl MicroParquetApp {
 
         // Modals
         self.render_csv_schema_modal(ctx);
+        self.render_template_picker(ctx);
+        self.render_schema_confirm(ctx);
         self.render_export_guard(ctx);
         self.render_text_number_guard(ctx);
         self.render_batch_modal(ctx);

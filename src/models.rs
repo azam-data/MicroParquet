@@ -154,6 +154,20 @@ pub struct ColumnSchemaConfig {
     /// Empty for CSV.
     #[serde(default)]
     pub source_dtype: String,
+    /// The name the column has from the schema on (Phase 6 U1). Blank or missing keeps the
+    /// file's name. Applied after typing, Dr/Cr and masking, before any step.
+    #[serde(default)]
+    pub rename_to: Option<String>,
+}
+
+impl ColumnSchemaConfig {
+    /// The name after the rename: "Rename to" when it has text, else the file's own name.
+    pub fn final_name(&self) -> String {
+        match self.rename_to.as_deref().map(str::trim) {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => self.name.clone(),
+        }
+    }
 }
 
 /// The column type a Parquet column already has, from its `source_dtype` label; `None` for
@@ -233,6 +247,40 @@ pub struct IngestionConfig {
     pub skip_rows: usize,
     #[serde(default)]
     pub encoding: CsvTextEncoding,
+    /// A saved template with this ticked opens matching files without asking (Phase 6 U1).
+    #[serde(default)]
+    pub auto_apply: bool,
+}
+
+impl IngestionConfig {
+    /// (the file's name, the new name) of every column the schema renames.
+    pub fn rename_pairs(&self) -> Vec<(String, String)> {
+        self.columns.iter().filter_map(|c| (c.final_name() != c.name).then(|| (c.name.clone(), c.final_name()))).collect()
+    }
+
+    /// The column names after the renames, in column order.
+    pub fn final_names(&self) -> Vec<String> {
+        self.columns.iter().map(|c| c.final_name()).collect()
+    }
+
+    /// What is wrong with the final names, by column index: a name that is empty after trimming,
+    /// or one that another column has too. Empty when the names are fine.
+    pub fn rename_problems(&self) -> Vec<(usize, String)> {
+        let finals = self.final_names();
+        let mut out = Vec::new();
+        for (i, f) in finals.iter().enumerate() {
+            if f.trim().is_empty() {
+                out.push((i, "This column has no name. Type a name in \"Rename to\".".to_string()));
+                continue;
+            }
+            let same: Vec<usize> = finals.iter().enumerate().filter(|(_, g)| *g == f).map(|(j, _)| j).collect();
+            if same.len() > 1 {
+                let others: Vec<String> = same.iter().filter(|j| **j != i).map(|j| format!("\"{}\"", self.columns[*j].name)).collect();
+                out.push((i, format!("\"{}\" is also the name of {}. Every column needs its own name: change one \"Rename to\".", f, others.join(", "))));
+            }
+        }
+        out
+    }
 }
 
 impl Default for IngestionConfig {
@@ -247,6 +295,7 @@ impl Default for IngestionConfig {
             separator: default_csv_separator(),
             skip_rows: 0,
             encoding: CsvTextEncoding::Utf8,
+            auto_apply: false,
         }
     }
 }
@@ -1998,6 +2047,20 @@ impl TransformStep {
             scale: spec.scale,
             sort_by_value: spec.sort_by_value,
             field_orders: spec.field_orders,
+        }
+    }
+}
+
+impl TabSource {
+    /// The name a column has in the file when the schema renamed it (Phase 6 U1): the Column
+    /// inspector says "From file: <name>". `None` when the column keeps its name or is not a
+    /// column of a file (a result of a tool, a join).
+    pub fn file_name_of(&self, final_name: &str) -> Option<String> {
+        let from = |c: &IngestionConfig| c.columns.iter().find(|c| c.final_name() == final_name && c.name != final_name).map(|c| c.name.clone());
+        match self {
+            TabSource::SingleFile { config, .. } => from(config),
+            TabSource::VerticalStack { files, .. } => files.iter().find_map(|(_, _, c)| from(c)),
+            _ => None,
         }
     }
 }

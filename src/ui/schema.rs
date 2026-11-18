@@ -19,6 +19,27 @@ pub struct PendingCsvModal {
     /// The dialog is shown in its own native window (an egui immediate viewport) instead of
     /// inside the app window.
     pub popped_out: bool,
+    /// A saved schema was applied to this file when it opened (Phase 6 U1): the dialog says so
+    /// and offers Undo.
+    pub applied: Option<AppliedTemplate>,
+}
+
+/// Several saved schemas match the file that was opened: the choice is asked for.
+pub struct TemplatePick {
+    pub path: PathBuf,
+    pub direct_convert_only: bool,
+    pub detected: IngestionConfig,
+    pub candidates: Vec<micro_parquet::schema_templates::SchemaTemplate>,
+    /// Where the buttons were drawn, for the render tests.
+    pub rects: Vec<(String, egui::Rect)>,
+}
+
+/// The saved schema a file opened with, and the schema it had before (for Undo).
+#[derive(Clone, Debug)]
+pub struct AppliedTemplate {
+    pub name: String,
+    pub columns: usize,
+    pub before: IngestionConfig,
 }
 
 /// What the user asked for in one frame of the schema dialog (header buttons, Enter, Esc).
@@ -73,7 +94,9 @@ impl SchemaKeys {
         if self.esc {
             out.cancel = true;
         } else if self.enter {
-            if modal.direct_convert_only && !modal.is_parquet {
+            if !modal.config.rename_problems().is_empty() {
+                // Enter does not apply a schema with a bad name
+            } else if modal.direct_convert_only && !modal.is_parquet {
                 out.convert = true;
             } else {
                 out.lock = true;
@@ -85,6 +108,9 @@ impl SchemaKeys {
 /// The buttons at the right of the dialog's header, in the order they read left to right:
 /// [Pop out] [Lock Schema & Open] [Convert to Parquet…] [Cancel]. Returns the row's rectangle.
 pub fn schema_header(ui: &mut egui::Ui, modal: &PendingCsvModal, can_pop: bool, out: &mut SchemaOutcome) -> egui::Rect {
+    // a name that is empty or used twice: nothing is applied until it is fixed (U1)
+    let problem = modal.config.rename_problems().first().map(|(i, why)| format!("Column {}: {}", i + 1, why));
+    let why = problem.clone().unwrap_or_default();
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // added right to left
@@ -93,18 +119,30 @@ pub fn schema_header(ui: &mut egui::Ui, modal: &PendingCsvModal, can_pop: bool, 
             }
             if !modal.is_parquet
                 && ui
-                    .button("\u{E2DE} Convert to Parquet\u{2026}")
+                    .add_enabled(problem.is_none(), egui::Button::new("\u{E2DE} Convert to Parquet\u{2026}"))
                     .on_hover_text("Convert the file to Parquet now, without opening a tab")
+                    .on_disabled_hover_text(&why)
                     .clicked()
             {
                 out.convert = true;
             }
             if modal.target_tab.is_some() {
-                if theme::primary_button(ui, "\u{E182} Apply Schema to This Tab").on_hover_text("Apply and reload the tab (Enter)").clicked() {
+                if ui
+                    .add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, "\u{E182} Apply Schema to This Tab"))
+                    .inner
+                    .on_hover_text("Apply and reload the tab (Enter)")
+                    .on_disabled_hover_text(&why)
+                    .clicked()
+                {
                     out.lock = true;
                 }
             } else if !modal.direct_convert_only
-                && theme::primary_button(ui, "\u{E182} Lock Schema & Open").on_hover_text("Lock this schema and open the file in a viewer tab (Enter)").clicked()
+                && ui
+                    .add_enabled_ui(problem.is_none(), |ui| theme::primary_button(ui, "\u{E182} Lock Schema & Open"))
+                    .inner
+                    .on_hover_text("Lock this schema and open the file in a viewer tab (Enter)")
+                    .on_disabled_hover_text(&why)
+                    .clicked()
             {
                 out.lock = true;
             }
@@ -264,6 +302,104 @@ impl MicroParquetApp {
         rects
     }
 
+    /// The list of saved schemas that match a file (several do): one button each, or none of them.
+    pub(crate) fn render_template_picker(&mut self, ctx: &egui::Context) {
+        let Some(mut pick) = self.template_pick.take() else {
+            return;
+        };
+        let file = pick.path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let mut chosen: Option<usize> = None;
+        let mut none = false;
+        let mut cancel = false;
+        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
+        theme::modal("\u{E434}  Which saved schema?").default_width(theme::DIALOG_W_PIVOT_CONVERT).show(ctx, |d| {
+            d.body(|ui| {
+                ui.add(egui::Label::new(format!("{} saved schemas have the same columns as {}.", pick.candidates.len(), file)).wrap());
+                ui.add_space(theme::SPACE_S);
+                for (i, t) in pick.candidates.iter().enumerate() {
+                    let r = ui.add(egui::Button::new(format!("{}   ({} columns)", t.name, t.config.columns.len())).min_size(egui::vec2(ui.available_width(), 0.0)));
+                    rects.push((t.name.clone(), r.rect));
+                    if r.clicked() {
+                        chosen = Some(i);
+                    }
+                }
+            });
+            d.footer(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let r = ui.button("None of these");
+                    rects.push(("None of these".to_string(), r.rect));
+                    if r.clicked() {
+                        none = true;
+                    }
+                    let r = ui.button("Cancel");
+                    rects.push(("Cancel".to_string(), r.rect));
+                    if r.clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        });
+        pick.rects = rects;
+        if let Some(i) = chosen {
+            let t = pick.candidates[i].clone();
+            self.open_with_template(pick.path, pick.direct_convert_only, pick.detected, &t, true);
+        } else if none {
+            let (path, direct) = (pick.path, pick.direct_convert_only);
+            // as if no saved schema matched: today's way in
+            let is_parquet = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("parquet"));
+            if is_parquet {
+                let title = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                self.create_tab_from_source(title, TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, Vec::new(), HashMap::new());
+            } else if let (Ok(preview_df), Ok(config)) = (preview_csv_raw(&path, 5), auto_detect_smart_schema(&path)) {
+                self.pending_csv_modal = Some(PendingCsvModal { csv_path: path, raw_preview_df: preview_df, config, direct_convert_only: direct, target_tab: None, parse_failures: Vec::new(), is_parquet: false, popped_out: false, applied: None });
+            }
+        } else if !cancel {
+            self.template_pick = Some(pick);
+        }
+    }
+
+    /// The question before a schema that would break steps is applied: the steps are listed.
+    pub(crate) fn render_schema_confirm(&mut self, ctx: &egui::Context) {
+        let Some(c) = self.schema_confirm.take() else {
+            return;
+        };
+        let tk = *theme::tokens(self.dark_mode);
+        let labels: Vec<String> = match self.tab_position(c.tab_id).and_then(|i| self.tabs.get(i)) {
+            Some(tab) => c.new_breaks.iter().map(|(i, why)| format!("Step {} '{}': {}", i + 1, tab.steps.get(*i).map(|s| s.short_label()).unwrap_or_default(), why)).collect(),
+            None => Vec::new(),
+        };
+        let mut apply = false;
+        let mut cancel = false;
+        theme::modal("\u{E4E0}  These steps would stop working").default_width(theme::DIALOG_W_TOOL).show(ctx, |d| {
+            d.body(|ui| {
+                ui.add(egui::Label::new("The new column names or types change what these steps need. Steps are never broken silently: choose \"Apply anyway\" to keep the steps (they will show as broken until you edit them), or Cancel to go back.").wrap());
+                ui.add_space(theme::SPACE_S);
+                egui::ScrollArea::vertical().max_height(theme::LIST_MAX_H_L).auto_shrink([false, true]).show(ui, |ui| {
+                    for l in &labels {
+                        ui.add(egui::Label::new(egui::RichText::new(l).color(tk.danger)).wrap());
+                    }
+                });
+            });
+            d.footer(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if theme::primary_button(ui, "Apply anyway").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        });
+        if apply {
+            self.finish_schema_applied(c);
+        } else if cancel {
+            self.status_message = "The schema was not applied: the steps keep working as they were.".to_string();
+        } else {
+            self.schema_confirm = Some(c);
+        }
+    }
+
     /// Reopens the schema modal for the active single-file tab, with its parse failures.
     pub(crate) fn open_schema_modal_for_active_tab(&mut self) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
@@ -313,6 +449,7 @@ impl MicroParquetApp {
                     parse_failures: tab.parse_failures.clone(),
                     is_parquet: *is_parquet,
                     popped_out: false,
+                    applied: None,
                 });
             }
             Err(e) => self.status_message = format!("Error reading the file preview: {:#}", e),
@@ -344,6 +481,7 @@ impl MicroParquetApp {
             new_source,
             steps,
             temp_dir: self.paths.temp_dir.clone(),
+            already_broken: tab.issues.iter().map(|i| i.index).collect(),
         };
         let key = JobKey::tab(JobKind::Schema, tab.id);
         self.jobs.submit(key, "Applying schema", true, move |ctx| {
@@ -436,7 +574,14 @@ impl MicroParquetApp {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = theme::SCHEMA_ROW_GAP;
                 theme::row_label(ui, egui::RichText::new("Template:").color(tk.muted));
-                if ui.button("\u{E248} Save").on_hover_text("Save Schema Template (.schema.json)").clicked() {
+                let bad_names = !modal.config.rename_problems().is_empty();
+                if ui
+                    .add_enabled(!bad_names, egui::Button::new("\u{E248} Save"))
+                    .on_hover_text("Save Schema Template (.schema.json) in portable_data/schemas")
+                    .on_disabled_hover_text("Fix the column names marked in red first.")
+                    .clicked()
+                {
+                    let _ = std::fs::create_dir_all(&self.paths.schemas_dir);
                     if let Some(save_path) = rfd::FileDialog::new()
                         .set_directory(&self.paths.schemas_dir)
                         .set_file_name("wb_schema.schema.json")
@@ -457,10 +602,14 @@ impl MicroParquetApp {
                         if let Ok(txt) = std::fs::read_to_string(load_path) {
                             if let Ok(loaded) = serde_json::from_str::<IngestionConfig>(&txt) {
                                 modal.config = loaded;
+                                modal.applied = None;
                             }
                         }
                     }
                 }
+                ui.checkbox(&mut modal.config.auto_apply, "Apply without asking").on_hover_text(
+                    "Saved with the template: a file whose columns match it opens with this schema straight away, without this dialog.",
+                );
                 theme::dot(ui);
                 // PII masks use the per-install key (the schema's old salt is not used).
                 theme::row_label(ui, egui::RichText::new("Masking key:").color(tk.muted));
@@ -525,6 +674,20 @@ impl MicroParquetApp {
         rects.columns = theme::card_height(ui, "Columns", columns_h, |ui| {
             let n = modal.config.columns.len();
             let is_parquet = modal.is_parquet;
+            let bad: Vec<(usize, String)> = modal.config.rename_problems();
+            if let Some(a) = modal.applied.clone() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(format!("Applied saved schema '{}' (all {} columns matched)", a.name, a.columns)).color(tk.accent_dark)).truncate());
+                    if ui.button("Undo").on_hover_text("Go back to the types the file was detected with").clicked() {
+                        modal.config = a.before.clone();
+                        modal.applied = None;
+                    }
+                });
+            }
+            if let Some((i, why)) = bad.first() {
+                let more = if bad.len() > 1 { format!(" (and {} more)", bad.len() - 1) } else { String::new() };
+                ui.add(egui::Label::new(egui::RichText::new(format!("\u{E4E0} Column {}: {}{}", i + 1, why, more)).color(theme::danger(ui))).truncate());
+            }
             let failures = &modal.parse_failures;
             let columns = &mut modal.config.columns;
             ui.push_id("schema_columns", |ui| {
@@ -538,13 +701,14 @@ impl MicroParquetApp {
                     .resizable(true)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .column(Column::initial(theme::SCHEMA_COL_NAME_W).at_least(theme::SCHEMA_COL_MIN_W).clip(true))
+                    .column(Column::initial(theme::SCHEMA_COL_RENAME_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_TYPE_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_PII_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_SIGN_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_FAIL_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::remainder().at_least(theme::SCHEMA_COL_MIN_W).clip(true))
                     .header(theme::HEADER_ROW_H, |mut header| {
-                        for title in ["Column Name", "Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Parse Failures", "Sample Values"] {
+                        for title in ["Column Name", "Rename to", "Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Parse Failures", "Sample Values"] {
                             header.col(|ui| theme::header_cell(ui, title, limit));
                         }
                     })
@@ -562,6 +726,25 @@ impl MicroParquetApp {
                                     ui.add(egui::Label::new(format!("{}  [{}]", col_cfg.name, col_cfg.source_dtype)).truncate());
                                 } else {
                                     ui.add(egui::Label::new(&col_cfg.name).truncate());
+                                }
+                            });
+                            row.col(|ui| {
+                                let problem = bad.iter().find(|(j, _)| *j == i).map(|(_, why)| why.clone());
+                                let mut text = col_cfg.rename_to.clone().unwrap_or_default();
+                                let mut edit = egui::TextEdit::singleline(&mut text).desired_width(ui.available_width()).hint_text("keep the name");
+                                if problem.is_some() {
+                                    edit = edit.text_color(theme::danger(ui));
+                                }
+                                let r = ui.add(edit);
+                                let r = match &problem {
+                                    Some(why) => r.on_hover_text(why),
+                                    None => r.on_hover_text("Blank keeps the file's name. A new name is used by every step, filter and export."),
+                                };
+                                if problem.is_some() {
+                                    ui.painter().rect_stroke(r.rect, theme::RADIUS_SMALL, theme::line(theme::danger(ui)));
+                                }
+                                if r.changed() {
+                                    col_cfg.rename_to = if text.is_empty() { None } else { Some(text) };
                                 }
                             });
                             // Parquet types with no counterpart here (Boolean, List...) stay as they are.
@@ -605,7 +788,7 @@ impl MicroParquetApp {
                                 }
                             });
                             row.col(|ui| {
-                                if let Some(f) = failures.iter().find(|f| f.column == col_cfg.name) {
+                                if let Some(f) = failures.iter().find(|f| f.column == col_cfg.final_name() || f.column == col_cfg.name) {
                                     ui.colored_label(theme::warning(ui), format!("\u{E4E0} {}", f.count)).on_hover_text(format!(
                                         "Could not be converted (now null), e.g.:\n{}",
                                         f.examples.join("\n")

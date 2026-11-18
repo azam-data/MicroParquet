@@ -156,7 +156,7 @@ impl MicroParquetApp {
         ctx.request_repaint();
     }
 
-    fn tab_position(&self, tab_id: u64) -> Option<usize> {
+    pub(crate) fn tab_position(&self, tab_id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == tab_id)
     }
 
@@ -164,6 +164,10 @@ impl MicroParquetApp {
         match out {
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
+                let status = match self.open_notes.remove(&tab.id) {
+                    Some(note) => format!("{} {}", note, status),
+                    None => status,
+                };
                 // A macro replayed into a new tab brings its summary choices.
                 if let Some(sum) = self.pending_summary.remove(&tab.id) {
                     tab.summary = sum;
@@ -260,22 +264,12 @@ impl MicroParquetApp {
                 }
             }
             JobOutput::Schema(s) => {
-                let SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, mut status, steps } = *s;
-                let Some(idx) = self.tab_position(tab_id) else {
+                if !s.new_breaks.is_empty() {
+                    // steps that worked would stop working: the owner is asked first (U1)
+                    self.schema_confirm = Some(*s);
                     return;
-                };
-                if let Some(tab) = self.tabs.get_mut(idx) {
-                    tab.source = new_source;
-                    tab.steps = steps;
-                    tab.parse_failures = parse_failures;
-                    tab.row_check = row_check;
                 }
-                if let Some(n) = parse_note {
-                    status.push_str(&format!(" {}", n));
-                }
-                self.active_tab = idx;
-                self.refresh_tab_at(idx, true, None);
-                self.status_message = status;
+                self.finish_schema_applied(*s);
             }
             JobOutput::TextCheck(r) => self.apply_text_check(*r),
             JobOutput::Exported(o) => {
@@ -290,6 +284,26 @@ impl MicroParquetApp {
                 self.batch_modal.last_error = None;
             }
         }
+    }
+
+    /// The tab takes the new schema (and the steps that go with it) and reloads.
+    pub(crate) fn finish_schema_applied(&mut self, s: SchemaApplied) {
+        let SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, mut status, steps, new_breaks: _ } = s;
+        let Some(idx) = self.tab_position(tab_id) else {
+            return;
+        };
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.source = new_source;
+            tab.steps = steps;
+            tab.parse_failures = parse_failures;
+            tab.row_check = row_check;
+        }
+        if let Some(n) = parse_note {
+            status.push_str(&format!(" {}", n));
+        }
+        self.active_tab = idx;
+        self.refresh_tab_at(idx, true, None);
+        self.status_message = status;
     }
 }
 

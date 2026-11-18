@@ -23,6 +23,7 @@ pub mod paths;
 pub mod pdf_layout;
 pub mod pivot_table;
 pub mod rules;
+pub mod schema_templates;
 pub mod sort_lists;
 pub mod steps_edit;
 pub mod summary;
