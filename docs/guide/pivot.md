@@ -39,7 +39,8 @@ Summarises a table the way Excel's pivot does: the Rows you pick go down the sid
 8. Choose "Scale" (As in View, Plain, Thousand, Lakh, Million, Crore). It only changes how the value columns are shown; the numbers stay in BDT. In an Excel export Thousand and Million are a number format (the cell keeps the full BDT amount, so Excel sums the real figures), while Lakh and Crore divide the amount and put the unit in the header ("Sum of Balance (BDT Cr)"). Plain keeps BDT, and rates and counts are never scaled. CSV and Parquet exports keep the BDT amounts.
 9. Choose "Sort rows": Natural order (the default) or by one Values field, high to low or low to high.
 10. Check the Preview (the first 20 rows, computed while you work). A red line at the bottom says why there is no table.
-11. Click "Create pivot tab". The pivot is a step ("Pivot") of a new tab named "Pivot: " and its first Rows field (for example "Pivot: Segment"). Double-click the tab name to rename it; a name longer than 24 characters is cut with "…" in the strip and shown in full when you point at it. To change it later, select the step in the Steps tab and click Edit: the dialog opens with the same settings and "Save changes" replaces the step.
+11. Click "Create pivot tab". The pivot is a step ("Pivot") of a new tab named "Pivot: " and its first Rows field (for example "Pivot: Segment"). Double-click the tab name to rename it; a name longer than 24 characters is cut with "…" in the strip and shown in full when you point at it. To change it later click "Edit pivot" in the bar above the table (or select the step in the Steps tab and click Edit): the dialog opens with the current Rows, Columns, Values, Filters and Scale, and "Save changes" updates the same tab in place (no new tab; Undo takes it back).
+12. Filters: a field in the Filters box limits the pivot to the values you choose; the empty box says "Drop a field here to limit the pivot to chosen values". Rows that are not chosen are removed before anything is added up, so every cell and total (a weighted rate too) is worked out from the chosen rows only, and the filter field does not appear as a row or a column (put it in Rows too if you want to see it). Above the pivot, in the bar next to "Edit pivot", each Filters field has a picker such as "Segment: All". Click it, type in "Search values…" to find a value, and tick the values to keep: the pivot changes at once, and the picker reads "Segment: CMSME" or "Segment: CMSME (+2)" (the first chosen value and how many more). Tick "All" to remove the limit. The filter is saved in the step, so a saved macro repeats it.
 
 ## 6. What you get
 
@@ -112,6 +113,7 @@ Test: `guide_pivot`
 - "Pivot: N columns is too many (the most is 500)." / "N rows is too many (the most is 200,000)." Remove a field from Columns or Rows, or filter first.
 - "Pivot: column 'X' (in Rows) was not found." A step before the pivot dropped or renamed it; pick another field.
 - "Pivot: 'Sort by value' points to a value field that is no longer there." Choose Sort rows again.
+- "Nothing ticked. Tick at least one value, or tick All." in a Filters picker: the pivot is not changed until one value is ticked.
 
 ## 10. Limits and assumptions
 

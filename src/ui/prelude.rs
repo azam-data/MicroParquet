@@ -63,6 +63,7 @@ pub use crate::ui::join::JoinState;
 pub use crate::ui::limits::LimitState;
 pub use crate::ui::normaliser::NormState;
 pub use crate::ui::clean_breaks::CleanBreaksState;
+pub use crate::ui::pivot_bar::PivotBarState;
 pub use crate::ui::pivot::PivotState;
 pub use crate::ui::pivot_builder::PivotBuilderState;
 pub use crate::ui::provision::ProvisionState;

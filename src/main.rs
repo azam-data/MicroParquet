@@ -191,6 +191,7 @@ pub struct MicroParquetApp {
     pub tab_rename: Option<crate::ui::tabs::TabRename>,
     pub pivot: PivotState,
     pub pivot_builder: PivotBuilderState,
+    pub pivot_bar: PivotBarState,
     pub cl_migration: ClMigrationState,
     pub gap: GapState,
     pub curves: CurvesState,
@@ -272,6 +273,7 @@ impl MicroParquetApp {
             tab_rename: None,
             pivot: PivotState::default(),
             pivot_builder: PivotBuilderState::default(),
+            pivot_bar: PivotBarState::default(),
             cl_migration: ClMigrationState::default(),
             gap: GapState::default(),
             curves: CurvesState::default(),
@@ -336,6 +338,7 @@ impl MicroParquetApp {
                     self.render_empty_state(ui);
                     return;
                 }
+                self.render_pivot_bar(ui);
                 self.render_filter_bar(ui);
                 self.render_sql_bar(ui);
                 self.render_chart_drawer(ui);

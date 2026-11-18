@@ -744,3 +744,63 @@ fn i15_clean_line_breaks_gives_one_space_per_run_trims_and_replays_from_a_macro(
     assert!(py.contains("str.replace_all(r\"[\\r\\n]+\", \" \")") && py.contains("str.strip_chars()"), "{py}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+// ------------------------------------------------------------------------------------------ 20
+
+fn segment_book() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Segment".into(), &["CMSME", "Retail", "CMSME", "Corporate", "Retail", "CMSME", "Corporate"]),
+        Series::new("Bucket".into(), &["01. Sight", "02. 1-3m", "02. 1-3m", "01. Sight", "01. Sight", "03. Over 3m", "02. 1-3m"]),
+        Series::new("Balance".into(), &[100.0, 200.0, 300.0, 400.0, 50.0, 70.0, 80.0]),
+        Series::new("Rate".into(), &[10.0, 8.0, 12.0, 9.0, 6.0, 14.0, 7.0]),
+    ])
+    .expect("book")
+}
+
+fn segment_spec(filter: Vec<Option<String>>) -> PivotSpec {
+    PivotSpec {
+        rows: vec!["Bucket".into()],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }, PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }],
+        filters: vec![PivotFilter { field: "Segment".into(), values: filter }],
+        row_totals: true,
+        column_totals: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn i20_a_pivot_filter_removes_the_other_rows_before_the_aggregation_and_the_field_is_not_a_row_or_column() {
+    let df = segment_book();
+    let run = |s: &PivotSpec| build_pivot(df.clone().lazy(), s).expect("pivot").df;
+    // no restriction: every segment
+    let all = run(&segment_spec(vec![]));
+    let last = all.height() - 1;
+    assert_eq!(strings(&all, "Bucket")[last].as_deref(), Some("Grand total"));
+    close(floats(&all, "Sum of Balance")[last], 1200.0, 1e-9, "all segments");
+    // Segment = CMSME: the totals of CMSME only (100 + 300 + 70)
+    let one = run(&segment_spec(vec![Some("CMSME".into())]));
+    let last = one.height() - 1;
+    close(floats(&one, "Sum of Balance")[last], 470.0, 1e-9, "the grand total is CMSME's");
+    assert_eq!(one.get_column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>(), vec!["Bucket", "Sum of Balance", "W.Avg of Rate by Balance"], "Segment is not a row or a column");
+    // by bucket: 01 100, 02 300, 03 70
+    assert_eq!(strings(&one, "Bucket").into_iter().flatten().collect::<Vec<_>>(), vec!["01. Sight", "02. 1-3m", "03. Over 3m", "Grand total"]);
+    assert_eq!(&floats(&one, "Sum of Balance")[..3], &[Some(100.0), Some(300.0), Some(70.0)]);
+    // the weighted rate is over the kept rows only: (10*100 + 12*300 + 14*70) / 470
+    close(floats(&one, "W.Avg of Rate by Balance")[last], (10.0 * 100.0 + 12.0 * 300.0 + 14.0 * 70.0) / 470.0, 1e-9, "weighted over CMSME rows only");
+    // two segments: Retail and Corporate (200 + 50 + 400 + 80)
+    let two = run(&segment_spec(vec![Some("Retail".into()), Some("Corporate".into())]));
+    close(floats(&two, "Sum of Balance")[two.height() - 1], 730.0, 1e-9, "two segments");
+    // a value that is not in the data keeps nothing: an empty pivot, not a wrong one
+    let none = run(&segment_spec(vec![Some("Nobody".into())]));
+    assert!(none.height() <= 1, "no row is kept: {}", none.height());
+    // the step carries the filter and a macro file keeps it
+    let step = TransformStep::from_pivot_spec(segment_spec(vec![Some("CMSME".into())]));
+    let d = dir("i20");
+    let recipe = MacroRecipe { name: "p".into(), description: String::new(), created_at: String::new(), enforce_balance_control: false, control_column: None, optional_ingestion_schema: None, steps: vec![step.clone()], summary: Default::default() };
+    let mp = d.join("p.mpq.json");
+    micro_parquet::macros::save_macro_to_file(&recipe, &mp).expect("save");
+    let back = micro_parquet::macros::load_macro_from_file(&mp).expect("load");
+    assert_eq!(back.steps[0].as_pivot_spec().map(|s| s.filters), Some(vec![PivotFilter { field: "Segment".into(), values: vec![Some("CMSME".into())] }]));
+    let out = run_steps("i20s", &df, &back.steps).expect("replays");
+    close(floats(&out, "Sum of Balance")[out.height() - 1], 470.0, 1e-9, "the replayed macro gives CMSME's totals");
+}

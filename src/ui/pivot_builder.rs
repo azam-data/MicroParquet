@@ -56,6 +56,9 @@ impl Area {
     }
 }
 
+/// The line in the empty Filters box.
+pub const FILTERS_EMPTY_HINT: &str = "Drop a field here to limit the pivot to chosen values";
+
 /// What the dialog drew, for the render tests.
 #[derive(Clone, Debug)]
 pub struct PivotRects {
@@ -628,6 +631,9 @@ impl MicroParquetApp {
             });
             // the chips flow into rows by their width (a row never needs more than the area has)
             let avail = ui.available_width();
+            if area == Area::Filters && spec_snapshot.filters.is_empty() {
+                ui.add(egui::Label::new(egui::RichText::new(FILTERS_EMPTY_HINT).size(theme::TEXT_LABEL).color(tk.muted)).truncate());
+            }
             enum Chip {
                 Plain(String, String),
                 Value(usize),

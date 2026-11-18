@@ -21,6 +21,7 @@ pub mod limits;
 pub mod clean_breaks;
 pub mod normaliser;
 pub mod pivot;
+pub mod pivot_bar;
 pub mod pivot_builder;
 pub mod prelude;
 pub mod provision;

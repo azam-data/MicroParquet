@@ -1616,3 +1616,148 @@ fn i18_a_new_pivot_tab_is_named_pivot_and_its_first_row_field() {
         assert_strip_fits(&rig, &what);
     }
 }
+
+fn pivot_tab_rig(name: &str, ppp: f32, w: f32, h: f32, spec: PivotSpec) -> Rig {
+    let mut rig = Rig::new(name, ppp, w, h, 0);
+    rig.app.push_step_to_active_tab(TransformStep::from_pivot_spec(spec), true);
+    settle(&mut rig.app);
+    rig.draw(6);
+    rig
+}
+
+fn total_of(rig: &Rig, col: &str) -> f64 {
+    let df = &rig.app.tabs[rig.app.active_tab].cached_slice;
+    let v: Vec<Option<f64>> = df.column(col).expect("col").f64().expect("f64").into_iter().collect();
+    v.last().copied().flatten().unwrap_or(f64::NAN)
+}
+
+#[test]
+fn i19_edit_pivot_reopens_the_dialog_filled_and_saves_into_the_same_tab() {
+    for (ppp, w, h) in SCREENS {
+        let spec = PivotSpec { rows: vec!["Bucket".into()], values: vec![sum_balance()], row_totals: true, column_totals: true, ..Default::default() };
+        let mut rig = pivot_tab_rig("pr6i19", ppp, w, h, spec.clone());
+        let what = rig.what.clone();
+        assert_eq!(rig.app.tabs.len(), 2, "{what}");
+        assert_eq!(rig.app.tabs[1].title, "Pivot: Bucket", "{what}");
+        let before_cols: Vec<String> = rig.app.tabs[1].cached_slice.get_column_names().iter().map(|s| s.to_string()).collect();
+        assert_eq!(before_cols, vec!["Bucket", "Sum of Balance"], "{what}");
+        // the bar is there with the button, inside the window
+        let bar = rig.app.pivot_bar.rects.clone();
+        assert!(bar.edit.is_positive() && inside(bar.edit, bar.bar) && inside(bar.bar, rig.ctx.screen_rect()), "{what}: the Edit pivot button {:?} is in the bar {:?}", bar.edit, bar.bar);
+        // another tab has no such bar
+        rig.app.active_tab = 0;
+        rig.draw(3);
+        assert!(!rig.app.pivot_bar.rects.edit.is_positive(), "{what}: no bar on a table tab");
+        rig.app.active_tab = 1;
+        rig.draw(3);
+        let tabs_before = rig.app.tabs.len();
+        let steps_before = rig.app.tabs[1].steps.len();
+        // click the button: the dialog opens filled with the tab's pivot, editing that step
+        rig.click(rig.app.pivot_bar.rects.edit.center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::PivotBuilder, "{what}");
+        assert!(rig.app.editing.is_some(), "{what}: it edits the step in place");
+        rig.draw(8);
+        assert_eq!(rig.app.pivot_builder.spec, spec, "{what}: prefilled with Rows, Columns, Values, Filters and Scale of the tab");
+        // add Bank to Columns and save
+        rig.app.pivot_builder.spec.columns = vec!["Bank".into()];
+        rig.app.pivot_builder.spec.scale = PivotScale::Crore;
+        rig.draw(8);
+        let save = rig.rects().buttons.iter().find(|(n, _)| n == "Save changes").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: Save changes"));
+        rig.click(save.center());
+        rig.draw(8);
+        assert_eq!(rig.app.tabs.len(), tabs_before, "{what}: no new tab");
+        assert_eq!(rig.app.tabs[1].steps.len(), steps_before, "{what}: the step was replaced, not added");
+        assert_eq!(rig.app.tabs[1].title, "Pivot: Bucket", "{what}: the tab keeps its name");
+        let after_cols: Vec<String> = rig.app.tabs[1].cached_slice.get_column_names().iter().map(|s| s.to_string()).collect();
+        assert_eq!(after_cols, vec!["Bucket", "Conventional", "Islami", "Total"], "{what}: the output changed");
+        assert_eq!(rig.app.tabs[1].steps[0].as_pivot_spec().map(|s| (s.columns, s.scale)), Some((vec!["Bank".to_string()], PivotScale::Crore)), "{what}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        assert!(rig.app.pivot_bar.rects.edit.is_positive(), "{what}: the bar is still there");
+    }
+}
+
+#[test]
+fn i20_a_filters_field_gets_a_picker_above_the_pivot_that_limits_it_in_place() {
+    use micro_parquet::tab_jobs::PIVOT_FILTER_VALUES_MAX;
+    assert!(PIVOT_FILTER_VALUES_MAX >= 100);
+    // the label: All by default, then the first value and how many more
+    let f = |v: &[&str]| PivotFilter { field: "Segment".into(), values: v.iter().map(|s| Some(s.to_string())).collect() };
+    assert_eq!(crate::ui::pivot_bar::filter_label(&f(&[])), "Segment: All");
+    assert_eq!(crate::ui::pivot_bar::filter_label(&f(&["CMSME"])), "Segment: CMSME");
+    assert_eq!(crate::ui::pivot_bar::filter_label(&f(&["CMSME", "Retail", "Corporate"])), "Segment: CMSME (+2)");
+    assert_eq!(crate::ui::pivot_bar::filter_label(&PivotFilter { field: "Segment".into(), values: vec![None, Some("A".into())] }), "Segment: (blank) (+1)");
+    for (ppp, w, h) in SCREENS {
+        let spec = PivotSpec {
+            rows: vec!["Bucket".into()],
+            values: vec![sum_balance()],
+            filters: vec![PivotFilter { field: "Bank".into(), values: vec![] }],
+            row_totals: true,
+            column_totals: true,
+            ..Default::default()
+        };
+        let mut rig = pivot_tab_rig("pr6i20", ppp, w, h, spec);
+        let what = rig.what.clone();
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, bx)| t == "Bank: All" && inside(*bx, rig.app.pivot_bar.rects.bar)), "{what}: the picker says All");
+        close_enough(total_of(&rig, "Sum of Balance"), 1300.0, &what);
+        assert!(!rig.app.tabs[1].cached_slice.get_column_names().iter().any(|n| n.as_str() == "Bank"), "{what}: the filter field is not a column");
+        // open the checklist
+        let chip = rig.app.pivot_bar.rects.chips[0].1;
+        rig.click(chip.center());
+        rig.draw(8);
+        let popup = rig.app.pivot_bar.rects.popup;
+        assert!(popup.is_positive() && inside(popup, rig.ctx.screen_rect()), "{what}: the checklist {popup:?} is in the window");
+        let p = rig.draw(2);
+        for t in ["Values of Bank", "All", "Conventional", "Islami", "Done"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x == t && inside(*bx, popup)), "{what}: '{t}' is in the checklist");
+        }
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("2 of 2")), "{what}: both ticked at the start");
+        // untick Islami: the pivot is limited to Conventional's totals, in place
+        let tabs = rig.app.tabs.len();
+        let isl = p.boxes.iter().find(|(t, bx)| t == "Islami" && inside(*bx, popup)).map(|(_, b)| *b).expect("the Islami row");
+        rig.click(isl.center());
+        rig.draw(8);
+        assert_eq!(rig.app.tabs.len(), tabs, "{what}: no new tab");
+        assert_eq!(rig.app.tabs[1].steps.len(), 1, "{what}");
+        assert_eq!(rig.app.tabs[1].steps[0].as_pivot_spec().map(|s| s.filters), Some(vec![PivotFilter { field: "Bank".into(), values: vec![Some("Conventional".into())] }]), "{what}");
+        close_enough(total_of(&rig, "Sum of Balance"), 800.0, &what);
+        let p = rig.draw(2);
+        assert!(p.boxes.iter().any(|(t, _)| t == "Bank: Conventional"), "{what}: the picker shows the selection");
+        // the search narrows the list
+        rig.app.pivot_bar.popup.as_mut().expect("open").search = "isl".into();
+        let p = rig.draw(3);
+        let popup = rig.app.pivot_bar.rects.popup;
+        assert!(!p.boxes.iter().any(|(t, bx)| t == "Conventional" && inside(*bx, popup)) && p.boxes.iter().any(|(t, bx)| t == "Islami" && inside(*bx, popup)), "{what}: the search shows only Islami");
+        // tick Islami again: All
+        rig.app.pivot_bar.popup.as_mut().expect("open").search.clear();
+        let p = rig.draw(3);
+        let isl = p.boxes.iter().find(|(t, bx)| t == "Islami" && inside(*bx, rig.app.pivot_bar.rects.popup)).map(|(_, b)| *b).expect("the Islami row");
+        rig.click(isl.center());
+        rig.draw(8);
+        assert_eq!(rig.app.tabs[1].steps[0].as_pivot_spec().map(|s| s.filters), Some(vec![PivotFilter { field: "Bank".into(), values: vec![] }]), "{what}: all ticked is All");
+        close_enough(total_of(&rig, "Sum of Balance"), 1300.0, &what);
+        // undo takes the filter step back to the one before
+        rig.app.undo_steps();
+        rig.draw(6);
+        close_enough(total_of(&rig, "Sum of Balance"), 800.0, &what);
+    }
+}
+
+fn close_enough(got: f64, want: f64, what: &str) {
+    assert!((got - want).abs() < 1e-6, "{what}: {got} is not {want}");
+}
+
+#[test]
+fn i20_the_empty_filters_box_says_what_to_drop_in_it() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("pr6i20b", ppp, w, h, 0);
+        let p = rig.open_pivot();
+        let what = rig.what.clone();
+        let area = rig.rects().areas[Area::Filters.index()];
+        assert!(p.boxes.iter().any(|(t, bx)| t == "Drop a field here to limit the pivot to chosen values" && inside(*bx, area)), "{what}: the hint is inside the Filters box {area:?}");
+        // once a field is there the hint goes
+        rig.app.pivot_builder.spec.filters = vec![PivotFilter { field: "Bank".into(), values: vec![] }];
+        let p = rig.draw(4);
+        assert!(!p.boxes.iter().any(|(t, _)| t.starts_with("Drop a field here")), "{what}");
+    }
+}

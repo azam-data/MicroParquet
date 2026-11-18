@@ -111,7 +111,9 @@ impl MicroParquetApp {
                     JobKind::Load => self.status_message = format!("Pipeline error: {}", msg),
                     JobKind::PivotPreview => self.pivot_preview_failed(msg),
                     JobKind::PivotValues => {
-                        if let Some(p) = self.pivot_builder.popup.as_mut() {
+                        if let Some(p) = self.pivot_bar.popup.as_mut().filter(|_| !self.pivot_builder.open) {
+                            p.values = Some(Err(msg));
+                        } else if let Some(p) = self.pivot_builder.popup.as_mut() {
                             p.values = Some(Err(msg));
                         }
                     }
@@ -226,7 +228,11 @@ impl MicroParquetApp {
                 self.submit_column_stats(idx);
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
-            JobOutput::PivotValues(r) => self.apply_pivot_values(*r),
+            JobOutput::PivotValues(r) => {
+                if !self.apply_pivot_bar_values(&r) {
+                    self.apply_pivot_values(*r)
+                }
+            }
             JobOutput::ColumnStats(r) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == r.tab_id) {
                     tab.column_stats = Some(r.stats);
