@@ -807,3 +807,128 @@ fn r4_the_tool_is_listed_under_loans_and_credit_and_found_by_the_search() {
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------ R5: CL-1 summary
+
+fn cl1_title() -> String {
+    format!("{}  {}", theme::ph::TABLE, crate::ui::cl1_summary::CL1_TITLE)
+}
+
+/// The six-loan book of the R5 test, as a tab; the template and the maps are written under the data folder.
+fn cl1_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    micro_parquet::rules::set_data_dir_override(Some(root.join("portable_data")));
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "A2", "A3", "A4", "A5", "A6"]),
+        Series::new("Loan_Category".into(), &["Continuous", "CONTINUOUS", "Demand", "Fixed term", "Fixed term", "Short-term agri & micro"]),
+        Series::new("CL_Final".into(), &["STD-0", "STD-2", "SMA", "SS", "B/L", "DF"]),
+        Series::new("Balance".into(), &[1000.0, 2000.0, 500.0, 300.0, 100.0, 400.0]),
+        Series::new("Base_For_Provision_BDT".into(), &[1000.0, 2000.0, 500.0, 250.0, 100.0, 300.0]),
+        Series::new("Required_Provision_BDT".into(), &[10.0, 20.0, 25.0, 50.0, 100.0, 150.0]),
+    ])
+    .expect("book");
+    let src = parquet_source(&root, "Loans", book);
+    app.create_tab_from_source("Loans".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+#[test]
+fn r5_the_cl1_dialog_fits_shows_the_sample_banner_and_builds_the_summary_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = cl1_rig("p5r5a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Cl1Summary);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::Cl1Summary, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &cl1_title(), &what);
+        for t in ["Sample parameters", "Loan category", "Same for every row:", "From the column:", "Grade column", "Measure", "Outstanding", "Base for provision", "Provision required", "Build CL-1 summary", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        let g = rig.app.cl1.rects.clone();
+        assert!(inside(g.banner, r.header) || inside(g.banner, r.window), "{what}: the sample banner is in the header: {:?}", g.banner);
+        for (name, rc) in &g.controls {
+            assert!(inside(*rc, r.window), "{what}: '{name}' {rc:?} is inside the dialog {:?}", r.window);
+        }
+        assert!(g.notes.right() <= r.window.right() && g.notes.left() >= r.window.left(), "{what}: the notes are inside the dialog's width");
+        for (name, b) in &g.buttons {
+            assert!(inside(*b, r.footer), "{what}: '{name}' is in the footer");
+        }
+        // the columns were guessed
+        let s = &rig.app.cl1;
+        assert_eq!((s.category_col.as_str(), s.grade_col.as_str()), ("Loan_Category", "CL_Final"), "{what}");
+        assert_eq!(s.measure_cols.iter().map(|(_, c)| c.as_str()).collect::<Vec<_>>(), vec!["Balance", "Base_For_Provision_BDT", "Required_Provision_BDT"], "{what}");
+        let build = g.button("Build CL-1 summary").expect("button");
+        rig.click(build.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed: {}", rig.app.status_message);
+        settle(&mut rig.app);
+        let tab = rig.app.tabs.last().expect("the summary tab");
+        assert_eq!(tab.title, "CL-1 summary", "{what}");
+        let df = &tab.cached_slice;
+        assert_eq!(df.height(), 5, "{what}");
+        let v = |c: &str, r: usize| df.column(c).expect("column").f64().expect("f64").get(r).unwrap_or(f64::NAN);
+        assert_eq!(v("Total | Outstanding", 4), 4300.0, "{what}");
+        assert_eq!(v("Total | Provision required", 4), 355.0, "{what}");
+        assert_eq!(v("STD | Outstanding", 0), 3000.0, "{what}");
+
+        // the Excel export of that tab (the file dialog is not part of the call)
+        let out = rig.app.paths.root_dir.join("cl1_out.xlsx");
+        rig.app.export_cl1_excel_to(out.clone());
+        settle(&mut rig.app);
+        assert!(out.exists(), "{what}: the workbook was written: {}", rig.app.status_message);
+        // on any other tab the command says what to do and opens no file dialog
+        rig.app.active_tab = 0;
+        rig.app.export_cl1_excel();
+        assert!(rig.app.status_message.contains("not a CL-1 summary"), "{what}: {}", rig.app.status_message);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r5_a_missing_choice_is_said_in_red_and_a_template_error_is_shown() {
+    let (ppp, w, h) = SCREENS[0];
+    let mut rig = cl1_rig("p5r5b", ppp, w, h);
+    rig.app.run_command(&rig.ctx, CommandId::Cl1Summary);
+    rig.app.cl1.grade_col.clear();
+    let p = rig.draw(6);
+    assert!(p.boxes.iter().any(|(t, _)| t.contains("Choose the grade column")), "the grade problem is said");
+    assert!(rig.app.cl1_source().is_err());
+    rig.app.cl1.grade_col = "CL_Final".into();
+    rig.app.cl1.measure_cols[1].1.clear();
+    assert!(rig.app.cl1_source().err().unwrap_or_default().contains("Choose the column of 'Base for provision'"));
+    rig.app.cl1.measure_cols[1].1 = "Base_For_Provision_BDT".into();
+    assert!(rig.app.cl1_source().is_ok());
+    // a template that names an unknown grade is shown in the dialog with its name
+    let f = rig.app.paths.root_dir.join("portable_data").join("report_templates").join("cl1.json");
+    let bad = std::fs::read_to_string(&f).expect("written").replace("\"SMA\"]", "\"SMA-9\"]");
+    std::fs::write(&f, bad).expect("edit");
+    rig.app.run_command(&rig.ctx, CommandId::Cl1Summary);
+    let p = rig.draw(6);
+    assert!(p.boxes.iter().any(|(t, _)| t.contains("'SMA-9'")), "the template error names the grade");
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r5_the_tool_is_listed_under_loans_and_credit_and_its_export_under_export() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::Cl1Summary), Some("Loans & credit"));
+    assert!(in_group(CommandGroup::Export).any(|c| c.id == CommandId::ExportCl1), "the Excel export of the CL-1 summary is in the Export menu");
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["cl-1 summary", "cl1 return"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::Cl1Summary, "{q}");
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = cl1_rig("p5r5c", ppp, w, h);
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
+        assert!(at("Loans & credit").top() < at("CL-1 summary").top(), "{}", rig.what);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}

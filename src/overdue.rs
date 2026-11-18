@@ -251,6 +251,50 @@ fn distinct_codes(vals: &[Option<String>], bad: &[usize], n: usize) -> Vec<Strin
     out
 }
 
+/// The index in `names` (the loan categories of a rule file or a report template) of each row of
+/// `df`: from the category column through the code map, or `fixed_category` for every row. A code
+/// that is blank, not in the map, or mapped to a category not in `names` stops the run with the
+/// codes, the count and the file to edit. `file_label` says where `names` come from and `who` is
+/// the tool.
+pub fn assign_categories(df: &DataFrame, category_col: Option<&str>, fixed_category: &str, names: &[String], category_map: &[(String, String)], file_label: &str, who: &str) -> Result<Vec<usize>> {
+    let mut cats: Vec<usize> = vec![0; df.height()];
+    match category_col.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(cc) => {
+            let col = df.column(cc).map_err(|_| anyhow!("{}: the loan category column '{}' was not found. Choose it again.", who, cc))?;
+            let col = col.cast(&DataType::String).with_context(|| format!("{}: could not read the column '{}' as text", who, cc))?;
+            let vals: Vec<Option<String>> = col.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+            let mut bad: Vec<usize> = Vec::new();
+            for (i, v) in vals.iter().enumerate() {
+                let code = normalise_code(v.as_deref().unwrap_or(""));
+                let mapped = category_map.iter().find(|(k, _)| *k == code).map(|(_, c)| c.as_str());
+                match mapped.and_then(|name| names.iter().position(|n| normalise_code(n) == normalise_code(name))) {
+                    Some(p) => cats[i] = p,
+                    None => bad.push(i),
+                }
+            }
+            if !bad.is_empty() {
+                bail!(
+                    "Loan category column '{}' has codes not in {} (or mapped to a category {} does not have): {}, on {} row(s). Add each code with its category ({}) to {}.",
+                    cc,
+                    CATEGORY_MAP_FILE,
+                    file_label,
+                    distinct_codes(&vals, &bad, 10).join(", "),
+                    bad.len(),
+                    names.join(", "),
+                    CATEGORY_MAP_FILE
+                );
+            }
+        }
+        None => {
+            let Some(p) = names.iter().position(|n| normalise_code(n) == normalise_code(fixed_category)) else {
+                bail!("{}: choose the loan category of the rows ({}), or a column that holds it.", who, names.join(", "));
+            };
+            cats.iter_mut().for_each(|c| *c = p);
+        }
+    }
+    Ok(cats)
+}
+
 /// Classifies the rows of `df`. The columns are checked first; bad values stop the run with the
 /// count and the first 5 account numbers (or row numbers).
 pub fn classify_df(df: &DataFrame, spec: &OverdueSpec, rules: &RuleFile<OverdueFile>, category_map: &[(String, String)], cl_map: &[(String, String)]) -> Result<Classified> {
@@ -270,43 +314,8 @@ pub fn classify_df(df: &DataFrame, spec: &OverdueSpec, rules: &RuleFile<OverdueF
     let mut problems = Problems::default();
 
     // 1. the loan category of each row
-    let mut cats: Vec<usize> = vec![0; height];
-    match spec.category_col.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        Some(cc) => {
-            need(cc, "loan category")?;
-            let vals = texts(cc)?;
-            let mut bad: Vec<usize> = Vec::new();
-            for (i, v) in vals.iter().enumerate() {
-                let code = normalise_code(v.as_deref().unwrap_or(""));
-                let mapped = category_map.iter().find(|(k, _)| *k == code).map(|(_, c)| c.as_str());
-                match mapped.and_then(|name| rules.data.categories.iter().position(|c| normalise_code(&c.name) == normalise_code(name))) {
-                    Some(p) => cats[i] = p,
-                    None => bad.push(i),
-                }
-            }
-            if !bad.is_empty() {
-                let names: Vec<&str> = rules.data.categories.iter().map(|c| c.name.as_str()).collect();
-                bail!(
-                    "Loan category column '{}' has codes not in {} (or mapped to a category the rule file {} does not have): {}, on {} row(s). Add each code with its category ({}) to {}.",
-                    cc,
-                    CATEGORY_MAP_FILE,
-                    rules.meta.file,
-                    distinct_codes(&vals, &bad, 10).join(", "),
-                    bad.len(),
-                    names.join(", "),
-                    CATEGORY_MAP_FILE
-                );
-            }
-        }
-        None => {
-            let p = rules.data.categories.iter().position(|c| normalise_code(&c.name) == normalise_code(&spec.fixed_category));
-            let Some(p) = p else {
-                let names: Vec<&str> = rules.data.categories.iter().map(|c| c.name.as_str()).collect();
-                bail!("Classify by overdue: choose the loan category of the rows ({}), or a column that holds it.", names.join(", "));
-            };
-            cats.iter_mut().for_each(|c| *c = p);
-        }
-    }
+    let names: Vec<String> = rules.data.categories.iter().map(|c| c.name.clone()).collect();
+    let cats = assign_categories(df, spec.category_col.as_deref(), &spec.fixed_category, &names, category_map, &format!("the rule file {}", rules.meta.file), "Classify by overdue")?;
 
     // 2. the overdue-since date of each row
     let mut since: Vec<Option<NaiveDate>> = vec![None; height];

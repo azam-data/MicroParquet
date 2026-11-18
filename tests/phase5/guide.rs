@@ -8,7 +8,7 @@ use micro_parquet::cashflow::*;
 use polars::prelude::*;
 
 /// The tool ids of Phase 5 (file names in docs/guide/), added as each task is done.
-pub const P5_GUIDE_TOOLS: [&str; 4] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue"];
+pub const P5_GUIDE_TOOLS: [&str; 5] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue", "cl1-summary"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -275,6 +275,48 @@ fn guide_classify_by_overdue() {
         &[
             md(&book, &["Account_No", "Loan_Category", "Overdue_Since", "Override_Grade"]),
             md(&out, &["Account_No", "Overdue_Months:0", "CL_Objective", "CL_Final", "CL_Rule_File"]),
+        ],
+    );
+}
+
+#[test]
+fn guide_cl1_summary() {
+    use micro_parquet::cl1::*;
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "A2", "A3", "A4", "A5", "A6"]),
+        Series::new("Loan_Category".into(), &["Continuous", "Continuous", "Demand", "Fixed term", "Fixed term", "Short-term agri & micro"]),
+        Series::new("CL_Final".into(), &["STD-0", "STD-2", "SMA", "SS", "B/L", "DF"]),
+        Series::new("Balance".into(), &[1000.0, 2000.0, 500.0, 300.0, 100.0, 400.0]),
+        Series::new("Base_For_Provision_BDT".into(), &[1000.0, 2000.0, 500.0, 250.0, 100.0, 300.0]),
+        Series::new("Required_Provision_BDT".into(), &[10.0, 20.0, 25.0, 50.0, 100.0, 150.0]),
+    ])
+    .expect("book");
+    let spec = Cl1Spec {
+        category_col: Some("Loan_Category".into()),
+        fixed_category: String::new(),
+        grade_col: "CL_Final".into(),
+        measure_cols: vec![("outstanding".into(), "Balance".into()), ("base".into(), "Base_For_Provision_BDT".into()), ("provision".into(), "Required_Provision_BDT".into())],
+    };
+    let data = dir("guide_cl1");
+    micro_parquet::rules::set_data_dir_override(Some(data.clone()));
+    let template = load_template().expect("the shipped template");
+    let cat = micro_parquet::overdue::load_category_map(&data).expect("category map");
+    let cl = micro_parquet::banking::ProvisionConfig::load_or_create(&data).expect("cl map").cl_code_map;
+    micro_parquet::rules::set_data_dir_override(None);
+    let out = build_cl1_frame(&book, &spec, &template, &cat, &cl).expect("the summary");
+    // the guide writes "STD: Outstanding" for the column "STD | Outstanding" (a bar would split a Markdown table)
+    let mut out = out;
+    let names: Vec<String> = out.get_column_names().iter().map(|n| n.to_string()).collect();
+    for n in names {
+        out.rename(&n, n.replace(" | ", ": ").into()).expect("rename");
+    }
+    check_guide(
+        "cl1-summary",
+        "guide_cl1_summary",
+        &[
+            md(&book, &["Account_No", "Loan_Category", "CL_Final", "Balance:2", "Base_For_Provision_BDT:2", "Required_Provision_BDT:2"]),
+            md(&out, &["Loan category", "STD: Outstanding:2", "SMA: Outstanding:2", "SS: Outstanding:2", "DF: Outstanding:2", "B/L: Outstanding:2", "Total: Outstanding:2"]),
+            md(&out, &["Loan category", "Total: Base for provision:2", "Total: Provision required:2"]),
         ],
     );
 }

@@ -79,12 +79,20 @@ pub const SHIPPED_RULES: &[(&str, BuiltIn)] = &[("irrbb_shocks", IRRBB_SHOCKS), 
 /// touched, and the check and the write are one step (`create_new`), so two runs at once cannot
 /// overwrite each other either. A failed write is not an error: the built-in copy is still used.
 pub fn write_builtin_if_missing(dir: &Path, builtin: BuiltIn) {
-    use std::io::Write;
     let (date, text) = builtin;
-    if std::fs::create_dir_all(dir).is_err() {
-        return;
+    write_text_if_missing(&dir.join(format!("{date}.json")), text);
+}
+
+/// Writes `text` to `path` when there is no file there (the folder is made); an existing file is
+/// never touched. A failed write is not an error.
+pub fn write_text_if_missing(path: &Path, text: &str) {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        if std::fs::create_dir_all(dir).is_err() {
+            return;
+        }
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(format!("{date}.json"))) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
         let _ = f.write_all(text.as_bytes());
     }
 }

@@ -1999,6 +1999,14 @@ pub enum TabSource {
         /// "Treat blank maturity as O/N".
         blank_maturity_on: bool,
     },
+    /// The CL-1 summary (Phase 5 R5): the loans of a tab by loan category and grade group.
+    Cl1Summary {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::cl1::Cl1Spec,
+        /// The template when the tab was built (the tab and its Excel layout follow it).
+        template: Box<crate::cl1::Cl1Template>,
+    },
     /// The six-scenario IRRBB run (Phase 5 R3): `view` says which of its two tables this tab shows.
     Irrbb {
         inputs: Vec<CfTabInput>,

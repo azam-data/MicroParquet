@@ -43,6 +43,7 @@ pub enum CommandId {
     YieldCurves,
     Provision,
     ClassifyOverdue,
+    Cl1Summary,
     Limits,
     Reconcile,
     ClMigration,
@@ -51,6 +52,7 @@ pub enum CommandId {
     ExportParquet,
     ExportCsv,
     ExportXlsx,
+    ExportCl1,
     ExportPdf,
     ExportSplit,
     ParquetArchive,
@@ -168,6 +170,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::ClassifyOverdue, "Classify by overdue\u{2026}", G::Banking, "cl classification overdue dpd days past due months std sma ss df bl brpd 15 2024 grade stage override", N::Tab),
+    c(I::Cl1Summary, "CL-1 summary\u{2026}", G::Banking, "cl1 classified loans return bangladesh bank grade category outstanding base for provision template excel", N::Tab),
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
     c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
@@ -175,6 +178,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
     c(I::ExportXlsx, "Export tabs to an Excel workbook\u{2026}", G::Export, "xlsx save spreadsheet totals", N::Tab),
+    c(I::ExportCl1, "Export the CL-1 summary to Excel\u{2026}", G::Export, "cl1 excel xlsx template return layout merged headers", N::Tab),
     c(I::ExportPdf, "Export tabs to a PDF report\u{2026}", G::Export, "save print", N::Tab),
     c(I::ExportSplit, "Split export by column\u{2026}", G::Export, "partition branch files", N::Tab),
     c(I::ParquetArchive, "Parquet compression: archive (Zstd)", G::Export, "smaller", N::Nothing),
@@ -202,7 +206,7 @@ pub const COMMANDS: &[Command] = &[
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
         CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
-        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
         _ => None,
     }
 }

@@ -1658,7 +1658,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
-        TabSource::RepricingGap { source, .. } => collect_masked_columns(source, out),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1677,7 +1677,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
-        TabSource::RepricingGap { source, .. } => source_masks_pii(source),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1821,7 +1821,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::RepricingGap { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2393,6 +2393,10 @@ pub fn compile_tab_lazy(
                 rate_col.as_deref(),
                 cl_status_col.as_deref(),
             )?
+        }
+        TabSource::Cl1Summary { source, steps, spec, template } => {
+            let input = compile_tab_lazy(source, steps, temp_dir)?;
+            crate::cl1::cl1_lazy(input, spec, template)?
         }
         TabSource::RepricingGap { source, steps, spec } => {
             let input = compile_tab_lazy(source, steps, temp_dir)?;

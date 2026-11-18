@@ -1,0 +1,20 @@
+{
+  "source": "SAMPLE layout of the Bangladesh Bank CL-1 return (classified loans and advances by loan category and grade). The owner must align the rows, groups, measures and positions with the current CL-1 form before the figures go into a return.",
+  "sample": true,
+  "title": "CL-1: Classification of loans and advances",
+  "categories": ["Continuous", "Demand", "Fixed term", "Short-term agri & micro"],
+  "grade_groups": [
+    { "label": "STD", "grades": ["STD-0", "STD-1", "STD-2"] },
+    { "label": "SMA", "grades": ["SMA"] },
+    { "label": "SS", "grades": ["SS"] },
+    { "label": "DF", "grades": ["DF"] },
+    { "label": "B/L", "grades": ["B/L"] }
+  ],
+  "measures": [
+    { "id": "outstanding", "label": "Outstanding" },
+    { "id": "base", "label": "Base for provision" },
+    { "id": "provision", "label": "Provision required" }
+  ],
+  "total_label": "Total",
+  "layout": { "title_row": 0, "unit_row": 1, "group_row": 3, "measure_row": 4, "first_data_row": 5, "label_col": 0 }
+}
