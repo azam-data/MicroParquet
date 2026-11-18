@@ -75,6 +75,7 @@ pub enum CommandId {
     ToggleSql,
     ToggleChart,
     ToggleSummary,
+    SortLists,
     // Help
     About,
 }
@@ -202,6 +203,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ToggleSql, "Show or hide the SQL scratchpad bar", G::View, "query", N::Nothing),
     c(I::ToggleChart, "Show or hide the ALCO bar chart", G::View, "graph plot", N::Nothing),
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
+    c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
 

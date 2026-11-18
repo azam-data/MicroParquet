@@ -65,6 +65,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ToggleSql => ph::TERMINAL_WINDOW,
         CommandId::ToggleChart => ph::CHART_BAR,
         CommandId::ToggleSummary => ph::SIGMA,
+        CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::About => ph::INFO,
     }
 }
@@ -237,6 +238,7 @@ impl MicroParquetApp {
             CommandId::ToggleSql => self.show_sql_bar = !self.show_sql_bar,
             CommandId::ToggleChart => self.show_chart_drawer = !self.show_chart_drawer,
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
+            CommandId::SortLists => self.open_sort_lists(),
             CommandId::About => self.show_about = true,
         }
     }

@@ -11,6 +11,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Join](join.md): add columns from one tab to another by a key.
 - [Filter](filter.md): keep or remove rows by conditions.
 - [Sort](sort.md): order rows by one or more columns.
+- [Custom sort lists and Tenor order](custom-sort-lists.md): High, Medium, Low and 1m, 100D, 1y in the order you read them.
 - [Calc column](calc-column.md): a new column from one arithmetic step.
 - [Conditional column](conditional-column.md): IF / ELSE IF / ELSE flags and groups.
 - [Clean line breaks](clean-line-breaks.md): one line for each value that was split over several lines.

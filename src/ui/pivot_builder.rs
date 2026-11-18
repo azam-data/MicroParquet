@@ -154,6 +154,7 @@ impl MicroParquetApp {
             .get(self.active_tab)
             .map(|t| t.cached_slice.get_columns().iter().map(|c| (c.name().to_string(), FieldKind::of(c.dtype()))).collect())
             .unwrap_or_default();
+        self.sort_lists.reload();
         let b = &mut self.pivot_builder;
         b.spec = from.unwrap_or_else(|| PivotSpec { row_totals: true, column_totals: true, ..Default::default() });
         b.fields = kinds;
@@ -293,6 +294,13 @@ impl MicroParquetApp {
     pub(crate) fn add_pivot_field(&mut self, field: &str, area: Area) {
         match area {
             Area::Rows | Area::Columns => {
+                // a list that names this field is pre-selected (U3)
+                if let Some(list) = micro_parquet::sort_lists::suggested_for(&self.sort_lists.lists, field).cloned() {
+                    let spec = &mut self.pivot_builder.spec;
+                    if !spec.field_orders.iter().any(|o| o.field == field) {
+                        spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order: SortOrder::from_list(&list) });
+                    }
+                }
                 let spec = &mut self.pivot_builder.spec;
                 spec.rows.retain(|f| f != field);
                 spec.columns.retain(|f| f != field);
@@ -316,6 +324,13 @@ impl MicroParquetApp {
     }
 
     fn remove_pivot_chip(&mut self, area: Area, index: usize) {
+        self.remove_pivot_chip_inner(area, index);
+        let spec = &mut self.pivot_builder.spec;
+        let (rows, cols) = (spec.rows.clone(), spec.columns.clone());
+        spec.field_orders.retain(|o| rows.contains(&o.field) || cols.contains(&o.field));
+    }
+
+    fn remove_pivot_chip_inner(&mut self, area: Area, index: usize) {
         let spec = &mut self.pivot_builder.spec;
         match area {
             Area::Rows => {
@@ -555,12 +570,60 @@ impl MicroParquetApp {
                         ui.close_menu();
                     }
                 }
+                let in_rows = areas.contains(&Area::Rows);
+                if in_rows || areas.contains(&Area::Columns) {
+                    ui.separator();
+                    self.pivot_order_menu(ui, name, in_rows);
+                }
             })
             .response
             .on_hover_text("Add to Rows, Columns, Values or Filters");
         });
         rects.field_rows.push((name.to_string(), row));
         rects.field_menus.push((name.to_string(), menu_rect));
+    }
+
+    /// "Order: Natural / <list> / Tenor / By value" for a field of Rows or Columns (U3).
+    fn pivot_order_menu(&mut self, ui: &mut egui::Ui, field: &str, is_row: bool) {
+        let current = self.pivot_builder.spec.field_orders.iter().find(|o| o.field == field).map(|o| o.order.clone()).unwrap_or_default();
+        let by_value = is_row && self.pivot_builder.spec.sort_by_value.is_some();
+        let shown = if by_value { "By value".to_string() } else { current.label() };
+        let mut choice: Option<SortOrder> = None;
+        let mut value_sort = false;
+        ui.menu_button(format!("Order: {}", shown), |ui| {
+            if ui.selectable_label(!by_value && current.is_natural(), "Natural").clicked() {
+                choice = Some(SortOrder::Natural);
+                ui.close_menu();
+            }
+            for list in self.sort_lists.lists.clone() {
+                let o = SortOrder::from_list(&list);
+                if ui.selectable_label(!by_value && current == o, &list.name).clicked() {
+                    choice = Some(o);
+                    ui.close_menu();
+                }
+            }
+            if ui.selectable_label(!by_value && current == SortOrder::Tenor, "Tenor").clicked() {
+                choice = Some(SortOrder::Tenor);
+                ui.close_menu();
+            }
+            if is_row && !self.pivot_builder.spec.values.is_empty() && ui.selectable_label(by_value, "By value").clicked() {
+                value_sort = true;
+                ui.close_menu();
+            }
+        });
+        let spec = &mut self.pivot_builder.spec;
+        if let Some(o) = choice {
+            spec.field_orders.retain(|x| x.field != field);
+            if !o.is_natural() {
+                spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order: o });
+            }
+            if is_row {
+                spec.sort_by_value = None;
+            }
+        }
+        if value_sort {
+            spec.sort_by_value = Some(PivotSortByValue { value_index: 0, descending: true });
+        }
     }
 
     fn pivot_right_panel(&mut self, ui: &mut egui::Ui, h: f32, tk: &theme::Tokens, rects: &mut PivotRects) {
@@ -639,8 +702,19 @@ impl MicroParquetApp {
                 Value(usize),
             }
             let chips: Vec<Chip> = match area {
-                Area::Rows => spec_snapshot.rows.iter().map(|f| Chip::Plain(f.clone(), String::new())).collect(),
-                Area::Columns => spec_snapshot.columns.iter().map(|f| Chip::Plain(f.clone(), String::new())).collect(),
+                Area::Rows | Area::Columns => {
+                    let fields = if area == Area::Rows { &spec_snapshot.rows } else { &spec_snapshot.columns };
+                    fields
+                        .iter()
+                        .map(|f| {
+                            let extra = match spec_snapshot.field_orders.iter().find(|o| o.field == *f) {
+                                Some(o) if !o.order.is_natural() => format!("order: {}", o.order.label()),
+                                _ => String::new(),
+                            };
+                            Chip::Plain(f.clone(), extra)
+                        })
+                        .collect()
+                }
                 Area::Filters => spec_snapshot
                     .filters
                     .iter()

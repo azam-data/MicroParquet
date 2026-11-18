@@ -11,6 +11,7 @@
 
 use crate::banking::weighted_rate_exprs;
 use crate::engine::natural_sort_key;
+use crate::sort_lists::SortOrder;
 use crate::models::*;
 use anyhow::{bail, Context, Result};
 use polars::prelude::*;
@@ -307,7 +308,11 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// One label of a key field: blanks last, numbers and dates by value, text in natural order.
-fn cmp_label(orders: &HashMap<Option<String>, f64>, numeric: bool, a: &Option<String>, b: &Option<String>) -> Ordering {
+fn cmp_label(orders: &HashMap<Option<String>, f64>, numeric: bool, order: &SortOrder, a: &Option<String>, b: &Option<String>) -> Ordering {
+    if !order.is_natural() {
+        // a custom list or Tenor (U3): blanks last, then the listed or parsed values in order
+        return order.compare(a, b);
+    }
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
@@ -406,9 +411,13 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     }
 
     let sort = spec.sort_by_value;
+    let field_orders: Vec<SortOrder> = all_fields
+        .iter()
+        .map(|f| spec.field_orders.iter().find(|o| o.field == **f).map(|o| o.order.clone()).unwrap_or_default())
+        .collect();
     let by_labels = |a: &Key, b: &Key, idx0: usize| -> Ordering {
         for (p, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-            let o = cmp_label(&orders[idx0 + p], numeric_key[idx0 + p], x, y);
+            let o = cmp_label(&orders[idx0 + p], numeric_key[idx0 + p], &field_orders[idx0 + p], x, y);
             if o != Ordering::Equal {
                 return o;
             }
@@ -430,7 +439,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
                     (None, Some(_)) => Ordering::Greater,
                     (Some(_), None) => Ordering::Less,
                 };
-                let o = o.then_with(|| cmp_label(&orders[k - 1], numeric_key[k - 1], &a[k - 1], &b[k - 1]));
+                let o = o.then_with(|| cmp_label(&orders[k - 1], numeric_key[k - 1], &field_orders[k - 1], &a[k - 1], &b[k - 1]));
                 if o != Ordering::Equal {
                     return o;
                 }
@@ -659,7 +668,7 @@ pub fn distinct_field_values(lf: LazyFrame, field: &str, limit: usize) -> Result
         }
     }
     let mut values = texts;
-    values.sort_by(|a, b| cmp_label(&order_map, numeric, a, b));
+    values.sort_by(|a, b| cmp_label(&order_map, numeric, &SortOrder::Natural, a, b));
     let more = values.len() > limit;
     values.truncate(limit);
     Ok((values, more))
@@ -793,6 +802,7 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
             show_as: if pct_count > 0 { PivotShowAs::PctOfColumnTotal } else { PivotShowAs::NoCalculation },
             scale: PivotScale::Global,
             sort_by_value,
+            field_orders: Vec::new(),
         },
         renames,
         notes,

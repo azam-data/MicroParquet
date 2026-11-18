@@ -215,7 +215,7 @@ pub const RADIUS_BAR: f32 = 3.0;
 pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL, ne: RADIUS_CONTROL, sw: 0.0, se: 0.0 };
 pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
 // dialogs: widths (the schema dialog's is above) and the lists inside them
-pub const DIALOG_W_SORT: f32 = 560.0;
+pub const DIALOG_W_SORT: f32 = 700.0;
 pub const DIALOG_W_FILTER: f32 = 640.0;
 pub const DIALOG_W_TOOL: f32 = 680.0;
 pub const DIALOG_W_PIVOT: f32 = 720.0;
@@ -296,6 +296,10 @@ pub const FIELD_W_VALUE: f32 = 130.0;
 pub const FIELD_W_OP: f32 = 120.0;
 pub const FIELD_W_COLUMN: f32 = 160.0;
 pub const FIELD_W_SORT_COLUMN: f32 = 180.0;
+/// The order choice (Natural, a list, Tenor) of a sort level.
+pub const FIELD_W_SORT_ORDER: f32 = 120.0;
+/// The name, columns and several-lines boxes of the custom sort-list manager.
+pub const FIELD_W_SORT_LIST: f32 = 300.0;
 pub const SQL_BAR_W: f32 = 520.0;
 // chart
 pub const CHART_H: f32 = 175.0;

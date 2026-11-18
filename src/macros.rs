@@ -83,6 +83,37 @@ def _mp_sort_key(e, dtype):
 
 "#;
 
+/// Python mirror of the custom-list and Tenor sort orders (`sort_lists::order_sort_keys`, U3).
+const PY_ORDER_HELPER: &str = r#"_MP_TENOR_DAYS = {"d": 1, "day": 1, "days": 1, "w": 7, "wk": 7, "wks": 7, "week": 7, "weeks": 7,
+                  "m": 30, "mon": 30, "mons": 30, "month": 30, "months": 30,
+                  "y": 365, "yr": 365, "yrs": 365, "year": 365, "years": 365}
+
+
+def _mp_tenor_days(v):
+    """Days of a tenor such as 3y, 6 M, 100D or O/N; None when the text is not one."""
+    t = v.strip().lower()
+    if t in ("o/n", "on", "overnight"):
+        return 1.0
+    m = _re.fullmatch(r"([0-9.]+)\s*([a-z]*)", t)
+    if not m or m.group(2) not in _MP_TENOR_DAYS:
+        return None
+    try:
+        return float(m.group(1)) * _MP_TENOR_DAYS[m.group(2)]
+    except ValueError:
+        return None
+
+
+def _mp_rank_keys(e, rank_fn):
+    """Three sort keys: listed (0) before the rest (1), the rank, then the natural key."""
+    blank = e.str.strip_chars() == ""
+    t = pl.when(blank).then(None).otherwise(e)
+    rank = t.map_elements(rank_fn, return_dtype=pl.Float64)
+    group = pl.when(t.is_null()).then(None).when(rank.is_null()).then(1).otherwise(0)
+    return [group, rank, t.map_elements(_mp_natural_key, return_dtype=pl.Utf8)]
+
+
+"#;
+
 /// Python mirror of `engine::parse_banking_amount` (P1 rules), emitted when a column is typed
 /// Float64 or Int64. Keep the two in step.
 const PY_AMOUNT_HELPER: &str = r#"import re as _re
@@ -446,16 +477,42 @@ pub fn generate_python_polars_code(
                     }
                     // Blank text counts as blank (last), like the app; other text sorts by its
                     // natural key (case-insensitive, numbers by value). Other types sort as they are.
-                    let keys: Vec<String> = levels
-                        .iter()
-                        .map(|l| {
-                            format!(
-                                "_mp_sort_key(pl.col(\"{c}\"), lf.collect_schema()[\"{c}\"])",
-                                c = l.column
-                            )
-                        })
-                        .collect();
-                    let desc: Vec<&str> = levels.iter().map(|l| if l.descending { "True" } else { "False" }).collect();
+                    if levels.iter().any(|l| !l.order.is_natural()) && !py.contains("def _mp_rank_keys") {
+                        py.push_str(PY_ORDER_HELPER);
+                    }
+                    let mut keys: Vec<String> = Vec::new();
+                    let mut desc: Vec<&str> = Vec::new();
+                    for l in levels {
+                        match &l.order {
+                            crate::sort_lists::SortOrder::Natural => {
+                                keys.push(format!(
+                                    "_mp_sort_key(pl.col(\"{c}\"), lf.collect_schema()[\"{c}\"])",
+                                    c = l.column
+                                ));
+                                desc.push(if l.descending { "True" } else { "False" });
+                            }
+                            order => {
+                                let rank_fn = match order {
+                                    crate::sort_lists::SortOrder::Tenor => "_mp_tenor_days".to_string(),
+                                    crate::sort_lists::SortOrder::List { values, case_insensitive, .. } => {
+                                        let norm = |v: &str| if *case_insensitive { v.trim().to_lowercase() } else { v.trim().to_string() };
+                                        let pairs: Vec<String> = values
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, v)| format!("{}: {}.0", serde_json::to_string(&norm(v)).unwrap_or_default(), i))
+                                            .collect();
+                                        let look = if *case_insensitive { "v.strip().lower()" } else { "v.strip()" };
+                                        format!("lambda v, _r={{{}}}: _r.get({})", pairs.join(", "), look)
+                                    }
+                                    crate::sort_lists::SortOrder::Natural => String::new(),
+                                };
+                                keys.push(format!("*_mp_rank_keys(pl.col(\"{}\"), {})", l.column, rank_fn));
+                                desc.push("False");
+                                desc.push(if l.descending { "True" } else { "False" });
+                                desc.push("False");
+                            }
+                        }
+                    }
                     py.push_str(&format!(
                         "lf = lf.sort([{}], descending=[{}], nulls_last=True, maintain_order=True)\n\n",
                         keys.join(", "),

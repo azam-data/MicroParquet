@@ -25,10 +25,11 @@ pub use micro_parquet::models::{
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
     format_metric_value, format_with_commas, resolved_scale, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection, BlankRule, RateBandDef, RateBandMode, fmt_pct, parse_rate_edges,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
-    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
+    CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, PivotFieldOrder, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
     SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep, GapTabInput, CfTabInput, IrrbbView,
 };
+pub use micro_parquet::sort_lists::SortOrder;
 pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
 pub use micro_parquet::tab_jobs::{
     check_schema_for_tab, check_text_columns, compute_step_counts, compute_tab_column_stats,
@@ -78,6 +79,7 @@ pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;
 pub use crate::ui::schema::PendingCsvModal;
 pub use crate::ui::sort::SortState;
+pub use crate::ui::sort_lists::SortListsState;
 pub use crate::ui::stack::StackState;
 pub use crate::ui::steps::{MacroState, RightTab};
 pub use crate::ui::theme;

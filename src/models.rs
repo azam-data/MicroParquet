@@ -811,12 +811,16 @@ pub struct SummarySpec {
 }
 
 /// One level of a multi-level sort.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct SortLevel {
     pub column: String,
     /// false = lowest first (A to Z, smallest, oldest); true = highest first.
     #[serde(default)]
     pub descending: bool,
+    /// How text values are ordered: Natural (Phase 3), a custom list or Tenor (Phase 6 U3). Steps
+    /// saved before U3 have none and sort naturally.
+    #[serde(default)]
+    pub order: crate::sort_lists::SortOrder,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1374,6 +1378,18 @@ pub struct PivotSpec {
     pub scale: PivotScale,
     #[serde(default)]
     pub sort_by_value: Option<PivotSortByValue>,
+    /// The order of the labels of a Rows or Columns field other than Natural (Phase 6 U3).
+    #[serde(default)]
+    pub field_orders: Vec<PivotFieldOrder>,
+}
+
+/// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PivotFieldOrder {
+    #[serde(default)]
+    pub field: String,
+    #[serde(default)]
+    pub order: crate::sort_lists::SortOrder,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -1746,6 +1762,8 @@ pub enum TransformStep {
         scale: PivotScale,
         #[serde(default)]
         sort_by_value: Option<PivotSortByValue>,
+        #[serde(default)]
+        field_orders: Vec<PivotFieldOrder>,
     },
     SqlQuery {
         query: String,
@@ -1949,7 +1967,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -1960,6 +1978,7 @@ impl TransformStep {
                 show_as: *show_as,
                 scale: *scale,
                 sort_by_value: *sort_by_value,
+                field_orders: field_orders.clone(),
             }),
             _ => None,
         }
@@ -1978,6 +1997,7 @@ impl TransformStep {
             show_as: spec.show_as,
             scale: spec.scale,
             sort_by_value: spec.sort_by_value,
+            field_orders: spec.field_orders,
         }
     }
 }

@@ -343,5 +343,11 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 </report>
 
 <accepted_deviations>
-(none yet)
+U3 (details in docs/phase6-progress.md):
+- The sort step and the pivot keep a copy of the list they use (name, values, case flag), so macros replay the same order whatever happens to the list file.
+- The Sort dialog keeps "Lowest first / Highest first" and adds an "Order" choice (Natural, each list, Tenor); "Highest first" reverses a list.
+- In the pivot, "By value" is the existing sort by the first value field (Rows only).
+- Values not in a list or not a tenor follow the others in natural A→Z order, also for Z→A.
+- The count of values that are not tenors is taken from the first 2,000 distinct values.
+- The fixture `phase6_sort_pivot_unset` was written by hand in the Phase 5 form.
 </accepted_deviations>

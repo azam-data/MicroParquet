@@ -94,6 +94,8 @@ pub enum ActiveToolModal {
     None,
     FilterRows,
     SortRows,
+    /// The custom sort-list manager (Phase 6 U3).
+    SortLists,
     ManageColumns,
     ConditionalCol,
     MathFormula,
@@ -195,6 +197,7 @@ pub struct MicroParquetApp {
     // One state struct per screen (src/ui/<name>.rs)
     pub filter: FilterState,
     pub sort: SortState,
+    pub sort_lists: SortListsState,
     pub columns: ColumnsState,
     pub cond: CondState,
     pub calc: CalcState,
@@ -288,6 +291,7 @@ impl MicroParquetApp {
 
             filter: FilterState::default(),
             sort: SortState::default(),
+            sort_lists: SortListsState::default(),
             columns: ColumnsState::default(),
             cond: CondState::default(),
             calc: CalcState::default(),

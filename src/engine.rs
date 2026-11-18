@@ -2528,10 +2528,28 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 .collect_schema()
                 .context("Could not read the column types for this sort")?;
             let mut keys: Vec<Expr> = Vec::with_capacity(levels.len());
+            let mut descending: Vec<bool> = Vec::with_capacity(levels.len());
             for l in levels {
                 let dtype = schema.get(l.column.as_str()).ok_or_else(|| {
                     anyhow::anyhow!("Sort: column '{}' was not found. Pick it again in the sort editor.", l.column)
                 })?;
+                if !l.order.is_natural() {
+                    // a custom list or Tenor orders text; other types sort as they are
+                    if !dtype.is_string() {
+                        anyhow::bail!(
+                            "Sort: the order '{}' is for text columns, but '{}' is {}. Choose A to Z / Z to A for it.",
+                            l.order.label(),
+                            l.column,
+                            dtype
+                        );
+                    }
+                    for (e, d) in crate::sort_lists::order_sort_keys(&l.column, &l.order, l.descending) {
+                        keys.push(e);
+                        descending.push(d);
+                    }
+                    continue;
+                }
+                descending.push(l.descending);
                 // Blank text sorts with the nulls: last, in either direction. Other text sorts by
                 // its natural key: case-insensitive, numbers inside the text by value.
                 keys.push(if dtype.is_string() {
@@ -2551,9 +2569,9 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                     col(l.column.as_str())
                 });
             }
-            let n = levels.len();
+            let n = keys.len();
             let options = SortMultipleOptions::default()
-                .with_order_descending_multi(levels.iter().map(|l| l.descending))
+                .with_order_descending_multi(descending)
                 .with_nulls_last_multi(vec![true; n])
                 .with_maintain_order(true);
             Ok(lf.sort_by_exprs(keys, options))

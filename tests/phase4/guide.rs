@@ -655,7 +655,7 @@ fn guide_sort() {
         opt_nums("Balance", &[Some(100.0), Some(300.0), Some(900.0), None, Some(50.0), Some(60.0)]),
     ]);
     let step = TransformStep::SortRows {
-        levels: vec![SortLevel { column: "Brancd".into(), descending: false }, SortLevel { column: "Balance".into(), descending: true }],
+        levels: vec![SortLevel { column: "Brancd".into(), descending: false, ..Default::default() }, SortLevel { column: "Balance".into(), descending: true, ..Default::default() }],
     };
     let out = run_steps("g_sort", &df, &[step]).expect("the sort runs");
     assert_eq!(

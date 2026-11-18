@@ -111,7 +111,9 @@ impl MicroParquetApp {
                     JobKind::Load => self.status_message = format!("Pipeline error: {}", msg),
                     JobKind::PivotPreview => self.pivot_preview_failed(msg),
                     JobKind::PivotValues => {
-                        if let Some(p) = self.pivot_bar.popup.as_mut().filter(|_| !self.pivot_builder.open) {
+                        if self.sort_lists.fill_wait.take().is_some() {
+                            self.sort_lists.message = Some((true, format!("Could not read the values: {}", msg)));
+                        } else if let Some(p) = self.pivot_bar.popup.as_mut().filter(|_| !self.pivot_builder.open) {
                             p.values = Some(Err(msg));
                         } else if let Some(p) = self.pivot_builder.popup.as_mut() {
                             p.values = Some(Err(msg));
@@ -229,7 +231,7 @@ impl MicroParquetApp {
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
             JobOutput::PivotValues(r) => {
-                if !self.apply_pivot_bar_values(&r) {
+                if !self.apply_sort_list_fill(&r) && !self.apply_pivot_bar_values(&r) {
                     self.apply_pivot_values(*r)
                 }
             }
