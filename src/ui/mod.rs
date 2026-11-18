@@ -14,11 +14,19 @@ pub mod duration;
 pub mod export;
 pub mod filter;
 pub mod ftp;
+pub mod behaviour_profile;
+pub mod cashflow_ladder;
 pub mod gap_ladder;
+pub mod irrbb;
 pub mod jobs;
 pub mod join;
 pub mod limits;
 pub mod clean_breaks;
+pub mod classify_overdue;
+pub mod cl1_summary;
+pub mod ifrs9;
+pub mod liquidity;
+pub mod pick;
 pub mod normaliser;
 pub mod pivot;
 pub mod pivot_bar;
@@ -44,6 +52,8 @@ mod layout_tests;
 mod render_tests;
 #[cfg(test)]
 mod render_tests_p4;
+#[cfg(test)]
+mod render_tests_p5;
 #[cfg(test)]
 mod tests;
 pub mod theme;
@@ -101,6 +111,10 @@ impl MicroParquetApp {
             ActiveToolModal::RateShockSim => self.render_rate_shock_modal(ctx, cols),
             ActiveToolModal::DurationAnalysis => self.render_duration_modal(ctx, cols),
             ActiveToolModal::LoanProvision => self.render_provision_modal(ctx, cols),
+            ActiveToolModal::ClassifyOverdue => self.render_classify_overdue_modal(ctx, cols),
+            ActiveToolModal::Cl1Summary => self.render_cl1_modal(ctx, cols),
+            ActiveToolModal::Liquidity => self.render_liquidity_modal(ctx, cols),
+            ActiveToolModal::IfrsEcl => self.render_ifrs9_modal(ctx, cols),
             ActiveToolModal::LoanLimitUtil => self.render_limits_modal(ctx, cols),
             ActiveToolModal::FtpCurveMap => self.render_ftp_modal(ctx, cols),
             ActiveToolModal::BankingAudit => self.render_audit_modal(ctx, cols),
@@ -109,6 +123,9 @@ impl MicroParquetApp {
             ActiveToolModal::ReconcilePeriods => self.render_reconcile_modal(ctx, cols),
             ActiveToolModal::ClMigration => self.render_cl_migration_modal(ctx, cols),
             ActiveToolModal::GapLadder => self.render_gap_ladder_modal(ctx, cols),
+            ActiveToolModal::IrrbbLadder => self.render_cf_ladder_modal(ctx, cols),
+            ActiveToolModal::IrrbbSix => self.render_irrbb_modal(ctx, cols),
+            ActiveToolModal::BehaviourProfile => self.render_behaviour_modal(ctx, cols),
             ActiveToolModal::YieldCurves => self.render_curves_modal(ctx, cols),
             ActiveToolModal::SaveMacro => self.render_save_macro_modal(ctx, cols),
             ActiveToolModal::PythonCodePreview => self.render_python_preview_modal(ctx, cols),
@@ -124,6 +141,10 @@ impl MicroParquetApp {
             } else {
                 self.push_step_to_active_tab(step, new_tab);
             }
+        }
+        // the IFRS 9 summary opens after the step was added to the tab it reads
+        if let Some(source) = self.pending_ecl_summary.take() {
+            self.create_tab_from_source_with("IFRS 9 summary".to_string(), source, Vec::new(), HashMap::new(), None);
         }
         self.render_edit_banner(ctx);
         if outcome.close {

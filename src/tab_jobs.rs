@@ -376,6 +376,8 @@ pub struct SchemaApplied {
     pub parse_note: Option<String>,
     pub row_check: Option<RowCountCheck>,
     pub status: String,
+    /// The tab's steps after the schema: the "Clean line breaks" check box adds or removes the first one.
+    pub steps: Vec<TransformStep>,
 }
 
 /// Checks that a tab's pipeline still builds with new ingestion settings and recounts its parse
@@ -408,7 +410,7 @@ pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaAp
     if let Some(n) = key_note {
         status.push_str(&format!(" 🔑 {}", n));
     }
-    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status })
+    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status, steps })
 }
 
 // ------------------------------------------------------------------------------------ exports
@@ -512,6 +514,20 @@ pub fn export_tabs_xlsx(
     let mut message =
         format!("Exported multi-tab Excel workbook to {:?}: {}", out_path, rep.summary());
     message.push_str(&sidecar_note(out_path, sidecar));
+    Ok(ExportOutcome { message, path_used: None, written: Some(out_path.to_path_buf()) })
+}
+
+/// The CL-1 summary tab as an Excel sheet laid out like its template (merged group headers, the
+/// unit line under the title, the template's cell positions). The tab's table is rebuilt from its
+/// source; steps added to the tab afterwards are not part of the sheet.
+pub fn export_cl1_xlsx(source: &TabSource, temp_dir: &Path, out_path: &Path, num_format: NumberDisplayFormat, decimals: usize, ctx: &JobCtx) -> Result<ExportOutcome> {
+    let TabSource::Cl1Summary { template, .. } = source else {
+        anyhow::bail!("Open a CL-1 summary tab first (Banking \u{25b8} Loans & credit \u{25b8} CL-1 summary), then export it.");
+    };
+    ctx.set_progress(format!("Writing {}\u{2026}", display_name(out_path)), None);
+    let df = compile_tab_lazy(source, &[], temp_dir)?.collect()?;
+    write_atomic(out_path, ctx, |tmp| crate::cl1::write_cl1_xlsx(&df, template, tmp, num_format, decimals))?;
+    let message = format!("Exported the CL-1 summary to {:?} ({}).", out_path, crate::cl1::unit_line(num_format));
     Ok(ExportOutcome { message, path_used: None, written: Some(out_path.to_path_buf()) })
 }
 

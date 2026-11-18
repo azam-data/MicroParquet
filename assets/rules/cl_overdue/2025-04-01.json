@@ -1,0 +1,55 @@
+{
+  "as_of": "2025-04-01",
+  "source": "Bangladesh Bank BRPD Circular No. 15, 27 November 2024 (Master Circular: Loan Classification and Provisioning), effective 1 April 2025: classification by the overdue period. Overdue months are complete calendar months from the overdue-since date to the cutoff. STD-1 is 1 day to under 1 month, STD-2 1 to under 2 months, SMA 2 to under 3, SS 3 to under 6, DF 6 to under 12, B/L 12 months or more; the same for every loan category today",
+  "sample": false,
+  "categories": [
+    {
+      "name": "Continuous",
+      "bands": [
+        {"grade": "STD-0"},
+        {"grade": "STD-1", "from_days": 1},
+        {"grade": "STD-2", "from_months": 1},
+        {"grade": "SMA", "from_months": 2},
+        {"grade": "SS", "from_months": 3},
+        {"grade": "DF", "from_months": 6},
+        {"grade": "B/L", "from_months": 12}
+      ]
+    },
+    {
+      "name": "Demand",
+      "bands": [
+        {"grade": "STD-0"},
+        {"grade": "STD-1", "from_days": 1},
+        {"grade": "STD-2", "from_months": 1},
+        {"grade": "SMA", "from_months": 2},
+        {"grade": "SS", "from_months": 3},
+        {"grade": "DF", "from_months": 6},
+        {"grade": "B/L", "from_months": 12}
+      ]
+    },
+    {
+      "name": "Fixed term",
+      "bands": [
+        {"grade": "STD-0"},
+        {"grade": "STD-1", "from_days": 1},
+        {"grade": "STD-2", "from_months": 1},
+        {"grade": "SMA", "from_months": 2},
+        {"grade": "SS", "from_months": 3},
+        {"grade": "DF", "from_months": 6},
+        {"grade": "B/L", "from_months": 12}
+      ]
+    },
+    {
+      "name": "Short-term agri & micro",
+      "bands": [
+        {"grade": "STD-0"},
+        {"grade": "STD-1", "from_days": 1},
+        {"grade": "STD-2", "from_months": 1},
+        {"grade": "SMA", "from_months": 2},
+        {"grade": "SS", "from_months": 3},
+        {"grade": "DF", "from_months": 6},
+        {"grade": "B/L", "from_months": 12}
+      ]
+    }
+  ]
+}

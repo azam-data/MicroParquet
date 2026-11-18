@@ -356,13 +356,17 @@ fn check_blank_rates_for_floor(lf: LazyFrame, spec: &RateShockSpec, floor: f64) 
         }
         None => rows.iter().map(|r| format!("row {r}")).collect(),
     };
+    let listed = match &acct {
+        // names the column the account numbers came from, e.g. "first 5 values of Account_No"
+        Some(c) => format!("first {} value{} of {}", items.len(), if items.len() == 1 { "" } else { "s" }, c),
+        None => format!("first {} row{}", items.len(), if items.len() == 1 { "" } else { "s" }),
+    };
     bail!(
-        "ΔNII: {} row(s) have no current rate in '{}', and a floor of {}% is set, so their shocked rate cannot be checked against it. First {} {}: {}. Fill in the rate on those rows, or remove the floor.",
+        "ΔNII: {} row(s) have no current rate in '{}', and a floor of {}% is set, so their shocked rate cannot be checked against it. The {}: {}. Fill in the rate on those rows, or remove the floor.",
         n,
         spec.rate_col,
         floor,
-        items.len(),
-        if acct.is_some() { "account number(s)" } else { "row(s)" },
+        listed,
         items.join(", ")
     );
 }
@@ -1183,9 +1187,9 @@ fn normalise_code_expr(e: Expr) -> Expr {
 
 /// A JSON object read as ordered (key, value) pairs, so a repeated key is caught instead of
 /// silently overwriting the earlier one. An optional numeric "defaults_version" key is split out.
-struct JsonPairs {
-    version: Option<u32>,
-    pairs: Vec<(String, String)>,
+pub(crate) struct JsonPairs {
+    pub(crate) version: Option<u32>,
+    pub(crate) pairs: Vec<(String, String)>,
 }
 
 impl<'de> Deserialize<'de> for JsonPairs {
@@ -1233,7 +1237,7 @@ fn parse_rule_date(s: &str, file: &Path, idx: usize, field: &str) -> Result<Naiv
 }
 
 /// Normalises keys and checks values against `allowed`; a code listed twice is an error.
-fn validate_code_map(
+pub(crate) fn validate_code_map(
     pairs: Vec<(String, String)>,
     allowed: &[&str],
     file: &Path,
@@ -1313,7 +1317,7 @@ fn validate_rules(rules: &[ProvisionRule], file: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("Could not read {}", path.display()))?;
     parse_json_text(&raw, path)
@@ -1382,7 +1386,7 @@ fn outdated_warning(path: &Path, version: Option<u32>) -> String {
 
 /// Writes `contents` to `path` unless it exists; via a temp file + rename so a reader never
 /// sees a half-written file.
-fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
@@ -1397,7 +1401,7 @@ fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
         .with_context(|| format!("Could not write default {}", path.display()))
 }
 
-fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
+pub(crate) fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
     let mut lines = vec![format!("  \"defaults_version\": {}", version)];
     lines.extend(
         pairs
@@ -2311,20 +2315,80 @@ pub fn build_gap_ladder(
     null_as_sight: bool,
     limits: Option<&GapLimitsFile>,
 ) -> Result<DataFrame> {
+    build_gap_ladder_behaviour(inputs, def, cutoff_date, null_as_sight, limits, None)
+}
+
+/// The behaviour profile of a gap ladder (Phase 5 R2): the profile file and, for each input tab
+/// (in the same order), the column that holds its product code.
+#[derive(Clone, Debug)]
+pub struct GapBehaviour {
+    pub file_name: String,
+    pub file: crate::behaviour::BehaviourFile,
+    pub product_cols: Vec<String>,
+}
+
+/// The label of the bucket that holds `days` days after the cutoff (a negative number is overdue).
+pub fn bucket_label_for_days(def: &crate::models::CustomBucketDef, days: i64) -> String {
+    if days < 0 {
+        return def.overdue_label.clone();
+    }
+    let mut rules = def.rules.clone();
+    rules.sort_by_key(|r| r.max_days);
+    rules.iter().find(|r| days <= r.max_days as i64).map(|r| r.label.clone()).unwrap_or_else(|| def.overflow_label.clone())
+}
+
+/// [`build_gap_ladder`] with an optional behaviour profile: a liability of a product that the
+/// profile covers as a non-maturity deposit is split. Its volatile part (1 − core) goes in the
+/// first bucket of the ladder and its core part in the bucket that holds its average maturity;
+/// its maturity date is not used. Other rows, and every row without a profile, are bucketed as before.
+pub fn build_gap_ladder_behaviour(
+    inputs: Vec<(LazyFrame, GapInputSpec)>,
+    def: &crate::models::CustomBucketDef,
+    cutoff_date: &str,
+    null_as_sight: bool,
+    limits: Option<&GapLimitsFile>,
+    behaviour: Option<&GapBehaviour>,
+) -> Result<DataFrame> {
     if inputs.is_empty() {
         bail!("Gap ladder: add at least one tab (assets or liabilities).");
     }
     if let Some(l) = limits {
         validate_gap_limits(l, def, "of this preset")?;
     }
+    // the buckets of the ladder: the preset's order without its overdue bucket
+    let order: Vec<String> = gap_bucket_order(def, null_as_sight).into_iter().filter(|b| *b != def.overdue_label).collect();
+    if order.is_empty() {
+        bail!("Gap ladder: the preset '{}' has no bucket.", def.name);
+    }
+    // each non-maturity product of the profile: its code, core share and the bucket of its average maturity
+    let nmd: Vec<(String, f64, String)> = behaviour
+        .map(|b| {
+            b.file
+                .products
+                .iter()
+                .filter(|p| p.is_nmd())
+                .map(|p| (crate::behaviour::normalise_product(&p.product), (p.core_pct / 100.0).clamp(0.0, 1.0), bucket_label_for_days(def, (p.avg_maturity_years * 365.0).round() as i64)))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut parts: Vec<LazyFrame> = Vec::new();
-    for (lf, spec) in inputs {
+    for (idx, (lf, spec)) in inputs.into_iter().enumerate() {
         let mut lf = lf;
         let schema = lf.collect_schema().context("Could not read the columns of a tab of the gap ladder")?;
         let amount_dt = schema.get(spec.amount_col.as_str()).cloned().ok_or_else(|| anyhow!("Gap ladder: a tab has no column '{}'. Choose its amount column again.", spec.amount_col))?;
         if !amount_dt.is_numeric() {
             bail!("Gap ladder: the amount column '{}' is {}, not a number. Set it to a number in the schema first.", spec.amount_col, amount_dt);
         }
+        let product_col: Option<String> = match behaviour {
+            Some(b) => {
+                let c = b.product_cols.get(idx).map(|c| c.trim().to_string()).unwrap_or_default();
+                if c.is_empty() || schema.get(c.as_str()).is_none() {
+                    bail!("Gap ladder: choose the product column of line {} (the behaviour profile is read against it).", idx + 1);
+                }
+                Some(c)
+            }
+            None => None,
+        };
         // +1 for an asset, -1 for a liability
         let (lf, sign) = match &spec.role {
             GapRole::Asset => (lf, lit(1.0)),
@@ -2333,11 +2397,26 @@ pub fn build_gap_ladder(
         };
         let lf = apply_maturity_bucket(lf, &spec.maturity_col, cutoff_date, def, null_as_sight, "__bucket")?;
         let amt = col(spec.amount_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
-        parts.push(lf.select([
-            col("__bucket"),
-            when(sign.clone().gt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__in"),
-            when(sign.lt(lit(0.0))).then(amt).otherwise(lit(0.0)).alias("__out"),
-        ]));
+        let normal = |lf: LazyFrame| {
+            lf.select([
+                col("__bucket"),
+                when(sign.clone().gt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__in"),
+                when(sign.clone().lt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__out"),
+            ])
+        };
+        match (&product_col, nmd.is_empty()) {
+            (Some(pc), false) => {
+                let code = normalise_code_expr(col(pc.as_str()));
+                let core = nmd.iter().rev().fold(lit(NULL).cast(DataType::Float64), |acc, (c, core, _)| when(code.clone().eq(lit(c.clone()))).then(lit(*core)).otherwise(acc));
+                let core_bucket = nmd.iter().rev().fold(lit(NULL).cast(DataType::String), |acc, (c, _, b)| when(code.clone().eq(lit(c.clone()))).then(lit(b.clone())).otherwise(acc));
+                let is_nmd = core.clone().is_not_null().and(sign.clone().lt(lit(0.0)));
+                parts.push(normal(lf.clone().filter(is_nmd.clone().not())));
+                // the volatile part: first bucket; the core part: the bucket of the average maturity (outflows)
+                parts.push(lf.clone().filter(is_nmd.clone()).select([lit(order[0].clone()).alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * (lit(1.0) - core.clone())).alias("__out")]));
+                parts.push(lf.filter(is_nmd).select([core_bucket.alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * core).alias("__out")]));
+            }
+            _ => parts.push(normal(lf)),
+        }
     }
     let grouped = concat(parts, UnionArgs::default())?
         .group_by([col("__bucket")])
@@ -2347,11 +2426,6 @@ pub fn build_gap_ladder(
     let names: Vec<Option<String>> = grouped.column("__bucket")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
     let ins: Vec<Option<f64>> = grouped.column("__in")?.f64()?.into_iter().collect();
     let outs: Vec<Option<f64>> = grouped.column("__out")?.f64()?.into_iter().collect();
-    // the buckets of the ladder: the preset's order without its overdue bucket
-    let order: Vec<String> = gap_bucket_order(def, null_as_sight).into_iter().filter(|b| *b != def.overdue_label).collect();
-    if order.is_empty() {
-        bail!("Gap ladder: the preset '{}' has no bucket.", def.name);
-    }
     let mut inflow = vec![0.0f64; order.len()];
     let mut outflow = vec![0.0f64; order.len()];
     let mut overdue_assets = 0.0f64;

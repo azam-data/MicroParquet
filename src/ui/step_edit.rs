@@ -26,6 +26,8 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::DurationAnalysis { .. } => ActiveToolModal::DurationAnalysis,
         TransformStep::LoanClassificationProvision { .. } => ActiveToolModal::LoanProvision,
         TransformStep::LoanLimitUtilization { .. } => ActiveToolModal::LoanLimitUtil,
+        TransformStep::ClassifyOverdue { .. } => ActiveToolModal::ClassifyOverdue,
+        TransformStep::IfrsEcl { .. } => ActiveToolModal::IfrsEcl,
         TransformStep::GroupByPivot { .. } => ActiveToolModal::GroupByPivot,
         TransformStep::PivotTable { .. } => ActiveToolModal::PivotBuilder,
         TransformStep::FilterRows { .. }
@@ -187,6 +189,8 @@ impl MicroParquetApp {
                 cutoff_date: self.provision.cutoff.trim().to_string(),
                 collateral_type_col: opt(&self.provision.coll_type_col),
             },
+            ActiveToolModal::ClassifyOverdue => return self.classify_overdue_step().ok(),
+            ActiveToolModal::IfrsEcl => return self.ifrs9_step().ok(),
             ActiveToolModal::LoanLimitUtil => TransformStep::LoanLimitUtilization {
                 limit_col: self.limits.col.clone(),
                 bal_col: self.limits.bal_col.clone(),
@@ -247,8 +251,9 @@ impl MicroParquetApp {
                 self.calc.right_is_col = right_is_col;
                 self.calc.right_val = right_val_or_col;
             }
-            TransformStep::CleanLineBreaks { columns } => {
+            TransformStep::CleanLineBreaks { columns, trim_all } => {
                 self.clean_breaks.all = columns.is_empty();
+                self.clean_breaks.trim_all = trim_all;
                 self.clean_breaks.picked = columns;
             }
             TransformStep::NormalizeEntity { source_col, new_col } => {
@@ -370,6 +375,46 @@ impl MicroParquetApp {
                 self.provision.sec_col = security_col.unwrap_or_default();
                 self.provision.cutoff = cutoff_date;
                 self.provision.coll_type_col = collateral_type_col.unwrap_or_default();
+            }
+            TransformStep::IfrsEcl { segment_col, fixed_segment, drawn_col, undrawn_col, eir_col, maturity_col, dpd_col, grade_col, classified_stage3, forborne_col, sicr_unassessed_col, rating_orig_col, rating_now_col, prev_stage_col, days_performing_col, cutoff_date } => {
+                let e = &mut self.ecl;
+                e.segment_by_col = segment_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                e.segment_col = segment_col.unwrap_or_default();
+                if !fixed_segment.trim().is_empty() {
+                    e.fixed_segment = fixed_segment;
+                }
+                e.drawn_col = drawn_col;
+                e.undrawn_col = undrawn_col.unwrap_or_default();
+                e.eir_col = eir_col;
+                e.maturity_col = maturity_col;
+                e.dpd_col = dpd_col.unwrap_or_default();
+                e.grade_col = grade_col.unwrap_or_default();
+                e.classified_stage3 = classified_stage3;
+                e.forborne_col = forborne_col.unwrap_or_default();
+                e.unassessed_col = sicr_unassessed_col.unwrap_or_default();
+                e.rating_orig_col = rating_orig_col.unwrap_or_default();
+                e.rating_now_col = rating_now_col.unwrap_or_default();
+                e.prev_col = prev_stage_col.unwrap_or_default();
+                e.days_col = days_performing_col.unwrap_or_default();
+                e.cutoff = cutoff_date;
+                e.files = None;
+            }
+            TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, overdue_amount_col, cutoff_date } => {
+                let o = &mut self.overdue;
+                o.category_by_col = category_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.category_col = category_col.unwrap_or_default();
+                if !fixed_category.trim().is_empty() {
+                    o.fixed_category = fixed_category;
+                }
+                o.use_dpd = dpd_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.since_col = since_col.unwrap_or_default();
+                o.dpd_col = dpd_col.unwrap_or_default();
+                o.override_on = override_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.override_col = override_col.unwrap_or_default();
+                o.amount_on = overdue_amount_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.amount_col = overdue_amount_col.unwrap_or_default();
+                o.cutoff = cutoff_date;
+                o.categories = None;
             }
             TransformStep::LoanLimitUtilization { limit_col, bal_col, ccf_pct } => {
                 self.limits.col = limit_col;

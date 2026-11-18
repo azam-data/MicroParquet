@@ -63,6 +63,23 @@ pub struct StepsReport {
     pub cards: Vec<egui::Rect>,
     /// The button rows of the selected step.
     pub buttons: Vec<egui::Rect>,
+    /// Each button of the selected step by name (edit, up, down, hide, duplicate, delete), where it was drawn.
+    pub named_buttons: Vec<(String, egui::Rect)>,
+}
+
+/// The Column tab as drawn in the last frame.
+#[derive(Clone, Debug)]
+pub struct InspectorReport {
+    /// What the tab leaves inside its panel.
+    pub inner: egui::Rect,
+    /// Each stat card: its name, its value as text, where its card was drawn.
+    pub tiles: Vec<(String, String, egui::Rect)>,
+    /// The slot of each bar of the chart.
+    pub bars: Vec<egui::Rect>,
+}
+
+pub fn inspector_report(ctx: &egui::Context) -> Option<InspectorReport> {
+    ctx.data(|d| d.get_temp::<InspectorReport>(egui::Id::new("inspector_report")))
 }
 
 pub fn steps_report(ctx: &egui::Context) -> Option<StepsReport> {
@@ -514,6 +531,7 @@ impl MicroParquetApp {
         let mut row_rects: Vec<StepRowRects> = Vec::new();
         let mut card_rects: Vec<egui::Rect> = Vec::new();
         let mut button_rects: Vec<egui::Rect> = Vec::new();
+        let mut named_buttons: Vec<(String, egui::Rect)> = Vec::new();
         let mut inner_rect = egui::Rect::NOTHING;
         egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
             inner_rect = ui.available_rect_before_wrap();
@@ -595,45 +613,52 @@ impl MicroParquetApp {
                                 }
                                 if is_sel {
                                     ui.add_space(theme::SPACE_XS);
-                                    // wraps to a second line instead of passing the panel's edge
-                                    let buttons = ui.horizontal_wrapped(|ui| {
+                                    // one row of small icon buttons, delete at the right end; each has a tooltip
+                                    let buttons = ui.horizontal(|ui| {
                                         ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-                                        let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
-                                        let edit = ui.add_enabled(editable, egui::Button::new(theme::ph::PENCIL_SIMPLE));
-                                        if edit
-                                            .on_hover_text("Edit")
-                                            .on_disabled_hover_text(if skipped { "Turn the step on to edit it." } else { "Set to Number and SQL steps have no editor: delete the step and add it again." })
-                                            .clicked()
-                                        {
-                                            do_edit = Some(i);
-                                        }
-                                        if ui.add_enabled(i > 0, egui::Button::new(theme::ph::ARROW_UP)).on_hover_text("Move up").clicked() {
-                                            do_up = Some(i);
-                                        }
-                                        if ui.add_enabled(i + 1 < tab.steps.len(), egui::Button::new(theme::ph::ARROW_DOWN)).on_hover_text("Move down").clicked() {
-                                            do_down = Some(i);
-                                        }
-                                        let (icon, tip) = if skipped { (theme::ph::EYE, "Turn on") } else { (theme::ph::EYE_SLASH, "Turn off (skip)") };
-                                        if ui.add(egui::Button::new(icon)).on_hover_text(tip).clicked() {
-                                            do_skip = Some(i);
-                                        }
-                                        if ui.add(egui::Button::new(theme::ph::COPY)).on_hover_text("Duplicate").clicked() {
-                                            do_dup = Some(i);
-                                        }
+                                        ui.spacing_mut().interact_size.y = theme::STEP_BTN_H;
+                                        ui.spacing_mut().button_padding = egui::vec2(theme::SPACE_XS, 2.0);
+                                        let mut small = |ui: &mut egui::Ui, name: &str, icon: &str, color: Option<egui::Color32>, enabled: bool, tip: &str, off_tip: &str| -> egui::Response {
+                                            let mut rt = egui::RichText::new(icon).size(theme::TEXT_SMALL);
+                                            if let Some(c) = color {
+                                                rt = rt.color(c);
+                                            }
+                                            let r = ui.add_enabled(enabled, egui::Button::new(rt).min_size(egui::vec2(theme::STEP_BTN_W, theme::STEP_BTN_H)));
+                                            named_buttons.push((name.to_string(), r.rect));
+                                            r.on_hover_text(tip).on_disabled_hover_text(off_tip)
+                                        };
                                         if confirm == Some(i) {
-                                            if theme::danger_button(ui, "Delete?").clicked() {
+                                            if theme::danger_button(ui, "Delete step?").clicked() {
                                                 do_delete = Some(i);
                                             }
                                             if ui.button("No").clicked() {
                                                 cancel_delete = true;
                                             }
-                                        } else if ui
-                                            .add(egui::Button::new(egui::RichText::new(theme::ph::TRASH).color(tk.danger)))
-                                            .on_hover_text("Delete (asks first)")
-                                            .clicked()
-                                        {
-                                            ask_delete = Some(i);
+                                            return;
                                         }
+                                        let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
+                                        let why = if skipped { "Turn the step on to edit it." } else { "Set to Number and SQL steps have no editor: delete the step and add it again." };
+                                        if small(ui, "edit", theme::ph::PENCIL_SIMPLE, None, editable, "Edit", why).clicked() {
+                                            do_edit = Some(i);
+                                        }
+                                        if small(ui, "up", theme::ph::ARROW_UP, None, i > 0, "Move up", "Already the first step").clicked() {
+                                            do_up = Some(i);
+                                        }
+                                        if small(ui, "down", theme::ph::ARROW_DOWN, None, i + 1 < tab.steps.len(), "Move down", "Already the last step").clicked() {
+                                            do_down = Some(i);
+                                        }
+                                        let (icon, tip) = if skipped { (theme::ph::EYE, "Turn on") } else { (theme::ph::EYE_SLASH, "Turn off (skip)") };
+                                        if small(ui, "hide", icon, None, true, tip, tip).clicked() {
+                                            do_skip = Some(i);
+                                        }
+                                        if small(ui, "duplicate", theme::ph::COPY, None, true, "Duplicate", "Duplicate").clicked() {
+                                            do_dup = Some(i);
+                                        }
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if small(ui, "delete", theme::ph::TRASH, Some(tk.danger), true, "Delete (asks first)", "Delete").clicked() {
+                                                ask_delete = Some(i);
+                                            }
+                                        });
                                     });
                                     button_rects.push(buttons.response.rect);
                                 }
@@ -643,7 +668,11 @@ impl MicroParquetApp {
                         card.response
                     });
                     let rect = out.inner.rect;
-                    if out.inner.interact(egui::Sense::click()).clicked() {
+                    // A click on the card selects it, unless it is on the step's buttons. (The card's click
+                    // area is not registered over the buttons: a widget added after them would take their
+                    // clicks, which is what made them do nothing.)
+                    let on_buttons = is_sel && button_rects.last().is_some_and(|b| ui.rect_contains_pointer(*b));
+                    if ui.input(|inp| inp.pointer.primary_clicked()) && ui.rect_contains_pointer(rect) && !on_buttons {
                         select = Some(i);
                     }
                     // timeline: dot, and the line down to the next step
@@ -693,6 +722,8 @@ impl MicroParquetApp {
                     (theme::ph::TIMER, "Duration / \u{394}EVE", ActiveToolModal::DurationAnalysis),
                     (theme::ph::CALCULATOR, "FTP", ActiveToolModal::FtpCurveMap),
                     (theme::ph::BANK, "Provision", ActiveToolModal::LoanProvision),
+                    (theme::ph::CALENDAR, "Classify by overdue", ActiveToolModal::ClassifyOverdue),
+                    (theme::ph::CHART_LINE, "IFRS 9 ECL", ActiveToolModal::IfrsEcl),
                     (theme::ph::CREDIT_CARD, "Limits", ActiveToolModal::LoanLimitUtil),
                     (theme::ph::SHIELD_CHECK, "Hygiene audit", ActiveToolModal::BankingAudit),
                 ] {
@@ -730,7 +761,7 @@ impl MicroParquetApp {
             });
         });
 
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("steps_report"), StepsReport { inner: inner_rect, rows: row_rects, cards: card_rects, buttons: button_rects }));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("steps_report"), StepsReport { inner: inner_rect, rows: row_rects, cards: card_rects, buttons: button_rects, named_buttons }));
 
         if open_schema {
             self.open_schema_modal_for_active_tab();
@@ -790,7 +821,13 @@ impl MicroParquetApp {
         let mut do_format = false;
         let mut do_type = false;
         let (num_format, decimals) = (self.num_format, self.global_decimals);
+        let self_log = self.inspector_log;
+        let mut new_log = self_log;
+        let mut tile_rects: Vec<(String, String, egui::Rect)> = Vec::new();
+        let mut bar_rects: Vec<egui::Rect> = Vec::new();
+        let mut panel_inner = egui::Rect::NOTHING;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            panel_inner = ui.available_rect_before_wrap();
             egui::Frame::none().inner_margin(theme::MARGIN_PANEL_COLUMN).show(ui, |ui| {
                 let Some(tab) = self.tabs.get(self.active_tab) else {
                     return;
@@ -863,51 +900,123 @@ impl MicroParquetApp {
                         if let Some(t) = &st.text {
                             tiles.push(("Distinct", count(t.distinct), None));
                         }
-                        egui::Grid::new("col_tiles").num_columns(2).spacing([theme::SPACE_S, theme::SPACE_S]).show(ui, |ui| {
-                            for (i, (k, v, color)) in tiles.iter().enumerate() {
-                                egui::Frame::none()
-                                    .fill(tk.bg)
-                                    .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
-                                    .inner_margin(theme::MARGIN_TILE)
-                                    .show(ui, |ui| {
-                                        ui.set_width(theme::TILE_W);
-                                        ui.label(theme::semibold(*k).size(theme::TEXT_LABEL).color(tk.muted));
-                                        ui.add(egui::Label::new(theme::mono_semibold(v.clone()).color(color.unwrap_or(tk.ink))).truncate());
-                                    });
-                                if i % 2 == 1 {
-                                    ui.end_row();
+                        // Stat cards: two to a row; a value that does not fit a half card is never cut:
+                        // its card takes the whole row. Every card shows the full value on hover.
+                        let width_of = |ui: &egui::Ui, rt: egui::RichText| egui::WidgetText::from(rt).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x;
+                        let mut card_rows: Vec<Vec<usize>> = Vec::new();
+                        let mut current: Vec<usize> = Vec::new();
+                        for (i, (k, v, _)) in tiles.iter().enumerate() {
+                            let fits = width_of(ui, theme::mono_semibold(v.clone())) <= theme::TILE_W && width_of(ui, theme::semibold(*k).size(theme::TEXT_LABEL)) <= theme::TILE_W;
+                            if fits {
+                                current.push(i);
+                                if current.len() == 2 {
+                                    card_rows.push(std::mem::take(&mut current));
                                 }
+                            } else {
+                                if !current.is_empty() {
+                                    card_rows.push(std::mem::take(&mut current));
+                                }
+                                card_rows.push(vec![i]);
                             }
-                        });
-                        // distribution
-                        if let Some(n) = &st.number {
-                            ui.add_space(theme::SPACE_M);
-                            ui.label(theme::semibold("Distribution").size(theme::TEXT_LABEL).color(tk.muted));
-                            let max = n.histogram.iter().copied().max().unwrap_or(1).max(1) as f32;
-                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), theme::HISTOGRAM_H), egui::Sense::hover());
-                            let w = rect.width() / n.histogram.len() as f32;
-                            for (i, c) in n.histogram.iter().enumerate() {
-                                let h = (*c as f32 / max) * rect.height();
-                                let bar = egui::Rect::from_min_max(
-                                    egui::pos2(rect.left() + i as f32 * w + theme::HISTOGRAM_BAR_GAP, rect.bottom() - h),
-                                    egui::pos2(rect.left() + (i as f32 + 1.0) * w - theme::HISTOGRAM_BAR_GAP, rect.bottom()),
-                                );
-                                ui.painter().rect_filled(bar, theme::ROUNDING_BAR_TOP, tk.accent.gamma_multiply(theme::HISTOGRAM_BAR_ALPHA));
-                            }
-                            resp.on_hover_text(format!(
-                                "{} bars from {} to {}; the bars add up to {} values",
-                                n.histogram.len(),
-                                num(n.min),
-                                num(n.max),
-                                count(n.histogram.iter().sum())
-                            ));
                         }
+                        if !current.is_empty() {
+                            card_rows.push(current);
+                        }
+                        for row in &card_rows {
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = theme::SPACE_S;
+                                for &i in row {
+                                    let (k, v, color) = &tiles[i];
+                                    let whole_row = width_of(ui, theme::mono_semibold(v.clone())) > theme::TILE_W || width_of(ui, theme::semibold(*k).size(theme::TEXT_LABEL)) > theme::TILE_W;
+                                    let inner_w = if whole_row { ui.available_width() - 2.0 * theme::MARGIN_TILE.left } else { theme::TILE_W };
+                                    let card = egui::Frame::none().fill(tk.bg).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(theme::MARGIN_TILE).show(ui, |ui| {
+                                        ui.set_width(inner_w);
+                                        // (the row is left to right: the key and the value stack in their own column)
+                                        ui.vertical(|ui| {
+                                            ui.label(theme::semibold(*k).size(theme::TEXT_LABEL).color(tk.muted));
+                                            ui.add(egui::Label::new(theme::mono_semibold(v.clone()).color(color.unwrap_or(tk.ink))).wrap_mode(egui::TextWrapMode::Extend));
+                                        });
+                                    });
+                                    card.response.clone().on_hover_text(format!("{}: {}", k, v));
+                                    tile_rects.push((k.to_string(), v.clone(), card.response.rect));
+                                }
+                            });
+                            ui.add_space(theme::SPACE_XS);
+                        }
+                        // a bar chart: bars scale with the count, or with its logarithm; each bar says what it holds
+                        let mut chart = |ui: &mut egui::Ui, title: &str, bars: &[(u64, String)], caption: String, extra: Option<String>, log: &mut bool| {
+                            ui.add_space(theme::SPACE_M);
+                            ui.horizontal(|ui| {
+                                ui.label(theme::semibold(title).size(theme::TEXT_LABEL).color(tk.muted));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.checkbox(log, "Log scale").on_hover_text("Bar heights follow the logarithm of the count, so a few large bars do not hide the small ones");
+                                });
+                            });
+                            let scale = |c: u64| if *log { (1.0 + c as f32).ln() } else { c as f32 };
+                            let max = bars.iter().map(|b| scale(b.0)).fold(f32::MIN_POSITIVE, f32::max);
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), theme::HISTOGRAM_H), egui::Sense::hover());
+                            let w = rect.width() / bars.len().max(1) as f32;
+                            for (i, (c, tip)) in bars.iter().enumerate() {
+                                let h = (scale(*c) / max) * rect.height();
+                                let slot = egui::Rect::from_min_max(egui::pos2(rect.left() + i as f32 * w, rect.top()), egui::pos2(rect.left() + (i as f32 + 1.0) * w, rect.bottom()));
+                                let bar = egui::Rect::from_min_max(egui::pos2(slot.left() + theme::HISTOGRAM_BAR_GAP, rect.bottom() - h), egui::pos2(slot.right() - theme::HISTOGRAM_BAR_GAP, rect.bottom()));
+                                ui.painter().rect_filled(bar, theme::ROUNDING_BAR_TOP, tk.accent.gamma_multiply(theme::HISTOGRAM_BAR_ALPHA));
+                                // the whole slot answers the pointer, also where the bar is short or empty
+                                let id = ui.id().with(("bar", title, i));
+                                ui.interact(slot, id, egui::Sense::hover()).on_hover_text(tip.clone());
+                                bar_rects.push(slot);
+                            }
+                            ui.add(egui::Label::new(egui::RichText::new(caption).size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+                            if let Some(e) = extra {
+                                ui.add(egui::Label::new(egui::RichText::new(e).size(theme::TEXT_LABEL).color(tk.ink)).wrap());
+                            }
+                        };
+                        let mut log = self_log;
+                        if let Some(n) = &st.number {
+                            let nb = n.histogram.len();
+                            let step = (n.range_hi - n.range_lo) / nb as f64;
+                            let bars: Vec<(u64, String)> = n
+                                .histogram
+                                .iter()
+                                .enumerate()
+                                .map(|(i, c)| {
+                                    let (a, b) = if step > 0.0 { (n.range_lo + step * i as f64, n.range_lo + step * (i + 1) as f64) } else { (n.range_lo, n.range_hi) };
+                                    (*c, format!("{} to {}: {} value{}", num(a), num(b), count(*c), if *c == 1 { "" } else { "s" }))
+                                })
+                                .collect();
+                            let caption = if n.range_hi > n.range_lo {
+                                format!("{} bars from {} to {} (the 1st to the 99th percentile)", nb, num(n.range_lo), num(n.range_hi))
+                            } else {
+                                format!("{} bar: every value in range is {}", 1, num(n.range_lo))
+                            };
+                            let plural = |c: u64| if c == 1 { "value" } else { "values" };
+                            let extra = if n.below + n.above > 0 {
+                                Some(format!("{} {} below range, {} {} above range", count(n.below), plural(n.below), count(n.above), plural(n.above)))
+                            } else {
+                                None
+                            };
+                            chart(ui, "Distribution", &bars, caption, extra, &mut log);
+                        }
+                        if let Some(dt) = &st.date {
+                            let shown: &[(i32, u32, u64)] = if dt.months.len() > theme::INSPECTOR_MAX_MONTHS { &dt.months[dt.months.len() - theme::INSPECTOR_MAX_MONTHS..] } else { &dt.months };
+                            if !shown.is_empty() {
+                                let bars: Vec<(u64, String)> = shown.iter().map(|(y, m, c)| (*c, format!("{:04}-{:02}: {} value{}", y, m, count(*c), if *c == 1 { "" } else { "s" }))).collect();
+                                let first = shown[0];
+                                let last = shown[shown.len() - 1];
+                                let mut caption = format!("{} month{} from {:04}-{:02} to {:04}-{:02}", dt.months.len(), if dt.months.len() == 1 { "" } else { "s" }, dt.months[0].0, dt.months[0].1, dt.months[dt.months.len() - 1].0, dt.months[dt.months.len() - 1].1);
+                                if shown.len() < dt.months.len() {
+                                    caption.push_str(&format!("; the bars show the last {} ({:04}-{:02} to {:04}-{:02})", shown.len(), first.0, first.1, last.0, last.1));
+                                }
+                                chart(ui, "Values per month", &bars, caption, None, &mut log);
+                            }
+                        }
+                        new_log = log;
                         if let Some(t) = &st.text {
                             ui.add_space(theme::SPACE_M);
-                            ui.label(theme::semibold("Most frequent").size(theme::TEXT_LABEL).color(tk.muted));
+                            ui.label(theme::semibold(format!("Most frequent (top {})", t.top.len().min(micro_parquet::column_stats::TOP_VALUES))).size(theme::TEXT_LABEL).color(tk.muted));
                             for (v, c) in &t.top {
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::Label::new(egui::RichText::new(v.clone()).color(tk.ink)).truncate());
+                                    ui.add(egui::Label::new(egui::RichText::new(v.clone()).color(tk.ink)).truncate()).on_hover_text(v.clone());
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         ui.label(theme::mono(count(*c)).size(theme::TEXT_COUNT).color(tk.muted));
                                     });
@@ -979,6 +1088,8 @@ impl MicroParquetApp {
             });
         });
 
+        self.inspector_log = new_log;
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("inspector_report"), InspectorReport { inner: panel_inner, tiles: tile_rects, bars: bar_rects }));
         if let Some(c) = do_filter {
             self.open_filter_editor_for_column(&c);
         }

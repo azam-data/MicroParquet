@@ -1,0 +1,60 @@
+{
+  "as_of": "2026-03-08",
+  "source": "SAMPLE ECL parameters for testing only: the probabilities of default, loss given default, credit conversion factors and scenarios are illustrative and are not the bank's or Bangladesh Bank's. The owner must replace them with the bank's own estimates (BRPD Circular No. 06 of 8 March 2026, section 5.9: at least three forward-looking scenarios, weights summing to 100).",
+  "sample": true,
+  "segments": [
+    {
+      "name": "Corporate",
+      "cumulative_pd_pct": [
+        2.0,
+        5.0,
+        8.0,
+        11.0,
+        14.0
+      ],
+      "lgd_pct": 45,
+      "ccf_pct": 50
+    },
+    {
+      "name": "SME",
+      "cumulative_pd_pct": [
+        3.0,
+        7.0,
+        11.0,
+        15.0,
+        19.0
+      ],
+      "lgd_pct": 50,
+      "ccf_pct": 50
+    },
+    {
+      "name": "Retail",
+      "cumulative_pd_pct": [
+        2.5,
+        6.0,
+        9.5,
+        13.0,
+        16.5
+      ],
+      "lgd_pct": 55,
+      "ccf_pct": 40
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "Base",
+      "weight_pct": 50,
+      "pd_multiplier": 1.0
+    },
+    {
+      "name": "Upside",
+      "weight_pct": 25,
+      "pd_multiplier": 0.8
+    },
+    {
+      "name": "Downside",
+      "weight_pct": 25,
+      "pd_multiplier": 1.5
+    }
+  ]
+}

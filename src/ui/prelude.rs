@@ -7,7 +7,7 @@ pub use micro_parquet::batch::BatchReport;
 pub use micro_parquet::engine::{
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema,
     auto_detect_smart_schema_with, blank_balance_notes, collect_masked_columns, compile_tab_lazy,
-    detect_file_schema, ensure_pii_key_for, export_pii_key,
+    detect_file_schema, ensure_pii_key_for, export_pii_key, hoist_clean_line_breaks, is_box_clean_step,
     import_pii_key, parse_failure_summary, pii_key_fingerprint, pii_key_path,
     preview_csv_raw, preview_csv_with, preview_parquet_raw, read_pii_key, source_masks_pii,
     source_parse_failures, source_row_check, stack_file_configs, take_pii_key_created_note,
@@ -27,7 +27,7 @@ pub use micro_parquet::models::{
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
     CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
-    SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep, GapTabInput,
+    SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep, GapTabInput, CfTabInput, IrrbbView,
 };
 pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
 pub use micro_parquet::tab_jobs::{
@@ -57,6 +57,9 @@ pub use crate::ui::export::{ExportState, GuardedExport};
 pub use crate::ui::filter::FilterState;
 pub use crate::ui::curves::CurvesState;
 pub use crate::ui::ftp::FtpState;
+pub use crate::ui::behaviour_profile::BehaviourState;
+pub use crate::ui::cashflow_ladder::CfLadderState;
+pub use crate::ui::irrbb::IrrbbState;
 pub use crate::ui::gap_ladder::GapState;
 pub use crate::ui::jobs::PendingRefresh;
 pub use crate::ui::join::JoinState;
@@ -67,6 +70,10 @@ pub use crate::ui::pivot_bar::PivotBarState;
 pub use crate::ui::pivot::PivotState;
 pub use crate::ui::pivot_builder::PivotBuilderState;
 pub use crate::ui::provision::ProvisionState;
+pub use crate::ui::classify_overdue::OverdueState;
+pub use crate::ui::cl1_summary::Cl1State;
+pub use crate::ui::liquidity::LiqState;
+pub use crate::ui::ifrs9::EclState;
 pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;
 pub use crate::ui::schema::PendingCsvModal;

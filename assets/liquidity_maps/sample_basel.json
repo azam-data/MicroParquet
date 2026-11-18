@@ -1,0 +1,219 @@
+{
+  "as_of": "2026-06-30",
+  "source": "SAMPLE using the Basel III LCR and NSFR factors (BCBS, January 2013 and October 2014), with illustrative six-digit GL codes. It is not the Bangladesh Bank map: the owner must replace the factors with those of DOS Circular No. 01 of 1 January 2015 and the NSFR lines of SDAD Circular Letter No. 11 of 22 July 2026, and the GL codes with the bank's chart of accounts.",
+  "sample": true,
+  "lines": [
+    {
+      "code": "L1_CASH",
+      "label": "Cash and balances with Bangladesh Bank",
+      "ratio": "LCR",
+      "kind": "hqla_l1",
+      "factor_pct": 100,
+      "side": "asset"
+    },
+    {
+      "code": "L1_GOVT",
+      "label": "Government securities (Level 1)",
+      "ratio": "LCR",
+      "kind": "hqla_l1",
+      "factor_pct": 100,
+      "side": "asset"
+    },
+    {
+      "code": "L2A_SEC",
+      "label": "Level 2A assets",
+      "ratio": "LCR",
+      "kind": "hqla_l2a",
+      "factor_pct": 85,
+      "side": "asset"
+    },
+    {
+      "code": "L2B_SEC",
+      "label": "Level 2B assets",
+      "ratio": "LCR",
+      "kind": "hqla_l2b",
+      "factor_pct": 50,
+      "side": "asset"
+    },
+    {
+      "code": "OUT_RETAIL_STABLE",
+      "label": "Stable retail deposits",
+      "ratio": "LCR",
+      "kind": "outflow",
+      "factor_pct": 5,
+      "side": "liability"
+    },
+    {
+      "code": "OUT_RETAIL_LESS_STABLE",
+      "label": "Less stable retail deposits",
+      "ratio": "LCR",
+      "kind": "outflow",
+      "factor_pct": 10,
+      "side": "liability"
+    },
+    {
+      "code": "OUT_WHOLESALE",
+      "label": "Unsecured wholesale funding",
+      "ratio": "LCR",
+      "kind": "outflow",
+      "factor_pct": 40,
+      "side": "liability"
+    },
+    {
+      "code": "IN_LOANS",
+      "label": "Performing loans (inflows)",
+      "ratio": "LCR",
+      "kind": "inflow",
+      "factor_pct": 50,
+      "side": "asset"
+    },
+    {
+      "code": "ASF_CAPITAL",
+      "label": "Regulatory capital and equity",
+      "ratio": "NSFR",
+      "kind": "asf",
+      "factor_pct": 100,
+      "side": "liability"
+    },
+    {
+      "code": "ASF_STABLE_DEP",
+      "label": "Stable retail deposits (funding)",
+      "ratio": "NSFR",
+      "kind": "asf",
+      "factor_pct": 95,
+      "side": "liability"
+    },
+    {
+      "code": "ASF_LESS_STABLE_DEP",
+      "label": "Less stable retail deposits (funding)",
+      "ratio": "NSFR",
+      "kind": "asf",
+      "factor_pct": 90,
+      "side": "liability"
+    },
+    {
+      "code": "ASF_WHOLESALE",
+      "label": "Wholesale funding",
+      "ratio": "NSFR",
+      "kind": "asf",
+      "factor_pct": 50,
+      "side": "liability"
+    },
+    {
+      "code": "RSF_CASH",
+      "label": "Cash and balances with Bangladesh Bank (required)",
+      "ratio": "NSFR",
+      "kind": "rsf",
+      "factor_pct": 0,
+      "side": "asset"
+    },
+    {
+      "code": "RSF_L1",
+      "label": "Level 1 securities (required)",
+      "ratio": "NSFR",
+      "kind": "rsf",
+      "factor_pct": 5,
+      "side": "asset"
+    },
+    {
+      "code": "RSF_LOANS",
+      "label": "Performing loans (required)",
+      "ratio": "NSFR",
+      "kind": "rsf",
+      "factor_by_maturity": {
+        "lt_6m": 50,
+        "6m_1y": 50,
+        "ge_1y": 85
+      },
+      "side": "asset"
+    }
+  ],
+  "gl_map": [
+    {
+      "match": "prefix",
+      "value": "1010",
+      "line": "L1_CASH"
+    },
+    {
+      "match": "prefix",
+      "value": "1010",
+      "line": "RSF_CASH"
+    },
+    {
+      "match": "prefix",
+      "value": "1020",
+      "line": "L1_GOVT"
+    },
+    {
+      "match": "prefix",
+      "value": "1020",
+      "line": "RSF_L1"
+    },
+    {
+      "match": "prefix",
+      "value": "1030",
+      "line": "L2A_SEC"
+    },
+    {
+      "match": "prefix",
+      "value": "1040",
+      "line": "L2B_SEC"
+    },
+    {
+      "match": "range",
+      "from": "110000",
+      "to": "119999",
+      "line": "IN_LOANS"
+    },
+    {
+      "match": "range",
+      "from": "110000",
+      "to": "119999",
+      "line": "RSF_LOANS"
+    },
+    {
+      "match": "prefix",
+      "value": "2010",
+      "line": "OUT_RETAIL_STABLE"
+    },
+    {
+      "match": "prefix",
+      "value": "2010",
+      "line": "ASF_STABLE_DEP"
+    },
+    {
+      "match": "prefix",
+      "value": "2020",
+      "line": "OUT_RETAIL_LESS_STABLE"
+    },
+    {
+      "match": "prefix",
+      "value": "2020",
+      "line": "ASF_LESS_STABLE_DEP"
+    },
+    {
+      "match": "prefix",
+      "value": "2030",
+      "line": "OUT_WHOLESALE"
+    },
+    {
+      "match": "prefix",
+      "value": "2030",
+      "line": "ASF_WHOLESALE"
+    },
+    {
+      "match": "prefix",
+      "value": "3",
+      "line": "ASF_CAPITAL"
+    }
+  ],
+  "caps": {
+    "level2_max_pct": 40,
+    "level2b_max_pct": 15,
+    "inflow_cap_pct": 75,
+    "lcr_min_pct": 100,
+    "nsfr_min_pct": 100,
+    "lcr_test": "at_least",
+    "nsfr_test": "greater_than"
+  }
+}

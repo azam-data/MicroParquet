@@ -255,8 +255,21 @@ pub const CURVES_LIST_W: f32 = 270.0;
 pub const CURVES_BODY_MIN_H: f32 = 300.0;
 pub const GAP_COMBO_W: f32 = 150.0;
 pub const GAP_COMBO_NARROW_W: f32 = 120.0;
+/// The column and default choices of the IRRBB tools' dialogs.
+pub const CF_COMBO_W: f32 = 160.0;
+pub const CF_DEFAULT_W: f32 = 130.0;
+pub const CF_WIDE_W: f32 = 150.0;
+pub const CF_DIALOG_W: f32 = 1040.0;
+pub const BEHAVIOUR_DIALOG_W: f32 = 1100.0;
+pub const BEHAVIOUR_CELL_W: f32 = 80.0;
+pub const BEHAVIOUR_SOURCE_W: f32 = 320.0;
 pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
+/// The height of a row of the Banking and Export menus (compact, so the Banking menu fits a 686 pt window).
+pub const MENU_ROW_H: f32 = 26.0;
+/// The combo boxes of the LCR / NSFR dialog: the map file and the balance sign.
+pub const LIQ_MAP_COMBO_W: f32 = 225.0;
+pub const LIQ_SIGN_COMBO_W: f32 = 270.0;
 pub const LIST_MAX_H_S: f32 = 120.0;
 pub const LIST_MAX_H_M: f32 = 180.0;
 pub const LIST_MAX_H_L: f32 = 240.0;
@@ -335,6 +348,9 @@ pub const TEXT_COUNT: f32 = 11.0;
 /// What a blank (null) cell of the table shows, in the muted colour. Exports are not affected.
 pub const BLANK_CELL: &str = "\u{2013}";
 pub const STEPS_FOOTER_RESERVE: f32 = 110.0;
+/// The icon buttons of a selected step: edit, up, down, hide, duplicate, delete.
+pub const STEP_BTN_W: f32 = 28.0;
+pub const STEP_BTN_H: f32 = 24.0;
 pub const STEPS_LIST_MIN_H: f32 = 100.0;
 pub const STEP_LIST_INDENT: f32 = 26.0;
 pub const MARGIN_STEP_ROW: egui::Margin = egui::Margin { left: 8.0, right: 8.0, top: 3.0, bottom: 8.0 };
@@ -344,6 +360,8 @@ pub const STEP_DOT_R: f32 = 6.0;
 pub const MARGIN_TILE: egui::Margin = egui::Margin::same(10.0);
 pub const TILE_W: f32 = 118.0;
 pub const HISTOGRAM_H: f32 = 70.0;
+/// The most months the Column inspector draws for a date column (the latest).
+pub const INSPECTOR_MAX_MONTHS: usize = 36;
 pub const HISTOGRAM_BAR_ALPHA: f32 = 0.8;
 pub const HISTOGRAM_BAR_GAP: f32 = 2.0;
 pub const DISABLED_OPACITY: f32 = 0.45;

@@ -217,6 +217,11 @@ pub fn default_csv_separator() -> char {
 pub struct IngestionConfig {
     pub columns: Vec<ColumnSchemaConfig>,
     pub sanitize_linebreaks: bool,
+    /// Set when the Schema & Ingestion box made the recorded "Clean line breaks" step: masked text
+    /// columns are still trimmed before they are masked, so a mask is the same as it was before
+    /// Phase 5. Old files do not have it.
+    #[serde(default)]
+    pub trim_before_mask: bool,
     pub parse_accounting_negatives: bool,
     pub heal_broken_csv_lines: bool,
     pub pii_salt: String,
@@ -235,6 +240,7 @@ impl Default for IngestionConfig {
         Self {
             columns: Vec::new(),
             sanitize_linebreaks: true,
+            trim_before_mask: false,
             parse_accounting_negatives: true,
             heal_broken_csv_lines: false,
             pii_salt: "BANK_ASIA_ALM_2026".to_string(),
@@ -1532,10 +1538,15 @@ pub enum TransformStep {
     },
     /// Replaces every run of line breaks (\r\n, \n or \r) inside the text values of the chosen
     /// columns (all text columns when none are listed) with one space and trims the ends of the
-    /// values that had one. Never applied automatically.
+    /// values that had one. With `trim_all` the ends of every text value are trimmed of spaces,
+    /// as the old Schema & Ingestion check box did. Never applied automatically.
     CleanLineBreaks {
         #[serde(default)]
         columns: Vec<String>,
+        /// "Trim spaces on all text values": on for the step the Schema & Ingestion box makes,
+        /// off from the Transform menu.
+        #[serde(default)]
+        trim_all: bool,
     },
     MaturityBucket {
         mat_col: String,
@@ -1643,6 +1654,68 @@ pub enum TransformStep {
         bal_col: String,
         ccf_pct: f64,
     },
+    /// IFRS 9 staging and expected credit loss (Phase 5 R7, BRPD Circular 06/2026): adds `Stage`,
+    /// `Stage_Reason`, `EAD`, `ECL`, `ECL_Rule_File` and `ECL_Params_File`.
+    IfrsEcl {
+        #[serde(default)]
+        segment_col: Option<String>,
+        #[serde(default)]
+        fixed_segment: String,
+        #[serde(default)]
+        drawn_col: String,
+        #[serde(default)]
+        undrawn_col: Option<String>,
+        /// The effective interest rate, in percent.
+        #[serde(default)]
+        eir_col: String,
+        #[serde(default)]
+        maturity_col: String,
+        #[serde(default)]
+        dpd_col: Option<String>,
+        #[serde(default)]
+        grade_col: Option<String>,
+        /// Classified grades (SS, DF, B/L) are Stage 3.
+        #[serde(default)]
+        classified_stage3: bool,
+        #[serde(default)]
+        forborne_col: Option<String>,
+        #[serde(default)]
+        sicr_unassessed_col: Option<String>,
+        #[serde(default)]
+        rating_orig_col: Option<String>,
+        #[serde(default)]
+        rating_now_col: Option<String>,
+        #[serde(default)]
+        prev_stage_col: Option<String>,
+        #[serde(default)]
+        days_performing_col: Option<String>,
+        /// YYYY-MM-DD.
+        #[serde(default)]
+        cutoff_date: String,
+    },
+    /// Loan classification from the overdue period (Phase 5 R4, BRPD Circular 15/2024): adds
+    /// `Overdue_Months`, `CL_Objective`, `CL_Final` and `CL_Rule_File`.
+    ClassifyOverdue {
+        /// The loan category column (codes go through `loan_category_map.json`); empty = `fixed_category` for every row.
+        #[serde(default)]
+        category_col: Option<String>,
+        #[serde(default)]
+        fixed_category: String,
+        /// The overdue-since date column, or the days-past-due column (one of the two).
+        #[serde(default)]
+        since_col: Option<String>,
+        #[serde(default)]
+        dpd_col: Option<String>,
+        /// The optional subjective/override grade column.
+        #[serde(default)]
+        override_col: Option<String>,
+        /// The optional overdue amount column: a row with an amount above 0 and a blank overdue date stops the run.
+        #[serde(default)]
+        overdue_amount_col: Option<String>,
+        /// YYYY-MM-DD.
+        #[serde(default)]
+        cutoff_date: String,
+    },
     GroupByPivot {
         group_cols: Vec<String>,
         pivot_col: Option<String>,
@@ -1721,6 +1794,8 @@ impl TransformStep {
             TransformStep::DurationAnalysis { .. } => "Duration / \u{394}EVE",
             TransformStep::LoanClassificationProvision { .. } => "Provision",
             TransformStep::LoanLimitUtilization { .. } => "Limits",
+            TransformStep::ClassifyOverdue { .. } => "Classify by overdue",
+            TransformStep::IfrsEcl { .. } => "IFRS 9 ECL",
             TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
             TransformStep::Skipped { .. } => "Off",
@@ -1806,11 +1881,12 @@ impl TransformStep {
             TransformStep::NormalizeEntity { new_col, .. } => {
                 format!("+Normalize Entity: {}", new_col)
             }
-            TransformStep::CleanLineBreaks { columns } => {
+            TransformStep::CleanLineBreaks { columns, trim_all } => {
+                let trim = if *trim_all { ", trim spaces on all values" } else { "" };
                 if columns.is_empty() {
-                    "Clean line breaks (all text columns)".to_string()
+                    format!("Clean line breaks (all text columns{})", trim)
                 } else {
-                    format!("Clean line breaks ({})", columns.join(", "))
+                    format!("Clean line breaks ({}{})", columns.join(", "), trim)
                 }
             }
             TransformStep::MaturityBucket {
@@ -1844,6 +1920,12 @@ impl TransformStep {
             }
             TransformStep::LoanLimitUtilization { .. } => {
                 "+Limit Util & Undrawn CCF".to_string()
+            }
+            TransformStep::IfrsEcl { cutoff_date, .. } => {
+                format!("+IFRS 9 ECL (cutoff {})", cutoff_date.trim())
+            }
+            TransformStep::ClassifyOverdue { cutoff_date, .. } => {
+                format!("+Classify by overdue (cutoff {})", cutoff_date.trim())
             }
             TransformStep::GroupByPivot { group_cols, .. } => {
                 format!("Group/Pivot by {:?}", group_cols)
@@ -1948,6 +2030,51 @@ pub enum TabSource {
         null_as_sight: bool,
         /// The limits read from `portable_data/gap_limits` when the tab was built.
         limits: Option<crate::banking::GapLimitsFile>,
+        /// The behaviour profile applied (Phase 5 R2); `None` gives the Phase 4 ladder.
+        behaviour: Option<crate::banking::GapBehaviour>,
+    },
+    /// The IRRBB cash-flow ladder (Phase 5 R1): the dated cash flows of the chosen tabs in the 19
+    /// buckets of the Bangladesh Bank guideline, by currency.
+    IrrbbLadder {
+        inputs: Vec<CfTabInput>,
+        cutoff_date: String,
+        mode: crate::cashflow::CashFlowMode,
+        scenario: crate::cashflow::Scenario,
+        /// The behaviour profile used (its file name and content when the tab was built).
+        behaviour: Option<(String, crate::behaviour::BehaviourFile)>,
+        /// "Treat blank maturity as O/N".
+        blank_maturity_on: bool,
+    },
+    /// The IFRS 9 summary (Phase 5 R7): ECL, regulatory provision, higher of and shortfall by grade
+    /// group and by stage, from a tab that has the "IFRS 9 ECL" step's columns.
+    EclSummary {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::ecl::EclSummarySpec,
+    },
+    /// The CL-1 summary (Phase 5 R5): the loans of a tab by loan category and grade group.
+    Cl1Summary {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::cl1::Cl1Spec,
+        /// The template when the tab was built (the tab and its Excel layout follow it).
+        template: Box<crate::cl1::Cl1Template>,
+    },
+    /// LCR and NSFR from the GL balances of a tab (Phase 5 R6).
+    Liquidity {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::liquidity::LiqSpec,
+        /// The map as read when the tab was built, and its file name.
+        map: Box<crate::liquidity::LiqMap>,
+        map_file: String,
+        view: LiquidityView,
+    },
+    /// The six-scenario IRRBB run (Phase 5 R3): `view` says which of its two tables this tab shows.
+    Irrbb {
+        inputs: Vec<CfTabInput>,
+        spec: Box<crate::irrbb::IrrbbSpec>,
+        view: IrrbbView,
     },
     /// The CL migration matrix of two months (Phase 4 V2).
     ClMigration {
@@ -1957,6 +2084,32 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// Which table of the LCR / NSFR run a tab shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiquidityView {
+    /// "LCR/NSFR lines": the line detail (code, label, amount, factor, weighted).
+    Lines,
+    /// "LCR/NSFR summary": HQLA, net cash outflows, ASF, RSF, the two ratios and their flags.
+    Summary,
+}
+
+/// Which table of the six-scenario run a tab shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IrrbbView {
+    /// "IRRBB results": the scenarios, their EVE change, loss and ΔNII.
+    Results,
+    /// "IRRBB cash flows": the cash-flow ladder with the base present values.
+    CashFlows,
+}
+
+/// A tab that feeds the IRRBB cash-flow tools: where its rows come from and what its columns mean.
+#[derive(Clone, Debug)]
+pub struct CfTabInput {
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::cashflow::CfInputSpec,
 }
 
 /// A tab that feeds the liquidity gap ladder: where its rows come from and how they count.

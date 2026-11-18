@@ -1271,6 +1271,38 @@ pub fn build_lazy_pipeline(
     Ok(lf)
 }
 
+/// True for the step the Schema & Ingestion box makes: all text columns, with "Trim spaces on all
+/// text values" on. A step of that kind made from the Transform menu has the option off.
+pub fn is_box_clean_step(step: &TransformStep) -> bool {
+    matches!(step, TransformStep::CleanLineBreaks { columns, trim_all: true } if columns.is_empty())
+}
+
+/// Moves the schema dialog's "Clean line breaks" check box into the tab's steps: when it is
+/// ticked (CSV only) the recorded "Clean line breaks" step (all text columns, trimming spaces on
+/// all text values) becomes the first step, so the values are the ones the box gave before the
+/// step existed; when it is not ticked, a first step of that kind is taken out. The setting is
+/// cleared afterwards, so the step is the only thing that cleans; masked columns keep being
+/// trimmed before they are masked (`trim_before_mask`), so a mask does not change.
+pub fn hoist_clean_line_breaks(config: &mut IngestionConfig, is_parquet: bool, steps: &mut Vec<TransformStep>) {
+    if is_parquet {
+        return;
+    }
+    let want = std::mem::replace(&mut config.sanitize_linebreaks, false);
+    config.trim_before_mask = want;
+    let has_first = steps.first().is_some_and(is_box_clean_step);
+    if want && !has_first {
+        steps.insert(0, TransformStep::CleanLineBreaks { columns: Vec::new(), trim_all: true });
+    } else if !want && has_first {
+        steps.remove(0);
+    }
+}
+
+/// The cleaning of the old Schema & Ingestion box: every run of line breaks becomes a space and
+/// the spaces at the ends are trimmed, for every value.
+fn old_clean_expr(e: Expr) -> Expr {
+    e.str().replace_all(lit(r"[\r\n]+"), lit(" "), false).str().strip_chars(lit(" "))
+}
+
 /// Reads a CSV with every configured column as text (no typing yet).
 fn scan_csv_text(path: &Path, config: &IngestionConfig, temp_dir: &Path) -> Result<LazyFrame> {
     let sep = separator_byte(config.separator)?;
@@ -1323,12 +1355,11 @@ fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr
 }
 
 fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
-    if config.sanitize_linebreaks {
-        e = e
-            .str()
-            .replace_all(lit(r"[\r\n]+"), lit(" "), false)
-            .str()
-            .strip_chars(lit(" "));
+    // The old setting (an old schema file, macro, batch or headless run) cleans here, before the
+    // typing, as it always did. A tab made from the dialog has the recorded step instead
+    // (`hoist_clean_line_breaks`); only its masked columns are still trimmed before the mask.
+    if config.sanitize_linebreaks || (config.trim_before_mask && col_cfg.pii_mask != PiiMaskMode::None) {
+        e = old_clean_expr(e);
     }
 
     if col_cfg.pii_mask != PiiMaskMode::None {
@@ -1625,7 +1656,9 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(curr_source, out);
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
-        TabSource::RepricingGap { source, .. } => collect_masked_columns(source, out),
+        TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
+        TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1642,7 +1675,9 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
-        TabSource::RepricingGap { source, .. } => source_masks_pii(source),
+        TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
+        TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1781,7 +1816,12 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::RepricingGap { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::IrrbbLadder { inputs, .. } | TabSource::Irrbb { inputs, .. } => {
+            for i in inputs {
+                parts.extend(source_parse_failures(&i.source, temp_dir)?);
+            }
+        }
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2354,6 +2394,23 @@ pub fn compile_tab_lazy(
                 cl_status_col.as_deref(),
             )?
         }
+        TabSource::EclSummary { source, steps, spec } => {
+            let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The IFRS 9 summary could not read the table")?;
+            let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
+            crate::ecl::summary_frame(&df, spec, &cl_map)?.lazy()
+        }
+        TabSource::Liquidity { source, steps, spec, map, map_file, view } => {
+            let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("LCR / NSFR could not read the GL table")?;
+            let ev = crate::liquidity::run_df(&df, spec, map, map_file)?;
+            match view {
+                crate::models::LiquidityView::Lines => crate::liquidity::lines_frame(&ev)?.lazy(),
+                crate::models::LiquidityView::Summary => crate::liquidity::summary_frame(&ev, map, map_file)?.lazy(),
+            }
+        }
+        TabSource::Cl1Summary { source, steps, spec, template } => {
+            let input = compile_tab_lazy(source, steps, temp_dir)?;
+            crate::cl1::cl1_lazy(input, spec, template)?
+        }
         TabSource::RepricingGap { source, steps, spec } => {
             let input = compile_tab_lazy(source, steps, temp_dir)?;
             let betas = rate_shock_betas(spec)?;
@@ -2365,12 +2422,34 @@ pub fn compile_tab_lazy(
             cutoff_date,
             null_as_sight,
             limits,
+            behaviour,
         } => {
             let mut lfs = Vec::with_capacity(inputs.len());
             for i in inputs {
                 lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
             }
-            crate::banking::build_gap_ladder(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref())?.lazy()
+            crate::banking::build_gap_ladder_behaviour(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref(), behaviour.as_ref())?.lazy()
+        }
+        TabSource::Irrbb { inputs, spec, view } => {
+            let mut lfs = Vec::with_capacity(inputs.len());
+            for i in inputs {
+                lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
+            }
+            let out = crate::irrbb::run_irrbb(lfs, spec)?;
+            match view {
+                crate::models::IrrbbView::Results => crate::irrbb::results_frame(&out)?.lazy(),
+                crate::models::IrrbbView::CashFlows => crate::irrbb::cashflows_frame(&out)?.lazy(),
+            }
+        }
+        TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour, blank_maturity_on } => {
+            let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
+            let mut lfs = Vec::with_capacity(inputs.len());
+            for i in inputs {
+                lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
+            }
+            let settings = crate::cashflow::CfSettings { cutoff, mode: *mode, scenario: *scenario, blank_maturity_on: *blank_maturity_on };
+            let res = crate::cashflow::build_ladder(lfs, &settings, behaviour.as_ref().map(|b| &b.1))?;
+            crate::cashflow::ladder_frame(&res)?.lazy()
         }
         TabSource::ClMigration {
             prev_source,
@@ -2572,7 +2651,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             source_col,
             new_col,
         } => Ok(apply_entity_normalizer(lf, source_col, new_col)),
-        TransformStep::CleanLineBreaks { columns } => apply_clean_line_breaks(lf, columns),
+        TransformStep::CleanLineBreaks { columns, trim_all } => apply_clean_line_breaks(lf, columns, *trim_all),
         TransformStep::MaturityBucket {
             mat_col,
             cutoff_date,
@@ -2705,6 +2784,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             bal_col,
             ccf_pct,
         } => apply_loan_limit_utilization(lf, limit_col, bal_col, *ccf_pct),
+        TransformStep::ClassifyOverdue { .. } => crate::overdue::apply_classify_overdue(lf, &crate::overdue::spec_of(step)?),
+        TransformStep::IfrsEcl { .. } => crate::ecl::apply_ifrs_ecl(lf, &crate::ecl::spec_of(step)?),
         TransformStep::GroupByPivot {
             group_cols,
             aggs,
@@ -2729,9 +2810,10 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
 
 /// "Clean line breaks": in each chosen text column (all text columns when `columns` is empty) a
 /// value that has a line break gets every run of `\r` and `\n` replaced by one space and its ends
-/// trimmed. Values without a line break are not touched. A chosen column that is missing or is not
-/// text stops with a message.
-pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String]) -> Result<LazyFrame> {
+/// trimmed. Values without a line break are not touched, unless `trim_all` is on: then every value
+/// of the column has its line breaks replaced and the spaces at its ends trimmed (the old Schema &
+/// Ingestion box). A chosen column that is missing or is not text stops with a message.
+pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String], trim_all: bool) -> Result<LazyFrame> {
     let mut lf = lf;
     let schema = lf.collect_schema().context("Could not read the columns for Clean line breaks")?;
     let targets: Vec<String> = if columns.is_empty() {
@@ -2753,6 +2835,9 @@ pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String]) -> Result<Lazy
         .iter()
         .map(|c| {
             let v = col(c.as_str());
+            if trim_all {
+                return old_clean_expr(v).alias(c.as_str());
+            }
             when(v.clone().str().contains(lit(r"[\r\n]"), false))
                 .then(v.clone().str().replace_all(lit(r"[\r\n]+"), lit(" "), false).str().strip_chars(lit(NULL)))
                 .otherwise(v)
@@ -3489,6 +3574,20 @@ pub fn blank_balance_notes(
                     ));
                 }
             }
+        }
+        if let TransformStep::IfrsEcl { .. } = step {
+            let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+            let spec = crate::ecl::spec_of(step)?;
+            let (_, stats) = crate::ecl::classify_lazy(input, &spec)?;
+            notes.push(stats.note(&step.short_label()));
+            continue;
+        }
+        if let TransformStep::ClassifyOverdue { override_col, .. } = step {
+            let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+            let spec = crate::overdue::spec_of(step)?;
+            let (_, stats) = crate::overdue::classify_lazy(input, &spec)?;
+            notes.push(stats.note(&step.short_label(), override_col.as_deref().is_some_and(|c| !c.trim().is_empty())));
+            continue;
         }
         let bal = match step {
             TransformStep::LoanClassificationProvision { bal_col, .. }

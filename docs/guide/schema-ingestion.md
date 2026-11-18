@@ -29,7 +29,7 @@ The dialog that opens when you open a CSV or Parquet file. It decides how each c
 ## 5. Step by step
 
 1. Choose File → "Open CSV or Parquet file…" (Ctrl+K: "open") and pick the file. The dialog "Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock" opens (for Parquet: "Schema & Ingestion (Parquet): Types & PII Masking").
-2. Under "Reading options" set "Separator", "Encoding" and "Lines above the header row that are skipped" if needed; click "Re-read" to apply them. Tick "Sanitize Linebreaks (\r, \n) & Trim Whitespace", "Parse Accounting Negatives (1,234.50 -> -1234.50)" and "Pre-Heal Broken Unquoted CSV Lines" as your file needs.
+2. Under "Reading options" set "Separator", "Encoding" and "Lines above the header row that are skipped" if needed; click "Re-read" to apply them. Tick "Clean line breaks" (it adds the recorded step "Clean line breaks" as the first step of the tab, with "Trim spaces on all text values" on so the values are the ones the box gave before, see clean-line-breaks.md; unticking it in "Apply to tab" takes that step out), "Parse Accounting Negatives (1,234.50 -> -1234.50)" and "Pre-Heal Broken Unquoted CSV Lines" as your file needs.
 3. Under "Columns" check each column's "Target Data Type". A column with Dr/Cr values shows a warning: choose "Dr is +" or "Cr is +".
 4. Choose "No Masking", "Mask Name (CLIENT_XXXX)" or "Mask Acct (ACCT_XXXX)" for sensitive columns under "PII Anonymizer".
 5. Read the "Preview" and the "Parse Failures" list: values that could not be converted become blank and are counted there.

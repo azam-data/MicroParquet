@@ -196,7 +196,8 @@ pub fn source_files(source: &TabSource) -> Vec<&Path> {
             v
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
-        TabSource::RepricingGap { source, .. } => source_files(source),
+        TabSource::IrrbbLadder { inputs, .. } | TabSource::Irrbb { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => source_files(source),
     }
 }
 
