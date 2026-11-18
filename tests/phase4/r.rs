@@ -237,8 +237,10 @@ fn i4_the_gap_ladder_ends_with_a_totals_row_and_its_percentage_cells_are_blank()
     let liab = DataFrame::new(vec![Series::new("Balance".into(), &[150.0, 50.0]), dates("Matdat", &["2026-11-20", "2026-12-15"])]).expect("liab");
     let limits = GapLimitsFile { limits: vec![GapLimit { bucket: "0\u{2013}1 month".into(), min_cumulative_gap_pct: -10.0 }], ..Default::default() };
     let out = build_gap_ladder(vec![(assets.lazy(), spec(GapRole::Asset)), (liab.lazy(), spec(GapRole::Liability))], &def, "2026-10-31", true, Some(&limits)).expect("ladder");
-    let last = out.height() - 1;
+    // the totals row is followed only by the row of overdue assets (item 10)
+    let last = out.height() - 2;
     assert_eq!(strings(&out, "Bucket")[last].as_deref(), Some("Total"));
+    assert_eq!(strings(&out, "Bucket")[last + 1].as_deref(), Some("Overdue assets (not in gap)"));
     assert_eq!(floats(&out, "Inflows")[last], Some(300.0));
     assert_eq!(floats(&out, "Outflows")[last], Some(200.0));
     assert_eq!(floats(&out, "Net gap")[last], Some(100.0));

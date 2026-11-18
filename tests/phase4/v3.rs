@@ -55,7 +55,7 @@ fn v3_the_acceptance_example_gives_net_cumulative_and_percentages() {
         vec!["Bucket", "Inflows", "Outflows", "Net gap", "Cumulative gap", "Net gap % of total assets", "Cumulative gap % of total assets"]
     );
     // one row per bucket of the preset, in its order
-    assert_eq!(strings(&out, "Bucket").into_iter().flatten().collect::<Vec<_>>(), vec![format!("0{EN}1 month"), format!("1{EN}3 months"), "Over 3 months".to_string(), "Overdue".to_string(), "Total".to_string()]);
+    assert_eq!(strings(&out, "Bucket").into_iter().flatten().collect::<Vec<_>>(), vec![format!("0{EN}1 month"), format!("1{EN}3 months"), "Over 3 months".to_string(), "Total".to_string(), "Overdue assets (not in gap)".to_string()]);
     assert_eq!(&floats(&out, "Inflows")[..2], &[Some(100.0), Some(200.0)]);
     assert_eq!(&floats(&out, "Outflows")[..2], &[Some(150.0), Some(50.0)]);
     assert_eq!(&floats(&out, "Net gap")[..2], &[Some(-50.0), Some(150.0)], "net -50 and +150");
@@ -67,8 +67,10 @@ fn v3_the_acceptance_example_gives_net_cumulative_and_percentages() {
     assert_eq!((r2(net_pct[0]), r2(net_pct[1])), (Some(-16.67), Some(50.0)));
     assert_eq!((r2(cum_pct[0]), r2(cum_pct[1])), (Some(-16.67), Some(33.33)));
     // the empty buckets carry the cumulative gap on
-    assert_eq!((floats(&out, "Cumulative gap")[2], floats(&out, "Cumulative gap")[3]), (Some(100.0), Some(100.0)));
-    assert_eq!(floats(&out, "Net gap")[3], Some(0.0));
+    assert_eq!(floats(&out, "Cumulative gap")[2], Some(100.0));
+    assert_eq!(floats(&out, "Net gap")[2], Some(0.0));
+    assert_eq!(floats(&out, "Net gap")[3], Some(100.0), "the totals row");
+    assert_eq!(floats(&out, "Inflows")[4], Some(0.0), "no matured asset");
 }
 
 #[test]
@@ -94,14 +96,30 @@ fn v3_a_limit_flags_the_breached_row_only_and_the_limit_column_shows_what_is_set
 }
 
 #[test]
-fn v3_blank_maturity_overdue_a_side_column_and_several_tabs() {
-    // a blank maturity is a sight deposit: the sight bucket; an old maturity is overdue
+fn v3_blank_maturity_a_side_column_several_tabs_and_overdue_liabilities_and_assets() {
+    // a blank maturity is a sight deposit: the sight bucket
     let liab = DataFrame::new(vec![Series::new("Balance".into(), &[40.0, 25.0, 10.0]), dates("Matdat", &["", "2026-09-30", "2028-01-01"])]).expect("frame");
     let out = ladder(vec![input(&assets(), GapRole::Asset), input(&liab, GapRole::Liability)], None);
-    assert_eq!(floats(&out, "Outflows"), vec![Some(40.0), Some(0.0), Some(10.0), Some(25.0), Some(75.0)], "sight, 1-3 months, over 3 months, overdue");
-    // ... or, when blank maturity is not sight, the preset's long bucket
+    // a matured liability (25, due 2026-09-30) still has to be paid: it is in the FIRST bucket with the sight 40
+    assert_eq!(strings(&out, "Bucket").into_iter().flatten().collect::<Vec<_>>(), vec![format!("0{EN}1 month"), format!("1{EN}3 months"), "Over 3 months".to_string(), "Total".to_string(), "Overdue assets (not in gap)".to_string()]);
+    assert_eq!(floats(&out, "Outflows"), vec![Some(65.0), Some(0.0), Some(10.0), Some(75.0), None], "first bucket 40 + 25, then 0, 10; total 75");
+    assert_eq!(&floats(&out, "Net gap")[..3], &[Some(100.0 - 65.0), Some(200.0), Some(-10.0)]);
+    assert_eq!(&floats(&out, "Cumulative gap")[..3], &[Some(35.0), Some(235.0), Some(225.0)], "the matured liability counts in the cumulative gap");
+    // ... or, when blank maturity is not sight, the preset's long bucket (the matured 25 is still in the first bucket)
     let out = build_gap_ladder(vec![input(&assets(), GapRole::Asset), input(&liab, GapRole::Liability)], &two_bucket_preset(), "2026-10-31", false, None).expect("builds");
-    assert_eq!(floats(&out, "Outflows"), vec![Some(0.0), Some(0.0), Some(50.0), Some(25.0), Some(75.0)], "the blank 40 joins over 3 months");
+    assert_eq!(floats(&out, "Outflows"), vec![Some(25.0), Some(0.0), Some(50.0), Some(75.0), None], "the blank 40 joins over 3 months, the matured 25 the first bucket");
+    // a matured asset that is still unpaid is NOT in the gap: a row of its own, below the ladder
+    let assets_with_overdue = DataFrame::new(vec![Series::new("Balance".into(), &[100.0, 200.0, 30.0]), dates("Matdat", &["2026-11-15", "2026-12-31", "2026-08-31"])]).expect("frame");
+    let out = ladder(vec![input(&assets_with_overdue, GapRole::Asset), input(&liab, GapRole::Liability)], None);
+    assert_eq!(strings(&out, "Bucket")[4].as_deref(), Some("Overdue assets (not in gap)"));
+    assert_eq!(floats(&out, "Inflows"), vec![Some(100.0), Some(200.0), Some(0.0), Some(300.0), Some(30.0)], "the 30 is in its own row; the Total row stays 300");
+    assert_eq!(&floats(&out, "Cumulative gap")[..3], &[Some(35.0), Some(235.0), Some(225.0)], "the overdue asset is not in the cumulative gap");
+    for c in ["Net gap", "Cumulative gap", "Net gap % of total assets", "Cumulative gap % of total assets", "Outflows"] {
+        assert_eq!(floats(&out, c)[4], None, "{c}: blank on the overdue assets row");
+    }
+    // total assets for the percentages is every asset, the matured one included: 330
+    let pct = floats(&out, "Net gap % of total assets");
+    close(pct[0], 35.0 / 330.0 * 100.0, 1e-9, "net gap % of 330");
     // one tab with a side column
     let both = DataFrame::new(vec![
         Series::new("Side".into(), &["Asset", "Deposit", "Asset", "Liab"]),

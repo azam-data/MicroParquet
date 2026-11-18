@@ -2206,6 +2206,9 @@ pub const GAP_COLUMNS: [&str; 7] = [
 ];
 /// The label of the last row of the ladder: the sums of the inflows, outflows and net gap.
 pub const GAP_TOTAL_LABEL: &str = "Total";
+/// The row below the ladder (and its totals row) with the assets whose maturity has passed: they
+/// are not in any bucket, the totals or the cumulative gap.
+pub const GAP_OVERDUE_ASSETS_LABEL: &str = "Overdue assets (not in gap)";
 pub const GAP_LIMIT_COLUMN: &str = "Cumulative gap limit %";
 pub const GAP_BREACH_COLUMN: &str = "Breach";
 pub const GAP_BREACH_FLAG: &str = "BREACH";
@@ -2277,7 +2280,9 @@ fn validate_gap_limits(file: &GapLimitsFile, def: &crate::models::CustomBucketDe
 /// (liabilities), the net gap, the cumulative gap and both as a percentage of total assets (the
 /// sum of all inflows). With limits, also the limit of each bucket and a BREACH flag where the
 /// cumulative gap % is below it. A blank maturity goes to the preset's sight bucket (or its long
-/// bucket); a maturity before the cutoff goes to the overdue bucket.
+/// bucket). A maturity before the cutoff: a liability is an outflow of the first bucket (it still has
+/// to be paid, and counts in the cumulative gap); an asset is a separate row below the totals,
+/// "Overdue assets (not in gap)", outside the buckets, the totals and the cumulative gap.
 pub fn build_gap_ladder(
     inputs: Vec<(LazyFrame, GapInputSpec)>,
     def: &crate::models::CustomBucketDef,
@@ -2321,18 +2326,31 @@ pub fn build_gap_ladder(
     let names: Vec<Option<String>> = grouped.column("__bucket")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
     let ins: Vec<Option<f64>> = grouped.column("__in")?.f64()?.into_iter().collect();
     let outs: Vec<Option<f64>> = grouped.column("__out")?.f64()?.into_iter().collect();
-    let order = gap_bucket_order(def, null_as_sight);
+    // the buckets of the ladder: the preset's order without its overdue bucket
+    let order: Vec<String> = gap_bucket_order(def, null_as_sight).into_iter().filter(|b| *b != def.overdue_label).collect();
+    if order.is_empty() {
+        bail!("Gap ladder: the preset '{}' has no bucket.", def.name);
+    }
     let mut inflow = vec![0.0f64; order.len()];
     let mut outflow = vec![0.0f64; order.len()];
+    let mut overdue_assets = 0.0f64;
     for (i, n) in names.iter().enumerate() {
         let Some(n) = n else { continue };
+        if *n == def.overdue_label {
+            // a matured liability still has to be paid: it is an outflow of the first bucket;
+            // a matured asset that is still unpaid is not an inflow of any bucket
+            outflow[0] += outs[i].unwrap_or(0.0);
+            overdue_assets += ins[i].unwrap_or(0.0);
+            continue;
+        }
         let Some(pos) = order.iter().position(|o| o == n) else {
             bail!("Gap ladder: the bucket '{}' is not in the preset '{}'.", n, def.name);
         };
         inflow[pos] += ins[i].unwrap_or(0.0);
         outflow[pos] += outs[i].unwrap_or(0.0);
     }
-    let total_assets: f64 = inflow.iter().sum();
+    // total assets: every asset, those with a matured date included
+    let total_assets: f64 = inflow.iter().sum::<f64>() + overdue_assets;
     let net: Vec<f64> = inflow.iter().zip(&outflow).map(|(a, b)| a - b).collect();
     let mut cum = Vec::with_capacity(net.len());
     let mut run = 0.0;
@@ -2343,27 +2361,32 @@ pub fn build_gap_ladder(
     let pct = |x: f64| -> Option<f64> { if total_assets != 0.0 { Some(x / total_assets * 100.0) } else { None } };
     let net_pct: Vec<Option<f64>> = net.iter().map(|x| pct(*x)).collect();
     let cum_pct: Vec<Option<f64>> = cum.iter().map(|x| pct(*x)).collect();
-    // the totals row: inflows, outflows and net gap added up; the cumulative and % columns stay blank
+    // below the buckets: the totals row (inflows, outflows and net gap added up; the cumulative and %
+    // cells stay blank), then the matured assets that are not in the gap
     let (sum_in, sum_out, sum_net): (f64, f64, f64) = (inflow.iter().sum(), outflow.iter().sum(), net.iter().sum());
     let mut labels = order.clone();
     labels.push(GAP_TOTAL_LABEL.to_string());
-    let with_total = |mut v: Vec<f64>, t: f64| -> Vec<Option<f64>> {
-        v.push(t);
-        v.into_iter().map(Some).collect()
+    labels.push(GAP_OVERDUE_ASSETS_LABEL.to_string());
+    let money = |v: Vec<f64>, total: f64, overdue: Option<f64>| -> Vec<Option<f64>> {
+        let mut out: Vec<Option<f64>> = v.into_iter().map(Some).collect();
+        out.push(Some(total));
+        out.push(overdue);
+        out
     };
-    let with_blank = |v: Vec<Option<f64>>| -> Vec<Option<f64>> {
+    let blanks = |v: Vec<Option<f64>>| -> Vec<Option<f64>> {
         let mut v = v;
+        v.push(None);
         v.push(None);
         v
     };
     let mut series = vec![
         Series::new(GAP_COLUMNS[0].into(), labels),
-        Series::new(GAP_COLUMNS[1].into(), with_total(inflow, sum_in)),
-        Series::new(GAP_COLUMNS[2].into(), with_total(outflow, sum_out)),
-        Series::new(GAP_COLUMNS[3].into(), with_total(net, sum_net)),
-        Series::new(GAP_COLUMNS[4].into(), with_blank(cum.into_iter().map(Some).collect())),
-        Series::new(GAP_COLUMNS[5].into(), with_blank(net_pct)),
-        Series::new(GAP_COLUMNS[6].into(), with_blank(cum_pct.clone())),
+        Series::new(GAP_COLUMNS[1].into(), money(inflow, sum_in, Some(overdue_assets))),
+        Series::new(GAP_COLUMNS[2].into(), money(outflow, sum_out, None)),
+        Series::new(GAP_COLUMNS[3].into(), money(net, sum_net, None)),
+        Series::new(GAP_COLUMNS[4].into(), blanks(cum.into_iter().map(Some).collect())),
+        Series::new(GAP_COLUMNS[5].into(), blanks(net_pct)),
+        Series::new(GAP_COLUMNS[6].into(), blanks(cum_pct.clone())),
     ];
     if let Some(l) = limits {
         if total_assets == 0.0 && !l.limits.is_empty() {
@@ -2376,9 +2399,9 @@ pub fn build_gap_ladder(
             _ => String::new(),
         }).collect();
         let mut lim = lim;
-        lim.push(None);
+        lim.extend([None, None]);
         let mut breach = breach;
-        breach.push(String::new());
+        breach.extend([String::new(), String::new()]);
         series.push(Series::new(GAP_LIMIT_COLUMN.into(), lim));
         series.push(Series::new(GAP_BREACH_COLUMN.into(), breach));
     }

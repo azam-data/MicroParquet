@@ -22,7 +22,7 @@ Lays out the bank's inflows (assets) and outflows (liabilities) by maturity buck
 | --- | --- | --- | --- | --- |
 | Tab role | Yes | Choice per tab | Asset / inflow, Liability / outflow, or a side column | A tab can hold both: choose Side column and pick the column that says A / ASSET or L / LIABILITY / DEPOSIT / BORROWING. |
 | Amount | Yes | Number (BDT) | 1,000,000 | Blank amounts count as 0. A negative amount reduces the bucket. |
-| Maturity date | Yes | Date | 2026-11-15; blank for current and savings | A blank maturity goes to the preset's sight bucket (or its long bucket if you untick the box). A maturity before the cutoff is overdue. |
+| Maturity date | Yes | Date | 2026-11-15; blank for current and savings | A blank maturity goes to the preset's sight bucket (or its long bucket if you untick the box). A maturity before the cutoff is overdue: a liability goes to the first bucket, an asset to the row "Overdue assets (not in gap)". |
 | Bucket preset, cutoff date | Yes | Chosen and typed in the dialog | Bangladesh Bank SLP (9 Liquidity Buckets), 2026-10-31 | Cutoff as YYYY-MM-DD. |
 
 ## 5. Step by step
@@ -37,13 +37,13 @@ Lays out the bank's inflows (assets) and outflows (liabilities) by maturity buck
 
 ## 6. What you get
 
-One row per bucket of the preset, in its order (sight, the day limits, over the last limit, overdue). `Inflows` is the sum of asset amounts and `Outflows` the sum of liability amounts in the bucket; `Net gap` = inflows − outflows; `Cumulative gap` is the running sum of the net gap; `Net gap % of total assets` and `Cumulative gap % of total assets` divide by total assets (all inflows added up) and show percent. A last row "Total" adds up Inflows, Outflows and Net gap over all buckets; its cumulative gap and percentage cells (and the limit and Breach cells) are blank. If total assets are 0 the percentages are blank. With a limits file there are two more columns: `Cumulative gap limit %` (the minimum, blank for a bucket with no limit) and `Breach` ("BREACH" when the cumulative gap % is below the limit; the cells are tinted in the danger colour). A cumulative gap equal to the limit is not a breach.
+One row per bucket of the preset, in its order (sight, the day limits, over the last limit), then the "Total" row, then "Overdue assets (not in gap)". The preset's own overdue bucket is not a row: a liability that has already matured is still to be paid, so it is an outflow of the first bucket and is in the cumulative gap; an asset that has matured and is still unpaid is not an inflow of any bucket and is shown on its own row below the totals (its Inflows cell), outside the totals and the cumulative gap. Total assets for the percentages include it. `Inflows` is the sum of asset amounts and `Outflows` the sum of liability amounts in the bucket; `Net gap` = inflows − outflows; `Cumulative gap` is the running sum of the net gap; `Net gap % of total assets` and `Cumulative gap % of total assets` divide by total assets (all inflows added up) and show percent. A last row "Total" adds up Inflows, Outflows and Net gap over all buckets; its cumulative gap and percentage cells (and the limit and Breach cells) are blank. If total assets are 0 the percentages are blank. With a limits file there are two more columns: `Cumulative gap limit %` (the minimum, blank for a bucket with no limit) and `Breach` ("BREACH" when the cumulative gap % is below the limit; the cells are tinted in the danger colour). A cumulative gap equal to the limit is not a breach.
 
 ## 7. Check your result
 
 - The sum of Inflows equals the asset balances you meant to include, and the sum of Outflows the liabilities (add the column in a Pivot or read the control totals of the tabs).
 - The last Cumulative gap equals total inflows − total outflows.
-- Overdue should be small: a large figure means matured deals still on the books (run the Hygiene audit).
+- "Overdue assets (not in gap)" should be small: a large figure means matured deals still on the books (run the Hygiene audit). A matured liability shows in the first bucket only; look at its maturity dates if the first bucket's outflow looks too high.
 - Compare the cumulative gap % of each bucket with the figure of the previous month's pack.
 
 ## 8. Worked example
@@ -66,15 +66,45 @@ Liabilities (outflows): 150 and 50 in the same buckets.
 
 Test: `guide_gap_ladder`
 
-The ladder with the preset "Test ladder" (0–1 month, 1–3 months, over 3 months, overdue), cutoff 2026-10-31, and a limit of −10% on the first bucket. Net gap is −50 and +150; cumulative −50 and +100; total assets are 300, so −16.67% and +50.00% net, −16.67% and +33.33% cumulative. The first bucket is below its −10% limit: BREACH.
+The ladder with the preset "Test ladder" (0–1 month, 1–3 months, over 3 months), cutoff 2026-10-31, and a limit of −10% on the first bucket. Net gap is −50 and +150; cumulative −50 and +100; total assets are 300, so −16.67% and +50.00% net, −16.67% and +33.33% cumulative. The first bucket is below its −10% limit: BREACH.
 
 | Bucket | Inflows | Outflows | Net gap | Cumulative gap | Net gap % of total assets | Cumulative gap % of total assets | Cumulative gap limit % | Breach |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 0–1 month | 100.00 | 150.00 | -50.00 | -50.00 | -16.67 | -16.67 | -10.00 | BREACH |
 | 1–3 months | 200.00 | 50.00 | 150.00 | 100.00 | 50.00 | 33.33 | (blank) | (blank) |
 | Over 3 months | 0.00 | 0.00 | 0.00 | 100.00 | 0.00 | 33.33 | (blank) | (blank) |
-| Overdue | 0.00 | 0.00 | 0.00 | 100.00 | 0.00 | 33.33 | (blank) | (blank) |
 | Total | 300.00 | 200.00 | 100.00 | (blank) | (blank) | (blank) | (blank) | (blank) |
+| Overdue assets (not in gap) | 0.00 | (blank) | (blank) | (blank) | (blank) | (blank) | (blank) | (blank) |
+
+Test: `guide_gap_ladder`
+
+Now the same book with two matured deals: a liability of 25 that fell due on 2026-09-30 and an asset of 30 that fell due on 2026-08-31 and is still unpaid. The cutoff is 2026-10-31.
+
+| Balance | Matdat |
+| ---: | --- |
+| 100.00 | 2026-11-15 |
+| 200.00 | 2026-12-31 |
+| 30.00 | 2026-08-31 |
+
+Test: `guide_gap_ladder`
+
+| Balance | Matdat |
+| ---: | --- |
+| 150.00 | 2026-11-20 |
+| 50.00 | 2026-12-15 |
+| 25.00 | 2026-09-30 |
+
+Test: `guide_gap_ladder`
+
+The matured liability is still to be paid, so it is an outflow of the first bucket (150 + 25 = 175) and is in the cumulative gap. The matured asset is not counted as an inflow of any bucket: it has its own row under the totals and is not in the cumulative gap. Total assets for the percentages are 330 (the 30 included).
+
+| Bucket | Inflows | Outflows | Net gap | Cumulative gap | Net gap % of total assets | Cumulative gap % of total assets |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0–1 month | 100.00 | 175.00 | -75.00 | -75.00 | -22.73 | -22.73 |
+| 1–3 months | 200.00 | 50.00 | 150.00 | 75.00 | 45.45 | 22.73 |
+| Over 3 months | 0.00 | 0.00 | 0.00 | 75.00 | 0.00 | 22.73 |
+| Total | 300.00 | 225.00 | 75.00 | (blank) | (blank) | (blank) |
+| Overdue assets (not in gap) | 30.00 | (blank) | (blank) | (blank) | (blank) | (blank) |
 
 Test: `guide_gap_ladder`
 

@@ -950,6 +950,11 @@ fn guide_gap_ladder() {
     let spec = |role| GapInputSpec { role, amount_col: "Balance".into(), maturity_col: "Matdat".into() };
     let ladder = build_gap_ladder(vec![(assets.clone().lazy(), spec(GapRole::Asset)), (liab.clone().lazy(), spec(GapRole::Liability))], &two_bucket_preset(), "2026-10-31", true, Some(&limits)).expect("the ladder builds");
     assert_eq!(strings(&ladder, "Breach")[0].as_deref(), Some("BREACH"));
+    // the same book with a matured liability (25, due 2026-09-30) and a matured asset (30, due 2026-08-31)
+    let assets_od = frame(vec![nums("Balance", &[100.0, 200.0, 30.0]), dates("Matdat", &["2026-11-15", "2026-12-31", "2026-08-31"])]);
+    let liab_od = frame(vec![nums("Balance", &[150.0, 50.0, 25.0]), dates("Matdat", &["2026-11-20", "2026-12-15", "2026-09-30"])]);
+    let overdue_ladder = build_gap_ladder(vec![(assets_od.clone().lazy(), spec(GapRole::Asset)), (liab_od.clone().lazy(), spec(GapRole::Liability))], &two_bucket_preset(), "2026-10-31", true, None).expect("the ladder builds");
+    assert_eq!(floats(&overdue_ladder, "Cumulative gap")[..2], [Some(-75.0), Some(75.0)]);
     check_guide(
         "gap-ladder",
         "guide_gap_ladder",
@@ -957,6 +962,9 @@ fn guide_gap_ladder() {
             md(&assets, &["Balance:2", "Matdat"]),
             md(&liab, &["Balance:2", "Matdat"]),
             md(&ladder, &["Bucket", "Inflows:2", "Outflows:2", "Net gap:2", "Cumulative gap:2", "Net gap % of total assets:2", "Cumulative gap % of total assets:2", "Cumulative gap limit %:2", "Breach"]),
+            md(&assets_od, &["Balance:2", "Matdat"]),
+            md(&liab_od, &["Balance:2", "Matdat"]),
+            md(&overdue_ladder, &["Bucket", "Inflows:2", "Outflows:2", "Net gap:2", "Cumulative gap:2", "Net gap % of total assets:2", "Cumulative gap % of total assets:2"]),
         ],
     );
 }
