@@ -160,6 +160,8 @@ pub struct MicroParquetApp {
     /// added step goes (after this step instead of at the end).
     pub selected_step: Option<usize>,
     pub confirm_delete_step: Option<usize>,
+    /// The Column inspector draws its bars on a log scale.
+    pub inspector_log: bool,
     pub insert_after: Option<usize>,
     /// A step reopened in its modal (edit in place).
     pub editing: Option<ui::step_edit::EditingStep>,
@@ -258,6 +260,7 @@ impl MicroParquetApp {
             selected_column: None,
             selected_step: None,
             confirm_delete_step: None,
+            inspector_log: false,
             insert_after: None,
             editing: None,
             show_about: false,

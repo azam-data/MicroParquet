@@ -1472,3 +1472,158 @@ fn c1_audit_the_behaviour_profile_row_remove_button_and_the_curve_point_remove_b
     }
 }
 
+
+// ------------------------------------------------------------------------------ C2: the Column inspector
+
+fn insp_rig(name: &str, ppp: f32, w: f32, h: f32, df: DataFrame, column: &str) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let src = parquet_source(&root, "Insp", df);
+    open_tab(&mut app, src, vec![]);
+    app.select_column(column);
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+    rig.draw(4);
+    rig
+}
+
+/// Scrolls the right panel down by turning the mouse wheel over it.
+fn scroll_panel_down(rig: &mut Rig, points: f32) -> Painted {
+    let pos = egui::pos2(rig.ctx.screen_rect().right() - theme::RIGHT_PANEL_W / 2.0, rig.ctx.screen_rect().center().y);
+    rig.step(vec![egui::Event::PointerMoved(pos)]);
+    rig.step(vec![egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -points), modifiers: egui::Modifiers::NONE }]);
+    // the scroll is animated: let it finish
+    let mut last = rig.draw(1);
+    for _ in 0..8 {
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.5);
+        last = rig.draw(1);
+    }
+    last
+}
+
+fn hover(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+    rig.step(vec![egui::Event::PointerMoved(pos)]);
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+    rig.step(vec![egui::Event::PointerMoved(pos)]);
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+    rig.step(vec![egui::Event::PointerMoved(pos)])
+}
+
+#[test]
+fn c2_stat_cards_never_cut_a_value_a_card_that_does_not_fit_takes_the_whole_row_and_every_card_has_a_tooltip() {
+    for (ppp, w, h) in SCREENS {
+        for (sum, want) in [(258_251_800_000.0f64, "25,825.18 Cr"), (12_345_678_900_000.0f64, "1,234,567.89 Cr"), (1_234_567_890_100_000.0f64, "123,456,789.01 Cr")] {
+            let df = DataFrame::new(vec![Series::new("Balance".into(), &[sum])]).expect("df");
+            let mut rig = insp_rig("p5c2a", ppp, w, h, df, "Balance");
+            let what = format!("{} sum {sum}", rig.what);
+            let p = rig.draw(3);
+            let rep = crate::ui::steps::inspector_report(&rig.ctx).unwrap_or_else(|| panic!("{what}: no inspector report"));
+            let names: Vec<&str> = rep.tiles.iter().map(|(k, _, _)| k.as_str()).collect();
+            assert_eq!(names, vec!["Rows", "Blanks", "Parse failures", "Sum", "Min", "Max", "Mean", "Distinct"], "{what}");
+            // one row: the sum, min, max and mean are all the value
+            let (_, sum_text, sum_rect) = rep.tiles.iter().find(|(k, _, _)| k == "Sum").cloned().expect("Sum");
+            let (_, min_text, _) = rep.tiles.iter().find(|(k, _, _)| k == "Min").cloned().expect("Min");
+            assert!(min_text.ends_with(" Cr") && sum_text.ends_with(" Cr"), "{what}: {sum_text} / {min_text}");
+            assert_eq!((sum_text.as_str(), min_text.as_str()), (want, want), "{what}");
+            for (k, v, r) in rep.tiles.iter().filter(|(_, _, r)| r.bottom() < rep.inner.bottom() - 4.0) {
+                // the whole value is painted, with no ellipsis, inside its card and the panel
+                let b = p.boxes.iter().filter(|(t, bx)| t == v && inside(*bx, *r)).map(|(_, b)| *b).next().unwrap_or_else(|| panic!("{what}: the value '{v}' of '{k}' is painted whole inside its card {r:?}"));
+                assert!(!v.contains('\u{2026}') && !p.boxes.iter().any(|(t, _)| t.contains('\u{2026}') && t.starts_with(v.trim_end_matches('\u{2026}')) && t != v), "{what}: '{k}' is cut");
+                assert!(r.right() <= rep.inner.right() + 0.5 && r.left() >= rep.inner.left() - 0.5, "{what}: card of '{k}' {r:?} is inside the panel {:?}", rep.inner);
+                assert!(b.right() <= r.right() - theme::MARGIN_TILE.right + 0.5, "{what}: '{v}' {b:?} fits its card {r:?}");
+            }
+            // a value that does not fit a half card has the whole row; one that fits shares it
+            let half = theme::TILE_W + 2.0 * theme::MARGIN_TILE.left;
+            for (k, v, r) in rep.tiles.iter().filter(|(_, _, r)| r.bottom() < rep.inner.bottom() - 4.0) {
+                let vb = p.boxes.iter().find(|(t, bx)| t == v && inside(*bx, *r)).map(|(_, b)| *b).expect("value");
+                if vb.width() > theme::TILE_W {
+                    assert!(r.width() > half + 20.0, "{what}: the card of '{k}' ({v}) does not fit a half card and spans the panel: {r:?}");
+                } else {
+                    assert!((r.width() - half).abs() < 1.0, "{what}: the card of '{k}' is a half card: {r:?}");
+                }
+            }
+            if want.len() > 16 {
+                assert!(rep.tiles.iter().any(|(k, _, r)| k == "Sum" && r.width() > half + 20.0), "{what}: a value of {} characters has a card of its own row", want.len());
+            }
+            // two short cards share a row
+            let rows_r = rep.tiles.iter().find(|(k, _, _)| k == "Rows").map(|(_, _, r)| *r).expect("Rows");
+            let blanks_r = rep.tiles.iter().find(|(k, _, _)| k == "Blanks").map(|(_, _, r)| *r).expect("Blanks");
+            assert!((rows_r.top() - blanks_r.top()).abs() < 1.0 && rows_r.right() < blanks_r.left(), "{what}: Rows and Blanks share a row");
+            // hovering a card gives its full value
+            let pt = sum_rect.center();
+            let tip = hover(&mut rig, pt);
+            assert!(tip.boxes.iter().any(|(t, _)| t == &format!("Sum: {sum_text}")), "{what}: the tooltip of the Sum card gives the full value: {:?}", tip.boxes.iter().filter(|(t, _)| t.contains("Sum")).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn c2_a_skewed_column_shows_its_bars_between_the_percentiles_the_outliers_a_log_toggle_and_a_tooltip_per_bar() {
+    for (ppp, w, h) in SCREENS {
+        let mut v: Vec<f64> = (1..=100).map(|i| i as f64).filter(|i| *i != 50.0).collect();
+        v.push(1e9);
+        let df = DataFrame::new(vec![Series::new("Rate_Value".into(), v)]).expect("df");
+        let mut rig = insp_rig("p5c2b", ppp, w, h, df, "Rate_Value");
+        let what = rig.what.clone();
+        rig.draw(3);
+        let p = scroll_panel_down(&mut rig, 2000.0);
+        let rep = crate::ui::steps::inspector_report(&rig.ctx).expect("report");
+        assert_eq!(rep.bars.len(), 10, "{what}");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("1 value above range")), "{what}: the outlier is said: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("range")).collect::<Vec<_>>());
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("10 bars from 2") && t.contains("1st to the 99th percentile")), "{what}: the caption gives the bar count and the range: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("bars from")).collect::<Vec<_>>());
+        for b in &rep.bars {
+            assert!(b.right() <= rep.inner.right() + 0.5 && b.left() >= rep.inner.left() - 0.5, "{what}: bar slot {b:?} in the panel {:?}", rep.inner);
+        }
+        // more than one bar has values: the painted bars (accent-coloured rectangles) are several
+        let accent = theme::tokens(false).accent.gamma_multiply(theme::HISTOGRAM_BAR_ALPHA);
+        let painted_bars = p.rects.iter().filter(|(r, f)| *f == accent && rep.bars.iter().any(|b| b.contains(r.center()))).count();
+        assert!(painted_bars > 1, "{what}: more than one non-empty bar: {painted_bars}");
+        // a tooltip per bar: range and count
+        let tip = hover(&mut rig, rep.bars[3].center());
+        assert!(tip.boxes.iter().any(|(t, _)| t.contains(" to ") && t.contains(" value")), "{what}: the bar says its range and count: {:?}", tip.boxes.iter().filter(|(t, _)| t.contains("value")).collect::<Vec<_>>());
+        // the Log scale toggle: a real click
+        let toggle = p.boxes.iter().find(|(t, _)| t == "Log scale").map(|(_, b)| *b).expect("the Log scale check box");
+        assert!(!rig.app.inspector_log);
+        rig.click(toggle.center());
+        assert!(rig.app.inspector_log, "{what}: a click turns the log scale on");
+        let rep2 = crate::ui::steps::inspector_report(&rig.ctx).expect("report");
+        assert_eq!(rep2.bars.len(), 10, "{what}: still ten bars");
+        rig.click(toggle.center());
+        assert!(!rig.app.inspector_log, "{what}: and off");
+    }
+}
+
+#[test]
+fn c2_a_text_column_lists_its_top_ten_and_a_date_column_its_months() {
+    for (ppp, w, h) in SCREENS {
+        let mut v: Vec<String> = Vec::new();
+        for i in 0..13 {
+            for _ in 0..(15 - i) {
+                v.push(format!("Branch{i:02}"));
+            }
+        }
+        let df = DataFrame::new(vec![Series::new("Brancd".into(), v)]).expect("df");
+        let mut rig = insp_rig("p5c2c", ppp, w, h, df, "Brancd");
+        let what = rig.what.clone();
+        rig.draw(3);
+        let p = scroll_panel_down(&mut rig, 140.0);
+        assert!(p.boxes.iter().any(|(t, _)| t == "Most frequent (top 10)"), "{what}");
+        let listed = (0..13).filter(|i| p.boxes.iter().any(|(t, _)| t == &format!("Branch{i:02}"))).count();
+        assert_eq!(listed, 10, "{what}: ten values are listed");
+        assert!(p.boxes.iter().any(|(t, _)| t == "15") && p.boxes.iter().any(|(t, _)| t == "6"), "{what}: with their counts");
+
+        let d = dated("Opndat", &["2026-01-05", "2026-01-31", "2026-03-01", "2025-12-31", "2026-03-15", "2026-03-20"]);
+        let df = DataFrame::new(vec![d]).expect("df");
+        let mut rig = insp_rig("p5c2d", ppp, w, h, df, "Opndat");
+        rig.draw(3);
+        let p = scroll_panel_down(&mut rig, 2000.0);
+        let rep = crate::ui::steps::inspector_report(&rig.ctx).expect("report");
+        assert_eq!(rep.bars.len(), 3, "{what}: a bar for each month with values");
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("3 months from 2025-12 to 2026-03")), "{what}: the caption names the months");
+        let tip = hover(&mut rig, rep.bars[2].center());
+        assert!(tip.boxes.iter().any(|(t, _)| t == "2026-03: 3 values"), "{what}: {:?}", tip.boxes.iter().filter(|(t, _)| t.contains("2026")).collect::<Vec<_>>());
+    }
+}
+
+

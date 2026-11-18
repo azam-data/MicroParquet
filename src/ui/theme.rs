@@ -360,6 +360,8 @@ pub const STEP_DOT_R: f32 = 6.0;
 pub const MARGIN_TILE: egui::Margin = egui::Margin::same(10.0);
 pub const TILE_W: f32 = 118.0;
 pub const HISTOGRAM_H: f32 = 70.0;
+/// The most months the Column inspector draws for a date column (the latest).
+pub const INSPECTOR_MAX_MONTHS: usize = 36;
 pub const HISTOGRAM_BAR_ALPHA: f32 = 0.8;
 pub const HISTOGRAM_BAR_GAP: f32 = 2.0;
 pub const DISABLED_OPACITY: f32 = 0.45;

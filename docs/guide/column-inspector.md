@@ -29,12 +29,12 @@ Shows the facts of one column over the whole result: how many rows and blanks, a
 
 ## 6. What you get
 
-Rows and blanks (blank = null, or text of only spaces). Numbers: sum, min, max, mean, distinct count, ten equal-width bars between the minimum and maximum (the maximum is in the last bar; the bars add up to the number of non-blank values). Dates: earliest and latest. Text: distinct count and the five most frequent values with their counts (ties in text order).
+Rows and blanks (blank = null, or text of only spaces). Numbers: sum, min, max, mean, distinct count, and ten equal-width bars between the 1st and 99th percentile (so one huge value does not flatten the others); under the bars a caption gives the number of bars and the range, and a line says how many values are below and above that range (for example "1 value above range"). "Log scale" draws the bars by the logarithm of their count, so a few tall bars do not hide the short ones; hover a bar for its range and count. Dates: earliest and latest, and a bar for each calendar month that has values (the latest 36 months when there are more), with the month and count on hover. Text: distinct count and the ten most frequent values with their counts (ties in text order). Every figure card shows its whole value (a value too long for half a card gets the full width) and the full value on hover.
 
 ## 7. Check your result
 
 - The sum equals the summary row's Sum for the same column.
-- Rows − blanks = the count of values; the histogram bars add up to it.
+- Rows − blanks = the count of values; the bars plus the values below and above the range add up to it.
 
 ## 8. Worked example
 
@@ -68,3 +68,4 @@ Test: `guide_column_inspector`
 
 - Statistics cover the result up to the last valid step; a broken step stops them there.
 - Blank text is never counted as a value, so a column of only blanks shows no distinct values.
+- The bar range is the 1st to the 99th percentile (the nearest actual value), so with 100 values or more the smallest and largest 1% fall outside the bars and are counted in the line under them; with fewer values every value is in the bars.

@@ -101,7 +101,7 @@ fn t5_dates_show_min_and_max() {
 }
 
 #[test]
-fn t5_text_shows_distinct_count_and_the_top_five_with_counts() {
+fn t5_text_shows_distinct_count_and_the_top_ten_with_counts() {
     let s = stats("Brancd");
     assert_eq!(s.kind, ColumnKind::Text);
     assert_eq!((s.rows, s.blanks), (12, 1), "the spaces-only value is a blank");
@@ -116,8 +116,8 @@ fn t5_text_shows_distinct_count_and_the_top_five_with_counts() {
     let t = compute_column_stats(df.lazy(), "T", 0).unwrap().text.unwrap();
     assert_eq!(t.top[0], ("a".to_string(), 2));
     assert_eq!(t.top[1], ("b".to_string(), 2));
-    // more than five values: only five are listed
-    let many: Vec<String> = (0..9).map(|i| format!("v{i}")).collect();
+    // more than ten values: only ten are listed
+    let many: Vec<String> = (0..15).map(|i| format!("v{i}")).collect();
     let df = DataFrame::new(vec![Series::new("T".into(), many).into()]).unwrap();
     assert_eq!(compute_column_stats(df.lazy(), "T", 0).unwrap().text.unwrap().top.len(), TOP_VALUES);
 }
