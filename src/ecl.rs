@@ -166,8 +166,10 @@ pub fn ecl_of(ead: f64, stage: u8, term_years: f64, eir: f64, seg: &Segment, sce
     for sc in scenarios {
         let mut e = 0.0;
         for y in 1..=years {
-            let cum = |i: usize| if i == 0 { 0.0 } else { seg.cumulative_pd_pct[i - 1] / 100.0 };
-            let marginal = ((cum(y) - cum(y - 1)) * sc.pd_multiplier).min(1.0);
+            // the scenario scales the cumulative PD, which is capped at 1; the marginal PD is the difference
+            // of the capped cumulatives, so the losses of all years never add up to more than LGD × EAD
+            let cum = |i: usize| if i == 0 { 0.0 } else { (seg.cumulative_pd_pct[i - 1] / 100.0 * sc.pd_multiplier).min(1.0) };
+            let marginal = (cum(y) - cum(y - 1)).max(0.0);
             let frac = (horizon - (y as f64 - 1.0)).min(1.0);
             e += marginal * frac * lgd * ead / (1.0 + eir).powi(y as i32);
         }

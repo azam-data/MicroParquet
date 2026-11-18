@@ -111,10 +111,10 @@ fn r7_three_scenarios_weight_the_pd_multipliers() {
     near(floats(&run("r7b2", &data, &stage_book(45), &s).expect("runs"), "ECL")[0], 20789.26, "stage 2");
     // Stage 3 does not depend on the scenarios: LGD x EAD
     near(floats(&run("r7b3", &data, &stage_book(95), &s).expect("runs"), "ECL")[0], 450_000.0, "stage 3");
-    // the marginal PD is capped at 1: a multiplier that would give more than 100% counts 100%
+    // the cumulative PD is capped at 1 after the multiplier: a multiplier that would give more than 100% counts 100%
     let seg = Segment { name: "S".into(), cumulative_pd_pct: vec![60.0, 90.0], lgd_pct: 100.0, ccf_pct: 0.0 };
     let sc = [Scenario { name: "x".into(), weight_pct: 100.0, pd_multiplier: 3.0 }];
-    near(Some(ecl_of(1000.0, 1, 2.0, 0.0, &seg, &sc).expect("ecl")), 1000.0, "60% x 3 is capped at 100%");
+    near(Some(ecl_of(1000.0, 2, 2.0, 0.0, &seg, &sc).expect("ecl")), 1000.0, "60% x 3 is capped at 100% and year 2 adds nothing");
 }
 
 #[test]
@@ -504,4 +504,33 @@ fn b1_a_cured_loan_is_never_better_than_the_stage_of_its_current_criteria() {
     assert_eq!(st, vec![Some(2), Some(1), Some(2)], "{why:?}");
     assert_eq!(why[0].as_deref(), Some("30+ DPD"), "the current criteria give the stage and the reason: {why:?}");
     assert_eq!(why[1].as_deref(), Some("Performing"));
+}
+
+#[test]
+fn d1_the_scenario_multiplies_the_cumulative_pd_which_is_capped_at_100_percent_so_the_ecl_never_exceeds_lgd_times_ead() {
+    // cumulative 80% and 90% x 1.5: 120% and 135% are both capped at 100%; the marginal PDs are 1 and 0
+    let seg = Segment { name: "S".into(), cumulative_pd_pct: vec![80.0, 90.0], lgd_pct: 100.0, ccf_pct: 0.0 };
+    let sc = [Scenario { name: "Down".into(), weight_pct: 100.0, pd_multiplier: 1.5 }];
+    near(Some(ecl_of(1000.0, 2, 2.0, 0.0, &seg, &sc).expect("ecl")), 1000.0, "never above LGD x EAD");
+    // and through the step, with weighted scenarios, whatever the multipliers
+    let params = serde_json::json!({
+        "as_of": "2026-03-08", "source": "test", "sample": true,
+        "segments": [{"name": "Corporate", "cumulative_pd_pct": [80.0, 90.0], "lgd_pct": 100, "ccf_pct": 0}],
+        "scenarios": [{"name": "A", "weight_pct": 50, "pd_multiplier": 1.5}, {"name": "B", "weight_pct": 25, "pd_multiplier": 2.0}, {"name": "C", "weight_pct": 25, "pd_multiplier": 0.5}]
+    });
+    let data = dir("d1_data");
+    std::fs::create_dir_all(data.join("ecl_params")).expect("folder");
+    std::fs::write(data.join("ecl_params").join("2026-03-08.json"), params.to_string()).expect("write");
+    let mut df = book(&[1000.0], &["2028-10-31"]);
+    df.with_column(Series::new("EIR".into(), &[0.0])).expect("eir");
+    df.with_column(Series::new("DPD".into(), &[45i64])).expect("dpd");
+    let out = run("d1x", &data, &df, &step(&|s| s["dpd_col"] = serde_json::json!("DPD"))).expect("runs");
+    // A and B: 1000 each; C: 0.5 x (80%, 90%) = 40% then 5% more: 450
+    near(floats(&out, "ECL")[0], 0.5 * 1000.0 + 0.25 * 1000.0 + 0.25 * 450.0, "weighted");
+    // a parameter file with a falling cumulative PD is refused
+    let mut v = params.clone();
+    v["segments"][0]["cumulative_pd_pct"] = serde_json::json!([90.0, 80.0]);
+    let p: EclParams = serde_json::from_value(v).expect("params");
+    let e = format!("{:#}", check_params(&p, "ecl_params/x.json").err().expect("refused"));
+    assert!(e.contains("do not fall from one year to the next") && e.contains("ecl_params/x.json"), "{e}");
 }
