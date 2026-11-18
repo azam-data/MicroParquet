@@ -79,8 +79,9 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             theme::load_fonts(&cc.egui_ctx);
-            theme::apply_ui_theme(&cc.egui_ctx, false, theme::UI_ZOOM_DEFAULT);
             let mut app = MicroParquetApp::new(paths, cc.egui_ctx.clone());
+            // the saved default zoom (105% when there is none)
+            theme::apply_ui_theme(&cc.egui_ctx, false, app.ui_zoom);
             if let Some(n) = rule_notice {
                 app.status_message = n;
             }
@@ -255,6 +256,11 @@ impl MicroParquetApp {
         let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
         let rate_presets = RateBandDef::load_all_presets(&paths.rate_bands_file());
         let (settings, settings_note) = micro_parquet::settings::Settings::load(&paths.root_dir);
+        let (start_zoom, zoom_note) = settings.start_zoom(theme::UI_ZOOM_DEFAULT);
+        let settings_note = match (settings_note, zoom_note) {
+            (Some(a), Some(b)) => Some(format!("{} {}", a, b)),
+            (a, b) => a.or(b),
+        };
         let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
             .map(|t| micro_parquet::commands::recent_from_text(&t))
             .unwrap_or_default();
@@ -295,7 +301,7 @@ impl MicroParquetApp {
             command_box_rect: egui::Rect::NOTHING,
             recent_commands,
             dark_mode: false,
-            ui_zoom: theme::UI_ZOOM_DEFAULT,
+            ui_zoom: start_zoom,
             pending_csv_modal: None,
             template_pick: None,
             schema_confirm: None,
@@ -384,6 +390,7 @@ impl MicroParquetApp {
             }
         }
         self.handle_palette_shortcut(ctx);
+        self.handle_zoom_keys(ctx);
         self.handle_step_shortcuts(ctx);
         self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
@@ -448,18 +455,8 @@ impl MicroParquetApp {
                 self.dark_mode = !self.dark_mode;
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
-            ui.horizontal(|ui| {
-                ui.label("UI Scale:");
-                if ui.small_button("\u{E30C}-").clicked() {
-                    self.ui_zoom = theme::zoom_out(self.ui_zoom);
-                    theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
-                ui.strong(format!("{:.0}%", self.ui_zoom * 100.0)); // not a size: percent
-                if ui.small_button("\u{E30C}+").clicked() {
-                    self.ui_zoom = theme::zoom_in(self.ui_zoom);
-                    theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
-            });
+            let zoom_title = format!("Zoom  {}", ui::zoom::percent_text(self.ui_zoom));
+            ui.menu_button(zoom_title, |ui| self.zoom_menu_contents(ui, ctx));
             ui.separator();
             ui.menu_button("Default Monetary Scale", |ui| {
                 for fmt in NumberDisplayFormat::all() {

@@ -726,7 +726,9 @@ fn status_bar_text(app: &mut MicroParquetApp) -> String {
         let out = ctx.run(input.clone(), |ctx| app.render_status_bar(ctx));
         p = collect_painted(&out.shapes);
     }
-    p.texts.iter().map(|(t, _, _)| t.clone()).collect::<Vec<_>>().join(" | ")
+    // (the zoom label at the right end is not part of a job's line)
+    let zoom = crate::ui::zoom::percent_text(app.ui_zoom);
+    p.texts.iter().map(|(t, _, _)| t.clone()).filter(|t| *t != zoom).collect::<Vec<_>>().join(" | ")
 }
 
 #[test]

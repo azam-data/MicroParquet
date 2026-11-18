@@ -9,7 +9,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 | U3 | DONE | (this commit) | tests/phase6/u3.rs ×11, guide_custom_sort_lists + completeness, render_tests_p6 ×3 (both screens) | D1–D4 below |
 | U1 | DONE | (this commit) | tests/phase6/u1.rs ×10 (rename order and typing, header match and no match, duplicate names, stack, batch, Python, old schema, warning with the step named, parse failures and masks, swap), render_tests_p6 ×5 (both screens; real clicks on Undo, Lock Schema & Open, picker buttons, Apply anyway / Cancel) | D7–D10 |
 | U2 | DONE | (this commit) | src/settings.rs ×2 unit; render_tests_p6 ×8 (drag to 500, clamp to half the window and to today's width, save and restart, double-click reset, three tabs in one row at both widths, 30 steps scroll to the last step and click it, SQL tab layout, 12-line Ctrl+Enter and Ctrl+Shift+Enter, bad query error, history of 10, View menu and Ctrl+K); guide_sql_editor + completeness | D11–D14 |
-| U6 | | | | |
+| U6 | DONE | (this commit) | render_tests_p6 ×5 (90% written as 0.9 and restart starts at it, 5.0 held to 2.0 with a message, damaged and missing file, Ctrl+= / Ctrl+- / Ctrl+0 and the 50%–200% limits, status-bar label click at both scales with Zoom in and Set as default by real clicks, Ctrl+K commands, 31 default choices and the View menu list) | D15–D17 |
 | U4 | | | | |
 | U5 | | | | |
 | U7 | | | | |
@@ -29,3 +29,6 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 - D12 (U2): a query is checked on the worker (the engine builds it as the next step) before it becomes a step; a wrong query adds no step and its message stays in the box under the editor. "Apply here" and "New tab" both work this way.
 - D13 (U2): the one-line SQL bar is gone; View ▸ "SQL" and the Ctrl+K command "SQL editor" (needs an open tab) open the panel on the SQL tab. Each tab of the panel scrolls with an always-visible solid bar, so the content is about 10 pt narrower than before.
 - D14 (U2): fixed an existing 4 pt overflow of the three buttons at the foot of the Steps tab (the panel used to hide it by clipping).
+- D15 (U6): the live zoom now runs 50%–200% (it was 80%–150%) and stays in 5% steps; Zoom in / Zoom out still move by 10%.
+- D16 (U6): the status-bar zoom label is the right-most item (right of "Messages") and is left out when the bar is narrower than 900 pt, so the last message keeps its room in a small window. egui's own Ctrl+= / Ctrl+- zoom is switched off (the app's own keys replace it).
+- D17 (U6): the new Ctrl+K commands are "Reset zoom to the default" and "Set the current zoom as the default"; the Zoom menu stays open after Zoom in / Zoom out so they can be repeated.

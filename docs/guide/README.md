@@ -2,6 +2,8 @@
 
 One short note per tool, in plain English for a bank ALM or treasury officer. Every note has the same ten sections: what it does, when to use it, before you start, columns you need, step by step, what you get, check your result, a worked example, common messages and fixes, and limits. The worked examples are tested: the tables in each note are produced by an automated test from the real calculation code.
 
+Window settings: View ▸ Zoom (or Ctrl+= / Ctrl+- / Ctrl+0, or a click on the percentage at the right end of the status bar) changes the size of everything; "Set current zoom as default" keeps it for the next start (`portable_data/settings.json`). The right panel is dragged wider by its left edge; the width is kept too.
+
 Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scale). Rates are in percent (9.5 means 9.5%). Shocks are in basis points. CBS dates are normally D/M/Y.
 
 ## Data preparation

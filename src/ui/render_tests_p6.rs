@@ -764,3 +764,149 @@ fn u2_view_sql_and_ctrl_k_sql_editor_open_the_panel_on_the_sql_tab() {
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ U6
+
+use crate::ui::status::status_report;
+
+fn key(key: egui::Key) -> egui::Event {
+    egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: CTRL }
+}
+
+/// A new app on the data folder of `old` (as after a restart).
+fn restarted(old: &MicroParquetApp) -> MicroParquetApp {
+    let mut app = MicroParquetApp::new(old.paths.clone(), egui::Context::default());
+    app.jobs = JobQueue::inline();
+    app
+}
+
+#[test]
+fn u6_a_90_percent_default_is_written_as_0_90_and_a_new_app_state_starts_at_it() {
+    let app = test_app("p6u6a");
+    assert!((app.ui_zoom - 1.05).abs() < 1e-6, "no setting: 105%: {}", app.ui_zoom);
+    let mut app = app;
+    app.zoom_set_default(0.9);
+    let text = std::fs::read_to_string(app.paths.root_dir.join("settings.json")).expect("settings.json was written");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(json["default_zoom"].as_f64(), Some(0.9), "{text}");
+    let again = restarted(&app);
+    assert!((again.ui_zoom - 0.9).abs() < 1e-6, "a new app state built from the file starts at 0.90: {}", again.ui_zoom);
+    assert_eq!(again.default_zoom(), 0.9);
+}
+
+#[test]
+fn u6_a_file_value_of_5_is_held_to_2_with_a_message_and_no_file_gives_105_percent() {
+    let app = test_app("p6u6b");
+    std::fs::write(app.paths.root_dir.join("settings.json"), r#"{"default_zoom": 5.0}"#).expect("write");
+    let again = restarted(&app);
+    assert!((again.ui_zoom - 2.0).abs() < 1e-6, "{}", again.ui_zoom);
+    assert!(again.status_message.contains("outside 50% to 200%") && again.status_message.contains("200%"), "{}", again.status_message);
+    // a damaged file: the defaults and a message
+    std::fs::write(app.paths.root_dir.join("settings.json"), "{ nope").expect("write");
+    let damaged = restarted(&app);
+    assert!((damaged.ui_zoom - 1.05).abs() < 1e-6 && damaged.status_message.contains("damaged"), "{}", damaged.status_message);
+    // no file at all
+    let _ = std::fs::remove_file(app.paths.root_dir.join("settings.json"));
+    let none = restarted(&app);
+    assert!((none.ui_zoom - 1.05).abs() < 1e-6, "{}", none.ui_zoom);
+}
+
+#[test]
+fn u6_ctrl_equals_ctrl_minus_and_ctrl_0_zoom_and_ctrl_0_goes_back_to_the_default() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u6c", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.zoom_set_default(0.9);
+        rig.app.set_zoom(&rig.ctx, 0.9);
+        for _ in 0..3 {
+            rig.step(vec![key(egui::Key::Equals)]);
+        }
+        assert!((rig.app.ui_zoom - 1.2).abs() < 1e-4, "{what}: three Ctrl+= from 90%: {}", rig.app.ui_zoom);
+        rig.draw(2);
+        assert!((rig.ctx.zoom_factor() - 1.2).abs() < 1e-4, "{what}: egui's zoom followed (and egui's own key handling did not add to it): {}", rig.ctx.zoom_factor());
+        rig.step(vec![key(egui::Key::Minus)]);
+        assert!((rig.app.ui_zoom - 1.1).abs() < 1e-4, "{what}: Ctrl+-: {}", rig.app.ui_zoom);
+        rig.step(vec![key(egui::Key::Num0)]);
+        assert!((rig.app.ui_zoom - 0.9).abs() < 1e-4, "{what}: Ctrl+0 returns to 90%: {}", rig.app.ui_zoom);
+        assert!(rig.app.status_message.contains("90%"), "{what}: {}", rig.app.status_message);
+        // the limits
+        for _ in 0..30 {
+            rig.step(vec![key(egui::Key::Minus)]);
+        }
+        assert!((rig.app.ui_zoom - 0.5).abs() < 1e-4, "{what}: not below 50%: {}", rig.app.ui_zoom);
+        for _ in 0..30 {
+            rig.step(vec![key(egui::Key::Equals)]);
+        }
+        assert!((rig.app.ui_zoom - 2.0).abs() < 1e-4, "{what}: not above 200%: {}", rig.app.ui_zoom);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u6_the_zoom_label_at_the_right_end_of_the_status_bar_opens_the_menu_and_its_items_work() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u6d", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(5);
+        let rep = status_report(&rig.ctx).expect("status bar");
+        assert!(rep.zoom.is_positive() && inside(rep.zoom, rep.bar), "{what}: the zoom label {:?} is in the bar {:?}", rep.zoom, rep.bar);
+        assert!(rep.zoom.left() >= rep.left.right() - 0.5 && rep.zoom.right() >= rep.messages.right() - 0.5, "{what}: it is the right-most item: {:?} vs Messages {:?}", rep.zoom, rep.messages);
+        let p = rig.draw(2);
+        assert!(p.boxes.iter().any(|(t, b)| t == "105%" && inside(*b, rep.zoom)), "{what}: the label reads 105%");
+        // a click opens the Zoom menu
+        rig.click(rep.zoom.center());
+        let p = rig.draw(3);
+        for t in ["Zoom: 105%", "Zoom in  (Ctrl+=)", "Zoom out  (Ctrl+-)", "Set current zoom as default"] {
+            assert!(p.boxes.iter().any(|(x, _)| x == t), "{what}: the menu has '{t}': {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("oom")).collect::<Vec<_>>());
+        }
+        assert!(p.boxes.iter().any(|(x, _)| x.starts_with("Reset to default  (105%)")), "{what}");
+        // Zoom in by a real click: 105% -> 115%
+        let zin = p.boxes.iter().find(|(x, _)| x == "Zoom in  (Ctrl+=)").map(|(_, b)| *b).expect("item");
+        rig.click(zin.center());
+        assert!((rig.app.ui_zoom - 1.15).abs() < 1e-4, "{what}: {}", rig.app.ui_zoom);
+        // "Set current zoom as default" by a real click (the menu stays open after Zoom in)
+        let p = rig.draw(3);
+        let set = p.boxes.iter().find(|(x, _)| x == "Set current zoom as default").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: menu open again"));
+        rig.click(set.center());
+        let saved = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir).0;
+        assert_eq!(saved.default_zoom, Some(1.15), "{what}");
+        // "Reset to default" goes back to it after zooming out
+        rig.app.zoom_out(&rig.ctx);
+        assert!((rig.app.ui_zoom - 1.05).abs() < 1e-4, "{what}");
+        rig.app.run_command(&rig.ctx, CommandId::ZoomReset);
+        assert!((rig.app.ui_zoom - 1.15).abs() < 1e-4, "{what}: Ctrl+K 'reset zoom'");
+        rig.app.set_zoom(&rig.ctx, 1.3);
+        rig.app.run_command(&rig.ctx, CommandId::ZoomSetDefault);
+        assert_eq!(micro_parquet::settings::Settings::load(&rig.app.paths.root_dir).0.default_zoom, Some(1.3), "{what}: Ctrl+K 'set the current zoom as the default'");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u6_the_default_zoom_runs_from_50_to_200_percent_in_5_percent_steps() {
+    let z = theme::zoom_choices();
+    assert_eq!((z.len(), z[0], *z.last().expect("last")), (31, 0.5, 2.0));
+    assert!(z.windows(2).all(|p| ((p[1] - p[0]) - 0.05).abs() < 1e-4));
+    assert!(z.contains(&1.05));
+    assert_eq!(theme::snap_zoom(0.93), 0.95);
+    assert_eq!(theme::snap_zoom(9.0), 2.0);
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u6e", ppp, w, h);
+        let what = rig.what.clone();
+        // View > Zoom > Default zoom > 60%
+        let p = rig.draw(3);
+        let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).expect("View");
+        rig.click(view.center());
+        let p = rig.draw(3);
+        let zoom = p.boxes.iter().find(|(t, _)| t.starts_with("Zoom  ")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View has Zoom"));
+        rig.click(zoom.center());
+        let p = rig.draw(3);
+        let default = p.boxes.iter().find(|(t, _)| t.starts_with("Default zoom:")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Zoom menu has Default zoom"));
+        rig.click(default.center());
+        let p = rig.draw(3);
+        let sixty = p.boxes.iter().find(|(t, _)| t == "60%").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the list has 60%: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.ends_with('%')).collect::<Vec<_>>()));
+        rig.click(sixty.center());
+        assert_eq!(micro_parquet::settings::Settings::load(&rig.app.paths.root_dir).0.default_zoom, Some(0.6), "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}

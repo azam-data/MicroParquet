@@ -53,7 +53,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ExportSplit => ph::FILES,
         CommandId::ParquetArchive | CommandId::ParquetSnappy => ph::GEAR,
         CommandId::ToggleTheme => ph::MOON,
-        CommandId::ZoomIn | CommandId::ZoomOut => ph::MAGNIFYING_GLASS,
+        CommandId::ZoomIn | CommandId::ZoomOut | CommandId::ZoomReset | CommandId::ZoomSetDefault => ph::MAGNIFYING_GLASS,
         CommandId::ScaleCrore
         | CommandId::ScaleLakh
         | CommandId::ScaleMillion
@@ -223,13 +223,12 @@ impl MicroParquetApp {
                 self.dark_mode = !self.dark_mode;
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
-            CommandId::ZoomIn => {
-                self.ui_zoom = theme::zoom_in(self.ui_zoom);
-                theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-            }
-            CommandId::ZoomOut => {
-                self.ui_zoom = theme::zoom_out(self.ui_zoom);
-                theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+            CommandId::ZoomIn => self.zoom_in(ctx),
+            CommandId::ZoomOut => self.zoom_out(ctx),
+            CommandId::ZoomReset => self.zoom_reset(ctx),
+            CommandId::ZoomSetDefault => {
+                let z = self.ui_zoom;
+                self.zoom_set_default(z);
             }
             CommandId::ScaleCrore => self.num_format = NumberDisplayFormat::BdtCrore,
             CommandId::ScaleLakh => self.num_format = NumberDisplayFormat::BdtLakh,

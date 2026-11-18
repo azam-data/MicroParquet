@@ -195,15 +195,30 @@ pub const SEARCH_LONG_HINT_W: f32 = 260.0;
 pub const WINDOW_SIZE: [f32; 2] = [1320.0, 740.0];
 pub const WINDOW_MIN_SIZE: [f32; 2] = [800.0, 560.0];
 pub const UI_ZOOM_DEFAULT: f32 = 1.05;
-pub const UI_ZOOM_MIN: f32 = 0.80;
-pub const UI_ZOOM_MAX: f32 = 1.50;
+pub const UI_ZOOM_MIN: f32 = 0.50;
+pub const UI_ZOOM_MAX: f32 = 2.00;
 pub const UI_ZOOM_STEP: f32 = 0.10;
+/// The status bar shows the zoom label only when the bar is at least this wide.
+pub const STATUS_ZOOM_MIN_BAR_W: f32 = 900.0;
+/// The list of default zooms in the Zoom menu scrolls above this height.
+pub const ZOOM_LIST_H: f32 = 280.0;
+/// The default zoom is chosen in steps of this much (5%).
+pub const UI_ZOOM_CHOICE_STEP: f32 = 0.05;
+/// A zoom rounded to the nearest 5% and kept between the minimum and the maximum.
+pub fn snap_zoom(z: f32) -> f32 {
+    ((z / UI_ZOOM_CHOICE_STEP).round() * UI_ZOOM_CHOICE_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+}
 /// The UI scale one step larger / smaller, kept between the minimum and the maximum.
 pub fn zoom_in(z: f32) -> f32 {
-    (z + UI_ZOOM_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+    snap_zoom(z + UI_ZOOM_STEP)
 }
 pub fn zoom_out(z: f32) -> f32 {
-    (z - UI_ZOOM_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+    snap_zoom(z - UI_ZOOM_STEP)
+}
+/// Every default zoom the menu offers: 50% to 200% in steps of 5%.
+pub fn zoom_choices() -> Vec<f32> {
+    let n = ((UI_ZOOM_MAX - UI_ZOOM_MIN) / UI_ZOOM_CHOICE_STEP).round() as usize;
+    (0..=n).map(|i| ((UI_ZOOM_MIN + i as f32 * UI_ZOOM_CHOICE_STEP) * 100.0).round() / 100.0).collect()
 }
 /// A 1 px line (borders, dividers) and a 2 px line (the selected column's underline, the active
 /// tab's top line, the steps rail).
@@ -565,6 +580,8 @@ pub fn load_fonts(ctx: &egui::Context) {
 
 pub fn apply_ui_theme(ctx: &egui::Context, dark_mode: bool, zoom: f32) {
     ctx.set_zoom_factor(zoom);
+    // Ctrl+= / Ctrl+- / Ctrl+0 are the app's own (View > Zoom): egui's would zoom a second time
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
     let tk = tokens(dark_mode);
 
     let mut style = (*ctx.style()).clone();

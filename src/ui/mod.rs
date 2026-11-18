@@ -47,6 +47,7 @@ pub mod steps;
 pub mod table;
 pub mod tabs;
 pub mod top_bar;
+pub mod zoom;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]

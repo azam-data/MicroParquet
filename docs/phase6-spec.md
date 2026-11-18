@@ -360,4 +360,7 @@ U2:
 - A query is checked on the worker first; a wrong one adds no step and its message stays under the editor (also for "New tab").
 - The SQL bar is replaced by the SQL tab; View ▸ SQL and Ctrl+K "SQL editor" open it (needs an open tab).
 - Each panel tab scrolls with an always-visible solid bar (about 10 pt narrower content); a 4 pt overflow of the Steps tab's three buttons was fixed.
+U6:
+- The live zoom runs 50%–200% (was 80%–150%); Zoom in / out still step by 10%, kept on 5% values.
+- The status-bar zoom label is the right-most item and is left out of a bar narrower than 900 pt; egui's own Ctrl+= / Ctrl+- zoom is switched off.
 </accepted_deviations>
