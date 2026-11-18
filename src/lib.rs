@@ -9,6 +9,7 @@ pub mod column_stats;
 pub mod commands;
 pub mod curves;
 pub mod engine;
+pub mod irrbb;
 pub mod exporters;
 pub mod jobs;
 pub mod macros;

@@ -8,7 +8,7 @@ use micro_parquet::cashflow::*;
 use polars::prelude::*;
 
 /// The tool ids of Phase 5 (file names in docs/guide/), added as each task is done.
-pub const P5_GUIDE_TOOLS: [&str; 2] = ["irrbb-cashflow-ladder", "behaviour-profile"];
+pub const P5_GUIDE_TOOLS: [&str; 3] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -163,6 +163,69 @@ fn guide_behaviour_profile() {
             md(&rows, &["Category", "Method", "Core %:2", "Capped", "Months"]),
             md(&with, &["Bucket", "Outflows:2", "Net gap:2"]),
             md(&without, &["Bucket", "Outflows:2", "Net gap:2"]),
+        ],
+    );
+}
+
+#[test]
+fn guide_irrbb_six_scenarios() {
+    use micro_parquet::irrbb::*;
+    use micro_parquet::models::FtpPoint;
+    use micro_parquet::rules::{CurrencyShock, RuleFile, RuleMeta, ShockFile};
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "L1"]),
+        Series::new("Side".into(), &["Asset", "Liability"]),
+        Series::new("Outstanding".into(), &[1_000_000.0, 600_000.0]),
+        dates("Matdat", &["2031-04-30", "2026-10-31"]),
+    ])
+    .expect("book");
+    let cf = CfInputSpec {
+        role: GapRole::Side("Side".into()),
+        principal_col: "Outstanding".into(),
+        rate_col: None,
+        rate_type_col: None,
+        default_rate_type: RateType::Fixed,
+        maturity_col: "Matdat".into(),
+        reprice_col: None,
+        repay_col: None,
+        default_repayment: Repayment::Bullet,
+        freq_col: None,
+        default_frequency: Frequency::AtMaturity,
+        product_col: None,
+        currency_col: None,
+        default_currency: "BDT".into(),
+    };
+    let shocks = RuleFile {
+        data: ShockFile { decay_x: 4.0, outlier_pct: 15.0, currencies: vec![CurrencyShock { currency: "BDT".into(), parallel_bp: 400.0, short_bp: 500.0, long_bp: 300.0 }] },
+        meta: RuleMeta { file: "irrbb_shocks/2021-04-13.json".into(), as_of: d("2021-04-13"), source: "BRPD IRRBB 2021".into(), sample: false },
+    };
+    let curve = micro_parquet::curves::YieldCurve { date: d("2026-10-01"), currency: "BDT".into(), source: "example".into(), points: vec![FtpPoint { tenor_days: 30, ftp_rate: 10.0 }, FtpPoint { tenor_days: 9000, ftp_rate: 10.0 }] };
+    let spec = |tier1: f64| IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, tier1, compounding: Compounding::Continuous, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shocks.clone(), curves: vec![curve.clone()], behaviour: None, betas: vec![] };
+    let o = run_irrbb(vec![(book.clone().lazy(), cf.clone())], &spec(1_000_000.0)).expect("runs");
+    let small = run_irrbb(vec![(book.clone().lazy(), cf)], &spec(600_000.0)).expect("runs");
+    assert!(!o.outlier && small.outlier);
+    close(Some(o.max_loss), 104_969.17, 0.01, "max loss");
+    close(o.base_eve("BDT"), 37_796.13, 0.05, "base EVE");
+    let cash = cashflows_frame(&o).expect("cash flows");
+    let keep: BooleanChunked = strings(&cash, "Bucket").iter().zip(floats(&cash, "Net")).map(|(b, n)| Some(n.unwrap_or(0.0) != 0.0 || b.as_deref() == Some("Base EVE"))).collect();
+    let cash_shown = cash.filter(&keep).expect("filter");
+    let results = results_frame(&o).expect("results");
+    let results_small = results_frame(&small).expect("results");
+    let pick = |df: &DataFrame, labels: &[&str]| -> DataFrame {
+        let sc = strings(df, "Scenario");
+        let m: BooleanChunked = sc.iter().map(|s| Some(labels.iter().any(|l| s.as_deref().unwrap_or("").starts_with(l)))).collect();
+        df.filter(&m).expect("filter")
+    };
+    let six = pick(&results, &["Parallel up", "Parallel down", "Steepener", "Flattener", "Short up", "Short down", "Maximum loss", "Outlier"]);
+    let six_small = pick(&results_small, &["Maximum loss", "Outlier"]);
+    check_guide(
+        "irrbb-six-scenarios",
+        "guide_irrbb_six_scenarios",
+        &[
+            md(&book, &["Account_No", "Side", "Outstanding:2", "Matdat"]),
+            md(&cash_shown, &["Bucket", "Midpoint (years)", "Net:2", "Discount factor:~6", "Base PV:2"]),
+            md(&six, &["Scenario", "EVE change:2", "Loss:2", "Loss % of Tier 1:2", "\u{394}NII:2", "Note"]),
+            md(&six_small, &["Scenario", "Loss:2", "Loss % of Tier 1:2", "Note"]),
         ],
     );
 }

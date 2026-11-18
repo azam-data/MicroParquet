@@ -26,6 +26,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Liquidity gap ladder](gap-ladder.md): inflows, outflows, net and cumulative gap by bucket, with limits.
 - [Behaviour profile](behaviour-profile.md): core and volatile parts of current and savings deposits, CPR and TDRR, saved as a dated file.
 - [IRRBB cash-flow ladder](irrbb-cashflow-ladder.md): dated cash flows in the 19 Bangladesh Bank IRRBB buckets, by currency.
+- [IRRBB (six scenarios)](irrbb-six-scenarios.md): ΔEVE, loss as a share of Tier 1, the outlier test and ΔNII in the six Bangladesh Bank scenarios.
 - [Interest-rate shock / ΔNII](rate-shock-nii.md): one-year earnings sensitivity.
 - [Duration, DV01 and ΔEVE](duration-dv01-eve.md): economic-value sensitivity.
 - [FTP curve mapper](ftp-curve-mapper.md): funds-transfer-pricing rate, spread and margin.

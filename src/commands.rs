@@ -34,6 +34,7 @@ pub enum CommandId {
     Buckets,
     GapLadder,
     IrrbbLadder,
+    IrrbbSix,
     BehaviourProfile,
     RateProfile,
     RateShock,
@@ -157,6 +158,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Buckets, "Maturity bucketer (SLP / LCR / custom)\u{2026}", G::Banking, "alm gap liquidity tenor", N::Tab),
     c(I::GapLadder, "Liquidity gap ladder\u{2026}", G::Banking, "alm gap slp cumulative inflow outflow mismatch limit buckets", N::Tab),
     c(I::IrrbbLadder, "IRRBB cash-flow ladder\u{2026}", G::Banking, "irrbb cash flow ladder bucket repricing eve nmd prepayment cpr tdrr behaviour schedule instalment", N::Tab),
+    c(I::IrrbbSix, "IRRBB (six scenarios): \u{394}EVE and \u{394}NII\u{2026}", G::Banking, "irrbb eve nii outlier tier 1 parallel short steepener flattener shock bb guideline 15 percent", N::Tab),
     c(I::BehaviourProfile, "Behaviour profile (core and volatile deposits)\u{2026}", G::Banking, "behavioural behavioral casa nmd non-maturity deposit savings current core volatile cpr tdrr prepayment early redemption irrbb caps", N::Nothing),
     c(I::RateProfile, "Rate profile (rate bands)\u{2026}", G::Banking, "rate band bucket interest lending deposit yield cost profile", N::Tab),
     c(I::RateShock, "Interest rate shock / \u{394}NII\u{2026}", G::Banking, "nii irrbb bps delta income", N::Tab),
@@ -197,7 +199,7 @@ pub const COMMANDS: &[Command] = &[
 /// order, so the commands of one heading are next to each other).
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
-        CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
+        CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
         CommandId::Provision | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
         _ => None,
     }

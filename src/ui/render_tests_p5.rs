@@ -456,3 +456,167 @@ fn r2_the_behaviour_profile_is_listed_under_treasury_and_alm_and_found_by_the_se
         micro_parquet::rules::set_data_dir_override(None);
     }
 }
+
+// ------------------------------------------------------------------------------ R3: IRRBB, six scenarios
+
+fn irrbb_title() -> String {
+    format!("{}  IRRBB (six scenarios)", theme::ph::CHART_LINE)
+}
+
+/// The acceptance book as two tabs, a flat 10% BDT curve and the BB shock file (written to the data folder).
+fn irrbb_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    micro_parquet::rules::set_data_dir_override(Some(root.join("portable_data")));
+    let curves = root.join("portable_data").join("curves");
+    std::fs::create_dir_all(&curves).expect("curves folder");
+    micro_parquet::curves::set_curves_dir_override(Some(curves.clone()));
+    let curve = micro_parquet::curves::YieldCurve {
+        date: chrono::NaiveDate::from_ymd_opt(2026, 10, 1).expect("date"),
+        currency: "BDT".into(),
+        source: "test".into(),
+        points: vec![micro_parquet::models::FtpPoint { tenor_days: 30, ftp_rate: 10.0 }, micro_parquet::models::FtpPoint { tenor_days: 9000, ftp_rate: 10.0 }],
+    };
+    micro_parquet::curves::save_curve(&curves, &curve).expect("saves");
+    let assets = DataFrame::new(vec![Series::new("Account_No".into(), &["A1"]), Series::new("Outstanding".into(), &[1_000_000.0]), Series::new("Rate".into(), &[9.0]), dated("Matdat", &["2031-04-30"])]).expect("assets");
+    let liab = DataFrame::new(vec![Series::new("Account_No".into(), &["L1"]), Series::new("Outstanding".into(), &[600_000.0]), Series::new("Rate".into(), &[4.0]), dated("Matdat", &["2026-10-31"])]).expect("liabilities");
+    for (title, df) in [("Assets", assets), ("Liabilities", liab)] {
+        let src = parquet_source(&root, title, df);
+        app.create_tab_from_source(title.into(), src, vec![], HashMap::new());
+        settle(&mut app);
+    }
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn irrbb_cleanup() {
+    micro_parquet::rules::set_data_dir_override(None);
+    micro_parquet::curves::set_curves_dir_override(None);
+}
+
+#[test]
+fn r3_the_irrbb_dialog_fits_takes_its_settings_by_click_and_builds_both_tabs() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = irrbb_rig("p5r3a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::IrrbbSix);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::IrrbbSix, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &irrbb_title(), &what);
+        for t in ["Cutoff date (YYYY-MM-DD)", "Tier 1 capital (BDT)", "Cash-flow mode", "Curve rates are", "Post-shock floor (%)", "Behaviour profile", "Beta file", "rate floor (%)", "Counts as", "Outstanding amount", "Run IRRBB", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        // the fixed header holds every setting; nothing in it passes the dialog's edge or overlaps
+        let g = rig.app.irrbb.rects.clone();
+        for (name, rc) in &g.header {
+            assert!(inside(*rc, r.window), "{what}: '{name}' {rc:?} is inside the dialog {:?}", r.window);
+            assert!(rc.bottom() <= r.body.top() + 1.0 || r.header.is_positive(), "{what}: '{name}' is in the header");
+        }
+        for (i, (na, ra)) in g.header.iter().enumerate() {
+            for (nb, rb) in g.header.iter().skip(i + 1) {
+                assert!(!overlaps(*ra, *rb), "{what}: '{na}' {ra:?} overlaps '{nb}' {rb:?}");
+            }
+        }
+        for (i, name, c) in &g.lines.controls {
+            assert!(inside(*c, g.lines.cards[*i]), "{what}: '{name}' {c:?} is inside its card");
+        }
+        // the problem line asks for Tier 1 first
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Type the Tier 1 capital")), "{what}");
+        // type the settings; the compounding by a real click
+        rig.app.irrbb.cutoff = "2026-10-31".into();
+        rig.app.irrbb.tier1 = "1,000,000".into();
+        rig.app.irrbb.mode = micro_parquet::cashflow::CashFlowMode::PrincipalOnly;
+        let comp = g.header.iter().find(|(n, _)| n == "Compounding").map(|(_, r)| *r).expect("combo");
+        pick(&mut rig, comp, "Continuous");
+        assert_eq!(rig.app.irrbb.compounding, micro_parquet::irrbb::Compounding::Continuous, "{what}");
+        // line 1 is the active tab (Liabilities): a liability; add the assets
+        rig.app.irrbb.lines[0].role = crate::ui::gap_ladder::RoleChoice::Liability;
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Add tab", egui::Rect::EVERYTHING);
+        assert_eq!(rig.app.irrbb.lines.len(), 2, "{what}");
+        rig.app.irrbb.lines[1].tab = 0;
+        rig.app.irrbb.lines[1].role = crate::ui::gap_ladder::RoleChoice::Asset;
+        rig.draw(5);
+        assert_dialog_fits(&rig.ctx, &irrbb_title(), &what);
+        let run = rig.app.irrbb.rects.buttons.iter().find(|(n, _)| n == "Run IRRBB").map(|(_, r)| *r).expect("button");
+        rig.click(run.center());
+        rig.draw(8);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed: {}", rig.app.status_message);
+        let titles: Vec<String> = rig.app.tabs.iter().map(|t| t.title.clone()).collect();
+        assert_eq!(&titles[titles.len() - 2..], &["IRRBB cash flows".to_string(), "IRRBB results".to_string()], "{what}");
+        let results = rig.app.tabs.last().expect("results");
+        let df = &results.cached_slice;
+        let eve: Vec<Option<f64>> = df.column("EVE change").expect("c").f64().expect("f").into_iter().collect();
+        assert!((eve[0].unwrap_or(0.0) + 104_969.17).abs() < 0.01, "{what}: parallel up {:?}", eve[0]);
+        let labels: Vec<String> = df.column("Scenario").expect("c").str().expect("s").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let notes: Vec<String> = df.column("Note").expect("c").str().expect("s").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let at = |l: &str| labels.iter().position(|x| x.starts_with(l)).expect("row");
+        assert_eq!(notes[at("Outlier")], "No", "{what}");
+        let pct = results.col_formats.get("Loss % of Tier 1").map(|f| f.fmt_type);
+        assert_eq!(pct, Some(MetricFormatType::PercentAsIs), "{what}: the percentage is not scaled");
+        let cash = &rig.app.tabs[rig.app.tabs.len() - 2];
+        let net: Vec<Option<f64>> = cash.cached_slice.column("Base PV").expect("c").f64().expect("f").into_iter().collect();
+        assert!((net[19].unwrap_or(0.0) - 37_796.13).abs() < 0.05, "{what}: the Base EVE row");
+        irrbb_cleanup();
+    }
+}
+
+#[test]
+fn r3_a_small_tier_1_makes_the_bank_an_outlier_and_a_sample_shock_file_shows_the_banner() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = irrbb_rig("p5r3b", ppp, w, h);
+        let what = rig.what.clone();
+        // a sample shock file dated later than the BB file, in the data folder
+        let dir = rig.app.paths.root_dir.join("portable_data").join("rules").join("irrbb_shocks");
+        std::fs::create_dir_all(&dir).expect("folder");
+        std::fs::write(dir.join("2026-01-01.json"), r#"{"as_of":"2026-01-01","source":"Sample numbers","sample":true,"currencies":[{"currency":"BDT","parallel_bp":400,"short_bp":500,"long_bp":300}]}"#).expect("write");
+        rig.app.run_command(&rig.ctx, CommandId::IrrbbSix);
+        rig.app.irrbb.cutoff = "2026-10-31".into();
+        rig.app.irrbb.tier1 = "600000".into();
+        rig.app.irrbb.mode = micro_parquet::cashflow::CashFlowMode::PrincipalOnly;
+        rig.app.irrbb.compounding = micro_parquet::irrbb::Compounding::Continuous;
+        rig.app.irrbb.lines[0].role = crate::ui::gap_ladder::RoleChoice::Liability;
+        rig.app.irrbb.lines.push(rig.app.irrbb.lines[0].clone());
+        rig.app.irrbb.lines[1].tab = 0;
+        rig.app.irrbb.lines[1].role = crate::ui::gap_ladder::RoleChoice::Asset;
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &irrbb_title(), &what);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Sample parameters")), "{what}: the banner is shown");
+        assert!(inside(rig.app.irrbb.rects.banner, r.window), "{what}: the banner {:?} is inside the dialog {:?}", rig.app.irrbb.rects.banner, r.window);
+        let run = rig.app.irrbb.rects.buttons.iter().find(|(n, _)| n == "Run IRRBB").map(|(_, r)| *r).expect("button");
+        rig.click(run.center());
+        rig.draw(8);
+        let results = rig.app.tabs.last().expect("results");
+        assert_eq!(results.title, "IRRBB results", "{what}: {}", rig.app.status_message);
+        let labels: Vec<String> = results.cached_slice.column("Scenario").expect("c").str().expect("s").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let notes: Vec<String> = results.cached_slice.column("Note").expect("c").str().expect("s").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let at = |l: &str| labels.iter().position(|x| x.starts_with(l)).expect("row");
+        assert_eq!(notes[at("Outlier")], "Yes", "{what}: 17.49% of Tier 1");
+        assert_eq!(notes[at("Rule file")], "irrbb_shocks/2026-01-01.json", "{what}: the latest file on or before the cutoff");
+        assert!(labels.iter().any(|l| l == "Sample parameters"), "{what}: the sample warning is in the table too");
+        let pct = results.cached_slice.column("Loss % of Tier 1").expect("c").f64().expect("f").get(at("Maximum loss")).unwrap_or(0.0);
+        assert_eq!(format!("{pct:.2}"), "17.49", "{what}");
+        irrbb_cleanup();
+    }
+}
+
+#[test]
+fn r3_the_irrbb_tool_is_listed_under_treasury_and_alm_and_found_by_the_search() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::IrrbbSix), Some("Treasury & ALM"));
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["irrbb six scenarios", "outlier tier 1", "steepener flattener"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::IrrbbSix, "{q}");
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = irrbb_rig("p5r3c", ppp, w, h);
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
+        assert!(at("Treasury & ALM").top() < at("IRRBB (six scenarios)").top() && at("IRRBB (six scenarios)").top() < at("Loans & credit").top(), "{}", rig.what);
+        irrbb_cleanup();
+    }
+}

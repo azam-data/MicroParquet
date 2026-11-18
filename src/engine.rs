@@ -1643,6 +1643,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
+        TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::RepricingGap { source, .. } => collect_masked_columns(source, out),
     }
 }
@@ -1661,6 +1662,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
+        TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::RepricingGap { source, .. } => source_masks_pii(source),
     }
 }
@@ -1800,7 +1802,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::IrrbbLadder { inputs, .. } => {
+        TabSource::IrrbbLadder { inputs, .. } | TabSource::Irrbb { inputs, .. } => {
             for i in inputs {
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
@@ -2396,6 +2398,17 @@ pub fn compile_tab_lazy(
                 lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
             }
             crate::banking::build_gap_ladder_behaviour(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref(), behaviour.as_ref())?.lazy()
+        }
+        TabSource::Irrbb { inputs, spec, view } => {
+            let mut lfs = Vec::with_capacity(inputs.len());
+            for i in inputs {
+                lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
+            }
+            let out = crate::irrbb::run_irrbb(lfs, spec)?;
+            match view {
+                crate::models::IrrbbView::Results => crate::irrbb::results_frame(&out)?.lazy(),
+                crate::models::IrrbbView::CashFlows => crate::irrbb::cashflows_frame(&out)?.lazy(),
+            }
         }
         TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour } => {
             let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;

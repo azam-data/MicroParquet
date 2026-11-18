@@ -155,6 +155,9 @@ fn col_combo(ui: &mut egui::Ui, id: (&str, usize), value: &mut String, cols: &[S
 pub fn cf_lines_ui(ui: &mut egui::Ui, lines: &mut Vec<CfLine>, tabs: &CfTabs, rects: &mut CfLineRects) {
     let tk = *theme::tokens(ui.visuals().dark_mode);
     let mut remove: Option<usize> = None;
+    // the button is above the cards, so it is in view without scrolling past them
+    let add = ui.button(format!("{}  Add tab", theme::ph::PLUS));
+    rects.add_button = add.rect;
     for i in 0..lines.len() {
         let mut line = lines[i].clone();
         let cols: Vec<String> = tabs.columns.get(line.tab).cloned().unwrap_or_default();
@@ -269,8 +272,6 @@ pub fn cf_lines_ui(ui: &mut egui::Ui, lines: &mut Vec<CfLine>, tabs: &CfTabs, re
     if let Some(i) = remove {
         lines.remove(i);
     }
-    let add = ui.button(format!("{}  Add tab", theme::ph::PLUS));
-    rects.add_button = add.rect;
     if add.clicked() {
         let next = (lines.last().map(|l| l.tab + 1).unwrap_or(0)).min(tabs.titles.len().saturating_sub(1));
         let mut line = CfLine::for_columns(next, tabs.columns.get(next).map(|c| c.as_slice()).unwrap_or(&[]));

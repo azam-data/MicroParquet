@@ -624,6 +624,10 @@ impl Issues {
     }
 
     fn into_result(self, key_label: &str) -> Result<()> {
+        self.into_result_as("Cash flows", key_label)
+    }
+
+    fn into_result_as(self, prefix: &str, key_label: &str) -> Result<()> {
         if self.0.is_empty() {
             return Ok(());
         }
@@ -632,7 +636,7 @@ impl Issues {
             .iter()
             .map(|i| format!("{} on {} row(s); the first {} {}: {}.", i.what, i.count, i.first.len(), key_label, i.first.join(", ")))
             .collect();
-        bail!("Cash flows: {}", parts.join(" "));
+        bail!("{}: {}", prefix, parts.join(" "));
     }
 }
 
@@ -867,6 +871,33 @@ pub fn build_ladder(inputs: Vec<(LazyFrame, CfInputSpec)>, settings: &CfSettings
         all.extend(parsed.rows);
     }
     ladder_from_rows(&all, settings, behaviour)
+}
+
+/// The rows of several tabs for the IRRBB run: parsed and checked like the ladder's. With
+/// `rate_needed` (a floor on current rates for ΔNII) every row also needs a current rate.
+pub fn build_rows_for_irrbb(inputs: Vec<(LazyFrame, CfInputSpec)>, settings: &CfSettings, behaviour: Option<&BehaviourFile>, rate_needed: bool) -> Result<Vec<CfRow>> {
+    if inputs.is_empty() {
+        bail!("IRRBB: add at least one tab (assets or liabilities).");
+    }
+    let mut all: Vec<CfRow> = Vec::new();
+    for (lf, spec) in inputs {
+        let parsed = rows_from_lazy(lf, &spec, settings, behaviour.is_some())?;
+        check_rows(&parsed, settings, behaviour)?;
+        if rate_needed {
+            if given(&spec.rate_col).is_none() {
+                bail!("IRRBB: choose the rate column: a floor on current rates is set, and \u{394}NII needs each row's current rate.");
+            }
+            let mut issues = Issues::default();
+            for (i, r) in parsed.rows.iter().enumerate() {
+                if !r.rate_pct.is_finite() {
+                    issues.add("the current rate is blank, and a floor is set, so the shocked rate cannot be checked against it", || parsed.keys.get(i).cloned().unwrap_or_else(|| format!("row {}", i + 1)));
+                }
+            }
+            issues.into_result_as("\u{394}NII", &parsed.key_label)?;
+        }
+        all.extend(parsed.rows);
+    }
+    Ok(all)
 }
 
 // ----------------------------------------------------------------------------------------- output

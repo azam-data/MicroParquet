@@ -1961,6 +1961,12 @@ pub enum TabSource {
         /// The behaviour profile used (its file name and content when the tab was built).
         behaviour: Option<(String, crate::behaviour::BehaviourFile)>,
     },
+    /// The six-scenario IRRBB run (Phase 5 R3): `view` says which of its two tables this tab shows.
+    Irrbb {
+        inputs: Vec<CfTabInput>,
+        spec: Box<crate::irrbb::IrrbbSpec>,
+        view: IrrbbView,
+    },
     /// The CL migration matrix of two months (Phase 4 V2).
     ClMigration {
         prev_source: Box<TabSource>,
@@ -1969,6 +1975,15 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// Which table of the six-scenario run a tab shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IrrbbView {
+    /// "IRRBB results": the scenarios, their EVE change, loss and ΔNII.
+    Results,
+    /// "IRRBB cash flows": the cash-flow ladder with the base present values.
+    CashFlows,
 }
 
 /// A tab that feeds the IRRBB cash-flow tools: where its rows come from and what its columns mean.
