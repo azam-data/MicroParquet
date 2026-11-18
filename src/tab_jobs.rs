@@ -38,6 +38,7 @@ pub enum JobOutput {
     Refreshed(Box<Refreshed>),
     Schema(Box<SchemaApplied>),
     SqlChecked(Box<SqlChecked>),
+    Chart(Box<ChartResult>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
 }
@@ -360,6 +361,35 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
             })
         }
     }
+}
+
+// ------------------------------------------------------------------------------------ chart
+
+/// The chart of a tab to calculate on the worker (Phase 6 U5).
+pub struct ChartRequest {
+    pub tab_id: u64,
+    /// Which request this is: a result for an older one is dropped.
+    pub token: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::chart::ChartSpec,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ChartResult {
+    pub tab_id: u64,
+    pub token: u64,
+    pub data: std::result::Result<crate::chart::ChartData, String>,
+}
+
+pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult> {
+    ctx.set_progress("Calculating the chart…", None);
+    ctx.check()?;
+    let ChartRequest { tab_id, token, source, steps, spec, temp_dir } = req;
+    let data = compile_tab_lazy(&source, &steps, &temp_dir)
+        .and_then(|lf| crate::chart::compute_chart(lf, &spec))
+        .map_err(|e| format!("{:#}", e));
+    Ok(ChartResult { tab_id, token, data })
 }
 
 // ------------------------------------------------------------------------------------ SQL tab

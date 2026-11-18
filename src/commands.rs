@@ -205,7 +205,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::DecimalsDown, "Fewer decimal places", G::View, "precision", N::Nothing),
     c(I::TogglePanel, "Show or hide the right panel", G::View, "steps column inspector sidebar", N::Nothing),
     c(I::ToggleSql, "SQL editor", G::View, "sql query select table self scratchpad run", N::Tab),
-    c(I::ToggleChart, "Show or hide the ALCO bar chart", G::View, "graph plot", N::Nothing),
+    c(I::ToggleChart, "Show or hide the chart", G::View, "graph plot bar line category series aggregation top n", N::Nothing),
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
     c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),

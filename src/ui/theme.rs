@@ -332,6 +332,19 @@ pub const SQL_HISTORY_POPUP_H: f32 = 420.0;
 // chart
 pub const CHART_H: f32 = 175.0;
 pub const CHART_BAR_W: f64 = 0.65;
+/// The chart's controls and marks.
+pub const CHART_COMBO_W: f32 = 130.0;
+pub const CHART_COMBO_NARROW_W: f32 = 90.0;
+/// Longest category name on the x-axis, and room for one.
+pub const CHART_LABEL_CHARS: usize = 14;
+pub const CHART_LABEL_W: f32 = 90.0;
+/// The width a group of bars takes of its category's 1.0, and how much of its slot a bar fills.
+pub const CHART_GROUP_W: f64 = 0.8;
+pub const CHART_BAR_FILL: f64 = 0.92;
+pub const CHART_LINE_W: f32 = 2.0;
+/// Room under the plot for the x-axis names (the render tests look for them there).
+pub const CHART_AXIS_BAND: f32 = 28.0;
+pub const CHART_POINT_R: f32 = 3.0;
 // command palette
 pub const PALETTE_W: f32 = 560.0;
 pub const PALETTE_TOP: f32 = 90.0;

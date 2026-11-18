@@ -365,4 +365,7 @@ U6:
 - The status-bar zoom label is the right-most item and is left out of a bar narrower than 900 pt; egui's own Ctrl+= / Ctrl+- zoom is switched off.
 U4:
 - The build date comes from a std-only `build.rs`; the title names the tab's first file (or the tab's title for a tool's result). Two Phase 3 version assertions read the Cargo version instead of "1.3.0".
+U5:
+- Top N keeps N categories plus "Other"; series: at most 8 drawn in all (7 plus "Other"); both are ranked by aggregated value and "Other" is recalculated from its rows.
+- Count ignores the value column; choices are kept under the tab's first file name; the old bar chart is replaced by View ▸ Chart.
 </accepted_deviations>

@@ -69,7 +69,7 @@ fn dtype_is_date(dt: &DataType) -> bool {
 }
 
 /// The text of a key field with blank (null, or text of only spaces) as null.
-fn key_text_expr(name: &str, dt: &DataType) -> Expr {
+pub fn key_text_expr(name: &str, dt: &DataType) -> Expr {
     if dt.is_float() {
         // a whole number is written without ".0": 9, not 9.0
         let f = col(name).cast(DataType::Float64);

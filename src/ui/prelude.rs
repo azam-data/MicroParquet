@@ -37,7 +37,7 @@ pub use micro_parquet::tab_jobs::{
     export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
     LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest, TabTextFindings, TextCheckRequest,
     TextCheckResult, StepCountsRequest, SummaryRequest, compute_pivot_preview, compute_pivot_values, FieldKind,
-    PivotPreviewRequest, PivotValuesRequest, SqlCheckRequest,
+    PivotPreviewRequest, PivotValuesRequest, SqlCheckRequest, ChartRequest,
 };
 pub use polars::datatypes::AnyValue;
 pub use polars::prelude::DataFrame;

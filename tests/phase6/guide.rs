@@ -8,7 +8,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 2] = ["custom-sort-lists", "sql-editor"];
+pub const P6_GUIDE_TOOLS: [&str; 3] = ["custom-sort-lists", "sql-editor", "chart"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -74,4 +74,21 @@ fn guide_sql_editor() {
     let bad = run_steps("g_sql_bad", &df, &[TransformStep::SqlQuery { query: "SELECT Missing FROM self".to_string() }]);
     assert!(bad.is_err(), "a column that is not in the table is an error, not a blank");
     check_guide("sql-editor", "guide_sql_editor", &[md(&df, &["Branch", "Product", "Balance:2"]), md(&out, &["Branch", "Total:2", "Accounts"])]);
+}
+
+#[test]
+fn guide_chart() {
+    use micro_parquet::chart::*;
+    let df = DataFrame::new(vec![
+        Series::new("Term Period".into(), &["6m", "1y", "1m", "100D", "3m", "1y", "6m", "1m"]),
+        Series::new("Balance".into(), &[500_000_000.0, 300_000_000.0, 100_000_000.0, 50_000_000.0, 200_000_000.0, 100_000_000.0, 250_000_000.0, 80_000_000.0]),
+    ])
+    .expect("frame");
+    let spec = ChartSpec { category: "Term Period".into(), value: Some("Balance".into()), order: SortOrder::Tenor, top_n: 3, ..Default::default() };
+    let data = compute_chart(df.clone().lazy(), &spec).expect("the chart");
+    assert_eq!(data.categories, vec!["3m", "6m", "1y", "Other"], "the three largest in tenor order, then Other");
+    let table = chart_table(&data).expect("table");
+    let total: f64 = floats(&df, "Balance").iter().flatten().sum();
+    assert!((floats(&table, "Sum of Balance").iter().flatten().sum::<f64>() - total).abs() < 1e-6, "Other keeps the total");
+    check_guide("chart", "guide_chart", &[md(&df, &["Term Period", "Balance:2"]), md(&table, &["Term Period", "Sum of Balance:2", "Rows"])]);
 }

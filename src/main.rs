@@ -512,7 +512,7 @@ impl MicroParquetApp {
             ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
             self.command_menu_item_titled(ui, ctx, micro_parquet::commands::CommandId::ToggleSql, "SQL");
             self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
-            ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
+            ui.checkbox(&mut self.show_chart_drawer, "Chart");
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response

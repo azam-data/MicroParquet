@@ -1,0 +1,91 @@
+# Chart
+
+## 1. What it does
+
+Draws bars or a line of one number by one category, calculated over the whole tab after its steps (never just the rows on screen). Choose the category (X), an optional series (grouped bars, at most 8), the value and how to add it up (Sum, Count, Average, W.Avg, Min, Max). The x-axis shows the category names, the title says what was drawn and in which unit, and a tooltip gives the category, series, value and the number of rows behind it.
+
+## 2. When to use it
+
+- Balance by maturity bucket or term period for an ALCO pack.
+- Number of accounts by branch or by classification grade.
+- A weighted-average rate by product, to see which product is out of line.
+
+## 3. Before you start
+
+- Open the tab and apply the steps that shape it (filters, buckets). The chart reads the result.
+- The value column must be a number (integer, decimal or whole number). If an amount is still Text, set it to a number in Schema & Ingestion first.
+- If your categories have a fixed order (tenors, risk grades), make a list or use Tenor: see [custom sort lists](custom-sort-lists.md).
+
+## 4. Columns you need
+
+| Column role | Required? | Type the app needs | Example values | Notes |
+| --- | --- | --- | --- | --- |
+| Category (X) | Yes | Any | Term Period, Branch | Blank values are one category called (blank), always last. |
+| Series | No | Any | Risk grade | More than 8 values: the 7 largest and "Other". |
+| Value | For every aggregation except Count | Number | Balance, Rate | A Text, Date or other non-number column is refused with its type. |
+| Weight | For W.Avg | Number | Balance | Rows without a value or a weight are left out; weights of both signs give a blank rate. |
+
+## 5. Step by step
+
+1. View ▸ "Chart" (or Ctrl+K: "chart") opens the drawer above the table.
+2. Choose "Category (X)". Optionally choose a "Series".
+3. Choose "Aggregation" and, except for Count, the "Value" (for W.Avg also "by": the weight).
+4. "Type" is Bar or Line.
+5. "Order" is Natural, one of your lists, Tenor, or By value (largest first).
+6. "Top N" keeps that many categories; the rest are added into "Other" (the totals stay whole). The default is 30.
+7. "Scale" follows the value column's display format (Crore, Lakh, Million, Thousand or plain) unless you choose another.
+8. "Open chart data as tab" puts the table behind the chart in a new tab, which can be exported to Excel or PDF.
+9. The choices are kept for the tab (by its file name) for the next session.
+
+## 6. What you get
+
+A chart whose title reads like "Sum of Balance by Term Period: all 250 rows (Crore)". The x-axis names the categories (a long name is cut with "…", the tooltip has it whole). With Top N below the number of categories the title adds "top 3 of 5 categories". The table tab has one row per category (and series) with the value and "Rows".
+
+## 7. Check your result
+
+- The "all N rows" in the title is the row count of the tab: compare it with the status bar.
+- The bars add up to the Sum in the Summary row of the tab (Top N keeps the total in "Other").
+- Open the chart data as a tab and compare one line with a Pivot of the same fields.
+
+## 8. Worked example
+
+Input: eight loans.
+
+| Term Period | Balance |
+| --- | ---: |
+| 6m | 500,000,000.00 |
+| 1y | 300,000,000.00 |
+| 1m | 100,000,000.00 |
+| 100D | 50,000,000.00 |
+| 3m | 200,000,000.00 |
+| 1y | 100,000,000.00 |
+| 6m | 250,000,000.00 |
+| 1m | 80,000,000.00 |
+
+Test: `guide_chart`
+
+Sum of Balance by Term Period, Order Tenor, Top N 3: the three largest terms in term order, and the rest (1m and 100D) as "Other". The total is unchanged.
+
+| Term Period | Sum of Balance | Rows |
+| --- | ---: | ---: |
+| 3m | 200,000,000.00 | 1 |
+| 6m | 750,000,000.00 | 2 |
+| 1y | 400,000,000.00 | 2 |
+| Other | 230,000,000.00 | 3 |
+
+Test: `guide_chart`
+
+## 9. Common messages and fixes
+
+- "Chart: Sum needs a number column, but 'Risk' is Text. …" Choose a number column, or Count.
+- "Chart: choose the Value column for Sum …" Pick the value, or choose Count.
+- "Chart: W.Avg needs a weight column." Choose one (usually Balance).
+- "N group(s) have weights of both signs, so their weighted average is left blank." Check the sign of the weights.
+- "The 5 series after the first 7 are drawn together as Other." More than 8 series: filter first to see them.
+
+## 10. Limits and assumptions
+
+- Top N ranks categories by the aggregated value, largest first; "Other" is calculated again from its own rows (an average of the rest is the average of its rows, not of averages).
+- A category called "Other" in the data is kept apart from the rest ("Other categories").
+- Count counts rows; the value column is not used.
+- The first chart of a tab picks the first text column and the first number column; change them as needed.

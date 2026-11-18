@@ -224,10 +224,6 @@ impl MicroParquetApp {
                 self.filter.col = first.clone();
             }
             self.columns.rename_old = first.clone();
-            self.chart.x_col = first.clone();
-        }
-        if let Some(second) = cols.get(1) {
-            self.chart.y_col = second.clone();
         }
         self.columns.list = cols
             .iter()

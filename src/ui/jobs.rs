@@ -120,6 +120,10 @@ impl MicroParquetApp {
                         }
                     }
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
+                    JobKind::Chart => {
+                        self.chart.busy = false;
+                        self.chart.error = Some(msg.clone());
+                    }
                     JobKind::SqlCheck => {
                         if let Some(tab) = r.key.scope.and_then(|id| self.tabs.iter_mut().find(|t| t.id == id)) {
                             tab.sql_error = Some(msg.clone());
@@ -278,6 +282,7 @@ impl MicroParquetApp {
                 self.finish_schema_applied(*s);
             }
             JobOutput::SqlChecked(r) => self.apply_sql_checked(*r),
+            JobOutput::Chart(r) => self.apply_chart_result(*r),
             JobOutput::TextCheck(r) => self.apply_text_check(*r),
             JobOutput::Exported(o) => {
                 self.status_message = o.message;

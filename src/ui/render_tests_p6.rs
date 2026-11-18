@@ -1023,3 +1023,190 @@ fn u4_about_has_the_version_build_date_capabilities_folder_key_and_fonts_and_fit
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ U5
+
+use micro_parquet::chart::{ChartAgg, ChartKind, ChartSpec};
+
+/// A tab "book" of 250 rows (three pages) with Term Period in five tenors, a Risk grade, Balance and Rate.
+fn chart_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let root = app.paths.root_dir.clone();
+    let n = 250usize;
+    let tenors = ["6m", "1y", "1m", "100D", "3m"];
+    let df = DataFrame::new(vec![
+        Series::new("Term Period".into(), (0..n).map(|i| tenors[i % 5].to_string()).collect::<Vec<_>>()),
+        Series::new("Risk".into(), (0..n).map(|i| ["High", "Medium", "Low"][i % 3].to_string()).collect::<Vec<_>>()),
+        Series::new("Balance".into(), (0..n).map(|i| 10_000_000.0 + i as f64 * 1_000_000.0).collect::<Vec<f64>>()),
+        Series::new("Rate".into(), (0..n).map(|i| 5.0 + (i % 7) as f64 * 0.5).collect::<Vec<f64>>()),
+    ])
+    .expect("frame");
+    let src = parquet_source(&root, "book", df);
+    app.create_tab_from_source("book".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    app.show_chart_drawer = true;
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn x_labels(p: &Painted, plot: egui::Rect, names: &[&str]) -> Vec<String> {
+    // the names painted under the plot's bottom edge, left to right
+    let mut v: Vec<(f32, String)> = p.boxes.iter().filter(|(t, b)| names.contains(&t.as_str()) && b.top() >= plot.bottom() - 1.0 && b.top() <= plot.bottom() + theme::CHART_AXIS_BAND && b.left() >= plot.left() - 1.0 && b.right() <= plot.right() + 1.0).map(|(t, b)| (b.left(), t.clone())).collect();
+    v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    v.into_iter().map(|(_, t)| t).collect()
+}
+
+#[test]
+fn u5_the_chart_shows_the_whole_tab_with_category_names_on_the_x_axis_and_the_title_with_its_unit() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = chart_rig("p6u5a", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(10);
+        let r = rig.app.chart.rects.clone();
+        let plot = r.plot.unwrap_or_else(|| panic!("{what}: the plot was drawn: error {:?}", rig.app.chart.error));
+        let data = rig.app.chart.data.clone().expect("the chart has data");
+        assert_eq!(data.spec.category, "Term Period", "{what}: the first text column is the category");
+        assert_eq!(data.spec.value.as_deref(), Some("Balance"), "{what}: and the first number column the value");
+        assert_eq!(data.total_rows, 250, "{what}: all rows, not the first page");
+        let sum: f64 = data.values[0].iter().flatten().sum();
+        let want: f64 = (0..250).map(|i| 10_000_000.0 + i as f64 * 1_000_000.0).sum();
+        assert!((sum - want).abs() < 1.0, "{what}: {sum} vs {want}");
+        // the x-axis labels are the category names (natural order)
+        let labels = x_labels(&p, plot, &["1m", "1y", "3m", "6m", "100D"]);
+        assert_eq!(labels, vec!["1m", "1y", "3m", "6m", "100D"], "{what}: the x-axis names the categories: {:?}", p.boxes.iter().filter(|(_, b)| b.top() >= plot.bottom() - 40.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        // the title, with the unit of the column's format (Crore is the default scale)
+        let title = p.boxes.iter().find(|(t, _)| t.starts_with("Sum of Balance by Term Period")).map(|(t, b)| (t.clone(), *b)).unwrap_or_else(|| panic!("{what}: the title"));
+        assert_eq!(title.0, "Sum of Balance by Term Period: all 250 rows (Crore)", "{what}");
+        // the controls and the title are inside the window and the central area
+        let screen_rect = rig.ctx.screen_rect();
+        for (n, f) in &r.fields {
+            assert!(inside(*f, screen_rect), "{what}: '{n}' {f:?} is in the window");
+            assert!(f.right() <= screen_rect.right() - rig.app.right_panel_w + 1.0, "{what}: '{n}' {f:?} is clear of the right panel");
+        }
+        assert!(title.1.right() <= screen_rect.right() - rig.app.right_panel_w + 1.0, "{what}");
+        for (i, (a, ra)) in r.fields.iter().enumerate() {
+            for (b, rb) in r.fields.iter().skip(i + 1) {
+                assert!(!overlaps(*ra, *rb), "{what}: '{a}' {ra:?} overlaps '{b}' {rb:?}");
+            }
+        }
+        // the chart choices are shown by name
+        for t in ["Category (X)", "Series", "Aggregation", "Value", "Type", "Order", "Top N", "Scale", "Open chart data as tab"] {
+            assert!(p.boxes.iter().any(|(x, _)| x.contains(t)), "{what}: '{t}' is a control");
+        }
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u5_tenor_order_aggregation_series_and_top_n_work_by_real_clicks_and_are_remembered_per_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = chart_rig("p6u5b", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(10);
+        // Order > Tenor by clicks
+        let order = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Order").map(|(_, r)| *r).expect("Order");
+        rig.click(order.center());
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Tenor", order);
+        rig.draw(10);
+        let p = rig.draw(2);
+        let plot = rig.app.chart.rects.plot.expect("plot");
+        assert_eq!(x_labels(&p, plot, &["1m", "1y", "3m", "6m", "100D"]), vec!["1m", "3m", "100D", "6m", "1y"], "{what}: Tenor order: 1m, 3m, 100D, 6m, 1y");
+        // Aggregation > Count by clicks: no Value control, the title says so
+        let agg = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Aggregation").map(|(_, r)| *r).expect("Aggregation");
+        rig.click(agg.center());
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Count", agg);
+        rig.draw(10);
+        let p = rig.draw(2);
+        assert!(p.boxes.iter().any(|(t, _)| t == "Count of rows by Term Period: all 250 rows"), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("rows")).collect::<Vec<_>>());
+        assert!(!rig.app.chart.rects.fields.iter().any(|(n, _)| n == "Value"), "{what}: Count needs no value column");
+        let d = rig.app.chart.data.clone().expect("data");
+        assert_eq!(d.values[0].iter().flatten().sum::<f64>(), 250.0, "{what}");
+        // a series and Top N 3: three categories plus Other, and grouped series
+        rig.app.chart.spec.series = Some("Risk".into());
+        rig.app.chart.spec.top_n = 3;
+        rig.draw(10);
+        let d = rig.app.chart.data.clone().expect("data");
+        assert_eq!((d.categories.len(), d.series.len()), (4, 3), "{what}: {:?} {:?}", d.categories, d.series);
+        assert_eq!(d.categories.last().map(String::as_str), Some("Other"), "{what}");
+        // Line
+        rig.app.chart.spec.kind = ChartKind::Line;
+        let p = rig.draw(4);
+        assert!(rig.app.chart.rects.plot.is_some(), "{what}: a line chart is drawn");
+        assert!(p.boxes.iter().any(|(t, _)| t == "Other"), "{what}: the Other category is named on the x-axis");
+        // the choices are saved in settings.json under the tab's file name, and a restarted app takes them back
+        rig.app.chart_save_choices_for_test();
+        let (saved, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);
+        let spec: ChartSpec = serde_json::from_value(saved.chart.get("book.parquet").cloned().expect("saved under the file name")).expect("a spec");
+        assert_eq!((spec.top_n, spec.kind, spec.agg, spec.series.as_deref()), (3, ChartKind::Line, ChartAgg::Count, Some("Risk")), "{what}");
+        assert_eq!(spec.order, SortOrder::Tenor, "{what}");
+        let mut again = restarted(&rig.app);
+        again.jobs = JobQueue::inline();
+        let src = parquet_source(&again.paths.root_dir.clone(), "book", DataFrame::new(vec![Series::new("Term Period".into(), &["1m"]), Series::new("Risk".into(), &["High"]), Series::new("Balance".into(), &[1.0])]).expect("frame"));
+        again.create_tab_from_source("book".into(), src, vec![], HashMap::new());
+        settle(&mut again);
+        again.show_chart_drawer = true;
+        let (ctx, input) = screen(ppp, w, h);
+        let mut rig2 = Rig { app: again, ctx, input, what: what.clone() };
+        rig2.draw(8);
+        assert_eq!((rig2.app.chart.spec.top_n, rig2.app.chart.spec.kind), (3, ChartKind::Line), "{what}: the tab's choices were kept");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u5_a_text_value_column_is_refused_in_the_chart_with_its_type_and_open_as_tab_makes_a_table_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = chart_rig("p6u5c", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(10);
+        rig.app.chart.spec.value = Some("Risk".into());
+        let p = rig.draw(10);
+        let err = rig.app.chart.error.clone().unwrap_or_else(|| panic!("{what}: the chart refused a text value"));
+        assert!(err.contains("'Risk'") && err.contains("Text") && err.contains("Sum"), "{what}: {err}");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("needs a number column")), "{what}: the reason is on screen");
+        assert!(rig.app.chart.rects.plot.is_none(), "{what}: no plot is drawn from a wrong choice");
+        // back to a number: the chart returns
+        rig.app.chart.spec.value = Some("Balance".into());
+        rig.draw(10);
+        assert!(rig.app.chart.rects.plot.is_some() && rig.app.chart.error.is_none(), "{what}");
+        // "Open chart data as tab" by a real click
+        let open = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Open chart data as tab").map(|(_, r)| *r).expect("button");
+        rig.click(open.center());
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: a new tab: {}", rig.app.status_message);
+        let t = &rig.app.tabs[1];
+        assert_eq!(t.available_columns(), vec!["Term Period", "Sum of Balance", "Rows"], "{what}");
+        assert_eq!(t.cached_slice.height(), 5, "{what}");
+        assert!(t.title.starts_with("Chart: Sum of Balance by Term Period"), "{what}: {}", t.title);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u5_a_tooltip_has_the_whole_category_the_series_the_value_in_the_columns_format_and_the_rows() {
+    let mut rig = chart_rig("p6u5d", 1.05, 1219.05, 685.71);
+    rig.app.chart_attach_tab_for_test();
+    rig.app.chart.spec.series = Some("Risk".into());
+    rig.draw(10);
+    let d = rig.app.chart.data.clone().expect("data");
+    let i = d.categories.iter().position(|c| c == "100D").expect("100D");
+    let j = d.series.iter().position(|s| s == "High").expect("High");
+    let tip = rig.app.chart_tip(&d, j, i);
+    let lines: Vec<&str> = tip.lines().collect();
+    assert_eq!(lines[0], "Term Period: 100D");
+    assert_eq!(lines[1], "Risk: High");
+    assert!(lines[2].ends_with(" Cr"), "the value in the column's format (Crore): {tip}");
+    assert!(lines[3].ends_with(" rows"), "{tip}");
+    assert_eq!(d.rows[j][i].to_string() + " rows", lines[3]);
+    // another scale changes the number and its unit
+    rig.app.chart.spec.scale = micro_parquet::chart::ChartScale::Million;
+    let tip = rig.app.chart_tip(&d, j, i);
+    assert!(tip.lines().nth(2).is_some_and(|l| l.ends_with(" M")), "{tip}");
+    // a long label is cut on the axis and whole in the tooltip
+    assert_eq!(crate::ui::chart::short_label("Khulna Division West Zone", 14), "Khulna Divisi\u{2026}");
+    assert_eq!(crate::ui::chart::short_label("DHAKA", 14), "DHAKA");
+    micro_parquet::rules::set_data_dir_override(None);
+}

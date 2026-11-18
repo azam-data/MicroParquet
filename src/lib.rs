@@ -3,6 +3,7 @@
 pub mod banking;
 pub mod behaviour;
 pub mod cashflow;
+pub mod chart;
 pub mod cl1;
 pub mod betas;
 pub mod batch;
