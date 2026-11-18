@@ -141,7 +141,7 @@ impl MicroParquetApp {
         let betas = if g.beta_sel.is_empty() { Vec::new() } else { load_beta_rows(&betas_dir(), &g.beta_sel).map_err(|e| format!("{:#}", e))? };
         let store = CurveStore::load(&curves_dir());
         let curves = store.strict().map_err(|e| format!("{:#}", e))?.to_vec();
-        let spec = IrrbbSpec { cutoff, mode: g.mode, blank_maturity_on: g.blank_on, tier1, compounding: g.compounding, post_shock_floor_pct: post_floor, nii_floor_pct: nii_floor, shocks, curves, behaviour, betas };
+        let spec = IrrbbSpec { cutoff, mode: g.mode, blank_maturity_on: g.blank_on, tier1, compounding: g.compounding, post_shock_floor_pct: post_floor, nii_floor_pct: nii_floor, shocks, curves, behaviour, betas, beta_file: g.beta_sel.clone() };
         let make = |view| TabSource::Irrbb { inputs: inputs.clone(), spec: Box::new(spec.clone()), view };
         Ok(vec![("IRRBB cash flows".to_string(), make(IrrbbView::CashFlows)), ("IRRBB results".to_string(), make(IrrbbView::Results))])
     }

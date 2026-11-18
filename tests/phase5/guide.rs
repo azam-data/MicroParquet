@@ -217,7 +217,7 @@ fn guide_irrbb_six_scenarios() {
         meta: RuleMeta { file: "irrbb_shocks/2021-04-13.json".into(), as_of: d("2021-04-13"), source: "BRPD IRRBB 2021".into(), sample: false },
     };
     let curve = micro_parquet::curves::YieldCurve { date: d("2026-10-01"), currency: "BDT".into(), source: "example".into(), points: vec![FtpPoint { tenor_days: 30, ftp_rate: 10.0 }, FtpPoint { tenor_days: 9000, ftp_rate: 10.0 }] };
-    let spec = |tier1: f64| IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1, compounding: Compounding::Continuous, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shocks.clone(), curves: vec![curve.clone()], behaviour: None, betas: vec![] };
+    let spec = |tier1: f64| IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1, compounding: Compounding::Continuous, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shocks.clone(), curves: vec![curve.clone()], behaviour: None, betas: vec![], beta_file: String::new() };
     let o = run_irrbb(vec![(book.clone().lazy(), cf.clone())], &spec(1_000_000.0)).expect("runs");
     let small = run_irrbb(vec![(book.clone().lazy(), cf)], &spec(600_000.0)).expect("runs");
     assert!(!o.outlier && small.outlier);

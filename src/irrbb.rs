@@ -204,6 +204,8 @@ pub struct IrrbbSpec {
     pub curves: Vec<YieldCurve>,
     pub behaviour: Option<(String, BehaviourFile)>,
     pub betas: Vec<BetaRow>,
+    /// The name of the beta file the `betas` come from, "" for none (for the results footer).
+    pub beta_file: String,
 }
 
 /// One scenario's result.
@@ -237,6 +239,10 @@ pub struct IrrbbOutput {
     pub curve_files: Vec<(String, String)>,
     pub behaviour_file: Option<String>,
     pub compounding: Compounding,
+    /// Every input of the run that is not a file, as it was typed: label and text (cutoff, mode, options,
+    /// floors), so the run can be repeated from the footer.
+    pub inputs: Vec<(String, String)>,
+    pub beta_file: String,
     pub notes: Vec<String>,
 }
 
@@ -327,6 +333,14 @@ pub fn run_rows(rows: &[CfRow], spec: &IrrbbSpec) -> Result<IrrbbOutput> {
         curve_files,
         behaviour_file: spec.behaviour.as_ref().map(|b| format!("behaviour/{}", b.0)),
         compounding: spec.compounding,
+        inputs: vec![
+            ("Cutoff date".to_string(), spec.cutoff.format("%Y-%m-%d").to_string()),
+            ("Cash flows".to_string(), spec.mode.label().to_string()),
+            ("Treat blank maturity as O/N".to_string(), if spec.blank_maturity_on { "Yes" } else { "No" }.to_string()),
+            ("Post-shock floor".to_string(), spec.post_shock_floor_pct.map(|f| format!("{} %", f)).unwrap_or_else(|| "off".to_string())),
+            ("\u{394}NII floor on current rates".to_string(), spec.nii_floor_pct.map(|f| format!("{} %", f)).unwrap_or_else(|| "off".to_string())),
+        ],
+        beta_file: spec.beta_file.clone(),
         notes,
     })
 }
@@ -375,12 +389,16 @@ pub fn results_frame(o: &IrrbbOutput) -> Result<DataFrame> {
     footer("Maximum loss", Some(o.max_loss), Some(o.max_loss_pct), o.max_loss_scenario.map(|s| s.label().to_string()).unwrap_or_else(|| "no scenario loses".to_string()));
     footer(&format!("Outlier (max loss \u{2265} {}% of Tier 1)", o.outlier_pct), None, None, if o.outlier { "Yes".to_string() } else { "No".to_string() });
     footer("Tier 1 capital", None, None, format!("{:.2}", o.tier1));
+    for (k, v) in &o.inputs {
+        footer(k, None, None, v.clone());
+    }
     footer("Base EVE", None, None, side_note(&o.base_pv.iter().map(|(c, pv)| (c.clone(), pv.iter().sum::<f64>())).collect::<Vec<_>>()));
     footer("Rule file", None, None, o.shock_meta.file.clone());
     footer("Rule source", None, None, o.shock_meta.source.clone());
     footer("Curve", None, None, o.curve_files.iter().map(|(c, f)| format!("{}: {}", c, f)).collect::<Vec<_>>().join("; "));
     footer("Compounding", None, None, o.compounding.label().to_string());
     footer("Behaviour profile", None, None, o.behaviour_file.clone().unwrap_or_else(|| "none".to_string()));
+    footer("Beta file", None, None, if o.beta_file.is_empty() { "none".to_string() } else { format!("betas/{}", o.beta_file) });
     if o.shock_meta.sample {
         footer("Sample parameters", None, None, "The shock file is marked sample: confirm the numbers before they are used in a return.".to_string());
     }

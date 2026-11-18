@@ -31,7 +31,7 @@ fn shock_file(extra: Vec<CurrencyShock>) -> RuleFile<ShockFile> {
 }
 
 fn spec(tier1: f64, comp: Compounding) -> IrrbbSpec {
-    IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1, compounding: comp, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shock_file(vec![]), curves: vec![flat("BDT", 10.0)], behaviour: None, betas: vec![] }
+    IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1, compounding: comp, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shock_file(vec![]), curves: vec![flat("BDT", 10.0)], behaviour: None, betas: vec![], beta_file: String::new() }
 }
 
 /// The acceptance book: an asset flow of 1,000,000 in (4, 5] and a liability flow of −600,000 in O/N.
@@ -98,7 +98,7 @@ fn r3_outlier_test_at_15_percent_of_tier_1() {
     assert!(strings(&t, "Note")[at("Curve")].as_deref().unwrap_or("").contains("curves/2026-10-01.json (BDT)"));
     assert_eq!(strings(&t, "Note")[at("Behaviour profile")].as_deref(), Some("none"));
     assert_eq!(strings(&t, "Note")[at("Maximum loss")].as_deref(), Some("Parallel up"));
-    assert_eq!(t.height(), 6 + 9);
+    assert_eq!(t.height(), 6 + 15, "six scenarios and the footer: the five inputs, the beta file and the nine rows before");
     assert_eq!(floats(&t, "Loss % of Tier 1")[at("Maximum loss")].map(|v| format!("{v:.2}")), Some("15.00".into()));
 }
 
@@ -388,4 +388,36 @@ fn d5_decay_x_and_outlier_pct_are_required_in_the_shock_file_and_a_missing_field
     let shipped: serde_json::Value = serde_json::from_str(micro_parquet::rules::IRRBB_SHOCKS.1).expect("json");
     assert!(shipped.get("decay_x").is_some() && shipped.get("outlier_pct").is_some());
     set_data_dir_override(None);
+}
+
+#[test]
+fn d10_the_results_footer_records_every_input_so_a_run_can_be_repeated() {
+    let mut sp = spec(1_000_000.0, Compounding::Annual);
+    sp.post_shock_floor_pct = Some(0.0);
+    sp.nii_floor_pct = Some(1.5);
+    sp.blank_maturity_on = true;
+    sp.beta_file = "2026-10-31.json".into();
+    let o = run_irrbb(vec![(book_frame().lazy(), cf_spec())], &sp).expect("runs");
+    let t = results_frame(&o).expect("results");
+    let labels: Vec<String> = strings(&t, "Scenario").into_iter().map(|s| s.unwrap_or_default()).collect();
+    let notes: Vec<String> = strings(&t, "Note").into_iter().map(|s| s.unwrap_or_default()).collect();
+    let at = |l: &str| notes[labels.iter().position(|x| x == l).unwrap_or_else(|| panic!("no footer row '{l}': {labels:?}"))].clone();
+    assert_eq!(at("Tier 1 capital"), "1000000.00");
+    assert_eq!(at("Cutoff date"), "2026-10-31");
+    assert_eq!(at("Cash flows"), CashFlowMode::PrincipalOnly.label());
+    assert_eq!(at("Treat blank maturity as O/N"), "Yes");
+    assert_eq!(at("Post-shock floor"), "0 %");
+    assert_eq!(at("\u{394}NII floor on current rates"), "1.5 %");
+    assert!(at("Rule file").starts_with("irrbb_shocks/"));
+    assert!(at("Curve").starts_with("BDT: curves/"));
+    assert!(at("Compounding").starts_with("Annual"));
+    assert_eq!(at("Behaviour profile"), "none");
+    assert_eq!(at("Beta file"), "betas/2026-10-31.json");
+    // the options that are off say so
+    let o = run_irrbb(vec![(book_frame().lazy(), cf_spec())], &spec(1_000_000.0, Compounding::Continuous)).expect("runs");
+    let t = results_frame(&o).expect("results");
+    let labels: Vec<String> = strings(&t, "Scenario").into_iter().map(|s| s.unwrap_or_default()).collect();
+    let notes: Vec<String> = strings(&t, "Note").into_iter().map(|s| s.unwrap_or_default()).collect();
+    let at = |l: &str| notes[labels.iter().position(|x| x == l).expect("row")].clone();
+    assert_eq!((at("Post-shock floor").as_str(), at("Treat blank maturity as O/N").as_str(), at("Beta file").as_str()), ("off", "No", "none"));
 }
