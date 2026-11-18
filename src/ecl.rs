@@ -85,8 +85,8 @@ pub fn check_staging(r: &StagingRules, file: &str) -> Result<()> {
     Ok(())
 }
 
-/// Checks the parameter file. The weights must sum to 100 (§5.9). Fewer than three scenarios is
-/// returned as a warning, not an error.
+/// Checks the parameter file (§5.9): one scenario (its weight is not used), or three or more whose
+/// weights sum to 100; exactly two are refused. The warnings are always empty today.
 pub fn check_params(p: &EclParams, file: &str) -> Result<Vec<String>> {
     if p.segments.is_empty() {
         bail!("The parameter file {} has no segment.", file);
@@ -110,18 +110,21 @@ pub fn check_params(p: &EclParams, file: &str) -> Result<Vec<String>> {
     if p.scenarios.is_empty() {
         bail!("The parameter file {} has no scenario.", file);
     }
-    let total: f64 = p.scenarios.iter().map(|s| s.weight_pct).sum();
     if p.scenarios.iter().any(|s| !(s.weight_pct.is_finite() && s.weight_pct >= 0.0 && s.pd_multiplier.is_finite() && s.pd_multiplier >= 0.0)) {
         bail!("The parameter file {}: each scenario needs a weight and a PD multiplier that are not negative.", file);
     }
-    if (total - 100.0).abs() > 1e-6 {
-        bail!("The parameter file {}: the scenario weights sum to {}, not 100. Fix the weights (BRPD Circular 06/2026, section 5.9).", file, trim_num(total));
+    // BRPD Circular 06/2026 section 5.9: one scenario (no weighting), or at least three weighted to 100
+    match p.scenarios.len() {
+        1 => {}
+        2 => bail!("The parameter file {} has 2 scenarios. BRPD Circular 06/2026 section 5.9 allows one scenario (no weighting) or at least three scenarios with weights that sum to 100; add a scenario or remove one.", file),
+        _ => {
+            let total: f64 = p.scenarios.iter().map(|s| s.weight_pct).sum();
+            if (total - 100.0).abs() > 1e-6 {
+                bail!("The parameter file {}: the scenario weights sum to {}, not 100. Fix the weights (BRPD Circular 06/2026, section 5.9).", file, trim_num(total));
+            }
+        }
     }
-    let mut warnings = Vec::new();
-    if p.scenarios.len() < 3 {
-        warnings.push(format!("The parameter file {} has {} scenario(s); BRPD Circular 06/2026 section 5.9 expects at least three.", file, p.scenarios.len()));
-    }
-    Ok(warnings)
+    Ok(Vec::new())
 }
 
 fn trim_num(v: f64) -> String {
@@ -168,7 +171,8 @@ pub fn ecl_of(ead: f64, stage: u8, term_years: f64, eir: f64, seg: &Segment, sce
             let frac = (horizon - (y as f64 - 1.0)).min(1.0);
             e += marginal * frac * lgd * ead / (1.0 + eir).powi(y as i32);
         }
-        total += sc.weight_pct / 100.0 * e;
+        // a single scenario is not weighted
+        total += if scenarios.len() == 1 { 1.0 } else { sc.weight_pct / 100.0 } * e;
     }
     Ok(total)
 }

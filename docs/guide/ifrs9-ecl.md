@@ -14,7 +14,7 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 
 - A loan tab with the drawn amount, the effective interest rate (%), the maturity date (Date) and, for the staging, the days past due and the classification grade (`CL_Final` from "Classify by overdue"). Optional: the undrawn amount, forborne flag, "SICR not assessed" flag, the ratings at origination and now (numbers; a bigger number is worse), the previous stage and the days performing.
 - The staging rules `portable_data/rules/ifrs9_staging/<date>.json` (built in as 2026-03-08, written if missing; 30 and 90 days past due, 90 and 365 days for cure, the classified grades, and a rating downgrade of 2 notches, which is a sample value).
-- The parameters `portable_data/ecl_params/<date>.json` (a sample is written if missing): for each segment the cumulative PD by year, LGD % and CCF %; and the scenarios with weight % and PD multiplier. The weights must sum to 100; the circular expects at least three scenarios. The latest file dated on or before the cutoff is used; an existing file is never overwritten.
+- The parameters `portable_data/ecl_params/<date>.json` (a sample is written if missing): for each segment the cumulative PD by year, LGD % and CCF %; and the scenarios with weight % and PD multiplier. Section 5.9: one scenario (its weight is not used, nothing is weighted), or three or more whose weights sum to 100; exactly two are refused. The latest file dated on or before the cutoff is used; an existing file is never overwritten.
 - For the summary: the Provision step's `Required_Provision_BDT`.
 
 ## 4. Columns you need
@@ -44,7 +44,7 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 
 Six new columns at the end: `Stage` (1, 2 or 3), `Stage_Reason` (the first thing that put the loan in that stage: "90+ DPD", "Classified SS", "30+ DPD", "Forborne", "SICR not assessed", "Rating down 2 notches or more", "Cure period not over (N of 90 days performing)", or "Performing"), `EAD` (drawn + CCF × undrawn), `ECL`, `ECL_Rule_File` and `ECL_Params_File` (the files used). The status bar counts the loans in each stage.
 
-How the stage is set: Stage 3 at 90 or more days past due, or a classified grade; Stage 2 at 30 or more days past due, forborne, SICR not assessed, or a rating downgrade; otherwise Stage 1. Cure: a loan whose previous stage was worse moves back one stage for each full cure period of days performing (90 days; 365 days for a forborne exposure), never below the stage its indicators give.
+How the stage is set: Stage 3 at 90 or more days past due, or a classified grade; Stage 2 at 30 or more days past due, forborne, SICR not assessed, or a rating downgrade; otherwise Stage 1. Cure: a loan whose previous stage was worse moves back one stage for each full cure period of days performing (90 days; 365 days for a forborne exposure), never better than the stage its current criteria give (a loan cured to Stage 1 that is 45 days past due now is Stage 2).
 
 ECL: for each scenario, the marginal PD of year y is the cumulative PD of year y less that of year y−1, times the scenario's PD multiplier and at most 100%; each year's loss is the marginal PD × LGD × EAD ÷ (1 + EIR)^y; Stage 1 takes year 1 (or the remaining term if shorter), Stage 2 every year to the remaining term with a final part-year taking its fraction of the marginal PD; the scenarios are weighted. Stage 3 is LGD × EAD.
 
@@ -104,7 +104,7 @@ Test: `guide_ifrs9_ecl`
 - "… the days past due in 'X' is blank …" Fill it (0 for not overdue).
 - "… the remaining term of N years is longer than the M years of the PD curve of 'S' …" Extend the cumulative PD of the segment in the parameter file.
 - "… the segment column 'X' has values that are not segments of ecl_params/… " Use the segment names of the file.
-- "… the scenario weights sum to 90, not 100 …" Fix the weights (section 5.9). A file with fewer than three scenarios runs and says so in the status bar.
+- "… the scenario weights sum to 90, not 100 …" Fix the weights (section 5.9). "… has 2 scenarios …": use one scenario or at least three.
 - "… choose both the rating columns / both the previous stage and the days performing …" Choose the pair or neither.
 - "… the previous stage in 'X' is not 1, 2 or 3 …", "… is not Y/N …" Fix the values.
 - "IFRS 9 summary: the tab has no column 'Stage' …" Run the IFRS 9 ECL step on the tab first.

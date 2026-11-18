@@ -281,19 +281,29 @@ fn s_prev() -> TransformStep {
 }
 
 #[test]
-fn r7_scenario_weights_that_do_not_sum_to_100_are_refused_and_fewer_than_three_scenarios_warn() {
-    let bad = serde_json::json!([{"name": "Base", "weight_pct": 60, "pd_multiplier": 1.0}, {"name": "Down", "weight_pct": 30, "pd_multiplier": 1.5}]);
-    let data = data_with("r7g", bad);
-    let e = format!("{:#}", run("r7g1", &data, &book(&[1.0], &["2028-10-31"]), &step(&|_| {})).err().expect("weights 90"));
+fn r7_scenarios_one_unweighted_two_refused_three_or_more_weighted_to_100() {
+    let msg = |sc: serde_json::Value, name: &str| -> String {
+        let data = data_with(name, sc);
+        format!("{:#}", run(&format!("{name}x"), &data, &book(&[1.0], &["2028-10-31"]), &step(&|_| {})).err().unwrap_or_else(|| panic!("refused: {name}")))
+    };
+    // three scenarios with weights that sum to 90: refused
+    let e = msg(serde_json::json!([{"name": "A", "weight_pct": 50, "pd_multiplier": 1.0}, {"name": "B", "weight_pct": 30, "pd_multiplier": 1.2}, {"name": "C", "weight_pct": 10, "pd_multiplier": 1.5}]), "r7g1");
     assert!(e.contains("sum to 90, not 100") && e.contains("ecl_params/2026-03-08.json") && e.contains("section 5.9"), "{e}");
-    // one scenario at 100: allowed, with a warning in the note (the spec's single-scenario acceptance)
-    let data = data_with("r7g2", one_scenario());
-    set_data_dir_override(Some(data));
-    let (_, stats) = classify_lazy(book(&[1.0], &["2028-10-31"]).lazy(), &spec_of(&step(&|_| {})).expect("spec")).expect("runs");
-    set_data_dir_override(None);
-    assert!(stats.note("IFRS 9 ECL").contains("has 1 scenario(s); BRPD Circular 06/2026 section 5.9 expects at least three"), "{}", stats.note("x"));
-    // three scenarios: no warning
-    let data = data_with("r7g3", three_scenarios());
+    // exactly two: refused, citing the circular
+    let e = msg(serde_json::json!([{"name": "A", "weight_pct": 60, "pd_multiplier": 1.0}, {"name": "B", "weight_pct": 40, "pd_multiplier": 1.5}]), "r7g2");
+    assert!(e.contains("has 2 scenarios") && e.contains("BRPD Circular 06/2026 section 5.9") && e.contains("at least three"), "{e}");
+    // one scenario: allowed and not weighted, whatever weight is written
+    let df = stage_book(45);
+    let s = step(&|s| s["dpd_col"] = serde_json::json!("DPD"));
+    for (name, w) in [("r7g3", 100), ("r7g4", 40)] {
+        let data = data_with(name, serde_json::json!([{"name": "Base", "weight_pct": w, "pd_multiplier": 1.0}]));
+        near(floats(&run(&format!("{name}x"), &data, &df, &s).expect("one scenario runs"), "ECL")[0], 19338.84, "no weighting");
+    }
+    // the multiplier of a single scenario still applies
+    let data = data_with("r7g5", serde_json::json!([{"name": "Down", "weight_pct": 100, "pd_multiplier": 1.5}]));
+    near(floats(&run("r7g5x", &data, &df, &s).expect("runs"), "ECL")[0], 19338.84 * 1.5, "x1.5");
+    // three scenarios that sum to 100 run, with no warning
+    let data = data_with("r7g6", three_scenarios());
     set_data_dir_override(Some(data));
     let (_, stats) = classify_lazy(book(&[1.0], &["2028-10-31"]).lazy(), &spec_of(&step(&|_| {})).expect("spec")).expect("runs");
     set_data_dir_override(None);
@@ -476,4 +486,22 @@ fn r7_the_step_is_saved_in_a_macro_and_a_step_list_without_it_is_unchanged() {
 
 fn s_prev_less() -> TransformStep {
     step(&|_| {})
+}
+
+#[test]
+fn b1_a_cured_loan_is_never_better_than_the_stage_of_its_current_criteria() {
+    // previous Stage 3, 185 days performing (two cure periods: Stage 1), but 45 days past due now (Stage 2): Stage 2
+    let mut df = book(&[1.0; 3], &["2028-10-31"; 3]);
+    df.with_column(Series::new("Prev".into(), &[3i64, 3, 3])).expect("col");
+    df.with_column(Series::new("Days".into(), &[185.0, 185.0, 95.0])).expect("col");
+    df.with_column(Series::new("DPD".into(), &[45i64, 0, 45])).expect("col");
+    let s = step(&|s| {
+        s["prev_stage_col"] = serde_json::json!("Prev");
+        s["days_performing_col"] = serde_json::json!("Days");
+        s["dpd_col"] = serde_json::json!("DPD");
+    });
+    let (st, why) = staged("b1", df, &s);
+    assert_eq!(st, vec![Some(2), Some(1), Some(2)], "{why:?}");
+    assert_eq!(why[0].as_deref(), Some("30+ DPD"), "the current criteria give the stage and the reason: {why:?}");
+    assert_eq!(why[1].as_deref(), Some("Performing"));
 }
