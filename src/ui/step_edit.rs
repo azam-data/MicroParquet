@@ -399,7 +399,7 @@ impl MicroParquetApp {
                 e.cutoff = cutoff_date;
                 e.files = None;
             }
-            TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, cutoff_date } => {
+            TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, overdue_amount_col, cutoff_date } => {
                 let o = &mut self.overdue;
                 o.category_by_col = category_col.as_deref().is_some_and(|c| !c.trim().is_empty());
                 o.category_col = category_col.unwrap_or_default();
@@ -411,6 +411,8 @@ impl MicroParquetApp {
                 o.dpd_col = dpd_col.unwrap_or_default();
                 o.override_on = override_col.as_deref().is_some_and(|c| !c.trim().is_empty());
                 o.override_col = override_col.unwrap_or_default();
+                o.amount_on = overdue_amount_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.amount_col = overdue_amount_col.unwrap_or_default();
                 o.cutoff = cutoff_date;
                 o.categories = None;
             }

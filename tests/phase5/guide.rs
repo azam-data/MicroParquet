@@ -263,6 +263,7 @@ fn guide_classify_by_overdue() {
         since_col: Some("Overdue_Since".into()),
         dpd_col: None,
         override_col: Some("Override_Grade".into()),
+        overdue_amount_col: None,
         cutoff_date: "2026-10-31".into(),
     };
     micro_parquet::rules::set_data_dir_override(Some(dir("guide_overdue")));

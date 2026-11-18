@@ -702,7 +702,7 @@ fn r4_the_classify_dialog_fits_takes_its_choices_by_click_and_adds_the_step() {
         assert_eq!(rig.app.active_tool, ActiveToolModal::ClassifyOverdue, "{what}");
         let p = rig.draw(6);
         let r = assert_dialog_fits(&rig.ctx, &ov_title(), &what);
-        for t in ["Cutoff date (YYYY-MM-DD)", "Loan category", "Same for every row:", "From the column:", "Overdue period", "Overdue-since date column:", "Days-past-due column:", "Override grade column", "Classify by overdue", "Cancel"] {
+        for t in ["Cutoff date (YYYY-MM-DD)", "Loan category", "Same for every row:", "From the column:", "Overdue period", "Overdue-since date column:", "Days-past-due column:", "Override grade column", "Overdue amount column", "Classify by overdue", "Cancel"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
         let g = rig.app.overdue.rects.clone();

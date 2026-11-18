@@ -144,6 +144,8 @@ pub struct OverdueSpec {
     pub since_col: Option<String>,
     pub dpd_col: Option<String>,
     pub override_col: Option<String>,
+    /// The optional overdue amount: above 0 with a blank date stops the run.
+    pub overdue_amount_col: Option<String>,
     pub cutoff: Option<NaiveDate>,
 }
 
@@ -161,7 +163,7 @@ pub struct OverdueStats {
 
 impl OverdueStats {
     pub fn note(&self, label: &str, has_override: bool) -> String {
-        let mut s = format!("{}: {} row(s) with no overdue date are counted as not overdue (STD-0).", label, self.no_overdue_date);
+        let mut s = format!("{}: {} row(s) treated as not overdue (STD-0) because the overdue date was blank.", label, self.no_overdue_date);
         if has_override {
             s.push_str(&format!(" {} override(s) were worse than the overdue grade and were used; {} override(s) were better and were ignored.", self.override_worse, self.override_ignored));
         }
@@ -383,11 +385,30 @@ pub fn classify_df(df: &DataFrame, spec: &OverdueSpec, rules: &RuleFile<OverdueF
         }
     }
 
+    // the overdue amount: a row that owes something overdue must have a date
+    let amounts: Option<Vec<Option<f64>>> = match spec.overdue_amount_col.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        Some(ac) => {
+            need(ac, "overdue amount")?;
+            let c = df.column(ac)?;
+            if !c.dtype().is_numeric() {
+                bail!("Classify by overdue: the overdue amount column '{}' is {}, not a number. Set it to a number in the Schema & Ingestion settings.", ac, c.dtype());
+            }
+            Some(c.cast(&DataType::Float64)?.f64()?.into_iter().collect())
+        }
+        None => None,
+    };
+
     // 4. the grades
     let mut out = Classified { months: vec![0; height], objective: vec![GRADES[0]; height], final_: vec![GRADES[0]; height], stats: OverdueStats { rows: height, ..Default::default() }, rule_file: rules.meta.file.clone() };
     for i in 0..height {
         let (days, months) = match since[i] {
             None => {
+                if let Some(a) = &amounts {
+                    if a[i].is_some_and(|v| v > 0.0) {
+                        problems.add(&format!("the overdue amount in '{}' is above 0 but the overdue date (or days past due) is blank", spec.overdue_amount_col.clone().unwrap_or_default()), || keys[i].clone());
+                        continue;
+                    }
+                }
                 // a blank date, or a blank days-past-due: not overdue
                 if spec.dpd_col.as_deref().is_some_and(|c| !c.trim().is_empty()) || spec.since_col.as_deref().is_some_and(|c| !c.trim().is_empty()) {
                     out.stats.no_overdue_date += 1;
@@ -468,10 +489,10 @@ pub fn apply_classify_overdue(lf: LazyFrame, spec: &OverdueSpec) -> Result<LazyF
 
 /// The spec of a `ClassifyOverdue` step.
 pub fn spec_of(step: &crate::models::TransformStep) -> Result<OverdueSpec> {
-    let crate::models::TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, cutoff_date } = step else {
+    let crate::models::TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, overdue_amount_col, cutoff_date } = step else {
         bail!("internal: not a Classify by overdue step");
     };
     let given = |c: &Option<String>| c.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d").map_err(|_| anyhow!("Classify by overdue: type the cutoff date as YYYY-MM-DD (for example 2026-10-31)."))?;
-    Ok(OverdueSpec { category_col: given(category_col), fixed_category: fixed_category.trim().to_string(), since_col: given(since_col), dpd_col: given(dpd_col), override_col: given(override_col), cutoff: Some(cutoff) })
+    Ok(OverdueSpec { category_col: given(category_col), fixed_category: fixed_category.trim().to_string(), since_col: given(since_col), dpd_col: given(dpd_col), override_col: given(override_col), overdue_amount_col: given(overdue_amount_col), cutoff: Some(cutoff) })
 }

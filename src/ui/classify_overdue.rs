@@ -19,6 +19,8 @@ pub struct OverdueState {
     pub dpd_col: String,
     pub override_on: bool,
     pub override_col: String,
+    pub amount_on: bool,
+    pub amount_col: String,
     pub cutoff: String,
     /// The category names of the rule file in force at the cutoff date (the date they were read for).
     pub categories: Option<(String, Result<Vec<String>, String>)>,
@@ -36,6 +38,8 @@ impl Default for OverdueState {
             dpd_col: String::new(),
             override_on: false,
             override_col: String::new(),
+            amount_on: false,
+            amount_col: String::new(),
             cutoff: String::new(),
             categories: None,
             rects: DialogRects::default(),
@@ -53,6 +57,8 @@ impl OverdueState {
         self.use_dpd = self.since_col.is_empty() && !self.dpd_col.is_empty();
         self.override_col = guess_column(cols, &["override", "subjective", "judgemental", "judgmental"]);
         self.override_on = !self.override_col.is_empty();
+        self.amount_col = guess_column(cols, &["overdue_amt", "overdue_amount", "arrear", "od_amount"]);
+        self.amount_on = !self.amount_col.is_empty();
     }
 }
 
@@ -108,12 +114,16 @@ impl MicroParquetApp {
         if s.override_on && s.override_col.trim().is_empty() {
             return Err("Choose the override grade column, or untick it.".to_string());
         }
+        if s.amount_on && s.amount_col.trim().is_empty() {
+            return Err("Choose the overdue amount column, or untick it.".to_string());
+        }
         Ok(TransformStep::ClassifyOverdue {
             category_col: some(s.category_by_col, &s.category_col),
             fixed_category: if s.category_by_col { String::new() } else { s.fixed_category.trim().to_string() },
             since_col: some(!s.use_dpd, &s.since_col),
             dpd_col: some(s.use_dpd, &s.dpd_col),
             override_col: some(s.override_on, &s.override_col),
+            overdue_amount_col: some(s.amount_on, &s.amount_col),
             cutoff_date: cutoff,
         })
     }
@@ -187,6 +197,14 @@ impl MicroParquetApp {
                     ui.add_enabled_ui(s.override_on, |ui| {
                         let r = col_combo(ui, "ov_over", &mut s.override_col, &cols, false);
                         rects.controls.push(("Override column".to_string(), r));
+                    });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    let c = ui.checkbox(&mut s.amount_on, "Overdue amount column (an amount above 0 needs a date):");
+                    rects.controls.push(("Overdue amount".to_string(), c.rect));
+                    ui.add_enabled_ui(s.amount_on, |ui| {
+                        let r = col_combo(ui, "ov_amt", &mut s.amount_col, &cols, false);
+                        rects.controls.push(("Overdue amount column".to_string(), r));
                     });
                 });
                 ui.add_space(theme::SPACE_S);

@@ -25,6 +25,7 @@ Gives every loan the classification grade its overdue period earns under Banglad
 | Overdue-since date | One of the two | Date | 2026-07-31 | Blank = not overdue. A date after the cutoff stops the run. |
 | Days past due | One of the two | Number (whole days) | 92 | Turned into the overdue-since date: cutoff less the days. Blank = not overdue; negative stops the run. |
 | Override grade | No | Text | SS, STD-2 | Blank = no override. The worse of this and the overdue grade is used. |
+| Overdue amount | No | Number (BDT) | 250,000 | If chosen, a row with an amount above 0 and a blank overdue date (or blank days past due) stops the run. A blank or 0 amount is fine. |
 | Account number | No | Text | 0012345678901 | Named in the messages (the first column whose name looks like an account number). |
 
 ## 5. Step by step
@@ -33,8 +34,8 @@ Gives every loan the classification grade its overdue period earns under Banglad
 2. Type the "Cutoff date (YYYY-MM-DD)".
 3. Under "Loan category" choose "Same for every row:" and a category, or "From the column:" and the column.
 4. Under "Overdue period" choose "Overdue-since date column:" or "Days-past-due column:" and the column.
-5. Tick "Override grade column (the worse grade wins):" and choose the column if you have one.
-6. Read the red line under the date if the button is grey. Click "Classify by overdue". The step is added; the status bar says how many rows had no date and how many overrides were worse (used) or better (ignored).
+5. Tick "Override grade column (the worse grade wins):" and choose the column if you have one. Tick "Overdue amount column (an amount above 0 needs a date):" and choose it to catch overdue loans whose date is missing.
+6. Read the red line under the date if the button is grey. Click "Classify by overdue". The step is added; the status bar always says how many rows were treated as not overdue because the date was blank (even 0) and how many overrides were worse (used) or better (ignored).
 
 ## 6. What you get
 
@@ -78,6 +79,7 @@ Test: `guide_classify_by_overdue`
 - "Loan category column 'X' has codes not in loan_category_map.json …: 'TL', (blank), on N row(s)." Add each code with its category to `portable_data/loan_category_map.json`, or fix blanks in the data.
 - "CL status column 'X' has codes not in cl_code_map.json …" (for the override column). Use a sub-grade code or add the code to `cl_code_map.json`.
 - "Classify by overdue: the overdue-since date is after the cutoff … on N row(s); the first 5 values of Account_No: …" The date is later than the cutoff date: fix the data or the cutoff.
+- "… the overdue amount in 'X' is above 0 but the overdue date (or days past due) is blank …" Fill the date for those accounts (the first 5 are named).
 - "… the days past due in 'X' is negative / is not a whole number of days …" Fix the data.
 - "… is String, not a date" / "… not a number." Set the column type in Schema & Ingestion.
 - "There is no cl_overdue file dated on or before the cutoff …" The cutoff is before 1 April 2025, or the folder has no file; add one.
@@ -89,7 +91,7 @@ Test: `guide_classify_by_overdue`
 
 - It classifies from the overdue period (and an override) only; it does not look at the other criteria of the circular (for example rescheduling or the loan's own characteristics).
 - Overdue 0 days (overdue since the cutoff itself) is STD-0, because no complete day has passed.
-- A blank overdue date or blank days past due means "not overdue"; the count is in the status bar.
+- A blank overdue date or blank days past due means "not overdue"; the count is always in the status bar. Map the "Overdue amount" column and a row that owes an overdue amount without a date stops the run instead.
 - The thresholds are the same for the four categories today; the file holds them per category, so a later circular can differ.
 - An override is a grade you take from your own judgement; it can raise the grade, never lower it.
 - Not translated to the Python export (the step says so).

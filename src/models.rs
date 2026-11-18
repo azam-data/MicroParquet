@@ -1709,6 +1709,9 @@ pub enum TransformStep {
         /// The optional subjective/override grade column.
         #[serde(default)]
         override_col: Option<String>,
+        /// The optional overdue amount column: a row with an amount above 0 and a blank overdue date stops the run.
+        #[serde(default)]
+        overdue_amount_col: Option<String>,
         /// YYYY-MM-DD.
         #[serde(default)]
         cutoff_date: String,

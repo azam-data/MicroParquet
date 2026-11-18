@@ -20,6 +20,7 @@ fn step(since: Option<&str>, dpd: Option<&str>, over: Option<&str>, cat: Option<
         since_col: since.map(str::to_string),
         dpd_col: dpd.map(str::to_string),
         override_col: over.map(str::to_string),
+        overdue_amount_col: None,
         cutoff_date: cutoff.to_string(),
     }
 }
@@ -289,4 +290,64 @@ fn r4_the_step_is_saved_in_a_macro_and_an_old_step_list_still_loads() {
     assert!(matches!(bare, TransformStep::ClassifyOverdue { category_col: None, since_col: None, dpd_col: None, override_col: None, .. }));
     assert_eq!(s.title(), "Classify by overdue");
     assert!(micro_parquet::macros::python_untranslated_steps(std::slice::from_ref(&s)).iter().any(|m| m.contains("Classify by overdue")));
+}
+
+// ---------------------------------------------------------------- B3: blank dates and the overdue amount
+
+fn step_with_amount(since: Option<&str>, dpd: Option<&str>, amount: &str) -> TransformStep {
+    match step(since, dpd, None, None, "2026-10-31") {
+        TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, cutoff_date, .. } => TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, overdue_amount_col: Some(amount.to_string()), cutoff_date },
+        other => other,
+    }
+}
+
+#[test]
+fn b3_the_status_note_always_counts_the_rows_treated_as_not_overdue_because_the_date_was_blank() {
+    let data = dir("b3a_data");
+    set_data_dir_override(Some(data));
+    let tmp = dir("b3a");
+    let s = step(Some("Since"), None, None, None, "2026-10-31");
+    // three blank dates
+    let df = DataFrame::new(vec![acct(4), dates("Since", &["", "2026-07-31", "", ""])]).expect("book");
+    let src = parquet(&tmp, "in", &df);
+    let notes = micro_parquet::engine::blank_balance_notes(&src, std::slice::from_ref(&s), &tmp).expect("notes");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("3 row(s) treated as not overdue (STD-0) because the overdue date was blank"), "{notes:?}");
+    // none: the note is still there, with 0
+    let df = DataFrame::new(vec![acct(2), dates("Since", &["2026-07-31", "2026-08-31"])]).expect("book");
+    let src = parquet(&tmp, "in2", &df);
+    let notes = micro_parquet::engine::blank_balance_notes(&src, std::slice::from_ref(&s), &tmp).expect("notes");
+    assert!(notes[0].contains("0 row(s) treated as not overdue (STD-0) because the overdue date was blank"), "{notes:?}");
+    // a blank days-past-due counts the same way
+    let df = DataFrame::new(vec![acct(2), Series::new("DPD".into(), &[Some(5.0), None])]).expect("book");
+    let src = parquet(&tmp, "in3", &df);
+    let notes = micro_parquet::engine::blank_balance_notes(&src, &[step(None, Some("DPD"), None, None, "2026-10-31")], &tmp).expect("notes");
+    assert!(notes[0].contains("1 row(s) treated as not overdue"), "{notes:?}");
+    set_data_dir_override(None);
+}
+
+#[test]
+fn b3_an_overdue_amount_above_zero_with_a_blank_date_stops_the_run_with_the_count_and_the_first_five_accounts() {
+    let n = 7;
+    let df = DataFrame::new(vec![acct(n), dates("Since", &vec![""; n]), Series::new("Overdue_Amt".into(), vec![100.0; n])]).expect("book");
+    let e = format!("{:#}", run("b3b", &df, &step_with_amount(Some("Since"), None, "Overdue_Amt")).err().expect("amount without date"));
+    assert!(e.contains("the overdue amount in 'Overdue_Amt' is above 0 but the overdue date (or days past due) is blank on 7 row(s)"), "{e}");
+    assert!(e.contains("the first 5 values of Account_No: A1, A2, A3, A4, A5") && !e.contains("A6"), "{e}");
+    // the same with days past due
+    let df = DataFrame::new(vec![acct(2), Series::new("DPD".into(), &[Some(40.0), None]), Series::new("Overdue_Amt".into(), &[50.0, 50.0])]).expect("book");
+    let e = format!("{:#}", run("b3c", &df, &step_with_amount(None, Some("DPD"), "Overdue_Amt")).err().expect("amount without dpd"));
+    assert!(e.contains("on 1 row(s)") && e.contains("A2") && !e.contains("A1"), "{e}");
+    // a zero or blank amount with a blank date is fine (and counted); an amount with a date is fine
+    let df = DataFrame::new(vec![acct(4), dates("Since", &["", "", "2026-07-31", "2026-10-15"]), Series::new("Overdue_Amt".into(), &[Some(0.0), None, Some(900.0), Some(10.0)])]).expect("book");
+    let out = run("b3d", &df, &step_with_amount(Some("Since"), None, "Overdue_Amt")).expect("runs");
+    assert_eq!(strings(&out, "CL_Final"), ["STD-0", "STD-0", "SS", "STD-1"].iter().map(|x| Some(x.to_string())).collect::<Vec<_>>());
+    // a text amount column, and a missing one
+    let df = DataFrame::new(vec![acct(1), dates("Since", &[""]), Series::new("Overdue_Amt".into(), &["100"])]).expect("book");
+    let e = format!("{:#}", run("b3e", &df, &step_with_amount(Some("Since"), None, "Overdue_Amt")).err().expect("text amount"));
+    assert!(e.contains("not a number"), "{e}");
+    let e = format!("{:#}", run("b3f", &df, &step_with_amount(Some("Since"), None, "Nope")).err().expect("missing"));
+    assert!(e.contains("overdue amount column 'Nope' was not found"), "{e}");
+    // old step lists without the field load
+    let bare: TransformStep = serde_json::from_str(r#"{"ClassifyOverdue":{"cutoff_date":"2026-10-31"}}"#).expect("loads");
+    assert!(matches!(bare, TransformStep::ClassifyOverdue { overdue_amount_col: None, .. }));
 }
