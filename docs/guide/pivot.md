@@ -36,7 +36,7 @@ Summarises a table the way Excel's pivot does: the Rows you pick go down the sid
 5. For a Filters field click its chip and tick the values to keep (type in "Search values…" to find one). Everything ticked means no filter.
 6. Set "Row totals", "Column totals" and "Subtotals" (subtotals need two Rows fields).
 7. Choose "Show values as": No calculation, % of row total, % of column total or % of grand total.
-8. Choose "Scale" (As in View, Plain, Thousand, Lakh, Million, Crore). It only changes how the value columns are shown; the numbers stay in BDT.
+8. Choose "Scale" (As in View, Plain, Thousand, Lakh, Million, Crore). It only changes how the value columns are shown; the numbers stay in BDT. In an Excel export Thousand and Million are a number format (the cell keeps the full BDT amount, so Excel sums the real figures), while Lakh and Crore divide the amount and put the unit in the header ("Sum of Balance (BDT Cr)"). Plain keeps BDT, and rates and counts are never scaled. CSV and Parquet exports keep the BDT amounts.
 9. Choose "Sort rows": Natural order (the default) or by one Values field, high to low or low to high.
 10. Check the Preview (the first 20 rows, computed while you work). A red line at the bottom says why there is no table.
 11. Click "Create pivot tab". The pivot is a step ("Pivot") of a new tab. To change it later, select the step in the Steps tab and click Edit: the dialog opens with the same settings and "Save changes" replaces the step.

@@ -211,3 +211,36 @@ pub fn assert_fixture_replays(name: &str, expected_kinds: &[&str]) {
     assert_eq!(got, want, "{name}: today's code gives what the code that saved the macro gave");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// One entry of an .xlsx (a zip), read with the `unzip` tool.
+pub fn unzip_entry(zip: &Path, entry: &str) -> String {
+    let out = std::process::Command::new("unzip").arg("-p").arg(zip).arg(entry).output().expect("unzip must be installed");
+    assert!(out.status.success(), "unzip {entry}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+/// The stored value of a cell ("C2") of a sheet's XML.
+pub fn cell_value(sheet: &str, cell: &str) -> Option<String> {
+    let key = format!("<c r=\"{}\"", cell);
+    let i = sheet.find(&key)?;
+    let rest = &sheet[i..];
+    let end = rest.find("</c>")?;
+    let c = &rest[..end];
+    let v0 = c.find("<v>")? + 3;
+    let v1 = c[v0..].find("</v>")? + v0;
+    Some(c[v0..v1].to_string())
+}
+
+/// The number-format code a cell uses (style index -> cellXfs -> custom format code).
+pub fn cell_format_code(sheet: &str, styles: &str, cell: &str) -> String {
+    let tag = sheet.split(&format!("<c r=\"{cell}\"")).nth(1).unwrap_or_else(|| panic!("no cell {cell}"));
+    let tag = tag.split('>').next().unwrap_or("");
+    let idx: usize = tag.split(" s=\"").nth(1).and_then(|s| s.split('"').next()).and_then(|s| s.parse().ok()).unwrap_or_else(|| panic!("cell {cell} has no style: {tag}"));
+    let xfs = styles.split("<cellXfs").nth(1).and_then(|s| s.split("</cellXfs>").next()).expect("cellXfs");
+    let xf = xfs.split("<xf ").nth(idx + 1).unwrap_or_else(|| panic!("cellXfs has no entry {idx}"));
+    let fmt_id = xf.split("numFmtId=\"").nth(1).and_then(|s| s.split('"').next()).expect("numFmtId").to_string();
+    match styles.split(&format!("<numFmt numFmtId=\"{fmt_id}\"")).nth(1) {
+        Some(after) => after.split("formatCode=\"").nth(1).and_then(|s| s.split('"').next()).unwrap_or("").to_string(),
+        None => format!("builtin:{fmt_id}"),
+    }
+}

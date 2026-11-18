@@ -88,3 +88,80 @@ fn i1_convert_reports_what_cannot_be_kept_and_refuses_what_it_cannot_express() {
     assert!(convert_group_by_pivot(&old_pivot(vec![], None, None)).is_err());
     assert!(convert_group_by_pivot(&TransformStep::from_pivot_spec(PivotSpec::default())).is_err());
 }
+
+// ------------------------------------------------------------------------------------------ 2
+
+fn pivot_for_export(scale: PivotScale) -> (DataFrame, std::collections::HashMap<String, ColumnFormatSpec>) {
+    let df = DataFrame::new(vec![
+        Series::new("Bank".into(), &["Conventional", "Islami", "Conventional"]),
+        Series::new("Balance".into(), &[250_000_000.0, 100_000_000.0, 50_000_000.0]),
+        Series::new("Rate".into(), &[8.0, 10.0, 6.0]),
+    ])
+    .expect("book");
+    let spec = PivotSpec {
+        rows: vec!["Bank".into()],
+        values: vec![
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None },
+            PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) },
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Count, weight_col: None },
+        ],
+        column_totals: true,
+        scale,
+        ..Default::default()
+    };
+    let out = build_pivot(df.lazy(), &spec).expect("pivot").df;
+    let cols: Vec<String> = out.get_column_names().iter().map(|s| s.to_string()).collect();
+    let formats = pivot_column_formats(&spec, &cols, 2).into_iter().collect();
+    (out, formats)
+}
+
+fn write_pivot_xlsx(name: &str, scale: PivotScale, global: NumberDisplayFormat) -> (std::path::PathBuf, DataFrame) {
+    use micro_parquet::exporters::*;
+    let (df, formats) = pivot_for_export(scale);
+    let d = dir(name);
+    let p = d.join("pivot.xlsx");
+    let tab = XlsxTab { title: "Pivot".into(), df: df.clone(), col_formats: formats, summary: Vec::new() };
+    write_xlsx_tabs(vec![tab], vec![], &p, 1000, Some(XlsxScale { num_format: global, decimals: 2 })).expect("xlsx");
+    (p, df)
+}
+
+#[test]
+fn i2_pivot_scale_does_not_change_the_data_only_the_display_and_the_excel_columns_follow_the_phase3_rule() {
+    // the pivot itself is in BDT whatever the Scale says
+    let (plain, _) = pivot_for_export(PivotScale::Plain);
+    let (crore, _) = pivot_for_export(PivotScale::Crore);
+    assert_eq!(floats(&plain, "Sum of Balance"), floats(&crore, "Sum of Balance"));
+    close(floats(&crore, "Sum of Balance")[0], 300_000_000.0, 1e-6, "Conventional in BDT");
+
+    // Crore: the cell is divided, the unit is in the header; the weighted rate and the count are not scaled
+    let (p, df) = write_pivot_xlsx("i2c", PivotScale::Crore, NumberDisplayFormat::Raw);
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+    let names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+    assert_eq!(names, vec!["Bank", "Sum of Balance", "W.Avg of Rate by Balance", "Count of Balance"]);
+    assert!(strings.contains("Sum of Balance (BDT Cr)"), "the unit is in the header: {strings}");
+    assert!(!strings.contains("W.Avg of Rate by Balance (") && !strings.contains("Count of Balance ("), "{strings}");
+    close(cell_value(&sheet, "B2").and_then(|v| v.parse().ok()), 30.0, 1e-9, "300,000,000 / 1e7 = 30.00 Cr");
+    close(cell_value(&sheet, "B4").and_then(|v| v.parse().ok()), 40.0, 1e-9, "grand total 400,000,000 = 40.00 Cr");
+    let rate: f64 = cell_value(&sheet, "C2").and_then(|v| v.parse().ok()).expect("rate");
+    close(Some(rate), (8.0 * 250.0 + 6.0 * 50.0) / 300.0, 1e-9, "the weighted rate is not divided");
+
+    // Million: the raw BDT value, the scale is the number format (',,') and the header says M
+    let (p, _) = write_pivot_xlsx("i2m", PivotScale::Million, NumberDisplayFormat::Raw);
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let styles = unzip_entry(&p, "xl/styles.xml");
+    close(cell_value(&sheet, "B2").and_then(|v| v.parse().ok()), 300_000_000.0, 1e-6, "raw value under a scaling format");
+    assert!(cell_format_code(&sheet, &styles, "B2").ends_with(",,"), "{}", cell_format_code(&sheet, &styles, "B2"));
+    assert!(unzip_entry(&p, "xl/sharedStrings.xml").contains("Sum of Balance (BDT M)"));
+
+    // Thousand: a single ',' ; Plain: nothing, even when the workbook's global scale is Crore
+    let (p, _) = write_pivot_xlsx("i2k", PivotScale::Thousand, NumberDisplayFormat::BdtCrore);
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    let styles = unzip_entry(&p, "xl/styles.xml");
+    assert!(cell_format_code(&sheet, &styles, "B2").ends_with(',') && !cell_format_code(&sheet, &styles, "B2").ends_with(",,"), "{}", cell_format_code(&sheet, &styles, "B2"));
+    let (p, _) = write_pivot_xlsx("i2p", PivotScale::Plain, NumberDisplayFormat::BdtCrore);
+    let sheet = unzip_entry(&p, "xl/worksheets/sheet1.xml");
+    close(cell_value(&sheet, "B2").and_then(|v| v.parse().ok()), 300_000_000.0, 1e-6, "plain stays in BDT");
+    let strings = unzip_entry(&p, "xl/sharedStrings.xml");
+    assert!(strings.contains("Sum of Balance") && !strings.contains("Sum of Balance ("), "{strings}");
+}
