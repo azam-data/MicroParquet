@@ -924,7 +924,7 @@ fn guide_cl_migration() {
     let mk = |keys: &[&str], bal: &[f64], cl: &[&str]| frame(vec![text("Actnum", keys), nums("Balance", bal), text("CL_Status", cl)]);
     let prev = mk(&["A1", "A2", "A3"], &[100.0, 50.0, 30.0], &["STD", "SS", "STD"]);
     let curr = mk(&["A1", "A2", "A4"], &[100.0, 50.0, 20.0], &["SMA", "DF", "STD"]);
-    let spec = ClMigrationSpec { key_col: "Actnum".into(), bal_col: "Balance".into(), cl_col: "CL_Status".into(), segment_col: None, measure: MigrationMeasure::Balance, pct_of_row: false };
+    let spec = ClMigrationSpec { key_col: "Actnum".into(), bal_col: "Balance".into(), cl_col: "CL_Status".into(), segment_col: None, measure: MigrationMeasure::Balance, pct_of_row: false, balance_basis: Default::default() };
     let cl_map = ProvisionConfig::defaults().cl_code_map;
     let m = build_cl_migration_with(prev.clone().lazy(), curr.clone().lazy(), &spec, &cl_map).expect("the matrix builds");
     let cols = ["Previous grade", "STD:2", "SMA:2", "SS:2", "DF:2", "BL:2", "Closed/Repaid:2", "Total:2"];

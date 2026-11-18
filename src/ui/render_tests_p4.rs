@@ -461,7 +461,7 @@ fn the_cl_migration_dialog_picks_the_months_and_columns_and_keeps_everything_ins
         assert_eq!(rig.app.active_tool, ActiveToolModal::ClMigration, "{what}");
         let p = rig.draw(6);
         let r = assert_dialog_fits(&rig.ctx, &migration_title(), &what);
-        for t in ["Previous-month tab:", "Current-month tab:", "Account key:", "Balance:", "CL status:", "Segment (optional):", "Show:", "Balance (BDT)", "Number of accounts", "As % of the previous grade's row total", "Build migration matrix", "Cancel"] {
+        for t in ["Previous-month tab:", "Current-month tab:", "Account key:", "Balance:", "CL status:", "Segment (optional):", "Show:", "Balance (BDT)", "Number of accounts", "Balance basis:", "Previous month (default)", "Current month", "As % of the previous grade's row total", "Build migration matrix", "Cancel"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
         // the active tab (Oct) is the current month, the one before it the previous; the columns were guessed

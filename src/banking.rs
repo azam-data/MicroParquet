@@ -1782,10 +1782,20 @@ pub const MIGRATION_CLOSED_COL: &str = "Closed/Repaid";
 pub const MIGRATION_TOTAL: &str = "Total";
 /// The row that adds up the five grades: the previous month's total.
 pub const MIGRATION_PREV_TOTAL_ROW: &str = "Previous month total";
+/// The same row when the balances are this month's: it then adds up this month's balances of the accounts that were there last month.
+pub const MIGRATION_PREV_TOTAL_ROW_CURRENT: &str = "Previous-month accounts (current balance)";
 /// The first column of the matrix (after "Segment", when there is one).
 pub const MIGRATION_ROW_HEADING: &str = "Previous grade";
 /// The label of the block that adds up all segments.
 pub const MIGRATION_ALL_SEGMENTS: &str = "All segments";
+
+/// The label of the row that adds up the five grades.
+pub fn migration_prev_total_label(basis: MigrationBasis) -> &'static str {
+    match basis {
+        MigrationBasis::Previous => MIGRATION_PREV_TOTAL_ROW,
+        MigrationBasis::Current => MIGRATION_PREV_TOTAL_ROW_CURRENT,
+    }
+}
 
 /// The grades in `cl_code_map.json` order.
 pub fn cl_grades() -> [&'static str; 5] {
@@ -1815,6 +1825,26 @@ pub fn migration_shade(from: &str, to: &str) -> Shade {
     }
 }
 
+/// Whose balance an account that is in both months carries in the matrix. A new account always
+/// uses the current month's balance and a closed/repaid one the previous month's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MigrationBasis {
+    /// Last month's balance (the default): the "Previous month total" row adds up to last month's total.
+    #[default]
+    Previous,
+    /// This month's balance.
+    Current,
+}
+
+impl MigrationBasis {
+    pub fn label(&self) -> &'static str {
+        match self {
+            MigrationBasis::Previous => "Previous month",
+            MigrationBasis::Current => "Current month",
+        }
+    }
+}
+
 /// The settings of a migration matrix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClMigrationSpec {
@@ -1825,6 +1855,8 @@ pub struct ClMigrationSpec {
     pub measure: MigrationMeasure,
     /// Each cell as a percentage of its row's total.
     pub pct_of_row: bool,
+    /// Whose balance an account in both months carries.
+    pub balance_basis: MigrationBasis,
 }
 
 /// The migration matrix of two months, with the code map of `portable_data`.
@@ -1922,8 +1954,13 @@ pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrat
     let joined = p.join(c, [col("__key")], [col("__key")], JoinArgs::new(JoinType::Full).with_coalesce(JoinCoalesce::CoalesceColumns));
     let from = col("__grade_p");
     let to = col("__grade_c");
-    // the previous month's balance of an account that was there; the current month's for a new one
-    let cell_bal = when(from.clone().is_not_null()).then(col("__bal_p")).otherwise(col("__bal_c")).fill_null(lit(0.0));
+    // A new account always carries this month's balance and a closed/repaid one last month's;
+    // an account in both months carries the one the basis says.
+    let cell_bal = match spec.balance_basis {
+        MigrationBasis::Previous => when(from.clone().is_not_null()).then(col("__bal_p")).otherwise(col("__bal_c")),
+        MigrationBasis::Current => when(to.clone().is_not_null()).then(col("__bal_c")).otherwise(col("__bal_p")),
+    }
+    .fill_null(lit(0.0));
     let mut keys: Vec<Expr> = vec![from.clone().fill_null(lit(MIGRATION_NEW_ROW)).alias("__from"), to.clone().fill_null(lit(MIGRATION_CLOSED_COL)).alias("__to")];
     if spec.segment_col.is_some() {
         keys.push(col("__seg_c").fill_null(col("__seg_p")).fill_null(lit(crate::pivot_table::BLANK_LABEL)).alias("__seg"));
@@ -2000,7 +2037,7 @@ pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrat
         let new_row = m[CL_GRADES.len()].clone();
         let grand: Vec<f64> = prev_total.iter().zip(new_row.iter()).map(|(a, b)| a + b).collect();
         let mut lines: Vec<(String, Vec<f64>)> = CL_GRADES.iter().zip(grade_rows).map(|(g, r)| (g.to_string(), r)).collect();
-        lines.push((MIGRATION_PREV_TOTAL_ROW.to_string(), prev_total));
+        lines.push((migration_prev_total_label(spec.balance_basis).to_string(), prev_total));
         lines.push((MIGRATION_NEW_ROW.to_string(), new_row));
         lines.push((MIGRATION_TOTAL.to_string(), grand));
         for (label, cells) in lines {

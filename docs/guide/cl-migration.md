@@ -31,16 +31,16 @@ Shows how classified-loan grades moved between two month-ends: rows are last mon
 2. Choose Banking ▾ → "CL migration matrix…" (under the heading "Loans & credit"; or Ctrl+K and type "migration"). It needs two open tabs.
 3. In "CL migration matrix" choose "Previous-month tab:" and "Current-month tab:".
 4. Choose "Account key:", "Balance:" and "CL status:" (only columns that both tabs have are offered) and, if you want it, "Segment (optional):".
-5. Choose "Show:" "Balance (BDT)" or "Number of accounts", and tick "As % of the previous grade's row total" for shares.
+5. Choose "Show:" "Balance (BDT)" or "Number of accounts". Choose "Balance basis:" "Previous month (default)" or "Current month" (see section 6), and tick "As % of the previous grade's row total" for shares.
 6. Click "Build migration matrix". The matrix opens in a new tab "CL migration (previous to current)". To see the other measure, build it again.
 
 ## 6. What you get
 
-One row per previous grade in the order of `cl_code_map.json`: STD, SMA, SS, DF, BL; then "Previous month total" (the five grades added up), "New" (accounts that exist only this month) and "Total". Columns are this month's grade (STD, SMA, SS, DF, BL), "Closed/Repaid" (accounts that exist only last month) and "Total". A balance cell holds last month's balance for an account that was there, and this month's balance for a new account, so the Previous month total row adds up to last month's balance. With a segment there is one block of rows for each segment (in natural order) and a last block "All segments". Shaded cells: green is an upgrade (to an earlier grade in STD, SMA, SS, DF, BL), amber a downgrade; the diagonal, New, Closed/Repaid and the totals are not shaded. With the share option each row's cells are percentages of its Total (2 decimals).
+One row per previous grade in the order of `cl_code_map.json`: STD, SMA, SS, DF, BL; then "Previous month total" (the five grades added up), "New" (accounts that exist only this month) and "Total". Columns are this month's grade (STD, SMA, SS, DF, BL), "Closed/Repaid" (accounts that exist only last month) and "Total". Which balance a cell holds depends on "Balance basis:". With "Previous month" (the default) an account that was there last month carries last month's balance, so the Previous month total row adds up to last month's balance. With "Current month" an account that is in both months carries this month's balance, and that row is called "Previous-month accounts (current balance)" because it no longer adds up to last month's total. Either way a new account always carries this month's balance and a Closed/Repaid account always last month's. The number of accounts does not depend on the basis. With a segment there is one block of rows for each segment (in natural order) and a last block "All segments". Shaded cells: green is an upgrade (to an earlier grade in STD, SMA, SS, DF, BL), amber a downgrade; the diagonal, New, Closed/Repaid and the totals are not shaded. With the share option each row's cells are percentages of its Total (2 decimals).
 
 ## 7. Check your result
 
-- "Previous month total" in the Total column equals the sum of the balance column of last month's tab (the control total).
+- With the default basis, "Previous month total" in the Total column equals the sum of the balance column of last month's tab (the control total).
 - The five grade columns of the "Total" row add up to this month's balance total (new accounts included).
 - With counts: "Previous month total" equals the number of accounts in last month's tab (several rows with one key count once).
 - Look at the Closed/Repaid column against the repayments in the GL.

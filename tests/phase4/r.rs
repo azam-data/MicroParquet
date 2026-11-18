@@ -165,3 +165,53 @@ fn i2_pivot_scale_does_not_change_the_data_only_the_display_and_the_excel_column
     let strings = unzip_entry(&p, "xl/sharedStrings.xml");
     assert!(strings.contains("Sum of Balance") && !strings.contains("Sum of Balance ("), "{strings}");
 }
+
+// ------------------------------------------------------------------------------------------ 3
+
+fn mig_frame(keys: &[&str], bal: &[f64], cl: &[&str]) -> DataFrame {
+    DataFrame::new(vec![Series::new("Actnum".into(), keys), Series::new("Balance".into(), bal), Series::new("CL_Status".into(), cl)]).expect("frame")
+}
+
+fn mig_at(df: &DataFrame, row: &str, col: &str) -> f64 {
+    let labels = strings(df, micro_parquet::banking::MIGRATION_ROW_HEADING);
+    let i = labels.iter().position(|l| l.as_deref() == Some(row)).unwrap_or_else(|| panic!("no row {row}: {labels:?}"));
+    floats(df, col)[i].unwrap_or(f64::NAN)
+}
+
+#[test]
+fn i3_balance_basis_previous_is_the_default_and_current_changes_only_accounts_in_both_months() {
+    use micro_parquet::banking::*;
+    // previous A1 STD 100, A2 SS 50, A3 STD 30; current A1 SMA 120, A2 DF 60, A4 STD 20
+    let prev = mig_frame(&["A1", "A2", "A3"], &[100.0, 50.0, 30.0], &["STD", "SS", "STD"]);
+    let curr = mig_frame(&["A1", "A2", "A4"], &[120.0, 60.0, 20.0], &["SMA", "DF", "STD"]);
+    let map = ProvisionConfig::defaults().cl_code_map;
+    let spec = |basis| ClMigrationSpec {
+        key_col: "Actnum".into(),
+        bal_col: "Balance".into(),
+        cl_col: "CL_Status".into(),
+        segment_col: None,
+        measure: MigrationMeasure::Balance,
+        pct_of_row: false,
+        balance_basis: basis,
+    };
+    assert_eq!(MigrationBasis::default(), MigrationBasis::Previous);
+    let go = |basis| build_cl_migration_with(prev.clone().lazy(), curr.clone().lazy(), &spec(basis), &map).expect("builds");
+
+    let p = go(MigrationBasis::Previous);
+    assert_eq!(mig_at(&p, "STD", "SMA"), 100.0, "last month's balance");
+    assert_eq!(mig_at(&p, "SS", "DF"), 50.0);
+    assert_eq!(mig_at(&p, "STD", "Closed/Repaid"), 30.0);
+    assert_eq!(mig_at(&p, "New", "STD"), 20.0);
+    assert_eq!(mig_at(&p, "Previous month total", "Total"), 180.0, "adds up to last month's total");
+
+    let c = go(MigrationBasis::Current);
+    assert_eq!(mig_at(&c, "STD", "SMA"), 120.0, "this month's balance of an account in both months");
+    assert_eq!(mig_at(&c, "SS", "DF"), 60.0);
+    assert_eq!(mig_at(&c, "STD", "Closed/Repaid"), 30.0, "a closed account always uses last month's");
+    assert_eq!(mig_at(&c, "New", "STD"), 20.0, "a new account always uses this month's");
+    assert_eq!(mig_at(&c, MIGRATION_PREV_TOTAL_ROW_CURRENT, "Total"), 210.0, "120 + 60 + 30");
+    assert_eq!(mig_at(&c, "Total", "Total"), 230.0);
+    // the counts do not depend on the basis
+    let counts = |b| build_cl_migration_with(prev.clone().lazy(), curr.clone().lazy(), &ClMigrationSpec { measure: MigrationMeasure::Count, ..spec(b) }, &map).expect("counts");
+    assert_eq!(floats(&counts(MigrationBasis::Previous), "Total"), floats(&counts(MigrationBasis::Current), "Total"));
+}

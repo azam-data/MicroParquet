@@ -28,7 +28,7 @@ fn months() -> (DataFrame, DataFrame) {
 }
 
 fn spec(measure: MigrationMeasure, pct: bool, seg: bool) -> ClMigrationSpec {
-    ClMigrationSpec { key_col: "Actnum".into(), bal_col: "Balance".into(), cl_col: "CL_Status".into(), segment_col: if seg { Some("Sector".into()) } else { None }, measure, pct_of_row: pct }
+    ClMigrationSpec { key_col: "Actnum".into(), bal_col: "Balance".into(), cl_col: "CL_Status".into(), segment_col: if seg { Some("Sector".into()) } else { None }, measure, pct_of_row: pct, balance_basis: Default::default() }
 }
 
 fn build(prev: &DataFrame, curr: &DataFrame, s: &ClMigrationSpec) -> DataFrame {

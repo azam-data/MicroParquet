@@ -2,7 +2,7 @@
 //! the account key, balance and CL status columns (and a segment), and build the matrix in a new tab.
 
 use crate::ui::prelude::*;
-use micro_parquet::banking::{ClMigrationSpec, MigrationMeasure, MIGRATION_ALL_SEGMENTS, MIGRATION_CLOSED_COL};
+use micro_parquet::banking::{ClMigrationSpec, MigrationBasis, MigrationMeasure, MIGRATION_ALL_SEGMENTS, MIGRATION_CLOSED_COL};
 
 /// What the dialog drew, for the render tests.
 #[derive(Clone, Debug)]
@@ -30,6 +30,7 @@ pub struct ClMigrationState {
     pub segment_col: String,
     pub measure: MigrationMeasure,
     pub pct_of_row: bool,
+    pub balance_basis: MigrationBasis,
     pub rects: MigrationRects,
 }
 
@@ -44,6 +45,7 @@ impl Default for ClMigrationState {
             segment_col: String::new(),
             measure: MigrationMeasure::Balance,
             pct_of_row: false,
+            balance_basis: MigrationBasis::Previous,
             rects: MigrationRects::default(),
         }
     }
@@ -118,6 +120,7 @@ impl MicroParquetApp {
             segment_col: if s.segment_col.trim().is_empty() { None } else { Some(s.segment_col.clone()) },
             measure: s.measure,
             pct_of_row: s.pct_of_row,
+            balance_basis: s.balance_basis,
         };
         let title = format!("CL migration ({} to {})", p.title, c.title);
         Ok((
@@ -210,32 +213,39 @@ impl MicroParquetApp {
                         ui.radio_value(&mut self.cl_migration.measure, MigrationMeasure::Count, "Number of accounts");
                     });
                     ui.end_row();
+                    ui.label("Balance basis:");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.cl_migration.balance_basis, MigrationBasis::Previous, "Previous month (default)");
+                        ui.radio_value(&mut self.cl_migration.balance_basis, MigrationBasis::Current, "Current month");
+                    });
+                    ui.end_row();
                     ui.label("");
                     ui.checkbox(&mut self.cl_migration.pct_of_row, "As % of the previous grade's row total");
                     ui.end_row();
                 });
                 rects.grid = grid.response.rect;
+                if let Some(p) = &problem {
+                    ui.add_space(theme::SPACE_S);
+                    theme::error_label(ui, p);
+                }
                 ui.add_space(theme::SPACE_S);
                 let legend = ui.scope(|ui| {
                     ui.set_max_width(ui.available_width());
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(format!(
-                                "Rows are last month's grade (STD, SMA, SS, DF, BL, in the order of cl_code_map.json) and New; columns are this month's grade and {}. An upgrade is shaded green, a downgrade amber. A balance is last month's for an account that was there, this month's for a new one, so \"{}\" adds up to last month's total.",
-                                MIGRATION_CLOSED_COL, micro_parquet::banking::MIGRATION_PREV_TOTAL_ROW
+                                "Rows: last month's grade; columns: this month's grade and {}. Upgrades are green, downgrades amber. New accounts use this month's balance and closed ones last month's; the rest follow the basis above (row \"{}\"). With a segment there is one block per segment and a last block \"{}\".",
+                                MIGRATION_CLOSED_COL,
+                                micro_parquet::banking::migration_prev_total_label(self.cl_migration.balance_basis),
+                                MIGRATION_ALL_SEGMENTS
                             ))
                             .color(tk.muted)
                             .size(theme::TEXT_LABEL),
                         )
                         .wrap(),
                     );
-                    ui.add(egui::Label::new(egui::RichText::new(format!("With a segment there is a block for each segment and a last block \"{}\".", MIGRATION_ALL_SEGMENTS)).color(tk.muted).size(theme::TEXT_LABEL)).wrap());
                 });
                 rects.legend = legend.response.rect;
-                if let Some(p) = &problem {
-                    ui.add_space(theme::SPACE_S);
-                    theme::error_label(ui, p);
-                }
             });
             d.footer(|ui| {
                 ui.horizontal_wrapped(|ui| {
