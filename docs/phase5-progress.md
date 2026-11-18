@@ -24,6 +24,6 @@ Branch `phase5` (PR #7). One commit per item, `cargo test`, push, don't merge. T
 | R4 | DONE | (this commit) | r4 ×10, render r4_ ×3 (both screens), guide_classify_by_overdue | step + dialog; `src/overdue.rs`, `src/problems.rs`, `src/ui/pick.rs` shared helpers |
 | R5 | DONE | (this commit) | r5 ×8, render r5_ ×3 (both screens), guide_cl1_summary | `src/cl1.rs`, tab + Excel layout |
 | R6 | DONE | (this commit) | r6 ×12, render r6_ ×3 + banking menu fit ×1 (both screens), guide_lcr_nsfr | `src/liquidity.rs`; Banking menu rows made compact |
-| R7 | TODO | | | |
+| R7 | DONE | (this commit) | r7 ×11, render r7_ ×3 (both screens), guide_ifrs9_ecl | step + summary tab; `src/ecl.rs` |
 
 R4–R7 were not asked for in Session A (the spec lists them).

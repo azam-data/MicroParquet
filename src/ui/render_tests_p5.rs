@@ -1089,3 +1089,163 @@ fn the_banking_menu_fits_the_window_with_every_entry_on_screen_at_both_scales() 
     micro_parquet::rules::set_data_dir_override(None);
 }
 
+
+// ------------------------------------------------------------------------------ R7: IFRS 9 ECL
+
+fn ifrs_title() -> String {
+    format!("{}  {}", theme::ph::BANK, crate::ui::ifrs9::IFRS9_TITLE)
+}
+
+/// Three loans (performing, 45 and 95 days past due) of the sample "Corporate" segment, two years from the maturity.
+fn ifrs_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    micro_parquet::rules::set_data_dir_override(Some(root.join("portable_data")));
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "A2", "A3"]),
+        Series::new("Segment".into(), &["Corporate", "Corporate", "Corporate"]),
+        Series::new("Drawn".into(), &[1_000_000.0, 1_000_000.0, 1_000_000.0]),
+        Series::new("Undrawn".into(), &[0.0, 0.0, 0.0]),
+        Series::new("EIR".into(), &[10.0, 10.0, 10.0]),
+        dated("Matdat", &["2028-10-31", "2028-10-31", "2028-10-31"]),
+        Series::new("DPD".into(), &[0i64, 45, 95]),
+        Series::new("CL_Final".into(), &["STD-0", "STD-2", "DF"]),
+        Series::new("Required_Provision_BDT".into(), &[10_000.0, 10_000.0, 500_000.0]),
+    ])
+    .expect("book");
+    let src = parquet_source(&root, "Loans", book);
+    app.create_tab_from_source("Loans".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+#[test]
+fn r7_the_dialog_fits_adds_the_step_and_opens_the_summary_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = ifrs_rig("p5r7a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::IfrsEcl);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::IfrsEcl, "{what}");
+        rig.app.ecl.cutoff = "2026-10-31".into();
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &ifrs_title(), &what);
+        for t in ["Sample parameters", "Cutoff date (YYYY-MM-DD)", "Segment", "Same for every row:", "From the column:", "Drawn amount", "Undrawn amount", "Effective interest rate (%)", "Maturity date", "Days past due", "Classification grade", "Forborne (Y/N)", "SICR not assessed (Y/N)", "Rating at origination", "Current rating", "Previous stage", "Days performing", "Regulatory provision (summary)", "Classified grades (SS, DF, B/L) are Stage 3", "Calculate IFRS 9 ECL", "Calculate ECL and open the summary", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        let g = rig.app.ecl.rects.clone();
+        assert!(g.banner.is_positive() && inside(g.banner, r.window), "{what}: the sample banner is drawn");
+        for (name, rc) in &g.controls {
+            assert!(inside(*rc, r.window), "{what}: '{name}' {rc:?} is inside the dialog {:?}", r.window);
+        }
+        for (name, b) in &g.buttons {
+            assert!(inside(*b, r.footer), "{what}: '{name}' is in the footer");
+        }
+        assert!(g.notes.left() >= r.window.left() && g.notes.right() <= r.window.right(), "{what}: the notes are inside the dialog");
+        // the columns were guessed from their names, and the classified option is on (the rule file's default)
+        let s = &rig.app.ecl;
+        assert_eq!((s.drawn_col.as_str(), s.eir_col.as_str(), s.maturity_col.as_str(), s.dpd_col.as_str(), s.grade_col.as_str(), s.provision_col.as_str(), s.segment_col.as_str()), ("Drawn", "EIR", "Matdat", "DPD", "CL_Final", "Required_Provision_BDT", "Segment"), "{what}");
+        assert!(s.classified_stage3 && s.segment_by_col, "{what}");
+        // the "classified" box is ticked off by a real click
+        let tick = g.control("Classified are Stage 3").expect("check box");
+        rig.click(tick.center());
+        assert!(!rig.app.ecl.classified_stage3, "{what}: a real click unticks it");
+        rig.click(tick.center());
+        assert!(rig.app.ecl.classified_stage3, "{what}: and ticks it again");
+        // the first button adds the step to the tab
+        let button = rig.app.ecl.rects.button("Calculate IFRS 9 ECL").expect("button");
+        rig.draw(3);
+        rig.click(button.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed: {}", rig.app.status_message);
+        settle(&mut rig.app);
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        assert!(matches!(tab.steps.last(), Some(TransformStep::IfrsEcl { classified_stage3: true, .. })), "{what}: {:?}", tab.steps);
+        let col = |c: &str| tab.cached_slice.column(c).unwrap_or_else(|_| panic!("{what}: column {c}")).clone();
+        let stage: Vec<Option<i64>> = col("Stage").cast(&polars::prelude::DataType::Int64).expect("cast").i64().expect("i64").into_iter().collect();
+        assert_eq!(stage, vec![Some(1), Some(2), Some(3)], "{what}");
+        let ecl: Vec<Option<f64>> = col("ECL").f64().expect("f64").into_iter().collect();
+        // the sample parameters: cumulative PD 2% and 5%, LGD 45%, scenarios 50/25/25 at x1 / x0.8 / x1.5 (1.075 times the single scenario)
+        assert!((ecl[0].unwrap_or(f64::NAN) - 8795.45).abs() < 0.005 && (ecl[1].unwrap_or(f64::NAN) - 20789.26).abs() < 0.005 && (ecl[2].unwrap_or(f64::NAN) - 450_000.0).abs() < 0.005, "{what}: {ecl:?}");
+        // the status bar note (a sample has three scenarios: no warning)
+        // the second button: the step and the summary tab
+        let mut rig2 = ifrs_rig("p5r7b", ppp, w, h);
+        rig2.app.run_command(&rig2.ctx, CommandId::IfrsEcl);
+        rig2.app.ecl.cutoff = "2026-10-31".into();
+        rig2.draw(6);
+        let tabs_before = rig2.app.tabs.len();
+        let b2 = rig2.app.ecl.rects.button("Calculate ECL and open the summary").expect("button");
+        rig2.click(b2.center());
+        rig2.draw(6);
+        settle(&mut rig2.app);
+        assert_eq!(rig2.app.tabs.len(), tabs_before + 1, "{what}: the summary tab was added");
+        assert!(matches!(rig2.app.tabs[0].steps.last(), Some(TransformStep::IfrsEcl { .. })), "{what}: the step is in the loan tab, not the summary: {:?}", rig2.app.tabs[0].steps);
+        let sum = rig2.app.tabs.last().expect("summary");
+        assert_eq!(sum.title, "IFRS 9 summary", "{what}");
+        let group: Vec<String> = sum.cached_slice.column("Group").expect("Group").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let section: Vec<String> = sum.cached_slice.column("Section").expect("Section").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let row = (0..group.len()).find(|i| group[*i] == "Total" && section[*i] == "Grade group").expect("total row");
+        let f = |c: &str| sum.cached_slice.column(c).expect("column").f64().expect("f64").get(row).unwrap_or(f64::NAN);
+        assert!((f("ECL") - (8795.45 + 20789.26 + 450_000.0)).abs() < 0.01, "{what}: {}", f("ECL"));
+        assert!((f("Regulatory provision") - 520_000.0).abs() < 0.005, "{what}");
+        assert!((f("Higher of") - 520_000.0).abs() < 0.005, "{what}: the provision is the higher of the two");
+        assert!((f("Shortfall to Loan Loss Reserve") - (520_000.0 - 479_584.71)).abs() < 0.01, "{what}: {}", f("Shortfall to Loan Loss Reserve"));
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r7_a_missing_choice_is_said_in_red_and_the_step_reopens_prefilled() {
+    let (ppp, w, h) = SCREENS[0];
+    let mut rig = ifrs_rig("p5r7c", ppp, w, h);
+    rig.app.run_command(&rig.ctx, CommandId::IfrsEcl);
+    rig.app.ecl.cutoff = "31/10/2026".into();
+    let p = rig.draw(6);
+    assert!(p.boxes.iter().any(|(t, _)| t.contains("Type the cutoff date as YYYY-MM-DD")), "the date problem is said");
+    rig.app.ecl.cutoff = "2026-10-31".into();
+    rig.app.ecl.eir_col.clear();
+    assert!(rig.app.ifrs9_step().err().unwrap_or_default().contains("Choose the effective interest rate column"));
+    rig.app.ecl.eir_col = "EIR".into();
+    rig.app.ecl.prev_col = "DPD".into();
+    assert!(rig.app.ifrs9_step().err().unwrap_or_default().contains("both the previous stage and the days performing"));
+    rig.app.ecl.prev_col.clear();
+    rig.app.ecl.rating_orig_col = "DPD".into();
+    assert!(rig.app.ifrs9_step().err().unwrap_or_default().contains("both rating columns"));
+    rig.app.ecl.rating_orig_col.clear();
+    let step = rig.app.ifrs9_step().expect("a step");
+    // the second button needs the provision column
+    rig.app.ecl.provision_col.clear();
+    rig.draw(4);
+    let b2 = rig.app.ecl.rects.button("Calculate ECL and open the summary").expect("button");
+    let tabs = rig.app.tabs.len();
+    rig.click(b2.center());
+    rig.draw(3);
+    assert_eq!(rig.app.tabs.len(), tabs, "the disabled button does nothing");
+    // reopen the step: the same choices
+    rig.app.ecl = crate::ui::ifrs9::EclState::default();
+    let cols = rig.app.tabs[0].available_columns();
+    rig.app.prefill_from_step(&step, &cols);
+    assert_eq!(format!("{:?}", rig.app.ifrs9_step().expect("same step")), format!("{step:?}"));
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r7_the_tool_is_listed_under_loans_and_credit_and_found_by_the_search() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::IfrsEcl), Some("Loans & credit"));
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["ifrs 9 ecl", "expected credit loss", "stage 2 sicr"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::IfrsEcl, "{q}");
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = ifrs_rig("p5r7d", ppp, w, h);
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
+        assert!(at("Loans & credit").top() < at("IFRS 9 ECL").top(), "{}", rig.what);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}

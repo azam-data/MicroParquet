@@ -24,6 +24,7 @@ pub mod limits;
 pub mod clean_breaks;
 pub mod classify_overdue;
 pub mod cl1_summary;
+pub mod ifrs9;
 pub mod liquidity;
 pub mod pick;
 pub mod normaliser;
@@ -113,6 +114,7 @@ impl MicroParquetApp {
             ActiveToolModal::ClassifyOverdue => self.render_classify_overdue_modal(ctx, cols),
             ActiveToolModal::Cl1Summary => self.render_cl1_modal(ctx, cols),
             ActiveToolModal::Liquidity => self.render_liquidity_modal(ctx, cols),
+            ActiveToolModal::IfrsEcl => self.render_ifrs9_modal(ctx, cols),
             ActiveToolModal::LoanLimitUtil => self.render_limits_modal(ctx, cols),
             ActiveToolModal::FtpCurveMap => self.render_ftp_modal(ctx, cols),
             ActiveToolModal::BankingAudit => self.render_audit_modal(ctx, cols),
@@ -139,6 +141,10 @@ impl MicroParquetApp {
             } else {
                 self.push_step_to_active_tab(step, new_tab);
             }
+        }
+        // the IFRS 9 summary opens after the step was added to the tab it reads
+        if let Some(source) = self.pending_ecl_summary.take() {
+            self.create_tab_from_source_with("IFRS 9 summary".to_string(), source, Vec::new(), HashMap::new(), None);
         }
         self.render_edit_banner(ctx);
         if outcome.close {

@@ -694,6 +694,7 @@ impl MicroParquetApp {
                     (theme::ph::CALCULATOR, "FTP", ActiveToolModal::FtpCurveMap),
                     (theme::ph::BANK, "Provision", ActiveToolModal::LoanProvision),
                     (theme::ph::CALENDAR, "Classify by overdue", ActiveToolModal::ClassifyOverdue),
+                    (theme::ph::CHART_LINE, "IFRS 9 ECL", ActiveToolModal::IfrsEcl),
                     (theme::ph::CREDIT_CARD, "Limits", ActiveToolModal::LoanLimitUtil),
                     (theme::ph::SHIELD_CHECK, "Hygiene audit", ActiveToolModal::BankingAudit),
                 ] {

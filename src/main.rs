@@ -125,6 +125,8 @@ pub enum ActiveToolModal {
     Cl1Summary,
     /// LCR / NSFR (Phase 5 R6).
     Liquidity,
+    /// IFRS 9 ECL (Phase 5 R7).
+    IfrsEcl,
     LoanLimitUtil,
     SaveMacro,
     PythonCodePreview,
@@ -220,6 +222,9 @@ pub struct MicroParquetApp {
     pub overdue: OverdueState,
     pub cl1: Cl1State,
     pub liq: LiqState,
+    pub ecl: EclState,
+    /// The IFRS 9 summary tab to open once the step has been added to the active tab.
+    pub pending_ecl_summary: Option<TabSource>,
     pub limits: LimitState,
     pub macros: MacroState,
     pub export: ExportState,
@@ -308,6 +313,8 @@ impl MicroParquetApp {
             overdue: OverdueState::default(),
             cl1: Cl1State::default(),
             liq: LiqState::default(),
+            ecl: EclState::default(),
+            pending_ecl_summary: None,
             limits: LimitState::default(),
             macros: MacroState::default(),
             export: ExportState::default(),

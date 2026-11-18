@@ -1,0 +1,16 @@
+{
+  "as_of": "2026-03-08",
+  "source": "Bangladesh Bank BRPD Circular No. 06, 8 March 2026 (Guidance for Banks in Implementing IFRS 9): section 4.5 (staging: significant increase in credit risk at 30 days past due, default at 90 days past due, forborne exposures and exposures whose SICR is not assessed in Stage 2), section 4.5.5 (cure: 90 days performing, 365 days for forborne exposures). The rating downgrade of 2 notches is a sample value (the circular names no number) and classified grades as Stage 3 is the app's alignment (the circular gives no mapping from Circular 15/2024 grades to stages).",
+  "sample": false,
+  "sicr_dpd": 30,
+  "default_dpd": 90,
+  "classified_grades": ["SS", "DF", "B/L"],
+  "classified_is_stage3": true,
+  "rating_downgrade_notches": 2,
+  "cure_days": 90,
+  "cure_days_forborne": 365,
+  "notes": [
+    "Classified grades (SS, DF, B/L in CL_Final) are Stage 3 by default: this is the app's alignment, because the circular gives no mapping. Untick the option in the dialog to leave them to the days-past-due test.",
+    "The rating downgrade of 2 notches is a sample value: confirm it against the bank's credit risk policy."
+  ]
+}

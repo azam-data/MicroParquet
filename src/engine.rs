@@ -1658,7 +1658,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } => collect_masked_columns(source, out),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1677,7 +1677,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } => source_masks_pii(source),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1821,7 +1821,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2394,6 +2394,11 @@ pub fn compile_tab_lazy(
                 cl_status_col.as_deref(),
             )?
         }
+        TabSource::EclSummary { source, steps, spec } => {
+            let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The IFRS 9 summary could not read the table")?;
+            let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
+            crate::ecl::summary_frame(&df, spec, &cl_map)?.lazy()
+        }
         TabSource::Liquidity { source, steps, spec, map, map_file, view } => {
             let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("LCR / NSFR could not read the GL table")?;
             let ev = crate::liquidity::run_df(&df, spec, map, map_file)?;
@@ -2780,6 +2785,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             ccf_pct,
         } => apply_loan_limit_utilization(lf, limit_col, bal_col, *ccf_pct),
         TransformStep::ClassifyOverdue { .. } => crate::overdue::apply_classify_overdue(lf, &crate::overdue::spec_of(step)?),
+        TransformStep::IfrsEcl { .. } => crate::ecl::apply_ifrs_ecl(lf, &crate::ecl::spec_of(step)?),
         TransformStep::GroupByPivot {
             group_cols,
             aggs,
@@ -3568,6 +3574,13 @@ pub fn blank_balance_notes(
                     ));
                 }
             }
+        }
+        if let TransformStep::IfrsEcl { .. } = step {
+            let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+            let spec = crate::ecl::spec_of(step)?;
+            let (_, stats) = crate::ecl::classify_lazy(input, &spec)?;
+            notes.push(stats.note(&step.short_label()));
+            continue;
         }
         if let TransformStep::ClassifyOverdue { override_col, .. } = step {
             let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;

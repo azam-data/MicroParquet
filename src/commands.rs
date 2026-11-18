@@ -44,6 +44,7 @@ pub enum CommandId {
     YieldCurves,
     Provision,
     ClassifyOverdue,
+    IfrsEcl,
     Cl1Summary,
     Limits,
     Reconcile,
@@ -172,6 +173,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::ClassifyOverdue, "Classify by overdue\u{2026}", G::Banking, "cl classification overdue dpd days past due months std sma ss df bl brpd 15 2024 grade stage override", N::Tab),
+    c(I::IfrsEcl, "IFRS 9 ECL\u{2026}", G::Banking, "ifrs9 ifrs 9 ecl expected credit loss stage 1 2 3 sicr pd lgd ead ccf scenario cure brpd 06 2026 provision shortfall", N::Tab),
     c(I::Cl1Summary, "CL-1 summary\u{2026}", G::Banking, "cl1 classified loans return bangladesh bank grade category outstanding base for provision template excel", N::Tab),
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
@@ -208,7 +210,7 @@ pub const COMMANDS: &[Command] = &[
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
         CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
-        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
         _ => None,
     }
 }

@@ -8,7 +8,7 @@ use micro_parquet::cashflow::*;
 use polars::prelude::*;
 
 /// The tool ids of Phase 5 (file names in docs/guide/), added as each task is done.
-pub const P5_GUIDE_TOOLS: [&str; 6] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue", "cl1-summary", "lcr-nsfr"];
+pub const P5_GUIDE_TOOLS: [&str; 7] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue", "cl1-summary", "lcr-nsfr", "ifrs9-ecl"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -351,6 +351,58 @@ fn guide_lcr_nsfr() {
             md(&gl, &["GL_Code", "Balance:2", "Residual_Months:~0"]),
             md(&used, &["Ratio", "Line", "Residual maturity", "Amount:2", "Factor %:2", "Weighted amount:2"]),
             md(&numbers, &["Item", "Value:2", "Unit"]),
+        ],
+    );
+}
+
+#[test]
+fn guide_ifrs9_ecl() {
+    use micro_parquet::ecl::*;
+    use micro_parquet::models::TransformStep;
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "A2", "A3", "A4"]),
+        Series::new("Drawn".into(), &[800_000.0, 1_000_000.0, 1_000_000.0, 1_000_000.0]),
+        Series::new("Undrawn".into(), &[200_000.0, 0.0, 0.0, 0.0]),
+        Series::new("EIR".into(), &[10.0, 10.0, 10.0, 10.0]),
+        dates("Matdat", &["2028-10-31", "2028-10-31", "2028-10-31", "2028-10-31"]),
+        Series::new("DPD".into(), &[0i64, 45, 0, 95]),
+        Series::new("CL_Final".into(), &["STD-0", "STD-2", "SS", "B/L"]),
+        Series::new("Required_Provision_BDT".into(), &[8_000.0, 10_000.0, 200_000.0, 1_000_000.0]),
+    ])
+    .expect("book");
+    let step = TransformStep::IfrsEcl {
+        segment_col: None,
+        fixed_segment: "Corporate".into(),
+        drawn_col: "Drawn".into(),
+        undrawn_col: Some("Undrawn".into()),
+        eir_col: "EIR".into(),
+        maturity_col: "Matdat".into(),
+        dpd_col: Some("DPD".into()),
+        grade_col: Some("CL_Final".into()),
+        classified_stage3: true,
+        forborne_col: None,
+        sicr_unassessed_col: None,
+        rating_orig_col: None,
+        rating_now_col: None,
+        prev_stage_col: None,
+        days_performing_col: None,
+        cutoff_date: "2026-10-31".into(),
+    };
+    let data = dir("guide_ecl");
+    micro_parquet::rules::set_data_dir_override(Some(data.clone()));
+    let out = run_steps("guide_ecl", &book, std::slice::from_ref(&step)).expect("runs");
+    let cl = micro_parquet::banking::ProvisionConfig::load_or_create(&data).expect("cl map").cl_code_map;
+    micro_parquet::rules::set_data_dir_override(None);
+    let spec = EclSummarySpec { grade_col: "CL_Final".into(), provision_col: "Required_Provision_BDT".into() };
+    let summary = summary_frame(&out, &spec, &cl).expect("summary");
+    assert_eq!(out.column("Stage").expect("Stage").cast(&DataType::Int64).expect("cast").i64().expect("i64").into_iter().collect::<Vec<_>>(), vec![Some(1), Some(2), Some(3), Some(3)]);
+    check_guide(
+        "ifrs9-ecl",
+        "guide_ifrs9_ecl",
+        &[
+            md(&book, &["Account_No", "Drawn:2", "Undrawn:2", "DPD:0", "CL_Final", "Required_Provision_BDT:2"]),
+            md(&out, &["Account_No", "Stage:0", "Stage_Reason", "EAD:2", "ECL:2"]),
+            md(&summary, &["Section", "Group", "Loans:~0", "EAD:2", "ECL:2", "Regulatory provision:2", "Higher of:2", "Shortfall to Loan Loss Reserve:2"]),
         ],
     );
 }

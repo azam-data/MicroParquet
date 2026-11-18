@@ -68,12 +68,16 @@ pub const IRRBB_SHOCKS: BuiltIn = ("2021-04-13", include_str!("../assets/rules/i
 /// The built-in non-maturity deposit caps (BB Table 4).
 pub const IRRBB_NMD_CAPS: BuiltIn = ("2021-04-13", include_str!("../assets/rules/irrbb_nmd_caps/2021-04-13.json"));
 /// The built-in loan classification thresholds by overdue period (BRPD Circular 15/2024).
+/// The built-in IFRS 9 staging rules (BRPD Circular 06/2026).
+pub const IFRS9_STAGING: BuiltIn = ("2026-03-08", include_str!("../assets/rules/ifrs9_staging/2026-03-08.json"));
+/// The built-in SAMPLE ECL parameters (the owner replaces them with the bank's own).
+pub const ECL_PARAMS: BuiltIn = ("2026-03-08", include_str!("../assets/ecl_params/2026-03-08.json"));
 pub const CL_OVERDUE: BuiltIn = ("2025-04-01", include_str!("../assets/rules/cl_overdue/2025-04-01.json"));
 
 /// Every shipped rule file: its folder under `portable_data/rules/` and its built-in copy. The tests
 /// go through this list, so a file added here is checked against `assets/rules/` and for the
 /// write-only-if-missing rule.
-pub const SHIPPED_RULES: &[(&str, BuiltIn)] = &[("irrbb_shocks", IRRBB_SHOCKS), ("irrbb_nmd_caps", IRRBB_NMD_CAPS), ("cl_overdue", CL_OVERDUE)];
+pub const SHIPPED_RULES: &[(&str, BuiltIn)] = &[("irrbb_shocks", IRRBB_SHOCKS), ("irrbb_nmd_caps", IRRBB_NMD_CAPS), ("cl_overdue", CL_OVERDUE), ("ifrs9_staging", IFRS9_STAGING)];
 
 /// Writes the built-in file into `dir` when `dir` does not have it. An existing file is never
 /// touched, and the check and the write are one step (`create_new`), so two runs at once cannot

@@ -1654,6 +1654,45 @@ pub enum TransformStep {
         bal_col: String,
         ccf_pct: f64,
     },
+    /// IFRS 9 staging and expected credit loss (Phase 5 R7, BRPD Circular 06/2026): adds `Stage`,
+    /// `Stage_Reason`, `EAD`, `ECL`, `ECL_Rule_File` and `ECL_Params_File`.
+    IfrsEcl {
+        #[serde(default)]
+        segment_col: Option<String>,
+        #[serde(default)]
+        fixed_segment: String,
+        #[serde(default)]
+        drawn_col: String,
+        #[serde(default)]
+        undrawn_col: Option<String>,
+        /// The effective interest rate, in percent.
+        #[serde(default)]
+        eir_col: String,
+        #[serde(default)]
+        maturity_col: String,
+        #[serde(default)]
+        dpd_col: Option<String>,
+        #[serde(default)]
+        grade_col: Option<String>,
+        /// Classified grades (SS, DF, B/L) are Stage 3.
+        #[serde(default)]
+        classified_stage3: bool,
+        #[serde(default)]
+        forborne_col: Option<String>,
+        #[serde(default)]
+        sicr_unassessed_col: Option<String>,
+        #[serde(default)]
+        rating_orig_col: Option<String>,
+        #[serde(default)]
+        rating_now_col: Option<String>,
+        #[serde(default)]
+        prev_stage_col: Option<String>,
+        #[serde(default)]
+        days_performing_col: Option<String>,
+        /// YYYY-MM-DD.
+        #[serde(default)]
+        cutoff_date: String,
+    },
     /// Loan classification from the overdue period (Phase 5 R4, BRPD Circular 15/2024): adds
     /// `Overdue_Months`, `CL_Objective`, `CL_Final` and `CL_Rule_File`.
     ClassifyOverdue {
@@ -1753,6 +1792,7 @@ impl TransformStep {
             TransformStep::LoanClassificationProvision { .. } => "Provision",
             TransformStep::LoanLimitUtilization { .. } => "Limits",
             TransformStep::ClassifyOverdue { .. } => "Classify by overdue",
+            TransformStep::IfrsEcl { .. } => "IFRS 9 ECL",
             TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
             TransformStep::Skipped { .. } => "Off",
@@ -1878,6 +1918,9 @@ impl TransformStep {
             TransformStep::LoanLimitUtilization { .. } => {
                 "+Limit Util & Undrawn CCF".to_string()
             }
+            TransformStep::IfrsEcl { cutoff_date, .. } => {
+                format!("+IFRS 9 ECL (cutoff {})", cutoff_date.trim())
+            }
             TransformStep::ClassifyOverdue { cutoff_date, .. } => {
                 format!("+Classify by overdue (cutoff {})", cutoff_date.trim())
             }
@@ -1998,6 +2041,13 @@ pub enum TabSource {
         behaviour: Option<(String, crate::behaviour::BehaviourFile)>,
         /// "Treat blank maturity as O/N".
         blank_maturity_on: bool,
+    },
+    /// The IFRS 9 summary (Phase 5 R7): ECL, regulatory provision, higher of and shortfall by grade
+    /// group and by stage, from a tab that has the "IFRS 9 ECL" step's columns.
+    EclSummary {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::ecl::EclSummarySpec,
     },
     /// The CL-1 summary (Phase 5 R5): the loans of a tab by loan category and grade group.
     Cl1Summary {

@@ -169,7 +169,7 @@ pub struct Cl1Spec {
 
 /// The grade of a code, as one of the seven: a sub-grade as it is; a coarse code of
 /// `cl_code_map.json` (STD, SMA, SS, DF, BL) as the first sub-grade of its class.
-fn grade_of(code: &str, cl_map: &[(String, String)]) -> Option<&'static str> {
+pub(crate) fn grade_of(code: &str, cl_map: &[(String, String)]) -> Option<&'static str> {
     let n = normalise_code(code);
     if let Some(g) = GRADES.iter().find(|g| **g == n) {
         return Some(g);

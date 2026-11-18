@@ -27,6 +27,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::LoanClassificationProvision { .. } => ActiveToolModal::LoanProvision,
         TransformStep::LoanLimitUtilization { .. } => ActiveToolModal::LoanLimitUtil,
         TransformStep::ClassifyOverdue { .. } => ActiveToolModal::ClassifyOverdue,
+        TransformStep::IfrsEcl { .. } => ActiveToolModal::IfrsEcl,
         TransformStep::GroupByPivot { .. } => ActiveToolModal::GroupByPivot,
         TransformStep::PivotTable { .. } => ActiveToolModal::PivotBuilder,
         TransformStep::FilterRows { .. }
@@ -189,6 +190,7 @@ impl MicroParquetApp {
                 collateral_type_col: opt(&self.provision.coll_type_col),
             },
             ActiveToolModal::ClassifyOverdue => return self.classify_overdue_step().ok(),
+            ActiveToolModal::IfrsEcl => return self.ifrs9_step().ok(),
             ActiveToolModal::LoanLimitUtil => TransformStep::LoanLimitUtilization {
                 limit_col: self.limits.col.clone(),
                 bal_col: self.limits.bal_col.clone(),
@@ -373,6 +375,29 @@ impl MicroParquetApp {
                 self.provision.sec_col = security_col.unwrap_or_default();
                 self.provision.cutoff = cutoff_date;
                 self.provision.coll_type_col = collateral_type_col.unwrap_or_default();
+            }
+            TransformStep::IfrsEcl { segment_col, fixed_segment, drawn_col, undrawn_col, eir_col, maturity_col, dpd_col, grade_col, classified_stage3, forborne_col, sicr_unassessed_col, rating_orig_col, rating_now_col, prev_stage_col, days_performing_col, cutoff_date } => {
+                let e = &mut self.ecl;
+                e.segment_by_col = segment_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                e.segment_col = segment_col.unwrap_or_default();
+                if !fixed_segment.trim().is_empty() {
+                    e.fixed_segment = fixed_segment;
+                }
+                e.drawn_col = drawn_col;
+                e.undrawn_col = undrawn_col.unwrap_or_default();
+                e.eir_col = eir_col;
+                e.maturity_col = maturity_col;
+                e.dpd_col = dpd_col.unwrap_or_default();
+                e.grade_col = grade_col.unwrap_or_default();
+                e.classified_stage3 = classified_stage3;
+                e.forborne_col = forborne_col.unwrap_or_default();
+                e.unassessed_col = sicr_unassessed_col.unwrap_or_default();
+                e.rating_orig_col = rating_orig_col.unwrap_or_default();
+                e.rating_now_col = rating_now_col.unwrap_or_default();
+                e.prev_col = prev_stage_col.unwrap_or_default();
+                e.days_col = days_performing_col.unwrap_or_default();
+                e.cutoff = cutoff_date;
+                e.files = None;
             }
             TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, cutoff_date } => {
                 let o = &mut self.overdue;

@@ -52,6 +52,7 @@ fn a4_a_missing_file_is_written_from_the_built_in_copy_and_only_then() {
             "irrbb_shocks" => drop(load_shocks(d("2026-10-31")).expect("loads")),
             "irrbb_nmd_caps" => drop(load_nmd_caps(d("2026-10-31")).expect("loads")),
             "cl_overdue" => drop(micro_parquet::overdue::load_overdue_rules(d("2026-10-31")).expect("loads")),
+            "ifrs9_staging" => drop(micro_parquet::ecl::load_staging(d("2026-10-31")).expect("loads")),
             other => panic!("no loader is known for the shipped kind {other}"),
         }
         set_data_dir_override(None);
@@ -79,6 +80,7 @@ fn a4_an_existing_file_is_never_overwritten_not_even_an_edited_or_a_broken_one()
             "irrbb_shocks" => load_shocks(d("2026-10-31")).err(),
             "irrbb_nmd_caps" => load_nmd_caps(d("2026-10-31")).err(),
             "cl_overdue" => micro_parquet::overdue::load_overdue_rules(d("2026-10-31")).err(),
+            "ifrs9_staging" => micro_parquet::ecl::load_staging(d("2026-10-31")).err(),
             other => panic!("no loader is known for the shipped kind {other}"),
         };
         set_data_dir_override(None);
