@@ -9,11 +9,13 @@ pub struct CleanBreaksState {
     /// All text columns (the default) or only `picked`.
     pub all: bool,
     pub picked: Vec<String>,
+    /// "Trim spaces on all text values" (off from the Transform menu).
+    pub trim_all: bool,
 }
 
 impl Default for CleanBreaksState {
     fn default() -> Self {
-        Self { all: true, picked: Vec::new() }
+        Self { all: true, picked: Vec::new(), trim_all: false }
     }
 }
 
@@ -22,11 +24,11 @@ impl MicroParquetApp {
     pub(crate) fn clean_breaks_step(&self) -> Option<TransformStep> {
         let s = &self.clean_breaks;
         if s.all {
-            Some(TransformStep::CleanLineBreaks { columns: Vec::new() })
+            Some(TransformStep::CleanLineBreaks { columns: Vec::new(), trim_all: s.trim_all })
         } else if s.picked.is_empty() {
             None
         } else {
-            Some(TransformStep::CleanLineBreaks { columns: s.picked.clone() })
+            Some(TransformStep::CleanLineBreaks { columns: s.picked.clone(), trim_all: s.trim_all })
         }
     }
 
@@ -38,7 +40,7 @@ impl MicroParquetApp {
     /// The "Replace with spaces" button of the row-count warning: adds the step to the active tab,
     /// for all text columns. Nothing is cleaned until it is pressed.
     pub(crate) fn replace_line_breaks_with_spaces(&mut self) {
-        self.push_step_to_active_tab(TransformStep::CleanLineBreaks { columns: Vec::new() }, false);
+        self.push_step_to_active_tab(TransformStep::CleanLineBreaks { columns: Vec::new(), trim_all: false }, false);
     }
 
     pub(crate) fn render_clean_breaks_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
@@ -60,7 +62,7 @@ impl MicroParquetApp {
         let ready = self.clean_breaks_step().is_some();
         theme::modal(&format!("{}  Clean line breaks", theme::ph::BROOM)).default_width(theme::DIALOG_W_TOOL).show(ctx, |d| {
             d.body(|ui| {
-                ui.add(egui::Label::new("Replaces every run of line breaks (\\r\\n, \\n or \\r) inside a text value with one space, and trims the ends of the values that had one. Values without a line break are not touched. Nothing is cleaned until you click the button; the step is recorded, so a macro repeats it.").wrap());
+                ui.add(egui::Label::new("Replaces every run of line breaks (\\r\\n, \\n or \\r) inside a text value with one space, and trims the ends of the values that had one. Values without a line break are not touched, unless you tick the box below. Nothing is cleaned until you click the button; the step is recorded, so a macro repeats it.").wrap());
                 ui.add_space(theme::SPACE_S);
                 ui.radio_value(&mut self.clean_breaks.all, true, "All text columns");
                 ui.radio_value(&mut self.clean_breaks.all, false, "Only these columns:");
@@ -81,6 +83,9 @@ impl MicroParquetApp {
                         }
                     });
                 });
+                ui.add_space(theme::SPACE_S);
+                ui.checkbox(&mut self.clean_breaks.trim_all, "Trim spaces on all text values")
+                    .on_hover_text("Also trims the spaces at both ends of values that have no line break. The Schema & Ingestion box does this; it is off here unless you tick it.");
                 if !ready {
                     ui.add_space(theme::SPACE_S);
                     theme::error_label(ui, "Tick at least one column, or choose All text columns.");

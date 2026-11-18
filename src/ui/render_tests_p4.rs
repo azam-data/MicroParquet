@@ -1338,7 +1338,7 @@ fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears
         rig.click(button.center());
         let p = rig.draw(6);
         assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}");
-        assert!(matches!(&rig.app.tabs[0].steps[0], TransformStep::CleanLineBreaks { columns } if columns.is_empty()), "{what}: {:?}", rig.app.tabs[0].steps);
+        assert!(matches!(&rig.app.tabs[0].steps[0], TransformStep::CleanLineBreaks { columns, .. } if columns.is_empty()), "{what}: {:?}", rig.app.tabs[0].steps);
         assert!(!p.boxes.iter().any(|(t, _)| t.contains("records contain line breaks inside quotes")), "{what}: the warning is gone");
         assert!(!p.boxes.iter().any(|(t, _)| t == "Replace with spaces"), "{what}: and so is the button");
         // the value in the table is clean: the second row's remark is on one line
@@ -1369,7 +1369,7 @@ fn i15_clean_line_breaks_is_a_transform_command_with_a_choice_of_columns() {
         assert_eq!(rig.app.active_tool, ActiveToolModal::CleanLineBreaks, "{what}");
         let p = rig.draw(6);
         let r = assert_dialog_fits(&rig.ctx, &format!("{}  Clean line breaks", theme::ph::BROOM), &what);
-        for t in ["All text columns", "Only these columns:", "Clean line breaks", "Cancel"] {
+        for t in ["All text columns", "Only these columns:", "Trim spaces on all text values", "Clean line breaks", "Cancel"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog");
         }
         // only the chosen column: tick Remarks
@@ -1378,13 +1378,20 @@ fn i15_clean_line_breaks_is_a_transform_command_with_a_choice_of_columns() {
         let p = rig.draw(4);
         assert!(p.boxes.iter().any(|(t, _)| t.contains("Tick at least one column")), "{what}");
         rig.app.clean_breaks.picked = vec!["Remarks".into()];
-        rig.draw(3);
+        assert!(!rig.app.clean_breaks.trim_all, "{what}: off from the menu");
+        let p = rig.draw(3);
+        let trim = p.boxes.iter().filter(|(t, _)| t.contains("Trim spaces on all text values")).map(|(_, b)| *b).last().expect("the check box");
+        assert!(inside(trim, r.window), "{what}: the check box is inside the dialog");
+        rig.click(trim.center());
+        assert!(rig.app.clean_breaks.trim_all, "{what}: a real click ticks it");
         let go = rig.draw(2).boxes.iter().filter(|(t, _)| t == "Clean line breaks").map(|(_, b)| *b).last().expect("the button");
         rig.click(go.center());
-        assert!(matches!(&rig.app.tabs[0].steps[..], [TransformStep::CleanLineBreaks { columns }] if columns == &vec!["Remarks".to_string()]), "{what}: {:?}", rig.app.tabs[0].steps);
+        assert!(matches!(&rig.app.tabs[0].steps[..], [TransformStep::CleanLineBreaks { columns, trim_all: true }] if columns == &vec!["Remarks".to_string()]), "{what}: {:?}", rig.app.tabs[0].steps);
         // Edit reopens it with the choice
+        rig.app.clean_breaks = CleanBreaksState::default();
         assert!(rig.app.open_step_editor(0), "{what}");
         assert_eq!(rig.app.active_tool, ActiveToolModal::CleanLineBreaks);
+        assert!(rig.app.clean_breaks.trim_all, "{what}: the option comes back");
         assert!(!rig.app.clean_breaks.all && rig.app.clean_breaks.picked == vec!["Remarks".to_string()], "{what}");
     }
 }

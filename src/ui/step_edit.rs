@@ -247,8 +247,9 @@ impl MicroParquetApp {
                 self.calc.right_is_col = right_is_col;
                 self.calc.right_val = right_val_or_col;
             }
-            TransformStep::CleanLineBreaks { columns } => {
+            TransformStep::CleanLineBreaks { columns, trim_all } => {
                 self.clean_breaks.all = columns.is_empty();
+                self.clean_breaks.trim_all = trim_all;
                 self.clean_breaks.picked = columns;
             }
             TransformStep::NormalizeEntity { source_col, new_col } => {

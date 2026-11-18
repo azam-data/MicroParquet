@@ -24,7 +24,7 @@ fn f0_the_schema_dialog_check_box_adds_the_clean_line_breaks_step_and_unticking_
     modal.config.sanitize_linebreaks = true;
     app.apply_schema_to_tab(idx, modal.config);
     settle(&mut app);
-    assert!(matches!(app.tabs[idx].steps.first(), Some(TransformStep::CleanLineBreaks { columns }) if columns.is_empty()), "{:?}", app.tabs[idx].steps);
+    assert!(matches!(app.tabs[idx].steps.first(), Some(TransformStep::CleanLineBreaks { columns, trim_all: true }) if columns.is_empty()), "{:?}", app.tabs[idx].steps);
     assert_eq!(app.tabs[idx].steps.len(), 1);
     assert_eq!(remark(&app), "Paid in full by cheque", "{}", app.status_message);
     let TabSource::SingleFile { config, .. } = &app.tabs[idx].source else { panic!("single file") };

@@ -7,7 +7,7 @@ pub use micro_parquet::batch::BatchReport;
 pub use micro_parquet::engine::{
     adapt_schema_to_parquet, auto_detect_parquet_schema, auto_detect_smart_schema,
     auto_detect_smart_schema_with, blank_balance_notes, collect_masked_columns, compile_tab_lazy,
-    detect_file_schema, ensure_pii_key_for, export_pii_key, hoist_clean_line_breaks,
+    detect_file_schema, ensure_pii_key_for, export_pii_key, hoist_clean_line_breaks, is_box_clean_step,
     import_pii_key, parse_failure_summary, pii_key_fingerprint, pii_key_path,
     preview_csv_raw, preview_csv_with, preview_parquet_raw, read_pii_key, source_masks_pii,
     source_parse_failures, source_row_check, stack_file_configs, take_pii_key_created_note,

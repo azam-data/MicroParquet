@@ -597,16 +597,24 @@ pub fn generate_python_polars_code(
                     source_col, new_col
                 ));
             }
-            TransformStep::CleanLineBreaks { columns } => {
+            TransformStep::CleanLineBreaks { columns, trim_all } => {
                 let list = if columns.is_empty() {
                     "[c for c, t in lf.collect_schema().items() if t == pl.String]".to_string()
                 } else {
                     format!("[{}]", columns.iter().map(|c| format!("\"{}\"", py_escape(c))).collect::<Vec<_>>().join(", "))
                 };
-                py.push_str(&format!(
-                    "for _c in {}:\n    lf = lf.with_columns(\n        pl.when(pl.col(_c).str.contains(r\"[\\r\\n]\"))\n          .then(pl.col(_c).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars())\n          .otherwise(pl.col(_c)).alias(_c)\n    )\n\n",
-                    list
-                ));
+                if *trim_all {
+                    // every value: line breaks to one space, spaces at the ends trimmed
+                    py.push_str(&format!(
+                        "for _c in {}:\n    lf = lf.with_columns(\n        pl.col(_c).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars(\" \").alias(_c)\n    )\n\n",
+                        list
+                    ));
+                } else {
+                    py.push_str(&format!(
+                        "for _c in {}:\n    lf = lf.with_columns(\n        pl.when(pl.col(_c).str.contains(r\"[\\r\\n]\"))\n          .then(pl.col(_c).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars())\n          .otherwise(pl.col(_c)).alias(_c)\n    )\n\n",
+                        list
+                    ));
+                }
             }
             TransformStep::MaturityBucket {
                 mat_col,

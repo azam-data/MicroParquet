@@ -1018,7 +1018,7 @@ fn guide_clean_line_breaks() {
         out.with_column(Series::new("Remarks".into(), v)).expect("replace");
         out
     };
-    let out = run_steps("guide_clean", &df, &[TransformStep::CleanLineBreaks { columns: vec![] }]).expect("the step runs");
+    let out = run_steps("guide_clean", &df, &[TransformStep::CleanLineBreaks { columns: vec![], trim_all: false }]).expect("the step runs");
     assert_eq!(strings(&out, "Remarks").into_iter().map(|v| v.unwrap_or_default()).collect::<Vec<_>>(), vec!["Paid in full by cheque", "plain", "Line one Line two", "leading and trailing", "fine"]);
     check_guide(
         "clean-line-breaks",

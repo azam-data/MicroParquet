@@ -1268,30 +1268,39 @@ pub fn build_lazy_pipeline(
         lf = lf.with_columns(exprs);
     }
 
-    // A source that still has the old "Clean line breaks" setting on (an old macro, a batch or a
-    // headless run) cleans through the same step the tab records.
-    if config.sanitize_linebreaks {
-        lf = apply_clean_line_breaks(lf, &[])?;
-    }
-
     Ok(lf)
 }
 
+/// True for the step the Schema & Ingestion box makes: all text columns, with "Trim spaces on all
+/// text values" on. A step of that kind made from the Transform menu has the option off.
+pub fn is_box_clean_step(step: &TransformStep) -> bool {
+    matches!(step, TransformStep::CleanLineBreaks { columns, trim_all: true } if columns.is_empty())
+}
+
 /// Moves the schema dialog's "Clean line breaks" check box into the tab's steps: when it is
-/// ticked (CSV only) the recorded "Clean line breaks" step (all text columns) becomes the first
-/// step; when it is not ticked, a first step of that kind is taken out. The setting is cleared
-/// afterwards, so the step is the only thing that cleans.
+/// ticked (CSV only) the recorded "Clean line breaks" step (all text columns, trimming spaces on
+/// all text values) becomes the first step, so the values are the ones the box gave before the
+/// step existed; when it is not ticked, a first step of that kind is taken out. The setting is
+/// cleared afterwards, so the step is the only thing that cleans; masked columns keep being
+/// trimmed before they are masked (`trim_before_mask`), so a mask does not change.
 pub fn hoist_clean_line_breaks(config: &mut IngestionConfig, is_parquet: bool, steps: &mut Vec<TransformStep>) {
     if is_parquet {
         return;
     }
     let want = std::mem::replace(&mut config.sanitize_linebreaks, false);
-    let has_first = matches!(steps.first(), Some(TransformStep::CleanLineBreaks { columns }) if columns.is_empty());
+    config.trim_before_mask = want;
+    let has_first = steps.first().is_some_and(is_box_clean_step);
     if want && !has_first {
-        steps.insert(0, TransformStep::CleanLineBreaks { columns: Vec::new() });
+        steps.insert(0, TransformStep::CleanLineBreaks { columns: Vec::new(), trim_all: true });
     } else if !want && has_first {
         steps.remove(0);
     }
+}
+
+/// The cleaning of the old Schema & Ingestion box: every run of line breaks becomes a space and
+/// the spaces at the ends are trimmed, for every value.
+fn old_clean_expr(e: Expr) -> Expr {
+    e.str().replace_all(lit(r"[\r\n]+"), lit(" "), false).str().strip_chars(lit(" "))
 }
 
 /// Reads a CSV with every configured column as text (no typing yet).
@@ -1345,9 +1354,14 @@ fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr
     text_expr_from(col(&col_cfg.name), col_cfg, config)
 }
 
-fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, _config: &IngestionConfig) -> Expr {
-    // Line breaks are not cleaned here: the "Clean line breaks" step does it (see
-    // `hoist_clean_line_breaks`), so there is one implementation.
+fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+    // The old setting (an old schema file, macro, batch or headless run) cleans here, before the
+    // typing, as it always did. A tab made from the dialog has the recorded step instead
+    // (`hoist_clean_line_breaks`); only its masked columns are still trimmed before the mask.
+    if config.sanitize_linebreaks || (config.trim_before_mask && col_cfg.pii_mask != PiiMaskMode::None) {
+        e = old_clean_expr(e);
+    }
+
     if col_cfg.pii_mask != PiiMaskMode::None {
         // The old `config.pii_salt` is no longer used: masks use the per-install key.
         let mode = col_cfg.pii_mask;
@@ -2620,7 +2634,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             source_col,
             new_col,
         } => Ok(apply_entity_normalizer(lf, source_col, new_col)),
-        TransformStep::CleanLineBreaks { columns } => apply_clean_line_breaks(lf, columns),
+        TransformStep::CleanLineBreaks { columns, trim_all } => apply_clean_line_breaks(lf, columns, *trim_all),
         TransformStep::MaturityBucket {
             mat_col,
             cutoff_date,
@@ -2777,9 +2791,10 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
 
 /// "Clean line breaks": in each chosen text column (all text columns when `columns` is empty) a
 /// value that has a line break gets every run of `\r` and `\n` replaced by one space and its ends
-/// trimmed. Values without a line break are not touched. A chosen column that is missing or is not
-/// text stops with a message.
-pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String]) -> Result<LazyFrame> {
+/// trimmed. Values without a line break are not touched, unless `trim_all` is on: then every value
+/// of the column has its line breaks replaced and the spaces at its ends trimmed (the old Schema &
+/// Ingestion box). A chosen column that is missing or is not text stops with a message.
+pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String], trim_all: bool) -> Result<LazyFrame> {
     let mut lf = lf;
     let schema = lf.collect_schema().context("Could not read the columns for Clean line breaks")?;
     let targets: Vec<String> = if columns.is_empty() {
@@ -2801,6 +2816,9 @@ pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String]) -> Result<Lazy
         .iter()
         .map(|c| {
             let v = col(c.as_str());
+            if trim_all {
+                return old_clean_expr(v).alias(c.as_str());
+            }
             when(v.clone().str().contains(lit(r"[\r\n]"), false))
                 .then(v.clone().str().replace_all(lit(r"[\r\n]+"), lit(" "), false).str().strip_chars(lit(NULL)))
                 .otherwise(v)

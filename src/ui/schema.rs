@@ -299,7 +299,7 @@ impl MicroParquetApp {
         } else {
             // the box is ticked while the tab has the recorded "Clean line breaks" first step
             let mut shown = config.clone();
-            shown.sanitize_linebreaks = config.sanitize_linebreaks || matches!(tab.steps.first(), Some(TransformStep::CleanLineBreaks { columns }) if columns.is_empty());
+            shown.sanitize_linebreaks = config.sanitize_linebreaks || tab.steps.first().is_some_and(is_box_clean_step);
             preview_csv_with(path, 5, &shown).map(|p| (p, shown))
         };
         match loaded {

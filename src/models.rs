@@ -217,6 +217,11 @@ pub fn default_csv_separator() -> char {
 pub struct IngestionConfig {
     pub columns: Vec<ColumnSchemaConfig>,
     pub sanitize_linebreaks: bool,
+    /// Set when the Schema & Ingestion box made the recorded "Clean line breaks" step: masked text
+    /// columns are still trimmed before they are masked, so a mask is the same as it was before
+    /// Phase 5. Old files do not have it.
+    #[serde(default)]
+    pub trim_before_mask: bool,
     pub parse_accounting_negatives: bool,
     pub heal_broken_csv_lines: bool,
     pub pii_salt: String,
@@ -235,6 +240,7 @@ impl Default for IngestionConfig {
         Self {
             columns: Vec::new(),
             sanitize_linebreaks: true,
+            trim_before_mask: false,
             parse_accounting_negatives: true,
             heal_broken_csv_lines: false,
             pii_salt: "BANK_ASIA_ALM_2026".to_string(),
@@ -1532,10 +1538,15 @@ pub enum TransformStep {
     },
     /// Replaces every run of line breaks (\r\n, \n or \r) inside the text values of the chosen
     /// columns (all text columns when none are listed) with one space and trims the ends of the
-    /// values that had one. Never applied automatically.
+    /// values that had one. With `trim_all` the ends of every text value are trimmed of spaces,
+    /// as the old Schema & Ingestion check box did. Never applied automatically.
     CleanLineBreaks {
         #[serde(default)]
         columns: Vec<String>,
+        /// "Trim spaces on all text values": on for the step the Schema & Ingestion box makes,
+        /// off from the Transform menu.
+        #[serde(default)]
+        trim_all: bool,
     },
     MaturityBucket {
         mat_col: String,
@@ -1806,11 +1817,12 @@ impl TransformStep {
             TransformStep::NormalizeEntity { new_col, .. } => {
                 format!("+Normalize Entity: {}", new_col)
             }
-            TransformStep::CleanLineBreaks { columns } => {
+            TransformStep::CleanLineBreaks { columns, trim_all } => {
+                let trim = if *trim_all { ", trim spaces on all values" } else { "" };
                 if columns.is_empty() {
-                    "Clean line breaks (all text columns)".to_string()
+                    format!("Clean line breaks (all text columns{})", trim)
                 } else {
-                    format!("Clean line breaks ({})", columns.join(", "))
+                    format!("Clean line breaks ({}{})", columns.join(", "), trim)
                 }
             }
             TransformStep::MaturityBucket {

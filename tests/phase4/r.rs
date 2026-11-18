@@ -706,7 +706,7 @@ fn i15_clean_line_breaks_gives_one_space_per_run_trims_and_replays_from_a_macro(
     assert!(rc.is_explained(), "the line breaks explain every missing line: {rc:?}");
     assert!(strings(&before, "Remarks")[0].as_deref().unwrap_or("").contains('\n'), "the values still have their line breaks until the step runs");
 
-    let step = TransformStep::CleanLineBreaks { columns: vec![] };
+    let step = TransformStep::CleanLineBreaks { columns: vec![], trim_all: false };
     let after = micro_parquet::engine::compile_tab_lazy(&src, &[step.clone()], &d).expect("compiles").collect().expect("collects");
     assert_eq!(after.height(), 5, "no row is lost or added");
     let remarks: Vec<String> = strings(&after, "Remarks").into_iter().map(|v| v.unwrap_or_default()).collect();
@@ -718,12 +718,12 @@ fn i15_clean_line_breaks_gives_one_space_per_run_trims_and_replays_from_a_macro(
     let out = run_steps("i15s", &spaced, &[step.clone()]).expect("runs");
     assert_eq!(strings(&out, "T"), vec![Some(" keep  ".to_string()), Some("a b".to_string())]);
     // chosen columns: only those; a missing or numeric column is an error
-    let only = TransformStep::CleanLineBreaks { columns: vec!["Remarks".into()] };
+    let only = TransformStep::CleanLineBreaks { columns: vec!["Remarks".into()], trim_all: false };
     let out = micro_parquet::engine::compile_tab_lazy(&src, &[only], &d).expect("compiles").collect().expect("collects");
     assert_eq!(strings(&out, "Remarks")[2].as_deref(), Some("Line one Line two"));
-    let e = format!("{:#}", micro_parquet::engine::compile_tab_lazy(&src, &[TransformStep::CleanLineBreaks { columns: vec!["Nope".into()] }], &d).and_then(|lf| Ok(lf.collect()?)).err().expect("missing column"));
+    let e = format!("{:#}", micro_parquet::engine::compile_tab_lazy(&src, &[TransformStep::CleanLineBreaks { columns: vec!["Nope".into()], trim_all: false }], &d).and_then(|lf| Ok(lf.collect()?)).err().expect("missing column"));
     assert!(e.contains("'Nope' was not found"), "{e}");
-    let e = format!("{:#}", run_steps("i15n", &spaced.hstack(&[Series::new("N".into(), &[1.0, 2.0]).into()]).expect("hstack"), &[TransformStep::CleanLineBreaks { columns: vec!["N".into()] }]).err().expect("not text"));
+    let e = format!("{:#}", run_steps("i15n", &spaced.hstack(&[Series::new("N".into(), &[1.0, 2.0]).into()]).expect("hstack"), &[TransformStep::CleanLineBreaks { columns: vec!["N".into()], trim_all: false }]).err().expect("not text"));
     assert!(e.contains("'N'") && e.contains("not text"), "{e}");
 
     // a macro with the step replays to the same values (and an old macro JSON without 'columns' means all text columns)
