@@ -16,6 +16,10 @@ use chrono::NaiveDate;
 use polars::prelude::*;
 use serde::Deserialize;
 
+/// The remaining term used for a Stage 1 or 2 loan whose maturity has passed (an overdue or
+/// matured loan still carries a year of risk).
+pub const MIN_REMAINING_TERM_YEARS: f64 = 1.0;
+
 pub const ECL_PARAMS_FOLDER: &str = "ecl_params";
 
 /// The output columns.
@@ -221,8 +225,8 @@ pub struct EclSpec {
 pub struct EclStats {
     pub rows: usize,
     pub stage_counts: [usize; 3],
-    /// Stage 1 and 2 rows whose maturity is on or before the cutoff: no remaining term, ECL 0.
-    pub no_term: usize,
+    /// Stage 1 and 2 rows whose maturity is on or before the cutoff: the minimum remaining term is used.
+    pub matured: usize,
     /// Rows that stay in the previous stage because their cure period is not over.
     pub cure_kept: usize,
     /// Rows with no rating, so the downgrade test was not applied.
@@ -236,8 +240,8 @@ impl EclStats {
         if self.cure_kept > 0 {
             s.push_str(&format!(" {} loan(s) stay in their previous stage until the cure period is over.", self.cure_kept));
         }
-        if self.no_term > 0 {
-            s.push_str(&format!(" {} Stage 1 or 2 loan(s) have a maturity on or before the cutoff: no remaining term, ECL 0.", self.no_term));
+        if self.matured > 0 {
+            s.push_str(&format!(" {} Stage 1 or 2 loan(s) have a maturity on or before the cutoff: a remaining term of {} year(s) is used.", self.matured, trim_num(MIN_REMAINING_TERM_YEARS)));
         }
         if self.no_rating > 0 {
             s.push_str(&format!(" {} loan(s) have no rating, so the rating downgrade test was not applied.", self.no_rating));
@@ -263,8 +267,10 @@ pub struct EclOutput {
 
 fn truthy(v: &AnyValue, what: &str, col: &str) -> std::result::Result<bool, String> {
     Ok(match v {
-        AnyValue::Null => false,
+        AnyValue::Null => return Err(format!("the {} in '{}' is blank (write Y or N)", what, col)),
         AnyValue::Boolean(b) => *b,
+        AnyValue::String(s) if s.trim().is_empty() => return Err(format!("the {} in '{}' is blank (write Y or N)", what, col)),
+        AnyValue::StringOwned(s) if s.as_str().trim().is_empty() => return Err(format!("the {} in '{}' is blank (write Y or N)", what, col)),
         AnyValue::String(s) => parse_flag(s).ok_or_else(|| format!("'{}' is not Y/N, Yes/No, True/False or 1/0 (the {} column '{}')", s.trim(), what, col))?,
         AnyValue::StringOwned(s) => parse_flag(s.as_str()).ok_or_else(|| format!("'{}' is not Y/N, Yes/No, True/False or 1/0 (the {} column '{}')", s.trim(), what, col))?,
         other => match other.extract::<f64>() {
@@ -277,7 +283,7 @@ fn truthy(v: &AnyValue, what: &str, col: &str) -> std::result::Result<bool, Stri
 
 fn parse_flag(s: &str) -> Option<bool> {
     match s.trim().to_uppercase().as_str() {
-        "" | "N" | "NO" | "FALSE" | "F" | "0" => Some(false),
+        "N" | "NO" | "FALSE" | "F" | "0" => Some(false),
         "Y" | "YES" | "TRUE" | "T" | "1" => Some(true),
         _ => None,
     }
@@ -564,10 +570,12 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
             continue;
         };
         let term = remaining_years(cutoff, m);
-        if term <= 0.0 {
-            stats.no_term += 1;
-            continue;
-        }
+        let term = if term <= 0.0 {
+            stats.matured += 1;
+            MIN_REMAINING_TERM_YEARS
+        } else {
+            term
+        };
         match ecl_of(ead[i], stage[i], term, e / 100.0, seg, &params.data.scenarios) {
             Ok(v) => ecl[i] = v,
             Err(err) => problems.add(&format!("{}", err), || keys[i].clone()),

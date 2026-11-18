@@ -147,14 +147,14 @@ fn r7_part_years_and_short_terms_scale_the_marginal_pd_by_the_fraction() {
     // a term longer than the PD curve is an error naming the curve
     let e = format!("{:#}", ecl_of(1.0, 2, 3.0, 0.1, &seg, &sc).err().expect("too long"));
     assert!(e.contains("3.00 years") && e.contains("2 years of the PD curve of 'S'"), "{e}");
-    // matured stage 1 or 2 loans have no remaining term: ECL 0 and the count is said
+    // matured stage 1 or 2 loans use the minimum remaining term of 1 year, and the count is said
     let data = data_with("r7d", one_scenario());
     let df = book(&[1000.0, 1000.0], &["2026-10-31", "2026-01-31"]);
     set_data_dir_override(Some(data));
     let (_, stats) = classify_lazy(df.lazy(), &spec_of(&step(&|_| {})).expect("spec")).expect("runs");
     set_data_dir_override(None);
-    assert_eq!(stats.no_term, 2);
-    assert!(stats.note("IFRS 9 ECL").contains("2 Stage 1 or 2 loan(s) have a maturity on or before the cutoff"), "{}", stats.note("x"));
+    assert_eq!(stats.matured, 2);
+    assert!(stats.note("IFRS 9 ECL").contains("2 Stage 1 or 2 loan(s) have a maturity on or before the cutoff: a remaining term of 1 year(s) is used"), "{}", stats.note("x"));
 }
 
 fn staged(name: &str, df: DataFrame, s: &TransformStep) -> (Vec<Option<i64>>, Vec<Option<String>>) {
@@ -192,7 +192,7 @@ fn r7_staging_by_dpd_classified_grade_forborne_unassessed_and_rating() {
     assert_eq!(staged("r7e3", df, &off).0, vec![Some(1); 4]);
     // forborne -> Stage 2; SICR not assessed -> Stage 2; the flags may be text, numbers or booleans
     let mut df = book(&[1.0; 4], &["2028-10-31"; 4]);
-    df.with_column(Series::new("Forborne".into(), &["Y", "N", "yes", ""])).expect("col");
+    df.with_column(Series::new("Forborne".into(), &["Y", "N", "yes", "no"])).expect("col");
     df.with_column(Series::new("Unassessed".into(), &[0i64, 1, 0, 0])).expect("col");
     let s = step(&|s| {
         s["forborne_col"] = serde_json::json!("Forborne");
@@ -564,4 +564,34 @@ fn d2_grades_are_read_through_cl_code_map_and_an_unknown_or_blank_grade_stops_th
         let e = format!("{:#}", run(name, &data_with(&format!("{name}d"), one_scenario()), &bad, st).err().expect("unknown grade"));
         assert!(e.contains("CL status column 'CL' has codes not in cl_code_map.json") && e.contains("'XYZ'") && e.contains("(blank)"), "{e}");
     }
+}
+
+#[test]
+fn d7_a_matured_stage_1_or_2_loan_uses_a_one_year_term_and_a_blank_forborne_or_sicr_flag_stops_the_run() {
+    // matured: one year of risk, not ECL 0 (the Stage 1 figure of the acceptance case)
+    let data = data_with("d7a", one_scenario());
+    let df = book(&[1_000_000.0], &["2026-10-31"]);
+    near(floats(&run("d7a1", &data, &df, &step(&|_| {})).expect("runs"), "ECL")[0], 8181.82, "year 1 of the loan whose maturity has passed");
+    // as Stage 2 too (45 days past due)
+    let mut s2 = book(&[1_000_000.0], &["2025-01-31"]);
+    s2.with_column(Series::new("DPD".into(), &[45i64])).expect("dpd");
+    near(floats(&run("d7a2", &data, &s2, &step(&|s| s["dpd_col"] = serde_json::json!("DPD"))).expect("runs"), "ECL")[0], 8181.82, "a Stage 2 loan past its maturity: one year");
+    // a Stage 3 loan is unchanged
+    let mut s3 = book(&[1_000_000.0], &["2025-01-31"]);
+    s3.with_column(Series::new("DPD".into(), &[120i64])).expect("dpd");
+    near(floats(&run("d7a3", &data, &s3, &step(&|s| s["dpd_col"] = serde_json::json!("DPD"))).expect("runs"), "ECL")[0], 450_000.0, "stage 3");
+    // blank flags stop the run with the count and the first 5 accounts
+    let n = 7;
+    let mut df = book(&vec![1.0; n], &vec!["2028-10-31"; n]);
+    df.with_column(Series::new("Forborne".into(), vec![None::<&str>; n])).expect("col");
+    let e = format!("{:#}", run("d7b", &data_with("d7bd", one_scenario()), &df, &step(&|s| s["forborne_col"] = serde_json::json!("Forborne"))).err().expect("blank forborne"));
+    assert!(e.contains("the forborne in 'Forborne' is blank (write Y or N) on 7 row(s)") && e.contains("the first 5 values of Account_No: A1, A2, A3, A4, A5") && !e.contains("A6"), "{e}");
+    let mut df = book(&[1.0, 1.0], &["2028-10-31"; 2]);
+    df.with_column(Series::new("Unassessed".into(), &[Some(0i64), None])).expect("col");
+    let e = format!("{:#}", run("d7c", &data_with("d7cd", one_scenario()), &df, &step(&|s| s["sicr_unassessed_col"] = serde_json::json!("Unassessed"))).err().expect("blank sicr"));
+    assert!(e.contains("is blank") && e.contains("on 1 row(s)") && e.contains("A2") && !e.contains("A1"), "{e}");
+    // an empty text counts as blank too
+    let mut df = book(&[1.0], &["2028-10-31"]);
+    df.with_column(Series::new("Forborne".into(), &["  "])).expect("col");
+    assert!(format!("{:#}", run("d7d", &data_with("d7dd", one_scenario()), &df, &step(&|s| s["forborne_col"] = serde_json::json!("Forborne"))).err().expect("blank text")).contains("is blank"));
 }

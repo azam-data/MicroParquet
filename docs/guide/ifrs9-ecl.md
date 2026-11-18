@@ -28,7 +28,7 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 | Maturity date | Yes (Stage 1 and 2) | Date | 2028-10-31 | The remaining term is the complete years from the cutoff plus the days left ÷ 365. |
 | Days past due | No | Whole number | 45 | Blank stops the run (use 0 for not overdue). |
 | Classification grade | No | Text | SS, BL | Read through `cl_code_map.json`; the grades SS, DF and B/L are Stage 3 if the option is ticked. An unknown or blank code stops the run. |
-| Forborne, SICR not assessed | No | Y/N, Yes/No, True/False, 1/0 | Y | Blank is No. |
+| Forborne, SICR not assessed | No | Y/N, Yes/No, True/False, 1/0 | Y | A blank value stops the run: write N for No. |
 | Rating at origination, current rating | No (both or neither) | Number | 3, 5 | A fall of 2 notches or more is Stage 2; a blank rating skips the test. |
 | Previous stage, days performing | No (both or neither) | 1, 2, 3 and a number | 3, 95 | The cure rule. |
 
@@ -101,7 +101,7 @@ Test: `guide_ifrs9_ecl`
 
 - "IFRS 9 ECL: the effective interest rate in 'X' is blank or not a number on N row(s); the first 5 values of Account_No: …" Fill the rate (Stage 3 loans need none).
 - "… the maturity date in 'X' is blank (a Stage 1 or 2 loan needs its remaining term) …" Fill the date.
-- "… the days past due in 'X' is blank …" Fill it (0 for not overdue).
+- "… the days past due in 'X' is blank …" Fill it (0 for not overdue). "… the forborne in 'X' is blank (write Y or N) …" Fill the flag.
 - "… the remaining term of N years is longer than the M years of the PD curve of 'S' …" Extend the cumulative PD of the segment in the parameter file.
 - "… the segment column 'X' has values that are not segments of ecl_params/… " Use the segment names of the file.
 - "… the scenario weights sum to 90, not 100 …" Fix the weights (section 5.9). "… has 2 scenarios …": use one scenario or at least three.
@@ -117,6 +117,6 @@ Test: `guide_ifrs9_ecl`
 - The parameters that ship are a sample (illustrative PD, LGD, CCF and scenarios); the ECL is only as good as the parameters you put in.
 - "Classified grades are Stage 3" is the app's alignment; the circular gives no mapping from Circular 15/2024 grades to stages. The rating downgrade of 2 notches is a sample value.
 - Cure is read as one stage back for each full cure period (90 days, or 365 for forborne), which is one reading of section 4.5.5; check it against your policy.
-- A Stage 1 or 2 loan with a maturity on or before the cutoff has no remaining term and an ECL of 0 (the status bar counts them); a loan that needs a longer PD curve than the file has stops the run.
+- A Stage 1 or 2 loan with a maturity on or before the cutoff uses a remaining term of 1 year (the status bar counts them); a loan that needs a longer PD curve than the file has stops the run.
 - Year-end discounting at the effective interest rate; no collateral cash-flow model, no stage-3 time value of recoveries, no off-balance-sheet products other than the undrawn amount through the CCF.
 - Amounts are BDT; no currency conversion. The step is not translated to the Python export.
