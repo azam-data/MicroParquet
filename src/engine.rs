@@ -1268,7 +1268,30 @@ pub fn build_lazy_pipeline(
         lf = lf.with_columns(exprs);
     }
 
+    // A source that still has the old "Clean line breaks" setting on (an old macro, a batch or a
+    // headless run) cleans through the same step the tab records.
+    if config.sanitize_linebreaks {
+        lf = apply_clean_line_breaks(lf, &[])?;
+    }
+
     Ok(lf)
+}
+
+/// Moves the schema dialog's "Clean line breaks" check box into the tab's steps: when it is
+/// ticked (CSV only) the recorded "Clean line breaks" step (all text columns) becomes the first
+/// step; when it is not ticked, a first step of that kind is taken out. The setting is cleared
+/// afterwards, so the step is the only thing that cleans.
+pub fn hoist_clean_line_breaks(config: &mut IngestionConfig, is_parquet: bool, steps: &mut Vec<TransformStep>) {
+    if is_parquet {
+        return;
+    }
+    let want = std::mem::replace(&mut config.sanitize_linebreaks, false);
+    let has_first = matches!(steps.first(), Some(TransformStep::CleanLineBreaks { columns }) if columns.is_empty());
+    if want && !has_first {
+        steps.insert(0, TransformStep::CleanLineBreaks { columns: Vec::new() });
+    } else if !want && has_first {
+        steps.remove(0);
+    }
 }
 
 /// Reads a CSV with every configured column as text (no typing yet).
@@ -1323,14 +1346,8 @@ fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr
 }
 
 fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
-    if config.sanitize_linebreaks {
-        e = e
-            .str()
-            .replace_all(lit(r"[\r\n]+"), lit(" "), false)
-            .str()
-            .strip_chars(lit(" "));
-    }
-
+    // Line breaks are not cleaned here: the "Clean line breaks" step does it (see
+    // `hoist_clean_line_breaks`), so there is one implementation.
     if col_cfg.pii_mask != PiiMaskMode::None {
         // The old `config.pii_salt` is no longer used: masks use the per-install key.
         let mode = col_cfg.pii_mask;

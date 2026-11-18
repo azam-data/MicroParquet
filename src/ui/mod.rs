@@ -45,6 +45,8 @@ mod render_tests;
 #[cfg(test)]
 mod render_tests_p4;
 #[cfg(test)]
+mod render_tests_p5;
+#[cfg(test)]
 mod tests;
 pub mod theme;
 

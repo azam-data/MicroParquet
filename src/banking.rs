@@ -356,13 +356,17 @@ fn check_blank_rates_for_floor(lf: LazyFrame, spec: &RateShockSpec, floor: f64) 
         }
         None => rows.iter().map(|r| format!("row {r}")).collect(),
     };
+    let listed = match &acct {
+        // names the column the account numbers came from, e.g. "first 5 values of Account_No"
+        Some(c) => format!("first {} value{} of {}", items.len(), if items.len() == 1 { "" } else { "s" }, c),
+        None => format!("first {} row{}", items.len(), if items.len() == 1 { "" } else { "s" }),
+    };
     bail!(
-        "ΔNII: {} row(s) have no current rate in '{}', and a floor of {}% is set, so their shocked rate cannot be checked against it. First {} {}: {}. Fill in the rate on those rows, or remove the floor.",
+        "ΔNII: {} row(s) have no current rate in '{}', and a floor of {}% is set, so their shocked rate cannot be checked against it. The {}: {}. Fill in the rate on those rows, or remove the floor.",
         n,
         spec.rate_col,
         floor,
-        items.len(),
-        if acct.is_some() { "account number(s)" } else { "row(s)" },
+        listed,
         items.join(", ")
     );
 }

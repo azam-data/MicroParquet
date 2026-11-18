@@ -13,7 +13,7 @@ Replaces every line break inside a text value (a Remarks or address cell that th
 ## 3. Before you start
 
 - Open the file and look at the status bar: "5 rows from 8 lines: 3 records contain line breaks inside quotes" means the row count is right and some values hold line breaks. Nothing is changed when you open the file; the step runs only when you ask.
-- The Schema & Ingestion dialog also has a "Clean line breaks" box for the columns you set up there; this tool works on any text column of the table, at any point of the steps.
+- The Schema & Ingestion dialog's "Clean line breaks" box does the same thing: ticking it (it is ticked by default for a CSV) puts this step first in the Steps list, for all text columns, so it is recorded and replays in macros. Unticking the box (Apply to tab) takes that first step out again. This tool works on any text column of the table, at any point of the steps.
 
 ## 4. Columns you need
 

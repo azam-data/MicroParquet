@@ -257,5 +257,6 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 </report>
 
 <accepted_deviations>
-(none yet)
+- F0 (Clean line breaks): the dialog's box now adds the Phase 4 item 15 step, so the cleaning runs after typing and, like that step, trims only values that had a line break. Before, the box also trimmed spaces at the ends of every text value, and cleaned before typing. Old sources that still have the setting on (old macros, batch, headless) are cleaned by the same step at the end of the pipeline, so their values change only for stray spaces around a value with no line break. Chosen because the spec asks for the same recorded step and one implementation, and the Phase 4 step must not change. Parquet has no such box and is no longer cleaned at all (before: the converted text columns of a Parquet file were, when the default setting was on).
+- F0 (ΔNII blank-rate error): the text is now "The first 5 values of Account_No: A1, …" (rows: "The first 3 rows: row 1, …"); the Phase 4 test and the guide were updated.
 </accepted_deviations>

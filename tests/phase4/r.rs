@@ -522,14 +522,14 @@ fn i9_with_a_floor_blank_rates_stop_the_step_with_the_count_and_the_first_five_a
     s.floor_pct = Some(0.0);
     let e = format!("{:#}", micro_parquet::banking::apply_rate_shock_with(df.clone().lazy(), &s, &[]).err().expect("blank rates with a floor"));
     assert!(e.contains("7 row(s) have no current rate in 'Rate'") && e.contains("floor of 0%"), "{e}");
-    assert!(e.contains("First 5 account number(s): A1, A2, A3, A4, A5."), "{e}");
+    assert!(e.contains("first 5 values of Account No: A1, A2, A3, A4, A5."), "{e}");
     assert!(!e.contains("A6") && !e.contains("OK1"), "only the first five: {e}");
     // fewer than five: all of them
     let e = format!("{:#}", micro_parquet::banking::apply_rate_shock_with(blank_rate_book(2, true).lazy(), &s, &[]).err().expect("two"));
-    assert!(e.contains("2 row(s)") && e.contains("First 2 account number(s): A1, A2."), "{e}");
+    assert!(e.contains("2 row(s)") && e.contains("first 2 values of Account No: A1, A2."), "{e}");
     // no account column: the rows are named
     let e = format!("{:#}", micro_parquet::banking::apply_rate_shock_with(blank_rate_book(3, false).lazy(), &s, &[]).err().expect("rows"));
-    assert!(e.contains("First 3 row(s): row 1, row 2, row 3."), "{e}");
+    assert!(e.contains("first 3 rows: row 1, row 2, row 3."), "{e}");
     // the step says the same
     let step = TransformStep::RateShockSim {
         bal_col: "Balance".into(), rate_col: "Rate".into(), mat_col: "Matdat".into(), cutoff_date: "2026-10-31".into(), shock_bps: -100.0,

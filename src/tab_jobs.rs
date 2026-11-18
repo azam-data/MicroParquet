@@ -376,6 +376,8 @@ pub struct SchemaApplied {
     pub parse_note: Option<String>,
     pub row_check: Option<RowCountCheck>,
     pub status: String,
+    /// The tab's steps after the schema: the "Clean line breaks" check box adds or removes the first one.
+    pub steps: Vec<TransformStep>,
 }
 
 /// Checks that a tab's pipeline still builds with new ingestion settings and recounts its parse
@@ -408,7 +410,7 @@ pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaAp
     if let Some(n) = key_note {
         status.push_str(&format!(" 🔑 {}", n));
     }
-    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status })
+    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status, steps })
 }
 
 // ------------------------------------------------------------------------------------ exports

@@ -258,12 +258,13 @@ impl MicroParquetApp {
                 }
             }
             JobOutput::Schema(s) => {
-                let SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, mut status } = *s;
+                let SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, mut status, steps } = *s;
                 let Some(idx) = self.tab_position(tab_id) else {
                     return;
                 };
                 if let Some(tab) = self.tabs.get_mut(idx) {
                     tab.source = new_source;
+                    tab.steps = steps;
                     tab.parse_failures = parse_failures;
                     tab.row_check = row_check;
                 }

@@ -189,14 +189,17 @@ impl MicroParquetApp {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
+            let mut config = modal.config;
+            let mut steps = Vec::new();
+            hoist_clean_line_breaks(&mut config, false, &mut steps);
             self.create_tab_from_source(
                 title,
                 TabSource::SingleFile {
                     path: modal.csv_path,
                     is_parquet: false,
-                    config: modal.config,
+                    config,
                 },
-                Vec::new(),
+                steps,
                 HashMap::new(),
             );
         } else if action_direct_convert {
@@ -294,7 +297,10 @@ impl MicroParquetApp {
                 Ok((preview, cfg))
             })
         } else {
-            preview_csv_with(path, 5, config).map(|p| (p, config.clone()))
+            // the box is ticked while the tab has the recorded "Clean line breaks" first step
+            let mut shown = config.clone();
+            shown.sanitize_linebreaks = config.sanitize_linebreaks || matches!(tab.steps.first(), Some(TransformStep::CleanLineBreaks { columns }) if columns.is_empty());
+            preview_csv_with(path, 5, &shown).map(|p| (p, shown))
         };
         match loaded {
             Ok((preview, cfg)) => {
@@ -325,6 +331,9 @@ impl MicroParquetApp {
         else {
             return;
         };
+        let mut config = config;
+        let mut steps = tab.steps.clone();
+        hoist_clean_line_breaks(&mut config, *is_parquet, &mut steps);
         let new_source = TabSource::SingleFile {
             path: path.clone(),
             is_parquet: *is_parquet,
@@ -333,7 +342,7 @@ impl MicroParquetApp {
         let req = SchemaRequest {
             tab_id: tab.id,
             new_source,
-            steps: tab.steps.clone(),
+            steps,
             temp_dir: self.paths.temp_dir.clone(),
         };
         let key = JobKey::tab(JobKind::Schema, tab.id);
