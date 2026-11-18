@@ -304,6 +304,9 @@ pub struct RowFlows {
     pub matured_asset: Option<f64>,
     /// A row with no maturity date that "Treat blank maturity as O/N" put in O/N: its principal.
     pub blank_maturity: Option<f64>,
+    /// A floating row whose next repricing date is on or before the cutoff: its principal, put in
+    /// O/N with no interest (the date is stale or the rate has already reset).
+    pub past_reprice: Option<f64>,
 }
 
 /// True when `d` is the last day of its month.
@@ -342,6 +345,7 @@ const MAX_PAYMENTS: u32 = 1200;
 /// * A floating row runs its scheduled payments (by its repayment type) up to its next repricing
 ///   date; on the earlier of that date and its maturity all the principal that is left and that
 ///   period's interest flow, and nothing comes after.
+/// * A floating row whose repricing date is on or before the cutoff goes to O/N, principal only (counted in the ladder's note).
 /// * A matured liability goes to O/N; a matured asset has no flows.
 /// * With a behaviour product: a non-maturity deposit splits into the non-core part (O/N) and the
 ///   core part at its average maturity (principal only); a loan's CPR and a term deposit's TDRR use
@@ -413,6 +417,13 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
     }
 
     let per_year = row.frequency.per_year();
+
+    // a floating row whose repricing date has passed: all of it in O/N, principal only
+    if row.rate_type == RateType::Floating && row.reprice.is_some_and(|r| r <= cutoff) {
+        out.flows.push(Flow { date: cutoff, t: 0.0, principal: remaining, interest: 0.0 });
+        out.past_reprice = Some(remaining);
+        return Ok(out);
+    }
 
     // a floating row: the scheduled payments before its next repricing date flow on their own
     // dates; on the repricing date all the remaining principal and that period's interest flow
@@ -551,6 +562,8 @@ pub struct LadderResult {
     /// Rows with a blank maturity that "Treat blank maturity as O/N" put in O/N (they are in the
     /// O/N bucket already): currency, count, total of assets, total of liabilities (negative).
     pub blank_on: Vec<(String, usize, f64, f64)>,
+    /// Floating rows whose repricing date was on or before the cutoff: put in O/N, principal only.
+    pub past_reprice_rows: usize,
     /// Counts of rows treated with the behaviour profile, and other things worth saying.
     pub notes: Vec<String>,
 }
@@ -621,6 +634,9 @@ pub fn ladder_from_rows(rows: &[CfRow], settings: &CfSettings, behaviour: Option
                 None => res.blank_on.push((row.currency.clone(), 1, a, l)),
             }
         }
+        if rf.past_reprice.is_some() {
+            res.past_reprice_rows += 1;
+        }
         if let Some(p) = rf.matured_asset {
             match res.excluded.iter_mut().find(|e| e.0 == row.currency) {
                 Some(e) => {
@@ -639,6 +655,9 @@ pub fn ladder_from_rows(rows: &[CfRow], settings: &CfSettings, behaviour: Option
     }
     if res.blank_on_count() > 0 {
         res.notes.push(format!("{} row(s) with a blank maturity date were put in O/N (\"Treat blank maturity as O/N\"), principal only.", res.blank_on_count()));
+    }
+    if res.past_reprice_rows > 0 {
+        res.notes.push(format!("{} floating row(s) had a repricing date on or before the cutoff and were put in O/N, principal only.", res.past_reprice_rows));
     }
     if res.excluded_count() > 0 {
         res.notes.push(format!("{} matured asset row(s) with a total of {:.2} are not in the ladder (as in the liquidity gap ladder). Matured liabilities are in O/N.", res.excluded_count(), res.excluded_total()));

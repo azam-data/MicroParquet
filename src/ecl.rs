@@ -210,7 +210,9 @@ pub fn ecl_of(ead: f64, stage: u8, term_years: f64, eir: f64, seg: &Segment, sce
             let cum = |i: usize| if i == 0 { 0.0 } else { (seg.cumulative_pd_pct[i - 1] / 100.0 * sc.pd_multiplier).min(1.0) };
             let marginal = (cum(y) - cum(y - 1)).max(0.0);
             let frac = (horizon - (y as f64 - 1.0)).min(1.0);
-            e += marginal * frac * lgd * ead / (1.0 + eir).powi(y as i32);
+            // a part-year is discounted at its actual time (1+EIR)^-t, where t is the end of the year or of the term, whichever comes first
+            let t = (y as f64).min(horizon);
+            e += marginal * frac * lgd * ead / (1.0 + eir).powf(t);
         }
         // a single scenario is not weighted
         total += if scenarios.len() == 1 { 1.0 } else { sc.weight_pct / 100.0 } * e;

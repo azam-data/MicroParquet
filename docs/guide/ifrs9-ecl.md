@@ -25,7 +25,7 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 | Segment | Yes (a column, or one segment for all) | Text | Corporate | Must be a segment name of the parameter file. |
 | Drawn amount | Yes | Number (BDT) | 1,000,000 | Blank or negative stops the run. |
 | Undrawn amount | No | Number (BDT) | 200,000 | Added to the exposure through the segment's CCF. |
-| Effective interest rate (%) | Yes (Stage 1 and 2) | Number | 10 | Discounts each year as (1 + rate)^−year. |
+| Effective interest rate (%) | Yes (Stage 1 and 2) | Number | 10 | Discounts each year's loss as (1 + rate)^−t, t in years. |
 | Maturity date | Yes (Stage 1 and 2) | Date | 2028-10-31 | The remaining term is the complete years from the cutoff plus the days left ÷ 365. |
 | Days past due | No | Whole number | 45 | Blank stops the run (use 0 for not overdue). |
 | Classification grade | No | Text | SS, BL | Read through `cl_code_map.json`; the grades SS, DF and B/L are Stage 3 if the option is ticked. An unknown or blank code stops the run. |
@@ -47,7 +47,7 @@ Six new columns at the end: `Stage` (1, 2 or 3), `Stage_Reason` (the first thing
 
 How the stage is set: Stage 3 at 90 or more days past due, or a classified grade; Stage 2 at 30 or more days past due, forborne, SICR not assessed, or a rating downgrade; otherwise Stage 1. Cure: a loan whose previous stage was worse moves back one stage for each full cure period of days performing (90 days; 365 days for a forborne exposure), never better than the stage its current criteria give (a loan cured to Stage 1 that is 45 days past due now is Stage 2).
 
-ECL: for each scenario, the cumulative PD of each year is multiplied by the scenario's PD multiplier and capped at 100%, and the marginal PD of year y is that of year y less that of year y−1 (so the losses never add up to more than LGD × EAD); each year's loss is the marginal PD × LGD × EAD ÷ (1 + EIR)^y; Stage 1 takes year 1 (or the remaining term if shorter), Stage 2 every year to the remaining term with a final part-year taking its fraction of the marginal PD; the scenarios are weighted. Stage 3 is LGD × EAD.
+ECL: for each scenario, the cumulative PD of each year is multiplied by the scenario's PD multiplier and capped at 100%, and the marginal PD of year y is that of year y less that of year y−1 (so the losses never add up to more than LGD × EAD); each year's loss is the marginal PD × LGD × EAD ÷ (1 + EIR)^t, where t is the end of that year, or the remaining term for the final part-year (a loan with 1.5 years left discounts its last half year at 1.5 years, a Stage 1 loan with 0.5 years left at 0.5 years); Stage 1 takes year 1 (or the remaining term if shorter), Stage 2 every year to the remaining term with a final part-year taking its fraction of the marginal PD; the scenarios are weighted. Stage 3 is LGD × EAD.
 
 The "IFRS 9 summary" tab: rows by grade group (Standard includes SMA, then SS, DF, B/L) and by stage, with `Loans`, `EAD`, `ECL`, `Regulatory provision`, `Higher of` (the larger of the two for the row) and, on the Total rows, `Shortfall to Loan Loss Reserve` = the total regulatory provision less the total ECL, not below 0.
 
@@ -119,5 +119,5 @@ Test: `guide_ifrs9_ecl`
 - "Classified grades are Stage 3" and the rating downgrade of 2 notches are the bank's own choices, in `portable_data/policy/ifrs9_bank_policy.json` (a sample until confirmed): the circular gives no mapping from Circular 15/2024 grades to stages and names no number of notches.
 - Cure is read as one stage back for each full cure period (90 days, or 365 for forborne), which is one reading of section 4.5.5; check it against your policy.
 - A Stage 1 or 2 loan with a maturity on or before the cutoff uses a remaining term of 1 year (the status bar counts them); a loan that needs a longer PD curve than the file has stops the run.
-- Year-end discounting at the effective interest rate; no collateral cash-flow model, no stage-3 time value of recoveries, no off-balance-sheet products other than the undrawn amount through the CCF.
+- Discounting at the effective interest rate at the end of each year (the final part-year at the end of the remaining term); no collateral cash-flow model, no stage-3 time value of recoveries, no off-balance-sheet products other than the undrawn amount through the CCF.
 - Amounts are BDT; no currency conversion. The step is not translated to the Python export.

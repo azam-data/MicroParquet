@@ -126,7 +126,7 @@ pub fn parse_rule_text<T: DeserializeOwned>(label: &str, file_date: NaiveDate, t
         bail!("The rule file {} says as_of {} but its name says {}. Make them the same.", label, as_of.format("%Y-%m-%d"), file_date.format("%Y-%m-%d"));
     }
     let source = value.get("source").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("The rule file {} has no \"source\" (the circular or paper the numbers come from).", label))?;
-    let sample = value.get("sample").and_then(|v| v.as_bool()).unwrap_or(false);
+    let sample = sample_flag(&value, label)?;
     let data: T = serde_json::from_value(value.clone()).map_err(|e| anyhow!("The rule file {} could not be read: {}.", label, e))?;
     Ok(RuleFile { data, meta: RuleMeta { file: label.to_string(), as_of, source: source.to_string(), sample } })
 }

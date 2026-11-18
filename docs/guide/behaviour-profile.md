@@ -15,6 +15,7 @@ Works out how much of each current and savings (non-maturity) deposit product is
 - Open a tab with the balance history: one row per date and product (or per account: balances of the same product and date are added up). Monthly or daily dates are fine; daily history is reduced to the last date of each month.
 - The date column must be typed as a Date and the balance as a number. Every product needs a balance in every month of the look-back.
 - The caps come from the rule file `portable_data/rules/irrbb_nmd_caps/<date>.json` (the 2021 guideline's Table 4 is built in: the program writes the file to that folder the first time if it is missing, and never overwrites a file that is there). A later dated file takes over from its date.
+- A profile file is checked again every time it is read, so a file edited by hand cannot get round the dialog: a non-maturity product must have a `core_pct`, its category must be one of the caps file's, and its core % and average maturity must not be above the caps. A broken file stops the run and names the file and the product.
 
 ## 4. Columns you need
 

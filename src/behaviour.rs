@@ -119,6 +119,27 @@ pub fn load_behaviour(dir: &Path, name: &str) -> Result<RuleFile<BehaviourFile>>
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the behaviour file {}", path.display()))?;
     let f: RuleFile<BehaviourFile> = parse_rule_text(&format!("behaviour/{stem}.json"), date, &text)?;
     f.data.validate(&f.meta.file)?;
+    // a file can be edited by hand: check it against the Bangladesh Bank caps again, as the dialog did
+    let raw: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("The behaviour file {} is not valid JSON.", f.meta.file))?;
+    let raw_products = raw.get("products").and_then(|p| p.as_array()).cloned().unwrap_or_default();
+    let caps = crate::rules::load_nmd_caps(date)?;
+    for (p, r) in f.data.products.iter().zip(raw_products.iter()) {
+        if !p.is_nmd() {
+            continue;
+        }
+        if r.get("core_pct").map_or(true, |v| v.is_null()) {
+            bail!("The behaviour file {}: the non-maturity product '{}' has no core_pct. Type the core share in percent.", f.meta.file, p.product);
+        }
+        let cap = caps.data.cap(&p.category).ok_or_else(|| {
+            anyhow::anyhow!("The behaviour file {}: '{}' has the category '{}', which is not a category of {}. Choose one of: {}.", f.meta.file, p.product, p.category, caps.meta.file, caps.data.categories.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", "))
+        })?;
+        if p.core_pct > cap.core_cap_pct {
+            bail!("The behaviour file {}: '{}' has a core share of {}%, above the cap of {}% for {} ({}).", f.meta.file, p.product, p.core_pct, cap.core_cap_pct, cap.name, caps.meta.file);
+        }
+        if p.avg_maturity_years > cap.max_avg_maturity_years {
+            bail!("The behaviour file {}: '{}' has an average maturity of {} years, above the cap of {} years for {} ({}).", f.meta.file, p.product, p.avg_maturity_years, cap.max_avg_maturity_years, cap.name, caps.meta.file);
+        }
+    }
     Ok(f)
 }
 

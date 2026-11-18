@@ -139,9 +139,9 @@ fn r7_part_years_and_short_terms_scale_the_marginal_pd_by_the_fraction() {
     let seg = Segment { name: "S".into(), cumulative_pd_pct: vec![2.0, 5.0], lgd_pct: 45.0, ccf_pct: 0.0 };
     let sc = [Scenario { name: "x".into(), weight_pct: 100.0, pd_multiplier: 1.0 }];
     // 1.5 years, stage 2: year 1 in full and half of year 2
-    near(Some(ecl_of(1_000_000.0, 2, 1.5, 0.10, &seg, &sc).expect("ecl")), 8181.82 + 6750.0 / 1.21, "1.5 years");
+    near(Some(ecl_of(1_000_000.0, 2, 1.5, 0.10, &seg, &sc).expect("ecl")), 8181.82 + 6750.0 / 1.1f64.powf(1.5), "1.5 years, the half year discounted at 1.5 years");
     // half a year left, stage 1: half of year 1
-    near(Some(ecl_of(1_000_000.0, 1, 0.5, 0.10, &seg, &sc).expect("ecl")), 4090.91, "6 months");
+    near(Some(ecl_of(1_000_000.0, 1, 0.5, 0.10, &seg, &sc).expect("ecl")), 4500.0 / 1.1f64.powf(0.5), "6 months, discounted at 0.5 years");
     // stage 1 with 3 years left is still only the first year
     near(Some(ecl_of(1_000_000.0, 1, 3.0, 0.10, &seg, &sc).expect("ecl")), 8181.82, "12 months");
     // a term longer than the PD curve is an error naming the curve
