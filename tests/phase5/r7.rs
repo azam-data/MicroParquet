@@ -534,3 +534,34 @@ fn d1_the_scenario_multiplies_the_cumulative_pd_which_is_capped_at_100_percent_s
     let e = format!("{:#}", check_params(&p, "ecl_params/x.json").err().expect("refused"));
     assert!(e.contains("do not fall from one year to the next") && e.contains("ecl_params/x.json"), "{e}");
 }
+
+#[test]
+fn d2_grades_are_read_through_cl_code_map_and_an_unknown_or_blank_grade_stops_the_run() {
+    // "BL" is a Phase 1 code for B/L: with DPD 0 and the option on it is Stage 3; "bad debt" style codes of the map work too
+    let mut df = book(&[1.0; 4], &["2028-10-31"; 4]);
+    df.with_column(Series::new("CL".into(), &["BL", "sub-standard", "STD", " Doubtful"])).expect("grade");
+    df.with_column(Series::new("DPD".into(), &[0i64; 4])).expect("dpd");
+    let s = step(&|s| {
+        s["grade_col"] = serde_json::json!("CL");
+        s["dpd_col"] = serde_json::json!("DPD");
+    });
+    let (st, why) = staged("d2a", df.clone(), &s);
+    assert_eq!(st, vec![Some(3), Some(3), Some(1), Some(3)], "{why:?}");
+    assert_eq!(why[0].as_deref(), Some("Classified B/L"));
+    assert_eq!(why[1].as_deref(), Some("Classified SS"));
+    // with the option off the same codes are all Stage 1 (but still checked)
+    let off = step(&|s| {
+        s["grade_col"] = serde_json::json!("CL");
+        s["dpd_col"] = serde_json::json!("DPD");
+        s["classified_stage3"] = serde_json::json!(false);
+    });
+    assert_eq!(staged("d2b", df, &off).0, vec![Some(1); 4]);
+    // an unknown code and a blank stop the run, listing the codes (Phase 1 wording)
+    let mut bad = book(&[1.0; 3], &["2028-10-31"; 3]);
+    bad.with_column(Series::new("CL".into(), &[Some("XYZ"), None, Some("SS")])).expect("grade");
+    bad.with_column(Series::new("DPD".into(), &[0i64; 3])).expect("dpd");
+    for (name, st) in [("d2c", &s), ("d2d", &off)] {
+        let e = format!("{:#}", run(name, &data_with(&format!("{name}d"), one_scenario()), &bad, st).err().expect("unknown grade"));
+        assert!(e.contains("CL status column 'CL' has codes not in cl_code_map.json") && e.contains("'XYZ'") && e.contains("(blank)"), "{e}");
+    }
+}

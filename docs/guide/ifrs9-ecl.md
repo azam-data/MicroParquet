@@ -27,7 +27,7 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 | Effective interest rate (%) | Yes (Stage 1 and 2) | Number | 10 | Discounts each year as (1 + rate)^−year. |
 | Maturity date | Yes (Stage 1 and 2) | Date | 2028-10-31 | The remaining term is the complete years from the cutoff plus the days left ÷ 365. |
 | Days past due | No | Whole number | 45 | Blank stops the run (use 0 for not overdue). |
-| Classification grade | No | Text | SS | The grades SS, DF and B/L are Stage 3 if the option is ticked. |
+| Classification grade | No | Text | SS, BL | Read through `cl_code_map.json`; the grades SS, DF and B/L are Stage 3 if the option is ticked. An unknown or blank code stops the run. |
 | Forborne, SICR not assessed | No | Y/N, Yes/No, True/False, 1/0 | Y | Blank is No. |
 | Rating at origination, current rating | No (both or neither) | Number | 3, 5 | A fall of 2 notches or more is Stage 2; a blank rating skips the test. |
 | Previous stage, days performing | No (both or neither) | 1, 2, 3 and a number | 3, 95 | The cure rule. |
@@ -106,6 +106,7 @@ Test: `guide_ifrs9_ecl`
 - "… the segment column 'X' has values that are not segments of ecl_params/… " Use the segment names of the file.
 - "… the scenario weights sum to 90, not 100 …" Fix the weights (section 5.9). "… has 2 scenarios …": use one scenario or at least three.
 - "… choose both the rating columns / both the previous stage and the days performing …" Choose the pair or neither.
+- "CL status column 'X' has codes not in cl_code_map.json: …" Add the code to that file, or fill the blank.
 - "… the previous stage in 'X' is not 1, 2 or 3 …", "… is not Y/N …" Fix the values.
 - "IFRS 9 summary: the tab has no column 'Stage' …" Run the IFRS 9 ECL step on the tab first.
 - "There is no ifrs9_staging file dated on or before the cutoff …" The cutoff is before 8 March 2026; add a file.

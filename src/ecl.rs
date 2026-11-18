@@ -295,7 +295,7 @@ fn parse_stage(s: &str) -> Option<u8> {
 }
 
 /// Runs staging and ECL over the rows of `df`.
-pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>, params: &RuleFile<EclParams>, params_warnings: &[String]) -> Result<EclOutput> {
+pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>, params: &RuleFile<EclParams>, params_warnings: &[String], cl_map: &[(String, String)]) -> Result<EclOutput> {
     let who = "IFRS 9 ECL";
     let cutoff = spec.cutoff.ok_or_else(|| anyhow!("{}: type the cutoff date as YYYY-MM-DD (for example 2026-10-31).", who))?;
     let height = df.height();
@@ -368,8 +368,31 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
         Some(c) => Some(number(&c, "days past due")?),
         None => None,
     };
-    let grades: Option<Vec<Option<String>>> = match given(&spec.grade_col) {
-        Some(c) => Some(col(&c, "grade")?.cast(&DataType::String)?.str()?.into_iter().map(|v| v.map(str::to_string)).collect()),
+    // the grade of each row as one of the seven (STD-0 … B/L), read through cl_code_map.json; a code that is
+    // not in it, or a blank, stops the run (the Phase 1 rule)
+    let grades: Option<Vec<usize>> = match given(&spec.grade_col) {
+        Some(c) => {
+            let vals: Vec<Option<String>> = col(&c, "grade")?.cast(&DataType::String)?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+            let mut ranks = Vec::with_capacity(height);
+            let mut bad: Vec<String> = Vec::new();
+            for v in &vals {
+                let code = v.as_deref().unwrap_or("").trim();
+                match crate::cl1::grade_of(code, cl_map).and_then(crate::overdue::grade_rank) {
+                    Some(r) => ranks.push(r),
+                    None => {
+                        ranks.push(0);
+                        let shown = if code.is_empty() { "(blank)".to_string() } else { format!("'{}'", code) };
+                        if !bad.contains(&shown) && bad.len() < 20 {
+                            bad.push(shown);
+                        }
+                    }
+                }
+            }
+            if !bad.is_empty() {
+                bail!("{}", crate::banking::cl_code_error(&c, &bad));
+            }
+            Some(ranks)
+        }
         None => None,
     };
     let flag = |c: &Option<String>, what: &str, problems: &mut Problems| -> Result<Option<Vec<bool>>> {
@@ -426,7 +449,7 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
 
     // 1. the stage of each row
     let rules = &staging.data;
-    let classified: Vec<String> = rules.classified_grades.iter().map(|g| normalise_code(g)).collect();
+    let classified: Vec<usize> = rules.classified_grades.iter().filter_map(|g| crate::overdue::grade_rank(g)).collect();
     let mut stats = EclStats { rows: height, warnings: params_warnings.to_vec(), ..Default::default() };
     let mut stage = vec![1u8; height];
     let mut reason = vec![String::new(); height];
@@ -446,7 +469,7 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
             },
             None => 0,
         };
-        let grade = grades.as_ref().and_then(|g| g[i].as_deref()).map(normalise_code).unwrap_or_default();
+        let grade_rank = grades.as_ref().map(|g| g[i]);
         let is_forborne = forborne.as_ref().is_some_and(|f| f[i]);
         let mut set = |stage: u8, text: String| {
             if stage > s {
@@ -457,8 +480,10 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
         if d >= rules.default_dpd {
             set(3, format!("{}+ DPD", rules.default_dpd));
         }
-        if spec.classified_stage3 && classified.contains(&grade) {
-            set(3, format!("Classified {}", grade));
+        if let (true, Some(r)) = (spec.classified_stage3, grade_rank) {
+            if classified.contains(&r) {
+                set(3, format!("Classified {}", crate::overdue::GRADES[r]));
+            }
         }
         if d >= rules.sicr_dpd {
             set(2, format!("{}+ DPD", rules.sicr_dpd));
@@ -572,7 +597,8 @@ pub fn classify_lazy(lf: LazyFrame, spec: &EclSpec) -> Result<(LazyFrame, EclSta
         None => lf,
     };
     let df = lf.collect().context("IFRS 9 ECL could not read the table")?;
-    let out = compute(&df, spec, &staging, &params, &warnings)?;
+    let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
+    let out = compute(&df, spec, &staging, &params, &warnings, &cl_map)?;
     let mut df = df;
     let n = df.height();
     df.with_column(Series::new("Stage".into(), out.stage))?;
