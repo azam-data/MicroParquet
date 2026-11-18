@@ -355,4 +355,9 @@ U1:
 - A Parquet file that matches a saved schema opens straight away with a status message (no dialog, no Undo).
 - The warning lists steps the worker found would break, before the tab changes; "Apply anyway" keeps them as broken steps.
 - Parse failures, masked-column names and the inspector use the final names; "Convert to Parquet…" is disabled with a bad name.
+U2:
+- The panel's resize handle is our own strip at its left edge; the panel is drawn at exactly the kept width.
+- A query is checked on the worker first; a wrong one adds no step and its message stays under the editor (also for "New tab").
+- The SQL bar is replaced by the SQL tab; View ▸ SQL and Ctrl+K "SQL editor" open it (needs an open tab).
+- Each panel tab scrolls with an always-visible solid bar (about 10 pt narrower content); a 4 pt overflow of the Steps tab's three buttons was fixed.
 </accepted_deviations>

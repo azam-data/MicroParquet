@@ -121,6 +121,12 @@ pub const TAB_SCROLL_FRAMES: u8 = 4;
 pub const HALF: f32 = 0.5;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
+/// The right panel can be dragged as wide as this share of the window, and its left edge reacts
+/// within this many points (double-click there goes back to the minimum width).
+pub const RIGHT_PANEL_MAX_SHARE: f32 = 0.5;
+pub const RIGHT_PANEL_GRAB: f32 = 6.0;
+/// The line drawn on the panel's edge while it is pointed at or dragged.
+pub const LINE_THICK_W: f32 = 2.0;
 pub const HEADER_ROW_H: f32 = 38.0;
 pub const SELECTOR_ROW_H: f32 = 30.0;
 pub const SUMMARY_BAND_H: f32 = 38.0;
@@ -301,7 +307,12 @@ pub const FIELD_W_SORT_COLUMN: f32 = 180.0;
 pub const FIELD_W_SORT_ORDER: f32 = 120.0;
 /// The name, columns and several-lines boxes of the custom sort-list manager.
 pub const FIELD_W_SORT_LIST: f32 = 300.0;
-pub const SQL_BAR_W: f32 = 520.0;
+pub const SQL_EDITOR_MIN_ROWS: usize = 8;
+/// The history drop-down's row, the error box's height and the characters of a history entry.
+pub const SQL_HISTORY_H: f32 = 28.0;
+pub const SQL_ERROR_H: f32 = 96.0;
+pub const SQL_HISTORY_CHARS: usize = 44;
+pub const SQL_HISTORY_POPUP_H: f32 = 420.0;
 // chart
 pub const CHART_H: f32 = 175.0;
 pub const CHART_BAR_W: f64 = 0.65;

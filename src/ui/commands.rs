@@ -117,8 +117,13 @@ impl MicroParquetApp {
         let Some(c) = cmds::command(id) else {
             return;
         };
+        self.command_menu_item_titled(ui, ctx, id, c.title);
+    }
+
+    /// A menu item that runs a command under a shorter name than its title in the Ctrl+K search.
+    pub(crate) fn command_menu_item_titled(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: CommandId, title: &str) {
         let reason = self.command_unavailable(id);
-        let resp = ui.add_enabled(reason.is_none(), egui::Button::new(format!("{}  {}", command_icon(id), c.title)));
+        let resp = ui.add_enabled(reason.is_none(), egui::Button::new(format!("{}  {}", command_icon(id), title)));
         let resp = match reason {
             Some(r) => resp.on_disabled_hover_text(r),
             None => resp,
@@ -235,7 +240,11 @@ impl MicroParquetApp {
             CommandId::DecimalsUp => self.global_decimals = (self.global_decimals + 1).min(6),
             CommandId::DecimalsDown => self.global_decimals = self.global_decimals.saturating_sub(1),
             CommandId::TogglePanel => self.show_steps_sidebar = !self.show_steps_sidebar,
-            CommandId::ToggleSql => self.show_sql_bar = !self.show_sql_bar,
+            CommandId::ToggleSql => {
+                // the SQL tab of the right panel (Phase 6 U2)
+                self.show_steps_sidebar = true;
+                self.right_tab = crate::ui::steps::RightTab::Sql;
+            }
             CommandId::ToggleChart => self.show_chart_drawer = !self.show_chart_drawer,
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::SortLists => self.open_sort_lists(),

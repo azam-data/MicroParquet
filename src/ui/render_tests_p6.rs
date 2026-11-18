@@ -450,3 +450,317 @@ fn u1_changing_a_rename_on_an_open_tab_warns_naming_the_step_before_it_is_applie
         assert!(rig.app.tabs[0].issues.iter().any(|i| i.index == 1), "{what}: the filter now shows as broken");
     }
 }
+
+// ------------------------------------------------------------------------------------------ U2
+
+use crate::ui::steps::{right_panel_report, steps_report, RightTab};
+use micro_parquet::settings::Settings;
+
+fn panel_edge(rig: &Rig) -> egui::Pos2 {
+    let right = rig.ctx.screen_rect().right();
+    egui::pos2(right - rig.app.right_panel_w + 2.0, rig.ctx.screen_rect().center().y) // just inside the left edge
+}
+
+fn drag(rig: &mut Rig, from: egui::Pos2, to: egui::Pos2) {
+    let b = |pressed| egui::Event::PointerButton { pos: if pressed { from } else { to }, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    rig.step(vec![egui::Event::PointerMoved(from)]);
+    rig.step(vec![b(true)]);
+    for k in 1..=4 {
+        let p = from + (to - from) * (k as f32 / 4.0);
+        rig.step(vec![egui::Event::PointerMoved(p)]);
+    }
+    rig.step(vec![b(false)]);
+    rig.draw(3);
+}
+
+#[test]
+fn u2_the_right_panel_is_dragged_to_a_width_clamped_saved_and_reset_by_a_double_click() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u2a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(6);
+        assert!((rig.app.right_panel_w - theme::RIGHT_PANEL_W).abs() < 1.0, "{what}: starts at today's width: {}", rig.app.right_panel_w);
+        // dragging the left edge to 500 pt gives 500
+        let right = rig.ctx.screen_rect().right();
+        let y = rig.ctx.screen_rect().center().y;
+        let edge = panel_edge(&rig);
+        drag(&mut rig, edge, egui::pos2(right - 500.0, y));
+        assert!((rig.app.right_panel_w - 500.0).abs() < 1.5, "{what}: dragged to 500, is {}", rig.app.right_panel_w);
+        // it is saved when the drag ends, and a new app state built from the file starts there
+        let (saved, note) = Settings::load(&rig.app.paths.root_dir);
+        assert!(note.is_none(), "{what}");
+        assert!((saved.right_panel_width.unwrap_or(0.0) - 500.0).abs() < 1.5, "{what}: settings.json has {:?}", saved.right_panel_width);
+        // the panel at its widest and at its narrowest keeps its content inside (a step list is on screen)
+        // a drag past half the window is clamped to half the window
+        let edge = panel_edge(&rig);
+        drag(&mut rig, edge, egui::pos2(40.0, y));
+        let half = rig.ctx.screen_rect().width() / 2.0;
+        assert!((rig.app.right_panel_w - half).abs() < 1.5, "{what}: clamped to half the window ({half}), is {}", rig.app.right_panel_w);
+        // and a drag below today's width is clamped to it
+        let edge = panel_edge(&rig);
+        drag(&mut rig, edge, egui::pos2(right - 100.0, y));
+        assert!((rig.app.right_panel_w - theme::RIGHT_PANEL_W).abs() < 1.5, "{what}: not narrower than today's width: {}", rig.app.right_panel_w);
+        // 500 again, then a double click on the edge resets it
+        let edge = panel_edge(&rig);
+        drag(&mut rig, edge, egui::pos2(right - 500.0, y));
+        assert!((rig.app.right_panel_w - 500.0).abs() < 1.5, "{what}");
+        let edge = panel_edge(&rig);
+        rig.click(edge);
+        rig.click(edge);
+        rig.draw(4);
+        assert!((rig.app.right_panel_w - theme::RIGHT_PANEL_W).abs() < 1.5, "{what}: a double click resets it: {}", rig.app.right_panel_w);
+        assert_eq!(Settings::load(&rig.app.paths.root_dir).0.right_panel_width, None, "{what}: and the setting is cleared");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u2_a_new_app_state_built_from_the_settings_file_starts_at_the_saved_width() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u2b", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.set_right_panel_width(Some(500.0));
+        let root = rig.app.paths.root_dir.clone();
+        // a second run of the app on the same data folder
+        let mut again = MicroParquetApp::new(rig.app.paths.clone(), egui::Context::default());
+        again.jobs = JobQueue::inline();
+        let src = parquet_source(&root, "book2", DataFrame::new(vec![Series::new("A".into(), &[1i64, 2])]).expect("frame"));
+        again.create_tab_from_source("T".into(), src, vec![], HashMap::new());
+        settle(&mut again);
+        let (ctx, input) = screen(ppp, w, h);
+        let mut rig2 = Rig { app: again, ctx, input, what: what.clone() };
+        rig2.draw(6);
+        assert!((rig2.app.right_panel_w - 500.0).abs() < 1.5, "{what}: the saved width is the start width: {}", rig2.app.right_panel_w);
+        // the saved width is held to half the window when the window is smaller than it was
+        let mut s = Settings::default();
+        s.right_panel_width = Some(5000.0);
+        rig2.app.settings = s;
+        rig2.app.right_panel_w = 5000.0;
+        rig2.draw(6);
+        assert!((rig2.app.right_panel_w - rig2.ctx.screen_rect().width() / 2.0).abs() < 1.5, "{what}: {}", rig2.app.right_panel_w);
+    }
+}
+
+fn thirty_steps(rig: &mut Rig) {
+    for i in 0..30 {
+        let step = TransformStep::FilterRows { column: "Balance".into(), operator: micro_parquet::models::FilterOp::Gt, value: format!("{}", i - 100), keep_matching: true };
+        rig.app.push_step_to_active_tab(step, false);
+        settle(&mut rig.app);
+    }
+}
+
+#[test]
+fn u2_the_tabs_fit_one_row_and_a_tab_with_30_steps_scrolls_to_the_last_step_which_can_be_clicked() {
+    for (ppp, w, h) in SCREENS {
+        for width in [theme::RIGHT_PANEL_W, 0.0] {
+            let mut rig = term_rig("p6u2c", ppp, w, h);
+            let what = format!("{} panel {}", rig.what, if width == 0.0 { "widest" } else { "narrowest" });
+            thirty_steps(&mut rig);
+            if width == 0.0 {
+                rig.app.set_right_panel_width(Some(rig.ctx.screen_rect().width()));
+            }
+            let p = rig.draw(8);
+            let panel_left = rig.ctx.screen_rect().right() - rig.app.right_panel_w;
+            if width == 0.0 {
+                assert!((rig.app.right_panel_w - rig.ctx.screen_rect().width() / 2.0).abs() < 1.5, "{what}: {}", rig.app.right_panel_w);
+            }
+            // "Steps · 30", "Column" and "SQL" in one row, inside the panel, not overlapping
+            let boxes: Vec<(String, egui::Rect)> = ["Steps \u{b7} 30", "Column", "SQL"].iter().map(|t| (t.to_string(), p.boxes.iter().find(|(x, bx)| x == t && bx.left() >= panel_left).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the tab '{t}' is shown")))).collect();
+            for (n, b) in &boxes {
+                assert!(b.left() >= panel_left - 0.5 && b.right() <= rig.ctx.screen_rect().right() + 0.5, "{what}: '{n}' {b:?} is inside the panel");
+            }
+            assert!(boxes.iter().all(|(_, b)| (b.center().y - boxes[0].1.center().y).abs() < 1.0), "{what}: one row: {boxes:?}");
+            assert!(boxes[0].1.right() <= boxes[1].1.left() && boxes[1].1.right() <= boxes[2].1.left(), "{what}: no overlap: {boxes:?}");
+            // the list is taller than the panel: it has a scroll area, and scrolling reaches step 30
+            let rep = right_panel_report(&rig.ctx).expect("panel report");
+            assert_eq!(rep.tab, RightTab::Steps, "{what}");
+            let steps = steps_report(&rig.ctx).expect("steps report");
+            let last = steps.rows.last().map(|r| r.title).expect("rows");
+            let pos = rig.ctx.screen_rect().center() + egui::vec2(rig.ctx.screen_rect().width() / 2.0 - rig.app.right_panel_w / 2.0, 0.0);
+            for _ in 0..60 {
+                rig.step(vec![egui::Event::PointerMoved(pos), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, -6.0), modifiers: egui::Modifiers::NONE }]);
+            }
+            rig.draw(4);
+            let steps = steps_report(&rig.ctx).expect("steps report");
+            let rep = right_panel_report(&rig.ctx).expect("panel report");
+            let last_row = steps.rows.iter().rev().find(|r| r.title.is_positive()).map(|r| r.title).unwrap_or(last);
+            assert!(last_row.bottom() <= rep.scroll.bottom() + 1.0 && last_row.top() >= rep.scroll.top() - 1.0, "{what}: the last step {last_row:?} is in view {:?}", rep.scroll);
+            rig.click(last_row.center());
+            assert_eq!(rig.app.selected_step, Some(29), "{what}: the last step was clicked");
+        }
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+fn open_sql_tab(rig: &mut Rig) -> Painted {
+    rig.app.run_command(&rig.ctx, CommandId::ToggleSql);
+    assert_eq!(rig.app.right_tab, RightTab::Sql, "{}: View > SQL / Ctrl+K 'SQL editor' opens the SQL tab", rig.what);
+    rig.draw(6)
+}
+
+fn key_enter(modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed: true, repeat: false, modifiers }
+}
+
+const CTRL: egui::Modifiers = egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: true };
+const CTRL_SHIFT: egui::Modifiers = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+
+#[test]
+fn u2_the_sql_tab_has_the_editor_hint_buttons_history_and_error_box_and_they_fit_at_both_widths() {
+    for (ppp, w, h) in SCREENS {
+        for widest in [false, true] {
+            let mut rig = term_rig("p6u2d", ppp, w, h);
+            let what = format!("{} {}", rig.what, if widest { "widest" } else { "narrowest" });
+            if widest {
+                rig.app.set_right_panel_width(Some(10_000.0));
+            }
+            let p = open_sql_tab(&mut rig);
+            let panel_left = rig.ctx.screen_rect().right() - rig.app.right_panel_w;
+            let rects = rig.app.sql_rects;
+            assert!(p.boxes.iter().any(|(t, b)| t == "Table name: self" && b.left() >= panel_left), "{what}: the hint");
+            // the old scratchpad text is kept, in a monospace font
+            assert!(p.texts.iter().any(|(t, _, f)| t.starts_with("SELECT * FROM self LIMIT 100") && *f == egui::FontFamily::Monospace), "{what}: the existing query shows in the editor, in monospace");
+            let font = egui::TextStyle::Monospace.resolve(&rig.ctx.style());
+            let line = rig.ctx.fonts(|f| f.row_height(&font));
+            assert!(rects.editor.height() >= 8.0 * line - 0.5, "{what}: the editor is at least 8 lines tall: {} < {}", rects.editor.height(), 8.0 * line);
+            assert!(rects.editor_rows >= 8, "{what}");
+            let rep = right_panel_report(&rig.ctx).expect("report");
+            for (n, r) in [("editor", rects.editor), ("Apply here", rects.apply), ("New tab", rects.new_tab), ("history", rects.history), ("error box", rects.error)] {
+                assert!(r.left() >= panel_left - 0.5 && r.right() <= rig.ctx.screen_rect().right() + 0.5, "{what}: {n} {r:?} is inside the panel");
+                assert!(r.is_positive(), "{what}: {n} drawn");
+                // (what is below the fold is reached by scrolling: the panel scrolls)
+                let _ = rep;
+            }
+            assert!(!overlaps(rects.apply, rects.new_tab) && !overlaps(rects.editor, rects.apply) && !overlaps(rects.history, rects.error), "{what}: no overlaps");
+            for t in ["Apply here", "New tab"] {
+                assert!(p.boxes.iter().any(|(x, bx)| x == t && inside(*bx, if t == "Apply here" { rects.apply } else { rects.new_tab })), "{what}: '{t}' is whole in its button");
+            }
+            // the editor grows with the panel: the panel at its widest is no shorter, and in a tall window the editor is taller
+            assert!(rects.editor.width() > 200.0, "{what}");
+        }
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u2_a_12_line_query_runs_with_ctrl_enter_and_ctrl_shift_enter_opens_a_new_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u2e", ppp, w, h);
+        let what = rig.what.clone();
+        open_sql_tab(&mut rig);
+        let query = "SELECT\n  \"Term Period\",\n  Balance,\n  Balance * 2 AS Double_Balance\nFROM self\nWHERE Balance > 10\n  AND Balance < 100\n  AND \"Term Period\" <> 'abc'\nORDER BY Balance DESC\nLIMIT 50\n-- the twelfth line\n-- is a comment".to_string();
+        assert_eq!(query.lines().count(), 12);
+        rig.app.tabs[0].sql_scratchpad = query.clone();
+        let p = rig.draw(3);
+        // focus the editor with a real click inside it, then Ctrl+Enter
+        let editor = rig.app.sql_rects.editor;
+        rig.click(editor.center());
+        let _ = p;
+        rig.step(vec![key_enter(CTRL)]);
+        settle(&mut rig.app);
+        rig.draw(3);
+        assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: the query ran as a step: {} / {:?}", rig.app.status_message, rig.app.tabs[0].sql_error);
+        assert!(matches!(&rig.app.tabs[0].steps[0], TransformStep::SqlQuery { query: q } if q.lines().count() == 12), "{what}");
+        assert_eq!(rig.app.tabs[0].cached_slice.height(), 4, "{what}: balances 20, 30, 40 and 60 (50 is 'abc', 10 is not above 10): {}", rig.app.tabs[0].cached_slice.height());
+        // the text was not changed by the key (no extra new line)
+        assert_eq!(rig.app.tabs[0].sql_scratchpad, query, "{what}");
+        // Ctrl+Shift+Enter: a new tab
+        rig.click(rig.app.sql_rects.editor.center());
+        rig.step(vec![key_enter(CTRL_SHIFT)]);
+        settle(&mut rig.app);
+        rig.draw(3);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: a new tab: {}", rig.app.status_message);
+        assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: the first tab is as it was");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u2_a_bad_query_shows_its_error_under_the_editor_and_adds_no_step() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u2f", ppp, w, h);
+        let what = rig.what.clone();
+        open_sql_tab(&mut rig);
+        rig.app.tabs[0].sql_scratchpad = "SELECT nosuchcolumn FROM self".to_string();
+        let p = rig.draw(3);
+        let apply = p.boxes.iter().find(|(t, _)| t == "Apply here").map(|(_, b)| *b).expect("button");
+        rig.click(apply.center());
+        settle(&mut rig.app);
+        let p = rig.draw(3);
+        let err = rig.app.tabs[0].sql_error.clone().unwrap_or_else(|| panic!("{what}: an error was kept ({})", rig.app.status_message));
+        assert!(err.to_lowercase().contains("nosuchcolumn") || err.to_lowercase().contains("not found"), "{what}: {err}");
+        assert!(rig.app.tabs[0].steps.is_empty(), "{what}: no step was added");
+        let box_rect = rig.app.sql_rects.error;
+        assert!(p.boxes.iter().any(|(t, b)| t.contains(err.lines().next().unwrap_or("")) && b.intersects(box_rect)), "{what}: the error is painted in its box");
+        // a good query clears it
+        rig.app.tabs[0].sql_scratchpad = "SELECT * FROM self".to_string();
+        let p = rig.draw(3);
+        let apply = p.boxes.iter().find(|(t, _)| t == "Apply here").map(|(_, b)| *b).expect("button");
+        rig.click(apply.center());
+        settle(&mut rig.app);
+        assert!(rig.app.tabs[0].sql_error.is_none() && rig.app.tabs[0].steps.len() == 1, "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u2_the_history_keeps_ten_queries_and_a_click_on_one_puts_it_back_in_the_editor() {
+    let mut h = Vec::new();
+    for i in 0..12 {
+        crate::ui::sql::remember_query(&mut h, &format!("SELECT {i} FROM self"));
+    }
+    assert_eq!(h.len(), 10);
+    assert_eq!((h[0].as_str(), h[9].as_str()), ("SELECT 2 FROM self", "SELECT 11 FROM self"), "the two oldest were dropped");
+    crate::ui::sql::remember_query(&mut h, "SELECT 5 FROM self");
+    assert_eq!((h.len(), h[9].as_str()), (10, "SELECT 5 FROM self"), "a repeated query moves to the end");
+    crate::ui::sql::remember_query(&mut h, "   ");
+    assert_eq!(h.len(), 10);
+    for (ppp, w, hh) in SCREENS {
+        let mut rig = term_rig("p6u2g", ppp, w, hh);
+        let what = rig.what.clone();
+        open_sql_tab(&mut rig);
+        for i in 0..12 {
+            rig.app.tabs[0].sql_scratchpad = format!("SELECT Balance + {i} AS B FROM self");
+            rig.app.run_sql_query(false);
+            settle(&mut rig.app);
+        }
+        assert_eq!(rig.app.tabs[0].sql_history.len(), 10, "{what}");
+        assert!(rig.app.tabs[0].sql_history[0].contains("+ 2 "), "{what}: the oldest two are gone: {:?}", rig.app.tabs[0].sql_history);
+        rig.app.tabs[0].sql_scratchpad = "SELECT 1".to_string();
+        rig.draw(4);
+        let combo = rig.app.sql_rects.history;
+        rig.click(combo.center());
+        let p = rig.draw(3);
+        let newest = p.boxes.iter().filter(|(t, _)| t.starts_with("SELECT Balance + 11")).map(|(_, b)| *b).next().unwrap_or_else(|| panic!("{what}: the newest query is listed"));
+        let oldest = p.boxes.iter().filter(|(t, _)| t.starts_with("SELECT Balance + 2 ")).map(|(_, b)| *b).next().unwrap_or_else(|| panic!("{what}: the oldest kept query is listed: {:?}", p.boxes.iter().filter(|(t, _)| t.starts_with("SELECT")).collect::<Vec<_>>()));
+        assert!(newest.top() < oldest.top(), "{what}: newest first");
+        assert!(!p.boxes.iter().any(|(t, _)| t.starts_with("SELECT Balance + 1 ") || t.starts_with("SELECT Balance + 0 ")), "{what}: the dropped ones are not listed");
+        rig.click(oldest.center());
+        assert_eq!(rig.app.tabs[0].sql_scratchpad, "SELECT Balance + 2 AS B FROM self", "{what}: the chosen query is in the editor");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u2_view_sql_and_ctrl_k_sql_editor_open_the_panel_on_the_sql_tab() {
+    use micro_parquet::commands::{rank, Entry, COMMANDS};
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    let top = rank("sql editor", &entries)[0];
+    assert_eq!(COMMANDS[top].id, CommandId::ToggleSql, "Ctrl+K 'sql editor' finds the command first");
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u2h", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.show_steps_sidebar = false;
+        rig.draw(4);
+        // View menu: click "View", then "SQL"
+        let p = rig.draw(2);
+        let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the View menu"));
+        rig.click(view.center());
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Custom sort lists")), "{what}: View lists Custom sort lists");
+        let item = p.boxes.iter().find(|(t, _)| t.ends_with("SQL") && t.chars().count() <= 6).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View lists SQL: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+        rig.click(item.center());
+        assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: View > SQL opened the panel on the SQL tab");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}

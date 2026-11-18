@@ -37,6 +37,7 @@ pub enum JobOutput {
     Loaded(Box<LoadedTab>),
     Refreshed(Box<Refreshed>),
     Schema(Box<SchemaApplied>),
+    SqlChecked(Box<SqlChecked>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
 }
@@ -206,6 +207,8 @@ fn load_tab_staged(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         viewport_limit: 100,
         cached_slice: slice,
         sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
+        sql_history: Vec::new(),
+        sql_error: None,
         parse_failures,
         join_status: join_stat,
         totals,
@@ -357,6 +360,40 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
             })
         }
     }
+}
+
+// ------------------------------------------------------------------------------------ SQL tab
+
+/// A query of the SQL tab to check before it is added as a step (Phase 6 U2).
+pub struct SqlCheckRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub query: String,
+    /// "New tab" instead of "Apply here".
+    pub new_tab: bool,
+    pub temp_dir: PathBuf,
+}
+
+pub struct SqlChecked {
+    pub tab_id: u64,
+    pub query: String,
+    pub new_tab: bool,
+    /// What is wrong with the query, in words; `None` when it runs on the tab's columns.
+    pub error: Option<String>,
+}
+
+/// Builds the query as the next step of the tab (on the worker) without reading the data. The
+/// error is the engine's own message, for example an unknown column.
+pub fn check_sql_query(req: SqlCheckRequest, ctx: &JobCtx) -> Result<SqlChecked> {
+    let SqlCheckRequest { tab_id, source, steps, query, new_tab, temp_dir } = req;
+    ctx.set_progress("Checking the query…", None);
+    let n = steps.len();
+    let mut all = steps;
+    all.push(TransformStep::SqlQuery { query: query.clone() });
+    let issues = crate::engine::validate_steps(&source, &all, &temp_dir)?;
+    let error = issues.into_iter().find(|i| i.index == n).map(|i| i.reason);
+    Ok(SqlChecked { tab_id, query, new_tab, error })
 }
 
 // ------------------------------------------------------------------------------------ schema

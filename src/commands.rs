@@ -200,7 +200,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::DecimalsUp, "More decimal places", G::View, "precision", N::Nothing),
     c(I::DecimalsDown, "Fewer decimal places", G::View, "precision", N::Nothing),
     c(I::TogglePanel, "Show or hide the right panel", G::View, "steps column inspector sidebar", N::Nothing),
-    c(I::ToggleSql, "Show or hide the SQL scratchpad bar", G::View, "query", N::Nothing),
+    c(I::ToggleSql, "SQL editor", G::View, "sql query select table self scratchpad run", N::Tab),
     c(I::ToggleChart, "Show or hide the ALCO bar chart", G::View, "graph plot", N::Nothing),
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
     c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),

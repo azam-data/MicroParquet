@@ -2221,6 +2221,10 @@ pub struct TabState {
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
+    /// The tab's last 10 SQL queries run from the SQL tab, oldest first (Phase 6 U2).
+    pub sql_history: Vec<String>,
+    /// The last error of a query run from the SQL tab (shown under the editor).
+    pub sql_error: Option<String>,
     /// Values of the tab's source that could not be converted to their column type.
     pub parse_failures: Vec<ParseFailure>,
     /// For a joined tab: rows and control sum against the left table, and dropped duplicates.

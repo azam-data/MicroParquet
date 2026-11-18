@@ -120,6 +120,12 @@ impl MicroParquetApp {
                         }
                     }
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
+                    JobKind::SqlCheck => {
+                        if let Some(tab) = r.key.scope.and_then(|id| self.tabs.iter_mut().find(|t| t.id == id)) {
+                            tab.sql_error = Some(msg.clone());
+                        }
+                        self.status_message = format!("The query was not checked: {}", msg);
+                    }
                     // The band must not keep values of an older result: "—" with the reason.
                     JobKind::Summary => {
                         if let Some(tab) = r.key.scope.and_then(|id| self.tabs.iter_mut().find(|t| t.id == id)) {
@@ -271,6 +277,7 @@ impl MicroParquetApp {
                 }
                 self.finish_schema_applied(*s);
             }
+            JobOutput::SqlChecked(r) => self.apply_sql_checked(*r),
             JobOutput::TextCheck(r) => self.apply_text_check(*r),
             JobOutput::Exported(o) => {
                 self.status_message = o.message;

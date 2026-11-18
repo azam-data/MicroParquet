@@ -8,7 +8,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 |---|---|---|---|---|
 | U3 | DONE | (this commit) | tests/phase6/u3.rs ×11, guide_custom_sort_lists + completeness, render_tests_p6 ×3 (both screens) | D1–D4 below |
 | U1 | DONE | (this commit) | tests/phase6/u1.rs ×10 (rename order and typing, header match and no match, duplicate names, stack, batch, Python, old schema, warning with the step named, parse failures and masks, swap), render_tests_p6 ×5 (both screens; real clicks on Undo, Lock Schema & Open, picker buttons, Apply anyway / Cancel) | D7–D10 |
-| U2 | | | | |
+| U2 | DONE | (this commit) | src/settings.rs ×2 unit; render_tests_p6 ×8 (drag to 500, clamp to half the window and to today's width, save and restart, double-click reset, three tabs in one row at both widths, 30 steps scroll to the last step and click it, SQL tab layout, 12-line Ctrl+Enter and Ctrl+Shift+Enter, bad query error, history of 10, View menu and Ctrl+K); guide_sql_editor + completeness | D11–D14 |
 | U6 | | | | |
 | U4 | | | | |
 | U5 | | | | |
@@ -25,3 +25,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 - D8 (U1): a Parquet file that matches a saved schema opens straight away with a status message naming it (the Parquet dialog is the tab's Schema button, so there is no dialog and no Undo for it at open).
 - D9 (U1): the warning about steps is shown once the worker has checked the new schema, before the tab changes. "Apply anyway" keeps the steps (shown as broken), Cancel leaves the tab as it was. Steps that were already broken are not listed.
 - D10 (U1): parse failures, the masked-column list and the Column inspector use the final names; "Convert to Parquet…" is disabled with a bad name, like Apply and Save.
+- D11 (U2): the resize handle is our own strip (6 pt inside the panel's left edge) instead of egui's, so a wide child can never push the panel wider; the panel is drawn at exactly the width we keep (`right_panel_w`).
+- D12 (U2): a query is checked on the worker (the engine builds it as the next step) before it becomes a step; a wrong query adds no step and its message stays in the box under the editor. "Apply here" and "New tab" both work this way.
+- D13 (U2): the one-line SQL bar is gone; View ▸ "SQL" and the Ctrl+K command "SQL editor" (needs an open tab) open the panel on the SQL tab. Each tab of the panel scrolls with an always-visible solid bar, so the content is about 10 pt narrower than before.
+- D14 (U2): fixed an existing 4 pt overflow of the three buttons at the foot of the Steps tab (the panel used to hide it by clipping).

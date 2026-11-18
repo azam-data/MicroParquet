@@ -8,7 +8,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 1] = ["custom-sort-lists"];
+pub const P6_GUIDE_TOOLS: [&str; 2] = ["custom-sort-lists", "sql-editor"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -57,4 +57,21 @@ fn guide_custom_sort_lists() {
         "guide_custom_sort_lists",
         &[md(&df, &["Id", "Term Period", "Risk"]), md(&by_tenor, &["Id", "Term Period"]), md(&by_list, &["Id", "Risk"])],
     );
+}
+
+#[test]
+fn guide_sql_editor() {
+    let df = DataFrame::new(vec![
+        Series::new("Branch".into(), &["DHK", "CTG", "DHK", "SYL", "CTG"]),
+        Series::new("Product".into(), &["TD", "SB", "SB", "TD", "TD"]),
+        Series::new("Balance".into(), &[500.0, 120.0, 80.0, 40.0, 300.0]),
+    ])
+    .expect("frame");
+    let query = "SELECT Branch, SUM(Balance) AS Total, COUNT(*) AS Accounts\nFROM self\nWHERE Product = 'TD'\nGROUP BY Branch\nORDER BY Total DESC";
+    let out = run_steps("g_sql", &df, &[TransformStep::SqlQuery { query: query.to_string() }]).expect("the query runs");
+    assert_eq!(strings(&out, "Branch"), vec![Some("DHK".to_string()), Some("CTG".to_string()), Some("SYL".to_string())]);
+    assert_eq!(floats(&out, "Total"), vec![Some(500.0), Some(300.0), Some(40.0)]);
+    let bad = run_steps("g_sql_bad", &df, &[TransformStep::SqlQuery { query: "SELECT Missing FROM self".to_string() }]);
+    assert!(bad.is_err(), "a column that is not in the table is an error, not a blank");
+    check_guide("sql-editor", "guide_sql_editor", &[md(&df, &["Branch", "Product", "Balance:2"]), md(&out, &["Branch", "Total:2", "Accounts"])]);
 }

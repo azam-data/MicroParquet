@@ -45,6 +45,8 @@ pub enum JobKind {
     Batch,
     /// Applies a schema to an open tab.
     Schema,
+    /// Checks a SQL query of the SQL tab against the tab's columns before it becomes a step.
+    SqlCheck,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

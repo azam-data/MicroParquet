@@ -151,7 +151,6 @@ pub struct MicroParquetApp {
     parquet_dialect: ParquetDialect,
     export_csv_mdy: bool,
     show_steps_sidebar: bool,
-    show_sql_bar: bool,
     show_chart_drawer: bool,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
@@ -197,6 +196,14 @@ pub struct MicroParquetApp {
     /// A line that starts the status message of a tab that is still loading (by tab id): the
     /// saved schema it opened with (Phase 6 U1).
     pub open_notes: HashMap<u64, String>,
+    /// `portable_data/settings.json` (Phase 6): panel width, default zoom, chart choices.
+    pub settings: micro_parquet::settings::Settings,
+    /// The right panel: its width in points this frame, whether a drag is under way, and a counter
+    /// that gives the panel a new identity (so it starts at the width asked for).
+    pub right_panel_w: f32,
+    pub right_panel_dragging: bool,
+    /// What the SQL tab drew (for the render tests).
+    pub sql_rects: ui::sql::SqlRects,
     batch_modal: BatchModalState,
     active_tool: ActiveToolModal,
     status_message: String,
@@ -247,10 +254,11 @@ impl MicroParquetApp {
     pub fn new(paths: PortablePaths, egui_ctx: egui::Context) -> Self {
         let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
         let rate_presets = RateBandDef::load_all_presets(&paths.rate_bands_file());
+        let (settings, settings_note) = micro_parquet::settings::Settings::load(&paths.root_dir);
         let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
             .map(|t| micro_parquet::commands::recent_from_text(&t))
             .unwrap_or_default();
-        Self {
+        let mut app = Self {
             jobs: JobQueue::new(move || egui_ctx.request_repaint()),
             tab_id_counter: 0,
             pending_refresh: HashMap::new(),
@@ -263,7 +271,6 @@ impl MicroParquetApp {
             parquet_dialect: ParquetDialect::ArchiveZstd,
             export_csv_mdy: false,
             show_steps_sidebar: true,
-            show_sql_bar: false,
             show_chart_drawer: false,
             show_summary_row: true,
             right_tab: RightTab::Steps,
@@ -293,6 +300,10 @@ impl MicroParquetApp {
             template_pick: None,
             schema_confirm: None,
             open_notes: HashMap::new(),
+            settings: settings.clone(),
+            right_panel_w: settings.right_panel_width.unwrap_or(ui::theme::RIGHT_PANEL_W).max(ui::theme::RIGHT_PANEL_W),
+            right_panel_dragging: false,
+            sql_rects: ui::sql::SqlRects::default(),
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
             status_message:
@@ -336,6 +347,17 @@ impl MicroParquetApp {
             macros: MacroState::default(),
             export: ExportState::default(),
             chart: ChartState::default(),
+        };
+        if let Some(note) = settings_note {
+            app.status_message = note;
+        }
+        app
+    }
+
+    /// Writes `settings.json`; a failure goes to the status line.
+    pub(crate) fn save_settings(&mut self) {
+        if let Err(e) = self.settings.save(&self.paths.root_dir) {
+            self.status_message = format!("Settings were not saved: {:#}", e);
         }
     }
 }
@@ -385,7 +407,6 @@ impl MicroParquetApp {
                 }
                 self.render_pivot_bar(ui);
                 self.render_filter_bar(ui);
-                self.render_sql_bar(ui);
                 self.render_chart_drawer(ui);
                 self.render_table_area(ui);
             });
@@ -457,7 +478,8 @@ impl MicroParquetApp {
             });
             ui.separator();
             ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
-            ui.checkbox(&mut self.show_sql_bar, "SQL scratchpad bar");
+            self.command_menu_item_titled(ui, ctx, micro_parquet::commands::CommandId::ToggleSql, "SQL");
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
             ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })

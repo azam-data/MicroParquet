@@ -19,6 +19,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Pivot table](pivot.md): Rows, Columns, Values and Filters with totals.
 - [Summary row](summary-row.md): totals and weighted averages under the table.
 - [Column inspector](column-inspector.md): facts about one column.
+- [SQL editor](sql-editor.md): a query on the tab's table, with history and the last error.
 
 ## Treasury & ALM
 
