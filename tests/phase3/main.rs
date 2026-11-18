@@ -36,3 +36,5 @@ mod v3_support {
 mod v4;
 #[path = "../phase4/v5.rs"]
 mod v5;
+#[path = "../phase4/r.rs"]
+mod r;

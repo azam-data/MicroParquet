@@ -1123,3 +1123,48 @@ fn the_repricing_gap_tab_shows_its_table_inside_the_window_and_the_note_counts_u
         micro_parquet::betas::set_betas_dir_override(None);
     }
 }
+
+// ----------------------------------------------------------------------------- PR #6 review
+
+#[test]
+fn i1_an_old_pivot_step_converts_to_the_new_pivot_only_after_the_confirmation_lists_the_new_names() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("pr6i1", ppp, w, h, 0);
+        let what = rig.what.clone();
+        let old = TransformStep::GroupByPivot {
+            group_cols: vec!["Bank".into()],
+            pivot_col: None,
+            aggs: vec![AggSpec { target_col: "Balance".into(), func: AggFunc::Sum, weight_col: None, alias: "Total_Balance".into(), format_spec: ColumnFormatSpec { fmt_type: MetricFormatType::Auto, decimals: 2 } }],
+            sort_by_col: None,
+            top_n: None,
+        };
+        rig.app.push_step_to_active_tab(old, false);
+        rig.draw(4);
+        assert!(rig.app.open_step_editor(0), "{what}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::GroupByPivot, "{what}: an old step keeps its dialog");
+        let p = rig.draw(6);
+        let btn = p.boxes.iter().find(|(t, _)| t.contains("Convert to new pivot")).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the button"));
+        rig.click(btn.center());
+        let p = rig.draw(6);
+        // nothing was converted yet: the list of changed names is on screen
+        assert!(matches!(rig.app.tabs[0].steps[0], TransformStep::GroupByPivot { .. }), "{what}: not converted before the confirmation");
+        assert!(p.boxes.iter().any(|(t, _)| t == "Total_Balance") && p.boxes.iter().any(|(t, _)| t == "Sum of Balance"), "{what}: old and new name are listed");
+        // Back leaves the step alone
+        let back = p.boxes.iter().find(|(t, _)| t == "Back").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: Back"));
+        rig.click(back.center());
+        assert!(matches!(rig.app.tabs[0].steps[0], TransformStep::GroupByPivot { .. }), "{what}: Back changes nothing");
+        // convert for real
+        let p = rig.draw(4);
+        let btn = p.boxes.iter().find(|(t, _)| t.contains("Convert to new pivot")).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the button again"));
+        rig.click(btn.center());
+        let p = rig.draw(6);
+        let go = p.boxes.iter().find(|(t, _)| t == "Convert").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: Convert"));
+        rig.click(go.center());
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), 1, "{what}: no new tab");
+        assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: replaced in place");
+        assert!(matches!(rig.app.tabs[0].steps[0], TransformStep::PivotTable { .. }), "{what}: {:?}", rig.app.tabs[0].steps);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        assert!(rig.app.tabs[0].available_columns().contains(&"Sum of Balance".to_string()), "{what}: {:?}", rig.app.tabs[0].available_columns());
+    }
+}

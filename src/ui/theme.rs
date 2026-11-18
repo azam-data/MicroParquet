@@ -212,6 +212,7 @@ pub const DIALOG_W_SORT: f32 = 560.0;
 pub const DIALOG_W_FILTER: f32 = 640.0;
 pub const DIALOG_W_TOOL: f32 = 680.0;
 pub const DIALOG_W_PIVOT: f32 = 720.0;
+pub const DIALOG_W_PIVOT_CONVERT: f32 = 520.0;
 pub const DIALOG_W_PYTHON: f32 = 760.0;
 // The pivot builder (Phase 4 V1), after docs/design/Pivot.dc.html.
 pub const DIALOG_W_PIVOT_BUILDER: f32 = 1100.0;

@@ -116,6 +116,6 @@ Test: `guide_pivot`
 ## 10. Limits and assumptions
 
 - The Python export does not translate Pivot steps (it stops with a clear message); run them in MicroParquet or with a macro.
-- Older "Group/Pivot" steps from earlier macros still load and run exactly as before; Edit on one opens the older dialog.
+- Older "Group/Pivot" steps from earlier macros still load and run exactly as before; Edit on one opens the older dialog. That dialog has a "Convert to new pivot…" button: it first lists the output columns whose names will change (for example `Total_Balance` → `Sum of Balance`) and what else changes (a Top-N limit is dropped; the new pivot adds no total row or column until you switch them on with Edit pivot), and converts the step in place only when you click "Convert". "Back" changes nothing. Later steps or macros that use the old column names must be changed to the new ones. A step that mixes "% of total" metrics with other metrics, or has two metrics that are the same calculation, cannot be converted and the button says why.
 - Scale sets the display format of the value columns when the tab is made; a column that appears later (a new bank) follows the format of the others after the next refresh, and is shown in the View scale until then.
 - At most 2,000 values are listed in a Filters checklist; type in the search box to find others.

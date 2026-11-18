@@ -696,3 +696,105 @@ pub fn pivot_column_formats(spec: &PivotSpec, columns: &[String], decimals: usiz
         .map(|(p, name)| (name.clone(), pivot_value_format(&spec.values[p % spec.values.len()], spec, decimals)))
         .collect()
 }
+
+// ------------------------------------------------------------------ converting an old pivot step
+
+/// What converting an old "Group/Pivot" step (`GroupByPivot`) to the new pivot (`PivotTable`) does:
+/// the new settings, the output columns whose names change, and what the new pivot cannot keep.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PivotConversion {
+    pub spec: PivotSpec,
+    /// (old column name, new column name), only the columns whose name changes.
+    pub renames: Vec<(String, String)>,
+    /// Other changes the owner must know about before confirming.
+    pub notes: Vec<String>,
+}
+
+/// Plans the conversion of an old `GroupByPivot` step. Nothing is changed here; the caller shows
+/// `renames` and `notes` and replaces the step only after the user confirms. A step the new
+/// pivot cannot express exactly is refused with the reason.
+pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
+    let TransformStep::GroupByPivot { group_cols, pivot_col, aggs, sort_by_col, top_n } = step.inner() else {
+        bail!("Only an old Group/Pivot step can be converted.");
+    };
+    if group_cols.is_empty() {
+        bail!("This Group/Pivot step has no grouping columns, so there is nothing to convert. Tick the grouping columns first.");
+    }
+    if aggs.is_empty() {
+        bail!("This Group/Pivot step has no metrics, so there is nothing to convert. Add a metric first.");
+    }
+    let pct_count = aggs.iter().filter(|a| a.func == AggFunc::PctOfTotal).count();
+    if pct_count != 0 && pct_count != aggs.len() {
+        bail!(
+            "This step mixes '% of total' metrics with other metrics. The new pivot shows all its values the same way ('Show values as'), so it cannot keep both. Split the step in two or remove one kind, then convert."
+        );
+    }
+    let mut values: Vec<PivotValue> = Vec::with_capacity(aggs.len());
+    for a in aggs {
+        let (agg, weight_col) = match a.func {
+            AggFunc::Sum | AggFunc::PctOfTotal => (PivotAgg::Sum, None),
+            AggFunc::Count => (PivotAgg::Count, None),
+            AggFunc::Mean => (PivotAgg::Average, None),
+            AggFunc::Min => (PivotAgg::Min, None),
+            AggFunc::Max => (PivotAgg::Max, None),
+            AggFunc::WeightedAvg => {
+                let w = a.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()).ok_or_else(|| {
+                    anyhow::anyhow!("The metric '{}' is a weighted average without a weight column; choose one before converting.", a.alias)
+                })?;
+                (PivotAgg::WeightedAvg, Some(w.to_string()))
+            }
+        };
+        let v = PivotValue { field: a.target_col.clone(), agg, weight_col };
+        if values.iter().any(|o| o.label() == v.label()) {
+            bail!(
+                "The metrics '{}' and another one both calculate '{}'. The new pivot allows each calculation once; remove one, then convert.",
+                a.alias,
+                v.label()
+            );
+        }
+        values.push(v);
+    }
+    let renames: Vec<(String, String)> = aggs
+        .iter()
+        .zip(&values)
+        .filter(|(a, v)| a.alias != v.label())
+        .map(|(a, v)| (a.alias.clone(), v.label()))
+        .collect();
+    let mut notes: Vec<String> = Vec::new();
+    let mut sort_by_value = None;
+    if let Some(sc) = sort_by_col.as_deref() {
+        match aggs.iter().position(|a| a.alias == sc) {
+            Some(i) => sort_by_value = Some(PivotSortByValue { value_index: i, descending: true }),
+            None => notes.push(format!("The old step sorts by '{sc}', which is not a metric; the new pivot sorts the rows by their labels instead.")),
+        }
+    }
+    if let Some(n) = top_n.filter(|n| *n > 0) {
+        notes.push(format!("Top {n}: the new pivot has no Top-N limit, so it shows every row, not the first {n}."));
+    }
+    if pivot_col.as_deref().map(str::trim).is_some_and(|p| !p.is_empty()) {
+        notes.push("The old step's pivot column was never used for the output; the new pivot has no Columns field set.".to_string());
+    }
+    if aggs.iter().any(|a| a.format_spec.fmt_type != MetricFormatType::Auto || a.format_spec.decimals != 2) {
+        notes.push("Each metric's own format and decimals are replaced by the new pivot's Scale (as in View).".to_string());
+    }
+    if pct_count > 0 {
+        notes.push("'% of total' metrics become Sum values shown as '% of column total' (the same shares, not rounded to 2 decimals in the data).".to_string());
+    }
+    notes.push("Rows are listed in natural label order, and the new pivot adds no Grand total row or Total column (switch them on with Edit pivot).".to_string());
+    Ok(PivotConversion {
+        spec: PivotSpec {
+            rows: group_cols.clone(),
+            columns: Vec::new(),
+            values,
+            filters: Vec::new(),
+            row_totals: false,
+            column_totals: false,
+            subtotals: false,
+            show_as: if pct_count > 0 { PivotShowAs::PctOfColumnTotal } else { PivotShowAs::NoCalculation },
+            scale: PivotScale::Global,
+            sort_by_value,
+        },
+        renames,
+        notes,
+    })
+}
