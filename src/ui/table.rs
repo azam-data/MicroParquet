@@ -650,7 +650,7 @@ impl MicroParquetApp {
                     tab.id,
                     self.selected_column.as_deref(),
                     &marks,
-                    Some(&view),
+                    if self.show_summary_row { Some(&view) } else { None },
                 );
             });
         }

@@ -138,6 +138,8 @@ pub struct MicroParquetApp {
     show_steps_sidebar: bool,
     show_sql_bar: bool,
     show_chart_drawer: bool,
+    /// The summary row (selectors and values) under the column names; shown by default.
+    show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
     pub right_tab: RightTab,
     pub selected_column: Option<String>,
@@ -225,6 +227,7 @@ impl MicroParquetApp {
             show_steps_sidebar: true,
             show_sql_bar: false,
             show_chart_drawer: false,
+            show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
             selected_step: None,
@@ -398,6 +401,7 @@ impl MicroParquetApp {
             ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
             ui.checkbox(&mut self.show_sql_bar, "SQL scratchpad bar");
             ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
+            ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response
     }

@@ -28,7 +28,8 @@ The band under the column names that totals every column over the whole result (
 1. Open the tab. Look at the selector row under the column names (it shows the current summary, for example "Sum").
 2. Click the selector of a column and choose None, Count, Count distinct, Sum, Average, Min, Max or W.Avg. For W.Avg also choose the weight column.
 3. Read the value in the dark band under the selectors. Hover it for the reason when it shows "—".
-4. Export to Excel or PDF: the choices are carried into the export.
+4. To hide the summary row (the selectors and the dark band) and give the table more room, press Ctrl+K and choose "Show/hide summary row" (or untick "Summary row" in the View menu). Run it again to bring the row back; your choices are kept while it is hidden.
+5. Export to Excel or PDF: the choices are carried into the export.
 
 ## 6. What you get
 

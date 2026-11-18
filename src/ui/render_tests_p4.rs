@@ -1257,3 +1257,27 @@ fn i7_the_curves_manager_warns_about_a_stored_curve_and_save_as_new_date_keeps_t
         micro_parquet::curves::set_curves_dir_override(None);
     }
 }
+
+#[test]
+fn i13_show_hide_summary_row_is_a_command_that_removes_and_restores_the_summary_band() {
+    let cmd = micro_parquet::commands::command(CommandId::ToggleSummary).expect("the command exists");
+    assert_eq!(cmd.title, "Show/hide summary row");
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("pr6i13", ppp, w, h, 0);
+        let what = rig.what.clone();
+        rig.draw(6);
+        let id = rig.app.tabs[0].id;
+        let bands = |rig: &Rig| crate::ui::table::grid_report(&rig.ctx, id).map(|r| r.summary.len()).unwrap_or(0);
+        assert!(rig.app.show_summary_row, "{what}: shown by default");
+        assert!(bands(&rig) > 0, "{what}: the summary band is drawn");
+        rig.app.run_command(&rig.ctx, CommandId::ToggleSummary);
+        rig.draw(4);
+        assert!(!rig.app.show_summary_row, "{what}");
+        assert_eq!(bands(&rig), 0, "{what}: no summary band after the command");
+        // the Ctrl+K search finds it by its title
+        assert!(micro_parquet::commands::COMMANDS.iter().any(|c| c.title.to_lowercase().contains("summary row")), "{what}");
+        rig.app.run_command(&rig.ctx, CommandId::ToggleSummary);
+        rig.draw(4);
+        assert!(bands(&rig) > 0, "{what}: back again");
+    }
+}
