@@ -351,3 +351,35 @@ fn b3_an_overdue_amount_above_zero_with_a_blank_date_stops_the_run_with_the_coun
     let bare: TransformStep = serde_json::from_str(r#"{"ClassifyOverdue":{"cutoff_date":"2026-10-31"}}"#).expect("loads");
     assert!(matches!(bare, TransformStep::ClassifyOverdue { overdue_amount_col: None, .. }));
 }
+
+// ---------------------------------------------------------------- D6: days past due out of range, date overflow
+
+#[test]
+fn d6_days_past_due_outside_0_to_36500_and_dates_outside_the_calendar_stop_the_step_without_a_panic() {
+    let n = 7;
+    // 1e15 days past due on 7 rows: the count and the first 5 account numbers
+    let df = DataFrame::new(vec![acct(n), Series::new("DPD".into(), vec![1e15f64; n])]).expect("book");
+    let e = format!("{:#}", run("d6a", &df, &step(None, Some("DPD"), None, None, "2026-10-31")).err().expect("too many days"));
+    assert!(e.contains("the days past due in 'DPD' is above 36,500 (about 100 years) on 7 row(s)"), "{e}");
+    assert!(e.contains("the first 5 values of Account_No: A1, A2, A3, A4, A5") && !e.contains("A6"), "{e}");
+    // 36,500 is accepted (100 years: B/L), 36,501 is not
+    let df = DataFrame::new(vec![acct(2), Series::new("DPD".into(), &[36_500.0, 36_501.0])]).expect("book");
+    let e = format!("{:#}", run("d6b", &df, &step(None, Some("DPD"), None, None, "2026-10-31")).err().expect("36,501"));
+    assert!(e.contains("above 36,500") && e.contains("on 1 row(s)") && e.contains("A2") && !e.contains("A1"), "{e}");
+    let df = DataFrame::new(vec![acct(1), Series::new("DPD".into(), &[36_500.0])]).expect("book");
+    let out = run("d6c", &df, &step(None, Some("DPD"), None, None, "2026-10-31")).expect("36,500 runs");
+    assert_eq!(strings(&out, "CL_Final"), vec![Some("B/L".to_string())]);
+    // an integer column far out, a negative infinity and a NaN
+    let df = DataFrame::new(vec![acct(3), Series::new("DPD".into(), &[f64::INFINITY, f64::NAN, -1.0])]).expect("book");
+    let e = format!("{:#}", run("d6d", &df, &step(None, Some("DPD"), None, None, "2026-10-31")).err().expect("not finite"));
+    assert!(e.contains("not a whole number of days") && e.contains("negative"), "{e}");
+    // a date column holding a day number the calendar cannot show
+    let far = Series::new("Since".into(), &[2_000_000_000i32, -2_000_000_000, 20_000]).cast(&DataType::Date).expect("Date");
+    let df = DataFrame::new(vec![acct(3), far]).expect("book");
+    let e = format!("{:#}", run("d6e", &df, &step(Some("Since"), None, None, None, "2026-10-31")).err().expect("outside the calendar"));
+    assert!(e.contains("the overdue-since date in 'Since' is outside the calendar on 2 row(s)") && e.contains("A1, A2"), "{e}");
+    // a cutoff far in the past with a large DPD gives a date outside the calendar: also a stop
+    let df = DataFrame::new(vec![acct(1), Series::new("DPD".into(), &[36_500.0])]).expect("book");
+    let e = format!("{:#}", run("d6f", &df, &step(None, Some("DPD"), None, None, "0001-01-05")).err().expect("calendar start"));
+    assert!(e.contains("outside the calendar") || e.contains("no cl_overdue file"), "{e}");
+}

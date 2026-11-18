@@ -80,7 +80,7 @@ Test: `guide_classify_by_overdue`
 - "CL status column 'X' has codes not in cl_code_map.json …" (for the override column). Use a sub-grade code or add the code to `cl_code_map.json`.
 - "Classify by overdue: the overdue-since date is after the cutoff … on N row(s); the first 5 values of Account_No: …" The date is later than the cutoff date: fix the data or the cutoff.
 - "… the overdue amount in 'X' is above 0 but the overdue date (or days past due) is blank …" Fill the date for those accounts (the first 5 are named).
-- "… the days past due in 'X' is negative / is not a whole number of days …" Fix the data.
+- "… the days past due in 'X' is negative / is not a whole number of days / is above 36,500 (about 100 years) …", "… the overdue-since date in 'X' is outside the calendar …" Fix the data.
 - "… is String, not a date" / "… not a number." Set the column type in Schema & Ingestion.
 - "There is no cl_overdue file dated on or before the cutoff …" The cutoff is before 1 April 2025, or the folder has no file; add one.
 - "The rule file … must grow", "… is not one of STD-0, …" The rule file is edited wrongly; fix it or delete it to get the built-in copy back.

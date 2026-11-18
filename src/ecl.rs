@@ -325,7 +325,7 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
         DataType::Date | DataType::Datetime(_, _) => {
             let days = mat_col.cast(&DataType::Date)?.cast(&DataType::Int32)?;
             let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).ok_or_else(|| anyhow!("calendar"))?;
-            days.i32()?.into_iter().map(|d| d.map(|d| epoch + chrono::Duration::days(d as i64))).collect()
+            days.i32()?.into_iter().map(|d| d.and_then(|d| chrono::TimeDelta::try_days(d as i64).and_then(|t| epoch.checked_add_signed(t)))).collect()
         }
         other => bail!("{}: the maturity column '{}' is {}, not a date. Set it to a Date type in the Schema & Ingestion settings.", who, spec.maturity_col, other),
     };

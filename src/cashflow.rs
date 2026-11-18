@@ -812,7 +812,7 @@ pub fn rows_from_lazy(lf: LazyFrame, spec: &CfInputSpec, settings: &CfSettings, 
         }
     };
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).ok_or_else(|| anyhow!("calendar"))?;
-    let to_date = |d: i32| epoch + chrono::Duration::days(d as i64);
+    let to_date = |d: i32| chrono::TimeDelta::try_days(d as i64).and_then(|t| epoch.checked_add_signed(t));
     let default_cur = spec.default_currency.trim().to_uppercase();
 
     let mut issues = Issues::default();
@@ -887,8 +887,8 @@ pub fn rows_from_lazy(lf: LazyFrame, spec: &CfInputSpec, settings: &CfSettings, 
             }
             Some(t) => t.trim().to_uppercase(),
         };
-        let maturity = mat.get(i).copied().flatten().map(to_date);
-        let reprice = rep.as_ref().and_then(|v| v.get(i).copied().flatten()).map(to_date);
+        let maturity = mat.get(i).copied().flatten().and_then(to_date);
+        let reprice = rep.as_ref().and_then(|v| v.get(i).copied().flatten()).and_then(to_date);
         let rate_v = match &rate {
             Some(r) => r.get(i).copied().flatten().filter(|v| v.is_finite()),
             None => Some(0.0),

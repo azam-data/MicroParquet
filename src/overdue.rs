@@ -22,6 +22,9 @@ pub const GRADES: [&str; 7] = ["STD-0", "STD-1", "STD-2", "SMA", "SS", "DF", "B/
 /// The output columns.
 pub const OUT_COLUMNS: [&str; 4] = ["Overdue_Months", "CL_Objective", "CL_Final", "CL_Rule_File"];
 
+/// The most days past due the step accepts (100 years); more is a data error.
+pub const MAX_DPD: f64 = 36_500.0;
+
 pub const CATEGORY_MAP_FILE: &str = "loan_category_map.json";
 
 /// The version of the shipped category map.
@@ -331,7 +334,12 @@ pub fn classify_df(df: &DataFrame, spec: &OverdueSpec, rules: &RuleFile<OverdueF
             }
             let days = c.cast(&DataType::Date)?.cast(&DataType::Int32)?;
             for (i, d) in days.i32()?.into_iter().enumerate() {
-                since[i] = d.map(|d| epoch() + chrono::Duration::days(d as i64));
+                if let Some(d) = d {
+                    match chrono::TimeDelta::try_days(d as i64).and_then(|t| epoch().checked_add_signed(t)) {
+                        Some(date) => since[i] = Some(date),
+                        None => problems.add(&format!("the overdue-since date in '{}' is outside the calendar", sc), || keys[i].clone()),
+                    }
+                }
             }
         }
         (None, Some(dc)) => {
@@ -346,7 +354,11 @@ pub fn classify_df(df: &DataFrame, spec: &OverdueSpec, rules: &RuleFile<OverdueF
                     None => {}
                     Some(x) if !x.is_finite() || x.fract() != 0.0 => problems.add(&format!("the days past due in '{}' is not a whole number of days", dc), || keys[i].clone()),
                     Some(x) if x < 0.0 => problems.add(&format!("the days past due in '{}' is negative", dc), || keys[i].clone()),
-                    Some(x) => since[i] = cutoff.checked_sub_signed(chrono::Duration::days(x as i64)),
+                    Some(x) if x > MAX_DPD => problems.add(&format!("the days past due in '{}' is above {} (about 100 years)", dc, "36,500"), || keys[i].clone()),
+                    Some(x) => match chrono::TimeDelta::try_days(x as i64).and_then(|t| cutoff.checked_sub_signed(t)) {
+                        Some(date) => since[i] = Some(date),
+                        None => problems.add(&format!("the days past due in '{}' gives a date outside the calendar", dc), || keys[i].clone()),
+                    },
                 }
             }
         }
