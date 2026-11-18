@@ -228,35 +228,335 @@ pub fn apply_rate_shock_sim(
     shock_bps: f64,
     side_col: Option<&str>,
 ) -> Result<LazyFrame> {
-    let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d")
-        .context("Cutoff Date must be YYYY-MM-DD")?;
-    let lf = ensure_date(lf, mat_col)?;
-    let (lf, sign) = direction_sign(lf, side_col)?;
+    let spec = RateShockSpec {
+        bal_col: bal_col.to_string(),
+        rate_col: rate_col.to_string(),
+        mat_col: mat_col.to_string(),
+        cutoff_date: cutoff_date.to_string(),
+        shock_bps,
+        side_col: side_col.map(str::to_string),
+        reprice_col: None,
+        beta_file: None,
+        product_col: None,
+        floor_pct: None,
+    };
+    apply_rate_shock_with(lf, &spec, &[])
+}
+
+/// Everything the rate-shock step takes (the dialog, the step and the repricing-gap tab share it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateShockSpec {
+    pub bal_col: String,
+    pub rate_col: String,
+    pub mat_col: String,
+    pub cutoff_date: String,
+    pub shock_bps: f64,
+    pub side_col: Option<String>,
+    pub reprice_col: Option<String>,
+    pub beta_file: Option<String>,
+    pub product_col: Option<String>,
+    pub floor_pct: Option<f64>,
+}
+
+fn given(c: &Option<String>) -> Option<&str> {
+    c.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The beta of each row, as the share of the shock its rate follows: 1.0 for a product that is
+/// not in the file (and for a row with no product).
+fn beta_factor_expr(product_col: &str, betas: &[crate::betas::BetaRow], shock_is_fall: bool) -> Expr {
+    let code = normalise_code_expr(col(product_col));
+    betas.iter().rev().fold(lit(1.0), |acc, r| when(code.clone().eq(lit(r.product.clone()))).then(lit(if shock_is_fall { r.down } else { r.up })).otherwise(acc))
+}
+
+/// A single beta per product (the same up and down).
+pub fn single_betas(betas: &[(String, f64)]) -> Vec<crate::betas::BetaRow> {
+    betas.iter().map(|(k, b)| crate::betas::BetaRow { product: k.clone(), base: *b, up: *b, down: *b }).collect()
+}
+
+/// The (product, beta) pairs of beta rows, for counting the products a file does not list.
+pub fn beta_pairs(rows: &[crate::betas::BetaRow]) -> Vec<(String, f64)> {
+    rows.iter().map(|r| (r.product.clone(), r.base)).collect()
+}
+
+/// How many rows have a product the beta file does not list (a blank product is one of them).
+pub fn count_unmapped_products(lf: LazyFrame, product_col: &str, betas: &[(String, f64)]) -> Result<usize> {
+    let known = betas.iter().fold(lit(false), |acc, (k, _)| acc.or(normalise_code_expr(col(product_col)).eq(lit(k.clone()))));
+    let df = lf
+        .select([known.fill_null(lit(false)).not().cast(DataType::Int64).sum().alias("n")])
+        .collect()
+        .with_context(|| format!("Could not check the products of '{}' against the beta file", product_col))?;
+    Ok(df.column("n")?.i64()?.get(0).unwrap_or(0) as usize)
+}
+
+/// The effective repricing date of each row as days since 1970 (null when there is none): the
+/// earlier of the repricing date and the maturity, or the maturity when there is no repricing date.
+fn effective_days_expr(spec: &RateShockSpec) -> Expr {
+    let mat = col(spec.mat_col.as_str()).cast(DataType::Int32).cast(DataType::Int64);
+    match given(&spec.reprice_col) {
+        None => mat,
+        Some(r) => {
+            let rep = col(r).cast(DataType::Int32).cast(DataType::Int64);
+            when(rep.clone().is_null())
+                .then(mat.clone())
+                .when(mat.clone().is_null())
+                .then(rep.clone())
+                .when(rep.clone().lt_eq(mat.clone()))
+                .then(rep)
+                .otherwise(mat)
+        }
+    }
+}
+
+/// The column that most likely holds the account number (Actnum, Account No, A/C ...), for messages that list accounts.
+pub fn guess_account_column(names: &[String]) -> Option<String> {
+    const WORDS: [&str; 7] = ["actnum", "acctnum", "acct_no", "account", "a/c", "acno", "ac_no"];
+    names.iter().find(|n| {
+        let l = n.to_lowercase();
+        WORDS.iter().any(|w| l.contains(w))
+    }).cloned()
+}
+
+/// With a floor, a row with no current rate cannot be checked against it: stop with the count and
+/// the first 5 account numbers (the rows are numbered when no column looks like an account number).
+fn check_blank_rates_for_floor(lf: LazyFrame, spec: &RateShockSpec, floor: f64) -> Result<()> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for the floor check")?;
+    if schema.get(spec.rate_col.as_str()).is_none() {
+        return Ok(()); // the step reports the missing column itself
+    }
+    let names: Vec<String> = schema.iter_names().map(|n| n.to_string()).collect();
+    let acct = guess_account_column(&names);
+    let blank = lf.with_row_index("__row", Some(1)).filter(col(spec.rate_col.as_str()).cast(DataType::Float64).is_null());
+    let n = blank
+        .clone()
+        .select([len().cast(DataType::Int64).alias("n")])
+        .collect()
+        .context("Could not check the current rates against the floor")?
+        .column("n")?
+        .i64()?
+        .get(0)
+        .unwrap_or(0);
+    if n == 0 {
+        return Ok(());
+    }
+    let mut cols = vec![col("__row").cast(DataType::Int64)];
+    if let Some(a) = &acct {
+        cols.push(col(a.as_str()).cast(DataType::String).alias("__acct"));
+    }
+    let first = blank.select(cols).limit(5).collect().context("Could not list the rows without a current rate")?;
+    let rows: Vec<i64> = first.column("__row")?.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect();
+    let items: Vec<String> = match &acct {
+        Some(_) => {
+            let a: Vec<Option<String>> = first.column("__acct")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+            a.into_iter().zip(&rows).map(|(v, r)| match v.filter(|t| !t.trim().is_empty()) {
+                Some(t) => t,
+                None => format!("(row {r})"),
+            }).collect()
+        }
+        None => rows.iter().map(|r| format!("row {r}")).collect(),
+    };
+    bail!(
+        "ΔNII: {} row(s) have no current rate in '{}', and a floor of {}% is set, so their shocked rate cannot be checked against it. First {} {}: {}. Fill in the rate on those rows, or remove the floor.",
+        n,
+        spec.rate_col,
+        floor,
+        items.len(),
+        if acct.is_some() { "account number(s)" } else { "row(s)" },
+        items.join(", ")
+    );
+}
+
+/// ΔNII with the options of Phase 4 V5. `betas` is the content of the beta file (`spec.beta_file`
+/// is read by the caller, so a test or a headless run needs no folder). With no option set the
+/// result is exactly what the step gave before.
+///
+/// * `reprice_col`: a deal reprices on the earlier of that date and its maturity.
+/// * betas: the shock is multiplied by the product's pass-through; an unmapped product passes 100%.
+/// * `floor_pct`: a fall in the rate stops at the floor; the change is cut to what fits.
+pub fn apply_rate_shock_with(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<LazyFrame> {
+    apply_rate_shock_betas(lf, spec, &single_betas(betas))
+}
+
+/// `apply_rate_shock_with` with a beta for a rise and one for a fall per product: a shock that
+/// raises rates uses `up`, one that lowers them `down` (a file with one beta has the same for both).
+pub fn apply_rate_shock_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[crate::betas::BetaRow]) -> Result<LazyFrame> {
+    let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
+    let lf = ensure_date(lf, &spec.mat_col)?;
+    let lf = match given(&spec.reprice_col) {
+        Some(r) => ensure_date(lf, r)?,
+        None => lf,
+    };
+    let (lf, sign) = direction_sign(lf, spec.side_col.as_deref())?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let cutoff_days = (cutoff - epoch).num_days();
+    if let Some(f) = spec.floor_pct {
+        if !f.is_finite() {
+            bail!("ΔNII: the floor is not a number.");
+        }
+        check_blank_rates_for_floor(lf.clone(), spec, f)?;
+    }
+    if given(&spec.beta_file).is_some() && given(&spec.product_col).is_none() {
+        bail!("ΔNII: choose the product column the beta file is read against.");
+    }
 
-    let bal = col(bal_col).cast(DataType::Float64).fill_null(lit(0.0));
-    let rate = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0));
-    let shock_pct = shock_bps / 100.0;
+    let bal = col(spec.bal_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+    let rate = col(spec.rate_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+    let shock_pct = spec.shock_bps / 100.0;
 
-    let rem_days = col(mat_col).cast(DataType::Int32).cast(DataType::Int64) - lit(cutoff_days);
+    // days to the effective repricing date; blank maturity (no date at all) reprices at once
+    let repricing_weight = if given(&spec.reprice_col).is_none() {
+        let rem_days = col(spec.mat_col.as_str()).cast(DataType::Int32).cast(DataType::Int64) - lit(cutoff_days);
+        when(col(spec.mat_col.as_str()).is_null().or(rem_days.clone().lt_eq(lit(0))))
+            .then(lit(1.0))
+            .when(rem_days.clone().gt(lit(365)))
+            .then(lit(0.0))
+            .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0))
+    } else {
+        let eff = effective_days_expr(spec);
+        let rem_days = eff.clone() - lit(cutoff_days);
+        when(eff.is_null().or(rem_days.clone().lt_eq(lit(0))))
+            .then(lit(1.0))
+            .when(rem_days.clone().gt(lit(365)))
+            .then(lit(0.0))
+            .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0))
+    };
 
-    let repricing_weight = when(col(mat_col).is_null().or(rem_days.clone().lt_eq(lit(0))))
-        .then(lit(1.0))
-        .when(rem_days.clone().gt(lit(365)))
-        .then(lit(0.0))
-        .otherwise((lit(365.0) - rem_days.cast(DataType::Float64)) / lit(365.0));
-
-    let current_int = (bal.clone() * (rate / lit(100.0))).alias("Current_Annual_Int");
-    // Change in the interest amount (income on assets, expense on liabilities), always >= 0 for a rise.
-    let int_change = bal * repricing_weight * lit(shock_pct / 100.0);
-    // NII effect: a rate rise adds income on assets (+) and adds cost on liabilities (-).
+    let current_int = (bal.clone() * (rate.clone() / lit(100.0))).alias("Current_Annual_Int");
+    // the change in the rate, as a fraction: the shock, times the pass-through, cut by the floor
+    let rate_change: Expr = if given(&spec.beta_file).is_none() && spec.floor_pct.is_none() {
+        lit(shock_pct / 100.0)
+    } else {
+        let beta = match (given(&spec.beta_file), given(&spec.product_col)) {
+            (Some(_), Some(p)) => beta_factor_expr(p, betas, spec.shock_bps < 0.0),
+            _ => lit(1.0),
+        };
+        let delta = lit(shock_pct) * beta;
+        let delta = match spec.floor_pct {
+            // a fall stops at the floor; a rate already at or under it does not fall; a rise is untouched
+            Some(f) => when(delta.clone().lt(lit(0.0)))
+                .then(when((lit(f) - rate.clone()).gt(delta.clone())).then(lit(f) - rate.clone()).otherwise(delta.clone()).clip_max(lit(0.0)))
+                .otherwise(delta),
+            None => delta,
+        };
+        delta / lit(100.0)
+    };
+    // Change in the interest amount (income on assets, expense on liabilities).
+    let int_change = bal * repricing_weight * rate_change;
     let nii_impact = (int_change.clone() * sign).alias("NII_Impact_BDT");
     let shocked_int = (col("Current_Annual_Int") + int_change).alias("Shocked_Annual_Int");
 
-    Ok(lf
-        .with_columns([current_int, nii_impact])
-        .with_column(shocked_int))
+    Ok(lf.with_columns([current_int, nii_impact]).with_column(shocked_int))
+}
+
+// ----------------------------------------------------------------------------- repricing gap
+
+/// The buckets of the repricing-gap summary, nearest first.
+pub const REPRICING_BUCKETS: [&str; 5] = ["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m"];
+pub const REPRICING_TOTAL_ROW: &str = "Total";
+
+/// The note under the repricing-gap table: rows that have neither a maturity nor a repricing date.
+pub fn repricing_no_date_note(n: i64) -> String {
+    format!("{} {} with no maturity or repricing date placed in 0\u{2013}1m (contractual)", n, if n == 1 { "row" } else { "rows" })
+}
+
+/// The repricing-gap summary of a book: for each repricing bucket the assets, the liabilities
+/// (negative), their sum (the gap), the cumulative gap and the ΔNII of the shock (with the same
+/// reprice date, betas and floor as the step), then a Total row. Rows that reprice at once
+/// (blank date, or a date on or before the cutoff) are in the first bucket; days to the
+/// effective repricing date 1 to 30, 31 to 90, 91 to 180 and 181 to 365 are in the next four,
+/// later or never in the last.
+pub fn build_repricing_gap(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<DataFrame> {
+    build_repricing_gap_betas(lf, spec, &single_betas(betas))
+}
+
+/// `build_repricing_gap` with up and down betas.
+pub fn build_repricing_gap_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[crate::betas::BetaRow]) -> Result<DataFrame> {
+    let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
+    let cutoff_days = days_since_epoch(cutoff);
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for the repricing gap")?;
+    let dt = schema.get(spec.bal_col.as_str()).cloned().ok_or_else(|| anyhow!("Column '{}' was not found. Choose the balance column again.", spec.bal_col))?;
+    if !dt.is_numeric() {
+        bail!("The balance column '{}' is {}, not a number. Set it to a number in the schema first.", spec.bal_col, dt);
+    }
+    let shocked = apply_rate_shock_betas(lf, spec, betas)?;
+    let (shocked, sign) = direction_sign(shocked, spec.side_col.as_deref())?;
+    let _ = sign;
+    let eff = effective_days_expr(spec);
+    let eff_for_count = eff.clone();
+    let rem = eff.clone() - lit(cutoff_days);
+    let bucket = when(eff.is_null().or(rem.clone().lt_eq(lit(0))))
+        .then(lit(0i32))
+        .when(rem.clone().lt_eq(lit(30)))
+        .then(lit(0i32))
+        .when(rem.clone().lt_eq(lit(90)))
+        .then(lit(1i32))
+        .when(rem.clone().lt_eq(lit(180)))
+        .then(lit(2i32))
+        .when(rem.lt_eq(lit(365)))
+        .then(lit(3i32))
+        .otherwise(lit(4i32))
+        .alias("__bucket");
+    let bal = col(spec.bal_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+    let side = match spec.side_col.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => side_sign_expr(col(s)),
+        None => lit(1.0),
+    };
+    let df = shocked
+        .with_column(bucket)
+        .group_by([col("__bucket")])
+        .agg([
+            when(side.clone().gt(lit(0.0))).then(bal.clone()).otherwise(lit(0.0)).sum().alias("__a"),
+            when(side.lt(lit(0.0))).then(bal).otherwise(lit(0.0)).sum().alias("__l"),
+            col("NII_Impact_BDT").sum().alias("__n"),
+            eff_for_count.is_null().cast(DataType::Int64).sum().alias("__nodate"),
+        ])
+        .collect()
+        .context("Could not calculate the repricing gap")?;
+    // rows with neither a maturity nor a repricing date: placed in the first bucket (contractual)
+    let no_date: i64 = df.column("__nodate")?.i64()?.into_iter().map(|v| v.unwrap_or(0)).sum();
+    let idx: Vec<Option<i32>> = df.column("__bucket")?.i32()?.into_iter().collect();
+    let (a, l, n) = (df.column("__a")?.f64()?, df.column("__l")?.f64()?, df.column("__n")?.f64()?);
+    let mut assets = [0.0f64; 5];
+    let mut liabs = [0.0f64; 5];
+    let mut nii = [0.0f64; 5];
+    for (i, b) in idx.iter().enumerate() {
+        let Some(b) = b else { continue };
+        let b = (*b).clamp(0, 4) as usize;
+        assets[b] += a.get(i).unwrap_or(0.0);
+        liabs[b] -= l.get(i).unwrap_or(0.0);
+        nii[b] += n.get(i).unwrap_or(0.0);
+    }
+    let gap: Vec<f64> = assets.iter().zip(&liabs).map(|(x, y)| x + y).collect();
+    let mut run = 0.0;
+    let cum: Vec<f64> = gap.iter().map(|g| { run += g; run }).collect();
+    let mut names: Vec<String> = REPRICING_BUCKETS.iter().map(|s| s.to_string()).collect();
+    names.push(REPRICING_TOTAL_ROW.to_string());
+    // a note row under the table when some rows have no date at all
+    let note = (no_date > 0).then(|| repricing_no_date_note(no_date));
+    if let Some(n) = &note {
+        names.push(n.clone());
+    }
+    let extra = usize::from(note.is_some());
+    let with_total = |v: &[f64]| -> Vec<Option<f64>> {
+        let mut o: Vec<Option<f64>> = v.iter().map(|x| Some(*x)).collect();
+        o.push(Some(v.iter().sum()));
+        o.extend(std::iter::repeat(None).take(extra));
+        o
+    };
+    let mut cumulative: Vec<Option<f64>> = cum.iter().map(|x| Some(*x)).collect();
+    cumulative.push(None);
+    cumulative.extend(std::iter::repeat(None).take(extra));
+    DataFrame::new(vec![
+        Series::new("Repricing bucket".into(), names),
+        Series::new("Assets".into(), with_total(&assets)),
+        Series::new("Liabilities".into(), with_total(&liabs)),
+        Series::new("Gap".into(), with_total(&gap)),
+        Series::new("Cumulative gap".into(), cumulative),
+        Series::new("\u{394}NII (BDT)".into(), with_total(&nii)),
+    ])
+    .context("Could not arrange the repricing gap")
 }
 
 /// Feature B2: Automated FTP (Fund Transfer Pricing) Yield Curve Mapper using Tenor Days
@@ -1396,30 +1696,9 @@ pub fn apply_loan_classification_provision_with(
     };
 
     // 1. CL grade: every code must be in cl_code_map.json; unknown codes are an error, never 1%.
-    let bad = lf
-        .clone()
-        .select([col(cl_status_col).cast(DataType::String).alias("__cl")])
-        .filter(map_codes_expr(normalise_code_expr(col("__cl")), &config.cl_code_map).is_null())
-        .unique_stable(None, UniqueKeepStrategy::First)
-        .limit(20)
-        .collect()
-        .with_context(|| format!("Could not read the CL status column '{}'", cl_status_col))?;
-    if bad.height() > 0 {
-        let codes: Vec<String> = bad
-            .column("__cl")?
-            .str()?
-            .into_iter()
-            .map(|v| match v {
-                Some(s) if !s.trim().is_empty() => format!("'{}'", s),
-                _ => "(blank)".to_string(),
-            })
-            .collect();
-        bail!(
-            "CL status column '{}' has codes not in {}: {}. Add each code with its grade (STD, SMA, SS, DF or BL) to that file.",
-            cl_status_col,
-            CL_CODE_MAP_FILE,
-            codes.join(", ")
-        );
+    let bad = unmapped_cl_codes(&lf, cl_status_col, &config.cl_code_map)?;
+    if !bad.is_empty() {
+        bail!("{}", cl_code_error(cl_status_col, &bad));
     }
     let grade_expr = map_codes_expr(normalise_code_expr(col(cl_status_col)), &config.cl_code_map);
 
@@ -1548,4 +1827,725 @@ pub fn apply_loan_limit_utilization(
     Ok(lf
         .with_columns([util_pct, undrawn, over_limit])
         .with_columns([ccf_equiv, status_flag]))
+}
+
+/// The CL codes of `column` that `cl_map` does not know (at most 20, as they are written in the
+/// data; a blank is "(blank)").
+pub fn unmapped_cl_codes(lf: &LazyFrame, column: &str, cl_map: &[(String, String)]) -> Result<Vec<String>> {
+    let bad = lf
+        .clone()
+        .select([col(column).cast(DataType::String).alias("__cl")])
+        .filter(map_codes_expr(normalise_code_expr(col("__cl")), cl_map).is_null())
+        .unique_stable(None, UniqueKeepStrategy::First)
+        .limit(20)
+        .collect()
+        .with_context(|| format!("Could not read the CL status column '{}'", column))?;
+    Ok(bad
+        .column("__cl")?
+        .str()?
+        .into_iter()
+        .map(|v| match v {
+            Some(s) if !s.trim().is_empty() => format!("'{}'", s),
+            _ => "(blank)".to_string(),
+        })
+        .collect())
+}
+
+/// The message for codes that are not in `cl_code_map.json` (the Phase 1 wording).
+pub fn cl_code_error(column: &str, codes: &[String]) -> String {
+    format!(
+        "CL status column '{}' has codes not in {}: {}. Add each code with its grade (STD, SMA, SS, DF or BL) to that file.",
+        column,
+        CL_CODE_MAP_FILE,
+        codes.join(", ")
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// CL migration matrix (Phase 4 V2)
+// ---------------------------------------------------------------------------------------------
+
+/// What the cells of the migration matrix hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MigrationMeasure {
+    /// Balance in BDT: the previous month's balance of an account that was there, the current
+    /// month's for a new one.
+    #[default]
+    Balance,
+    /// Number of accounts.
+    Count,
+}
+
+/// The row of accounts that exist only in the current month.
+pub const MIGRATION_NEW_ROW: &str = "New";
+/// The column of accounts that exist only in the previous month.
+pub const MIGRATION_CLOSED_COL: &str = "Closed/Repaid";
+/// The last row and column.
+pub const MIGRATION_TOTAL: &str = "Total";
+/// The row that adds up the five grades: the previous month's total.
+pub const MIGRATION_PREV_TOTAL_ROW: &str = "Previous month total";
+/// The same row when the balances are this month's: it then adds up this month's balances of the accounts that were there last month.
+pub const MIGRATION_PREV_TOTAL_ROW_CURRENT: &str = "Previous-month accounts (current balance)";
+/// The first column of the matrix (after "Segment", when there is one).
+pub const MIGRATION_ROW_HEADING: &str = "Previous grade";
+/// The label of the block that adds up all segments.
+pub const MIGRATION_ALL_SEGMENTS: &str = "All segments";
+
+/// The label of the row that adds up the five grades.
+pub fn migration_prev_total_label(basis: MigrationBasis) -> &'static str {
+    match basis {
+        MigrationBasis::Previous => MIGRATION_PREV_TOTAL_ROW,
+        MigrationBasis::Current => MIGRATION_PREV_TOTAL_ROW_CURRENT,
+    }
+}
+
+/// The grades in `cl_code_map.json` order.
+pub fn cl_grades() -> [&'static str; 5] {
+    CL_GRADES
+}
+
+/// How a cell of a result table is shaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shade {
+    None,
+    /// A limit is breached (the liquidity gap ladder).
+    Breach,
+    /// To a better grade.
+    Upgrade,
+    /// To a worse grade.
+    Downgrade,
+}
+
+/// Upgrade (to a grade earlier in STD, SMA, SS, DF, BL), downgrade, or neither (the diagonal,
+/// New, Closed/Repaid, totals).
+pub fn migration_shade(from: &str, to: &str) -> Shade {
+    let rank = |g: &str| CL_GRADES.iter().position(|x| *x == g);
+    match (rank(from), rank(to)) {
+        (Some(a), Some(b)) if b < a => Shade::Upgrade,
+        (Some(a), Some(b)) if b > a => Shade::Downgrade,
+        _ => Shade::None,
+    }
+}
+
+/// Whose balance an account that is in both months carries in the matrix. A new account always
+/// uses the current month's balance and a closed/repaid one the previous month's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MigrationBasis {
+    /// Last month's balance (the default): the "Previous month total" row adds up to last month's total.
+    #[default]
+    Previous,
+    /// This month's balance.
+    Current,
+}
+
+impl MigrationBasis {
+    pub fn label(&self) -> &'static str {
+        match self {
+            MigrationBasis::Previous => "Previous month",
+            MigrationBasis::Current => "Current month",
+        }
+    }
+}
+
+/// The settings of a migration matrix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClMigrationSpec {
+    pub key_col: String,
+    pub bal_col: String,
+    pub cl_col: String,
+    pub segment_col: Option<String>,
+    pub measure: MigrationMeasure,
+    /// Each cell as a percentage of its row's total.
+    pub pct_of_row: bool,
+    /// Whose balance an account in both months carries.
+    pub balance_basis: MigrationBasis,
+}
+
+/// The migration matrix of two months, with the code map of `portable_data`.
+pub fn build_cl_migration(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrationSpec) -> Result<DataFrame> {
+    let cl_map = ProvisionConfig::load_or_create(&portable_root_dir())?.cl_code_map;
+    build_cl_migration_with(prev, curr, spec, &cl_map)
+}
+
+/// One account per row: its balance, its worst grade (the worst-graded row decides, as in the
+/// reconcile tool) and its segment.
+fn migration_per_key(lf: LazyFrame, spec: &ClMigrationSpec, cl_map: &[(String, String)], suffix: &str) -> LazyFrame {
+    let bal = format!("__bal_{suffix}");
+    let grade = format!("__grade_{suffix}");
+    let seg = format!("__seg_{suffix}");
+    let g = map_codes_expr(normalise_code_expr(col(spec.cl_col.as_str())), cl_map);
+    let mut rank: Expr = lit(NULL).cast(DataType::Int32);
+    for (i, name) in CL_GRADES.iter().enumerate().rev() {
+        rank = when(g.clone().eq(lit(*name))).then(lit(i as i32)).otherwise(rank);
+    }
+    let mut select = vec![
+        col(spec.key_col.as_str()).cast(DataType::String).alias("__key"),
+        col(spec.bal_col.as_str()).cast(DataType::Float64).alias(&bal),
+        g.alias("__g"),
+        rank.alias("__r"),
+    ];
+    if let Some(sc) = &spec.segment_col {
+        let t = col(sc.as_str()).cast(DataType::String).str().strip_chars(lit(NULL));
+        select.push(when(t.clone().is_null().or(t.clone().eq(lit("")))).then(lit(NULL).cast(DataType::String)).otherwise(t).alias("__seg"));
+    }
+    let mut agg = vec![
+        col(&bal).sum().alias(&bal),
+        col("__g")
+            .sort_by(
+                [col("__r"), col(&bal)],
+                SortMultipleOptions::default().with_order_descending_multi([true, true]).with_nulls_last(true).with_maintain_order(true),
+            )
+            .first()
+            .alias(&grade),
+    ];
+    if spec.segment_col.is_some() {
+        agg.push(col("__seg").drop_nulls().first().alias(&seg));
+    }
+    lf.select(select).group_by([col("__key")]).agg(agg)
+}
+
+/// The migration matrix with an explicit code map: rows = the previous month's grade (STD, SMA,
+/// SS, DF, BL), then "New" (only in the current month); columns = the current month's grade, then
+/// "Closed/Repaid" (only in the previous month). A code that is not in the map is an error that
+/// lists it. With a segment column there is one block per segment and a last block for all.
+pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrationSpec, cl_map: &[(String, String)]) -> Result<DataFrame> {
+    let (mut prev, mut curr) = (prev, curr);
+    for (name, lf) in [("previous month", &mut prev), ("current month", &mut curr)] {
+        let schema = lf.collect_schema().with_context(|| format!("Could not read the columns of the {name}"))?;
+        let mut wanted = vec![spec.key_col.as_str(), spec.bal_col.as_str(), spec.cl_col.as_str()];
+        if let Some(sc) = &spec.segment_col {
+            wanted.push(sc.as_str());
+        }
+        for c in wanted {
+            if schema.get(c).is_none() {
+                bail!("CL migration: the {} has no column '{}'. Choose columns that both months have.", name, c);
+            }
+        }
+        let dt = schema.get(spec.bal_col.as_str()).cloned().unwrap_or(DataType::String);
+        if !dt.is_numeric() {
+            bail!("CL migration: the balance column '{}' of the {} is {}, not a number. Set it to a number in the schema first.", spec.bal_col, name, dt);
+        }
+        let blank_keys = lf
+            .clone()
+            .filter(col(spec.key_col.as_str()).is_null())
+            .select([len().alias("n")])
+            .collect()
+            .with_context(|| format!("Could not check the account keys of the {name}"))?
+            .column("n")?
+            .cast(&DataType::Int64)?
+            .i64()?
+            .get(0)
+            .unwrap_or(0);
+        if blank_keys > 0 {
+            bail!("CL migration: the account key column '{}' has {} blank value(s) in the {}. Every row needs an account key.", spec.key_col, blank_keys, name);
+        }
+    }
+    // unmapped codes of either month, in one message
+    let mut bad = unmapped_cl_codes(&prev, &spec.cl_col, cl_map)?;
+    for c in unmapped_cl_codes(&curr, &spec.cl_col, cl_map)? {
+        if !bad.contains(&c) {
+            bad.push(c);
+        }
+    }
+    if !bad.is_empty() {
+        bail!("{}", cl_code_error(&spec.cl_col, &bad));
+    }
+
+    let p = migration_per_key(prev, spec, cl_map, "p");
+    let c = migration_per_key(curr, spec, cl_map, "c");
+    let joined = p.join(c, [col("__key")], [col("__key")], JoinArgs::new(JoinType::Full).with_coalesce(JoinCoalesce::CoalesceColumns));
+    let from = col("__grade_p");
+    let to = col("__grade_c");
+    // A new account always carries this month's balance and a closed/repaid one last month's;
+    // an account in both months carries the one the basis says.
+    let cell_bal = match spec.balance_basis {
+        MigrationBasis::Previous => when(from.clone().is_not_null()).then(col("__bal_p")).otherwise(col("__bal_c")),
+        MigrationBasis::Current => when(to.clone().is_not_null()).then(col("__bal_c")).otherwise(col("__bal_p")),
+    }
+    .fill_null(lit(0.0));
+    let mut keys: Vec<Expr> = vec![from.clone().fill_null(lit(MIGRATION_NEW_ROW)).alias("__from"), to.clone().fill_null(lit(MIGRATION_CLOSED_COL)).alias("__to")];
+    if spec.segment_col.is_some() {
+        keys.push(col("__seg_c").fill_null(col("__seg_p")).fill_null(lit(crate::pivot_table::BLANK_LABEL)).alias("__seg"));
+    }
+    let mut group_by: Vec<Expr> = vec![col("__from"), col("__to")];
+    if spec.segment_col.is_some() {
+        group_by.push(col("__seg"));
+    }
+    let grouped = joined
+        .with_columns(keys)
+        .with_column(cell_bal.alias("__cell"))
+        .group_by(group_by)
+        .agg([col("__cell").sum().alias("__sum"), len().cast(DataType::Int64).alias("__n")])
+        .collect()
+        .context("Could not calculate the CL migration matrix")?;
+
+    let froms: Vec<Option<String>> = grouped.column("__from")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+    let tos: Vec<Option<String>> = grouped.column("__to")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+    let sums: Vec<Option<f64>> = grouped.column("__sum")?.f64()?.into_iter().collect();
+    let counts: Vec<Option<i64>> = grouped.column("__n")?.i64()?.into_iter().collect();
+    let segs: Vec<Option<String>> = if spec.segment_col.is_some() {
+        grouped.column("__seg")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect()
+    } else {
+        vec![None; grouped.height()]
+    };
+
+    // the blocks: one per segment (natural order), then all of them
+    let mut seg_names: Vec<String> = Vec::new();
+    if spec.segment_col.is_some() {
+        for s in segs.iter().flatten() {
+            if !seg_names.contains(s) {
+                seg_names.push(s.clone());
+            }
+        }
+        seg_names.sort_by(|a, b| crate::engine::natural_sort_key(a).cmp(&crate::engine::natural_sort_key(b)).then_with(|| a.cmp(b)));
+    }
+    let blocks: Vec<Option<String>> = if spec.segment_col.is_some() {
+        seg_names.iter().cloned().map(Some).chain(std::iter::once(Some(MIGRATION_ALL_SEGMENTS.to_string()))).collect()
+    } else {
+        vec![None]
+    };
+
+    let col_labels: Vec<&str> = CL_GRADES.iter().copied().chain(std::iter::once(MIGRATION_CLOSED_COL)).collect();
+    let mut seg_out: Vec<String> = Vec::new();
+    let mut row_out: Vec<String> = Vec::new();
+    let mut values: Vec<Vec<Option<f64>>> = vec![Vec::new(); col_labels.len() + 1];
+    for block in &blocks {
+        // the matrix of this block: [row][col] of the measure
+        let mut m = vec![vec![0.0f64; col_labels.len()]; CL_GRADES.len() + 1];
+        for i in 0..grouped.height() {
+            let in_block = match block {
+                Some(b) if b == MIGRATION_ALL_SEGMENTS => true,
+                Some(b) => segs[i].as_deref() == Some(b.as_str()),
+                None => true,
+            };
+            if !in_block {
+                continue;
+            }
+            let (Some(f), Some(t)) = (froms[i].as_deref(), tos[i].as_deref()) else {
+                continue;
+            };
+            let r = if f == MIGRATION_NEW_ROW { Some(CL_GRADES.len()) } else { CL_GRADES.iter().position(|g| *g == f) };
+            let c = col_labels.iter().position(|g| *g == t);
+            if let (Some(r), Some(c)) = (r, c) {
+                m[r][c] += match spec.measure {
+                    MigrationMeasure::Balance => sums[i].unwrap_or(0.0),
+                    MigrationMeasure::Count => counts[i].unwrap_or(0) as f64,
+                };
+            }
+        }
+        // rows: the five grades, the previous month's total, New, the grand total
+        let grade_rows: Vec<Vec<f64>> = m[..CL_GRADES.len()].to_vec();
+        let prev_total: Vec<f64> = (0..col_labels.len()).map(|c| grade_rows.iter().map(|r| r[c]).sum()).collect();
+        let new_row = m[CL_GRADES.len()].clone();
+        let grand: Vec<f64> = prev_total.iter().zip(new_row.iter()).map(|(a, b)| a + b).collect();
+        let mut lines: Vec<(String, Vec<f64>)> = CL_GRADES.iter().zip(grade_rows).map(|(g, r)| (g.to_string(), r)).collect();
+        lines.push((migration_prev_total_label(spec.balance_basis).to_string(), prev_total));
+        lines.push((MIGRATION_NEW_ROW.to_string(), new_row));
+        lines.push((MIGRATION_TOTAL.to_string(), grand));
+        for (label, cells) in lines {
+            let total: f64 = cells.iter().sum();
+            seg_out.push(block.clone().unwrap_or_default());
+            row_out.push(label);
+            for (c, v) in cells.iter().enumerate() {
+                values[c].push(Some(if spec.pct_of_row { if total != 0.0 { v / total * 100.0 } else { 0.0 } } else { *v }));
+            }
+            values[col_labels.len()].push(Some(if spec.pct_of_row { if total != 0.0 { 100.0 } else { 0.0 } } else { total }));
+        }
+    }
+    let mut series: Vec<Series> = Vec::new();
+    if spec.segment_col.is_some() {
+        series.push(Series::new("Segment".into(), seg_out));
+    }
+    series.push(Series::new(MIGRATION_ROW_HEADING.into(), row_out));
+    let names: Vec<&str> = col_labels.iter().copied().chain(std::iter::once(MIGRATION_TOTAL)).collect();
+    for (name, vals) in names.iter().zip(values) {
+        if spec.measure == MigrationMeasure::Count && !spec.pct_of_row {
+            let ints: Vec<Option<i64>> = vals.iter().map(|v| v.map(|x| x.round() as i64)).collect();
+            series.push(Series::new((*name).into(), ints));
+        } else {
+            series.push(Series::new((*name).into(), vals));
+        }
+    }
+    DataFrame::new(series).context("Could not arrange the CL migration matrix")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Liquidity gap ladder (Phase 4 V3)
+// ---------------------------------------------------------------------------------------------
+
+/// How the rows of one tab count in the ladder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GapRole {
+    /// Every row is an asset (an inflow).
+    Asset,
+    /// Every row is a liability (an outflow).
+    Liability,
+    /// A column says which: A / ASSET for assets; L / LIABILITY / DEPOSIT / BORROWING for liabilities.
+    Side(String),
+}
+
+/// What a tab contributes to the ladder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GapInputSpec {
+    pub role: GapRole,
+    pub amount_col: String,
+    pub maturity_col: String,
+}
+
+/// One minimum cumulative gap, in percent of total assets, for one bucket.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct GapLimit {
+    pub bucket: String,
+    pub min_cumulative_gap_pct: f64,
+}
+
+/// `portable_data/gap_limits/<preset>.json`: the limits ALCO set for a bucket preset.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct GapLimitsFile {
+    #[serde(default)]
+    pub preset: String,
+    /// Where the limits come from (the ALCO paper, the circular).
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub effective_from: String,
+    #[serde(default)]
+    pub limits: Vec<GapLimit>,
+}
+
+/// The name of the folder of gap limit files.
+pub const GAP_LIMITS_DIR: &str = "gap_limits";
+/// The ladder's columns.
+pub const GAP_COLUMNS: [&str; 7] = [
+    "Bucket",
+    "Inflows",
+    "Outflows",
+    "Net gap",
+    "Cumulative gap",
+    "Net gap % of total assets",
+    "Cumulative gap % of total assets",
+];
+/// The label of the last row of the ladder: the sums of the inflows, outflows and net gap.
+pub const GAP_TOTAL_LABEL: &str = "Total";
+/// The row below the ladder (and its totals row) with the assets whose maturity has passed: they
+/// are not in any bucket, the totals or the cumulative gap.
+pub const GAP_OVERDUE_ASSETS_LABEL: &str = "Overdue assets (not in gap)";
+pub const GAP_LIMIT_COLUMN: &str = "Cumulative gap limit %";
+pub const GAP_BREACH_COLUMN: &str = "Breach";
+pub const GAP_BREACH_FLAG: &str = "BREACH";
+
+/// The limits file of a preset in `dir`.
+pub fn gap_limits_path(dir: &Path, preset_name: &str) -> std::path::PathBuf {
+    dir.join(format!("{}.json", crate::paths::sanitize_file_name(preset_name)))
+}
+
+/// The buckets of a preset in the order of the ladder: the sight bucket (or the long bucket for
+/// a blank maturity), the buckets by their day limit, the overflow bucket, then overdue; a label
+/// that appears twice is kept at its first place.
+pub fn gap_bucket_order(def: &crate::models::CustomBucketDef, null_as_sight: bool) -> Vec<String> {
+    let mut rules = def.rules.clone();
+    rules.sort_by_key(|r| r.max_days);
+    let mut order: Vec<String> = Vec::new();
+    let mut push = |l: &str| {
+        if !order.iter().any(|x| x == l) {
+            order.push(l.to_string());
+        }
+    };
+    if null_as_sight {
+        push(&def.null_sight_label);
+    }
+    for r in &rules {
+        push(&r.label);
+    }
+    push(&def.overflow_label);
+    if !null_as_sight {
+        push(&def.null_long_label);
+    }
+    push(&def.overdue_label);
+    order
+}
+
+/// Reads the limits of a preset. `None` when there is no file; a file that is not valid, lists a
+/// bucket the preset does not have, lists one twice or has a limit that is not a number is an
+/// error that says what to fix.
+pub fn load_gap_limits(dir: &Path, def: &crate::models::CustomBucketDef) -> Result<Option<GapLimitsFile>> {
+    let path = gap_limits_path(dir, &def.name);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let txt = std::fs::read_to_string(&path).with_context(|| format!("Could not read the gap limits file {}", path.display()))?;
+    let file: GapLimitsFile = serde_json::from_str(&txt).map_err(|e| anyhow!("The gap limits file {} is not valid: {}. Expected {{\"limits\": [{{\"bucket\": \"...\", \"min_cumulative_gap_pct\": -10}}]}}.", path.display(), e))?;
+    validate_gap_limits(&file, def, &path.display().to_string())?;
+    Ok(Some(file))
+}
+
+fn validate_gap_limits(file: &GapLimitsFile, def: &crate::models::CustomBucketDef, name: &str) -> Result<()> {
+    let known: Vec<String> = gap_bucket_order(def, true).into_iter().chain(gap_bucket_order(def, false)).collect();
+    let mut seen: Vec<&str> = Vec::new();
+    for l in &file.limits {
+        if !known.iter().any(|k| *k == l.bucket) {
+            bail!("The gap limits file {} has a limit for '{}', which is not a bucket of the preset '{}'. Use the bucket names exactly as the bucketer writes them.", name, l.bucket, def.name);
+        }
+        if seen.contains(&l.bucket.as_str()) {
+            bail!("The gap limits file {} has two limits for '{}'. Keep one.", name, l.bucket);
+        }
+        seen.push(&l.bucket);
+        if !l.min_cumulative_gap_pct.is_finite() {
+            bail!("The gap limits file {} has no valid number for the limit of '{}'.", name, l.bucket);
+        }
+    }
+    Ok(())
+}
+
+/// The liquidity gap ladder: for each bucket of the preset, the inflows (assets), the outflows
+/// (liabilities), the net gap, the cumulative gap and both as a percentage of total assets (the
+/// sum of all inflows). With limits, also the limit of each bucket and a BREACH flag where the
+/// cumulative gap % is below it. A blank maturity goes to the preset's sight bucket (or its long
+/// bucket). A maturity before the cutoff: a liability is an outflow of the first bucket (it still has
+/// to be paid, and counts in the cumulative gap); an asset is a separate row below the totals,
+/// "Overdue assets (not in gap)", outside the buckets, the totals and the cumulative gap.
+pub fn build_gap_ladder(
+    inputs: Vec<(LazyFrame, GapInputSpec)>,
+    def: &crate::models::CustomBucketDef,
+    cutoff_date: &str,
+    null_as_sight: bool,
+    limits: Option<&GapLimitsFile>,
+) -> Result<DataFrame> {
+    if inputs.is_empty() {
+        bail!("Gap ladder: add at least one tab (assets or liabilities).");
+    }
+    if let Some(l) = limits {
+        validate_gap_limits(l, def, "of this preset")?;
+    }
+    let mut parts: Vec<LazyFrame> = Vec::new();
+    for (lf, spec) in inputs {
+        let mut lf = lf;
+        let schema = lf.collect_schema().context("Could not read the columns of a tab of the gap ladder")?;
+        let amount_dt = schema.get(spec.amount_col.as_str()).cloned().ok_or_else(|| anyhow!("Gap ladder: a tab has no column '{}'. Choose its amount column again.", spec.amount_col))?;
+        if !amount_dt.is_numeric() {
+            bail!("Gap ladder: the amount column '{}' is {}, not a number. Set it to a number in the schema first.", spec.amount_col, amount_dt);
+        }
+        // +1 for an asset, -1 for a liability
+        let (lf, sign) = match &spec.role {
+            GapRole::Asset => (lf, lit(1.0)),
+            GapRole::Liability => (lf, lit(-1.0)),
+            GapRole::Side(c) => direction_sign(lf, Some(c))?,
+        };
+        let lf = apply_maturity_bucket(lf, &spec.maturity_col, cutoff_date, def, null_as_sight, "__bucket")?;
+        let amt = col(spec.amount_col.as_str()).cast(DataType::Float64).fill_null(lit(0.0));
+        parts.push(lf.select([
+            col("__bucket"),
+            when(sign.clone().gt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__in"),
+            when(sign.lt(lit(0.0))).then(amt).otherwise(lit(0.0)).alias("__out"),
+        ]));
+    }
+    let grouped = concat(parts, UnionArgs::default())?
+        .group_by([col("__bucket")])
+        .agg([col("__in").sum(), col("__out").sum()])
+        .collect()
+        .context("Could not calculate the gap ladder")?;
+    let names: Vec<Option<String>> = grouped.column("__bucket")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+    let ins: Vec<Option<f64>> = grouped.column("__in")?.f64()?.into_iter().collect();
+    let outs: Vec<Option<f64>> = grouped.column("__out")?.f64()?.into_iter().collect();
+    // the buckets of the ladder: the preset's order without its overdue bucket
+    let order: Vec<String> = gap_bucket_order(def, null_as_sight).into_iter().filter(|b| *b != def.overdue_label).collect();
+    if order.is_empty() {
+        bail!("Gap ladder: the preset '{}' has no bucket.", def.name);
+    }
+    let mut inflow = vec![0.0f64; order.len()];
+    let mut outflow = vec![0.0f64; order.len()];
+    let mut overdue_assets = 0.0f64;
+    for (i, n) in names.iter().enumerate() {
+        let Some(n) = n else { continue };
+        if *n == def.overdue_label {
+            // a matured liability still has to be paid: it is an outflow of the first bucket;
+            // a matured asset that is still unpaid is not an inflow of any bucket
+            outflow[0] += outs[i].unwrap_or(0.0);
+            overdue_assets += ins[i].unwrap_or(0.0);
+            continue;
+        }
+        let Some(pos) = order.iter().position(|o| o == n) else {
+            bail!("Gap ladder: the bucket '{}' is not in the preset '{}'.", n, def.name);
+        };
+        inflow[pos] += ins[i].unwrap_or(0.0);
+        outflow[pos] += outs[i].unwrap_or(0.0);
+    }
+    // total assets: every asset, those with a matured date included
+    let total_assets: f64 = inflow.iter().sum::<f64>() + overdue_assets;
+    let net: Vec<f64> = inflow.iter().zip(&outflow).map(|(a, b)| a - b).collect();
+    let mut cum = Vec::with_capacity(net.len());
+    let mut run = 0.0;
+    for n in &net {
+        run += n;
+        cum.push(run);
+    }
+    let pct = |x: f64| -> Option<f64> { if total_assets != 0.0 { Some(x / total_assets * 100.0) } else { None } };
+    let net_pct: Vec<Option<f64>> = net.iter().map(|x| pct(*x)).collect();
+    let cum_pct: Vec<Option<f64>> = cum.iter().map(|x| pct(*x)).collect();
+    // below the buckets: the totals row (inflows, outflows and net gap added up; the cumulative and %
+    // cells stay blank), then the matured assets that are not in the gap
+    let (sum_in, sum_out, sum_net): (f64, f64, f64) = (inflow.iter().sum(), outflow.iter().sum(), net.iter().sum());
+    let mut labels = order.clone();
+    labels.push(GAP_TOTAL_LABEL.to_string());
+    labels.push(GAP_OVERDUE_ASSETS_LABEL.to_string());
+    let money = |v: Vec<f64>, total: f64, overdue: Option<f64>| -> Vec<Option<f64>> {
+        let mut out: Vec<Option<f64>> = v.into_iter().map(Some).collect();
+        out.push(Some(total));
+        out.push(overdue);
+        out
+    };
+    let blanks = |v: Vec<Option<f64>>| -> Vec<Option<f64>> {
+        let mut v = v;
+        v.push(None);
+        v.push(None);
+        v
+    };
+    let mut series = vec![
+        Series::new(GAP_COLUMNS[0].into(), labels),
+        Series::new(GAP_COLUMNS[1].into(), money(inflow, sum_in, Some(overdue_assets))),
+        Series::new(GAP_COLUMNS[2].into(), money(outflow, sum_out, None)),
+        Series::new(GAP_COLUMNS[3].into(), money(net, sum_net, None)),
+        Series::new(GAP_COLUMNS[4].into(), blanks(cum.into_iter().map(Some).collect())),
+        Series::new(GAP_COLUMNS[5].into(), blanks(net_pct)),
+        Series::new(GAP_COLUMNS[6].into(), blanks(cum_pct.clone())),
+    ];
+    if let Some(l) = limits {
+        if total_assets == 0.0 && !l.limits.is_empty() {
+            bail!("Gap ladder: total assets are 0, so the limits (percent of total assets) cannot be checked. Add an asset tab with amounts.");
+        }
+        let limit_for = |b: &str| l.limits.iter().find(|x| x.bucket == b).map(|x| x.min_cumulative_gap_pct);
+        let lim: Vec<Option<f64>> = order.iter().map(|b| limit_for(b)).collect();
+        let breach: Vec<String> = lim.iter().zip(&cum_pct).map(|(l, c)| match (l, c) {
+            (Some(l), Some(c)) if c < l => GAP_BREACH_FLAG.to_string(),
+            _ => String::new(),
+        }).collect();
+        let mut lim = lim;
+        lim.extend([None, None]);
+        let mut breach = breach;
+        breach.extend([String::new(), String::new()]);
+        series.push(Series::new(GAP_LIMIT_COLUMN.into(), lim));
+        series.push(Series::new(GAP_BREACH_COLUMN.into(), breach));
+    }
+    DataFrame::new(series).context("Could not arrange the gap ladder")
+}
+
+// ---------------------------------------------------------------------------------------------
+// FTP with the dated curves of the store (Phase 4 V4)
+// ---------------------------------------------------------------------------------------------
+
+/// The `FTP_Note` of a deal priced on the earliest curve because it is older than every curve.
+pub const FTP_NOTE_EARLIEST: &str = "earliest curve used";
+/// The column that says which curve priced each deal.
+pub const FTP_CURVE_DATE_COLUMN: &str = "FTP_Curve_Date";
+/// The column that identifies the content of the curve that priced each deal (8 hex characters).
+pub const FTP_CURVE_ID_COLUMN: &str = "FTP_Curve_Id";
+
+fn days_since_epoch(d: NaiveDate) -> i64 {
+    (d - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or(NaiveDate::MIN)).num_days()
+}
+
+/// FTP rates from the dated curves of the store: `FixedDate` prices every deal on the curve dated
+/// on or before one date; `OriginationDate` prices each deal on the latest curve dated on or
+/// before its open date. Adds `FTP_Curve_Date` (the curve used), and with the option for older
+/// deals `FTP_Note`. The other columns are those of [`apply_ftp_curve_map`]: Tenor_Days,
+/// Benchmark_FTP_Rate, FTP_Method, FTP_Spread_Pct, Annual_FTP_Margin_BDT.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_ftp_dated_curves(
+    lf: LazyFrame,
+    opndat_col: &str,
+    matdat_col: &str,
+    bal_col: &str,
+    rate_col: &str,
+    curves: &[crate::curves::YieldCurve],
+    mode: &crate::models::FtpCurveMode,
+    is_liability: bool,
+    interpolation: FtpInterpolation,
+) -> Result<LazyFrame> {
+    use crate::models::FtpCurveMode;
+    let mut sorted: Vec<&crate::curves::YieldCurve> = curves.iter().collect();
+    sorted.sort_by_key(|c| c.date);
+    let Some(earliest) = sorted.first().copied() else {
+        bail!("There are no yield curves in portable_data/curves. Add a curve in Banking > Yield curves, dated on or before the deals' open dates.");
+    };
+    match mode {
+        FtpCurveMode::Inline => bail!("FTP: this step uses the curve typed in it, not the curve store."),
+        FtpCurveMode::FixedDate { date } => {
+            let d = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| anyhow!("FTP: the curve date '{}' is not a date. Write it as YYYY-MM-DD (for example 2026-06-30).", date))?;
+            let Some(c) = sorted.iter().rev().find(|c| c.date <= d) else {
+                bail!("FTP: no yield curve is dated on or before {}; the earliest is {}. Add an earlier curve or choose a later date.", d, earliest.date);
+            };
+            let lf = apply_ftp_curve_map(lf, opndat_col, matdat_col, bal_col, rate_col, &c.points, is_liability, interpolation)?;
+            Ok(lf
+                .with_column(lit(days_since_epoch(c.date) as i32).cast(DataType::Date).alias(FTP_CURVE_DATE_COLUMN))
+                .with_column(lit(crate::curves::curve_id(c)).alias(FTP_CURVE_ID_COLUMN)))
+        }
+        FtpCurveMode::OriginationDate { use_earliest_for_older } => {
+            let lf = ensure_date(lf, opndat_col)?;
+            let lf = ensure_date(lf, matdat_col)?;
+            let earliest_days = days_since_epoch(earliest.date);
+            let opn_days = col(opndat_col).cast(DataType::Int32).cast(DataType::Int64);
+            let mat_days = col(matdat_col).cast(DataType::Int32).cast(DataType::Int64);
+            let older = opn_days.clone().lt(lit(earliest_days));
+            // deals opened before the earliest curve
+            let cnt = lf
+                .clone()
+                .filter(col(opndat_col).is_not_null().and(older.clone()))
+                .select([len().cast(DataType::Int64).alias("n"), col(opndat_col).cast(DataType::Int32).min().alias("first")])
+                .collect()
+                .context("Could not count the deals opened before the earliest yield curve")?;
+            let n = cnt.column("n")?.i64()?.get(0).unwrap_or(0);
+            if n > 0 && !use_earliest_for_older {
+                let first = cnt.column("first")?.i32()?.get(0).and_then(|d| NaiveDate::from_ymd_opt(1970, 1, 1).and_then(|e| e.checked_add_signed(chrono::Duration::days(d as i64))));
+                bail!(
+                    "FTP: {} deal(s) were opened before the earliest yield curve ({}){}. Add an earlier curve in Banking > Yield curves, or use the earliest curve for older deals.",
+                    n,
+                    earliest.date,
+                    first.map(|f| format!(", the oldest on {}", f)).unwrap_or_default()
+                );
+            }
+            // the curve of each deal: the latest curve dated on or before its open date
+            let mut curve_days: Expr = lit(NULL).cast(DataType::Int64);
+            for c in &sorted {
+                curve_days = when(opn_days.clone().gt_eq(lit(days_since_epoch(c.date)))).then(lit(days_since_epoch(c.date))).otherwise(curve_days);
+            }
+            if *use_earliest_for_older {
+                curve_days = when(curve_days.clone().is_null().and(col(opndat_col).is_not_null())).then(lit(earliest_days)).otherwise(curve_days);
+            }
+            let raw_diff = mat_days - opn_days.clone();
+            let missing_date = col(matdat_col).is_null().or(col(opndat_col).is_null());
+            let tenor_expr = when(missing_date.clone())
+                .then(lit(NULL).cast(DataType::Int64))
+                .when(raw_diff.clone().lt(lit(1i64)))
+                .then(lit(1i64))
+                .otherwise(raw_diff)
+                .alias("Tenor_Days");
+            let mut rate: Expr = lit(NULL).cast(DataType::Float64);
+            let mut method: Expr = lit(NULL).cast(DataType::String);
+            let mut curve_id: Expr = lit(NULL).cast(DataType::String);
+            for c in &sorted {
+                curve_id = when(col("__ftp_curve_days").eq(lit(days_since_epoch(c.date)))).then(lit(crate::curves::curve_id(c))).otherwise(curve_id);
+                let (r, m) = ftp_rate_exprs(&c.points, interpolation).with_context(|| format!("The yield curve of {} cannot be used", c.date))?;
+                let hit = col("__ftp_curve_days").eq(lit(days_since_epoch(c.date)));
+                rate = when(hit.clone()).then(r).otherwise(rate);
+                method = when(hit).then(m).otherwise(method);
+            }
+            let rate = when(missing_date.clone()).then(lit(NULL).cast(DataType::Float64)).otherwise(rate).alias("Benchmark_FTP_Rate");
+            let method = when(missing_date).then(lit(FTP_MISSING_DATE)).otherwise(method).alias("FTP_Method");
+            let acct_rate = col(rate_col).cast(DataType::Float64).fill_null(lit(0.0));
+            let spread = if is_liability { (col("Benchmark_FTP_Rate") - acct_rate).alias("FTP_Spread_Pct") } else { (acct_rate - col("Benchmark_FTP_Rate")).alias("FTP_Spread_Pct") };
+            let margin = (col(bal_col).cast(DataType::Float64).fill_null(lit(0.0)) * (col("FTP_Spread_Pct") / lit(100.0))).alias("Annual_FTP_Margin_BDT");
+            let mut out = lf
+                .with_column(tenor_expr)
+                .with_column(curve_days.alias("__ftp_curve_days"))
+                .with_columns([rate, method])
+                .with_column(spread)
+                .with_column(margin)
+                .with_column(col("__ftp_curve_days").cast(DataType::Int32).cast(DataType::Date).alias(FTP_CURVE_DATE_COLUMN))
+                .with_column(curve_id.alias(FTP_CURVE_ID_COLUMN));
+            if *use_earliest_for_older {
+                out = out.with_column(when(col(opndat_col).is_not_null().and(older)).then(lit(FTP_NOTE_EARLIEST)).otherwise(lit(NULL).cast(DataType::String)).alias("FTP_Note"));
+            }
+            Ok(out.drop(["__ftp_curve_days"]))
+        }
+    }
 }

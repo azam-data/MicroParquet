@@ -98,10 +98,17 @@ pub enum ActiveToolModal {
     ConditionalCol,
     MathFormula,
     NormalizeEntity,
+    /// Clean line breaks inside text values.
+    CleanLineBreaks,
     GroupByPivot,
+    /// The pivot builder (Phase 4 V1); `GroupByPivot` is the older dialog that edits old steps.
+    PivotBuilder,
     StackFiles,
     JoinTabs,
     ReconcilePeriods,
+    ClMigration,
+    GapLadder,
+    YieldCurves,
     MaturityBucket,
     RateBand,
     RateShockSim,
@@ -133,6 +140,8 @@ pub struct MicroParquetApp {
     show_steps_sidebar: bool,
     show_sql_bar: bool,
     show_chart_drawer: bool,
+    /// The summary row (selectors and values) under the column names; shown by default.
+    show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
     pub right_tab: RightTab,
     pub selected_column: Option<String>,
@@ -177,7 +186,15 @@ pub struct MicroParquetApp {
     pub cond: CondState,
     pub calc: CalcState,
     pub normaliser: NormState,
+    pub clean_breaks: CleanBreaksState,
+    /// The tab whose name is being edited in the strip.
+    pub tab_rename: Option<crate::ui::tabs::TabRename>,
     pub pivot: PivotState,
+    pub pivot_builder: PivotBuilderState,
+    pub pivot_bar: PivotBarState,
+    pub cl_migration: ClMigrationState,
+    pub gap: GapState,
+    pub curves: CurvesState,
     pub stack: StackState,
     pub join: JoinState,
     pub recon: ReconcileState,
@@ -216,6 +233,7 @@ impl MicroParquetApp {
             show_steps_sidebar: true,
             show_sql_bar: false,
             show_chart_drawer: false,
+            show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
             selected_step: None,
@@ -251,7 +269,14 @@ impl MicroParquetApp {
             cond: CondState::default(),
             calc: CalcState::default(),
             normaliser: NormState::default(),
+            clean_breaks: CleanBreaksState::default(),
+            tab_rename: None,
             pivot: PivotState::default(),
+            pivot_builder: PivotBuilderState::default(),
+            pivot_bar: PivotBarState::default(),
+            cl_migration: ClMigrationState::default(),
+            gap: GapState::default(),
+            curves: CurvesState::default(),
             stack: StackState::default(),
             join: JoinState::default(),
             recon: ReconcileState::default(),
@@ -293,6 +318,7 @@ impl MicroParquetApp {
         }
         self.handle_palette_shortcut(ctx);
         self.handle_step_shortcuts(ctx);
+        self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
         self.render_tab_strip_panel(ctx);
         self.render_status_bar(ctx);
@@ -312,6 +338,7 @@ impl MicroParquetApp {
                     self.render_empty_state(ui);
                     return;
                 }
+                self.render_pivot_bar(ui);
                 self.render_filter_bar(ui);
                 self.render_sql_bar(ui);
                 self.render_chart_drawer(ui);
@@ -385,6 +412,7 @@ impl MicroParquetApp {
             ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
             ui.checkbox(&mut self.show_sql_bar, "SQL scratchpad bar");
             ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
+            ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response
     }

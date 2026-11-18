@@ -5,18 +5,24 @@ pub mod batch;
 pub mod buckets;
 pub mod calc_column;
 pub mod chart;
+pub mod cl_migration;
 pub mod columns;
 pub mod commands;
 pub mod conditional;
+pub mod curves;
 pub mod duration;
 pub mod export;
 pub mod filter;
 pub mod ftp;
+pub mod gap_ladder;
 pub mod jobs;
 pub mod join;
 pub mod limits;
+pub mod clean_breaks;
 pub mod normaliser;
 pub mod pivot;
+pub mod pivot_bar;
+pub mod pivot_builder;
 pub mod prelude;
 pub mod provision;
 pub mod rate_band;
@@ -36,6 +42,8 @@ pub mod top_bar;
 mod layout_tests;
 #[cfg(test)]
 mod render_tests;
+#[cfg(test)]
+mod render_tests_p4;
 #[cfg(test)]
 mod tests;
 pub mod theme;
@@ -85,7 +93,9 @@ impl MicroParquetApp {
             ActiveToolModal::ConditionalCol => self.render_conditional_modal(ctx, cols),
             ActiveToolModal::MathFormula => self.render_calc_modal(ctx, cols),
             ActiveToolModal::NormalizeEntity => self.render_normaliser_modal(ctx, cols),
+            ActiveToolModal::CleanLineBreaks => self.render_clean_breaks_modal(ctx, cols),
             ActiveToolModal::GroupByPivot => self.render_pivot_modal(ctx, cols),
+            ActiveToolModal::PivotBuilder => self.render_pivot_builder(ctx, cols),
             ActiveToolModal::MaturityBucket => self.render_buckets_modal(ctx, cols),
             ActiveToolModal::RateBand => self.render_rate_band_modal(ctx, cols),
             ActiveToolModal::RateShockSim => self.render_rate_shock_modal(ctx, cols),
@@ -97,6 +107,9 @@ impl MicroParquetApp {
             ActiveToolModal::StackFiles => self.render_stack_modal(ctx, cols),
             ActiveToolModal::JoinTabs => self.render_join_modal(ctx, cols),
             ActiveToolModal::ReconcilePeriods => self.render_reconcile_modal(ctx, cols),
+            ActiveToolModal::ClMigration => self.render_cl_migration_modal(ctx, cols),
+            ActiveToolModal::GapLadder => self.render_gap_ladder_modal(ctx, cols),
+            ActiveToolModal::YieldCurves => self.render_curves_modal(ctx, cols),
             ActiveToolModal::SaveMacro => self.render_save_macro_modal(ctx, cols),
             ActiveToolModal::PythonCodePreview => self.render_python_preview_modal(ctx, cols),
             ActiveToolModal::MultiTabExport => self.render_multi_export_modal(ctx, cols),

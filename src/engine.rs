@@ -1,7 +1,7 @@
 use crate::banking::{
     apply_banking_hygiene_audit, apply_duration_analysis, apply_entity_normalizer,
     apply_ftp_curve_map, apply_loan_classification_provision, apply_loan_limit_utilization,
-    apply_maturity_bucket, apply_rate_shock_sim, build_period_reconcile_lazy,
+    apply_maturity_bucket, build_period_reconcile_lazy, RateShockSpec,
     ensure_date, weighted_rate_exprs, FTP_MISSING_DATE,
 };
 use crate::models::{
@@ -1620,10 +1620,12 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(left_source, out);
             collect_masked_columns(right_source, out);
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
             collect_masked_columns(prev_source, out);
             collect_masked_columns(curr_source, out);
         }
+        TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
+        TabSource::RepricingGap { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1636,9 +1638,11 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::JoinedTabs { left_source, right_source, .. } => {
             source_masks_pii(left_source) || source_masks_pii(right_source)
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
+        TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
+        TabSource::RepricingGap { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1763,10 +1767,21 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             prev_source,
             curr_source,
             ..
+        }
+        | TabSource::ClMigration {
+            prev_source,
+            curr_source,
+            ..
         } => {
             parts.extend(source_parse_failures(prev_source, temp_dir)?);
             parts.extend(source_parse_failures(curr_source, temp_dir)?);
         }
+        TabSource::GapLadder { inputs, .. } => {
+            for i in inputs {
+                parts.extend(source_parse_failures(&i.source, temp_dir)?);
+            }
+        }
+        TabSource::RepricingGap { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2339,6 +2354,35 @@ pub fn compile_tab_lazy(
                 cl_status_col.as_deref(),
             )?
         }
+        TabSource::RepricingGap { source, steps, spec } => {
+            let input = compile_tab_lazy(source, steps, temp_dir)?;
+            let betas = rate_shock_betas(spec)?;
+            crate::banking::build_repricing_gap_betas(input, spec, &betas)?.lazy()
+        }
+        TabSource::GapLadder {
+            inputs,
+            preset,
+            cutoff_date,
+            null_as_sight,
+            limits,
+        } => {
+            let mut lfs = Vec::with_capacity(inputs.len());
+            for i in inputs {
+                lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
+            }
+            crate::banking::build_gap_ladder(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref())?.lazy()
+        }
+        TabSource::ClMigration {
+            prev_source,
+            prev_steps,
+            curr_source,
+            curr_steps,
+            spec,
+        } => {
+            let prev_lf = compile_tab_lazy(prev_source, prev_steps, temp_dir)?;
+            let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
+            crate::banking::build_cl_migration(prev_lf, curr_lf, spec)?.lazy()
+        }
     };
 
     for step in steps {
@@ -2528,6 +2572,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             source_col,
             new_col,
         } => Ok(apply_entity_normalizer(lf, source_col, new_col)),
+        TransformStep::CleanLineBreaks { columns } => apply_clean_line_breaks(lf, columns),
         TransformStep::MaturityBucket {
             mat_col,
             cutoff_date,
@@ -2543,15 +2588,26 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             cutoff_date,
             shock_bps,
             side_col,
-        } => apply_rate_shock_sim(
-            lf,
-            bal_col,
-            rate_col,
-            mat_col,
-            cutoff_date,
-            *shock_bps,
-            side_col.as_deref(),
-        ),
+            reprice_col,
+            beta_file,
+            product_col,
+            floor_pct,
+        } => {
+            let spec = RateShockSpec {
+                bal_col: bal_col.clone(),
+                rate_col: rate_col.clone(),
+                mat_col: mat_col.clone(),
+                cutoff_date: cutoff_date.clone(),
+                shock_bps: *shock_bps,
+                side_col: side_col.clone(),
+                reprice_col: reprice_col.clone(),
+                beta_file: beta_file.clone(),
+                product_col: product_col.clone(),
+                floor_pct: *floor_pct,
+            };
+            let betas = rate_shock_betas(&spec)?;
+            crate::banking::apply_rate_shock_betas(lf, &spec, &betas)
+        }
         TransformStep::FtpCurveMap {
             opndat_col,
             matdat_col,
@@ -2560,16 +2616,25 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             curve,
             is_liability,
             interpolation,
-        } => apply_ftp_curve_map(
-            lf,
-            opndat_col,
-            matdat_col,
-            bal_col,
-            rate_col,
-            curve,
-            *is_liability,
-            *interpolation,
-        ),
+            curve_mode,
+            currency,
+        } => match curve_mode {
+            crate::models::FtpCurveMode::Inline => apply_ftp_curve_map(
+                lf,
+                opndat_col,
+                matdat_col,
+                bal_col,
+                rate_col,
+                curve,
+                *is_liability,
+                *interpolation,
+            ),
+            dated => {
+                let store = crate::curves::CurveStore::load(&crate::curves::curves_dir());
+                let (curves, _skipped) = store.for_currency(currency)?;
+                crate::banking::apply_ftp_dated_curves(lf, opndat_col, matdat_col, bal_col, rate_col, &curves, dated, *is_liability, *interpolation)
+            }
+        },
         TransformStep::BankingHygieneAudit {
             opndat_col,
             matdat_col,
@@ -2647,6 +2712,10 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             top_n,
             ..
         } => apply_groupby_pivot(lf, group_cols, aggs, sort_by_col.as_deref(), *top_n),
+        TransformStep::PivotTable { .. } => match step.as_pivot_spec() {
+            Some(spec) => crate::pivot_table::apply_pivot_table(lf, &spec),
+            None => Ok(lf),
+        },
         TransformStep::SqlQuery { query } => {
             let mut ctx = SQLContext::new();
             ctx.register("self", lf);
@@ -2655,6 +2724,49 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 .context("SQL execution failed (use table name 'self')")?;
             Ok(res_lf)
         }
+    }
+}
+
+/// "Clean line breaks": in each chosen text column (all text columns when `columns` is empty) a
+/// value that has a line break gets every run of `\r` and `\n` replaced by one space and its ends
+/// trimmed. Values without a line break are not touched. A chosen column that is missing or is not
+/// text stops with a message.
+pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String]) -> Result<LazyFrame> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for Clean line breaks")?;
+    let targets: Vec<String> = if columns.is_empty() {
+        schema.iter().filter(|(_, dt)| matches!(dt, DataType::String)).map(|(n, _)| n.to_string()).collect()
+    } else {
+        for c in columns {
+            match schema.get(c.as_str()) {
+                None => anyhow::bail!("Clean line breaks: the column '{}' was not found. Choose the columns again.", c),
+                Some(DataType::String) => {}
+                Some(other) => anyhow::bail!("Clean line breaks: the column '{}' is {}, not text. Choose text columns only.", c, other),
+            }
+        }
+        columns.to_vec()
+    };
+    if targets.is_empty() {
+        return Ok(lf);
+    }
+    let exprs: Vec<Expr> = targets
+        .iter()
+        .map(|c| {
+            let v = col(c.as_str());
+            when(v.clone().str().contains(lit(r"[\r\n]"), false))
+                .then(v.clone().str().replace_all(lit(r"[\r\n]+"), lit(" "), false).str().strip_chars(lit(NULL)))
+                .otherwise(v)
+                .alias(c.as_str())
+        })
+        .collect();
+    Ok(lf.with_columns(exprs))
+}
+
+/// The betas a rate-shock step reads: the content of its beta file, or none when it has none.
+pub fn rate_shock_betas(spec: &RateShockSpec) -> Result<Vec<crate::betas::BetaRow>> {
+    match spec.beta_file.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => crate::betas::load_beta_rows(&crate::betas::betas_dir(), name),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -3334,6 +3446,23 @@ pub fn blank_balance_notes(
 ) -> Result<Vec<String>> {
     let mut notes = Vec::new();
     for (i, step) in steps.iter().enumerate() {
+        if let TransformStep::FtpCurveMap { curve_mode, currency, .. } = step {
+            if !matches!(curve_mode, crate::models::FtpCurveMode::Inline) {
+                // curves of other currencies are not used: say which
+                let store = crate::curves::CurveStore::load(&crate::curves::curves_dir());
+                if let Ok((_, skipped)) = store.for_currency(currency) {
+                    if !skipped.is_empty() {
+                        notes.push(format!(
+                            "{}: skipped {} curve(s) in another currency than {}: {}",
+                            step.short_label(),
+                            skipped.len(),
+                            currency.trim(),
+                            skipped.iter().map(|c| format!("{} ({})", c.date.format("%Y-%m-%d"), c.currency)).collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                }
+            }
+        }
         if let TransformStep::FtpCurveMap { opndat_col, matdat_col, .. } = step {
             let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
             let n = count_missing_ftp_dates(input, opndat_col, matdat_col)?;
@@ -3344,6 +3473,21 @@ pub fn blank_balance_notes(
                     n,
                     FTP_MISSING_DATE
                 ));
+            }
+        }
+        if let TransformStep::RateShockSim { beta_file: Some(bf), product_col: Some(pc), .. } = step {
+            if !bf.trim().is_empty() && !pc.trim().is_empty() {
+                let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+                let betas = crate::betas::load_beta_file(&crate::betas::betas_dir(), bf)?;
+                let n = crate::banking::count_unmapped_products(input, pc, &betas)?;
+                if n > 0 {
+                    notes.push(format!(
+                        "{}: {} row(s) have a product that is not in the beta file '{}' (or no product): they pass through 100%",
+                        step.short_label(),
+                        n,
+                        bf
+                    ));
+                }
             }
         }
         let bal = match step {
@@ -3376,6 +3520,20 @@ pub fn weighted_mixed_sign_notes(
 ) -> Result<Vec<String>> {
     let mut notes = Vec::new();
     for (i, step) in steps.iter().enumerate() {
+        if let Some(spec) = step.as_pivot_spec() {
+            if spec.values.iter().any(|v| v.agg == crate::models::PivotAgg::WeightedAvg) && !step.is_skipped() {
+                let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+                for (label, n) in crate::pivot_table::pivot_mixed_sign_cells(input, &spec)? {
+                    notes.push(format!(
+                        "{}: {} is blank for {} cell(s) whose weights mix positive and negative",
+                        step.short_label(),
+                        label,
+                        n
+                    ));
+                }
+            }
+            continue;
+        }
         let TransformStep::GroupByPivot { group_cols, aggs, .. } = step else {
             continue;
         };

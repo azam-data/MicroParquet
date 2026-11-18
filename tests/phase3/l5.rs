@@ -174,6 +174,10 @@ fn rich_recipe() -> MacroRecipe {
                 cutoff_date: "2026-10-31".into(),
                 shock_bps: 100.0,
                 side_col: Some("Side".into()),
+                reprice_col: None,
+                beta_file: None,
+                product_col: None,
+                floor_pct: None,
             },
             TransformStep::FtpCurveMap {
                 opndat_col: "Opndat".into(),
@@ -183,6 +187,8 @@ fn rich_recipe() -> MacroRecipe {
                 curve: default_bd_ftp_curve(),
                 is_liability: true,
                 interpolation: FtpInterpolation::Linear,
+
+                curve_mode: Default::default(), currency: "BDT".into(),
             },
         ],
         summary: Default::default(),

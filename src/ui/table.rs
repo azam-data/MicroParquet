@@ -278,6 +278,7 @@ impl MicroParquetApp {
         let ctx = ui.ctx().clone();
         let mut action: Option<GridAction> = None;
         let weight_guess = micro_parquet::tab_jobs::guess_balance_column(df);
+        let shading: Option<Vec<Vec<micro_parquet::banking::Shade>>> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_shading", tab_id))));
         let mut report = GridReport::default();
         let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
         let want_y = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_y", tab_id))));
@@ -452,8 +453,13 @@ impl MicroParquetApp {
                                 row.col(|ui| {
                                     ui.label(theme::mono(format_with_commas((row_offset + r_idx + 1) as f64, 0)).color(tk.muted));
                                 });
-                                for (c, kind) in cols.iter().zip(&kinds) {
+                                for (c_idx, (c, kind)) in cols.iter().zip(&kinds).enumerate() {
                                     row.col(|ui| {
+                                        // the CL migration matrix: an upgrade is green, a downgrade amber
+                                        if let Some(fill) = shading.as_ref().and_then(|s| s.get(r_idx)).and_then(|r| r.get(c_idx)).and_then(|sh| theme::migration_fill(&tk, *sh)) {
+                                            let cell = ui.max_rect().expand2(egui::vec2(ui.spacing().item_spacing.x / 2.0, ui.spacing().item_spacing.y / 2.0));
+                                            ui.painter().rect_filled(cell, 0.0, fill);
+                                        }
                                         let text = cell_text(c, r_idx, col_formats, num_format, global_decimals);
                                         // a blank cell shows a muted dash, never the word "null" (a text that
                                         // really says "null" is data and keeps its colour)
@@ -629,6 +635,7 @@ impl MicroParquetApp {
                 .on_hover_text(e.as_str());
             }
             let stale = tab.page_error.is_some();
+            migration_shading_for(ui.ctx(), tab);
             ui.scope(|ui| {
                 if updating || stale {
                     ui.set_opacity(theme::DISABLED_OPACITY);
@@ -643,7 +650,7 @@ impl MicroParquetApp {
                     tab.id,
                     self.selected_column.as_deref(),
                     &marks,
-                    Some(&view),
+                    if self.show_summary_row { Some(&view) } else { None },
                 );
             });
         }
@@ -656,4 +663,57 @@ impl MicroParquetApp {
             None => {}
         }
     }
+}
+
+/// The shading of the result tables that have one: the CL migration matrix (an upgrade green, a
+/// downgrade amber; a cell without an amount is not shaded) and the liquidity gap ladder (the cells
+/// of a row whose limit is breached). Other tabs have none.
+pub(crate) fn migration_shading_for(ctx: &egui::Context, tab: &TabState) {
+    use micro_parquet::banking::*;
+    let id = egui::Id::new(("grid_shading", tab.id));
+    let df = &tab.cached_slice;
+    let mut shades: Vec<Vec<Shade>> = Vec::with_capacity(df.height());
+    match &tab.source {
+        TabSource::ClMigration { .. } => {
+            let Some(row_col) = df.get_columns().iter().position(|c| c.name().as_str() == MIGRATION_ROW_HEADING) else {
+                return;
+            };
+            let labels: Vec<Option<String>> = match df.get_columns()[row_col].str() {
+                Ok(s) => s.into_iter().map(|v| v.map(str::to_string)).collect(),
+                Err(_) => return,
+            };
+            for (r, label) in labels.iter().enumerate() {
+                let mut row = Vec::with_capacity(df.width());
+                for c in df.get_columns() {
+                    let has_amount = match c.get(r) {
+                        Ok(AnyValue::Float64(x)) => x.abs() > 0.0,
+                        Ok(AnyValue::Int64(x)) => x != 0,
+                        _ => false,
+                    };
+                    row.push(if has_amount { migration_shade(label.as_deref().unwrap_or(""), c.name().as_str()) } else { Shade::None });
+                }
+                shades.push(row);
+            }
+        }
+        TabSource::GapLadder { .. } => {
+            let Some(breach) = df.get_columns().iter().find(|c| c.name().as_str() == GAP_BREACH_COLUMN).and_then(|c| c.str().ok().map(|s| s.into_iter().map(|v| v.map(str::to_string)).collect::<Vec<_>>())) else {
+                ctx.data_mut(|d| d.remove_temp::<Vec<Vec<Shade>>>(id));
+                return;
+            };
+            for flag in breach {
+                let on = flag.as_deref() == Some(GAP_BREACH_FLAG);
+                shades.push(
+                    df.get_columns()
+                        .iter()
+                        .map(|c| if on && matches!(c.name().as_str(), GAP_BREACH_COLUMN | GAP_LIMIT_COLUMN) || on && c.name().as_str() == GAP_COLUMNS[6] { Shade::Breach } else { Shade::None })
+                        .collect(),
+                );
+            }
+        }
+        _ => {
+            ctx.data_mut(|d| d.remove_temp::<Vec<Vec<Shade>>>(id));
+            return;
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(id, shades));
 }

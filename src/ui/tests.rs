@@ -405,7 +405,7 @@ fn one_step_per_modal() -> Vec<TransformStep> {
         TransformStep::MathFormula { new_col: "Bal_K".into(), left_col: "Balance".into(), op: MathOp::Mul, right_is_col: false, right_val_or_col: "0.001".into() },
         TransformStep::NormalizeEntity { source_col: "Branch".into(), new_col: "Branch_N".into() },
         TransformStep::MaturityBucket { mat_col: "Matdat".into(), cutoff_date: "2026-06-30".into(), bucket_def: bucket, null_as_sight: false, new_col: "Bkt".into() },
-        TransformStep::RateShockSim { bal_col: "Balance".into(), rate_col: "Rate".into(), mat_col: "Matdat".into(), cutoff_date: "2026-06-30".into(), shock_bps: -150.0, side_col: Some("Side".into()) },
+        TransformStep::RateShockSim { bal_col: "Balance".into(), rate_col: "Rate".into(), mat_col: "Matdat".into(), cutoff_date: "2026-06-30".into(), shock_bps: -150.0, side_col: Some("Side".into()), reprice_col: None, beta_file: None, product_col: None, floor_pct: None, },
         TransformStep::FtpCurveMap {
             opndat_col: "Opndat".into(),
             matdat_col: "Matdat".into(),
@@ -414,6 +414,8 @@ fn one_step_per_modal() -> Vec<TransformStep> {
             curve: vec![FtpPoint { tenor_days: 30, ftp_rate: 6.5 }, FtpPoint { tenor_days: 365, ftp_rate: 8.25 }],
             is_liability: false,
             interpolation: FtpInterpolation::NextPointUp,
+
+            curve_mode: Default::default(), currency: "BDT".into(),
         },
         TransformStep::BankingHygieneAudit {
             opndat_col: "Opndat".into(),

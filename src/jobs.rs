@@ -35,6 +35,10 @@ pub enum JobKind {
     Summary,
     /// Row counts after each step.
     StepCounts,
+    /// The live preview of the pivot builder (and the field types it lists).
+    PivotPreview,
+    /// The values of one field for the pivot builder's Filters checklist.
+    PivotValues,
     /// Writes an output file or folder.
     Export,
     /// Folder batch conversion.

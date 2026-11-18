@@ -11,3 +11,17 @@ with that version's `save_macro_to_file`, replayed it on the synthetic loan book
 
 `fix13_genuine_old_macros_load_and_replay_to_the_results_their_code_gave` loads each file with
 today's code and checks that it replays to the same CSV. Do not edit these files by hand.
+
+## Phase 4 fixtures
+
+Made the same way from the code of `main` at `c01b78b` (the end of Phase 3), in a temporary worktree
+that shared this repository's build cache, with a throw-away test that saved a `MacroRecipe`
+with that code's `save_macro_to_file` and wrote the result of replaying it on the same synthetic
+loan book:
+
+- `phase4_pivot_main.*`: a filter and a `GroupByPivot` step (Sum, Count, Mean, WeightedAvg, PctOfTotal), before the pivot builder (V1).
+- `phase4_rate_shock_main.*`: a `RateShockSim` step without a side column, before V5.
+- `phase4_rate_shock_side_main.*`: a `RateShockSim` step with a side column and a −200 bp shock, before V5.
+
+`v1_an_old_group_by_pivot_macro_replays_to_what_main_gave` and the V5 tests replay them.
+Do not edit these files by hand.

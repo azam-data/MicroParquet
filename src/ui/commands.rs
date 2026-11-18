@@ -24,16 +24,20 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Pivot => ph::TABLE,
         CommandId::Conditional => ph::PLUS,
         CommandId::Normaliser => ph::BUILDINGS,
+        CommandId::CleanBreaks => ph::BROOM,
         CommandId::JoinTabs => ph::LINK,
         CommandId::CopyTable => ph::CLIPBOARD_TEXT,
         CommandId::Buckets => ph::CALENDAR,
+        CommandId::GapLadder => ph::CHART_BAR,
         CommandId::RateProfile => ph::PERCENT,
         CommandId::RateShock => ph::CHART_LINE,
         CommandId::Duration => ph::TIMER,
         CommandId::Ftp => ph::CALCULATOR,
+        CommandId::YieldCurves => ph::CHART_LINE,
         CommandId::Provision => ph::BANK,
         CommandId::Limits => ph::CREDIT_CARD,
         CommandId::Reconcile => ph::SCALES,
+        CommandId::ClMigration => ph::ARROWS_LEFT_RIGHT,
         CommandId::Audit => ph::SHIELD_CHECK,
         CommandId::ExportParquet | CommandId::ExportCsv => ph::EXPORT,
         CommandId::ExportXlsx => ph::FILE_XLS,
@@ -52,6 +56,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::TogglePanel => ph::SIDEBAR_SIMPLE,
         CommandId::ToggleSql => ph::TERMINAL_WINDOW,
         CommandId::ToggleChart => ph::CHART_BAR,
+        CommandId::ToggleSummary => ph::SIGMA,
         CommandId::About => ph::INFO,
     }
 }
@@ -144,12 +149,18 @@ impl MicroParquetApp {
             CommandId::CalcColumn => self.active_tool = ActiveToolModal::MathFormula,
             CommandId::Pivot => {
                 self.init_tool_defaults_from_active_tab();
-                self.active_tool = ActiveToolModal::GroupByPivot;
+                self.open_pivot_builder(None, false);
+                self.active_tool = ActiveToolModal::PivotBuilder;
             }
             CommandId::Conditional => self.active_tool = ActiveToolModal::ConditionalCol,
             CommandId::Normaliser => self.active_tool = ActiveToolModal::NormalizeEntity,
+            CommandId::CleanBreaks => {
+                self.clean_breaks = CleanBreaksState::default();
+                self.active_tool = ActiveToolModal::CleanLineBreaks;
+            }
             CommandId::JoinTabs => self.active_tool = ActiveToolModal::JoinTabs,
             CommandId::CopyTable => self.copy_table_to_clipboard(ctx),
+            CommandId::GapLadder => self.open_gap_ladder(),
             CommandId::Buckets => {
                 self.buckets.presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
                 self.active_tool = ActiveToolModal::MaturityBucket;
@@ -158,12 +169,21 @@ impl MicroParquetApp {
                 self.rate_band.presets = RateBandDef::load_all_presets(&self.paths.rate_bands_file());
                 self.active_tool = ActiveToolModal::RateBand;
             }
-            CommandId::RateShock => self.active_tool = ActiveToolModal::RateShockSim,
+            CommandId::RateShock => {
+                self.shock.reload_beta_files();
+                self.active_tool = ActiveToolModal::RateShockSim;
+            }
             CommandId::Duration => self.active_tool = ActiveToolModal::DurationAnalysis,
-            CommandId::Ftp => self.active_tool = ActiveToolModal::FtpCurveMap,
+            CommandId::Ftp => {
+                self.ftp.reload_store();
+                self.ftp.choose_default_source();
+                self.active_tool = ActiveToolModal::FtpCurveMap;
+            }
+            CommandId::YieldCurves => self.open_yield_curves(),
             CommandId::Provision => self.active_tool = ActiveToolModal::LoanProvision,
             CommandId::Limits => self.active_tool = ActiveToolModal::LoanLimitUtil,
             CommandId::Reconcile => self.active_tool = ActiveToolModal::ReconcilePeriods,
+            CommandId::ClMigration => self.open_cl_migration(),
             CommandId::Audit => self.active_tool = ActiveToolModal::BankingAudit,
             CommandId::ExportParquet => self.run_guarded_export(GuardedExport::Parquet),
             CommandId::ExportCsv => self.run_guarded_export(GuardedExport::Csv),
@@ -200,6 +220,7 @@ impl MicroParquetApp {
             CommandId::TogglePanel => self.show_steps_sidebar = !self.show_steps_sidebar,
             CommandId::ToggleSql => self.show_sql_bar = !self.show_sql_bar,
             CommandId::ToggleChart => self.show_chart_drawer = !self.show_chart_drawer,
+            CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::About => self.show_about = true,
         }
     }

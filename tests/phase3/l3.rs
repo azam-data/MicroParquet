@@ -155,16 +155,20 @@ fn l3_pdf_shows_the_scale_in_the_header() {
     let rep = export_tabs_to_pdf(vec![("Loans".into(), frame(), HashMap::new())], &p, NumberDisplayFormat::BdtMillion, 2).unwrap();
     assert!(rep.summary().is_empty());
     assert!(std::fs::metadata(&p).unwrap().len() > 500);
-    // headers (the PDF text itself is compressed, so the header rule is tested directly)
+    // the PDF text itself is compressed, so the layout it is drawn from is tested: the unit is
+    // stated once under the title, and no header carries it
+    use micro_parquet::pdf_layout::layout_pdf_tab;
     let m = NumberDisplayFormat::BdtMillion;
-    assert_eq!(pdf_column_header("Balance", true, None, m), "Balance (BDT M)");
-    assert_eq!(pdf_column_header("Int Rate", true, None, m), "Int Rate");
-    assert_eq!(pdf_column_header("Actnum", false, None, m), "Actnum");
-    assert_eq!(pdf_column_header("Balance", true, Some(&spec(MetricFormatType::BdtCrore)), m), "Balance (BDT Cr)");
-    assert_eq!(pdf_column_header("Balance", true, None, NumberDisplayFormat::Raw), "Balance");
-    // a long name is cut, the unit is not
-    let long = pdf_column_header("Outstanding_Balance_Amount_Total", true, None, m);
-    assert!(long.ends_with("(BDT M)"), "{long}");
-    assert!(long.chars().count() <= 18, "{long}");
+    let lay = layout_pdf_tab("Loans", &frame(), &HashMap::new(), m, 2, &[], 100);
+    assert_eq!(lay.unit_line.as_deref(), Some("Figures in BDT Million"));
+    let headers: Vec<String> = lay.parts.iter().flat_map(|p| p.header.iter().flat_map(|h| h.lines.iter().map(|l| l.text.clone()))).collect();
+    assert!(headers.iter().any(|h| h == "Balance") && !headers.iter().any(|h| h.contains("BDT") || h.contains('(')), "{headers:?}");
+    // a column in its own scale: the unit line names it
+    let mut formats = HashMap::new();
+    formats.insert("Balance".to_string(), spec(MetricFormatType::BdtCrore));
+    let lay = layout_pdf_tab("Loans", &frame(), &formats, NumberDisplayFormat::Raw, 2, &[], 100);
+    assert_eq!(lay.unit_line.as_deref(), Some("Figures in BDT Crore"));
+    let raw = layout_pdf_tab("Loans", &frame(), &HashMap::new(), NumberDisplayFormat::Raw, 2, &[], 100);
+    assert_eq!(raw.unit_line, None, "nothing is scaled, so there is no unit to state");
     std::fs::remove_dir_all(&d).ok();
 }

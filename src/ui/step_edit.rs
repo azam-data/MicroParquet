@@ -17,6 +17,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::ConditionalColumn { .. } => ActiveToolModal::ConditionalCol,
         TransformStep::MathFormula { .. } => ActiveToolModal::MathFormula,
         TransformStep::NormalizeEntity { .. } => ActiveToolModal::NormalizeEntity,
+        TransformStep::CleanLineBreaks { .. } => ActiveToolModal::CleanLineBreaks,
         TransformStep::MaturityBucket { .. } => ActiveToolModal::MaturityBucket,
         TransformStep::RateBand { .. } => ActiveToolModal::RateBand,
         TransformStep::RateShockSim { .. } => ActiveToolModal::RateShockSim,
@@ -26,6 +27,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::LoanClassificationProvision { .. } => ActiveToolModal::LoanProvision,
         TransformStep::LoanLimitUtilization { .. } => ActiveToolModal::LoanLimitUtil,
         TransformStep::GroupByPivot { .. } => ActiveToolModal::GroupByPivot,
+        TransformStep::PivotTable { .. } => ActiveToolModal::PivotBuilder,
         TransformStep::FilterRows { .. }
         | TransformStep::FilterGroup { .. }
         | TransformStep::SortRows { .. }
@@ -107,6 +109,7 @@ impl MicroParquetApp {
                 source_col: self.normaliser.source_col.clone(),
                 new_col: self.normaliser.new_col.clone(),
             },
+            ActiveToolModal::CleanLineBreaks => return self.clean_breaks_step(),
             ActiveToolModal::RateBand => {
                 let band_def = self.rate_band.def().ok()?;
                 if self.rate_band.new_col.trim().is_empty() {
@@ -128,6 +131,10 @@ impl MicroParquetApp {
                 cutoff_date: self.buckets.cutoff.clone(),
                 shock_bps: self.shock.bps,
                 side_col: side(),
+                reprice_col: self.shock.reprice_choice(),
+                beta_file: self.shock.beta_choice(),
+                product_col: self.shock.product_choice(),
+                floor_pct: self.shock.floor_choice(),
             },
             ActiveToolModal::DurationAnalysis => TransformStep::DurationAnalysis {
                 bal_col: self.duration.bal_col.clone(),
@@ -144,9 +151,12 @@ impl MicroParquetApp {
                 matdat_col: self.ftp.mat_col.clone(),
                 bal_col: self.ftp.bal_col.clone(),
                 rate_col: self.ftp.rate_col.clone(),
-                curve: self.ftp.curve.clone(),
+                // the typed points belong to the step only when it uses them; a step that reads the store has none
+                curve: if self.ftp.curve_source == crate::ui::ftp::CurveSource::Typed { self.ftp.curve.clone() } else { Vec::new() },
                 is_liability: self.ftp.is_liability,
                 interpolation: self.ftp.interpolation,
+                curve_mode: self.ftp.curve_mode(),
+                currency: self.ftp.currency.trim().to_string(),
             },
             ActiveToolModal::BankingAudit => TransformStep::BankingHygieneAudit {
                 opndat_col: self.audit.opn_col.clone(),
@@ -189,6 +199,7 @@ impl MicroParquetApp {
                 sort_by_col: self.pivot.aggs.first().map(|a| a.alias.clone()),
                 top_n: if self.pivot.top_n > 0 { Some(self.pivot.top_n) } else { None },
             },
+            ActiveToolModal::PivotBuilder => return self.pivot_builder_step(),
             _ => return None,
         })
     }
@@ -236,6 +247,10 @@ impl MicroParquetApp {
                 self.calc.right_is_col = right_is_col;
                 self.calc.right_val = right_val_or_col;
             }
+            TransformStep::CleanLineBreaks { columns } => {
+                self.clean_breaks.all = columns.is_empty();
+                self.clean_breaks.picked = columns;
+            }
             TransformStep::NormalizeEntity { source_col, new_col } => {
                 self.normaliser.source_col = source_col;
                 self.normaliser.new_col = new_col;
@@ -262,7 +277,13 @@ impl MicroParquetApp {
                 self.buckets.null_sight = null_as_sight;
                 self.buckets.new_col = new_col;
             }
-            TransformStep::RateShockSim { bal_col, rate_col, mat_col, cutoff_date, shock_bps, side_col } => {
+            TransformStep::RateShockSim { bal_col, rate_col, mat_col, cutoff_date, shock_bps, side_col, reprice_col, beta_file, product_col, floor_pct } => {
+                self.shock.reprice_col = reprice_col.unwrap_or_default();
+                self.shock.beta_file = beta_file.unwrap_or_default();
+                self.shock.product_col = product_col.unwrap_or_default();
+                self.shock.use_floor = floor_pct.is_some();
+                self.shock.floor_pct = floor_pct.unwrap_or(0.0);
+                self.shock.reload_beta_files();
                 self.shock.bal_col = bal_col;
                 self.shock.rate_col = rate_col;
                 self.shock.mat_col = mat_col;
@@ -292,14 +313,19 @@ impl MicroParquetApp {
                 self.shock.side_col = side_col.unwrap_or_default();
                 self.shock.side_cols_seen = columns.to_vec();
             }
-            TransformStep::FtpCurveMap { opndat_col, matdat_col, bal_col, rate_col, curve, is_liability, interpolation } => {
+            TransformStep::FtpCurveMap { opndat_col, matdat_col, bal_col, rate_col, curve, is_liability, interpolation, curve_mode, currency } => {
+                self.ftp.currency = currency;
                 self.ftp.opn_col = opndat_col;
                 self.ftp.mat_col = matdat_col;
                 self.ftp.bal_col = bal_col;
                 self.ftp.rate_col = rate_col;
-                self.ftp.curve = curve;
+                if !curve.is_empty() {
+                    self.ftp.curve = curve;
+                }
                 self.ftp.is_liability = is_liability;
                 self.ftp.interpolation = interpolation;
+                self.ftp.set_curve_mode(&curve_mode);
+                self.ftp.reload_store();
             }
             TransformStep::BankingHygieneAudit {
                 opndat_col,
@@ -358,6 +384,11 @@ impl MicroParquetApp {
                 self.pivot.aggs = aggs;
                 self.pivot.top_n = top_n.unwrap_or(0);
                 self.pivot.open_in_new_tab = false;
+            }
+            TransformStep::PivotTable { .. } => {
+                if let Some(spec) = step.as_pivot_spec() {
+                    self.open_pivot_builder(Some(spec), true);
+                }
             }
             _ => return None,
         }

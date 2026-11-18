@@ -21,12 +21,13 @@ pub use micro_parquet::macros::{
     python_untranslated_steps, save_macro_to_file,
 };
 pub use micro_parquet::models::{
+    FtpCurveMode, PivotAgg, PivotFilter, PivotScale, PivotShowAs, PivotSortByValue, PivotSpec, PivotValue,
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
     format_metric_value, format_with_commas, resolved_scale, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection, BlankRule, RateBandDef, RateBandMode, fmt_pct, parse_rate_edges,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
     CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
-    SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep,
+    SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep, GapTabInput,
 };
 pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
 pub use micro_parquet::tab_jobs::{
@@ -34,7 +35,8 @@ pub use micro_parquet::tab_jobs::{
     compute_tab_summary, ColumnStatsRequest, stats_key, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
     export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
     LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest, TabTextFindings, TextCheckRequest,
-    TextCheckResult, StepCountsRequest, SummaryRequest,
+    TextCheckResult, StepCountsRequest, SummaryRequest, compute_pivot_preview, compute_pivot_values, FieldKind,
+    PivotPreviewRequest, PivotValuesRequest,
 };
 pub use polars::datatypes::AnyValue;
 pub use polars::prelude::DataFrame;
@@ -47,17 +49,23 @@ pub use crate::ui::buckets::BucketState;
 pub use crate::ui::rate_band::RateBandState;
 pub use crate::ui::calc_column::CalcState;
 pub use crate::ui::chart::ChartState;
+pub use crate::ui::cl_migration::ClMigrationState;
 pub use crate::ui::columns::ColumnsState;
 pub use crate::ui::conditional::CondState;
 pub use crate::ui::duration::DurationState;
 pub use crate::ui::export::{ExportState, GuardedExport};
 pub use crate::ui::filter::FilterState;
+pub use crate::ui::curves::CurvesState;
 pub use crate::ui::ftp::FtpState;
+pub use crate::ui::gap_ladder::GapState;
 pub use crate::ui::jobs::PendingRefresh;
 pub use crate::ui::join::JoinState;
 pub use crate::ui::limits::LimitState;
 pub use crate::ui::normaliser::NormState;
+pub use crate::ui::clean_breaks::CleanBreaksState;
+pub use crate::ui::pivot_bar::PivotBarState;
 pub use crate::ui::pivot::PivotState;
+pub use crate::ui::pivot_builder::PivotBuilderState;
 pub use crate::ui::provision::ProvisionState;
 pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;

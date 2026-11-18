@@ -40,6 +40,7 @@ fn has_python_translation(step: &TransformStep) -> bool {
             | TransformStep::BankingHygieneAudit { .. }
             | TransformStep::LoanClassificationProvision { .. }
             | TransformStep::LoanLimitUtilization { .. }
+            | TransformStep::PivotTable { .. }
     )
 }
 
@@ -596,6 +597,17 @@ pub fn generate_python_polars_code(
                     source_col, new_col
                 ));
             }
+            TransformStep::CleanLineBreaks { columns } => {
+                let list = if columns.is_empty() {
+                    "[c for c, t in lf.collect_schema().items() if t == pl.String]".to_string()
+                } else {
+                    format!("[{}]", columns.iter().map(|c| format!("\"{}\"", py_escape(c))).collect::<Vec<_>>().join(", "))
+                };
+                py.push_str(&format!(
+                    "for _c in {}:\n    lf = lf.with_columns(\n        pl.when(pl.col(_c).str.contains(r\"[\\r\\n]\"))\n          .then(pl.col(_c).str.replace_all(r\"[\\r\\n]+\", \" \").str.strip_chars())\n          .otherwise(pl.col(_c)).alias(_c)\n    )\n\n",
+                    list
+                ));
+            }
             TransformStep::MaturityBucket {
                 mat_col,
                 cutoff_date,
@@ -752,7 +764,8 @@ pub fn generate_python_polars_code(
             | TransformStep::FtpCurveMap { .. }
             | TransformStep::BankingHygieneAudit { .. }
             | TransformStep::LoanClassificationProvision { .. }
-            | TransformStep::LoanLimitUtilization { .. } => {
+            | TransformStep::LoanLimitUtilization { .. }
+            | TransformStep::PivotTable { .. } => {
                 py.push_str(&format!(
                     "raise NotImplementedError(\"Step {} '{}' has no Python translation in this version; run it in MicroParquet\")\n\n",
                     idx + 1,

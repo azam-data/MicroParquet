@@ -190,11 +190,13 @@ pub fn source_files(source: &TabSource) -> Vec<&Path> {
             v.extend(source_files(right_source));
             v
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
             let mut v = source_files(prev_source);
             v.extend(source_files(curr_source));
             v
         }
+        TabSource::GapLadder { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
+        TabSource::RepricingGap { source, .. } => source_files(source),
     }
 }
 
@@ -225,7 +227,25 @@ pub fn pipeline_hash(source: &TabSource, steps: &[TransformStep]) -> u64 {
     for s in steps {
         format!("{:?}", s).hash(&mut h);
     }
+    // an FTP step that reads the curve store follows the curve files too
+    if steps.iter().any(uses_curve_store) {
+        crate::curves::curves_stamp().hash(&mut h);
+    }
+    // so does a rate shock that reads a beta file
+    if steps.iter().any(uses_beta_file) {
+        crate::betas::betas_stamp().hash(&mut h);
+    }
     h.finish()
+}
+
+/// True for a rate-shock step (turned off or not) that reads a beta file.
+fn uses_beta_file(step: &TransformStep) -> bool {
+    matches!(step.inner(), TransformStep::RateShockSim { beta_file: Some(b), .. } if !b.trim().is_empty())
+}
+
+/// True for an FTP step (turned off or not) that takes its curve from the store.
+fn uses_curve_store(step: &TransformStep) -> bool {
+    matches!(step.inner(), TransformStep::FtpCurveMap { curve_mode, .. } if *curve_mode != crate::models::FtpCurveMode::Inline)
 }
 
 /// The keys of the per-step row counts: index 0 is the source (its identity: paths, ingestion

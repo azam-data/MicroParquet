@@ -112,6 +112,13 @@ pub const TEXT_INSPECTOR_TITLE: f32 = 20.0;
 /// and the 52 px toolbar.
 pub const TOP_BAR_H: f32 = 44.0;
 pub const TAB_STRIP_H: f32 = 40.0;
+/// The cross of a tab: its square hit area, and the width of the rename box.
+pub const TAB_CLOSE_SIZE: f32 = 22.0;
+pub const TAB_RENAME_W: f32 = 160.0;
+/// For how many frames the strip keeps scrolling to a tab that became active.
+pub const TAB_SCROLL_FRAMES: u8 = 4;
+/// One half, for centring.
+pub const HALF: f32 = 0.5;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
 pub const HEADER_ROW_H: f32 = 38.0;
@@ -212,7 +219,44 @@ pub const DIALOG_W_SORT: f32 = 560.0;
 pub const DIALOG_W_FILTER: f32 = 640.0;
 pub const DIALOG_W_TOOL: f32 = 680.0;
 pub const DIALOG_W_PIVOT: f32 = 720.0;
+pub const DIALOG_W_PIVOT_CONVERT: f32 = 520.0;
 pub const DIALOG_W_PYTHON: f32 = 760.0;
+// The pivot builder (Phase 4 V1), after docs/design/Pivot.dc.html.
+pub const DIALOG_W_PIVOT_BUILDER: f32 = 1100.0;
+pub const DIALOG_MIN_W_PIVOT_BUILDER: f32 = 700.0;
+pub const PIVOT_FIELDS_W: f32 = 240.0;
+/// The field list takes at most this share of the dialog's width.
+pub const PIVOT_FIELDS_MAX_SHARE: f32 = 0.35;
+pub const PIVOT_FIELD_ROW_H: f32 = 28.0;
+pub const PIVOT_BADGE_W: f32 = 26.0;
+pub const PIVOT_BADGE_H: f32 = 18.0;
+pub const PIVOT_AREA_MIN_H: f32 = 72.0;
+pub const PIVOT_CHIP_H: f32 = 26.0;
+pub const PIVOT_PREVIEW_MIN_H: f32 = 110.0;
+pub const PIVOT_PREVIEW_COL_W: f32 = 118.0;
+pub const PIVOT_PREVIEW_ROW_H: f32 = 28.0;
+pub const PIVOT_PREVIEW_LABEL_W: f32 = 190.0;
+pub const PIVOT_POPUP_W: f32 = 300.0;
+pub const PIVOT_POPUP_LIST_H: f32 = 220.0;
+pub const PIVOT_COMBO_W: f32 = 130.0;
+pub const PIVOT_COMBO_AGG_W: f32 = 104.0;
+pub const PIVOT_COMBO_WEIGHT_W: f32 = 120.0;
+pub const PIVOT_COMBO_SORT_W: f32 = 210.0;
+pub const PIVOT_FOOTER_BUTTONS_W: f32 = 250.0;
+pub const PIVOT_GAP: f32 = 12.0;
+/// How much of the warning colour tints a downgrade in the CL migration matrix (green uses `success_soft`).
+pub const SHADE_AMBER_STRENGTH: f32 = 0.22;
+/// How much of the danger colour tints a breached limit in the liquidity gap ladder.
+pub const SHADE_DANGER_STRENGTH: f32 = 0.18;
+pub const MIGRATION_DIALOG_W: f32 = 640.0;
+pub const GAP_DIALOG_W: f32 = 940.0;
+pub const CURVES_DIALOG_W: f32 = 860.0;
+pub const CURVES_LIST_W: f32 = 270.0;
+pub const CURVES_BODY_MIN_H: f32 = 300.0;
+pub const GAP_COMBO_W: f32 = 150.0;
+pub const GAP_COMBO_NARROW_W: f32 = 120.0;
+pub const MIGRATION_COMBO_W: f32 = 200.0;
+pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
 pub const LIST_MAX_H_S: f32 = 120.0;
 pub const LIST_MAX_H_M: f32 = 180.0;
 pub const LIST_MAX_H_L: f32 = 240.0;
@@ -352,6 +396,16 @@ fn t(ui: &egui::Ui) -> &'static Tokens {
 pub fn danger(ui: &egui::Ui) -> Color32 {
     t(ui).danger
 }
+/// The fill of an upgrade (green) and of a downgrade (amber) in the CL migration matrix.
+pub fn migration_fill(tk: &Tokens, shade: micro_parquet::banking::Shade) -> Option<Color32> {
+    match shade {
+        micro_parquet::banking::Shade::Upgrade => Some(tk.success_soft),
+        micro_parquet::banking::Shade::Downgrade => Some(tk.warning.gamma_multiply(SHADE_AMBER_STRENGTH)),
+        micro_parquet::banking::Shade::Breach => Some(tk.danger.gamma_multiply(SHADE_DANGER_STRENGTH)),
+        micro_parquet::banking::Shade::None => None,
+    }
+}
+
 pub fn warning(ui: &egui::Ui) -> Color32 {
     t(ui).warning
 }

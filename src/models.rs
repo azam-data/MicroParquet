@@ -459,7 +459,7 @@ pub fn resolved_scale(
     }
 }
 
-fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
+pub fn classify_column_auto_format(col_name: &str) -> MetricFormatType {
     // Whole-token matches only: "Utility_Bill_Amount" is money, not utilisation
     const BPS_TOKENS: &[&str] = &["bps", "bp"];
     const PLAIN_NUMBER_TOKENS: &[&str] = &[
@@ -728,6 +728,11 @@ impl GroupJoin {
 
 fn default_true() -> bool {
     true
+}
+
+/// The currency an FTP step reads curves in unless it says otherwise.
+pub fn default_ftp_currency() -> String {
+    "BDT".to_string()
 }
 
 /// Header mark for each sorted column: its level (1-based) and whether it is highest first. The
@@ -1129,6 +1134,11 @@ impl RateBandDef {
 }
 
 impl PortablePaths {
+    /// The folder of the gap limit files (`gap_limits/<preset>.json`).
+    pub fn gap_limits_dir(&self) -> PathBuf {
+        self.root_dir.join(crate::banking::GAP_LIMITS_DIR)
+    }
+
     /// Where the rate profile presets are saved.
     pub fn rate_bands_file(&self) -> PathBuf {
         self.root_dir.join("rate_bands.json")
@@ -1182,7 +1192,185 @@ pub struct AggSpec {
     pub format_spec: ColumnFormatSpec,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+// ---------------------------------------------------------------------------- pivot table (V1)
+
+/// How one value field of a pivot table is aggregated.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotAgg {
+    #[default]
+    Sum,
+    Count,
+    CountDistinct,
+    Average,
+    Min,
+    Max,
+    WeightedAvg,
+}
+
+impl PivotAgg {
+    pub fn all() -> &'static [PivotAgg] {
+        &[
+            PivotAgg::Sum,
+            PivotAgg::Count,
+            PivotAgg::CountDistinct,
+            PivotAgg::Average,
+            PivotAgg::Min,
+            PivotAgg::Max,
+            PivotAgg::WeightedAvg,
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotAgg::Sum => "Sum",
+            PivotAgg::Count => "Count",
+            PivotAgg::CountDistinct => "Count distinct",
+            PivotAgg::Average => "Average",
+            PivotAgg::Min => "Min",
+            PivotAgg::Max => "Max",
+            PivotAgg::WeightedAvg => "W.Avg",
+        }
+    }
+
+    /// True when the cells of a row or column add up to its total (so a share of the total means something).
+    pub fn is_additive(&self) -> bool {
+        matches!(self, PivotAgg::Sum | PivotAgg::Count)
+    }
+}
+
+/// One value field of a pivot table.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PivotValue {
+    pub field: String,
+    #[serde(default)]
+    pub agg: PivotAgg,
+    /// The weight column of a weighted average.
+    #[serde(default)]
+    pub weight_col: Option<String>,
+}
+
+impl PivotValue {
+    /// "Sum of Balance", "W.Avg of Rate by Balance".
+    pub fn label(&self) -> String {
+        match (&self.agg, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty())) {
+            (PivotAgg::WeightedAvg, Some(w)) => format!("W.Avg of {} by {}", self.field, w),
+            (a, _) => format!("{} of {}", a.label(), self.field),
+        }
+    }
+}
+
+/// A filter of a pivot table: only rows whose field is one of `values` are used; `None` is a blank value.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PivotFilter {
+    pub field: String,
+    #[serde(default)]
+    pub values: Vec<Option<String>>,
+}
+
+/// "Show values as" of a pivot table.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotShowAs {
+    #[default]
+    NoCalculation,
+    PctOfRowTotal,
+    PctOfColumnTotal,
+    PctOfGrandTotal,
+}
+
+impl PivotShowAs {
+    pub fn all() -> &'static [PivotShowAs] {
+        &[PivotShowAs::NoCalculation, PivotShowAs::PctOfRowTotal, PivotShowAs::PctOfColumnTotal, PivotShowAs::PctOfGrandTotal]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotShowAs::NoCalculation => "No calculation",
+            PivotShowAs::PctOfRowTotal => "% of row total",
+            PivotShowAs::PctOfColumnTotal => "% of column total",
+            PivotShowAs::PctOfGrandTotal => "% of grand total",
+        }
+    }
+}
+
+/// The scale a pivot's value columns are shown in. The numbers stay in BDT; this sets each value
+/// column's display format (so the global scale is not applied a second time).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotScale {
+    /// As set in the View menu.
+    #[default]
+    Global,
+    Plain,
+    Thousand,
+    Lakh,
+    Million,
+    Crore,
+}
+
+impl PivotScale {
+    pub fn all() -> &'static [PivotScale] {
+        &[PivotScale::Global, PivotScale::Plain, PivotScale::Thousand, PivotScale::Lakh, PivotScale::Million, PivotScale::Crore]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotScale::Global => "As in View",
+            PivotScale::Plain => "Plain",
+            PivotScale::Thousand => "Thousand",
+            PivotScale::Lakh => "Lakh",
+            PivotScale::Million => "Million",
+            PivotScale::Crore => "Crore",
+        }
+    }
+
+    /// The column format that shows this scale; `None` follows the global setting.
+    pub fn format_type(&self) -> Option<MetricFormatType> {
+        match self {
+            PivotScale::Global => None,
+            PivotScale::Plain => Some(MetricFormatType::StandardCommas),
+            PivotScale::Thousand => Some(MetricFormatType::BdtThousand),
+            PivotScale::Lakh => Some(MetricFormatType::BdtLakh),
+            PivotScale::Million => Some(MetricFormatType::BdtMillion),
+            PivotScale::Crore => Some(MetricFormatType::BdtCrore),
+        }
+    }
+}
+
+/// "Sort by value": the rows are ordered by the row total of one value field instead of by their labels.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PivotSortByValue {
+    /// Index into the pivot's value fields.
+    pub value_index: usize,
+    /// Highest first.
+    #[serde(default)]
+    pub descending: bool,
+}
+
+/// Everything a pivot table is made of (the step `PivotTable`, the builder dialog and the engine share it).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct PivotSpec {
+    #[serde(default)]
+    pub rows: Vec<String>,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub values: Vec<PivotValue>,
+    #[serde(default)]
+    pub filters: Vec<PivotFilter>,
+    #[serde(default = "default_true")]
+    pub row_totals: bool,
+    #[serde(default = "default_true")]
+    pub column_totals: bool,
+    #[serde(default)]
+    pub subtotals: bool,
+    #[serde(default)]
+    pub show_as: PivotShowAs,
+    #[serde(default)]
+    pub scale: PivotScale,
+    #[serde(default)]
+    pub sort_by_value: Option<PivotSortByValue>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct FtpPoint {
     pub tenor_days: i64,
     pub ftp_rate: f64,
@@ -1224,6 +1412,23 @@ pub fn default_active_statuses() -> Vec<String> {
 /// Hygiene audit: rates above this (percent) are outliers by default.
 pub fn default_rate_max_pct() -> f64 {
     25.0
+}
+
+/// Which yield curve an FTP step uses (Phase 4 V4).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub enum FtpCurveMode {
+    /// The points typed in the step (its `curve`): what every step saved before Phase 4 does.
+    #[default]
+    Inline,
+    /// The curve of the store dated on or before `date` (YYYY-MM-DD), for every deal.
+    FixedDate { date: String },
+    /// For each deal, the latest curve of the store dated on or before its open date. A deal opened
+    /// before the earliest curve is an error, unless `use_earliest_for_older`: then the earliest
+    /// curve is used and `FTP_Note` says so.
+    OriginationDate {
+        #[serde(default)]
+        use_earliest_for_older: bool,
+    },
 }
 
 /// Interpolation of an FTP step saved without the field (before Phase 2): the old step lookup.
@@ -1325,6 +1530,13 @@ pub enum TransformStep {
         source_col: String,
         new_col: String,
     },
+    /// Replaces every run of line breaks (\r\n, \n or \r) inside the text values of the chosen
+    /// columns (all text columns when none are listed) with one space and trims the ends of the
+    /// values that had one. Never applied automatically.
+    CleanLineBreaks {
+        #[serde(default)]
+        columns: Vec<String>,
+    },
     MaturityBucket {
         mat_col: String,
         cutoff_date: String,
@@ -1347,6 +1559,20 @@ pub enum TransformStep {
         /// Asset/liability side column; None = old macro, treated as asset (flagged in output)
         #[serde(default)]
         side_col: Option<String>,
+        /// The date a floating rate reprices (V5): the effective repricing date is the earlier of
+        /// this and the maturity. `None`: the maturity (every step saved before Phase 4).
+        #[serde(default)]
+        reprice_col: Option<String>,
+        /// A file in `portable_data/betas` (without `.json`) with the pass-through % of each
+        /// product; products that are not in it pass through 100%.
+        #[serde(default)]
+        beta_file: Option<String>,
+        /// The column with the product codes the beta file is read against.
+        #[serde(default)]
+        product_col: Option<String>,
+        /// The shocked rate never goes below this (percent); the rate change is cut to fit.
+        #[serde(default)]
+        floor_pct: Option<f64>,
     },
     FtpCurveMap {
         opndat_col: String,
@@ -1359,6 +1585,14 @@ pub enum TransformStep {
         /// their past results; new steps from the FTP modal default to Linear.
         #[serde(default = "legacy_ftp_interpolation")]
         interpolation: FtpInterpolation,
+        /// Which curve: the points typed in the step (`curve`; every step saved before Phase 4), the
+        /// curve of the store on a fixed date, or each deal's own curve by its open date (V4).
+        #[serde(default)]
+        curve_mode: FtpCurveMode,
+        /// The currency of the curves a step that reads the store uses (default BDT); curves of
+        /// other currencies are skipped with a note.
+        #[serde(default = "default_ftp_currency")]
+        currency: String,
     },
     BankingHygieneAudit {
         opndat_col: String,
@@ -1416,6 +1650,30 @@ pub enum TransformStep {
         sort_by_col: Option<String>,
         top_n: Option<usize>,
     },
+    /// The pivot builder's table (Phase 4 V1): Rows, Columns, Values and Filters, with totals.
+    /// `GroupByPivot` steps from older macros stay as they were.
+    PivotTable {
+        #[serde(default)]
+        rows: Vec<String>,
+        #[serde(default)]
+        columns: Vec<String>,
+        #[serde(default)]
+        values: Vec<PivotValue>,
+        #[serde(default)]
+        filters: Vec<PivotFilter>,
+        #[serde(default = "default_true")]
+        row_totals: bool,
+        #[serde(default = "default_true")]
+        column_totals: bool,
+        #[serde(default)]
+        subtotals: bool,
+        #[serde(default)]
+        show_as: PivotShowAs,
+        #[serde(default)]
+        scale: PivotScale,
+        #[serde(default)]
+        sort_by_value: Option<PivotSortByValue>,
+    },
     SqlQuery {
         query: String,
     },
@@ -1454,6 +1712,7 @@ impl TransformStep {
             TransformStep::ConditionalColumn { .. } => "Conditional column",
             TransformStep::MathFormula { .. } => "Calc column",
             TransformStep::NormalizeEntity { .. } => "Normalise names",
+            TransformStep::CleanLineBreaks { .. } => "Clean line breaks",
             TransformStep::MaturityBucket { .. } => "Maturity buckets",
             TransformStep::RateBand { .. } => "Rate profile",
             TransformStep::RateShockSim { .. } => "Rate shock",
@@ -1462,7 +1721,7 @@ impl TransformStep {
             TransformStep::DurationAnalysis { .. } => "Duration / \u{394}EVE",
             TransformStep::LoanClassificationProvision { .. } => "Provision",
             TransformStep::LoanLimitUtilization { .. } => "Limits",
-            TransformStep::GroupByPivot { .. } => "Pivot",
+            TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
             TransformStep::Skipped { .. } => "Off",
         }
@@ -1547,6 +1806,13 @@ impl TransformStep {
             TransformStep::NormalizeEntity { new_col, .. } => {
                 format!("+Normalize Entity: {}", new_col)
             }
+            TransformStep::CleanLineBreaks { columns } => {
+                if columns.is_empty() {
+                    "Clean line breaks (all text columns)".to_string()
+                } else {
+                    format!("Clean line breaks ({})", columns.join(", "))
+                }
+            }
             TransformStep::MaturityBucket {
                 new_col,
                 bucket_def,
@@ -1582,7 +1848,54 @@ impl TransformStep {
             TransformStep::GroupByPivot { group_cols, .. } => {
                 format!("Group/Pivot by {:?}", group_cols)
             }
+            TransformStep::PivotTable { rows, columns, values, .. } => {
+                let mut t = format!("Pivot: {}", values.iter().map(|v| v.label()).collect::<Vec<_>>().join(", "));
+                if !rows.is_empty() {
+                    t.push_str(&format!(" by {}", rows.join(" / ")));
+                }
+                if !columns.is_empty() {
+                    t.push_str(&format!(" across {}", columns.join(" / ")));
+                }
+                t
+            }
             TransformStep::SqlQuery { .. } => "SQL Query Transform".to_string(),
+        }
+    }
+}
+
+impl TransformStep {
+    /// The pivot table settings of a `PivotTable` step.
+    pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
+        match self.inner() {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value } => Some(PivotSpec {
+                rows: rows.clone(),
+                columns: columns.clone(),
+                values: values.clone(),
+                filters: filters.clone(),
+                row_totals: *row_totals,
+                column_totals: *column_totals,
+                subtotals: *subtotals,
+                show_as: *show_as,
+                scale: *scale,
+                sort_by_value: *sort_by_value,
+            }),
+            _ => None,
+        }
+    }
+
+    /// A `PivotTable` step from settings.
+    pub fn from_pivot_spec(spec: PivotSpec) -> TransformStep {
+        TransformStep::PivotTable {
+            rows: spec.rows,
+            columns: spec.columns,
+            values: spec.values,
+            filters: spec.filters,
+            row_totals: spec.row_totals,
+            column_totals: spec.column_totals,
+            subtotals: spec.subtotals,
+            show_as: spec.show_as,
+            scale: spec.scale,
+            sort_by_value: spec.sort_by_value,
         }
     }
 }
@@ -1620,6 +1933,38 @@ pub enum TabSource {
         rate_col: Option<String>,
         cl_status_col: Option<String>,
     },
+    /// The repricing-gap summary of a rate shock (Phase 4 V5): the tab's rows (its source and
+    /// steps) put into repricing buckets, with the ΔNII of the shock in `spec`.
+    RepricingGap {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::banking::RateShockSpec,
+    },
+    /// The liquidity gap ladder (Phase 4 V3): inflows and outflows of the chosen tabs by maturity bucket.
+    GapLadder {
+        inputs: Vec<GapTabInput>,
+        preset: CustomBucketDef,
+        cutoff_date: String,
+        null_as_sight: bool,
+        /// The limits read from `portable_data/gap_limits` when the tab was built.
+        limits: Option<crate::banking::GapLimitsFile>,
+    },
+    /// The CL migration matrix of two months (Phase 4 V2).
+    ClMigration {
+        prev_source: Box<TabSource>,
+        prev_steps: Vec<TransformStep>,
+        curr_source: Box<TabSource>,
+        curr_steps: Vec<TransformStep>,
+        spec: crate::banking::ClMigrationSpec,
+    },
+}
+
+/// A tab that feeds the liquidity gap ladder: where its rows come from and how they count.
+#[derive(Clone, Debug)]
+pub struct GapTabInput {
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::banking::GapInputSpec,
 }
 
 #[derive(Clone)]

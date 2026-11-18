@@ -27,17 +27,21 @@ pub enum CommandId {
     Pivot,
     Conditional,
     Normaliser,
+    CleanBreaks,
     JoinTabs,
     CopyTable,
     // Banking
     Buckets,
+    GapLadder,
     RateProfile,
     RateShock,
     Duration,
     Ftp,
+    YieldCurves,
     Provision,
     Limits,
     Reconcile,
+    ClMigration,
     Audit,
     // Export
     ExportParquet,
@@ -62,6 +66,7 @@ pub enum CommandId {
     TogglePanel,
     ToggleSql,
     ToggleChart,
+    ToggleSummary,
     // Help
     About,
 }
@@ -141,19 +146,23 @@ pub const COMMANDS: &[Command] = &[
     c(I::Sort, "Sort rows\u{2026}", G::Transform, "order ascending descending", N::Tab),
     c(I::Columns, "Columns: drop, order, rename, format\u{2026}", G::Transform, "select hide rename decimals", N::Tab),
     c(I::CalcColumn, "Calc column\u{2026}", G::Transform, "formula math add divide new", N::Tab),
-    c(I::Pivot, "Pivot and weighted average\u{2026}", G::Transform, "group by aggregate wavg summary", N::Tab),
+    c(I::Pivot, "Pivot table (Rows, Columns, Values)\u{2026}", G::Transform, "group by aggregate wavg weighted average summary crosstab subtotal", N::Tab),
     c(I::Conditional, "Conditional column (IF / ELSE)\u{2026}", G::Transform, "case when flag", N::Tab),
+    c(I::CleanBreaks, "Clean line breaks\u{2026}", G::Transform, "newline carriage return quoted multiline cell wrap spaces replace", N::Tab),
     c(I::Normaliser, "Counterparty name normaliser\u{2026}", G::Transform, "clean entity names ltd", N::Tab),
     c(I::JoinTabs, "SQL join of two open tabs\u{2026}", G::Transform, "merge lookup left right", N::TwoTabs),
     c(I::CopyTable, "Copy the table to the clipboard", G::Transform, "excel powerpoint slides paste spreadsheet", N::Tab),
     c(I::Buckets, "Maturity bucketer (SLP / LCR / custom)\u{2026}", G::Banking, "alm gap liquidity tenor", N::Tab),
+    c(I::GapLadder, "Liquidity gap ladder\u{2026}", G::Banking, "alm gap slp cumulative inflow outflow mismatch limit buckets", N::Tab),
     c(I::RateProfile, "Rate profile (rate bands)\u{2026}", G::Banking, "rate band bucket interest lending deposit yield cost profile", N::Tab),
     c(I::RateShock, "Interest rate shock / \u{394}NII\u{2026}", G::Banking, "nii irrbb bps delta income", N::Tab),
     c(I::Duration, "Duration, DV01 and \u{394}EVE\u{2026}", G::Banking, "eve irrbb modified macaulay", N::Tab),
     c(I::Ftp, "FTP yield curve mapper\u{2026}", G::Banking, "funds transfer pricing margin", N::Tab),
+    c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
+    c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
     c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Banking, "hygiene ghost exceptions quality", N::Tab),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
@@ -176,8 +185,19 @@ pub const COMMANDS: &[Command] = &[
     c(I::TogglePanel, "Show or hide the right panel", G::View, "steps column inspector sidebar", N::Nothing),
     c(I::ToggleSql, "Show or hide the SQL scratchpad bar", G::View, "query", N::Nothing),
     c(I::ToggleChart, "Show or hide the ALCO bar chart", G::View, "graph plot", N::Nothing),
+    c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
+
+/// The heading a Banking command is listed under in the menu (the Banking menu lists them in
+/// order, so the commands of one heading are next to each other).
+pub fn banking_section(id: CommandId) -> Option<&'static str> {
+    match id {
+        CommandId::Buckets | CommandId::GapLadder | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
+        CommandId::Provision | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        _ => None,
+    }
+}
 
 pub fn command(id: CommandId) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.id == id)

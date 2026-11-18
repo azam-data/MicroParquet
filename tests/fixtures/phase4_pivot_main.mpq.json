@@ -1,0 +1,82 @@
+{
+  "app_version": "1.3.0",
+  "control_column": "Balance",
+  "created_at": "c01b78b",
+  "description": "A GroupByPivot step saved by the code of main (c01b78b), before the Phase 4 pivot builder.",
+  "enforce_balance_control": true,
+  "name": "phase4_pivot_main",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "FilterRows": {
+        "column": "Brancd",
+        "keep_matching": true,
+        "operator": "NotEq",
+        "value": "XXX"
+      }
+    },
+    {
+      "GroupByPivot": {
+        "aggs": [
+          {
+            "alias": "Total_Balance",
+            "format_spec": {
+              "decimals": 2,
+              "fmt_type": "Auto"
+            },
+            "func": "Sum",
+            "target_col": "Balance",
+            "weight_col": null
+          },
+          {
+            "alias": "Accounts",
+            "format_spec": {
+              "decimals": 2,
+              "fmt_type": "Auto"
+            },
+            "func": "Count",
+            "target_col": "Actnum",
+            "weight_col": null
+          },
+          {
+            "alias": "Avg_Rate",
+            "format_spec": {
+              "decimals": 2,
+              "fmt_type": "Auto"
+            },
+            "func": "Mean",
+            "target_col": "Int Rate",
+            "weight_col": null
+          },
+          {
+            "alias": "WAvg_Rate",
+            "format_spec": {
+              "decimals": 2,
+              "fmt_type": "Auto"
+            },
+            "func": "WeightedAvg",
+            "target_col": "Int Rate",
+            "weight_col": "Balance"
+          },
+          {
+            "alias": "Share_Pct",
+            "format_spec": {
+              "decimals": 2,
+              "fmt_type": "Auto"
+            },
+            "func": "PctOfTotal",
+            "target_col": "Balance",
+            "weight_col": null
+          }
+        ],
+        "group_cols": [
+          "Brancd"
+        ],
+        "pivot_col": null,
+        "sort_by_col": "Total_Balance",
+        "top_n": null
+      }
+    }
+  ],
+  "summary": {}
+}
