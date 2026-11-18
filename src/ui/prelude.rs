@@ -72,6 +72,7 @@ pub use crate::ui::pivot_builder::PivotBuilderState;
 pub use crate::ui::provision::ProvisionState;
 pub use crate::ui::classify_overdue::OverdueState;
 pub use crate::ui::cl1_summary::Cl1State;
+pub use crate::ui::liquidity::LiqState;
 pub use crate::ui::rate_shock::ShockState;
 pub use crate::ui::reconcile::ReconcileState;
 pub use crate::ui::schema::PendingCsvModal;

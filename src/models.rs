@@ -2007,6 +2007,16 @@ pub enum TabSource {
         /// The template when the tab was built (the tab and its Excel layout follow it).
         template: Box<crate::cl1::Cl1Template>,
     },
+    /// LCR and NSFR from the GL balances of a tab (Phase 5 R6).
+    Liquidity {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::liquidity::LiqSpec,
+        /// The map as read when the tab was built, and its file name.
+        map: Box<crate::liquidity::LiqMap>,
+        map_file: String,
+        view: LiquidityView,
+    },
     /// The six-scenario IRRBB run (Phase 5 R3): `view` says which of its two tables this tab shows.
     Irrbb {
         inputs: Vec<CfTabInput>,
@@ -2021,6 +2031,15 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// Which table of the LCR / NSFR run a tab shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiquidityView {
+    /// "LCR/NSFR lines": the line detail (code, label, amount, factor, weighted).
+    Lines,
+    /// "LCR/NSFR summary": HQLA, net cash outflows, ASF, RSF, the two ratios and their flags.
+    Summary,
 }
 
 /// Which table of the six-scenario run a tab shows.

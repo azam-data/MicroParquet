@@ -13,6 +13,7 @@ pub mod engine;
 pub mod irrbb;
 pub mod exporters;
 pub mod jobs;
+pub mod liquidity;
 pub mod macros;
 pub mod models;
 pub mod overdue;

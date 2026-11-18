@@ -932,3 +932,160 @@ fn r5_the_tool_is_listed_under_loans_and_credit_and_its_export_under_export() {
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------ R6: LCR / NSFR
+
+fn liq_title() -> String {
+    format!("{}  {}", theme::ph::CHART_BAR, crate::ui::liquidity::LIQ_TITLE)
+}
+
+/// A GL tab whose codes fit the shipped sample map, plus one code (999900) that no rule covers.
+fn liq_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    micro_parquet::rules::set_data_dir_override(Some(root.join("portable_data")));
+    let gl = DataFrame::new(vec![
+        Series::new("GL_Code".into(), &["101000", "103000", "104000", "201000", "202000", "203000", "115000", "300100", "999900"]),
+        Series::new("Closing_Balance".into(), &[1000.0, 400.0, 100.0, -10_000.0, -10_000.0, -2_500.0, 3_600.0, -500.0, 5.0]),
+        Series::new("Residual_Maturity".into(), &[None, None, None, None, None, None, Some(24.0), None, None]),
+    ])
+    .expect("gl");
+    let src = parquet_source(&root, "GL", gl);
+    app.create_tab_from_source("GL".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+#[test]
+fn r6_the_dialog_fits_stops_on_an_unmapped_code_and_builds_both_tabs_with_another_map() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = liq_rig("p5r6a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Liquidity);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::Liquidity, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &liq_title(), &what);
+        for t in ["Sample parameters", "Liquidity map", "GL code column", "Balance column", "Balance sign", "Residual maturity column (NSFR)", "Calculate LCR and NSFR", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        let g = rig.app.liq.rects.clone();
+        assert!(g.banner.is_positive() && inside(g.banner, r.window), "{what}: the sample banner is drawn: {:?}", g.banner);
+        for (name, rc) in &g.controls {
+            assert!(inside(*rc, r.window), "{what}: '{name}' {rc:?} is inside the dialog {:?}", r.window);
+        }
+        for (name, b) in &g.buttons {
+            assert!(inside(*b, r.footer), "{what}: '{name}' is in the footer");
+        }
+        // the columns were guessed from their names, and the sample map is chosen
+        let s = &rig.app.liq;
+        assert_eq!((s.gl_col.as_str(), s.balance_col.as_str(), s.maturity_col.as_str(), s.map_sel.as_str()), ("GL_Code", "Closing_Balance", "Residual_Maturity", "sample_basel.json"), "{what}");
+        // Calculate: 999900 is in no rule of the map, so the run stops and says so; the tabs are not made
+        let tabs_before = rig.app.tabs.len();
+        let calc = g.button("Calculate LCR and NSFR").expect("button");
+        rig.click(calc.center());
+        let p = rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::Liquidity, "{what}: the dialog stays open");
+        assert_eq!(rig.app.tabs.len(), tabs_before, "{what}: no tab was made");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("1 GL code(s) are not in the liquidity map") && t.contains("999900")), "{what}: the stop names the code");
+        let export = rig.app.liq.rects.control("Export unmapped").expect("the Export unmapped button is shown");
+        assert!(inside(export, r.window), "{what}: Export unmapped {export:?} is in the dialog");
+        let out = rig.app.paths.root_dir.join("unmapped.csv");
+        rig.app.export_unmapped_to(out.clone());
+        assert_eq!(std::fs::read_to_string(&out).expect("written"), "GL code,Balance\n999900,5\n", "{what}");
+        // a map of the bank's own that covers the code: written next to the sample, chosen by a real click
+        let sample = std::fs::read_to_string(rig.app.paths.root_dir.join("portable_data").join("liquidity_maps").join("sample_basel.json")).expect("the sample was written");
+        let mut j: serde_json::Value = serde_json::from_str(&sample).expect("json");
+        j["gl_map"].as_array_mut().expect("rules").push(serde_json::json!({"match": "prefix", "value": "9999", "line": "RSF_CASH"}));
+        j["sample"] = serde_json::json!(false);
+        std::fs::write(rig.app.paths.root_dir.join("portable_data").join("liquidity_maps").join("bank.json"), j.to_string()).expect("write the bank's map");
+        rig.app.open_liquidity();
+        rig.draw(4);
+        let combo = rig.app.liq.rects.control("Liquidity map").expect("map combo");
+        pick(&mut rig, combo, "bank.json");
+        assert_eq!(rig.app.liq.map_sel, "bank.json", "{what}");
+        let p = rig.draw(5);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("Sample parameters")), "{what}: no banner for a map that is not a sample");
+        let calc = rig.app.liq.rects.button("Calculate LCR and NSFR").expect("button");
+        rig.click(calc.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed: {} {}", rig.app.liq.error, rig.app.status_message);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), tabs_before + 2, "{what}");
+        let lines = &rig.app.tabs[tabs_before];
+        let summary = &rig.app.tabs[tabs_before + 1];
+        assert_eq!((lines.title.as_str(), summary.title.as_str()), ("LCR/NSFR lines", "LCR/NSFR summary"), "{what}");
+        let items: Vec<String> = summary.cached_slice.column("Item").expect("Item").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let val = |i: &str| summary.cached_slice.column("Value").expect("Value").f64().expect("f64").get(items.iter().position(|x| x == i).unwrap_or(0)).unwrap_or(f64::NAN);
+        assert!((val("HQLA after caps") - 1390.0).abs() < 0.005, "{what}: {}", val("HQLA after caps"));
+        assert!((val("LCR") - 198.5714).abs() < 0.001, "{what}: {}", val("LCR"));
+        assert!((val("NSFR") - 20250.0 / 3060.0 * 100.0).abs() < 0.001, "{what}: {}", val("NSFR"));
+        assert!(lines.cached_slice.height() >= 10, "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r6_a_missing_choice_is_said_in_red_and_blocks_the_button() {
+    let (ppp, w, h) = SCREENS[0];
+    let mut rig = liq_rig("p5r6b", ppp, w, h);
+    rig.app.run_command(&rig.ctx, CommandId::Liquidity);
+    rig.app.liq.gl_col.clear();
+    let p = rig.draw(6);
+    assert!(p.boxes.iter().any(|(t, _)| t.contains("Choose the GL code column")), "the problem is said");
+    assert!(rig.app.liquidity_inputs().is_err());
+    rig.app.liq.gl_col = "GL_Code".into();
+    rig.app.liq.balance_col = "Nope".into();
+    assert!(rig.app.liquidity_inputs().err().unwrap_or_default().contains("Choose the balance column"));
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r6_the_tool_is_listed_under_treasury_and_alm_and_found_by_the_search() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::Liquidity), Some("Treasury & ALM"));
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["lcr nsfr", "liquidity coverage", "net stable funding"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::Liquidity, "{q}");
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = liq_rig("p5r6c", ppp, w, h);
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
+        assert!(at("Treasury & ALM").top() < at("LCR / NSFR from GL balances").top() && at("LCR / NSFR from GL balances").top() < at("Loans & credit").top(), "{}", rig.what);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+
+#[test]
+fn the_banking_menu_fits_the_window_with_every_entry_on_screen_at_both_scales() {
+    use micro_parquet::commands::*;
+    // every Banking command is under one of the two headings
+    for c in in_group(CommandGroup::Banking) {
+        assert!(banking_section(c.id).is_some(), "{:?} has no heading in the Banking menu", c.id);
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = cl1_rig("p5menu", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let screen = rig.ctx.screen_rect();
+        let alm = p.boxes.iter().find(|(x, _)| x.contains("Treasury & ALM")).map(|(_, b)| *b).expect("heading");
+        assert!(alm.top() >= theme::TOP_BAR_H - 1.0, "{what}: the first heading is under the top bar, not pushed above the window: {alm:?}");
+        for c in in_group(CommandGroup::Banking) {
+            let title = c.title.trim_end_matches('\u{2026}');
+            let b = p.boxes.iter().find(|(x, _)| x.contains(title)).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{title}' is in the Banking menu"));
+            assert!(inside(b, screen), "{what}: '{title}' {b:?} is inside the window {screen:?}");
+            assert!(b.bottom() <= screen.bottom() - theme::STATUS_BAR_H + 1.0, "{what}: '{title}' {b:?} is above the status bar");
+        }
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+

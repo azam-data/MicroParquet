@@ -8,7 +8,7 @@ use micro_parquet::cashflow::*;
 use polars::prelude::*;
 
 /// The tool ids of Phase 5 (file names in docs/guide/), added as each task is done.
-pub const P5_GUIDE_TOOLS: [&str; 5] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue", "cl1-summary"];
+pub const P5_GUIDE_TOOLS: [&str; 6] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue", "cl1-summary", "lcr-nsfr"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -317,6 +317,40 @@ fn guide_cl1_summary() {
             md(&book, &["Account_No", "Loan_Category", "CL_Final", "Balance:2", "Base_For_Provision_BDT:2", "Required_Provision_BDT:2"]),
             md(&out, &["Loan category", "STD: Outstanding:2", "SMA: Outstanding:2", "SS: Outstanding:2", "DF: Outstanding:2", "B/L: Outstanding:2", "Total: Outstanding:2"]),
             md(&out, &["Loan category", "Total: Base for provision:2", "Total: Provision required:2"]),
+        ],
+    );
+}
+
+#[test]
+fn guide_lcr_nsfr() {
+    use micro_parquet::liquidity::*;
+    let mut gl = DataFrame::new(vec![
+        Series::new("GL_Code".into(), &["101000", "103000", "104000", "201000", "202000", "203000", "115000", "300100"]),
+        Series::new("Balance".into(), &[1000.0, 400.0, 100.0, -10_000.0, -10_000.0, -2_500.0, 3_600.0, -500.0]),
+    ])
+    .expect("gl");
+    gl.with_column(Series::new("Residual_Months".into(), &[None, None, None, None, None, None, Some(24.0), None])).expect("col");
+    let data = dir("guide_lcr");
+    micro_parquet::rules::set_data_dir_override(Some(data));
+    let map = load_map("sample_basel").expect("the shipped sample");
+    micro_parquet::rules::set_data_dir_override(None);
+    let spec = LiqSpec { gl_col: "GL_Code".into(), balance_col: "Balance".into(), sign: BalanceSign::DebitPositive, maturity_col: Some("Residual_Months".into()), maturity_unit: MaturityUnit::Months };
+    let ev = run_df(&gl, &spec, &map, "liquidity_maps/sample_basel.json").expect("runs");
+    assert!((ev.hqla - 1390.0).abs() < 0.005 && (ev.nco - 700.0).abs() < 0.005);
+    assert!((ev.lcr.expect("defined") - 198.5714).abs() < 0.001 && (ev.nsfr.expect("defined") - 661.7647).abs() < 0.001);
+    let summary = summary_frame(&ev, &map, "liquidity_maps/sample_basel.json").expect("summary");
+    let keep: BooleanChunked = summary.column("Value").expect("c").f64().expect("f").into_iter().map(|v| Some(v.is_some())).collect();
+    let numbers = summary.filter(&keep).expect("filter");
+    let lines = lines_frame(&ev).expect("lines");
+    let keep: BooleanChunked = lines.column("Amount").expect("c").f64().expect("f").into_iter().map(|v| Some(v.unwrap_or(0.0) != 0.0)).collect();
+    let used = lines.filter(&keep).expect("filter");
+    check_guide(
+        "lcr-nsfr",
+        "guide_lcr_nsfr",
+        &[
+            md(&gl, &["GL_Code", "Balance:2", "Residual_Months:~0"]),
+            md(&used, &["Ratio", "Line", "Residual maturity", "Amount:2", "Factor %:2", "Weighted amount:2"]),
+            md(&numbers, &["Item", "Value:2", "Unit"]),
         ],
     );
 }

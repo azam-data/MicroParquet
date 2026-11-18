@@ -24,6 +24,7 @@ pub mod limits;
 pub mod clean_breaks;
 pub mod classify_overdue;
 pub mod cl1_summary;
+pub mod liquidity;
 pub mod pick;
 pub mod normaliser;
 pub mod pivot;
@@ -111,6 +112,7 @@ impl MicroParquetApp {
             ActiveToolModal::LoanProvision => self.render_provision_modal(ctx, cols),
             ActiveToolModal::ClassifyOverdue => self.render_classify_overdue_modal(ctx, cols),
             ActiveToolModal::Cl1Summary => self.render_cl1_modal(ctx, cols),
+            ActiveToolModal::Liquidity => self.render_liquidity_modal(ctx, cols),
             ActiveToolModal::LoanLimitUtil => self.render_limits_modal(ctx, cols),
             ActiveToolModal::FtpCurveMap => self.render_ftp_modal(ctx, cols),
             ActiveToolModal::BankingAudit => self.render_audit_modal(ctx, cols),

@@ -123,6 +123,8 @@ pub enum ActiveToolModal {
     ClassifyOverdue,
     /// CL-1 summary (Phase 5 R5).
     Cl1Summary,
+    /// LCR / NSFR (Phase 5 R6).
+    Liquidity,
     LoanLimitUtil,
     SaveMacro,
     PythonCodePreview,
@@ -217,6 +219,7 @@ pub struct MicroParquetApp {
     pub provision: ProvisionState,
     pub overdue: OverdueState,
     pub cl1: Cl1State,
+    pub liq: LiqState,
     pub limits: LimitState,
     pub macros: MacroState,
     pub export: ExportState,
@@ -304,6 +307,7 @@ impl MicroParquetApp {
             provision: ProvisionState::default(),
             overdue: OverdueState::default(),
             cl1: Cl1State::default(),
+            liq: LiqState::default(),
             limits: LimitState::default(),
             macros: MacroState::default(),
             export: ExportState::default(),

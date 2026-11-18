@@ -287,6 +287,10 @@ impl MicroParquetApp {
                     let r = ui
                         .add_enabled_ui(has_tab, |ui| {
                             ui.menu_button(text, |ui| {
+                                // compact rows: the Banking menu has about twenty entries and two headings, and must
+                                // fit a 686 pt window under the top bar
+                                ui.spacing_mut().interact_size.y = theme::MENU_ROW_H;
+                                ui.spacing_mut().item_spacing.y = 0.0;
                                 let mut last_section: Option<&str> = None;
                                 for c in cmds::in_group(group_id) {
                                     // the Banking menu has two headings: Treasury & ALM and Loans & credit

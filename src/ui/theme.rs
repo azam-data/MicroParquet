@@ -265,6 +265,11 @@ pub const BEHAVIOUR_CELL_W: f32 = 80.0;
 pub const BEHAVIOUR_SOURCE_W: f32 = 320.0;
 pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
+/// The height of a row of the Banking and Export menus (compact, so the Banking menu fits a 686 pt window).
+pub const MENU_ROW_H: f32 = 26.0;
+/// The combo boxes of the LCR / NSFR dialog: the map file and the balance sign.
+pub const LIQ_MAP_COMBO_W: f32 = 225.0;
+pub const LIQ_SIGN_COMBO_W: f32 = 270.0;
 pub const LIST_MAX_H_S: f32 = 120.0;
 pub const LIST_MAX_H_M: f32 = 180.0;
 pub const LIST_MAX_H_L: f32 = 240.0;

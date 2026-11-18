@@ -23,7 +23,7 @@ Branch `phase5` (PR #7). One commit per item, `cargo test`, push, don't merge. T
 | A5 no CPR/TDRR in gap ladder | DONE | (this commit) | r2 a5 ×1 | guide only (the code already ignored them) |
 | R4 | DONE | (this commit) | r4 ×10, render r4_ ×3 (both screens), guide_classify_by_overdue | step + dialog; `src/overdue.rs`, `src/problems.rs`, `src/ui/pick.rs` shared helpers |
 | R5 | DONE | (this commit) | r5 ×8, render r5_ ×3 (both screens), guide_cl1_summary | `src/cl1.rs`, tab + Excel layout |
-| R6 | TODO | | | |
+| R6 | DONE | (this commit) | r6 ×12, render r6_ ×3 + banking menu fit ×1 (both screens), guide_lcr_nsfr | `src/liquidity.rs`; Banking menu rows made compact |
 | R7 | TODO | | | |
 
 R4–R7 were not asked for in Session A (the spec lists them).
