@@ -27,3 +27,26 @@ Branch `phase5` (PR #7). One commit per item, `cargo test`, push, don't merge. T
 | R7 | DONE | (this commit) | r7 ×11, render r7_ ×3 (both screens), guide_ifrs9_ecl | step + summary tab; `src/ecl.rs` |
 
 R4–R7 were not asked for in Session A (the spec lists them).
+
+## Session B, second part (owner answers B1–B3, build findings C1–C2, review fixes D1–D10)
+One commit per item, except B1 and B2, which are in one commit (826ca6e, both are R7 rules). Deviations are in the spec's `<accepted_deviations>`.
+
+| Item | Status | Commit | Tests added | Notes |
+|---|---|---|---|---|
+| B1 R7 cure | DONE | 826ca6e | r7 b1 | final stage never better than the current criteria |
+| B2 R7 scenarios | DONE | 826ca6e | r7 scenarios | 1 unweighted, 2 refused (BRPD 06/2026 §5.9), 3+ sum to 100 |
+| B3 R4 blank overdue date | DONE | 1a8d6ad | r4 b3 | count always in the note; optional "Overdue amount" role stops the run |
+| C1 Steps panel buttons | DONE | 6b6d625 | render c1_* ×4 (real clicks, both screens), c1_audit_* | click area no longer over the buttons; row widgets audited, none else overlapped |
+| C2 Column inspector | DONE | 3c41a7b | c2 ×N, t5 top ten, render c2_* (both screens) | p1–p99 bins, log scale, tooltips, top 10, months, stat cards never cut |
+| D1 R7 cumulative PD | DONE | 06800b9 | r7 d1 | scenario scales cumulative PD, capped at 1 |
+| D2 R7 grade map | DONE | 5a7f33a | r7 d2 | grades through cl_code_map.json; unknown stops the run |
+| D3 R1 payment dates | DONE | 8bb2ac5 | r1 d3 | derived from the maturity each time |
+| D4 R1 prepayment order | DONE | b6c47f5 | r1 d4 | interest, prepayment, then scheduled principal |
+| D5 R3 required fields | DONE | 1c5e494 | r3 d5 | decay_x, outlier_pct |
+| D6 R4 DPD range | DONE | aba6ca2 | r4 d6 | 0–36,500, date overflow, no panic |
+| D7 R7 matured loans, blank flags | DONE | 9cb7ddd | r7 d7 | 1-year minimum term, counted |
+| D8 R7 bank policy file | DONE | 4fb5d26 | r7 d8 | `portable_data/policy/ifrs9_bank_policy.json`, sample |
+| D9 rule files, profiles, floating, part-years | DONE | 6b9e4de | d9 ×3, r7 part-years expectations changed | four parts, see spec |
+| D10 R3 footer | DONE | 608d100 | r3 d10 | cutoff, mode, options, floors, beta file added |
+
+`cargo test`: 148 unit, 347 phase3 (all phases), 60 review: all pass. Release build and CI not re-run for D8–D10 (see report).
