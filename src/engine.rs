@@ -2357,7 +2357,7 @@ pub fn compile_tab_lazy(
         TabSource::RepricingGap { source, steps, spec } => {
             let input = compile_tab_lazy(source, steps, temp_dir)?;
             let betas = rate_shock_betas(spec)?;
-            crate::banking::build_repricing_gap(input, spec, &betas)?.lazy()
+            crate::banking::build_repricing_gap_betas(input, spec, &betas)?.lazy()
         }
         TabSource::GapLadder {
             inputs,
@@ -2605,7 +2605,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 floor_pct: *floor_pct,
             };
             let betas = rate_shock_betas(&spec)?;
-            apply_rate_shock_with(lf, &spec, &betas)
+            crate::banking::apply_rate_shock_betas(lf, &spec, &betas)
         }
         TransformStep::FtpCurveMap {
             opndat_col,
@@ -2726,9 +2726,9 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
 }
 
 /// The betas a rate-shock step reads: the content of its beta file, or none when it has none.
-pub fn rate_shock_betas(spec: &RateShockSpec) -> Result<Vec<(String, f64)>> {
+pub fn rate_shock_betas(spec: &RateShockSpec) -> Result<Vec<crate::betas::BetaRow>> {
     match spec.beta_file.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(name) => crate::betas::load_beta_file(&crate::betas::betas_dir(), name),
+        Some(name) => crate::betas::load_beta_rows(&crate::betas::betas_dir(), name),
         None => Ok(Vec::new()),
     }
 }

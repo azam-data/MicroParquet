@@ -264,9 +264,19 @@ fn given(c: &Option<String>) -> Option<&str> {
 
 /// The beta of each row, as the share of the shock its rate follows: 1.0 for a product that is
 /// not in the file (and for a row with no product).
-fn beta_factor_expr(product_col: &str, betas: &[(String, f64)]) -> Expr {
+fn beta_factor_expr(product_col: &str, betas: &[crate::betas::BetaRow], shock_is_fall: bool) -> Expr {
     let code = normalise_code_expr(col(product_col));
-    betas.iter().rev().fold(lit(1.0), |acc, (k, b)| when(code.clone().eq(lit(k.clone()))).then(lit(*b)).otherwise(acc))
+    betas.iter().rev().fold(lit(1.0), |acc, r| when(code.clone().eq(lit(r.product.clone()))).then(lit(if shock_is_fall { r.down } else { r.up })).otherwise(acc))
+}
+
+/// A single beta per product (the same up and down).
+pub fn single_betas(betas: &[(String, f64)]) -> Vec<crate::betas::BetaRow> {
+    betas.iter().map(|(k, b)| crate::betas::BetaRow { product: k.clone(), base: *b, up: *b, down: *b }).collect()
+}
+
+/// The (product, beta) pairs of beta rows, for counting the products a file does not list.
+pub fn beta_pairs(rows: &[crate::betas::BetaRow]) -> Vec<(String, f64)> {
+    rows.iter().map(|r| (r.product.clone(), r.base)).collect()
 }
 
 /// How many rows have a product the beta file does not list (a blank product is one of them).
@@ -306,6 +316,12 @@ fn effective_days_expr(spec: &RateShockSpec) -> Expr {
 /// * betas: the shock is multiplied by the product's pass-through; an unmapped product passes 100%.
 /// * `floor_pct`: a fall in the rate stops at the floor; the change is cut to what fits.
 pub fn apply_rate_shock_with(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<LazyFrame> {
+    apply_rate_shock_betas(lf, spec, &single_betas(betas))
+}
+
+/// `apply_rate_shock_with` with a beta for a rise and one for a fall per product: a shock that
+/// raises rates uses `up`, one that lowers them `down` (a file with one beta has the same for both).
+pub fn apply_rate_shock_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[crate::betas::BetaRow]) -> Result<LazyFrame> {
     let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
     let lf = ensure_date(lf, &spec.mat_col)?;
     let lf = match given(&spec.reprice_col) {
@@ -352,7 +368,7 @@ pub fn apply_rate_shock_with(lf: LazyFrame, spec: &RateShockSpec, betas: &[(Stri
         lit(shock_pct / 100.0)
     } else {
         let beta = match (given(&spec.beta_file), given(&spec.product_col)) {
-            (Some(_), Some(p)) => beta_factor_expr(p, betas),
+            (Some(_), Some(p)) => beta_factor_expr(p, betas, spec.shock_bps < 0.0),
             _ => lit(1.0),
         };
         let delta = lit(shock_pct) * beta;
@@ -386,6 +402,11 @@ pub const REPRICING_TOTAL_ROW: &str = "Total";
 /// effective repricing date 1 to 30, 31 to 90, 91 to 180 and 181 to 365 are in the next four,
 /// later or never in the last.
 pub fn build_repricing_gap(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String, f64)]) -> Result<DataFrame> {
+    build_repricing_gap_betas(lf, spec, &single_betas(betas))
+}
+
+/// `build_repricing_gap` with up and down betas.
+pub fn build_repricing_gap_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[crate::betas::BetaRow]) -> Result<DataFrame> {
     let cutoff = NaiveDate::parse_from_str(spec.cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
     let cutoff_days = days_since_epoch(cutoff);
     let mut lf = lf;
@@ -394,7 +415,7 @@ pub fn build_repricing_gap(lf: LazyFrame, spec: &RateShockSpec, betas: &[(String
     if !dt.is_numeric() {
         bail!("The balance column '{}' is {}, not a number. Set it to a number in the schema first.", spec.bal_col, dt);
     }
-    let shocked = apply_rate_shock_with(lf, spec, betas)?;
+    let shocked = apply_rate_shock_betas(lf, spec, betas)?;
     let (shocked, sign) = direction_sign(shocked, spec.side_col.as_deref())?;
     let _ = sign;
     let eff = effective_days_expr(spec);

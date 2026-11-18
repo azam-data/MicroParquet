@@ -250,3 +250,103 @@ fn i4_the_gap_ladder_ends_with_a_totals_row_and_its_percentage_cells_are_blank()
     let sum: f64 = floats(&out, "Net gap")[..last].iter().flatten().sum();
     assert_eq!(sum, 100.0);
 }
+
+// ------------------------------------------------------------------------------------------ 6
+
+fn savings_book() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Product".into(), &["SAVINGS", "FDR", "OTHER"]),
+        Series::new("Side".into(), &["Liability", "Liability", "Liability"]),
+        Series::new("Balance".into(), &[1_000_000.0, 1_000_000.0, 1_000_000.0]),
+        Series::new("Rate".into(), &[1.5, 6.0, 3.0]),
+        dates("Matdat", &["", "", ""]),
+    ])
+    .expect("book")
+}
+
+fn shock_spec(bps: f64) -> micro_parquet::banking::RateShockSpec {
+    micro_parquet::banking::RateShockSpec {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        shock_bps: bps,
+        side_col: Some("Side".into()),
+        reprice_col: None,
+        beta_file: Some("b".into()),
+        product_col: Some("Product".into()),
+        floor_pct: None,
+    }
+}
+
+fn nii_with(rows: &[micro_parquet::betas::BetaRow], bps: f64) -> Vec<Option<f64>> {
+    let out = micro_parquet::banking::apply_rate_shock_betas(savings_book().lazy(), &shock_spec(bps), rows).expect("runs").collect().expect("collect");
+    floats(&out, "NII_Impact_BDT")
+}
+
+const BETA_JSON: &str = r#"{ "source": "test", "betas": [
+    { "product": "SAVINGS", "beta_pct": 40, "beta_up_pct": 30, "beta_down_pct": 60 },
+    { "product": "FDR", "beta_pct": 100 },
+    { "product": "OTHER", "beta_up": 20, "beta_down": 50 } ] }"#;
+
+#[test]
+fn i6_beta_up_applies_to_a_rise_beta_down_to_a_fall_and_a_file_with_only_beta_gives_todays_result() {
+    use micro_parquet::betas::*;
+    let rows = parse_beta_rows("b.json", BETA_JSON).expect("parses");
+    // a rise of 100 bp: savings beta_up 30% -> interest +3,000 on a liability -> NII -3,000
+    let up = nii_with(&rows, 100.0);
+    close(up[0], -3_000.0, 1e-6, "savings, rise, beta_up 30%");
+    close(up[1], -10_000.0, 1e-6, "FDR has only beta 100%: both directions use it");
+    close(up[2], -2_000.0, 1e-6, "OTHER: the 'beta_up' alias, 20%");
+    // a fall of 100 bp: savings beta_down 60% -> interest -6,000 -> NII +6,000
+    let down = nii_with(&rows, -100.0);
+    close(down[0], 6_000.0, 1e-6, "savings, fall, beta_down 60%");
+    close(down[1], 10_000.0, 1e-6, "FDR, fall");
+    close(down[2], 5_000.0, 1e-6, "OTHER, fall, beta_down 50%");
+    // the single beta of the same product is still 40% (what a file with only beta_pct uses for both)
+    let single = parse_beta_file("b.json", BETA_JSON).expect("single view");
+    assert_eq!(single[0], ("SAVINGS".to_string(), 0.4));
+
+    // a file with only beta: exactly today's result in both directions (the old function and the new agree)
+    let only = r#"{ "betas": [ { "product": "SAVINGS", "beta_pct": 40 }, { "product": "FDR", "beta_pct": 100 }, { "product": "OTHER", "beta_pct": 25 } ] }"#;
+    let rows = parse_beta_rows("only.json", only).expect("parses");
+    assert!(rows.iter().all(|r| r.up == r.down && r.up == r.base));
+    let pairs = parse_beta_file("only.json", only).expect("pairs");
+    for bps in [100.0, -100.0] {
+        let old = micro_parquet::banking::apply_rate_shock_with(savings_book().lazy(), &shock_spec(bps), &pairs).expect("runs").collect().expect("collect");
+        assert_eq!(floats(&old, "NII_Impact_BDT"), nii_with(&rows, bps), "{bps} bp");
+    }
+    close(nii_with(&rows, 100.0)[0], -4_000.0, 1e-6, "40% of +100 bp on 1,000,000 (the Phase 4 example)");
+    close(nii_with(&rows, -100.0)[0], 4_000.0, 1e-6, "and the same for a fall");
+
+    // the file must say what to use
+    let e = parse_beta_rows("x.json", r#"{ "betas": [ { "product": "A", "beta_up_pct": 30 } ] }"#).err().expect("incomplete").to_string();
+    assert!(e.contains("needs beta_pct, or both beta_up_pct and beta_down_pct"), "{e}");
+    let e = parse_beta_rows("x.json", r#"{ "betas": [ { "product": "A", "beta_pct": 40, "beta_down_pct": 120 } ] }"#).err().expect("over 100").to_string();
+    assert!(e.contains("beta_down") && e.contains("not a percentage from 0 to 100"), "{e}");
+}
+
+#[test]
+fn i6_the_step_reads_up_and_down_betas_from_the_file() {
+    use micro_parquet::models::*;
+    let d = dir("i6step");
+    micro_parquet::betas::set_betas_dir_override(Some(d.clone()));
+    std::fs::write(d.join("b.json"), BETA_JSON).expect("write");
+    let step = |bps: f64| TransformStep::RateShockSim {
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        mat_col: "Matdat".into(),
+        cutoff_date: "2026-10-31".into(),
+        shock_bps: bps,
+        side_col: Some("Side".into()),
+        reprice_col: None,
+        beta_file: Some("b".into()),
+        product_col: Some("Product".into()),
+        floor_pct: None,
+    };
+    let up = run_steps("i6u", &savings_book(), &[step(100.0)]).expect("up");
+    let down = run_steps("i6d", &savings_book(), &[step(-100.0)]).expect("down");
+    close(floats(&up, "NII_Impact_BDT")[0], -3_000.0, 1e-6, "step, rise");
+    close(floats(&down, "NII_Impact_BDT")[0], 6_000.0, 1e-6, "step, fall");
+    micro_parquet::betas::set_betas_dir_override(None);
+}

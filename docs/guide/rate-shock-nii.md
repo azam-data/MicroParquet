@@ -27,7 +27,7 @@ Estimates the one-year change in net interest income (ΔNII) if all rates move i
 | Maturity date | Yes | Date | 2027-01-29; blank = reprices at once | Blank or already matured: weight 1.0 (reprices immediately). |
 | Repricing date | No | Date | 2026-11-30 | A floating deal reprices on the earlier of this date and its maturity. A blank repricing date uses the maturity. |
 | Side (asset / liability) | Recommended | Text | Asset, Deposit, A, L, Borrowing | A… = asset; L…, Deposit and Borrowing = liability. Other values stop the run. Without it every row is treated as an asset and `Direction_Assumed` says so. |
-| Product and beta file | No | Text codes; file in portable_data/betas | SAVINGS; deposit_betas | File: {"source": "...", "betas": [{"product": "SAVINGS", "beta_pct": 40}]}. Codes are matched ignoring case and extra spaces. A product that is not in the file passes 100%. |
+| Product and beta file | No | Text codes; file in portable_data/betas | SAVINGS; deposit_betas | File: {"source": "...", "betas": [{"product": "SAVINGS", "beta_pct": 40}]}; add "beta_up_pct" (a rise) and/or "beta_down_pct" (a fall) to a product that follows rises and falls differently, each defaulting to "beta_pct". Codes are matched ignoring case and extra spaces. A product that is not in the file passes 100%. |
 | Floor | No | Number (percent) | 0 | The shocked rate never goes below it. |
 | Cutoff date and shock | Yes | Typed in the dialog | 2026-10-31, +100 | Shock in basis points; negative for a fall. |
 
@@ -41,7 +41,7 @@ Estimates the one-year change in net interest income (ΔNII) if all rates move i
 
 ## 6. What you get
 
-Three new columns in the result. `Current_Annual_Int` = balance × rate: gross interest income (assets) or expense (liabilities), unsigned. `NII_Impact_BDT` = the change in NII, signed: plus for assets and minus for liabilities when rates rise. `Shocked_Annual_Int` = gross interest after the shock, unsigned; do not add it across assets and liabilities as NII. Weight = 1 if the effective repricing date is on or before the cutoff or there is none, 0 if more than 365 days away, otherwise (365 − days) / 365. The rate change is the shock times the beta (100% when there is no beta), cut so the rate does not fall below the floor; a rise is never cut, and a rate already under the floor does not fall. Without a side column a `Direction_Assumed` column reads "ASSET (unspecified)".
+Three new columns in the result. `Current_Annual_Int` = balance × rate: gross interest income (assets) or expense (liabilities), unsigned. `NII_Impact_BDT` = the change in NII, signed: plus for assets and minus for liabilities when rates rise. `Shocked_Annual_Int` = gross interest after the shock, unsigned; do not add it across assets and liabilities as NII. Weight = 1 if the effective repricing date is on or before the cutoff or there is none, 0 if more than 365 days away, otherwise (365 − days) / 365. The rate change is the shock times the beta (100% when there is no beta; a shock that raises rates uses the product's beta_up_pct, one that lowers them its beta_down_pct, and a product with only beta_pct uses it both ways), cut so the rate does not fall below the floor; a rise is never cut, and a rate already under the floor does not fall. Without a side column a `Direction_Assumed` column reads "ASSET (unspecified)".
 
 The summary table has one row for each repricing bucket (0–1m, 1–3m, 3–6m, 6–12m, >12m/non-repricing) and a Total row: `Assets` (positive), `Liabilities` (negative), `Gap` (assets plus liabilities), `Cumulative gap` and `ΔNII (BDT)` for those rows. Rows that reprice at once (no date, or a date on or before the cutoff) are in 0–1m.
 
@@ -131,7 +131,7 @@ Test: `guide_rate_shock_nii`
 - "Column 'X' is String, not a date. Set it to a Date type…" for the maturity or the repricing date column.
 - "Cutoff Date must be YYYY-MM-DD".
 - "ΔNII: choose the product column the beta file is read against." Pick the Product Col.
-- "The beta file 'x' was not found in …\betas." / "The beta file x.json is not valid…" / "…the beta of 'SAVINGS' is 120, not a percentage from 0 to 100." / "…lists 'SAVINGS' twice…" Fix the file.
+- "The beta file 'x' was not found in …\betas." / "The beta file x.json is not valid…" / "…the beta of 'SAVINGS' is 120, not a percentage from 0 to 100." / "…'SAVINGS' needs beta_pct, or both beta_up_pct and beta_down_pct." / "…lists 'SAVINGS' twice…" Fix the file.
 - "ΔNII: the floor is not a number."
 - Status bar: "Rate shock: N row(s) have a product that is not in the beta file 'x' (or no product): they pass through 100%". Add the products to the file if that is wrong.
 - Blank balance note in the status bar: rows with a blank balance were counted as 0; check the extract.
@@ -139,7 +139,7 @@ Test: `guide_rate_shock_nii`
 ## 10. Limits and assumptions
 
 - A parallel shock only, over a 12-month horizon; no behavioural prepayment, no repricing of the new business rolled over, no basis risk between products.
-- A beta is the share of the shock the rate follows, applied to the whole shock in either direction; asymmetric betas (up and down) are not modelled.
+- A beta is the share of the shock the rate follows. A product may have one beta for rises and another for falls; a file with only beta_pct uses it both ways. A beta is a fixed percentage for the whole shock, not a curve that changes with its size.
 - A floor applies to a fall in the rate only; caps and options are not modelled.
 - The effective repricing date is the earlier of the repricing date and the maturity; a deal whose repricing date is already past is treated as repricing at once.
 - The summary groups by the effective repricing date and uses balances, not the ΔNII-weighted amounts.
