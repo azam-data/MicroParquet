@@ -14,7 +14,7 @@ Runs the six interest-rate shock scenarios of the Bangladesh Bank IRRBB guidelin
 
 - Open the asset and liability extracts as tabs, with the columns of the IRRBB cash-flow ladder (outstanding, maturity date, rate, repricing date, product, currency, as needed).
 - A yield curve of each currency dated on or before the cutoff: Banking ▸ Treasury & ALM ▸ Yield curves.
-- The shock file `portable_data/rules/irrbb_shocks/<date>.json` (BB Table 2: BDT parallel 400, short 500, long 300 bp, decay x = 4, outlier 15%; built in as the 2021-04-13 file: the program writes it to that folder the first time if it is missing, and never overwrites a file that is there, so your edits stay). The app uses the latest file dated on or before the cutoff. When Bangladesh Bank revises the BDT shocks, add a newer dated file next to it.
+- The shock file `portable_data/rules/irrbb_shocks/<date>.json` (BB Table 2: BDT parallel 400, short 500, long 300 bp, decay x = 4, outlier 15%; built in as the 2021-04-13 file: the program writes it to that folder the first time if it is missing, and never overwrites a file that is there, so your edits stay). The app uses the latest file dated on or before the cutoff. When Bangladesh Bank revises the BDT shocks, add a newer dated file next to it, with `decay_x` and `outlier_pct` as well as the shocks.
 - Optional: a behaviour profile and a beta file for ΔNII. Know your Tier 1 capital in BDT.
 
 ## 4. Columns you need
@@ -104,6 +104,7 @@ Test: `guide_irrbb_six_scenarios`
 - "IRRBB: there is no BDT yield curve in portable_data/curves…" and "the earliest BDT curve is dated …, after the cutoff". Add a curve dated on or before the cutoff in Banking ▸ Yield curves.
 - "The IRRBB shock file … has no shocks for USD." Add a USD entry to a dated shock file (Bangladesh Bank sets sizes per currency).
 - "There is no irrbb_shocks file dated on or before the cutoff …" Add a dated file, or use a later cutoff.
+- "The rule file … could not be read: missing field `decay_x`" (or `outlier_pct`): both numbers must be in every shock file; copy them from the file you are replacing.
 - "The rule file … says as_of … but its name says …" and "… has no source". Fix the file: every rule file needs `as_of` equal to its date and a `source`.
 - "ΔNII: the current rate is blank, and a floor is set …" with the count and the first 5 account numbers: fill the rates or untick the floor.
 - The messages of the cash-flow ladder (blank maturity, unknown frequency, and so on) apply here too. "Treat blank maturity as O/N" works as in the ladder: those rows are in O/N with principal only, and for ΔNII they reprice at once.

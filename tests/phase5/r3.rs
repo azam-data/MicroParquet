@@ -254,12 +254,12 @@ fn r3_the_shipped_bb_rule_file_has_the_table_2_numbers_and_its_source() {
     // the file was written next to the program's data so that the owner can add a newer dated file
     assert!(tmp.join("rules").join("irrbb_shocks").join("2021-04-13.json").exists());
     // a later dated file with other numbers takes over from its date
-    std::fs::write(tmp.join("rules").join("irrbb_shocks").join("2027-01-01.json"), r#"{"as_of":"2027-01-01","source":"BB revision","currencies":[{"currency":"BDT","parallel_bp":300,"short_bp":400,"long_bp":250}]}"#).expect("write");
+    std::fs::write(tmp.join("rules").join("irrbb_shocks").join("2027-01-01.json"), r#"{"as_of":"2027-01-01","source":"BB revision","decay_x":4,"outlier_pct":15,"currencies":[{"currency":"BDT","parallel_bp":300,"short_bp":400,"long_bp":250}]}"#).expect("write");
     assert_eq!(load_shocks(d("2026-12-31")).expect("loads").meta.file, "irrbb_shocks/2021-04-13.json");
     let later = load_shocks(d("2027-03-31")).expect("loads");
     assert_eq!(later.meta.file, "irrbb_shocks/2027-01-01.json");
     assert_eq!(later.data.for_currency("BDT", "x").expect("BDT").parallel_bp, 300.0);
-    assert_eq!(later.data.outlier_pct, 15.0, "defaults to the guideline's 15");
+    assert_eq!(later.data.outlier_pct, 15.0);
     // before the first file: the message names the date
     let e = format!("{:#}", load_shocks(d("2020-01-01")).err().expect("too early"));
     assert!(e.contains("dated on or before the cutoff 2020-01-01"), "{e}");
@@ -366,4 +366,26 @@ fn r3_both_tables_go_into_one_excel_workbook() {
     let rep = micro_parquet::exporters::export_tabs_to_xlsx(vec![("IRRBB results".into(), results_frame(&o).expect("r")), ("IRRBB cash flows".into(), cashflows_frame(&o).expect("c"))], Vec::new(), &tmp).expect("exports");
     assert_eq!(rep.sheets, vec![("IRRBB results".to_string(), 1), ("IRRBB cash flows".to_string(), 1)]);
     assert!(tmp.exists());
+}
+
+#[test]
+fn d5_decay_x_and_outlier_pct_are_required_in_the_shock_file_and_a_missing_field_is_named_with_the_file() {
+    let tmp = dir("d5");
+    set_data_dir_override(Some(tmp.clone()));
+    let folder = tmp.join("rules").join("irrbb_shocks");
+    std::fs::create_dir_all(&folder).expect("folder");
+    let with = |extra: &str| format!(r#"{{"as_of":"2027-01-01","source":"BB revision","sample":false,{extra}"currencies":[{{"currency":"BDT","parallel_bp":300,"short_bp":400,"long_bp":250}}]}}"#);
+    for (extra, field) in [(r#""outlier_pct":15,"#, "decay_x"), (r#""decay_x":4,"#, "outlier_pct"), ("", "decay_x")] {
+        std::fs::write(folder.join("2027-01-01.json"), with(extra)).expect("write");
+        let e = format!("{:#}", load_shocks(d("2027-06-30")).err().expect("a missing field is refused"));
+        assert!(e.contains("irrbb_shocks/2027-01-01.json") && e.contains(&format!("missing field `{field}`")), "{e}");
+    }
+    // both present: it loads
+    std::fs::write(folder.join("2027-01-01.json"), with(r#""decay_x":4,"outlier_pct":15,"#)).expect("write");
+    let f = load_shocks(d("2027-06-30")).expect("loads");
+    assert_eq!((f.data.decay_x, f.data.outlier_pct), (4.0, 15.0));
+    // the shipped file has both
+    let shipped: serde_json::Value = serde_json::from_str(micro_parquet::rules::IRRBB_SHOCKS.1).expect("json");
+    assert!(shipped.get("decay_x").is_some() && shipped.get("outlier_pct").is_some());
+    set_data_dir_override(None);
 }

@@ -171,18 +171,11 @@ pub fn load_latest<T: DeserializeOwned>(dir: &Path, label_dir: &str, cutoff: Nai
 /// The IRRBB shocks of the rule file in force at `cutoff` (BB Table 2).
 #[derive(serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct ShockFile {
-    #[serde(default = "default_decay")]
+    /// The decay x of the short and long shock weights (BB §14.2); required.
     pub decay_x: f64,
-    #[serde(default = "default_outlier")]
+    /// The outlier test, in percent of Tier 1 (BB §13.1); required.
     pub outlier_pct: f64,
     pub currencies: Vec<CurrencyShock>,
-}
-
-fn default_decay() -> f64 {
-    4.0
-}
-fn default_outlier() -> f64 {
-    15.0
 }
 
 #[derive(serde::Deserialize, Clone, Debug, PartialEq)]
