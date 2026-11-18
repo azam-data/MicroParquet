@@ -51,6 +51,7 @@ fn a4_a_missing_file_is_written_from_the_built_in_copy_and_only_then() {
         match *kind {
             "irrbb_shocks" => drop(load_shocks(d("2026-10-31")).expect("loads")),
             "irrbb_nmd_caps" => drop(load_nmd_caps(d("2026-10-31")).expect("loads")),
+            "cl_overdue" => drop(micro_parquet::overdue::load_overdue_rules(d("2026-10-31")).expect("loads")),
             other => panic!("no loader is known for the shipped kind {other}"),
         }
         set_data_dir_override(None);
@@ -66,7 +67,7 @@ fn a4_an_existing_file_is_never_overwritten_not_even_an_edited_or_a_broken_one()
         std::fs::create_dir_all(&folder).expect("folder");
         let file = folder.join(format!("{date}.json"));
         // an edited copy: other numbers
-        let edited = text.replace("400", "350").replace("\"core_cap_pct\": 90", "\"core_cap_pct\": 85");
+        let edited = text.replacen("\"as_of\"", "\"note\": \"edited by the bank\",\n  \"as_of\"", 1);
         assert_ne!(&edited, text, "{kind}: the test really edits the file");
         std::fs::write(&file, &edited).expect("write the edited copy");
         write_builtin_if_missing(&folder, (date, text));
@@ -77,6 +78,7 @@ fn a4_an_existing_file_is_never_overwritten_not_even_an_edited_or_a_broken_one()
         let err = match *kind {
             "irrbb_shocks" => load_shocks(d("2026-10-31")).err(),
             "irrbb_nmd_caps" => load_nmd_caps(d("2026-10-31")).err(),
+            "cl_overdue" => micro_parquet::overdue::load_overdue_rules(d("2026-10-31")).err(),
             other => panic!("no loader is known for the shipped kind {other}"),
         };
         set_data_dir_override(None);

@@ -693,6 +693,7 @@ impl MicroParquetApp {
                     (theme::ph::TIMER, "Duration / \u{394}EVE", ActiveToolModal::DurationAnalysis),
                     (theme::ph::CALCULATOR, "FTP", ActiveToolModal::FtpCurveMap),
                     (theme::ph::BANK, "Provision", ActiveToolModal::LoanProvision),
+                    (theme::ph::CALENDAR, "Classify by overdue", ActiveToolModal::ClassifyOverdue),
                     (theme::ph::CREDIT_CARD, "Limits", ActiveToolModal::LoanLimitUtil),
                     (theme::ph::SHIELD_CHECK, "Hygiene audit", ActiveToolModal::BankingAudit),
                 ] {

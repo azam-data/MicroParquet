@@ -42,6 +42,7 @@ pub enum CommandId {
     Ftp,
     YieldCurves,
     Provision,
+    ClassifyOverdue,
     Limits,
     Reconcile,
     ClMigration,
@@ -166,6 +167,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Ftp, "FTP yield curve mapper\u{2026}", G::Banking, "funds transfer pricing margin", N::Tab),
     c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
+    c(I::ClassifyOverdue, "Classify by overdue\u{2026}", G::Banking, "cl classification overdue dpd days past due months std sma ss df bl brpd 15 2024 grade stage override", N::Tab),
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
     c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
@@ -200,7 +202,7 @@ pub const COMMANDS: &[Command] = &[
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
         CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
-        CommandId::Provision | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
         _ => None,
     }
 }

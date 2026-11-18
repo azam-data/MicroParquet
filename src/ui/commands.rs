@@ -38,6 +38,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Ftp => ph::CALCULATOR,
         CommandId::YieldCurves => ph::CHART_LINE,
         CommandId::Provision => ph::BANK,
+        CommandId::ClassifyOverdue => ph::CALENDAR,
         CommandId::Limits => ph::CREDIT_CARD,
         CommandId::Reconcile => ph::SCALES,
         CommandId::ClMigration => ph::ARROWS_LEFT_RIGHT,
@@ -187,6 +188,7 @@ impl MicroParquetApp {
             }
             CommandId::YieldCurves => self.open_yield_curves(),
             CommandId::Provision => self.active_tool = ActiveToolModal::LoanProvision,
+            CommandId::ClassifyOverdue => self.open_classify_overdue(),
             CommandId::Limits => self.active_tool = ActiveToolModal::LoanLimitUtil,
             CommandId::Reconcile => self.active_tool = ActiveToolModal::ReconcilePeriods,
             CommandId::ClMigration => self.open_cl_migration(),

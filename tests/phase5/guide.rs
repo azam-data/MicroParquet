@@ -8,7 +8,7 @@ use micro_parquet::cashflow::*;
 use polars::prelude::*;
 
 /// The tool ids of Phase 5 (file names in docs/guide/), added as each task is done.
-pub const P5_GUIDE_TOOLS: [&str; 3] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios"];
+pub const P5_GUIDE_TOOLS: [&str; 4] = ["irrbb-cashflow-ladder", "behaviour-profile", "irrbb-six-scenarios", "classify-by-overdue"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -243,6 +243,38 @@ fn guide_irrbb_six_scenarios() {
             md(&cash_shown, &["Bucket", "Midpoint (years)", "Net:2", "Discount factor:~6", "Base PV:2"]),
             md(&six, &["Scenario", "EVE change:2", "Loss:2", "Loss % of Tier 1:2", "\u{394}NII:2", "Note"]),
             md(&six_small, &["Scenario", "Loss:2", "Loss % of Tier 1:2", "Note"]),
+        ],
+    );
+}
+
+#[test]
+fn guide_classify_by_overdue() {
+    use micro_parquet::models::TransformStep;
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "A2", "A3", "A4", "A5"]),
+        Series::new("Loan_Category".into(), &["Continuous", "Demand", "Fixed term", "Fixed term", "Continuous"]),
+        dates("Overdue_Since", &["", "2026-10-15", "2026-08-31", "2026-07-31", "2026-04-30"]),
+        Series::new("Override_Grade".into(), &[None, None, None, Some("DF"), Some("STD-0")]),
+    ])
+    .expect("book");
+    let step = TransformStep::ClassifyOverdue {
+        category_col: Some("Loan_Category".into()),
+        fixed_category: String::new(),
+        since_col: Some("Overdue_Since".into()),
+        dpd_col: None,
+        override_col: Some("Override_Grade".into()),
+        cutoff_date: "2026-10-31".into(),
+    };
+    micro_parquet::rules::set_data_dir_override(Some(dir("guide_overdue")));
+    let out = run_steps("guide_overdue", &book, std::slice::from_ref(&step)).expect("classifies");
+    micro_parquet::rules::set_data_dir_override(None);
+    assert_eq!(strings(&out, "CL_Final"), ["STD-0", "STD-1", "SMA", "DF", "DF"].iter().map(|s| Some(s.to_string())).collect::<Vec<_>>());
+    check_guide(
+        "classify-by-overdue",
+        "guide_classify_by_overdue",
+        &[
+            md(&book, &["Account_No", "Loan_Category", "Overdue_Since", "Override_Grade"]),
+            md(&out, &["Account_No", "Overdue_Months:0", "CL_Objective", "CL_Final", "CL_Rule_File"]),
         ],
     );
 }

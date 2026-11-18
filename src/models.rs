@@ -1654,6 +1654,26 @@ pub enum TransformStep {
         bal_col: String,
         ccf_pct: f64,
     },
+    /// Loan classification from the overdue period (Phase 5 R4, BRPD Circular 15/2024): adds
+    /// `Overdue_Months`, `CL_Objective`, `CL_Final` and `CL_Rule_File`.
+    ClassifyOverdue {
+        /// The loan category column (codes go through `loan_category_map.json`); empty = `fixed_category` for every row.
+        #[serde(default)]
+        category_col: Option<String>,
+        #[serde(default)]
+        fixed_category: String,
+        /// The overdue-since date column, or the days-past-due column (one of the two).
+        #[serde(default)]
+        since_col: Option<String>,
+        #[serde(default)]
+        dpd_col: Option<String>,
+        /// The optional subjective/override grade column.
+        #[serde(default)]
+        override_col: Option<String>,
+        /// YYYY-MM-DD.
+        #[serde(default)]
+        cutoff_date: String,
+    },
     GroupByPivot {
         group_cols: Vec<String>,
         pivot_col: Option<String>,
@@ -1732,6 +1752,7 @@ impl TransformStep {
             TransformStep::DurationAnalysis { .. } => "Duration / \u{394}EVE",
             TransformStep::LoanClassificationProvision { .. } => "Provision",
             TransformStep::LoanLimitUtilization { .. } => "Limits",
+            TransformStep::ClassifyOverdue { .. } => "Classify by overdue",
             TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
             TransformStep::Skipped { .. } => "Off",
@@ -1856,6 +1877,9 @@ impl TransformStep {
             }
             TransformStep::LoanLimitUtilization { .. } => {
                 "+Limit Util & Undrawn CCF".to_string()
+            }
+            TransformStep::ClassifyOverdue { cutoff_date, .. } => {
+                format!("+Classify by overdue (cutoff {})", cutoff_date.trim())
             }
             TransformStep::GroupByPivot { group_cols, .. } => {
                 format!("Group/Pivot by {:?}", group_cols)

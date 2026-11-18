@@ -22,6 +22,8 @@ pub mod jobs;
 pub mod join;
 pub mod limits;
 pub mod clean_breaks;
+pub mod classify_overdue;
+pub mod pick;
 pub mod normaliser;
 pub mod pivot;
 pub mod pivot_bar;
@@ -106,6 +108,7 @@ impl MicroParquetApp {
             ActiveToolModal::RateShockSim => self.render_rate_shock_modal(ctx, cols),
             ActiveToolModal::DurationAnalysis => self.render_duration_modal(ctx, cols),
             ActiveToolModal::LoanProvision => self.render_provision_modal(ctx, cols),
+            ActiveToolModal::ClassifyOverdue => self.render_classify_overdue_modal(ctx, cols),
             ActiveToolModal::LoanLimitUtil => self.render_limits_modal(ctx, cols),
             ActiveToolModal::FtpCurveMap => self.render_ftp_modal(ctx, cols),
             ActiveToolModal::BankingAudit => self.render_audit_modal(ctx, cols),

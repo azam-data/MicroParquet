@@ -24,6 +24,11 @@ pub fn set_data_dir_override(dir: Option<PathBuf>) {
     RULES_DIR_OVERRIDE.with(|d| *d.borrow_mut() = dir);
 }
 
+/// `portable_data` (or the folder a test or headless run put in its place).
+pub fn data_dir() -> PathBuf {
+    data_root()
+}
+
 fn data_root() -> PathBuf {
     RULES_DIR_OVERRIDE.with(|d| d.borrow().clone()).unwrap_or_else(crate::models::portable_root_dir)
 }
@@ -62,11 +67,13 @@ pub type BuiltIn = (&'static str, &'static str);
 pub const IRRBB_SHOCKS: BuiltIn = ("2021-04-13", include_str!("../assets/rules/irrbb_shocks/2021-04-13.json"));
 /// The built-in non-maturity deposit caps (BB Table 4).
 pub const IRRBB_NMD_CAPS: BuiltIn = ("2021-04-13", include_str!("../assets/rules/irrbb_nmd_caps/2021-04-13.json"));
+/// The built-in loan classification thresholds by overdue period (BRPD Circular 15/2024).
+pub const CL_OVERDUE: BuiltIn = ("2025-04-01", include_str!("../assets/rules/cl_overdue/2025-04-01.json"));
 
 /// Every shipped rule file: its folder under `portable_data/rules/` and its built-in copy. The tests
 /// go through this list, so a file added here is checked against `assets/rules/` and for the
 /// write-only-if-missing rule.
-pub const SHIPPED_RULES: &[(&str, BuiltIn)] = &[("irrbb_shocks", IRRBB_SHOCKS), ("irrbb_nmd_caps", IRRBB_NMD_CAPS)];
+pub const SHIPPED_RULES: &[(&str, BuiltIn)] = &[("irrbb_shocks", IRRBB_SHOCKS), ("irrbb_nmd_caps", IRRBB_NMD_CAPS), ("cl_overdue", CL_OVERDUE)];
 
 /// Writes the built-in file into `dir` when `dir` does not have it. An existing file is never
 /// touched, and the check and the write are one step (`create_new`), so two runs at once cannot

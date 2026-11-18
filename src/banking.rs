@@ -1187,9 +1187,9 @@ fn normalise_code_expr(e: Expr) -> Expr {
 
 /// A JSON object read as ordered (key, value) pairs, so a repeated key is caught instead of
 /// silently overwriting the earlier one. An optional numeric "defaults_version" key is split out.
-struct JsonPairs {
-    version: Option<u32>,
-    pairs: Vec<(String, String)>,
+pub(crate) struct JsonPairs {
+    pub(crate) version: Option<u32>,
+    pub(crate) pairs: Vec<(String, String)>,
 }
 
 impl<'de> Deserialize<'de> for JsonPairs {
@@ -1237,7 +1237,7 @@ fn parse_rule_date(s: &str, file: &Path, idx: usize, field: &str) -> Result<Naiv
 }
 
 /// Normalises keys and checks values against `allowed`; a code listed twice is an error.
-fn validate_code_map(
+pub(crate) fn validate_code_map(
     pairs: Vec<(String, String)>,
     allowed: &[&str],
     file: &Path,
@@ -1317,7 +1317,7 @@ fn validate_rules(rules: &[ProvisionRule], file: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("Could not read {}", path.display()))?;
     parse_json_text(&raw, path)
@@ -1386,7 +1386,7 @@ fn outdated_warning(path: &Path, version: Option<u32>) -> String {
 
 /// Writes `contents` to `path` unless it exists; via a temp file + rename so a reader never
 /// sees a half-written file.
-fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
@@ -1401,7 +1401,7 @@ fn write_if_missing(path: &Path, contents: &str) -> Result<()> {
         .with_context(|| format!("Could not write default {}", path.display()))
 }
 
-fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
+pub(crate) fn pairs_to_json(version: u32, pairs: &[(&str, &str)]) -> String {
     let mut lines = vec![format!("  \"defaults_version\": {}", version)];
     lines.extend(
         pairs

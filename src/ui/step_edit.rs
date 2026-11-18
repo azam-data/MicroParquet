@@ -26,6 +26,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::DurationAnalysis { .. } => ActiveToolModal::DurationAnalysis,
         TransformStep::LoanClassificationProvision { .. } => ActiveToolModal::LoanProvision,
         TransformStep::LoanLimitUtilization { .. } => ActiveToolModal::LoanLimitUtil,
+        TransformStep::ClassifyOverdue { .. } => ActiveToolModal::ClassifyOverdue,
         TransformStep::GroupByPivot { .. } => ActiveToolModal::GroupByPivot,
         TransformStep::PivotTable { .. } => ActiveToolModal::PivotBuilder,
         TransformStep::FilterRows { .. }
@@ -187,6 +188,7 @@ impl MicroParquetApp {
                 cutoff_date: self.provision.cutoff.trim().to_string(),
                 collateral_type_col: opt(&self.provision.coll_type_col),
             },
+            ActiveToolModal::ClassifyOverdue => return self.classify_overdue_step().ok(),
             ActiveToolModal::LoanLimitUtil => TransformStep::LoanLimitUtilization {
                 limit_col: self.limits.col.clone(),
                 bal_col: self.limits.bal_col.clone(),
@@ -371,6 +373,21 @@ impl MicroParquetApp {
                 self.provision.sec_col = security_col.unwrap_or_default();
                 self.provision.cutoff = cutoff_date;
                 self.provision.coll_type_col = collateral_type_col.unwrap_or_default();
+            }
+            TransformStep::ClassifyOverdue { category_col, fixed_category, since_col, dpd_col, override_col, cutoff_date } => {
+                let o = &mut self.overdue;
+                o.category_by_col = category_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.category_col = category_col.unwrap_or_default();
+                if !fixed_category.trim().is_empty() {
+                    o.fixed_category = fixed_category;
+                }
+                o.use_dpd = dpd_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.since_col = since_col.unwrap_or_default();
+                o.dpd_col = dpd_col.unwrap_or_default();
+                o.override_on = override_col.as_deref().is_some_and(|c| !c.trim().is_empty());
+                o.override_col = override_col.unwrap_or_default();
+                o.cutoff = cutoff_date;
+                o.categories = None;
             }
             TransformStep::LoanLimitUtilization { limit_col, bal_col, ccf_pct } => {
                 self.limits.col = limit_col;

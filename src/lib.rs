@@ -14,6 +14,8 @@ pub mod exporters;
 pub mod jobs;
 pub mod macros;
 pub mod models;
+pub mod overdue;
+pub mod problems;
 pub mod paths;
 pub mod pdf_layout;
 pub mod pivot_table;

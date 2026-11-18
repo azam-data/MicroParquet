@@ -21,7 +21,7 @@ Branch `phase5` (PR #7). One commit per item, `cargo test`, push, don't merge. T
 | A3 R1 floating amortisation | DONE | (this commit) | r1 a3_ ×2, guide table ×1; r1 floating assertion updated | |
 | A4 shipped rule files | DONE | (this commit) | a4 ×4 | `SHIPPED_RULES` list; create_new write |
 | A5 no CPR/TDRR in gap ladder | DONE | (this commit) | r2 a5 ×1 | guide only (the code already ignored them) |
-| R4 | TODO | | | |
+| R4 | DONE | (this commit) | r4 ×10, render r4_ ×3 (both screens), guide_classify_by_overdue | step + dialog; `src/overdue.rs`, `src/problems.rs`, `src/ui/pick.rs` shared helpers |
 | R5 | TODO | | | |
 | R6 | TODO | | | |
 | R7 | TODO | | | |

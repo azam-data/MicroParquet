@@ -2767,6 +2767,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             bal_col,
             ccf_pct,
         } => apply_loan_limit_utilization(lf, limit_col, bal_col, *ccf_pct),
+        TransformStep::ClassifyOverdue { .. } => crate::overdue::apply_classify_overdue(lf, &crate::overdue::spec_of(step)?),
         TransformStep::GroupByPivot {
             group_cols,
             aggs,
@@ -3555,6 +3556,13 @@ pub fn blank_balance_notes(
                     ));
                 }
             }
+        }
+        if let TransformStep::ClassifyOverdue { override_col, .. } = step {
+            let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
+            let spec = crate::overdue::spec_of(step)?;
+            let (_, stats) = crate::overdue::classify_lazy(input, &spec)?;
+            notes.push(stats.note(&step.short_label(), override_col.as_deref().is_some_and(|c| !c.trim().is_empty())));
+            continue;
         }
         let bal = match step {
             TransformStep::LoanClassificationProvision { bal_col, .. }

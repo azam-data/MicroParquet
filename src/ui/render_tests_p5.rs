@@ -665,3 +665,145 @@ fn r3_the_irrbb_tool_is_listed_under_treasury_and_alm_and_found_by_the_search() 
         irrbb_cleanup();
     }
 }
+
+// ------------------------------------------------------------------------------ R4: classify by overdue
+
+fn ov_title() -> String {
+    format!("{}  {}", theme::ph::BANK, crate::ui::classify_overdue::OVERDUE_TITLE)
+}
+
+/// A loan book tab with a category, an overdue-since date, a days-past-due and an override column.
+fn ov_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    micro_parquet::rules::set_data_dir_override(Some(root.join("portable_data")));
+    let book = DataFrame::new(vec![
+        Series::new("Account_No".into(), &["A1", "A2", "A3", "A4"]),
+        Series::new("Loan_Category".into(), &["Continuous", "Demand", "Fixed term", "Fixed term"]),
+        dated("Overdue_Since", &["", "2026-09-30", "2026-07-31", "2026-07-31"]),
+        Series::new("DPD".into(), &[0i64, 31, 92, 92]),
+        Series::new("Override_Grade".into(), &[None, None, None, Some("DF")]),
+        Series::new("Balance".into(), &[1_000_000.0, 2_000_000.0, 3_000_000.0, 4_000_000.0]),
+    ])
+    .expect("book");
+    let src = parquet_source(&root, "Loans", book);
+    app.create_tab_from_source("Loans".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+#[test]
+fn r4_the_classify_dialog_fits_takes_its_choices_by_click_and_adds_the_step() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = ov_rig("p5r4a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::ClassifyOverdue);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ClassifyOverdue, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &ov_title(), &what);
+        for t in ["Cutoff date (YYYY-MM-DD)", "Loan category", "Same for every row:", "From the column:", "Overdue period", "Overdue-since date column:", "Days-past-due column:", "Override grade column", "Classify by overdue", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
+        }
+        let g = rig.app.overdue.rects.clone();
+        for (name, rc) in &g.controls {
+            assert!(inside(*rc, r.window), "{what}: '{name}' {rc:?} is inside the dialog {:?}", r.window);
+        }
+        assert!(inside(g.notes, r.window) && g.notes.right() <= r.window.right(), "{what}: the notes are inside the dialog");
+        for (name, b) in &g.buttons {
+            assert!(inside(*b, r.footer), "{what}: '{name}' is in the footer");
+        }
+        // the columns were guessed from their names
+        assert_eq!((rig.app.overdue.category_col.as_str(), rig.app.overdue.since_col.as_str(), rig.app.overdue.dpd_col.as_str(), rig.app.overdue.override_col.as_str()), ("Loan_Category", "Overdue_Since", "DPD", "Override_Grade"), "{what}");
+        assert!(rig.app.overdue.category_by_col && !rig.app.overdue.use_dpd && rig.app.overdue.override_on, "{what}");
+        // the cutoff date is typed; the days-past-due radio is a real click
+        rig.app.overdue.cutoff = "2026-10-31".into();
+        let dpd = g.control("Use days past due").expect("radio");
+        rig.click(dpd.center());
+        assert!(rig.app.overdue.use_dpd, "{what}: a real click chose the days-past-due column");
+        let since = rig.app.overdue.rects.control("Use overdue-since").expect("radio");
+        rig.draw(3);
+        rig.click(since.center());
+        assert!(!rig.app.overdue.use_dpd, "{what}: and back");
+        // the fixed category is chosen from the combo by a real click, after "Same for every row"
+        let same = rig.app.overdue.rects.control("Same category").expect("radio");
+        rig.draw(2);
+        rig.click(same.center());
+        assert!(!rig.app.overdue.category_by_col, "{what}");
+        let p = rig.draw(3);
+        let combo = rig.app.overdue.rects.control("Fixed category").expect("combo");
+        rig.click(combo.center());
+        let p2 = rig.draw(3);
+        assert!(p2.boxes.iter().any(|(t, _)| t == "Short-term agri & micro"), "{what}: the four categories of the rule file are listed");
+        click_text(&mut rig, &p2, "Demand", combo);
+        assert_eq!(rig.app.overdue.fixed_category, "Demand", "{what}");
+        drop(p);
+        // take the category from the column again, untick the override, and build
+        let from = rig.app.overdue.rects.control("Category from column").expect("radio");
+        rig.draw(2);
+        rig.click(from.center());
+        rig.app.overdue.override_on = false;
+        rig.draw(4);
+        let button = rig.app.overdue.rects.button("Classify by overdue").expect("button");
+        rig.click(button.center());
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed: {}", rig.app.status_message);
+        settle(&mut rig.app);
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        assert!(matches!(tab.steps.last(), Some(TransformStep::ClassifyOverdue { category_col: Some(c), since_col: Some(s), dpd_col: None, override_col: None, .. }) if c == "Loan_Category" && s == "Overdue_Since"), "{what}: {:?}", tab.steps);
+        let fin: Vec<Option<String>> = tab.cached_slice.column("CL_Final").expect("CL_Final").str().expect("text").into_iter().map(|v| v.map(str::to_string)).collect();
+        assert_eq!(fin, ["STD-0", "STD-2", "SS", "SS"].iter().map(|s| Some(s.to_string())).collect::<Vec<_>>(), "{what}");
+        // the status bar says how many rows had no date
+        assert!(rig.app.status_message.is_empty() || !rig.app.status_message.contains("Error"), "{what}: {}", rig.app.status_message);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r4_a_missing_choice_is_said_in_red_and_blocks_the_button_and_the_step_reopens_in_the_dialog() {
+    let (ppp, w, h) = SCREENS[0];
+    let mut rig = ov_rig("p5r4b", ppp, w, h);
+    rig.app.run_command(&rig.ctx, CommandId::ClassifyOverdue);
+    rig.app.overdue.cutoff = "31/10/2026".into();
+    let p = rig.draw(6);
+    assert!(p.boxes.iter().any(|(t, _)| t.contains("Type the cutoff date as YYYY-MM-DD")), "the date problem is said");
+    assert!(rig.app.classify_overdue_step().is_err());
+    rig.app.overdue.cutoff = "2026-10-31".into();
+    rig.app.overdue.since_col.clear();
+    rig.draw(3);
+    assert!(rig.app.classify_overdue_step().err().unwrap_or_default().contains("overdue-since date column"));
+    rig.app.overdue.since_col = "Overdue_Since".into();
+    rig.app.overdue.override_on = true;
+    rig.app.overdue.override_col.clear();
+    assert!(rig.app.classify_overdue_step().err().unwrap_or_default().contains("override grade column"));
+    rig.app.overdue.override_col = "Override_Grade".into();
+    let step = rig.app.classify_overdue_step().expect("a step");
+    // reopening the step prefills the dialog with the same choices
+    rig.app.overdue = crate::ui::classify_overdue::OverdueState::default();
+    let cols: Vec<String> = rig.app.tabs[0].available_columns();
+    rig.app.prefill_from_step(&step, &cols);
+    assert_eq!(format!("{:?}", rig.app.classify_overdue_step().expect("same step")), format!("{step:?}"));
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn r4_the_tool_is_listed_under_loans_and_credit_and_found_by_the_search() {
+    use micro_parquet::commands::*;
+    assert_eq!(banking_section(CommandId::ClassifyOverdue), Some("Loans & credit"));
+    let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
+    for q in ["classify loans by overdue", "dpd days past due", "overdue months"] {
+        let ranked = rank(q, &entries);
+        assert_eq!(COMMANDS[ranked[0]].id, CommandId::ClassifyOverdue, "{q}");
+    }
+    for (ppp, w, h) in SCREENS {
+        let mut rig = ov_rig("p5r4c", ppp, w, h);
+        let p = rig.draw(4);
+        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
+        rig.click(banking.center());
+        let p = rig.draw(3);
+        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
+        assert!(at("Loans & credit").top() < at("Classify by overdue").top(), "{}", rig.what);
+        assert!(at("Classify by overdue").right() <= rig.ctx.screen_rect().right(), "{}: the menu entry is on screen", rig.what);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
