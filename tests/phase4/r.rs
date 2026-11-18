@@ -551,3 +551,50 @@ fn i9_with_a_floor_blank_rates_stop_the_step_with_the_count_and_the_first_five_a
     let out = micro_parquet::banking::apply_rate_shock_with(full.lazy(), &s, &[]).expect("runs").collect().expect("collect");
     close(floats(&out, "NII_Impact_BDT")[0], 10_000.0, 1e-6, "-100 bp on 1.5% with a 0% floor");
 }
+
+// ------------------------------------------------------------------------------------------ 11
+
+#[test]
+fn i11_the_repricing_gap_names_its_last_bucket_gt_12m_and_notes_how_many_rows_have_no_date() {
+    use micro_parquet::banking::*;
+    assert_eq!(REPRICING_BUCKETS[4], ">12m");
+    let book = |mats: &[&str], reprice: &[&str]| {
+        let n = mats.len();
+        DataFrame::new(vec![
+            Series::new("Side".into(), vec!["Asset"; n]),
+            Series::new("Balance".into(), vec![100.0; n]),
+            Series::new("Rate".into(), vec![10.0; n]),
+            dates("Matdat", mats),
+            dates("Reprice", reprice),
+        ])
+        .expect("book")
+    };
+    let spec = |reprice: Option<&str>| RateShockSpec {
+        bal_col: "Balance".into(), rate_col: "Rate".into(), mat_col: "Matdat".into(), cutoff_date: "2026-10-31".into(), shock_bps: 100.0,
+        side_col: Some("Side".into()), reprice_col: reprice.map(str::to_string), beta_file: None, product_col: None, floor_pct: None,
+    };
+    let labels = |g: &DataFrame| strings(g, "Repricing bucket").into_iter().flatten().collect::<Vec<_>>();
+    // three rows with neither date: the note counts exactly them
+    let df = book(&["", "2027-03-01", "", ""], &["", "", "", ""]);
+    let g = build_repricing_gap(df.clone().lazy(), &spec(None), &[]).expect("builds");
+    let l = labels(&g);
+    assert_eq!(&l[..6], &["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m", "Total"]);
+    assert_eq!(l[6], "3 rows with no maturity or repricing date placed in 0\u{2013}1m (contractual)");
+    assert_eq!(l.len(), 7, "the note is the last row, under the Total");
+    assert_eq!(floats(&g, "Assets")[6], None, "the note row has no numbers");
+    assert_eq!(floats(&g, "Assets")[0], Some(300.0), "the three rows are in 0-1m");
+    assert_eq!(floats(&g, "Assets")[5], Some(400.0), "the Total row is not changed by the note");
+    // one such row: singular
+    let g = build_repricing_gap(book(&["", "2027-03-01"], &["", ""]).lazy(), &spec(None), &[]).expect("builds");
+    assert_eq!(labels(&g)[6], "1 row with no maturity or repricing date placed in 0\u{2013}1m (contractual)");
+    // a repricing date makes a row dated: with it, only the rows with neither date are counted
+    let df = book(&["", "", ""], &["2026-12-01", "", ""]);
+    let g = build_repricing_gap(df.lazy(), &spec(Some("Reprice")), &[]).expect("builds");
+    assert_eq!(labels(&g)[6], "2 rows with no maturity or repricing date placed in 0\u{2013}1m (contractual)");
+    // every row dated: no note
+    let g = build_repricing_gap(book(&["2026-12-01", "2027-03-01"], &["", ""]).lazy(), &spec(None), &[]).expect("builds");
+    assert_eq!(labels(&g).len(), 6, "no note when every row has a date: {:?}", labels(&g));
+    // a date on or before the cutoff is a date (the row reprices at once, but it is not 'no date')
+    let g = build_repricing_gap(book(&["2026-09-01"], &[""]).lazy(), &spec(None), &[]).expect("builds");
+    assert_eq!(labels(&g).len(), 6);
+}

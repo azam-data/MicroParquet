@@ -452,8 +452,13 @@ pub fn apply_rate_shock_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[crat
 // ----------------------------------------------------------------------------- repricing gap
 
 /// The buckets of the repricing-gap summary, nearest first.
-pub const REPRICING_BUCKETS: [&str; 5] = ["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m/non-repricing"];
+pub const REPRICING_BUCKETS: [&str; 5] = ["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m"];
 pub const REPRICING_TOTAL_ROW: &str = "Total";
+
+/// The note under the repricing-gap table: rows that have neither a maturity nor a repricing date.
+pub fn repricing_no_date_note(n: i64) -> String {
+    format!("{} {} with no maturity or repricing date placed in 0\u{2013}1m (contractual)", n, if n == 1 { "row" } else { "rows" })
+}
 
 /// The repricing-gap summary of a book: for each repricing bucket the assets, the liabilities
 /// (negative), their sum (the gap), the cumulative gap and the ΔNII of the shock (with the same
@@ -479,6 +484,7 @@ pub fn build_repricing_gap_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[c
     let (shocked, sign) = direction_sign(shocked, spec.side_col.as_deref())?;
     let _ = sign;
     let eff = effective_days_expr(spec);
+    let eff_for_count = eff.clone();
     let rem = eff.clone() - lit(cutoff_days);
     let bucket = when(eff.is_null().or(rem.clone().lt_eq(lit(0))))
         .then(lit(0i32))
@@ -504,9 +510,12 @@ pub fn build_repricing_gap_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[c
             when(side.clone().gt(lit(0.0))).then(bal.clone()).otherwise(lit(0.0)).sum().alias("__a"),
             when(side.lt(lit(0.0))).then(bal).otherwise(lit(0.0)).sum().alias("__l"),
             col("NII_Impact_BDT").sum().alias("__n"),
+            eff_for_count.is_null().cast(DataType::Int64).sum().alias("__nodate"),
         ])
         .collect()
         .context("Could not calculate the repricing gap")?;
+    // rows with neither a maturity nor a repricing date: placed in the first bucket (contractual)
+    let no_date: i64 = df.column("__nodate")?.i64()?.into_iter().map(|v| v.unwrap_or(0)).sum();
     let idx: Vec<Option<i32>> = df.column("__bucket")?.i32()?.into_iter().collect();
     let (a, l, n) = (df.column("__a")?.f64()?, df.column("__l")?.f64()?, df.column("__n")?.f64()?);
     let mut assets = [0.0f64; 5];
@@ -524,9 +533,21 @@ pub fn build_repricing_gap_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[c
     let cum: Vec<f64> = gap.iter().map(|g| { run += g; run }).collect();
     let mut names: Vec<String> = REPRICING_BUCKETS.iter().map(|s| s.to_string()).collect();
     names.push(REPRICING_TOTAL_ROW.to_string());
-    let with_total = |v: &[f64]| -> Vec<f64> { let mut o = v.to_vec(); o.push(v.iter().sum()); o };
+    // a note row under the table when some rows have no date at all
+    let note = (no_date > 0).then(|| repricing_no_date_note(no_date));
+    if let Some(n) = &note {
+        names.push(n.clone());
+    }
+    let extra = usize::from(note.is_some());
+    let with_total = |v: &[f64]| -> Vec<Option<f64>> {
+        let mut o: Vec<Option<f64>> = v.iter().map(|x| Some(*x)).collect();
+        o.push(Some(v.iter().sum()));
+        o.extend(std::iter::repeat(None).take(extra));
+        o
+    };
     let mut cumulative: Vec<Option<f64>> = cum.iter().map(|x| Some(*x)).collect();
     cumulative.push(None);
+    cumulative.extend(std::iter::repeat(None).take(extra));
     DataFrame::new(vec![
         Series::new("Repricing bucket".into(), names),
         Series::new("Assets".into(), with_total(&assets)),

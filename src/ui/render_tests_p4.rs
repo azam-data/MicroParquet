@@ -1076,7 +1076,7 @@ fn the_rate_shock_dialog_takes_a_repricing_date_a_beta_file_and_a_floor_and_make
         assert!(tab.title.starts_with("Repricing gap ("), "{}", tab.title);
         let names: Vec<String> = tab.cached_slice.get_column_names().iter().map(|n| n.to_string()).collect();
         assert_eq!(names, vec!["Repricing bucket", "Assets", "Liabilities", "Gap", "Cumulative gap", "\u{394}NII (BDT)"], "{what}");
-        assert_eq!(tab.cached_slice.height(), 6, "{what}: five buckets and the total");
+        assert_eq!(tab.cached_slice.height(), 7, "{what}: five buckets, the total and the note about the savings account without a date");
         // the summary of the shock the step makes: the same total
         let total: Vec<Option<f64>> = tab.cached_slice.column("\u{394}NII (BDT)").expect("col").f64().expect("f64").into_iter().collect();
         // loan: reprices in 30 days, -2% cut by the floor of 0 (rate 12%, so no cut): -2% x 1,000,000 x 335/365; savings 40% of -2% at 0.8% fits above 0: +8,000; FDR (no beta: 100%) 7% to 5%: +10,000 x (365-135)/365

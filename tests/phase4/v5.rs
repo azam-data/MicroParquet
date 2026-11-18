@@ -239,14 +239,14 @@ fn v5_the_repricing_gap_summary_has_five_buckets_a_total_and_the_delta_nii_of_th
     let g = build_repricing_gap(df.clone().lazy(), &spec(100.0), &[]).expect("the summary builds");
     assert_eq!(
         strings(&g, "Repricing bucket").into_iter().flatten().collect::<Vec<_>>(),
-        vec!["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m/non-repricing", "Total"]
+        vec!["0\u{2013}1m", "1\u{2013}3m", "3\u{2013}6m", "6\u{2013}12m", ">12m", "Total", "1 row with no maturity or repricing date placed in 0\u{2013}1m (contractual)"]
     );
     assert_eq!(g.get_column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>(), vec!["Repricing bucket", "Assets", "Liabilities", "Gap", "Cumulative gap", "\u{394}NII (BDT)"]);
     // assets positive, liabilities negative, gap = assets + liabilities; the blank maturity reprices at once
-    assert_eq!(floats(&g, "Assets"), vec![Some(100.0), Some(200.0), Some(0.0), Some(0.0), Some(300.0), Some(600.0)]);
-    assert_eq!(floats(&g, "Liabilities"), vec![Some(-40.0), Some(0.0), Some(-50.0), Some(-80.0), Some(0.0), Some(-170.0)]);
-    assert_eq!(floats(&g, "Gap"), vec![Some(60.0), Some(200.0), Some(-50.0), Some(-80.0), Some(300.0), Some(430.0)]);
-    assert_eq!(floats(&g, "Cumulative gap"), vec![Some(60.0), Some(260.0), Some(210.0), Some(130.0), Some(430.0), None]);
+    assert_eq!(floats(&g, "Assets"), vec![Some(100.0), Some(200.0), Some(0.0), Some(0.0), Some(300.0), Some(600.0), None]);
+    assert_eq!(floats(&g, "Liabilities"), vec![Some(-40.0), Some(0.0), Some(-50.0), Some(-80.0), Some(0.0), Some(-170.0), None]);
+    assert_eq!(floats(&g, "Gap"), vec![Some(60.0), Some(200.0), Some(-50.0), Some(-80.0), Some(300.0), Some(430.0), None]);
+    assert_eq!(floats(&g, "Cumulative gap"), vec![Some(60.0), Some(260.0), Some(210.0), Some(130.0), Some(430.0), None, None]);
     // the ΔNII of the step, bucket by bucket and in total
     let w = |d: f64| (365.0 - d) / 365.0;
     let want = [100.0 * w(15.0) * 0.01 - 40.0 * 0.01, 200.0 * w(76.0) * 0.01, -50.0 * w(135.0) * 0.01, -80.0 * w(274.0) * 0.01, 0.0];

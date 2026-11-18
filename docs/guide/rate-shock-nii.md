@@ -43,7 +43,7 @@ Estimates the one-year change in net interest income (ΔNII) if all rates move i
 
 Three new columns in the result. `Current_Annual_Int` = balance × rate: gross interest income (assets) or expense (liabilities), unsigned. `NII_Impact_BDT` = the change in NII, signed: plus for assets and minus for liabilities when rates rise. `Shocked_Annual_Int` = gross interest after the shock, unsigned; do not add it across assets and liabilities as NII. Weight = 1 if the effective repricing date is on or before the cutoff or there is none, 0 if more than 365 days away, otherwise (365 − days) / 365. The rate change is the shock times the beta (100% when there is no beta; a shock that raises rates uses the product's beta_up_pct, one that lowers them its beta_down_pct, and a product with only beta_pct uses it both ways), cut so the rate does not fall below the floor; a rise is never cut, and a rate already under the floor does not fall. Without a side column a `Direction_Assumed` column reads "ASSET (unspecified)".
 
-The summary table has one row for each repricing bucket (0–1m, 1–3m, 3–6m, 6–12m, >12m/non-repricing) and a Total row: `Assets` (positive), `Liabilities` (negative), `Gap` (assets plus liabilities), `Cumulative gap` and `ΔNII (BDT)` for those rows. Rows that reprice at once (no date, or a date on or before the cutoff) are in 0–1m.
+The summary table has one row for each repricing bucket (0–1m, 1–3m, 3–6m, 6–12m, >12m) and a Total row: `Assets` (positive), `Liabilities` (negative), `Gap` (assets plus liabilities), `Cumulative gap` and `ΔNII (BDT)` for those rows. Rows that reprice at once (no date, or a date on or before the cutoff) are in 0–1m. Under the Total row a note says how many rows had neither a maturity nor a repricing date and so were placed in 0–1m on a contractual basis (no note when every row has a date). Savings and current accounts without a maturity are in 0–1m for the same reason; their behavioural split comes in Phase 5.
 
 ## 7. Check your result
 
@@ -120,8 +120,9 @@ The summary at +100 bp: liabilities are negative, the gap is assets plus liabili
 | 1–3m | 200.00 | 0.00 | 200.00 | 260.00 | 1.58 |
 | 3–6m | 0.00 | -50.00 | -50.00 | 210.00 | -0.32 |
 | 6–12m | 0.00 | -80.00 | -80.00 | 130.00 | -0.20 |
-| >12m/non-repricing | 300.00 | 0.00 | 300.00 | 430.00 | 0.00 |
+| >12m | 300.00 | 0.00 | 300.00 | 430.00 | 0.00 |
 | Total | 600.00 | -170.00 | 430.00 | (blank) | 1.63 |
+| 1 row with no maturity or repricing date placed in 0–1m (contractual) | (blank) | (blank) | (blank) | (blank) | (blank) |
 
 Test: `guide_rate_shock_nii`
 
