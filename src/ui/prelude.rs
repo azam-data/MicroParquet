@@ -57,6 +57,7 @@ pub use crate::ui::export::{ExportState, GuardedExport};
 pub use crate::ui::filter::FilterState;
 pub use crate::ui::curves::CurvesState;
 pub use crate::ui::ftp::FtpState;
+pub use crate::ui::behaviour_profile::BehaviourState;
 pub use crate::ui::cashflow_ladder::CfLadderState;
 pub use crate::ui::gap_ladder::GapState;
 pub use crate::ui::jobs::PendingRefresh;

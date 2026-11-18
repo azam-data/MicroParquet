@@ -1948,6 +1948,8 @@ pub enum TabSource {
         null_as_sight: bool,
         /// The limits read from `portable_data/gap_limits` when the tab was built.
         limits: Option<crate::banking::GapLimitsFile>,
+        /// The behaviour profile applied (Phase 5 R2); `None` gives the Phase 4 ladder.
+        behaviour: Option<crate::banking::GapBehaviour>,
     },
     /// The IRRBB cash-flow ladder (Phase 5 R1): the dated cash flows of the chosen tabs in the 19
     /// buckets of the Bangladesh Bank guideline, by currency.

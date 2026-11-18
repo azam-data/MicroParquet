@@ -31,6 +31,8 @@ pub struct GapRow {
     pub side_col: String,
     pub amount_col: String,
     pub maturity_col: String,
+    /// The product code column (read against the behaviour profile).
+    pub product_col: String,
 }
 
 /// What the dialog drew, for the render tests.
@@ -57,12 +59,17 @@ pub struct GapState {
     pub null_as_sight: bool,
     /// The limits file of the chosen preset: read again when the preset or the dialog changes.
     pub limits: Option<(usize, Result<Option<GapLimitsFile>, String>)>,
+    /// "Apply behaviour profile" (Phase 5 R2): off gives the Phase 4 ladder.
+    pub apply_behaviour: bool,
+    pub behaviour_files: Vec<String>,
+    pub behaviour_sel: String,
+    pub behaviour: Option<(String, Result<micro_parquet::behaviour::BehaviourFile, String>)>,
     pub rects: GapRects,
 }
 
 impl Default for GapState {
     fn default() -> Self {
-        Self { rows: Vec::new(), presets: Vec::new(), preset_idx: 0, cutoff: String::new(), null_as_sight: true, limits: None, rects: GapRects::default() }
+        Self { rows: Vec::new(), presets: Vec::new(), preset_idx: 0, cutoff: String::new(), null_as_sight: true, limits: None, apply_behaviour: false, behaviour_files: Vec::new(), behaviour_sel: String::new(), behaviour: None, rects: GapRects::default() }
     }
 }
 
@@ -88,6 +95,11 @@ impl MicroParquetApp {
             self.gap.cutoff = last_month_end(chrono::Local::now().date_naive());
         }
         self.gap.limits = None;
+        self.gap.behaviour_files = micro_parquet::behaviour::list_behaviour_files(&micro_parquet::rules::behaviour_dir());
+        if !self.gap.behaviour_files.contains(&self.gap.behaviour_sel) {
+            self.gap.behaviour_sel.clear();
+        }
+        self.gap.behaviour = None;
         self.gap.rows = vec![self.gap_row_for(self.active_tab)];
         self.active_tool = ActiveToolModal::GapLadder;
     }
@@ -102,6 +114,7 @@ impl MicroParquetApp {
             side_col: side.unwrap_or_default(),
             amount_col: guess(&cols, &["balance", "outstanding", "amount"]).unwrap_or_default(),
             maturity_col: guess(&cols, &["matdat", "maturity", "mat_date"]).unwrap_or_default(),
+            product_col: guess(&cols, &["product", "scheme", "prod_code"]).unwrap_or_default(),
         }
     }
 
@@ -147,8 +160,26 @@ impl MicroParquetApp {
             Some((idx, Err(e))) if *idx == g.preset_idx => return Err(e.clone()),
             _ => None,
         };
+        let behaviour = if g.apply_behaviour {
+            let file = match &g.behaviour {
+                Some((n, Ok(f))) if *n == g.behaviour_sel => f.clone(),
+                Some((n, Err(e))) if *n == g.behaviour_sel => return Err(e.clone()),
+                _ => return Err("Choose the behaviour profile to apply.".to_string()),
+            };
+            let mut product_cols = Vec::new();
+            for (i, r) in g.rows.iter().enumerate() {
+                let cols = self.tabs.get(r.tab).map(|t| t.available_columns()).unwrap_or_default();
+                if r.product_col.trim().is_empty() || !cols.contains(&r.product_col) {
+                    return Err(format!("Line {}: choose the product column (the behaviour profile is read against it).", i + 1));
+                }
+                product_cols.push(r.product_col.clone());
+            }
+            Some(micro_parquet::banking::GapBehaviour { file_name: g.behaviour_sel.clone(), file, product_cols })
+        } else {
+            None
+        };
         let title = format!("Gap ladder ({})", preset.name);
-        Ok((title, TabSource::GapLadder { inputs, preset, cutoff_date: g.cutoff.trim().to_string(), null_as_sight: g.null_as_sight, limits }))
+        Ok((title, TabSource::GapLadder { inputs, preset, cutoff_date: g.cutoff.trim().to_string(), null_as_sight: g.null_as_sight, limits, behaviour }))
     }
 
     fn refresh_gap_limits(&mut self) {
@@ -175,6 +206,9 @@ impl MicroParquetApp {
         let title = format!("{}  Liquidity gap ladder", theme::ph::CHART_BAR);
         let mut rects = GapRects::default();
         self.refresh_gap_limits();
+        let sel = if self.gap.apply_behaviour { self.gap.behaviour_sel.clone() } else { String::new() };
+        crate::ui::cashflow_ladder::refresh_behaviour(&sel, &mut self.gap.behaviour);
+        let apply_b = self.gap.apply_behaviour;
         let problem = self.gap_ladder_source().err();
         theme::modal(&title).default_width(theme::GAP_DIALOG_W).show(ctx, |d| {
             d.body(|ui| {
@@ -185,9 +219,10 @@ impl MicroParquetApp {
                 let titles: Vec<String> = self.tabs.iter().map(|t| t.title.clone()).collect();
                 let tab_columns: Vec<Vec<String>> = self.tabs.iter().map(|t| t.available_columns()).collect();
                 let mut remove: Option<usize> = None;
-                let grid = egui::Grid::new("gap_rows").num_columns(6).spacing(egui::vec2(theme::SPACE_S, theme::SPACE_S)).show(ui, |ui| {
-                    for h in ["Tab", "Counts as", "Side column", "Amount", "Maturity date", ""] {
-                        ui.label(egui::RichText::new(h).color(tk.muted).size(theme::TEXT_LABEL));
+                let grid = egui::Grid::new(("gap_rows", apply_b)).num_columns(if apply_b { 7 } else { 6 }).spacing(egui::vec2(theme::SPACE_S, theme::SPACE_S)).show(ui, |ui| {
+                    let heads: &[&str] = if apply_b { &["Tab", "Counts as", "Side column", "Amount", "Maturity date", "Product", ""] } else { &["Tab", "Counts as", "Side column", "Amount", "Maturity date", ""] };
+                    for h in heads {
+                        ui.label(egui::RichText::new(*h).color(tk.muted).size(theme::TEXT_LABEL));
                     }
                     ui.end_row();
                     for i in 0..self.gap.rows.len() {
@@ -228,6 +263,11 @@ impl MicroParquetApp {
                         let mut mat = row.maturity_col.clone();
                         col_combo(ui, ("gap_mat", i), &mut mat, true, &mut push, "Maturity date");
                         row.maturity_col = mat;
+                        if apply_b {
+                            let mut prod = row.product_col.clone();
+                            col_combo(ui, ("gap_prod", i), &mut prod, true, &mut push, "Product");
+                            row.product_col = prod;
+                        }
                         let x = ui.add(egui::Button::new(egui::RichText::new(theme::ph::X).color(tk.muted)).frame(false)).on_hover_text("Remove this tab");
                         push("Remove", x.rect);
                         if x.clicked() {
@@ -239,6 +279,7 @@ impl MicroParquetApp {
                             row.amount_col = fresh.amount_col;
                             row.maturity_col = fresh.maturity_col;
                             row.side_col = fresh.side_col;
+                            row.product_col = fresh.product_col;
                         }
                         self.gap.rows[i] = row;
                         ui.end_row();
@@ -273,6 +314,22 @@ impl MicroParquetApp {
                     let r = ui.checkbox(&mut self.gap.null_as_sight, "Treat a blank maturity as sight (otherwise as the preset's long bucket)");
                     rects.settings.push(("Blank maturity".to_string(), r.rect));
                     ui.end_row();
+                    ui.label("");
+                    ui.horizontal_wrapped(|ui| {
+                        let r = ui.checkbox(&mut self.gap.apply_behaviour, "Apply behaviour profile");
+                        rects.settings.push(("Apply behaviour profile".to_string(), r.rect));
+                        ui.add_enabled_ui(self.gap.apply_behaviour, |ui| {
+                            let files = self.gap.behaviour_files.clone();
+                            let shown = if self.gap.behaviour_sel.is_empty() { "Choose a profile\u{2026}".to_string() } else { self.gap.behaviour_sel.clone() };
+                            let r = egui::ComboBox::from_id_salt("gap_behaviour").width(theme::GAP_COMBO_W).selected_text(shown).show_ui(ui, |ui| {
+                                for f in &files {
+                                    ui.selectable_value(&mut self.gap.behaviour_sel, f.clone(), f.as_str());
+                                }
+                            });
+                            rects.settings.push(("Behaviour profile".to_string(), r.response.rect));
+                        });
+                    });
+                    ui.end_row();
                 });
                 ui.add_space(theme::SPACE_S);
                 let limits_line = match &self.gap.limits {
@@ -284,7 +341,7 @@ impl MicroParquetApp {
                     ui.set_max_width(ui.available_width());
                     let muted = |t: String| egui::Label::new(egui::RichText::new(t).color(tk.muted).size(theme::TEXT_LABEL)).wrap();
                     ui.add(muted("Inflows are the amounts of asset rows and outflows those of liability rows, by the bucket of their maturity date. Percentages are of total assets (all inflows). Cumulative gap is the running sum of the net gap.".to_string()));
-                    ui.add(muted("Behavioural treatment of current and savings accounts (core and volatile parts) comes in Phase 5. Until then a deposit with no maturity date goes to the sight bucket, or to the preset's long bucket if you untick the box above.".to_string()));
+                    ui.add(muted("Without a behaviour profile a deposit with no maturity date goes to the sight bucket, or to the preset's long bucket if you untick the box above. With \"Apply behaviour profile\" (made in Banking \u{25b8} Treasury & ALM \u{25b8} Behaviour profile), the volatile part of each profiled deposit goes in the first bucket and its core part in the bucket that holds its average maturity.".to_string()));
                     if !limits_line.is_empty() {
                         ui.add(muted(limits_line.clone()));
                     }

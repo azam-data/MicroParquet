@@ -202,6 +202,7 @@ fn v3_the_ladder_is_a_tab_source_with_steps_after_it() {
         cutoff_date: "2026-10-31".into(),
         null_as_sight: true,
         limits: Some(limit(&format!("0{EN}1 month"), -10.0)),
+        behaviour: None,
     };
     let steps = vec![TransformStep::FilterRows { column: "Breach".into(), operator: FilterOp::Eq, value: "BREACH".into(), keep_matching: true }];
     let out = compile_tab_lazy(&src, &steps, &d).expect("compiles").collect().expect("collects");
@@ -217,6 +218,7 @@ fn v3_the_ladder_is_a_tab_source_with_steps_after_it() {
         cutoff_date: "2026-10-31".into(),
         null_as_sight: true,
         limits: None,
+        behaviour: None,
     };
     let out = compile_tab_lazy(&filtered, &[], &d).expect("compiles").collect().expect("collects");
     assert_eq!(floats(&out, "Inflows")[1], Some(0.0));

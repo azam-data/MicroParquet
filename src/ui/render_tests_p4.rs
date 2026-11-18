@@ -643,7 +643,7 @@ fn the_gap_ladder_dialog_takes_tabs_roles_and_columns_and_builds_the_ladder() {
         assert_eq!(rig.app.active_tool, ActiveToolModal::GapLadder, "{what}");
         let p = rig.draw(6);
         let r = assert_dialog_fits(&rig.ctx, &gap_title(), &what);
-        for t in ["Tab", "Counts as", "Amount", "Maturity date", "Bucket preset:", "Cutoff date (YYYY-MM-DD):", "Treat a blank maturity as sight", "Add tab", "Build gap ladder", "Cancel", "Phase 5"] {
+        for t in ["Tab", "Counts as", "Amount", "Maturity date", "Bucket preset:", "Cutoff date (YYYY-MM-DD):", "Treat a blank maturity as sight", "Add tab", "Build gap ladder", "Cancel", "Apply behaviour profile"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
         let g = rig.app.gap.rects.clone();

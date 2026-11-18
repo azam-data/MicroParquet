@@ -32,8 +32,9 @@ Lays out the bank's inflows (assets) and outflows (liabilities) by maturity buck
 3. In "Liquidity gap ladder" set the first line: the "Tab", "Counts as" (Asset / inflow, Liability / outflow, or Side column (A / L)), the "Side column" if you chose that, the "Amount" and the "Maturity date". Click "Add tab" for each further tab and set its line the same way.
 4. Choose "Bucket preset:" and type "Cutoff date (YYYY-MM-DD):".
 5. Leave "Treat a blank maturity as sight" ticked for current and savings accounts, or untick it to put them in the preset's long bucket.
-6. Read the note under the settings: it says whether a limits file was found for the preset.
-7. Click "Build gap ladder". The ladder opens in a new tab "Gap ladder (preset)". Limits are read when the tab is built: build again after you change the file.
+6. Optional: tick "Apply behaviour profile", choose the file made in the Behaviour profile tool, and choose the "Product" column of each line. The volatile part of each profiled deposit then goes in the first bucket and its core part in the bucket that holds its average maturity (see behaviour-profile.md). Unticked, the ladder is as it was.
+7. Read the note under the settings: it says whether a limits file was found for the preset.
+8. Click "Build gap ladder". The ladder opens in a new tab "Gap ladder (preset)". Limits are read when the tab is built: build again after you change the file.
 
 ## 6. What you get
 
@@ -121,7 +122,7 @@ Test: `guide_gap_ladder`
 
 ## 10. Limits and assumptions
 
-- Behavioural treatment of current and savings accounts (core and volatile parts) is planned for Phase 5. Until then a deposit with no maturity date is placed wholly in the sight bucket (or the long bucket), which overstates the early outflows.
+- Without "Apply behaviour profile" a deposit with no maturity date is placed wholly in the sight bucket (or the long bucket), which overstates the early outflows. With it, only the split of non-maturity deposits changes; CPR and TDRR are not used by this ladder.
 - Contractual maturity only; no prepayment, rollover or off-balance-sheet items unless you add them as rows.
 - One currency at a time: filter the tabs first.
 - The limits are minimum cumulative gaps as a percentage of total assets; other limit types are not checked.

@@ -2389,12 +2389,13 @@ pub fn compile_tab_lazy(
             cutoff_date,
             null_as_sight,
             limits,
+            behaviour,
         } => {
             let mut lfs = Vec::with_capacity(inputs.len());
             for i in inputs {
                 lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
             }
-            crate::banking::build_gap_ladder(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref())?.lazy()
+            crate::banking::build_gap_ladder_behaviour(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref(), behaviour.as_ref())?.lazy()
         }
         TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour } => {
             let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;

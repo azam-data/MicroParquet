@@ -8,7 +8,7 @@ use micro_parquet::cashflow::*;
 use polars::prelude::*;
 
 /// The tool ids of Phase 5 (file names in docs/guide/), added as each task is done.
-pub const P5_GUIDE_TOOLS: [&str; 1] = ["irrbb-cashflow-ladder"];
+pub const P5_GUIDE_TOOLS: [&str; 2] = ["irrbb-cashflow-ladder", "behaviour-profile"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -103,6 +103,66 @@ fn guide_irrbb_cashflow_ladder() {
             md(&book, &["Account_No", "Side", "Outstanding:2", "Rate:2", "Matdat"]),
             md(&shown, &["Currency", "Bucket", "Midpoint (years):~4", "Assets:2", "Liabilities:2", "Net:2", "Cumulative net:2"]),
             md(&flows, &["Payment date", "Principal:2", "Interest:2", "Payment:2"]),
+        ],
+    );
+}
+
+#[test]
+fn guide_behaviour_profile() {
+    use micro_parquet::banking::*;
+    use micro_parquet::behaviour::*;
+    use micro_parquet::models::*;
+    let dir_p = dir("g_beh");
+    micro_parquet::rules::set_data_dir_override(Some(dir_p.clone()));
+    let caps = micro_parquet::rules::load_nmd_caps(d("2026-10-31")).expect("caps");
+    micro_parquet::rules::set_data_dir_override(None);
+    let balances = [100.0, 95.0, 110.0, 90.0, 105.0, 120.0, 98.0, 102.0, 96.0, 104.0, 108.0, 100.0];
+    let ends = ["2025-11-30", "2025-12-31", "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-30", "2026-10-31"];
+    let history = DataFrame::new(vec![dates("Month-end", &ends), Series::new("Product".into(), vec!["SAV"; 12]), Series::new("Balance".into(), balances.to_vec())]).expect("history");
+    let series: Vec<(chrono::NaiveDate, f64)> = ends.iter().map(|e| d(e)).zip(balances).collect();
+    let run = |cat: &str, m: CoreMethod| build_product(&RowInput { product: "SAV".into(), category: cat.into(), avg_maturity_years: Some(3.0), method: m, ..RowInput::default() }, Some(&series), 120, DEFAULT_Z, &caps).expect("builds");
+    let a = run("Retail transactional", CoreMethod::HistoricalMinimum);
+    let b = run("Retail non-transactional", CoreMethod::HistoricalMinimum);
+    let c = run("Retail transactional", CoreMethod::Volatility);
+    assert!((a.product.core_pct - 90.0).abs() < 1e-9 && !a.product.capped);
+    assert!((b.product.core_pct - 70.0).abs() < 1e-9 && b.product.capped);
+    assert!((c.sigma.unwrap_or(0.0) - 0.126772).abs() < 1e-6);
+    assert_eq!(format!("{:.2}", c.product.core_pct), "70.46");
+    let rows = DataFrame::new(vec![
+        Series::new("Category".into(), &[a.product.category.as_str(), b.product.category.as_str(), c.product.category.as_str()]),
+        Series::new("Method".into(), &[a.product.method.as_str(), b.product.method.as_str(), c.product.method.as_str()]),
+        Series::new("Core %".into(), &[a.product.core_pct, b.product.core_pct, c.product.core_pct]),
+        Series::new("Capped".into(), &[if a.product.capped { "capped" } else { "" }, if b.product.capped { "capped" } else { "" }, if c.product.capped { "capped" } else { "" }]),
+        Series::new("Months".into(), &[a.months_used as f64, b.months_used as f64, c.months_used as f64]),
+    ])
+    .expect("rows");
+    assert_eq!(short_history_warning(12).as_deref(), Some("BB IRRBB guideline §15.13 uses 10 years of volume history; this profile uses 12 months."));
+    // the gap ladder: 1,000,000 of savings, core 60%, 3 years
+    let book = DataFrame::new(vec![Series::new("Product".into(), &["SAV"]), Series::new("Balance".into(), &[1_000_000.0]), dates("Matdat", &[""])]).expect("book");
+    let preset = CustomBucketDef {
+        name: "Example".into(),
+        rules: vec![BucketRuleItem { max_days: 30, label: "0-1 month".into() }, BucketRuleItem { max_days: 365, label: "1-12 months".into() }, BucketRuleItem { max_days: 1825, label: "1-5 years".into() }],
+        overflow_label: "Over 5 years".into(),
+        overdue_label: "Overdue".into(),
+        null_sight_label: "0-1 month".into(),
+        null_long_label: "Over 5 years".into(),
+    };
+    let beh = GapBehaviour {
+        file_name: "2026-10-31.json".into(),
+        file: BehaviourFile { as_of: "2026-10-31".into(), source: "example".into(), products: vec![BehaviourProduct { product: "SAV".into(), category: "Retail non-transactional".into(), core_pct: 60.0, avg_maturity_years: 3.0, method: "Typed".into(), ..BehaviourProduct::default() }] },
+        product_cols: vec!["Product".into()],
+    };
+    let spec = GapInputSpec { role: GapRole::Liability, amount_col: "Balance".into(), maturity_col: "Matdat".into() };
+    let with = build_gap_ladder_behaviour(vec![(book.clone().lazy(), spec.clone())], &preset, "2026-10-31", true, None, Some(&beh)).expect("ladder");
+    let without = build_gap_ladder(vec![(book.clone().lazy(), spec)], &preset, "2026-10-31", true, None).expect("ladder");
+    check_guide(
+        "behaviour-profile",
+        "guide_behaviour_profile",
+        &[
+            md(&history, &["Month-end", "Product", "Balance:2"]),
+            md(&rows, &["Category", "Method", "Core %:2", "Capped", "Months"]),
+            md(&with, &["Bucket", "Outflows:2", "Net gap:2"]),
+            md(&without, &["Bucket", "Outflows:2", "Net gap:2"]),
         ],
     );
 }

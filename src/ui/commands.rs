@@ -30,6 +30,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Buckets => ph::CALENDAR,
         CommandId::GapLadder => ph::CHART_BAR,
         CommandId::IrrbbLadder => ph::CHART_BAR,
+        CommandId::BehaviourProfile => ph::CALCULATOR,
         CommandId::RateProfile => ph::PERCENT,
         CommandId::RateShock => ph::CHART_LINE,
         CommandId::Duration => ph::TIMER,
@@ -163,6 +164,7 @@ impl MicroParquetApp {
             CommandId::CopyTable => self.copy_table_to_clipboard(ctx),
             CommandId::GapLadder => self.open_gap_ladder(),
             CommandId::IrrbbLadder => self.open_cf_ladder(),
+            CommandId::BehaviourProfile => self.open_behaviour_profile(),
             CommandId::Buckets => {
                 self.buckets.presets = CustomBucketDef::load_all_presets(&self.paths.buckets_file);
                 self.active_tool = ActiveToolModal::MaturityBucket;

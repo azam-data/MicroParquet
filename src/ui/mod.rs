@@ -14,6 +14,7 @@ pub mod duration;
 pub mod export;
 pub mod filter;
 pub mod ftp;
+pub mod behaviour_profile;
 pub mod cashflow_ladder;
 pub mod gap_ladder;
 pub mod jobs;
@@ -113,6 +114,7 @@ impl MicroParquetApp {
             ActiveToolModal::ClMigration => self.render_cl_migration_modal(ctx, cols),
             ActiveToolModal::GapLadder => self.render_gap_ladder_modal(ctx, cols),
             ActiveToolModal::IrrbbLadder => self.render_cf_ladder_modal(ctx, cols),
+            ActiveToolModal::BehaviourProfile => self.render_behaviour_modal(ctx, cols),
             ActiveToolModal::YieldCurves => self.render_curves_modal(ctx, cols),
             ActiveToolModal::SaveMacro => self.render_save_macro_modal(ctx, cols),
             ActiveToolModal::PythonCodePreview => self.render_python_preview_modal(ctx, cols),
