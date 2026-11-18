@@ -122,7 +122,8 @@ Test: `guide_gap_ladder`
 
 ## 10. Limits and assumptions
 
-- Without "Apply behaviour profile" a deposit with no maturity date is placed wholly in the sight bucket (or the long bucket), which overstates the early outflows. With it, only the split of non-maturity deposits changes; CPR and TDRR are not used by this ladder.
+- Without "Apply behaviour profile" a deposit with no maturity date is placed wholly in the sight bucket (or the long bucket), which overstates the early outflows. With it, only the split of non-maturity deposits (volatile part in the first bucket, core part at its average maturity) changes.
+- The gap ladder has no loan prepayment (CPR) and no term deposit early redemption (TDRR), by decision: a CPR or TDRR in the behaviour profile changes nothing here, and every loan and term deposit stays in the bucket of its contractual maturity. Use Banking ▸ Treasury & ALM ▸ "IRRBB cash-flow ladder" (or "IRRBB (six scenarios)") when you need them.
 - Contractual maturity only; no prepayment, rollover or off-balance-sheet items unless you add them as rows.
 - One currency at a time: filter the tabs first.
 - The limits are minimum cumulative gaps as a percentage of total assets; other limit types are not checked.

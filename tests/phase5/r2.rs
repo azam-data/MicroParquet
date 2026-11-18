@@ -4,6 +4,7 @@ use crate::common::*;
 use chrono::NaiveDate;
 use micro_parquet::banking::*;
 use micro_parquet::behaviour::*;
+use micro_parquet::cashflow::{generate_flows, CashFlowMode, CfRow, CfSettings, Scenario, Side};
 use micro_parquet::models::*;
 use micro_parquet::rules::{load_nmd_caps, set_data_dir_override};
 use polars::prelude::*;
@@ -281,4 +282,35 @@ fn r2_a_ladder_tab_source_with_a_profile_compiles_and_an_old_one_is_unchanged() 
     assert_eq!(floats(&with, "Outflows")[0], Some(400_000.0));
     let without = micro_parquet::engine::compile_tab_lazy(&src(None), &[], &tmp).expect("compiles").collect().expect("collects");
     assert_eq!(floats(&without, "Outflows")[0], Some(1_000_000.0));
+}
+
+// ------------------------------------------------------------ A5: no CPR or TDRR in the gap ladder
+
+#[test]
+fn a5_the_gap_ladder_does_not_use_cpr_or_tdrr() {
+    let book = DataFrame::new(vec![
+        Series::new("Product".into(), &["SAV", "FDR", "HL"]),
+        Series::new("Balance".into(), &[1_000_000.0, 500_000.0, 800_000.0]),
+        dates("Matdat", &["", "2027-10-31", "2028-10-31"]),
+    ])
+    .expect("book");
+    let profile = |cpr: f64, tdrr: f64| {
+        let sav = BehaviourProduct { product: "SAV".into(), category: "Retail non-transactional".into(), core_pct: 60.0, avg_maturity_years: 3.0, method: "Typed".into(), cpr_pct: cpr, tdrr_pct: tdrr, ..BehaviourProduct::default() };
+        // a term deposit and a loan: only a CPR or a TDRR, no category
+        let fdr = BehaviourProduct { product: "FDR".into(), tdrr_pct: tdrr, ..BehaviourProduct::default() };
+        let hl = BehaviourProduct { product: "HL".into(), cpr_pct: cpr, ..BehaviourProduct::default() };
+        GapBehaviour { file_name: "2026-10-31.json".into(), file: BehaviourFile { as_of: "2026-10-31".into(), source: "test".into(), products: vec![sav, fdr, hl] }, product_cols: vec!["Product".into()] }
+    };
+    for role in [GapRole::Liability, GapRole::Asset] {
+        let spec = GapInputSpec { role, amount_col: "Balance".into(), maturity_col: "Matdat".into() };
+        let ladder = |p: &GapBehaviour| build_gap_ladder_behaviour(vec![(book.clone().lazy(), spec.clone())], &preset(), "2026-10-31", true, None, Some(p)).expect("ladder");
+        let none = ladder(&profile(0.0, 0.0));
+        let big = ladder(&profile(10.0, 10.0));
+        assert!(none.equals_missing(&big), "a CPR of 10% and a TDRR of 10% change nothing in the gap ladder");
+    }
+    // while the IRRBB cash-flow ladder does use them (the term deposit's 10% goes to O/N)
+    let r = CfRow { rate_pct: 0.0, ..CfRow::simple(Side::Liability, 500_000.0, d("2027-10-31")) };
+    let td = BehaviourProduct { product: "FDR".into(), tdrr_pct: 10.0, ..BehaviourProduct::default() };
+    let rf = generate_flows(&r, &CfSettings::new(d("2026-10-31"), CashFlowMode::PrincipalOnly, Scenario::Base), Some(&td)).expect("flows");
+    assert_eq!(rf.flows[0].principal, 50_000.0);
 }

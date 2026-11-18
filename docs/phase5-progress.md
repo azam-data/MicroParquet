@@ -20,7 +20,7 @@ Branch `phase5` (PR #7). One commit per item, `cargo test`, push, don't merge. T
 | A2 R1 blank maturity | DONE | (this commit) | r1 a2_ ×3, render a2_ ×1 (both screens), R3 header rect check | option also in the IRRBB (six scenarios) dialog |
 | A3 R1 floating amortisation | DONE | (this commit) | r1 a3_ ×2, guide table ×1; r1 floating assertion updated | |
 | A4 shipped rule files | DONE | (this commit) | a4 ×4 | `SHIPPED_RULES` list; create_new write |
-| A5 no CPR/TDRR in gap ladder | TODO | | | |
+| A5 no CPR/TDRR in gap ladder | DONE | (this commit) | r2 a5 ×1 | guide only (the code already ignored them) |
 | R4 | TODO | | | |
 | R5 | TODO | | | |
 | R6 | TODO | | | |

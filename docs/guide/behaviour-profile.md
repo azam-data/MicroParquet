@@ -119,6 +119,6 @@ Test: `guide_behaviour_profile`
 
 - Only the two methods above (and a typed core); no seasonal or rate-sensitivity model of deposit behaviour.
 - The core share and average maturity apply to the product as a whole, not to customer segments.
-- CPR and TDRR are annual percentages you type; the tool does not estimate them from history.
+- CPR and TDRR are annual percentages you type; the tool does not estimate them from history. The liquidity gap ladder does not use them (only the core and volatile split); the IRRBB cash-flow ladder and IRRBB (six scenarios) do.
 - A deposit's volatile part goes in the first bucket of the ladder, not O/N separately.
 - Amounts are BDT or BDT-equivalent; no currency conversion.
