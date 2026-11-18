@@ -7,7 +7,7 @@
 
 use crate::behaviour::{normalise_product, BehaviourFile, BehaviourProduct};
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{Months, NaiveDate};
+use chrono::{Datelike, Months, NaiveDate};
 use polars::prelude::*;
 
 /// One bucket of BB Table 3: its label, upper bound in years (each bucket includes its upper
@@ -306,6 +306,17 @@ pub struct RowFlows {
     pub blank_maturity: Option<f64>,
 }
 
+/// True when `d` is the last day of its month.
+pub fn is_month_end(d: NaiveDate) -> bool {
+    d.succ_opt().is_none_or(|n| n.month() != d.month())
+}
+
+/// The last day of the month of `d`.
+pub fn last_day_of_month(d: NaiveDate) -> NaiveDate {
+    let first = d.with_day(1).unwrap_or(d);
+    first.checked_add_months(Months::new(1)).and_then(|n| n.pred_opt()).unwrap_or(d)
+}
+
 fn years(cutoff: NaiveDate, d: NaiveDate) -> f64 {
     (d - cutoff).num_days() as f64 / 365.0
 }
@@ -417,10 +428,17 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
         None => vec![maturity],
         Some(f) => {
             let step = 12 / f;
+            // each date comes from the maturity, never from the date before it: a maturity on the last day of
+            // its month gives month ends; otherwise the maturity's day, cut back to the month end where the
+            // month is shorter
+            let month_end = is_month_end(maturity);
             let mut v = Vec::new();
             let mut k: u32 = 0;
             loop {
-                let d = maturity.checked_sub_months(Months::new(k * step)).ok_or_else(|| anyhow!("The payment dates of the row run out of the calendar."))?;
+                let mut d = maturity.checked_sub_months(Months::new(k * step)).ok_or_else(|| anyhow!("The payment dates of the row run out of the calendar."))?;
+                if month_end {
+                    d = last_day_of_month(d);
+                }
                 if d <= cutoff {
                     break;
                 }

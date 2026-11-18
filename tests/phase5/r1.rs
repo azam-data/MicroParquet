@@ -501,3 +501,27 @@ fn a3_the_repricing_date_may_fall_between_payment_dates_and_the_other_repayment_
     assert_eq!(rf.flows.len(), 1);
     close_to(rf.flows[0].interest, 1_000_000.0 * 0.10 * 30.0 / 365.0, 1e-6, "simple interest for the time left");
 }
+
+// ------------------------------------------------------------------- D3: payment dates from the maturity
+
+#[test]
+fn d3_payment_dates_come_from_the_maturity_each_time_and_a_month_end_maturity_gives_month_ends() {
+    let mut r = row(Side::Asset, 120_000.0, 0.0, "2027-04-30");
+    r.frequency = Frequency::Monthly;
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalOnly, Scenario::Base), None).expect("flows");
+    let dates: Vec<String> = rf.flows.iter().map(|f| f.date.format("%Y-%m-%d").to_string()).collect();
+    assert_eq!(dates, vec!["2026-11-30", "2026-12-31", "2027-01-31", "2027-02-28", "2027-03-31", "2027-04-30"], "{dates:?}");
+    // a maturity that is not a month end keeps its day, cut back to the month end where the month is shorter
+    let mut r = row(Side::Asset, 120_000.0, 0.0, "2027-03-30");
+    r.frequency = Frequency::Monthly;
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalOnly, Scenario::Base), None).expect("flows");
+    let dates: Vec<String> = rf.flows.iter().map(|f| f.date.format("%Y-%m-%d").to_string()).collect();
+    assert_eq!(dates, vec!["2026-11-30", "2026-12-30", "2027-01-30", "2027-02-28", "2027-03-30"], "{dates:?}");
+    // a leap year and quarterly dates from a 29 February maturity
+    let mut r = row(Side::Asset, 120_000.0, 0.0, "2028-02-29");
+    r.frequency = Frequency::Quarterly;
+    let s = CfSettings { cutoff: d("2027-01-15"), ..settings(CashFlowMode::PrincipalOnly, Scenario::Base) };
+    let rf = generate_flows(&r, &s, None).expect("flows");
+    let dates: Vec<String> = rf.flows.iter().map(|f| f.date.format("%Y-%m-%d").to_string()).collect();
+    assert_eq!(dates, vec!["2027-02-28", "2027-05-31", "2027-08-31", "2027-11-30", "2028-02-29"], "{dates:?}");
+}
