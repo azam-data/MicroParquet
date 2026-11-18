@@ -14,7 +14,7 @@ Runs the six interest-rate shock scenarios of the Bangladesh Bank IRRBB guidelin
 
 - Open the asset and liability extracts as tabs, with the columns of the IRRBB cash-flow ladder (outstanding, maturity date, rate, repricing date, product, currency, as needed).
 - A yield curve of each currency dated on or before the cutoff: Banking ▸ Treasury & ALM ▸ Yield curves.
-- The shock file `portable_data/rules/irrbb_shocks/<date>.json` (BB Table 2: BDT parallel 400, short 500, long 300 bp, decay x = 4, outlier 15%; built in as the 2021-04-13 file). The app uses the latest file dated on or before the cutoff. When Bangladesh Bank revises the BDT shocks, add a newer dated file.
+- The shock file `portable_data/rules/irrbb_shocks/<date>.json` (BB Table 2: BDT parallel 400, short 500, long 300 bp, decay x = 4, outlier 15%; built in as the 2021-04-13 file: the program writes it to that folder the first time if it is missing, and never overwrites a file that is there, so your edits stay). The app uses the latest file dated on or before the cutoff. When Bangladesh Bank revises the BDT shocks, add a newer dated file next to it.
 - Optional: a behaviour profile and a beta file for ΔNII. Know your Tier 1 capital in BDT.
 
 ## 4. Columns you need

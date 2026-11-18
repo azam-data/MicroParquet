@@ -3,9 +3,11 @@
 //! `source`; a sample the owner must confirm also has `"sample": true`. A run uses the latest file
 //! dated on or before its cutoff date and records which one it used.
 //!
-//! The files the circulars fix (IRRBB shocks and non-maturity deposit caps) are built in as a
-//! default and written to the folder when it has none, so a bank can add a newer dated file next to
-//! them when Bangladesh Bank revises a number.
+//! The files the circulars fix (IRRBB shocks and non-maturity deposit caps, and later the loan
+//! overdue thresholds and IFRS 9 staging) are shipped as source copies under `assets/rules/`, built
+//! in with `include_str!`, and written to `portable_data/rules/<kind>/` only when that file is
+//! missing; an existing file is never overwritten (a bank may have edited it). A bank adds a newer
+//! dated file next to them when Bangladesh Bank revises a number.
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDate;
@@ -61,6 +63,25 @@ pub const IRRBB_SHOCKS: BuiltIn = ("2021-04-13", include_str!("../assets/rules/i
 /// The built-in non-maturity deposit caps (BB Table 4).
 pub const IRRBB_NMD_CAPS: BuiltIn = ("2021-04-13", include_str!("../assets/rules/irrbb_nmd_caps/2021-04-13.json"));
 
+/// Every shipped rule file: its folder under `portable_data/rules/` and its built-in copy. The tests
+/// go through this list, so a file added here is checked against `assets/rules/` and for the
+/// write-only-if-missing rule.
+pub const SHIPPED_RULES: &[(&str, BuiltIn)] = &[("irrbb_shocks", IRRBB_SHOCKS), ("irrbb_nmd_caps", IRRBB_NMD_CAPS)];
+
+/// Writes the built-in file into `dir` when `dir` does not have it. An existing file is never
+/// touched, and the check and the write are one step (`create_new`), so two runs at once cannot
+/// overwrite each other either. A failed write is not an error: the built-in copy is still used.
+pub fn write_builtin_if_missing(dir: &Path, builtin: BuiltIn) {
+    use std::io::Write;
+    let (date, text) = builtin;
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(format!("{date}.json"))) {
+        let _ = f.write_all(text.as_bytes());
+    }
+}
+
 fn parse_date(text: &str, what: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d").map_err(|_| anyhow!("{} must be a date written YYYY-MM-DD, not '{}'.", what, text))
 }
@@ -101,11 +122,8 @@ fn dated_files(dir: &Path) -> Vec<(NaiveDate, PathBuf)> {
 /// messages). With a built-in default, it is used when the folder has no file that qualifies, and
 /// it is written to the folder when the folder lacks it (a failed write is not an error).
 pub fn load_latest<T: DeserializeOwned>(dir: &Path, label_dir: &str, cutoff: NaiveDate, builtin: Option<BuiltIn>) -> Result<RuleFile<T>> {
-    if let Some((date, text)) = builtin {
-        let path = dir.join(format!("{date}.json"));
-        if !path.exists() && std::fs::create_dir_all(dir).is_ok() {
-            let _ = std::fs::write(&path, text);
-        }
+    if let Some(b) = builtin {
+        write_builtin_if_missing(dir, b);
     }
     let files = dated_files(dir);
     if let Some((d, p)) = files.iter().rev().find(|(d, _)| *d <= cutoff) {
