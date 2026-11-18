@@ -348,6 +348,9 @@ pub const TEXT_COUNT: f32 = 11.0;
 /// What a blank (null) cell of the table shows, in the muted colour. Exports are not affected.
 pub const BLANK_CELL: &str = "\u{2013}";
 pub const STEPS_FOOTER_RESERVE: f32 = 110.0;
+/// The icon buttons of a selected step: edit, up, down, hide, duplicate, delete.
+pub const STEP_BTN_W: f32 = 28.0;
+pub const STEP_BTN_H: f32 = 24.0;
 pub const STEPS_LIST_MIN_H: f32 = 100.0;
 pub const STEP_LIST_INDENT: f32 = 26.0;
 pub const MARGIN_STEP_ROW: egui::Margin = egui::Margin { left: 8.0, right: 8.0, top: 3.0, bottom: 8.0 };

@@ -761,7 +761,7 @@ fn the_gap_ladder_is_listed_under_treasury_and_alm_and_found_by_the_search() {
 
 // -------------------------------------------------------------------- V4: yield curves and FTP
 
-fn curves_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+pub(crate) fn curves_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
     let mut app = test_app(name);
     let dir = app.paths.curves_dir.clone();
     let _ = std::fs::remove_dir_all(&dir);
@@ -787,7 +787,7 @@ fn curves_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
     Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
 }
 
-fn curves_title() -> String {
+pub(crate) fn curves_title() -> String {
     format!("{}  Yield curves", theme::ph::CHART_LINE)
 }
 

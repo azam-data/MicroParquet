@@ -1249,3 +1249,226 @@ fn r7_the_tool_is_listed_under_loans_and_credit_and_found_by_the_search() {
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------ C1: the Steps panel buttons
+
+fn steps_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let df = DataFrame::new(vec![
+        Series::new("Actnum".into(), &["A1", "A2"]),
+        Series::new("Balance".into(), &[1.0, 2.0]),
+        Series::new("Rate".into(), &[9.0, 8.0]),
+    ])
+    .expect("book");
+    let src = parquet_source(&root, "Steps", df);
+    // three steps that can be moved and copied in any order
+    let steps = vec![
+        TransformStep::CleanLineBreaks { columns: vec!["Actnum".into()], trim_all: false },
+        TransformStep::CleanLineBreaks { columns: vec![], trim_all: false },
+        TransformStep::CleanLineBreaks { columns: vec![], trim_all: true },
+    ];
+    open_tab(&mut app, src, steps);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn step_labels(rig: &Rig) -> Vec<String> {
+    rig.app.tabs[rig.app.active_tab].steps.iter().map(|s| s.short_label()).collect()
+}
+
+/// Clicks the card of step `i` and returns the buttons drawn for it.
+fn select_step(rig: &mut Rig, i: usize) -> crate::ui::steps::StepsReport {
+    rig.draw(3);
+    let rep = crate::ui::steps::steps_report(&rig.ctx).expect("steps report");
+    let card = rep.cards[i];
+    rig.click(egui::pos2(card.left() + 20.0, card.top() + 8.0));
+    assert_eq!(rig.app.selected_step, Some(i), "{}: a click on the card of step {i} selects it", rig.what);
+    rig.draw(3);
+    crate::ui::steps::steps_report(&rig.ctx).expect("steps report")
+}
+
+fn press_step_button(rig: &mut Rig, name: &str) {
+    let rep = crate::ui::steps::steps_report(&rig.ctx).expect("steps report");
+    let b = rep.named_buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: no '{name}' button", rig.what));
+    rig.click(b.center());
+}
+
+#[test]
+fn c1_every_step_button_does_its_job_when_its_real_rect_is_clicked_and_all_six_fit_in_one_row() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = steps_rig("p5c1", ppp, w, h);
+        let what = rig.what.clone();
+        let rep = select_step(&mut rig, 1);
+        // six buttons, one row, inside the card and the panel, delete at the right end, no overlaps
+        let names: Vec<&str> = rep.named_buttons.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["edit", "up", "down", "hide", "duplicate", "delete"], "{what}");
+        let top = rep.named_buttons[0].1.top();
+        for (n, r) in &rep.named_buttons {
+            assert!((r.top() - top).abs() < 1.0 && r.height() <= theme::STEP_BTN_H + 1.0, "{what}: '{n}' {r:?} is in the same row");
+            assert!(r.right() <= rep.cards[1].right() + 0.5 && r.right() <= rep.inner.right() + 0.5 && r.left() >= rep.cards[1].left(), "{what}: '{n}' {r:?} is inside the card {:?}", rep.cards[1]);
+        }
+        for (i, (na, a)) in rep.named_buttons.iter().enumerate() {
+            for (nb, b) in rep.named_buttons.iter().skip(i + 1) {
+                assert!(!a.intersects(*b), "{what}: '{na}' and '{nb}' overlap");
+            }
+        }
+        let delete = rep.named_buttons[5].1;
+        assert!(rep.named_buttons.iter().all(|(_, r)| r.right() <= delete.right() + 0.5), "{what}: delete is at the right end");
+        assert!(rep.cards[1].right() - delete.right() < theme::MARGIN_STEP_ROW.right + 6.0, "{what}: and reaches the card's right margin");
+
+        // move up: step 1 goes first
+        press_step_button(&mut rig, "up");
+        assert_eq!(step_labels(&rig)[0], "Clean line breaks (all text columns)", "{what}: {:?}", step_labels(&rig));
+        // move down: it goes back to second place
+        let _ = select_step(&mut rig, 0);
+        press_step_button(&mut rig, "down");
+        assert_eq!(step_labels(&rig)[1], "Clean line breaks (all text columns)", "{what}: {:?}", step_labels(&rig));
+        // hide: the step is turned off, and on again
+        let _ = select_step(&mut rig, 1);
+        assert!(!rig.app.tabs[rig.app.active_tab].steps[1].is_skipped());
+        press_step_button(&mut rig, "hide");
+        assert!(rig.app.tabs[rig.app.active_tab].steps[1].is_skipped(), "{what}: the step is off");
+        let _ = select_step(&mut rig, 1);
+        press_step_button(&mut rig, "hide");
+        assert!(!rig.app.tabs[rig.app.active_tab].steps[1].is_skipped(), "{what}: the step is on again");
+        // duplicate: four steps, the copy next to the original
+        let _ = select_step(&mut rig, 2);
+        press_step_button(&mut rig, "duplicate");
+        let labels = step_labels(&rig);
+        assert_eq!(labels.len(), 4, "{what}: {labels:?}");
+        assert_eq!(labels[2], labels[3], "{what}: {labels:?}");
+        // delete asks first, then removes
+        let _ = select_step(&mut rig, 3);
+        press_step_button(&mut rig, "delete");
+        assert_eq!(rig.app.confirm_delete_step, Some(3), "{what}: asks first");
+        assert_eq!(step_labels(&rig).len(), 4, "{what}: nothing is removed yet");
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Delete step?", egui::Rect::EVERYTHING);
+        assert_eq!(step_labels(&rig).len(), 3, "{what}: the step is removed: {:?}", step_labels(&rig));
+        // and "No" keeps it
+        let _ = select_step(&mut rig, 2);
+        press_step_button(&mut rig, "delete");
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "No", egui::Rect::EVERYTHING);
+        assert_eq!(step_labels(&rig).len(), 3, "{what}: No keeps it");
+        // edit: the step's dialog opens, editing that step
+        let _ = select_step(&mut rig, 0);
+        press_step_button(&mut rig, "edit");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::CleanLineBreaks, "{what}: the editor of the step opened");
+        assert!(rig.app.editing.is_some(), "{what}");
+    }
+}
+
+#[test]
+fn c1_the_buttons_of_the_first_and_last_step_say_why_up_and_down_are_off_and_a_click_on_a_button_does_not_select_another_step() {
+    let (ppp, w, h) = SCREENS[0];
+    let mut rig = steps_rig("p5c1b", ppp, w, h);
+    select_step(&mut rig, 0);
+    let before = step_labels(&rig);
+    press_step_button(&mut rig, "up");
+    assert_eq!(step_labels(&rig), before, "the first step cannot move up");
+    select_step(&mut rig, 2);
+    press_step_button(&mut rig, "down");
+    assert_eq!(step_labels(&rig), before, "the last step cannot move down");
+    // a click on the selected step's button leaves it selected (it is not taken by the card)
+    assert_eq!(rig.app.selected_step, Some(2));
+}
+
+// ------------------------------------------------------------------------------ C1 audit: other rows with buttons
+
+/// The painted icon `glyph`s below the tab strip, top to bottom.
+fn glyphs(p: &Painted, glyph: &str) -> Vec<egui::Rect> {
+    let mut v: Vec<egui::Rect> = p.boxes.iter().filter(|(t, b)| t == glyph && b.top() > theme::TOP_BAR_H + theme::TAB_STRIP_H).map(|(_, b)| *b).collect();
+    v.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap_or(std::cmp::Ordering::Equal).then(a.left().partial_cmp(&b.left()).unwrap_or(std::cmp::Ordering::Equal)));
+    v
+}
+
+#[test]
+fn c1_audit_the_sort_level_buttons_work_by_a_real_click() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = steps_rig("p5c1s", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Sort);
+        rig.app.sort.levels = vec![SortLevel { column: "Actnum".into(), descending: false }, SortLevel { column: "Balance".into(), descending: false }];
+        let cols = |rig: &Rig| rig.app.sort.levels.iter().map(|l| l.column.clone()).collect::<Vec<_>>();
+        let p = rig.draw(4);
+        // move the first level down
+        let down = glyphs(&p, theme::ph::ARROW_DOWN)[0];
+        rig.click(down.center());
+        assert_eq!(cols(&rig), vec!["Balance", "Actnum"], "{what}: move down");
+        // move the second level up
+        let p = rig.draw(3);
+        let up = glyphs(&p, theme::ph::ARROW_UP)[1];
+        rig.click(up.center());
+        assert_eq!(cols(&rig), vec!["Actnum", "Balance"], "{what}: move up");
+        // remove the first level
+        let p = rig.draw(3);
+        let x = glyphs(&p, theme::ph::X)[0];
+        rig.click(x.center());
+        assert_eq!(cols(&rig), vec!["Balance"], "{what}: remove");
+        // add a level
+        let p = rig.draw(3);
+        click_text(&mut rig, &p, "Add level", egui::Rect::EVERYTHING);
+        assert_eq!(rig.app.sort.levels.len(), 2, "{what}: add");
+    }
+}
+
+#[test]
+fn c1_audit_the_filter_condition_buttons_work_by_a_real_click() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = steps_rig("p5c1f", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Filter);
+        rig.draw(4);
+        let n0 = rig.app.filter.conditions.len();
+        let p = rig.draw(2);
+        click_text(&mut rig, &p, "Add condition", egui::Rect::EVERYTHING);
+        assert_eq!(rig.app.filter.conditions.len(), n0 + 1, "{what}: add a condition");
+        let p = rig.draw(3);
+        let crosses = glyphs(&p, theme::ph::X);
+        assert!(!crosses.is_empty(), "{what}: the conditions have a remove button");
+        rig.click(crosses[0].center());
+        assert_eq!(rig.app.filter.conditions.len(), n0, "{what}: remove a condition");
+    }
+}
+
+#[test]
+fn c1_audit_the_behaviour_profile_row_remove_button_and_the_curve_point_remove_button_work_by_a_real_click() {
+    for (ppp, w, h) in SCREENS {
+        // behaviour profile: add a product, remove it with its cross
+        let mut rig = bh_rig("p5c1b", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::BehaviourProfile);
+        rig.draw(4);
+        let n0 = rig.app.behaviour.rows.len();
+        let p = rig.draw(2);
+        let add = p.boxes.iter().filter(|(t, b)| t.ends_with("Add product") && b.width() < 200.0).map(|(_, b)| *b).next().expect("the Add product button");
+        rig.click(add.center());
+        assert_eq!(rig.app.behaviour.rows.len(), n0 + 1, "{what}: add a product");
+        let p = rig.draw(3);
+        let table = rig.app.behaviour.rects.table;
+        let x: Vec<egui::Rect> = glyphs(&p, theme::ph::X).into_iter().filter(|b| inside(*b, table)).collect();
+        assert_eq!(x.len(), n0 + 1, "{what}: one cross per product row");
+        rig.click(x[x.len() - 1].center());
+        assert_eq!(rig.app.behaviour.rows.len(), n0, "{what}: remove a product");
+        micro_parquet::rules::set_data_dir_override(None);
+
+        // yield curves: a click on a list row opens the curve; a point is removed with its cross
+        let mut rig = crate::ui::render_tests_p4::curves_rig("p5c1c", ppp, w, h);
+        rig.app.run_command(&rig.ctx, CommandId::YieldCurves);
+        rig.draw(5);
+        let row = rig.app.curves.rects.list_rows.iter().find(|(d, _)| d == "2026-01-01").map(|(_, r)| *r).expect("row");
+        rig.click(row.center());
+        assert_eq!(rig.app.curves.editor.date, "2026-01-01", "{what}: a click on the row opens the curve");
+        let n = rig.app.curves.editor.points.len();
+        let p = rig.draw(3);
+        let editor = rig.app.curves.rects.editor;
+        let x: Vec<egui::Rect> = glyphs(&p, theme::ph::X).into_iter().filter(|b| inside(*b, editor)).collect();
+        assert_eq!(x.len(), n, "{what}: one cross per point");
+        rig.click(x[0].center());
+        assert_eq!(rig.app.curves.editor.points.len(), n - 1, "{what}: remove a point");
+        micro_parquet::curves::set_curves_dir_override(None);
+    }
+}
+

@@ -63,6 +63,8 @@ pub struct StepsReport {
     pub cards: Vec<egui::Rect>,
     /// The button rows of the selected step.
     pub buttons: Vec<egui::Rect>,
+    /// Each button of the selected step by name (edit, up, down, hide, duplicate, delete), where it was drawn.
+    pub named_buttons: Vec<(String, egui::Rect)>,
 }
 
 pub fn steps_report(ctx: &egui::Context) -> Option<StepsReport> {
@@ -514,6 +516,7 @@ impl MicroParquetApp {
         let mut row_rects: Vec<StepRowRects> = Vec::new();
         let mut card_rects: Vec<egui::Rect> = Vec::new();
         let mut button_rects: Vec<egui::Rect> = Vec::new();
+        let mut named_buttons: Vec<(String, egui::Rect)> = Vec::new();
         let mut inner_rect = egui::Rect::NOTHING;
         egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
             inner_rect = ui.available_rect_before_wrap();
@@ -595,45 +598,52 @@ impl MicroParquetApp {
                                 }
                                 if is_sel {
                                     ui.add_space(theme::SPACE_XS);
-                                    // wraps to a second line instead of passing the panel's edge
-                                    let buttons = ui.horizontal_wrapped(|ui| {
+                                    // one row of small icon buttons, delete at the right end; each has a tooltip
+                                    let buttons = ui.horizontal(|ui| {
                                         ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-                                        let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
-                                        let edit = ui.add_enabled(editable, egui::Button::new(theme::ph::PENCIL_SIMPLE));
-                                        if edit
-                                            .on_hover_text("Edit")
-                                            .on_disabled_hover_text(if skipped { "Turn the step on to edit it." } else { "Set to Number and SQL steps have no editor: delete the step and add it again." })
-                                            .clicked()
-                                        {
-                                            do_edit = Some(i);
-                                        }
-                                        if ui.add_enabled(i > 0, egui::Button::new(theme::ph::ARROW_UP)).on_hover_text("Move up").clicked() {
-                                            do_up = Some(i);
-                                        }
-                                        if ui.add_enabled(i + 1 < tab.steps.len(), egui::Button::new(theme::ph::ARROW_DOWN)).on_hover_text("Move down").clicked() {
-                                            do_down = Some(i);
-                                        }
-                                        let (icon, tip) = if skipped { (theme::ph::EYE, "Turn on") } else { (theme::ph::EYE_SLASH, "Turn off (skip)") };
-                                        if ui.add(egui::Button::new(icon)).on_hover_text(tip).clicked() {
-                                            do_skip = Some(i);
-                                        }
-                                        if ui.add(egui::Button::new(theme::ph::COPY)).on_hover_text("Duplicate").clicked() {
-                                            do_dup = Some(i);
-                                        }
+                                        ui.spacing_mut().interact_size.y = theme::STEP_BTN_H;
+                                        ui.spacing_mut().button_padding = egui::vec2(theme::SPACE_XS, 2.0);
+                                        let mut small = |ui: &mut egui::Ui, name: &str, icon: &str, color: Option<egui::Color32>, enabled: bool, tip: &str, off_tip: &str| -> egui::Response {
+                                            let mut rt = egui::RichText::new(icon).size(theme::TEXT_SMALL);
+                                            if let Some(c) = color {
+                                                rt = rt.color(c);
+                                            }
+                                            let r = ui.add_enabled(enabled, egui::Button::new(rt).min_size(egui::vec2(theme::STEP_BTN_W, theme::STEP_BTN_H)));
+                                            named_buttons.push((name.to_string(), r.rect));
+                                            r.on_hover_text(tip).on_disabled_hover_text(off_tip)
+                                        };
                                         if confirm == Some(i) {
-                                            if theme::danger_button(ui, "Delete?").clicked() {
+                                            if theme::danger_button(ui, "Delete step?").clicked() {
                                                 do_delete = Some(i);
                                             }
                                             if ui.button("No").clicked() {
                                                 cancel_delete = true;
                                             }
-                                        } else if ui
-                                            .add(egui::Button::new(egui::RichText::new(theme::ph::TRASH).color(tk.danger)))
-                                            .on_hover_text("Delete (asks first)")
-                                            .clicked()
-                                        {
-                                            ask_delete = Some(i);
+                                            return;
                                         }
+                                        let editable = !skipped && crate::ui::step_edit::step_is_editable(step);
+                                        let why = if skipped { "Turn the step on to edit it." } else { "Set to Number and SQL steps have no editor: delete the step and add it again." };
+                                        if small(ui, "edit", theme::ph::PENCIL_SIMPLE, None, editable, "Edit", why).clicked() {
+                                            do_edit = Some(i);
+                                        }
+                                        if small(ui, "up", theme::ph::ARROW_UP, None, i > 0, "Move up", "Already the first step").clicked() {
+                                            do_up = Some(i);
+                                        }
+                                        if small(ui, "down", theme::ph::ARROW_DOWN, None, i + 1 < tab.steps.len(), "Move down", "Already the last step").clicked() {
+                                            do_down = Some(i);
+                                        }
+                                        let (icon, tip) = if skipped { (theme::ph::EYE, "Turn on") } else { (theme::ph::EYE_SLASH, "Turn off (skip)") };
+                                        if small(ui, "hide", icon, None, true, tip, tip).clicked() {
+                                            do_skip = Some(i);
+                                        }
+                                        if small(ui, "duplicate", theme::ph::COPY, None, true, "Duplicate", "Duplicate").clicked() {
+                                            do_dup = Some(i);
+                                        }
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if small(ui, "delete", theme::ph::TRASH, Some(tk.danger), true, "Delete (asks first)", "Delete").clicked() {
+                                                ask_delete = Some(i);
+                                            }
+                                        });
                                     });
                                     button_rects.push(buttons.response.rect);
                                 }
@@ -643,7 +653,11 @@ impl MicroParquetApp {
                         card.response
                     });
                     let rect = out.inner.rect;
-                    if out.inner.interact(egui::Sense::click()).clicked() {
+                    // A click on the card selects it, unless it is on the step's buttons. (The card's click
+                    // area is not registered over the buttons: a widget added after them would take their
+                    // clicks, which is what made them do nothing.)
+                    let on_buttons = is_sel && button_rects.last().is_some_and(|b| ui.rect_contains_pointer(*b));
+                    if ui.input(|inp| inp.pointer.primary_clicked()) && ui.rect_contains_pointer(rect) && !on_buttons {
                         select = Some(i);
                     }
                     // timeline: dot, and the line down to the next step
@@ -732,7 +746,7 @@ impl MicroParquetApp {
             });
         });
 
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("steps_report"), StepsReport { inner: inner_rect, rows: row_rects, cards: card_rects, buttons: button_rects }));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("steps_report"), StepsReport { inner: inner_rect, rows: row_rects, cards: card_rects, buttons: button_rects, named_buttons }));
 
         if open_schema {
             self.open_schema_modal_for_active_tab();
