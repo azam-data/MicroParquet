@@ -2123,6 +2123,8 @@ pub const GAP_COLUMNS: [&str; 7] = [
     "Net gap % of total assets",
     "Cumulative gap % of total assets",
 ];
+/// The label of the last row of the ladder: the sums of the inflows, outflows and net gap.
+pub const GAP_TOTAL_LABEL: &str = "Total";
 pub const GAP_LIMIT_COLUMN: &str = "Cumulative gap limit %";
 pub const GAP_BREACH_COLUMN: &str = "Breach";
 pub const GAP_BREACH_FLAG: &str = "BREACH";
@@ -2260,14 +2262,27 @@ pub fn build_gap_ladder(
     let pct = |x: f64| -> Option<f64> { if total_assets != 0.0 { Some(x / total_assets * 100.0) } else { None } };
     let net_pct: Vec<Option<f64>> = net.iter().map(|x| pct(*x)).collect();
     let cum_pct: Vec<Option<f64>> = cum.iter().map(|x| pct(*x)).collect();
+    // the totals row: inflows, outflows and net gap added up; the cumulative and % columns stay blank
+    let (sum_in, sum_out, sum_net): (f64, f64, f64) = (inflow.iter().sum(), outflow.iter().sum(), net.iter().sum());
+    let mut labels = order.clone();
+    labels.push(GAP_TOTAL_LABEL.to_string());
+    let with_total = |mut v: Vec<f64>, t: f64| -> Vec<Option<f64>> {
+        v.push(t);
+        v.into_iter().map(Some).collect()
+    };
+    let with_blank = |v: Vec<Option<f64>>| -> Vec<Option<f64>> {
+        let mut v = v;
+        v.push(None);
+        v
+    };
     let mut series = vec![
-        Series::new(GAP_COLUMNS[0].into(), order.clone()),
-        Series::new(GAP_COLUMNS[1].into(), inflow),
-        Series::new(GAP_COLUMNS[2].into(), outflow),
-        Series::new(GAP_COLUMNS[3].into(), net),
-        Series::new(GAP_COLUMNS[4].into(), cum),
-        Series::new(GAP_COLUMNS[5].into(), net_pct),
-        Series::new(GAP_COLUMNS[6].into(), cum_pct.clone()),
+        Series::new(GAP_COLUMNS[0].into(), labels),
+        Series::new(GAP_COLUMNS[1].into(), with_total(inflow, sum_in)),
+        Series::new(GAP_COLUMNS[2].into(), with_total(outflow, sum_out)),
+        Series::new(GAP_COLUMNS[3].into(), with_total(net, sum_net)),
+        Series::new(GAP_COLUMNS[4].into(), with_blank(cum.into_iter().map(Some).collect())),
+        Series::new(GAP_COLUMNS[5].into(), with_blank(net_pct)),
+        Series::new(GAP_COLUMNS[6].into(), with_blank(cum_pct.clone())),
     ];
     if let Some(l) = limits {
         if total_assets == 0.0 && !l.limits.is_empty() {
@@ -2279,6 +2294,10 @@ pub fn build_gap_ladder(
             (Some(l), Some(c)) if c < l => GAP_BREACH_FLAG.to_string(),
             _ => String::new(),
         }).collect();
+        let mut lim = lim;
+        lim.push(None);
+        let mut breach = breach;
+        breach.push(String::new());
         series.push(Series::new(GAP_LIMIT_COLUMN.into(), lim));
         series.push(Series::new(GAP_BREACH_COLUMN.into(), breach));
     }

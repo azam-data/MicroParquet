@@ -55,7 +55,7 @@ fn v3_the_acceptance_example_gives_net_cumulative_and_percentages() {
         vec!["Bucket", "Inflows", "Outflows", "Net gap", "Cumulative gap", "Net gap % of total assets", "Cumulative gap % of total assets"]
     );
     // one row per bucket of the preset, in its order
-    assert_eq!(strings(&out, "Bucket").into_iter().flatten().collect::<Vec<_>>(), vec![format!("0{EN}1 month"), format!("1{EN}3 months"), "Over 3 months".to_string(), "Overdue".to_string()]);
+    assert_eq!(strings(&out, "Bucket").into_iter().flatten().collect::<Vec<_>>(), vec![format!("0{EN}1 month"), format!("1{EN}3 months"), "Over 3 months".to_string(), "Overdue".to_string(), "Total".to_string()]);
     assert_eq!(&floats(&out, "Inflows")[..2], &[Some(100.0), Some(200.0)]);
     assert_eq!(&floats(&out, "Outflows")[..2], &[Some(150.0), Some(50.0)]);
     assert_eq!(&floats(&out, "Net gap")[..2], &[Some(-50.0), Some(150.0)], "net -50 and +150");
@@ -76,8 +76,8 @@ fn v3_a_limit_flags_the_breached_row_only_and_the_limit_column_shows_what_is_set
     let two = || vec![input(&assets(), GapRole::Asset), input(&liabilities(), GapRole::Liability)];
     let out = ladder(two(), Some(&limit(&format!("0{EN}1 month"), -10.0)));
     assert_eq!(out.width(), 9, "the Limit and Breach columns are added");
-    assert_eq!(strings(&out, "Breach").into_iter().flatten().collect::<Vec<_>>(), vec!["BREACH", "", "", ""], "-16.67% is below -10% in the first bucket only");
-    assert_eq!(floats(&out, "Cumulative gap limit %"), vec![Some(-10.0), None, None, None]);
+    assert_eq!(strings(&out, "Breach").into_iter().flatten().collect::<Vec<_>>(), vec!["BREACH", "", "", "", ""], "-16.67% is below -10% in the first bucket only");
+    assert_eq!(floats(&out, "Cumulative gap limit %"), vec![Some(-10.0), None, None, None, None]);
     // a limit that is met is not a breach (equal is met), and a looser limit is not breached
     assert_eq!(strings(&out, "Breach")[1].as_deref(), Some(""));
     let out = ladder(two(), Some(&limit(&format!("0{EN}1 month"), -16.66)));
@@ -88,7 +88,7 @@ fn v3_a_limit_flags_the_breached_row_only_and_the_limit_column_shows_what_is_set
     assert_eq!(strings(&out, "Breach")[0].as_deref(), Some(""));
     // a limit on the second bucket: 33.33% against a minimum of 40%
     let out = ladder(two(), Some(&limit(&format!("1{EN}3 months"), 40.0)));
-    assert_eq!(strings(&out, "Breach").into_iter().flatten().collect::<Vec<_>>(), vec!["", "BREACH", "", ""]);
+    assert_eq!(strings(&out, "Breach").into_iter().flatten().collect::<Vec<_>>(), vec!["", "BREACH", "", "", ""]);
     // no limits: no columns
     assert_eq!(ladder(two(), None).width(), 7);
 }
@@ -98,10 +98,10 @@ fn v3_blank_maturity_overdue_a_side_column_and_several_tabs() {
     // a blank maturity is a sight deposit: the sight bucket; an old maturity is overdue
     let liab = DataFrame::new(vec![Series::new("Balance".into(), &[40.0, 25.0, 10.0]), dates("Matdat", &["", "2026-09-30", "2028-01-01"])]).expect("frame");
     let out = ladder(vec![input(&assets(), GapRole::Asset), input(&liab, GapRole::Liability)], None);
-    assert_eq!(floats(&out, "Outflows"), vec![Some(40.0), Some(0.0), Some(10.0), Some(25.0)], "sight, 1-3 months, over 3 months, overdue");
+    assert_eq!(floats(&out, "Outflows"), vec![Some(40.0), Some(0.0), Some(10.0), Some(25.0), Some(75.0)], "sight, 1-3 months, over 3 months, overdue");
     // ... or, when blank maturity is not sight, the preset's long bucket
     let out = build_gap_ladder(vec![input(&assets(), GapRole::Asset), input(&liab, GapRole::Liability)], &two_bucket_preset(), "2026-10-31", false, None).expect("builds");
-    assert_eq!(floats(&out, "Outflows"), vec![Some(0.0), Some(0.0), Some(50.0), Some(25.0)], "the blank 40 joins over 3 months");
+    assert_eq!(floats(&out, "Outflows"), vec![Some(0.0), Some(0.0), Some(50.0), Some(25.0), Some(75.0)], "the blank 40 joins over 3 months");
     // one tab with a side column
     let both = DataFrame::new(vec![
         Series::new("Side".into(), &["Asset", "Deposit", "Asset", "Liab"]),
@@ -133,7 +133,7 @@ fn v3_bad_input_is_a_message_and_a_zero_total_has_no_percentages() {
     assert!(run(vec![(assets().lazy(), missing)], "2026-10-31", None).contains("no column 'Nope'"));
     // only liabilities: the ladder is made, the percentages are blank, and limits cannot be checked
     let out = ladder(vec![input(&liabilities(), GapRole::Liability)], None);
-    assert_eq!(floats(&out, "Net gap % of total assets"), vec![None, None, None, None]);
+    assert_eq!(floats(&out, "Net gap % of total assets"), vec![None, None, None, None, None]);
     assert_eq!(floats(&out, "Net gap")[0], Some(-150.0));
     let e = run(vec![input(&liabilities(), GapRole::Liability)], "2026-10-31", Some(&limit(&format!("0{EN}1 month"), -10.0)));
     assert!(e.contains("total assets are 0"), "{e}");

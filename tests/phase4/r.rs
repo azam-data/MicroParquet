@@ -215,3 +215,38 @@ fn i3_balance_basis_previous_is_the_default_and_current_changes_only_accounts_in
     let counts = |b| build_cl_migration_with(prev.clone().lazy(), curr.clone().lazy(), &ClMigrationSpec { measure: MigrationMeasure::Count, ..spec(b) }, &map).expect("counts");
     assert_eq!(floats(&counts(MigrationBasis::Previous), "Total"), floats(&counts(MigrationBasis::Current), "Total"));
 }
+
+// ------------------------------------------------------------------------------------------ 4
+
+#[test]
+fn i4_the_gap_ladder_ends_with_a_totals_row_and_its_percentage_cells_are_blank() {
+    use micro_parquet::banking::*;
+    let def = CustomBucketDef {
+        name: "Test ladder".into(),
+        rules: vec![
+            BucketRuleItem { max_days: 31, label: "0\u{2013}1 month".into() },
+            BucketRuleItem { max_days: 92, label: "1\u{2013}3 months".into() },
+        ],
+        overflow_label: "Over 3 months".into(),
+        overdue_label: "Overdue".into(),
+        null_sight_label: "0\u{2013}1 month".into(),
+        null_long_label: "Over 3 months".into(),
+    };
+    let spec = |role| GapInputSpec { role, amount_col: "Balance".into(), maturity_col: "Matdat".into() };
+    let assets = DataFrame::new(vec![Series::new("Balance".into(), &[100.0, 200.0]), dates("Matdat", &["2026-11-15", "2026-12-31"])]).expect("assets");
+    let liab = DataFrame::new(vec![Series::new("Balance".into(), &[150.0, 50.0]), dates("Matdat", &["2026-11-20", "2026-12-15"])]).expect("liab");
+    let limits = GapLimitsFile { limits: vec![GapLimit { bucket: "0\u{2013}1 month".into(), min_cumulative_gap_pct: -10.0 }], ..Default::default() };
+    let out = build_gap_ladder(vec![(assets.lazy(), spec(GapRole::Asset)), (liab.lazy(), spec(GapRole::Liability))], &def, "2026-10-31", true, Some(&limits)).expect("ladder");
+    let last = out.height() - 1;
+    assert_eq!(strings(&out, "Bucket")[last].as_deref(), Some("Total"));
+    assert_eq!(floats(&out, "Inflows")[last], Some(300.0));
+    assert_eq!(floats(&out, "Outflows")[last], Some(200.0));
+    assert_eq!(floats(&out, "Net gap")[last], Some(100.0));
+    for c in ["Cumulative gap", "Net gap % of total assets", "Cumulative gap % of total assets", "Cumulative gap limit %"] {
+        assert_eq!(floats(&out, c)[last], None, "{c} is blank on the totals row");
+    }
+    assert_eq!(strings(&out, "Breach")[last].as_deref(), Some(""), "the totals row is never a breach");
+    // the rows above it add up to it
+    let sum: f64 = floats(&out, "Net gap")[..last].iter().flatten().sum();
+    assert_eq!(sum, 100.0);
+}

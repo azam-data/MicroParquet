@@ -37,7 +37,7 @@ Lays out the bank's inflows (assets) and outflows (liabilities) by maturity buck
 
 ## 6. What you get
 
-One row per bucket of the preset, in its order (sight, the day limits, over the last limit, overdue). `Inflows` is the sum of asset amounts and `Outflows` the sum of liability amounts in the bucket; `Net gap` = inflows − outflows; `Cumulative gap` is the running sum of the net gap; `Net gap % of total assets` and `Cumulative gap % of total assets` divide by total assets (all inflows added up) and show percent. If total assets are 0 the percentages are blank. With a limits file there are two more columns: `Cumulative gap limit %` (the minimum, blank for a bucket with no limit) and `Breach` ("BREACH" when the cumulative gap % is below the limit; the cells are tinted in the danger colour). A cumulative gap equal to the limit is not a breach.
+One row per bucket of the preset, in its order (sight, the day limits, over the last limit, overdue). `Inflows` is the sum of asset amounts and `Outflows` the sum of liability amounts in the bucket; `Net gap` = inflows − outflows; `Cumulative gap` is the running sum of the net gap; `Net gap % of total assets` and `Cumulative gap % of total assets` divide by total assets (all inflows added up) and show percent. A last row "Total" adds up Inflows, Outflows and Net gap over all buckets; its cumulative gap and percentage cells (and the limit and Breach cells) are blank. If total assets are 0 the percentages are blank. With a limits file there are two more columns: `Cumulative gap limit %` (the minimum, blank for a bucket with no limit) and `Breach` ("BREACH" when the cumulative gap % is below the limit; the cells are tinted in the danger colour). A cumulative gap equal to the limit is not a breach.
 
 ## 7. Check your result
 
@@ -74,6 +74,7 @@ The ladder with the preset "Test ladder" (0–1 month, 1–3 months, over 3 mont
 | 1–3 months | 200.00 | 50.00 | 150.00 | 100.00 | 50.00 | 33.33 | (blank) | (blank) |
 | Over 3 months | 0.00 | 0.00 | 0.00 | 100.00 | 0.00 | 33.33 | (blank) | (blank) |
 | Overdue | 0.00 | 0.00 | 0.00 | 100.00 | 0.00 | 33.33 | (blank) | (blank) |
+| Total | 300.00 | 200.00 | 100.00 | (blank) | (blank) | (blank) | (blank) | (blank) |
 
 Test: `guide_gap_ladder`
 
