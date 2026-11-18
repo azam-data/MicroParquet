@@ -611,8 +611,9 @@ pub enum BatchSchemaStrategy {
     MasterSchemaTemplate,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FilterOp {
+    #[default]
     Eq,
     NotEq,
     Gt,
@@ -624,6 +625,8 @@ pub enum FilterOp {
     IsNull,
     IsNotNull,
     InList,
+    /// Not any of the picked values (Phase 6 U7).
+    NotInList,
 }
 
 impl FilterOp {
@@ -640,6 +643,7 @@ impl FilterOp {
             FilterOp::IsNull,
             FilterOp::IsNotNull,
             FilterOp::InList,
+            FilterOp::NotInList,
         ]
     }
 
@@ -656,13 +660,15 @@ impl FilterOp {
             FilterOp::IsNull => "Is Null / Blank",
             FilterOp::IsNotNull => "Is Not Null",
             FilterOp::InList => "In List (a, b, c)",
+            FilterOp::NotInList => "Not in List",
         }
     }
 }
 
 /// Operators of the multi-condition filter (T1).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CondOp {
+    #[default]
     Equals,
     NotEquals,
     Gt,
@@ -676,6 +682,8 @@ pub enum CondOp {
     InList,
     IsBlank,
     IsNotBlank,
+    /// Not any of the picked values (Phase 6 U7).
+    NotInList,
 }
 
 impl CondOp {
@@ -692,6 +700,7 @@ impl CondOp {
             CondOp::StartsWith,
             CondOp::EndsWith,
             CondOp::InList,
+            CondOp::NotInList,
             CondOp::IsBlank,
             CondOp::IsNotBlank,
         ]
@@ -711,6 +720,7 @@ impl CondOp {
             CondOp::StartsWith => "starts with",
             CondOp::EndsWith => "ends with",
             CondOp::InList => "is in list",
+            CondOp::NotInList => "is not in list",
             CondOp::IsBlank => "is blank",
             CondOp::IsNotBlank => "is not blank",
         }
@@ -735,12 +745,13 @@ impl CondOp {
             FilterOp::IsNull => CondOp::IsBlank,
             FilterOp::IsNotNull => CondOp::IsNotBlank,
             FilterOp::InList => CondOp::InList,
+            FilterOp::NotInList => CondOp::NotInList,
         }
     }
 }
 
 /// One condition of a filter: "Balance > 1000", "Opndat between 2026-09-01 and 2026-09-30".
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct FilterCondition {
     pub column: String,
     pub op: CondOp,
@@ -749,11 +760,43 @@ pub struct FilterCondition {
     /// Upper bound of `Between` (inclusive).
     #[serde(default)]
     pub value2: String,
+    /// The values picked from the column's list (Phase 6 U7). When there are some, they are the
+    /// ones compared (a value with a comma in it is one value); `value` is then only a summary.
+    /// Dates and numbers are matched as typed values, not as text.
+    #[serde(default)]
+    pub values: Vec<String>,
+    /// "(blank)" was picked as well: blank values match (or, for "not in list", are left out too).
+    #[serde(default)]
+    pub or_blank: bool,
+}
+
+/// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
+pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
+    let mut s = values.iter().take(n).cloned().collect::<Vec<_>>().join("; ");
+    let more = values.len().saturating_sub(n);
+    if more > 0 {
+        s.push_str(&format!(" (+{})", more));
+    }
+    if blank {
+        if !s.is_empty() {
+            s.push_str("; ");
+        }
+        s.push_str("(blank)");
+    }
+    s
 }
 
 impl FilterCondition {
+    /// True when the condition compares with picked values rather than a typed text.
+    pub fn uses_values(&self) -> bool {
+        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank)
+    }
+
     /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000".
     pub fn describe(&self) -> String {
+        if self.uses_values() {
+            return format!("{} {} {}", self.column, self.op.label(), values_summary(&self.values, self.or_blank, 3));
+        }
         match self.op {
             CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", self.column, self.op.label()),
             CondOp::Between => format!("{} between {} and {}", self.column, self.value.trim(), self.value2.trim()),
@@ -872,7 +915,7 @@ pub struct SortLevel {
     pub order: crate::sort_lists::SortOrder,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct CondRule {
     pub col_name: String,
     pub op: FilterOp,
@@ -882,6 +925,10 @@ pub struct CondRule {
     /// The right-hand side is another column, not a value.
     #[serde(default)]
     pub compare_is_col: bool,
+    /// The values picked from the column's list for =, ≠, "In list" and "Not in list" (Phase 6 U7);
+    /// when there are some they are the ones compared.
+    #[serde(default)]
+    pub values: Vec<String>,
 }
 
 /// What a conditional column gives a row when a column in one of its rules is blank (null, or
@@ -1888,6 +1935,7 @@ impl TransformStep {
                     op: CondOp::from_filter_op(*operator),
                     value: value.clone(),
                     value2: String::new(),
+                    ..Default::default()
                 }],
                 GroupJoin::And,
                 *keep_matching,

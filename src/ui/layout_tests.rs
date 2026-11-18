@@ -346,7 +346,7 @@ fn real_dialogs_with_long_content_keep_their_buttons_in_the_window() {
     let screen = input.screen_rect.unwrap_or(egui::Rect::NOTHING);
     // 80 filter conditions: far more than fit
     app.filter.conditions = (0..80)
-        .map(|i| FilterCondition { column: format!("Col{i}"), op: CondOp::Equals, value: format!("{i}"), value2: String::new() })
+        .map(|i| FilterCondition { column: format!("Col{i}"), op: CondOp::Equals, value: format!("{i}"), value2: String::new(), ..Default::default() })
         .collect();
     let cols: Vec<String> = (0..80).map(|i| format!("Col{i}")).collect();
     for _ in 0..4 {

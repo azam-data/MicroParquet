@@ -39,6 +39,7 @@ pub enum JobOutput {
     Schema(Box<SchemaApplied>),
     SqlChecked(Box<SqlChecked>),
     Chart(Box<ChartResult>),
+    Picker(Box<PickerResult>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
 }
@@ -361,6 +362,37 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
             })
         }
     }
+}
+
+// ------------------------------------------------------------------------------------ value picker
+
+/// The values of a column (as the tab stands before a filter) to calculate on the worker.
+pub struct PickerRequest {
+    pub tab_id: u64,
+    pub token: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub field: String,
+    pub search: Option<String>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct PickerResult {
+    pub tab_id: u64,
+    pub token: u64,
+    pub field: String,
+    pub search: Option<String>,
+    pub values: std::result::Result<crate::value_picker::PickerValues, String>,
+}
+
+pub fn compute_picker_values(req: PickerRequest, ctx: &JobCtx) -> Result<PickerResult> {
+    ctx.set_progress("Listing the values…", None);
+    ctx.check()?;
+    let PickerRequest { tab_id, token, source, steps, field, search, temp_dir } = req;
+    let values = compile_tab_lazy(&source, &steps, &temp_dir)
+        .and_then(|lf| crate::value_picker::picker_values(lf, &field, search.as_deref(), crate::value_picker::PICKER_LIMIT))
+        .map_err(|e| format!("{:#}", e));
+    Ok(PickerResult { tab_id, token, field, search, values })
 }
 
 // ------------------------------------------------------------------------------------ chart

@@ -40,7 +40,7 @@ fn calc() -> TransformStep {
 
 fn filter_cr() -> TransformStep {
     TransformStep::FilterGroup {
-        conditions: vec![FilterCondition { column: "Balance_Cr".into(), op: CondOp::Gt, value: "3".into(), value2: String::new() }],
+        conditions: vec![FilterCondition { column: "Balance_Cr".into(), op: CondOp::Gt, value: "3".into(), value2: String::new(), ..Default::default() }],
         join: GroupJoin::And,
         keep_matching: true,
     }

@@ -47,6 +47,7 @@ pub mod steps;
 pub mod table;
 pub mod tabs;
 pub mod top_bar;
+pub mod value_picker;
 pub mod zoom;
 #[cfg(test)]
 mod layout_tests;
@@ -78,6 +79,12 @@ impl MicroParquetApp {
             return;
         }
 
+        // a dialog starts with a new value picker and the lists as they are on disk
+        if self.picker_tool != self.active_tool {
+            self.picker = PickerPanel::default();
+            self.picker_tool = self.active_tool;
+            self.sort_lists.reload();
+        }
         // An edit belongs to the modal it was opened in.
         if self.editing.as_ref().is_some_and(|e| e.tool != self.active_tool) {
             self.editing = None;

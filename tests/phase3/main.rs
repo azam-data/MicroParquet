@@ -72,5 +72,7 @@ mod u3;
 mod u1;
 #[path = "../phase6/u5.rs"]
 mod u5;
+#[path = "../phase6/u7.rs"]
+mod u7;
 #[path = "../phase6/guide.rs"]
 mod guide6;

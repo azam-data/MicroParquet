@@ -21,7 +21,7 @@ Keeps or removes rows that meet one or more conditions (equals, greater than, be
 | --- | --- | --- | --- | --- |
 | Column to test | Yes | Any column | Brancd, Balance | Account numbers with leading zeros stay text: use text values such as 0034. |
 | Condition | Yes | Choice | equals, >, between, contains, is in list, is blank | A blank value never matches a comparison. |
-| Value | Yes (not for blank tests) | Text, number or date | DHK, 1500 | between needs both ends; is in list takes a, b, c. |
+| Value | Yes (not for blank tests) | Text, number or date | DHK, 1500 | between needs both ends. For equals, does not equal, is in list and is not in list you pick the values from the column's own list (see step 3). |
 | Join of conditions | Yes | all (and) / any (or) | all conditions (and) |  |
 | Keep or delete | Yes | Choice | Keep matching rows |  |
 
@@ -29,7 +29,7 @@ Keeps or removes rows that meet one or more conditions (equals, greater than, be
 
 1. Open the tab and click the Filter button on the toolbar (or Ctrl+K: "filter"). The same button edits the tab's first filter.
 2. In "Filter rows" choose "Rows must meet": "all conditions (and)" or "any condition (or)".
-3. Pick a column, a condition and a value; click "+ Add condition" for more.
+3. Pick a column, a condition and a value; click "+ Add condition" for more. For "equals", "does not equal", "is in list" and "is not in list" the value box is a picker: click "pick values" (or "3 of 42 selected") and tick the values from the column's own list, with the number of rows of each, counted over the whole tab as it stands before this filter. Use "Search values", "Select all" and "Clear"; "(blank)" is an entry of its own and adds the blank rows. One value stores "equals", several store "is in list" ("is not in list" when you started from "does not equal"). A value with a comma in it, such as "Khulna, West", is one value. A column with more than 1,000 values lists the 1,000 most frequent with the note "Showing 1,000 of N; search to find others"; the search looks through all of them.
 4. Choose "Keep matching rows" or "Delete matching rows".
 5. Click "Apply to current tab", or "Open filtered view in new tab".
 6. To change it later, click the filter chip above the table, or Edit on the step, then "Save filter". "Remove this condition" takes one condition out; removing the last one removes the filter.
@@ -68,6 +68,8 @@ Test: `guide_filter`
 
 ## 9. Common messages and fixes
 
+- "X: pick at least one value." The condition has no value yet: open the picker and tick one, or choose "(blank)".
+- "'abc' is not a number for numeric column 'Rate'." A picked value must fit the column's type: numbers and dates (YYYY-MM-DD) are matched as typed values, not as text, so 9.50 matches 9.5.
 - "Add at least one condition." / "{column}: enter a value." / "{column}: enter the upper limit of the range." Fill the missing field.
 - "Pick a column." Choose a column for each condition.
 - A filter step that turns red after you delete or rename a column it uses: restore the column or edit the filter.

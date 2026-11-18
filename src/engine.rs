@@ -2936,6 +2936,12 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
             }
             expr
         }
+        FilterOp::NotInList => {
+            // a typed list is not in the text of this operator: it is the old "In List" turned round
+            // (a blank is unknown, like in every other comparison)
+            let positive = build_filter_expr(col_name, FilterOp::InList, raw_val, schema)?;
+            when(col(col_name).is_null()).then(lit(NULL).cast(DataType::Boolean)).otherwise(positive.not())
+        }
         FilterOp::Eq | FilterOp::NotEq | FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
             let (lhs, rhs) = typed_operand(col_name, trimmed, schema)?;
             match op {
@@ -2947,6 +2953,51 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
                 _ => lhs.lt_eq(rhs),
             }
         }
+    })
+}
+
+/// "In the picked values", compared by the column's real type (Phase 6 U7): text as text, numbers
+/// as numbers, dates as dates (YYYY-MM-DD); other types as the text they are shown as. A value
+/// that does not fit the column's type is an error, not a silent miss.
+fn typed_values_in(name: &str, values: &[String], dtype: &DataType) -> Result<Expr> {
+    let c = col(name);
+    if dtype.is_numeric() || matches!(dtype, DataType::Decimal(..)) {
+        let mut nums = Vec::with_capacity(values.len());
+        for v in values {
+            let n = v.trim().replace(',', "").parse::<f64>().map_err(|_| anyhow::anyhow!("'{}' is not a number for numeric column '{}'", v, name))?;
+            nums.push(n);
+        }
+        return Ok(c.cast(DataType::Float64).is_in(lit(Series::new("picked".into(), nums))));
+    }
+    if matches!(dtype, DataType::Date) {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).context("Internal date error (epoch)")?;
+        let mut days = Vec::with_capacity(values.len());
+        for v in values {
+            let d = NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d").map_err(|_| anyhow::anyhow!("'{}' is not a date for date column '{}'. Dates are YYYY-MM-DD (e.g. 2026-10-31).", v, name))?;
+            days.push((d - epoch).num_days() as i32);
+        }
+        let s = Series::new("picked".into(), days).cast(&DataType::Date).context("Internal date error")?;
+        return Ok(c.cast(DataType::Date).is_in(lit(s)));
+    }
+    Ok(c.cast(DataType::String).is_in(lit(Series::new("picked".into(), values.to_vec()))))
+}
+
+/// A condition on picked values: in the list (or blank, when "(blank)" was picked), or its
+/// opposite. A blank value never matches "in the list"; for the opposite it is unknown (so "Keep
+/// matching" drops it) unless "(blank)" was picked, which leaves blanks out for certain.
+fn membership_expr(name: &str, values: &[String], or_blank: bool, negate: bool, schema: &Schema) -> Result<Expr> {
+    let dtype = schema.get(name).ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this filter.", name))?;
+    let blank = blank_of(name, dtype);
+    let mut positive = if values.is_empty() { lit(false) } else { typed_values_in(name, values, dtype)?.fill_null(lit(false)) };
+    if or_blank {
+        positive = positive.or(blank.clone());
+    }
+    Ok(if !negate {
+        positive
+    } else if or_blank {
+        positive.not()
+    } else {
+        when(blank).then(lit(NULL).cast(DataType::Boolean)).otherwise(positive.not())
     })
 }
 
@@ -2999,7 +3050,12 @@ fn build_condition_expr(cond: &FilterCondition, schema: &Schema) -> Result<Expr>
         anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this filter.", name)
     })?;
     let value = cond.value.trim();
+    if cond.uses_values() {
+        let negate = matches!(cond.op, CondOp::NotEquals | CondOp::NotInList);
+        return membership_expr(name, &cond.values, cond.or_blank, negate, schema);
+    }
     Ok(match cond.op {
+        CondOp::NotInList => build_filter_expr(name, FilterOp::NotInList, value, schema)?,
         CondOp::Equals => build_filter_expr(name, FilterOp::Eq, value, schema)?,
         CondOp::NotEquals => build_filter_expr(name, FilterOp::NotEq, value, schema)?,
         CondOp::Gt => build_filter_expr(name, FilterOp::Gt, value, schema)?,
@@ -3109,6 +3165,9 @@ impl CompareKind {
 /// The test of one rule. A value on the right is checked as in a filter; another column on the
 /// right must be of the same kind (number with number, date with date, text with text).
 fn build_rule_expr(r: &CondRule, schema: &Schema) -> Result<Expr> {
+    if !r.values.is_empty() && !r.compare_is_col && matches!(r.op, FilterOp::Eq | FilterOp::NotEq | FilterOp::InList | FilterOp::NotInList) {
+        return membership_expr(&r.col_name, &r.values, false, matches!(r.op, FilterOp::NotEq | FilterOp::NotInList), schema);
+    }
     if !r.compare_is_col || matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
         return build_filter_expr(&r.col_name, r.op, &r.compare_val, schema);
     }

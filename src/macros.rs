@@ -438,6 +438,18 @@ pub fn generate_python_polars_code(
         py.push_str("})\n\n");
     }
 
+    // the helper of conditions on picked values (U7), when a step has one
+    fn uses_values(step: &TransformStep) -> bool {
+        match step.inner() {
+            TransformStep::FilterGroup { conditions, .. } => conditions.iter().any(|c| c.uses_values()),
+            TransformStep::ConditionalColumn { rules, .. } => rules.iter().any(|r| !r.values.is_empty() && !r.compare_is_col),
+            _ => false,
+        }
+    }
+    if steps.iter().any(uses_values) {
+        py.push_str(PY_VALUES_HELPER);
+    }
+
     py.push_str("# 3. Applied Transformation Pipeline Steps\n");
     for (idx, step) in steps.iter().enumerate() {
         py.push_str(&format!("# Step {}: {}\n", idx + 1, step.short_label()));
@@ -607,6 +619,8 @@ pub fn generate_python_polars_code(
                                 FilterOp::StartsWith => format!("pl.col(\"{a}\").str.starts_with(pl.col(\"{b}\"))"),
                                 _ => format!("pl.col(\"{a}\") {sym} pl.col(\"{b}\")"),
                             }
+                        } else if !r.values.is_empty() && matches!(r.op, FilterOp::Eq | FilterOp::NotEq | FilterOp::InList | FilterOp::NotInList) {
+                            py_values_expr(&r.col_name, &r.values, false, matches!(r.op, FilterOp::NotEq | FilterOp::NotInList))
                         } else {
                             py_filter_expr(&r.col_name, r.op, &r.compare_val)
                         };
@@ -871,6 +885,10 @@ pub fn generate_python_polars_code(
 /// column types: a value that is a number is compared as a number, anything else as text.
 fn py_condition_expr(c: &FilterCondition) -> String {
     let name = &c.column;
+    if c.uses_values() {
+        let negate = matches!(c.op, CondOp::NotEquals | CondOp::NotInList);
+        return py_values_expr(name, &c.values, c.or_blank, negate);
+    }
     let lit_of = |v: &str| {
         let t = v.trim();
         if t.parse::<f64>().is_ok() {
@@ -889,6 +907,7 @@ fn py_condition_expr(c: &FilterCondition) -> String {
         CondOp::Contains => py_filter_expr(name, FilterOp::Contains, &c.value),
         CondOp::StartsWith => py_filter_expr(name, FilterOp::StartsWith, &c.value),
         CondOp::InList => py_filter_expr(name, FilterOp::InList, &c.value),
+        CondOp::NotInList => py_filter_expr(name, FilterOp::NotInList, &c.value),
         CondOp::EndsWith => format!("pl.col(\"{}\").str.ends_with(\"{}\")", name, c.value.trim()),
         CondOp::Between => format!(
             "pl.col(\"{}\").is_between({}, {})",
@@ -907,9 +926,51 @@ fn py_condition_expr(c: &FilterCondition) -> String {
     }
 }
 
+/// Python for a condition on picked values (the helper `_mp_in_values` reads the column's type).
+fn py_values_expr(name: &str, values: &[String], or_blank: bool, negate: bool) -> String {
+    let items: Vec<String> = values.iter().map(|v| serde_json::to_string(v).unwrap_or_default()).collect();
+    format!(
+        "_mp_in_values(\"{n}\", [{items}], lf.collect_schema()[\"{n}\"], {b}, {neg})",
+        n = py_escape(name),
+        items = items.join(", "),
+        b = if or_blank { "True" } else { "False" },
+        neg = if negate { "True" } else { "False" }
+    )
+}
+
+/// Python mirror of the picked-values conditions (Phase 6 U7): numbers as numbers, dates as dates,
+/// the rest as text; a blank never matches "in", and is unknown for "not in" unless blank was picked.
+const PY_VALUES_HELPER: &str = r#"import datetime as _dt
+
+
+def _mp_in_values(name, values, dtype, or_blank=False, negate=False):
+    c = pl.col(name)
+    if dtype.is_numeric():
+        picked = c.cast(pl.Float64).is_in([float(v.replace(",", "")) for v in values])
+    elif dtype == pl.Date:
+        picked = c.is_in([_dt.date.fromisoformat(v.strip()) for v in values])
+    else:
+        picked = c.cast(pl.Utf8).is_in(values)
+    blank = c.is_null() | (c.cast(pl.Utf8).str.strip_chars() == "") if dtype == pl.Utf8 else c.is_null()
+    positive = picked.fill_null(False)
+    if or_blank:
+        positive = positive | blank
+    if not negate:
+        return positive
+    if or_blank:
+        return ~positive
+    return pl.when(blank).then(None).otherwise(~positive)
+
+
+"#;
+
 fn py_filter_expr(col_name: &str, op: FilterOp, val: &str) -> String {
     let trimmed = val.trim();
     match op {
+        FilterOp::NotInList => {
+            let items: Vec<String> = trimmed.split(',').map(|s| format!("\"{}\"", s.trim())).collect();
+            format!("~pl.col(\"{}\").is_in([{}])", col_name, items.join(", "))
+        }
         FilterOp::IsNull => format!("pl.col(\"{}\").is_null()", col_name),
         FilterOp::IsNotNull => format!("pl.col(\"{}\").is_not_null()", col_name),
         FilterOp::Contains => format!("pl.col(\"{}\").str.contains(\"{}\")", col_name, trimmed),

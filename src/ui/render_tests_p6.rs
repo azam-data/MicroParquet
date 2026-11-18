@@ -1210,3 +1210,239 @@ fn u5_a_tooltip_has_the_whole_category_the_series_the_value_in_the_columns_forma
     assert_eq!(crate::ui::chart::short_label("DHAKA", 14), "DHAKA");
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ U7
+
+const ZONES: [&str; 6] = ["DHAKA NORTH", "WEST-1 ZONE", "Khulna, West", "CTG SOUTH", "", "  "];
+
+/// A tab "book" of 250 rows (three pages): Zone cycles through four names and two blanks, plus a null; a 2,000-value Code column.
+fn pick_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let root = app.paths.root_dir.clone();
+    let n = 250usize;
+    let zones: Vec<Option<String>> = (0..n).map(|i| if i == 7 { None } else { Some(ZONES[i % 6].to_string()) }).collect();
+    let df = DataFrame::new(vec![
+        Series::new("Zone".into(), zones),
+        Series::new("Balance".into(), (0..n).map(|i| 1000 + i as i64).collect::<Vec<i64>>()),
+        Series::new("Code".into(), (0..n).map(|i| if i < 125 { format!("k{:04}", i % 125) } else { format!("k{:04}", 125 + (i - 125) * 15) }).collect::<Vec<_>>()),
+    ])
+    .expect("frame");
+    let src = parquet_source(&root, "book", df);
+    app.create_tab_from_source("book".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+fn zone_rows(n: usize, names: &[&str]) -> usize {
+    (0..n).filter(|i| *i != 7 && names.contains(&ZONES[i % 6])).count()
+}
+
+fn filter_title() -> String {
+    "\u{E30C}  Filter rows".to_string()
+}
+
+fn open_filter_on(rig: &mut Rig, column: &str) -> Painted {
+    rig.app.open_filter_editor(None, false);
+    rig.app.filter.conditions[0].column = column.to_string();
+    rig.draw(4)
+}
+
+fn click_pick_button(rig: &mut Rig) -> Painted {
+    let b = rig.app.filter.pick_buttons.first().map(|(_, r)| *r).expect("the value picker button");
+    rig.click(b.center());
+    rig.draw(5)
+}
+
+fn pick_row(rig: &Rig, label: &str) -> egui::Rect {
+    rig.app.picker.rects.boxes.iter().find(|(l, _)| l == label).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the picker lists '{label}': {:?}", rig.what, rig.app.picker.rects.boxes.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>()))
+}
+
+#[test]
+fn u7_the_picker_lists_every_distinct_value_with_its_count_and_two_clicks_pick_two_values() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = pick_rig("p6u7a", ppp, w, h);
+        let what = rig.what.clone();
+        open_filter_on(&mut rig, "Zone");
+        let p = click_pick_button(&mut rig);
+        let r = assert_dialog_fits(&rig.ctx, &filter_title(), &what);
+        let pk = rig.app.picker.rects.clone();
+        let panel = pk.panel.unwrap_or_else(|| panic!("{what}: the picker panel opened"));
+        assert!(inside(panel, r.window), "{what}: the picker {panel:?} is in the dialog {:?}", r.window);
+        // every distinct value with its count, over all 250 rows
+        for z in ["DHAKA NORTH", "WEST-1 ZONE", "Khulna, West", "CTG SOUTH"] {
+            let want = zone_rows(250, &[z]);
+            let row = pk.rows.iter().find(|(l, _)| l == z).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: '{z}' is listed"));
+            assert!(p.boxes.iter().any(|(t, b)| *t == want.to_string() && b.center().y > row.top() && b.center().y < row.bottom()), "{what}: '{z}' has its count {want} on its row");
+            assert!(inside(row, panel), "{what}: the row of '{z}' is inside the picker");
+        }
+        let blanks = 250 - [DHAKA, WEST, KHULNA, CTG].iter().map(|z| zone_rows(250, &[z])).sum::<usize>();
+        let blank_row = pk.rows.iter().find(|(l, _)| l == "(blank)").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the (blank) entry"));
+        assert!(p.boxes.iter().any(|(t, b)| *t == blanks.to_string() && b.center().y > blank_row.top() && b.center().y < blank_row.bottom()), "{what}: (blank) has its count {blanks}");
+        assert_eq!(pk.rows.len(), 5, "{what}: four names and the blank entry");
+        assert!(p.boxes.iter().any(|(t, _)| t == "0 of 5 selected"), "{what}: the summary");
+        for t in ["Select all", "Clear"] {
+            assert!(p.boxes.iter().any(|(x, _)| x == t), "{what}: '{t}'");
+        }
+        // two real clicks on the check boxes
+        rig.click(pick_row(&rig, "DHAKA NORTH").center());
+        assert_eq!(rig.app.filter.conditions[0].values, vec!["DHAKA NORTH"], "{what}");
+        assert_eq!(rig.app.filter.conditions[0].op, CondOp::Equals, "{what}: one value stores equals");
+        rig.draw(2);
+        rig.click(pick_row(&rig, "WEST-1 ZONE").center());
+        let c = rig.app.filter.conditions[0].clone();
+        assert_eq!((c.op, c.values.clone()), (CondOp::InList, vec!["DHAKA NORTH".to_string(), "WEST-1 ZONE".to_string()]), "{what}: several store 'is in list'");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t == "2 of 5 selected"), "{what}: the picker says 2 of 5");
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("2 of 5 selected")), "{what}: and so does the button");
+        // Apply to current tab by a real click: the matching rows
+        let apply = p.boxes.iter().find(|(t, _)| t.contains("Apply to current tab")).map(|(_, b)| *b).expect("apply");
+        rig.click(apply.center());
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs[0].total_rows, zone_rows(250, &["DHAKA NORTH", "WEST-1 ZONE"]), "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+const DHAKA: &str = "DHAKA NORTH";
+const WEST: &str = "WEST-1 ZONE";
+const KHULNA: &str = "Khulna, West";
+const CTG: &str = "CTG SOUTH";
+
+#[test]
+fn u7_a_value_with_a_comma_blank_not_in_list_select_all_and_clear_work_by_real_clicks() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = pick_rig("p6u7b", ppp, w, h);
+        let what = rig.what.clone();
+        open_filter_on(&mut rig, "Zone");
+        click_pick_button(&mut rig);
+        // "Khulna, West" is one value
+        rig.click(pick_row(&rig, KHULNA).center());
+        assert_eq!(rig.app.filter.conditions[0].values, vec![KHULNA], "{what}");
+        rig.draw(2);
+        // "(blank)" adds the blank rows
+        rig.click(pick_row(&rig, "(blank)").center());
+        assert!(rig.app.filter.conditions[0].or_blank, "{what}");
+        let step = TransformStep::FilterGroup { conditions: rig.app.filter.conditions.clone(), join: GroupJoin::And, keep_matching: true };
+        let blank_rows = 250 - [DHAKA, WEST, KHULNA, CTG].iter().map(|z| zone_rows(250, &[z])).sum::<usize>();
+        rig.app.push_step_to_active_tab(step, false);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs[0].total_rows, zone_rows(250, &[KHULNA]) + blank_rows, "{what}: the value and the blanks");
+        rig.app.tabs[0].steps.clear();
+        // Clear and Select all
+        let clear = rig.app.picker.rects.clear.expect("Clear");
+        rig.click(clear.center());
+        assert!(rig.app.filter.conditions[0].values.is_empty() && !rig.app.filter.conditions[0].or_blank, "{what}: Clear");
+        let all = rig.app.picker.rects.select_all.expect("Select all");
+        rig.click(all.center());
+        let c = rig.app.filter.conditions[0].clone();
+        assert_eq!((c.values.len(), c.or_blank, c.op), (4, true, CondOp::InList), "{what}: Select all picks every listed value and (blank)");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t == "5 of 5 selected"), "{what}");
+        // the search narrows the list
+        rig.app.picker.search = "west".to_string();
+        rig.draw(3);
+        let labels: Vec<String> = rig.app.picker.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+        assert!(labels.contains(&KHULNA.to_string()) && labels.contains(&WEST.to_string()) && labels.len() == 2, "{what}: 'west' finds two values, not case-sensitive: {labels:?}");
+        rig.app.picker.search.clear();
+        rig.draw(2);
+        // is not in list: the picked values are out
+        rig.app.filter.conditions[0].op = CondOp::NotInList;
+        rig.app.filter.conditions[0].values = vec![DHAKA.to_string(), CTG.to_string()];
+        rig.app.filter.conditions[0].or_blank = false;
+        let step = TransformStep::FilterGroup { conditions: rig.app.filter.conditions.clone(), join: GroupJoin::And, keep_matching: true };
+        rig.app.push_step_to_active_tab(step, false);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs[0].total_rows, zone_rows(250, &[WEST, KHULNA]), "{what}: not in list keeps the other named zones (a blank is unknown)");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u7_a_column_with_many_values_shows_the_note_and_the_search_finds_a_value_outside_the_list() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = pick_rig("p6u7c", ppp, w, h);
+        let what = rig.what.clone();
+        // 250 rows, 250 different codes: not above 1,000, so the whole list shows and there is no note
+        open_filter_on(&mut rig, "Code");
+        click_pick_button(&mut rig);
+        assert!(rig.app.picker.rects.note.is_none(), "{what}: no note below 1,000 values");
+        // the note and the worker's search are checked on a column above 1,000 values
+        let n = 3_000usize;
+        let root = rig.app.paths.root_dir.clone();
+        let vals: Vec<String> = (0..n).map(|i| if i < 2000 { format!("k{:04}", i % 1000) } else { format!("k{:04}", 1000 + (i - 2000)) }).collect();
+        let df = DataFrame::new(vec![Series::new("Code".into(), vals), Series::new("V".into(), vec![1i64; n])]).expect("frame");
+        let src = parquet_source(&root, "codes", df);
+        rig.app.create_tab_from_source("codes".into(), src, vec![], HashMap::new());
+        settle(&mut rig.app);
+        rig.app.active_tool = ActiveToolModal::None;
+        open_filter_on(&mut rig, "Code");
+        let p = click_pick_button(&mut rig);
+        let note = rig.app.picker.rects.note.unwrap_or_else(|| panic!("{what}: the note is shown"));
+        assert!(p.boxes.iter().any(|(t, b)| t == "Showing 1,000 of 2,000; search to find others" && inside(*b, note)), "{what}: the note text");
+        assert_eq!(rig.app.picker.full.as_ref().map(|f| (f.values.len(), f.distinct)), Some((1000, 2000)), "{what}");
+        assert!(!rig.app.picker.rects.rows.iter().any(|(l, _)| l == "k1500"), "{what}: k1500 is not among the 1,000 most frequent");
+        // type in the search box: a real click on it, then the text
+        let search = rig.app.picker.rects.search.expect("search box");
+        rig.click(search.center());
+        rig.step(vec![egui::Event::Text("k1500".to_string())]);
+        rig.draw(4);
+        settle(&mut rig.app);
+        rig.draw(4);
+        assert!(rig.app.picker.rects.rows.iter().any(|(l, _)| l == "k1500"), "{what}: the search found a value outside the top 1,000: {:?}", rig.app.picker.rects.rows.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>());
+        rig.click(pick_row(&rig, "k1500").center());
+        assert_eq!(rig.app.filter.conditions[0].values, vec!["k1500"], "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u7_a_conditional_column_rule_has_the_same_picker_and_an_old_typed_value_shows_as_picked() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = pick_rig("p6u7d", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Conditional);
+        rig.app.cond.rules[0].col_name = "Zone".into();
+        rig.app.cond.rules[0].op = FilterOp::Eq;
+        rig.app.cond.rules[0].compare_val = "DHAKA NORTH".into();
+        rig.draw(5);
+        let b = rig.app.cond.pick_buttons.first().map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the rule has a picker button"));
+        let p = rig.draw(2);
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("1 selected")), "{what}: the old typed value counts as one picked");
+        rig.click(b.center());
+        rig.draw(5);
+        assert!(!rig.app.picker.rects.rows.iter().any(|(l, _)| l == "(blank)"), "{what}: a rule's blanks have their own result, so there is no (blank) entry");
+        // the rule's value was typed before: it shows as picked; add a second value by a real click
+        rig.click(pick_row(&rig, "WEST-1 ZONE").center());
+        let rule = rig.app.cond.rules[0].clone();
+        assert_eq!((rule.op, rule.values.clone()), (FilterOp::InList, vec!["DHAKA NORTH".to_string(), "WEST-1 ZONE".to_string()]), "{what}: the typed value became part of the picked values");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t == "2 of 5 selected" || t == "2 of 4 selected" || t.starts_with("2 of ")), "{what}: the summary");
+        // Add Column by a real click: the flag
+        rig.app.cond.rules[0].output_val = "Core".into();
+        rig.app.cond.fallback = "Other".into();
+        let add = p.boxes.iter().find(|(t, _)| t.contains("Add Column")).map(|(_, b)| *b).expect("Add Column");
+        rig.click(add.center());
+        settle(&mut rig.app);
+        let flags = rig.app.tabs[0].cached_slice.column("Custom_Flag").expect("the new column").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect::<Vec<_>>();
+        let zones = rig.app.tabs[0].cached_slice.column("Zone").expect("zone").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect::<Vec<_>>();
+        for (f, z) in flags.iter().zip(zones.iter()) {
+            let core = z == DHAKA || z == WEST;
+            assert!(f == "Core" && core || f != "Core" && !core, "{what}: {z} -> {f}");
+        }
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn u7_the_picker_lists_the_values_in_the_columns_custom_list_order_when_it_has_one() {
+    let mut rig = pick_rig("p6u7e", 1.05, 1219.05, 685.71);
+    let list = SortList { name: "Zones".into(), values: vec!["CTG SOUTH".into(), "Khulna, West".into()], case_insensitive: true, apply_to_columns: vec!["Zone".into()] };
+    save_list(&sort_lists_dir(), &list).expect("saved a list");
+    open_filter_on(&mut rig, "Zone");
+    click_pick_button(&mut rig);
+    let labels: Vec<String> = rig.app.picker.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+    assert_eq!(labels, vec!["CTG SOUTH", "Khulna, West", "DHAKA NORTH", "WEST-1 ZONE", "(blank)"], "the listed values first, the rest naturally, blank last");
+    micro_parquet::rules::set_data_dir_override(None);
+}

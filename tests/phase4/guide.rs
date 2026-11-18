@@ -594,7 +594,7 @@ fn guide_period_reconcile() {
 #[test]
 fn guide_conditional_column() {
     let df = frame(vec![text("Actnum", &["A1", "A2", "A3", "A4"]), opt_nums("Balance", &[Some(8_000_000.0), Some(2_500_000.0), Some(400_000.0), None])]);
-    let rule = |v: &str, out: &str| CondRule { col_name: "Balance".into(), op: FilterOp::Gt, compare_val: v.into(), output_val: out.into(), compare_is_col: false };
+    let rule = |v: &str, out: &str| CondRule { col_name: "Balance".into(), op: FilterOp::Gt, compare_val: v.into(), output_val: out.into(), compare_is_col: false, ..Default::default() };
     let step = TransformStep::ConditionalColumn {
         new_col: "Size".into(),
         rules: vec![rule("5000000", "Large"), rule("1000000", "Medium")],
@@ -635,7 +635,7 @@ fn loans_frame() -> DataFrame {
 #[test]
 fn guide_filter() {
     let df = loans_frame();
-    let cond = |c: &str, op: CondOp, v: &str| FilterCondition { column: c.into(), op, value: v.into(), value2: String::new() };
+    let cond = |c: &str, op: CondOp, v: &str| FilterCondition { column: c.into(), op, value: v.into(), value2: String::new(), ..Default::default() };
     let step = TransformStep::FilterGroup {
         conditions: vec![cond("Brancd", CondOp::Equals, "DHK"), cond("Balance", CondOp::Gt, "1500")],
         join: GroupJoin::And,

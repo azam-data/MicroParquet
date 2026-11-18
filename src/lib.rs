@@ -31,3 +31,4 @@ pub mod steps_edit;
 pub mod summary;
 pub mod table_layout;
 pub mod tab_jobs;
+pub mod value_picker;

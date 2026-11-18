@@ -316,6 +316,10 @@ pub const RATE_STEP_RANGE: std::ops::RangeInclusive<f64> = 0.01..=50.0;
 pub const COND_BODY_W: f32 = 720.0;
 pub const DIALOG_SCROLL_BAR_ALLOWANCE: f32 = 16.0;
 pub const FIELD_W_VALUE: f32 = 130.0;
+/// The value picker: its search box, its list's height and the button that opens it.
+pub const PICKER_SEARCH_W: f32 = 200.0;
+pub const PICKER_LIST_H: f32 = 200.0;
+pub const FIELD_W_PICK: f32 = 150.0;
 pub const FIELD_W_OP: f32 = 120.0;
 pub const FIELD_W_COLUMN: f32 = 160.0;
 pub const FIELD_W_SORT_COLUMN: f32 = 180.0;

@@ -31,7 +31,7 @@ fn source(d: &std::path::Path) -> TabSource {
 }
 
 fn cond(column: &str, op: CondOp, value: &str) -> FilterCondition {
-    FilterCondition { column: column.into(), op, value: value.into(), value2: String::new() }
+    FilterCondition { column: column.into(), op, value: value.into(), value2: String::new(), ..Default::default() }
 }
 
 fn rows(src: &TabSource, d: &std::path::Path, step: TransformStep) -> Vec<String> {
@@ -74,16 +74,16 @@ fn t1_between_works_on_dates_numbers_and_text() {
     // dates: inclusive, entered as YYYY-MM-DD (2025-09-09 .. 2025-09-30)
     let from = (chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + chrono::Duration::days(20_340)).format("%Y-%m-%d").to_string();
     let to = (chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + chrono::Duration::days(20_361)).format("%Y-%m-%d").to_string();
-    let dates = FilterCondition { column: "Opndat".into(), op: CondOp::Between, value: from.clone(), value2: to.clone() };
+    let dates = FilterCondition { column: "Opndat".into(), op: CondOp::Between, value: from.clone(), value2: to.clone(), ..Default::default() };
     assert_eq!(rows(&src, &d, group(vec![dates], GroupJoin::And, true)), vec!["0034", "12"], "both ends are included");
     // numbers
-    let nums = FilterCondition { column: "Balance".into(), op: CondOp::Between, value: "2500".into(), value2: "5000".into() };
+    let nums = FilterCondition { column: "Balance".into(), op: CondOp::Between, value: "2500".into(), value2: "5000".into(), ..Default::default() };
     assert_eq!(rows(&src, &d, group(vec![nums], GroupJoin::And, true)), vec!["0034", "12"]);
     // text compares as text
-    let text = FilterCondition { column: "Brancd".into(), op: CondOp::Between, value: "CTG".into(), value2: "DHK".into() };
+    let text = FilterCondition { column: "Brancd".into(), op: CondOp::Between, value: "CTG".into(), value2: "DHK".into(), ..Default::default() };
     assert_eq!(rows(&src, &d, group(vec![text], GroupJoin::And, true)).len(), 5);
     // a bad bound names the column
-    let bad = FilterCondition { column: "Opndat".into(), op: CondOp::Between, value: "01/09/2025".into(), value2: to };
+    let bad = FilterCondition { column: "Opndat".into(), op: CondOp::Between, value: "01/09/2025".into(), value2: to, ..Default::default() };
     let err = compile_tab_lazy(&src, &[group(vec![bad], GroupJoin::And, true)], &d).and_then(|lf| Ok(lf.collect()?)).err().unwrap();
     assert!(format!("{err:#}").contains("Opndat") && format!("{err:#}").contains("YYYY-MM-DD"), "{err:#}");
     std::fs::remove_dir_all(&d).ok();
@@ -167,7 +167,7 @@ fn t1_filter_group_serialises_with_defaults_and_describes_itself() {
     // chip text
     assert_eq!(cond("Brancd", CondOp::Equals, " DHK ").describe(), "Brancd equals DHK");
     assert_eq!(cond("Remarks", CondOp::IsBlank, "").describe(), "Remarks is blank");
-    let b = FilterCondition { column: "Balance".into(), op: CondOp::Between, value: "1000".into(), value2: "5000".into() };
+    let b = FilterCondition { column: "Balance".into(), op: CondOp::Between, value: "1000".into(), value2: "5000".into(), ..Default::default() };
     assert_eq!(b.describe(), "Balance between 1000 and 5000");
     assert_eq!(
         group(vec![cond("A", CondOp::Gte, "1"), cond("B", CondOp::Lt, "2")], GroupJoin::Or, false).short_label(),
@@ -180,7 +180,7 @@ fn t1_python_export_translates_a_filter_group() {
     let steps = [group(
         vec![
             cond("Brancd", CondOp::Equals, "DHK"),
-            FilterCondition { column: "Balance".into(), op: CondOp::Between, value: "1000".into(), value2: "5000".into() },
+            FilterCondition { column: "Balance".into(), op: CondOp::Between, value: "1000".into(), value2: "5000".into(), ..Default::default() },
             cond("Remarks", CondOp::IsBlank, ""),
         ],
         GroupJoin::Or,

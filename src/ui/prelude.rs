@@ -37,7 +37,7 @@ pub use micro_parquet::tab_jobs::{
     export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
     LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest, TabTextFindings, TextCheckRequest,
     TextCheckResult, StepCountsRequest, SummaryRequest, compute_pivot_preview, compute_pivot_values, FieldKind,
-    PivotPreviewRequest, PivotValuesRequest, SqlCheckRequest, ChartRequest,
+    PivotPreviewRequest, PivotValuesRequest, SqlCheckRequest, ChartRequest, PickerRequest,
 };
 pub use polars::datatypes::AnyValue;
 pub use polars::prelude::DataFrame;
@@ -80,6 +80,7 @@ pub use crate::ui::reconcile::ReconcileState;
 pub use crate::ui::schema::PendingCsvModal;
 pub use crate::ui::sort::SortState;
 pub use crate::ui::sort_lists::SortListsState;
+pub use crate::ui::value_picker::PickerPanel;
 pub use crate::ui::stack::StackState;
 pub use crate::ui::steps::{MacroState, RightTab};
 pub use crate::ui::theme;

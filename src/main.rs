@@ -240,6 +240,12 @@ pub struct MicroParquetApp {
     pub filter: FilterState,
     pub sort: SortState,
     pub sort_lists: SortListsState,
+    /// The value picker of the filter or conditional-column dialog that is open, and the number
+    /// of distinct values last listed for each column (for "3 of 42 selected").
+    pub picker: PickerPanel,
+    pub picker_totals: HashMap<String, usize>,
+    /// The tool the picker was last reset for (a new dialog starts with a new picker).
+    pub picker_tool: ActiveToolModal,
     pub columns: ColumnsState,
     pub cond: CondState,
     pub calc: CalcState,
@@ -353,6 +359,9 @@ impl MicroParquetApp {
             filter: FilterState::default(),
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
+            picker: PickerPanel::default(),
+            picker_totals: HashMap::new(),
+            picker_tool: ActiveToolModal::None,
             columns: ColumnsState::default(),
             cond: CondState::default(),
             calc: CalcState::default(),

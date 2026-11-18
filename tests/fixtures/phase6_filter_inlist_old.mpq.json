@@ -1,0 +1,20 @@
+{
+  "app_version": "1.5.0",
+  "control_column": "Balance",
+  "created_at": "9aadb59",
+  "description": "A filter with a comma-separated In list in the form main (9aadb59, Phase 5) saved it: no values field.",
+  "enforce_balance_control": true,
+  "name": "phase6_filter_inlist_old",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "FilterGroup": {
+        "conditions": [
+          { "column": "Brancd", "op": "InList", "value": "DHK, SYL", "value2": "" }
+        ],
+        "join": "And",
+        "keep_matching": true
+      }
+    }
+  ]
+}

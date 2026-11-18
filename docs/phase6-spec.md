@@ -368,4 +368,7 @@ U4:
 U5:
 - Top N keeps N categories plus "Other"; series: at most 8 drawn in all (7 plus "Other"); both are ranked by aggregated value and "Other" is recalculated from its rows.
 - Count ignores the value column; choices are kept under the tab's first file name; the old bar chart is replaced by View ▸ Chart.
+U7:
+- "(blank)" is the flag `or_blank` of the condition (same rows as an extra is-blank condition joined with OR, without disturbing the group's join).
+- No "(blank)" entry in the conditional column's picker (blanks have their own result). The picker is an inline panel under the row. "Select all" selects the listed values.
 </accepted_deviations>
