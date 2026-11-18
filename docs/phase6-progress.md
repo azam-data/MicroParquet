@@ -14,6 +14,9 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 | U5 | DONE | (this commit) | tests/phase6/u5.rs ×10 (sums equal a group-by over all 250 rows, tenor/list/value order, Int32 and Decimal, Count without a number column, min/max/avg, W.Avg Phase 2 rule and mixed signs, Top N 3 + Other with totals, text value refused with its type, series ≤ 8 + Other, blanks last, old specs); render_tests_p6 ×4 (x-axis labels are the category names, title with unit, controls inside the window, Tenor / Count by clicks, series + Top N + Line, choices saved per tab and taken back, text value refused, Open chart data as tab, tooltip text); guide_chart + completeness | D20–D23 |
 | U7 | DONE | (this commit) | tests/phase6/u7.rs ×8 (every distinct value with counts over 250 rows, two values, comma in a value, (blank), Not in list, typed numbers and dates, 3,000-row column with 2,000 values and search, old comma list + Phase 5 fixture, conditional rules, Python); render_tests_p6 ×5 (list with counts at both scales, real clicks on check boxes, Select all / Clear / search, (blank), not in list, note and worker search, conditional picker, custom-list order); filter and conditional-column guides updated | D24–D27 |
 
+## Owner answers on session A
+- D15 live zoom 50–200%: accepted. D24 `or_blank` flag: accepted. D20 series 8 in total (7 + Other): accepted. U1 correction (Parquet like CSV): done in its own commit.
+
 ## Deviations (also in the spec's `<accepted_deviations>`)
 - D1 (U3): the sort step and the pivot keep a copy of the list they use (name, values, case flag) instead of its name, so a macro replays the same order if the list file is edited, renamed or missing. Fewest changes to existing results.
 - D2 (U3): the Sort dialog keeps its "Lowest first / Highest first" choice and adds an "Order" choice (Natural, each list, Tenor). "A→Z / Z→A" are the existing radios; "Highest first" reverses a list.
@@ -22,7 +25,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 - D5 (U3): the Tenor count of values that are not tenors is read from the first 2,000 distinct values of the column (the existing value-list job); the status line says so when the column has more.
 - D6 (U3 fixture): `phase6_sort_pivot_unset` was written by hand in the Phase 5 form (see tests/fixtures/README.md).
 - D7 (U1): a blank "Rename to" keeps the file's name, so "a name that is empty after trimming" is reported for a file column that has no name and no rename. Two columns with the same final name are both marked.
-- D8 (U1): a Parquet file that matches a saved schema opens straight away with a status message naming it (the Parquet dialog is the tab's Schema button, so there is no dialog and no Undo for it at open).
+- D8 (U1, corrected after owner review): a Parquet file that matches a saved schema opens the Parquet Schema dialog with the template applied and the "Applied saved schema…" line with Undo, like a CSV; a template ticked "Apply without asking" opens it at once with a status message.
 - D9 (U1): the warning about steps is shown once the worker has checked the new schema, before the tab changes. "Apply anyway" keeps the steps (shown as broken), Cancel leaves the tab as it was. Steps that were already broken are not listed.
 - D10 (U1): parse failures, the masked-column list and the Column inspector use the final names; "Convert to Parquet…" is disabled with a bad name, like Apply and Save.
 - D11 (U2): the resize handle is our own strip (6 pt inside the panel's left edge) instead of egui's, so a wide child can never push the panel wider; the panel is drawn at exactly the width we keep (`right_panel_w`).

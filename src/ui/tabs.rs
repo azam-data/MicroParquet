@@ -135,30 +135,23 @@ impl MicroParquetApp {
         let is_parquet = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("parquet"));
         let note = format!("Applied saved schema '{}' (all {} columns matched)", template.name, n);
         let fine = applied_config.rename_problems().is_empty();
-        if is_parquet && !direct_convert_only {
-            if !fine {
-                self.status_message = format!("The saved schema '{}' was not applied: {}", template.name, applied_config.rename_problems().first().map(|p| p.1.clone()).unwrap_or_default());
-                self.create_tab_from_source(title, TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, Vec::new(), HashMap::new());
-                return;
-            }
-            let id = self.create_tab_from_source_with(title, TabSource::SingleFile { path, is_parquet: true, config: applied_config }, Vec::new(), HashMap::new(), None);
-            self.open_notes.insert(id, format!("{}.", note));
-            return;
-        }
-        if !is_parquet && template.config.auto_apply && !direct_convert_only && !chosen_from_list && fine {
-            let mut config = applied_config;
-            let mut steps = Vec::new();
-            hoist_clean_line_breaks(&mut config, false, &mut steps);
-            let id = self.create_tab_from_source_with(title, TabSource::SingleFile { path, is_parquet: false, config }, steps, HashMap::new(), None);
-            self.open_notes.insert(id, format!("{}, opened without asking.", note));
-            return;
-        }
-        if is_parquet {
+        if is_parquet && direct_convert_only {
             // converting a Parquet file is not offered here: open it as it is
             self.create_tab_from_source(title, TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, Vec::new(), HashMap::new());
             return;
         }
-        match preview_csv_raw(&path, 5) {
+        // a template ticked "Apply without asking" opens the file at once, CSV and Parquet alike
+        if template.config.auto_apply && !direct_convert_only && !chosen_from_list && fine {
+            let mut config = applied_config;
+            let mut steps = Vec::new();
+            hoist_clean_line_breaks(&mut config, is_parquet, &mut steps);
+            let id = self.create_tab_from_source_with(title, TabSource::SingleFile { path, is_parquet, config }, steps, HashMap::new(), None);
+            self.open_notes.insert(id, format!("{}, opened without asking.", note));
+            return;
+        }
+        // otherwise the Schema dialog opens with the template applied (and an Undo button)
+        let preview = if is_parquet { preview_parquet_raw(&path, 5) } else { preview_csv_raw(&path, 5) };
+        match preview {
             Ok(preview_df) => {
                 self.pending_csv_modal = Some(PendingCsvModal {
                     csv_path: path,
@@ -167,7 +160,7 @@ impl MicroParquetApp {
                     direct_convert_only,
                     target_tab: None,
                     parse_failures: Vec::new(),
-                    is_parquet: false,
+                    is_parquet,
                     popped_out: false,
                     applied: Some(crate::ui::schema::AppliedTemplate { name: template.name.clone(), columns: n, before: detected }),
                 });

@@ -217,7 +217,7 @@ fn u3_the_pivot_field_menu_has_the_order_choice_and_a_suggested_list_is_preselec
 
 // ------------------------------------------------------------------------------------------ U1
 
-use crate::ui::schema::SCHEMA_TITLE_CSV;
+use crate::ui::schema::{SCHEMA_TITLE_CSV, SCHEMA_TITLE_PARQUET};
 
 const U1_FILE_A: &str = "ACNO,CRIRTE,BAL\n1001,9.5,100.00\n1002,12.0,250.50\n1003,7.25,80.00\n";
 const U1_FILE_B: &str = "BAL,ACNO,CRIRTE\n300.00,2001,11.0\n40.00,2002,6.5\n";
@@ -1445,4 +1445,73 @@ fn u7_the_picker_lists_the_values_in_the_columns_custom_list_order_when_it_has_o
     let labels: Vec<String> = rig.app.picker.rects.rows.iter().map(|(l, _)| l.clone()).collect();
     assert_eq!(labels, vec!["CTG SOUTH", "Khulna, West", "DHAKA NORTH", "WEST-1 ZONE", "(blank)"], "the listed values first, the rest naturally, blank last");
     micro_parquet::rules::set_data_dir_override(None);
+}
+
+// ---- U1 correction: a Parquet file that matches a saved schema behaves like a CSV
+
+/// BAL, ACNO, CRIRTE as a Parquet file (ACNO as text, like the saved schema says).
+fn u1_parquet_file(root: &std::path::Path) -> PathBuf {
+    let mut df = DataFrame::new(vec![
+        Series::new("BAL".into(), &[300.0f64, 40.0]).into(),
+        Series::new("ACNO".into(), &["2001", "2002"]).into(),
+        Series::new("CRIRTE".into(), &[11.0f64, 6.5]).into(),
+    ])
+    .expect("frame");
+    let p = root.join("c.parquet");
+    polars::prelude::ParquetWriter::new(std::fs::File::create(&p).expect("create")).finish(&mut df).expect("write");
+    p
+}
+
+#[test]
+fn u1_a_matching_parquet_file_opens_the_dialog_with_the_saved_schema_and_undo_like_a_csv() {
+    for (ppp, w, h) in SCREENS {
+        let (mut rig, _a, _b) = u1_rig("p6u1pq", ppp, w, h, false, false);
+        let what = rig.what.clone();
+        let pq = u1_parquet_file(&rig.app.paths.root_dir);
+        rig.app.open_data_file(pq, false);
+        assert!(rig.app.tabs.is_empty() && rig.app.jobs.any_busy() == false, "{what}: no tab yet, the dialog asks first");
+        let modal = rig.app.pending_csv_modal.as_ref().unwrap_or_else(|| panic!("{what}: the Schema dialog opened for the Parquet file"));
+        assert!(modal.is_parquet && modal.target_tab.is_none(), "{what}");
+        assert_eq!(modal.applied.as_ref().map(|a| (a.name.as_str(), a.columns)), Some(("loans", 3)), "{what}");
+        assert_eq!(modal.config.final_names(), vec!["Balance", "Account_No", "Int_Rate"], "{what}");
+        let p = rig.draw(6);
+        let r = dialog_in_window(&rig, SCHEMA_TITLE_PARQUET);
+        assert!(p.boxes.iter().any(|(t, bx)| t == "Applied saved schema 'loans' (all 3 columns matched)" && inside(*bx, r.window)), "{what}: the applied line");
+        let undo = text_box(&p, "Undo");
+        assert!(inside(undo, r.window), "{what}");
+        rig.click(undo.center());
+        let modal = rig.app.pending_csv_modal.as_ref().expect("still open");
+        assert!(modal.applied.is_none() && modal.config.rename_pairs().is_empty(), "{what}: Undo goes back to the file's own names");
+        // apply again by reopening, then lock: the tab has the renamed columns
+        let pq = u1_parquet_file(&rig.app.paths.root_dir);
+        rig.app.pending_csv_modal = None;
+        rig.app.open_data_file(pq, false);
+        let p = rig.draw(6);
+        let lock = text_box(&p, "Lock Schema & Open");
+        rig.click(lock.center());
+        settle(&mut rig.app);
+        assert!(rig.app.pending_csv_modal.is_none(), "{what}: the dialog closed");
+        assert_eq!(rig.app.tabs.len(), 1, "{what}");
+        assert!(matches!(&rig.app.tabs[0].source, TabSource::SingleFile { is_parquet: true, .. }), "{what}: still a Parquet tab");
+        assert_eq!(rig.app.tabs[0].available_columns(), vec!["Balance", "Account_No", "Int_Rate"], "{what}");
+        let step = TransformStep::FilterRows { column: "Int_Rate".into(), operator: micro_parquet::models::FilterOp::Gt, value: "8".into(), keep_matching: true };
+        rig.app.push_step_to_active_tab(step, false);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs[0].cached_slice.height(), 1, "{what}: {}", rig.app.status_message);
+    }
+}
+
+#[test]
+fn u1_a_parquet_file_with_apply_without_asking_opens_at_once_with_a_message_naming_the_schema() {
+    for (ppp, w, h) in SCREENS {
+        let (mut rig, _a, _b) = u1_rig("p6u1pqauto", ppp, w, h, true, false);
+        let what = rig.what.clone();
+        let pq = u1_parquet_file(&rig.app.paths.root_dir);
+        rig.app.open_data_file(pq, false);
+        assert!(rig.app.pending_csv_modal.is_none(), "{what}: no dialog");
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 1, "{what}");
+        assert_eq!(rig.app.tabs[0].available_columns(), vec!["Balance", "Account_No", "Int_Rate"], "{what}");
+        assert!(rig.app.status_message.contains("'loans'") && rig.app.status_message.contains("without asking"), "{what}: {}", rig.app.status_message);
+    }
 }

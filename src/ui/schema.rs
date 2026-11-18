@@ -229,12 +229,12 @@ impl MicroParquetApp {
                 .to_string();
             let mut config = modal.config;
             let mut steps = Vec::new();
-            hoist_clean_line_breaks(&mut config, false, &mut steps);
+            hoist_clean_line_breaks(&mut config, modal.is_parquet, &mut steps);
             self.create_tab_from_source(
                 title,
                 TabSource::SingleFile {
                     path: modal.csv_path,
-                    is_parquet: false,
+                    is_parquet: modal.is_parquet,
                     config,
                 },
                 steps,

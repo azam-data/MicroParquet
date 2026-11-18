@@ -352,7 +352,7 @@ U3 (details in docs/phase6-progress.md):
 - The fixture `phase6_sort_pivot_unset` was written by hand in the Phase 5 form.
 U1:
 - A blank "Rename to" keeps the file's name; "empty after trimming" is reported for a file column with no name and no rename.
-- A Parquet file that matches a saved schema opens straight away with a status message (no dialog, no Undo).
+- (Corrected by the owner after session A) a Parquet file that matches a saved schema behaves like a CSV: the Parquet Schema dialog opens with the template applied and the "Applied saved schema…" line with Undo, unless the template is ticked "Apply without asking".
 - The warning lists steps the worker found would break, before the tab changes; "Apply anyway" keeps them as broken steps.
 - Parse failures, masked-column names and the inspector use the final names; "Convert to Parquet…" is disabled with a bad name.
 U2:
@@ -368,6 +368,7 @@ U4:
 U5:
 - Top N keeps N categories plus "Other"; series: at most 8 drawn in all (7 plus "Other"); both are ranked by aggregated value and "Other" is recalculated from its rows.
 - Count ignores the value column; choices are kept under the tab's first file name; the old bar chart is replaced by View ▸ Chart.
+Owner answers on session A: live zoom 50–200% accepted (U6); "(blank)" as the `or_blank` flag on the filter condition accepted (U7); chart series 8 in total, 7 plus "Other", accepted (U5).
 U7:
 - "(blank)" is the flag `or_blank` of the condition (same rows as an extra is-blank condition joined with OR, without disturbing the group's join).
 - No "(blank)" entry in the conditional column's picker (blanks have their own result). The picker is an inline panel under the row. "Select all" selects the listed values.
