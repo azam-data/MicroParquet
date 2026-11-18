@@ -68,7 +68,7 @@ fn guide_irrbb_cashflow_ladder() {
         currency_col: None,
         default_currency: "BDT".into(),
     };
-    let settings = CfSettings { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, scenario: Scenario::Base };
+    let settings = CfSettings { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, scenario: Scenario::Base, blank_maturity_on: false };
     let res = build_ladder(vec![(book.clone().lazy(), spec)], &settings, None).expect("the ladder builds");
     let full = ladder_frame(&res).expect("frame");
     assert_eq!(full.height(), 20);
@@ -84,7 +84,7 @@ fn guide_irrbb_cashflow_ladder() {
     r.rate_pct = 12.0;
     r.repayment = Repayment::EqualInstalment;
     r.frequency = Frequency::Monthly;
-    let rf = generate_flows(&r, &CfSettings { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalAndInterest, scenario: Scenario::Base }, None).expect("flows");
+    let rf = generate_flows(&r, &CfSettings { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalAndInterest, scenario: Scenario::Base, blank_maturity_on: false }, None).expect("flows");
     assert_eq!(rf.flows.len(), 12);
     close(Some(rf.flows[0].total()), 10_661.85, 0.005, "instalment");
     close(Some(rf.flows.iter().map(|f| f.principal).sum::<f64>()), 120_000.0, 0.01, "principal");
@@ -200,7 +200,7 @@ fn guide_irrbb_six_scenarios() {
         meta: RuleMeta { file: "irrbb_shocks/2021-04-13.json".into(), as_of: d("2021-04-13"), source: "BRPD IRRBB 2021".into(), sample: false },
     };
     let curve = micro_parquet::curves::YieldCurve { date: d("2026-10-01"), currency: "BDT".into(), source: "example".into(), points: vec![FtpPoint { tenor_days: 30, ftp_rate: 10.0 }, FtpPoint { tenor_days: 9000, ftp_rate: 10.0 }] };
-    let spec = |tier1: f64| IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, tier1, compounding: Compounding::Continuous, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shocks.clone(), curves: vec![curve.clone()], behaviour: None, betas: vec![] };
+    let spec = |tier1: f64| IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1, compounding: Compounding::Continuous, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shocks.clone(), curves: vec![curve.clone()], behaviour: None, betas: vec![] };
     let o = run_irrbb(vec![(book.clone().lazy(), cf.clone())], &spec(1_000_000.0)).expect("runs");
     let small = run_irrbb(vec![(book.clone().lazy(), cf)], &spec(600_000.0)).expect("runs");
     assert!(!o.outlier && small.outlier);

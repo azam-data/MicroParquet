@@ -1972,6 +1972,8 @@ pub enum TabSource {
         scenario: crate::cashflow::Scenario,
         /// The behaviour profile used (its file name and content when the tab was built).
         behaviour: Option<(String, crate::behaviour::BehaviourFile)>,
+        /// "Treat blank maturity as O/N".
+        blank_maturity_on: bool,
     },
     /// The six-scenario IRRBB run (Phase 5 R3): `view` says which of its two tables this tab shows.
     Irrbb {

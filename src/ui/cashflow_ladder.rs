@@ -302,6 +302,8 @@ pub struct CfLadderState {
     pub cutoff: String,
     pub mode: CashFlowMode,
     pub scenario: Scenario,
+    /// "Treat blank maturity as O/N".
+    pub blank_on: bool,
     /// The behaviour files in `portable_data/behaviour`, newest first.
     pub behaviour_files: Vec<String>,
     /// The file chosen (empty = none) and what reading it gave.
@@ -312,7 +314,7 @@ pub struct CfLadderState {
 
 impl Default for CfLadderState {
     fn default() -> Self {
-        Self { lines: Vec::new(), cutoff: String::new(), mode: CashFlowMode::PrincipalAndInterest, scenario: Scenario::Base, behaviour_files: Vec::new(), behaviour_sel: String::new(), behaviour: None, rects: CfLadderRects::default() }
+        Self { lines: Vec::new(), cutoff: String::new(), mode: CashFlowMode::PrincipalAndInterest, scenario: Scenario::Base, blank_on: false, behaviour_files: Vec::new(), behaviour_sel: String::new(), behaviour: None, rects: CfLadderRects::default() }
     }
 }
 
@@ -387,7 +389,7 @@ impl MicroParquetApp {
             return Err("The behaviour profile has not been read yet.".to_string());
         }
         let title = "IRRBB cash-flow ladder".to_string();
-        Ok((title, TabSource::IrrbbLadder { inputs, cutoff_date: g.cutoff.trim().to_string(), mode: g.mode, scenario: g.scenario, behaviour }))
+        Ok((title, TabSource::IrrbbLadder { inputs, cutoff_date: g.cutoff.trim().to_string(), mode: g.mode, scenario: g.scenario, behaviour, blank_maturity_on: g.blank_on }))
     }
 
     pub(crate) fn render_cf_ladder_modal(&mut self, ctx: &egui::Context, _cols: Vec<String>) -> ModalOutcome {
@@ -429,6 +431,8 @@ impl MicroParquetApp {
                         }
                     });
                     rects.settings.push(("Behaviour profile".to_string(), r.response.rect));
+                    let r = ui.checkbox(&mut self.cf.blank_on, "Treat blank maturity as O/N").on_hover_text("Rows with no maturity date go in O/N, principal only, and the ladder counts them. Without it a blank maturity stops the run. A non-maturity deposit of the behaviour profile needs no maturity date either way.");
+                    rects.settings.push(("Blank maturity".to_string(), r.rect));
                 });
             });
             if let Some(p) = &problem {

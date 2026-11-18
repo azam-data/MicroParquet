@@ -22,7 +22,7 @@ Turns each loan and deposit of the book into dated cash flows from the cutoff da
 | --- | --- | --- | --- | --- |
 | Side | Yes | Text, or the tab's role | Asset, Liability, A, L, DEPOSIT | Choose "Counts as" Asset / Liability for the whole tab, or "Side column (A / L)" and pick the column. |
 | Outstanding amount | Yes | Number, not negative | 1,000,000.00 | The side decides the sign. A negative amount stops the run. |
-| Maturity date | Yes | Date | 2031-04-30 | May be blank only for a non-maturity deposit that the behaviour profile covers. |
+| Maturity date | Yes | Date | 2031-04-30 | May be blank for a liability whose product is a non-maturity deposit in the selected behaviour profile. Any other blank maturity stops the run, unless you tick "Treat blank maturity as O/N". |
 | Rate (%) | With interest | Number | 9.5 | Not needed in "Principal only". |
 | Rate type | No | Text: Fixed, Floating | Floating | "If no column" gives the default. |
 | Next repricing date | Floating rows | Date | 2026-11-30 | The earlier of this and the maturity is used. |
@@ -35,14 +35,15 @@ Turns each loan and deposit of the book into dated cash flows from the cutoff da
 
 1. Open the tabs. Choose Banking ▸ Treasury & ALM ▸ "IRRBB cash-flow ladder…" (or Ctrl+K and type "irrbb").
 2. In the top rows type the "Cutoff date (YYYY-MM-DD)" and choose the "Cash-flow mode", the "Scenario" (Base unless you want the behavioural effect of a shock) and the "Behaviour profile" ("(none)" for contractual cash flows only).
-3. In the card "Tab 1" choose the "Tab", what it "Counts as", and its columns: "Outstanding amount", "Maturity date" and the optional roles. A column set to "(none)" uses the value in "If no column".
-4. Click "Add tab" for each further tab and fill its card.
-5. Read the red line at the top if the button is grey; it names what is missing.
-6. Click "Build cash-flow ladder". The result opens in the tab "IRRBB cash-flow ladder".
+3. Tick "Treat blank maturity as O/N" (next to "Behaviour profile") only if rows with no maturity date should go in O/N instead of stopping the run. It is off by default.
+4. In the card "Tab 1" choose the "Tab", what it "Counts as", and its columns: "Outstanding amount", "Maturity date" and the optional roles. A column set to "(none)" uses the value in "If no column".
+5. Click "Add tab" for each further tab and fill its card.
+6. Read the red line at the top if the button is grey; it names what is missing.
+7. Click "Build cash-flow ladder". The result opens in the tab "IRRBB cash-flow ladder".
 
 ## 6. What you get
 
-One row per bucket and currency, BDT first. `Midpoint (years)` is the bucket's midpoint from BB Table 3. `Assets` are inflows (positive) and `Liabilities` outflows (negative), in BDT; `Net` is their sum and `Cumulative net` the running sum within the currency. After each currency's buckets a row "Matured assets, not in ladder (N)" gives the number and total principal of assets whose maturity has passed. Buckets: O/N (up to 1 day), then up to 1M, 3M, 6M, 9M, 1Y, 1.5Y, 2Y, 3Y, 4Y, 5Y, 6Y, 7Y, 8Y, 9Y, 10Y, 15Y, 20Y and over 20Y; each includes its upper bound. Time is days from the cutoff divided by 365.
+One row per bucket and currency, BDT first. `Midpoint (years)` is the bucket's midpoint from BB Table 3. `Assets` are inflows (positive) and `Liabilities` outflows (negative), in BDT; `Net` is their sum and `Cumulative net` the running sum within the currency. After each currency's buckets a row "Matured assets, not in ladder (N)" gives the number and total principal of assets whose maturity has passed. With "Treat blank maturity as O/N" ticked and at least one such row, a row "Blank maturity, in O/N above (N)" comes first below the buckets: it gives the number of rows with no maturity date and their assets and liabilities, which are already in the O/N bucket (principal only, no interest); it is information, not an extra amount. Buckets: O/N (up to 1 day), then up to 1M, 3M, 6M, 9M, 1Y, 1.5Y, 2Y, 3Y, 4Y, 5Y, 6Y, 7Y, 8Y, 9Y, 10Y, 15Y, 20Y and over 20Y; each includes its upper bound. Time is days from the cutoff divided by 365.
 
 How the flows are made: payment dates run back from the maturity by the frequency and only those after the cutoff count. Interest of a period is the outstanding × rate ÷ payments per year (a full period, also for the first). An equal instalment loan is an annuity on the remaining payments. A floating row has one flow on its next repricing date: all its principal plus one period's interest. A matured liability goes to O/N.
 
@@ -89,7 +90,7 @@ Test: `guide_irrbb_cashflow_ladder`
 
 ## 9. Common messages and fixes
 
-- "Cash flows: the maturity date is blank on N row(s); the first 5 values of Account_No: …" Fill the maturity dates, or cover the product with a behaviour profile if it is a non-maturity deposit. The message names the account column it took the numbers from, or lists rows ("row 12").
+- "Cash flows: the maturity date is blank on N row(s); the first 5 values of Account_No: … Only a product that is a non-maturity deposit in the behaviour profile needs no maturity date. Fill the dates, or tick "Treat blank maturity as O/N" to put those rows in O/N." Fill the maturity dates, cover the product with a behaviour profile if it is a non-maturity deposit (a liability row needs no date then), or tick the option. The message names the account column it took the numbers from, or lists rows ("row 12").
 - "… the rate is blank or not a number …" Fill the rate, or switch to "Principal only".
 - "… a floating row has no next repricing date …" Fill the repricing date, or set the rate type to Fixed.
 - "… the frequency 'X' is not Monthly, Quarterly, Half-yearly, Annual or At maturity" (also for the repayment type and the rate type). Correct the values or use a lookup first.
@@ -104,5 +105,6 @@ Test: `guide_irrbb_cashflow_ladder`
 - A floating row is not amortised before its repricing date: all remaining principal is on that date. A loan prepayment rate (CPR) is not applied to floating rows or to "At maturity" rows.
 - "At maturity" rows pay simple interest on the principal for the time left (days ÷ 365).
 - Non-maturity deposits use principal only, with no interest flows.
+- "Treat blank maturity as O/N" puts the whole principal of such a row in O/N, assets as well as liabilities, with no interest and no prepayment or early-redemption effect; it is a way to see the rest of the book, not a view that the deal is overnight. Only a liability whose product is a non-maturity deposit in the profile needs no maturity date without the option; a profiled loan or term deposit still needs one.
 - No currency conversion: amounts are BDT or BDT-equivalent. Each currency has its own ladder.
 - Matured assets are left out of the buckets (as in the liquidity gap ladder); no collateral, option or off-balance-sheet flows are modelled.

@@ -100,11 +100,11 @@ fn r1_the_cash_flow_dialog_fits_takes_roles_by_click_and_builds_the_ladder() {
         let p: Painted = rig.draw(6);
         let r = assert_dialog_fits(&rig.ctx, &cf_title(), &what);
         // (the middle scrolls: what is below the fold is checked against its card, not the window)
-        for t in ["Cutoff date (YYYY-MM-DD)", "Cash-flow mode", "Scenario", "Behaviour profile", "Tab", "Counts as", "Outstanding amount", "Maturity date", "Rate (%)", "Next repricing date", "Rate type", "Repayment type", "Build cash-flow ladder", "Cancel"] {
+        for t in ["Cutoff date (YYYY-MM-DD)", "Cash-flow mode", "Scenario", "Behaviour profile", "Treat blank maturity as O/N", "Tab", "Counts as", "Outstanding amount", "Maturity date", "Rate (%)", "Next repricing date", "Rate type", "Repayment type", "Build cash-flow ladder", "Cancel"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
         let g = rig.app.cf.rects.clone();
-        for name in ["Cutoff date", "Cash-flow mode", "Scenario", "Behaviour profile"] {
+        for name in ["Cutoff date", "Cash-flow mode", "Scenario", "Behaviour profile", "Blank maturity"] {
             let rc = g.settings.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: '{name}' was drawn"));
             assert!(inside(rc, r.window) && rc.bottom() <= r.body.top() + 1.0 || inside(rc, r.header), "{what}: '{name}' {rc:?} is in the dialog's fixed header {:?}", r.header);
         }
@@ -163,6 +163,51 @@ fn r1_the_cash_flow_dialog_fits_takes_roles_by_click_and_builds_the_ladder() {
         assert_eq!(assets[19], Some(250_000.0), "{what}: the matured asset is in the last row, outside the buckets");
         let bucket = df.column("Bucket").expect("col").str().expect("str").get(19).unwrap_or("").to_string();
         assert_eq!(bucket, "Matured assets, not in ladder (1)", "{what}");
+    }
+}
+
+#[test]
+fn a2_the_blank_maturity_box_is_ticked_by_a_click_and_the_row_goes_to_o_n() {
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("p5a2");
+        let root = app.paths.root_dir.clone();
+        let liab = DataFrame::new(vec![
+            Series::new("Account_No".into(), &["T1", "T2"]),
+            Series::new("Outstanding".into(), &[500_000.0, 200_000.0]),
+            Series::new("Rate".into(), &[5.0, 5.0]),
+            dated("Matdat", &["", "2027-10-31"]),
+        ])
+        .expect("liabilities");
+        let src = parquet_source(&root, "Liabilities", liab);
+        app.create_tab_from_source("Liabilities".into(), src, vec![], HashMap::new());
+        settle(&mut app);
+        let (ctx, input) = screen(ppp, w, h);
+        let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::IrrbbLadder);
+        rig.app.cf.cutoff = "2026-10-31".into();
+        rig.app.cf.lines[0].role = crate::ui::gap_ladder::RoleChoice::Liability;
+        rig.app.cf.mode = micro_parquet::cashflow::CashFlowMode::PrincipalOnly;
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &cf_title(), &what);
+        let tick = p.boxes.iter().filter(|(t, _)| t.contains("Treat blank maturity as O/N")).map(|(_, b)| *b).last().expect("the check box");
+        assert!(inside(tick, r.window), "{what}: the box {tick:?} is in the dialog {:?}", r.window);
+        assert!(!rig.app.cf.blank_on, "{what}: off by default");
+        // tick the box by a real click and build
+        click_text(&mut rig, &p, "Treat blank maturity as O/N", egui::Rect::EVERYTHING);
+        assert!(rig.app.cf.blank_on, "{what}: a real click ticks it");
+        rig.draw(3);
+        let build = rig.app.cf.rects.buttons.iter().find(|(n, _)| n == "Build cash-flow ladder").map(|(_, r)| *r).expect("button");
+        rig.click(build.center());
+        rig.draw(6);
+        let tab = rig.app.tabs.last().expect("the ladder tab");
+        assert_eq!(tab.title, "IRRBB cash-flow ladder", "{what}: {}", rig.app.status_message);
+        let df = &tab.cached_slice;
+        let liabs: Vec<Option<f64>> = df.column("Liabilities").expect("col").f64().expect("f64").into_iter().collect();
+        let labels: Vec<String> = df.column("Bucket").expect("col").str().expect("str").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        assert_eq!(liabs[0], Some(-500_000.0), "{what}: the blank-maturity row is in O/N");
+        let at = labels.iter().position(|l| l == "Blank maturity, in O/N above (1)").unwrap_or_else(|| panic!("{what}: the count row is listed {labels:?}"));
+        assert_eq!(liabs[at], Some(-500_000.0), "{what}");
     }
 }
 
@@ -503,7 +548,7 @@ fn r3_the_irrbb_dialog_fits_takes_its_settings_by_click_and_builds_both_tabs() {
         assert_eq!(rig.app.active_tool, ActiveToolModal::IrrbbSix, "{what}");
         let p = rig.draw(6);
         let r = assert_dialog_fits(&rig.ctx, &irrbb_title(), &what);
-        for t in ["Cutoff date (YYYY-MM-DD)", "Tier 1 capital (BDT)", "Cash-flow mode", "Curve rates are", "Post-shock floor (%)", "Behaviour profile", "Beta file", "rate floor (%)", "Counts as", "Outstanding amount", "Run IRRBB", "Cancel"] {
+        for t in ["Cutoff date (YYYY-MM-DD)", "Tier 1 capital (BDT)", "Cash-flow mode", "Curve rates are", "Post-shock floor (%)", "Behaviour profile", "Treat blank maturity as O/N", "Beta file", "rate floor (%)", "Counts as", "Outstanding amount", "Run IRRBB", "Cancel"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
         // the fixed header holds every setting; nothing in it passes the dialog's edge or overlaps

@@ -2424,13 +2424,13 @@ pub fn compile_tab_lazy(
                 crate::models::IrrbbView::CashFlows => crate::irrbb::cashflows_frame(&out)?.lazy(),
             }
         }
-        TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour } => {
+        TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour, blank_maturity_on } => {
             let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
             let mut lfs = Vec::with_capacity(inputs.len());
             for i in inputs {
                 lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
             }
-            let settings = crate::cashflow::CfSettings { cutoff, mode: *mode, scenario: *scenario };
+            let settings = crate::cashflow::CfSettings { cutoff, mode: *mode, scenario: *scenario, blank_maturity_on: *blank_maturity_on };
             let res = crate::cashflow::build_ladder(lfs, &settings, behaviour.as_ref().map(|b| &b.1))?;
             crate::cashflow::ladder_frame(&res)?.lazy()
         }

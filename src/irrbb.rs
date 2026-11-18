@@ -191,6 +191,8 @@ pub fn row_nii(row: &CfRow, scn: Scenario, shock: &CurrencyShock, decay_x: f64, 
 pub struct IrrbbSpec {
     pub cutoff: NaiveDate,
     pub mode: CashFlowMode,
+    /// "Treat blank maturity as O/N".
+    pub blank_maturity_on: bool,
     pub tier1: f64,
     pub compounding: Compounding,
     /// The post-shock floor in percent, off by default.
@@ -251,7 +253,7 @@ pub fn run_rows(rows: &[CfRow], spec: &IrrbbSpec) -> Result<IrrbbOutput> {
     }
     crate::rules::check_shocks(&spec.shocks.data, &spec.shocks.meta.file)?;
     let behaviour = spec.behaviour.as_ref().map(|b| &b.1);
-    let settings = |scenario| CfSettings { cutoff: spec.cutoff, mode: spec.mode, scenario };
+    let settings = |scenario| CfSettings { cutoff: spec.cutoff, mode: spec.mode, scenario, blank_maturity_on: spec.blank_maturity_on };
     let base = ladder_from_rows(rows, &settings(Scenario::Base), behaviour)?;
     let x = spec.shocks.data.decay_x;
     // each currency: its shocks and its curve
@@ -336,7 +338,7 @@ fn setup_no_floor<'a>(s: &EveSetup<'a>) -> EveSetup<'a> {
 
 /// The six scenarios on tabs.
 pub fn run_irrbb(inputs: Vec<(LazyFrame, CfInputSpec)>, spec: &IrrbbSpec) -> Result<IrrbbOutput> {
-    let rows = build_rows_for_irrbb(inputs, &CfSettings { cutoff: spec.cutoff, mode: spec.mode, scenario: Scenario::Base }, spec.behaviour.as_ref().map(|b| &b.1), spec.nii_floor_pct.is_some())?;
+    let rows = build_rows_for_irrbb(inputs, &CfSettings { cutoff: spec.cutoff, mode: spec.mode, scenario: Scenario::Base, blank_maturity_on: spec.blank_maturity_on }, spec.behaviour.as_ref().map(|b| &b.1), spec.nii_floor_pct.is_some())?;
     run_rows(&rows, spec)
 }
 

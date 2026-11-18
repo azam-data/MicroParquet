@@ -31,6 +31,8 @@ pub struct IrrbbState {
     pub lines: Vec<CfLine>,
     pub cutoff: String,
     pub mode: CashFlowMode,
+    /// "Treat blank maturity as O/N".
+    pub blank_on: bool,
     pub tier1: String,
     pub compounding: Compounding,
     pub post_floor_on: bool,
@@ -53,6 +55,7 @@ impl Default for IrrbbState {
             lines: Vec::new(),
             cutoff: String::new(),
             mode: CashFlowMode::PrincipalAndInterest,
+            blank_on: false,
             tier1: String::new(),
             compounding: Compounding::Annual,
             post_floor_on: false,
@@ -138,7 +141,7 @@ impl MicroParquetApp {
         let betas = if g.beta_sel.is_empty() { Vec::new() } else { load_beta_rows(&betas_dir(), &g.beta_sel).map_err(|e| format!("{:#}", e))? };
         let store = CurveStore::load(&curves_dir());
         let curves = store.strict().map_err(|e| format!("{:#}", e))?.to_vec();
-        let spec = IrrbbSpec { cutoff, mode: g.mode, tier1, compounding: g.compounding, post_shock_floor_pct: post_floor, nii_floor_pct: nii_floor, shocks, curves, behaviour, betas };
+        let spec = IrrbbSpec { cutoff, mode: g.mode, blank_maturity_on: g.blank_on, tier1, compounding: g.compounding, post_shock_floor_pct: post_floor, nii_floor_pct: nii_floor, shocks, curves, behaviour, betas };
         let make = |view| TabSource::Irrbb { inputs: inputs.clone(), spec: Box::new(spec.clone()), view };
         Ok(vec![("IRRBB cash flows".to_string(), make(IrrbbView::CashFlows)), ("IRRBB results".to_string(), make(IrrbbView::Results))])
     }
@@ -211,6 +214,8 @@ impl MicroParquetApp {
                         }
                     });
                     rects.header.push(("Behaviour profile".to_string(), r.response.rect));
+                    let r = ui.checkbox(&mut self.irrbb.blank_on, "Treat blank maturity as O/N");
+                    rects.header.push(("Blank maturity".to_string(), r.rect));
                     ui.label(egui::RichText::new("Beta file (\u{394}NII)").color(tk.muted).size(theme::TEXT_LABEL));
                     let files = self.irrbb.beta_files.clone();
                     let shown = if self.irrbb.beta_sel.is_empty() { "(none)".to_string() } else { self.irrbb.beta_sel.clone() };

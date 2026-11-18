@@ -233,6 +233,16 @@ pub struct CfSettings {
     pub cutoff: NaiveDate,
     pub mode: CashFlowMode,
     pub scenario: Scenario,
+    /// "Treat blank maturity as O/N": a row with no maturity date (other than a non-maturity
+    /// deposit of the behaviour profile, which needs none) goes in O/N instead of stopping the run.
+    pub blank_maturity_on: bool,
+}
+
+impl CfSettings {
+    /// The usual settings: a blank maturity stops the run.
+    pub fn new(cutoff: NaiveDate, mode: CashFlowMode, scenario: Scenario) -> CfSettings {
+        CfSettings { cutoff, mode, scenario, blank_maturity_on: false }
+    }
 }
 
 /// A row of a book, parsed.
@@ -292,6 +302,8 @@ pub struct RowFlows {
     pub flows: Vec<Flow>,
     /// An asset whose maturity has passed: it has no flows; this is its principal.
     pub matured_asset: Option<f64>,
+    /// A row with no maturity date that "Treat blank maturity as O/N" put in O/N: its principal.
+    pub blank_maturity: Option<f64>,
 }
 
 fn years(cutoff: NaiveDate, d: NaiveDate) -> f64 {
@@ -349,7 +361,16 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
         return Ok(out);
     }
 
-    let maturity = row.maturity.ok_or_else(|| anyhow!("The row has no maturity date."))?;
+    let maturity = match row.maturity {
+        Some(m) => m,
+        None if settings.blank_maturity_on => {
+            // the owner's option: no maturity date, so all of it is in O/N (principal only)
+            out.flows.push(Flow { date: cutoff, t: 0.0, principal: p, interest: 0.0 });
+            out.blank_maturity = Some(p);
+            return Ok(out);
+        }
+        None => bail!("The row has no maturity date."),
+    };
     if maturity <= cutoff {
         match row.side {
             Side::Liability => out.flows.push(Flow { date: cutoff, t: 0.0, principal: p, interest: 0.0 }),
@@ -497,6 +518,9 @@ pub struct LadderResult {
     pub currencies: Vec<(String, BucketAmounts)>,
     /// Matured assets that are not in the ladder: currency, count, total principal.
     pub excluded: Vec<(String, usize, f64)>,
+    /// Rows with a blank maturity that "Treat blank maturity as O/N" put in O/N (they are in the
+    /// O/N bucket already): currency, count, total of assets, total of liabilities (negative).
+    pub blank_on: Vec<(String, usize, f64, f64)>,
     /// Counts of rows treated with the behaviour profile, and other things worth saying.
     pub notes: Vec<String>,
 }
@@ -510,6 +534,9 @@ impl LadderResult {
     }
     pub fn excluded_total(&self) -> f64 {
         self.excluded.iter().map(|e| e.2).sum()
+    }
+    pub fn blank_on_count(&self) -> usize {
+        self.blank_on.iter().map(|e| e.1).sum()
     }
 }
 
@@ -550,6 +577,20 @@ pub fn ladder_from_rows(rows: &[CfRow], settings: &CfSettings, behaviour: Option
                 Side::Liability => res.currencies[idx].1.liabilities[b] += sign * amt,
             }
         }
+        if let Some(p) = rf.blank_maturity {
+            let (a, l) = match row.side {
+                Side::Asset => (p, 0.0),
+                Side::Liability => (0.0, -p),
+            };
+            match res.blank_on.iter_mut().find(|e| e.0 == row.currency) {
+                Some(e) => {
+                    e.1 += 1;
+                    e.2 += a;
+                    e.3 += l;
+                }
+                None => res.blank_on.push((row.currency.clone(), 1, a, l)),
+            }
+        }
         if let Some(p) = rf.matured_asset {
             match res.excluded.iter_mut().find(|e| e.0 == row.currency) {
                 Some(e) => {
@@ -562,8 +603,12 @@ pub fn ladder_from_rows(rows: &[CfRow], settings: &CfSettings, behaviour: Option
     }
     res.currencies.sort_by(|a, b| currency_order(&a.0, &b.0));
     res.excluded.sort_by(|a, b| currency_order(&a.0, &b.0));
+    res.blank_on.sort_by(|a, b| currency_order(&a.0, &b.0));
     if behaviour.is_some() {
         res.notes.push(format!("Behaviour profile applied: {} non-maturity deposit row(s), {} loan row(s) with a prepayment rate, {} term deposit row(s) with an early-redemption rate.", nmd_rows, cpr_rows, tdrr_rows));
+    }
+    if res.blank_on_count() > 0 {
+        res.notes.push(format!("{} row(s) with a blank maturity date were put in O/N (\"Treat blank maturity as O/N\"), principal only.", res.blank_on_count()));
     }
     if res.excluded_count() > 0 {
         res.notes.push(format!("{} matured asset row(s) with a total of {:.2} are not in the ladder (as in the liquidity gap ladder). Matured liabilities are in O/N.", res.excluded_count(), res.excluded_total()));
@@ -843,7 +888,9 @@ pub fn check_rows(parsed: &ParsedRows, settings: &CfSettings, behaviour: Option<
             continue;
         }
         if r.maturity.is_none() {
-            issues.add("the maturity date is blank", || key(i));
+            if !settings.blank_maturity_on {
+                issues.add("the maturity date is blank", || key(i));
+            }
             continue;
         }
         if r.maturity.is_some_and(|m| m <= settings.cutoff) {
@@ -856,7 +903,12 @@ pub fn check_rows(parsed: &ParsedRows, settings: &CfSettings, behaviour: Option<
             issues.add("a floating row has no next repricing date", || key(i));
         }
     }
-    issues.into_result(&parsed.key_label)
+    let blank = issues.0.iter().any(|i| i.what == "the maturity date is blank");
+    let res = issues.into_result(&parsed.key_label);
+    if blank {
+        return res.map_err(|e| anyhow!("{} Only a product that is a non-maturity deposit in the behaviour profile needs no maturity date. Fill the dates, or tick \"Treat blank maturity as O/N\" to put those rows in O/N.", e));
+    }
+    res
 }
 
 /// The ladder of several tabs, with the optional behaviour profile.
@@ -909,7 +961,14 @@ pub fn excluded_label(count: usize) -> String {
     format!("Matured assets, not in ladder ({})", count)
 }
 
+/// The label of the row below a currency's buckets that says how many rows with a blank maturity
+/// "Treat blank maturity as O/N" put in O/N (their principal is in the O/N bucket already).
+pub fn blank_on_label(count: usize) -> String {
+    format!("Blank maturity, in O/N above ({})", count)
+}
+
 /// The ladder as a table: one row per bucket and currency (liabilities negative), then a row per
+/// currency with the rows of a blank maturity that were put in O/N (if any), then a row per
 /// currency with the matured assets that were left out.
 pub fn ladder_frame(res: &LadderResult) -> Result<DataFrame> {
     let (mut cur, mut bucket, mut mid, mut a, mut l, mut n, mut c): (Vec<String>, Vec<String>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) = Default::default();
@@ -926,6 +985,15 @@ pub fn ladder_frame(res: &LadderResult) -> Result<DataFrame> {
             n.push(Some(net[i]));
             c.push(Some(run));
         }
+    }
+    for (ccy, count, assets, liabilities) in &res.blank_on {
+        cur.push(ccy.clone());
+        bucket.push(blank_on_label(*count));
+        mid.push(None);
+        a.push(Some(*assets));
+        l.push(Some(*liabilities));
+        n.push(None);
+        c.push(None);
     }
     for (ccy, count, total) in &res.excluded {
         cur.push(ccy.clone());

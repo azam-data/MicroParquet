@@ -12,7 +12,7 @@ fn d(s: &str) -> NaiveDate {
 }
 
 fn settings(mode: CashFlowMode, scenario: Scenario) -> CfSettings {
-    CfSettings { cutoff: d("2026-10-31"), mode, scenario }
+    CfSettings { cutoff: d("2026-10-31"), mode, scenario, blank_maturity_on: false }
 }
 
 fn row(side: Side, principal: f64, rate: f64, maturity: &str) -> CfRow {
@@ -334,4 +334,89 @@ fn r1_the_behaviour_profile_needs_the_product_column() {
     let sp = CfInputSpec { product_col: None, ..spec() };
     let e = format!("{:#}", build_ladder(vec![(tab_frame().lazy(), sp)], &s, Some(&file)).err().expect("product column"));
     assert!(e.contains("choose the product column"), "{e}");
+}
+
+// ------------------------------------------------------------------------- A2: blank maturity
+
+/// Three rows with no maturity date: a savings deposit in the behaviour profile, a term deposit that
+/// is not in it, and a loan that is not in it.
+fn blank_maturity_tab(products: &[&str], sides: &[&str]) -> DataFrame {
+    let n = products.len();
+    DataFrame::new(vec![
+        Series::new("Account_No".into(), (1..=n).map(|i| format!("Z{i}")).collect::<Vec<_>>()),
+        Series::new("Side".into(), sides.to_vec()),
+        Series::new("Outstanding".into(), vec![1_000_000.0; n]),
+        Series::new("Rate".into(), vec![4.0; n]),
+        dates("Matdat", &vec![""; n]),
+        Series::new("Product".into(), products.to_vec()),
+    ])
+    .expect("tab")
+}
+
+fn blank_spec() -> CfInputSpec {
+    CfInputSpec { role: GapRole::Side("Side".into()), rate_type_col: None, reprice_col: None, repay_col: None, freq_col: None, ..spec() }
+}
+
+fn savings_profile() -> BehaviourFile {
+    let nmd = BehaviourProduct { product: "SAV".into(), category: "Retail non-transactional".into(), core_pct: 60.0, avg_maturity_years: 3.0, method: "Typed".into(), ..BehaviourProduct::default() };
+    BehaviourFile { as_of: "2026-10-31".into(), source: "test".into(), products: vec![nmd] }
+}
+
+#[test]
+fn a2_a_profiled_savings_row_with_a_blank_maturity_runs() {
+    let s = settings(CashFlowMode::PrincipalAndInterest, Scenario::Base);
+    let df = blank_maturity_tab(&["SAV"], &["Liability"]);
+    let res = build_ladder(vec![(df.lazy(), blank_spec())], &s, Some(&savings_profile())).expect("a profiled savings row needs no maturity");
+    let b = res.for_currency("BDT").expect("BDT");
+    assert_eq!(b.liabilities[0], -400_000.0, "the non-core part in O/N");
+    assert_eq!(b.liabilities[8], -600_000.0, "the core part at 3 years");
+    assert_eq!(res.blank_on_count(), 0, "it is a profiled deposit, not a blank-maturity row");
+}
+
+#[test]
+fn a2_an_unprofiled_blank_maturity_row_stops_the_run_unless_the_option_is_on() {
+    let s = settings(CashFlowMode::PrincipalAndInterest, Scenario::Base);
+    // three blank rows: SAV is profiled, the term deposit and the loan are not
+    let df = blank_maturity_tab(&["SAV", "TD", "HL"], &["Liability", "Liability", "Asset"]);
+    let e = format!("{:#}", build_ladder(vec![(df.clone().lazy(), blank_spec())], &s, Some(&savings_profile())).err().expect("unprofiled blank maturity"));
+    assert!(e.contains("the maturity date is blank on 2 row(s)"), "{e}");
+    assert!(e.contains("the first 2 values of Account_No: Z2, Z3"), "{e}");
+    assert!(!e.contains("Z1"), "the profiled row is not named: {e}");
+    assert!(e.contains("Treat blank maturity as O/N"), "the message names the option: {e}");
+    // without a profile at all the savings row is blank too
+    let e = format!("{:#}", build_ladder(vec![(df.lazy(), blank_spec())], &s, None).err().expect("no profile"));
+    assert!(e.contains("blank on 3 row(s)"), "{e}");
+}
+
+#[test]
+fn a2_with_the_option_a_blank_maturity_row_goes_to_o_n_and_the_note_gives_the_count() {
+    let with = CfSettings { blank_maturity_on: true, ..settings(CashFlowMode::PrincipalAndInterest, Scenario::Base) };
+    // one unprofiled term deposit with a blank maturity (and no rate: it is in O/N, principal only)
+    let mut df = blank_maturity_tab(&["TD"], &["Liability"]);
+    df.with_column(Series::new("Rate".into(), &[None::<f64>])).expect("rate");
+    let res = build_ladder(vec![(df.lazy(), blank_spec())], &with, None).expect("the option puts it in O/N");
+    let b = res.for_currency("BDT").expect("BDT");
+    assert_eq!(b.liabilities[0], -1_000_000.0, "all of it in O/N, principal only");
+    assert_eq!(res.blank_on_count(), 1);
+    assert!(res.notes.iter().any(|n| n.contains("1 row(s) with a blank maturity date were put in O/N")), "{:?}", res.notes);
+    let frame = ladder_frame(&res).expect("frame");
+    let labels = strings(&frame, "Bucket");
+    let last = labels.last().cloned().flatten().expect("a last row");
+    assert_eq!(last, blank_on_label(1));
+    assert_eq!(last, "Blank maturity, in O/N above (1)");
+    assert_eq!(floats(&frame, "Liabilities").last().copied().flatten(), Some(-1_000_000.0));
+
+    // an asset row goes to O/N too (it is not "matured", so it is not left out)
+    let df = blank_maturity_tab(&["HL"], &["Asset"]);
+    let res = build_ladder(vec![(df.lazy(), blank_spec())], &with, None).expect("ladder");
+    assert_eq!(res.for_currency("BDT").expect("BDT").assets[0], 1_000_000.0);
+    assert_eq!(res.excluded_count(), 0);
+
+    // a profiled savings row next to it still splits by the profile; only the unprofiled row is counted
+    let df = blank_maturity_tab(&["SAV", "TD"], &["Liability", "Liability"]);
+    let res = build_ladder(vec![(df.lazy(), blank_spec())], &with, Some(&savings_profile())).expect("ladder");
+    assert_eq!(res.blank_on_count(), 1);
+    let b = res.for_currency("BDT").expect("BDT");
+    assert_eq!(b.liabilities[0], -400_000.0 - 1_000_000.0);
+    assert_eq!(b.liabilities[8], -600_000.0);
 }

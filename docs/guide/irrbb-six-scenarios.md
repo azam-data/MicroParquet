@@ -23,7 +23,7 @@ Runs the six interest-rate shock scenarios of the Bangladesh Bank IRRBB guidelin
 | --- | --- | --- | --- | --- |
 | Side | Yes | Text, or the tab's role | Asset, Liability | As in the cash-flow ladder. |
 | Outstanding amount | Yes | Number, not negative | 1,000,000.00 | BDT or BDT-equivalent. |
-| Maturity date | Yes | Date | 2031-04-30 | Blank only for non-maturity deposits covered by the profile. |
+| Maturity date | Yes | Date | 2031-04-30 | Blank only for non-maturity deposits covered by the profile, or for any row when "Treat blank maturity as O/N" is ticked (it is in the dialog's header next to "Behaviour profile"). |
 | Rate (%) | With interest, or a ΔNII floor | Number | 9.5 | Not needed in "Principal only" without a floor. |
 | Next repricing date, rate type, repayment type, frequency | No | Date / text | Floating, Monthly | As in the cash-flow ladder; floating rows need the repricing date. |
 | Product code | With a profile or a beta file | Text | SAV01 | |
@@ -106,7 +106,7 @@ Test: `guide_irrbb_six_scenarios`
 - "There is no irrbb_shocks file dated on or before the cutoff …" Add a dated file, or use a later cutoff.
 - "The rule file … says as_of … but its name says …" and "… has no source". Fix the file: every rule file needs `as_of` equal to its date and a `source`.
 - "ΔNII: the current rate is blank, and a floor is set …" with the count and the first 5 account numbers: fill the rates or untick the floor.
-- The messages of the cash-flow ladder (blank maturity, unknown frequency, and so on) apply here too.
+- The messages of the cash-flow ladder (blank maturity, unknown frequency, and so on) apply here too. "Treat blank maturity as O/N" works as in the ladder: those rows are in O/N with principal only, and for ΔNII they reprice at once.
 
 ## 10. Limits and assumptions
 

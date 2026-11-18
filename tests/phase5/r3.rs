@@ -31,7 +31,7 @@ fn shock_file(extra: Vec<CurrencyShock>) -> RuleFile<ShockFile> {
 }
 
 fn spec(tier1: f64, comp: Compounding) -> IrrbbSpec {
-    IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, tier1, compounding: comp, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shock_file(vec![]), curves: vec![flat("BDT", 10.0)], behaviour: None, betas: vec![] }
+    IrrbbSpec { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1, compounding: comp, post_shock_floor_pct: None, nii_floor_pct: None, shocks: shock_file(vec![]), curves: vec![flat("BDT", 10.0)], behaviour: None, betas: vec![] }
 }
 
 /// The acceptance book: an asset flow of 1,000,000 in (4, 5] and a liability flow of −600,000 in O/N.
