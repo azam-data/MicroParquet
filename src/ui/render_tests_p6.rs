@@ -1515,3 +1515,236 @@ fn u1_a_parquet_file_with_apply_without_asking_opens_at_once_with_a_message_nami
         assert!(rig.app.status_message.contains("'loans'") && rig.app.status_message.contains("without asking"), "{what}: {}", rig.app.status_message);
     }
 }
+
+// ---- P1: saved tool runs
+
+use micro_parquet::banking::{GapInputSpec, GapRole as P1GapRole, RateShockSpec};
+use micro_parquet::tool_runs::*;
+
+fn p1_book() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("ACNO".into(), &["A1", "A2", "A3"]),
+        Series::new("BAL".into(), &[1_000_000.0f64, 2_000_000.0, 500_000.0]),
+        Series::new("RATE".into(), &[9.0f64, 12.0, 6.0]),
+        {
+            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch");
+            let days: Vec<i32> = [(2027, 3, 31), (2028, 10, 31), (2026, 12, 15)].iter().map(|(y, m, d)| (chrono::NaiveDate::from_ymd_opt(*y, *m, *d).expect("date") - epoch).num_days() as i32).collect();
+            Series::new("MAT".into(), days).cast(&polars::prelude::DataType::Date).expect("date column").into()
+        },
+        Series::new("SIDE".into(), &["A", "A", "L"]),
+    ])
+    .expect("book")
+}
+
+/// A tab "Loans" and the repricing-gap result tab made from it; the data folder is the test's own.
+fn p1_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let root = app.paths.root_dir.clone();
+    let src = parquet_source(&root, "loans", p1_book());
+    app.create_tab_from_source("Loans".into(), src.clone(), vec![], HashMap::new());
+    settle(&mut app);
+    let spec = RateShockSpec { bal_col: "BAL".into(), rate_col: "RATE".into(), mat_col: "MAT".into(), cutoff_date: "2026-10-31".into(), shock_bps: 100.0, side_col: Some("SIDE".into()), ..Default::default() };
+    app.create_tab_from_source_with("Repricing gap (Loans)".into(), TabSource::RepricingGap { source: Box::new(src), steps: vec![], spec }, vec![], HashMap::new(), None);
+    settle(&mut app);
+    assert_eq!(app.tabs.len(), 2, "{}", app.status_message);
+    let (ctx, input) = screen(ppp, w, h);
+    let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+    rig.draw(4);
+    rig
+}
+
+fn right_click(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+    let press = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE }];
+    let release = vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE }];
+    rig.step(press);
+    rig.step(release);
+    rig.draw(3)
+}
+
+fn tab_rect(rig: &Rig, idx: usize) -> egui::Rect {
+    crate::ui::tabs::tab_strip_report(&rig.ctx).expect("the strip").cells[idx].tab
+}
+
+fn runs_button(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.runs.rects.buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the button '{name}' was drawn", rig.what))
+}
+
+#[test]
+fn p1_a_result_tab_menu_offers_re_run_and_save_run_and_a_plain_tab_does_not() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = p1_rig("p6p1a", ppp, w, h);
+        let what = rig.what.clone();
+        let screen = rig.ctx.screen_rect();
+        // the file's own tab has neither
+        let loans = tab_rect(&rig, 0);
+        let p = right_click(&mut rig, loans.center());
+        assert!(!p.boxes.iter().any(|(t, _)| t == "Re-run with changes" || t.starts_with("Save run")), "{what}: a plain tab has no run");
+        assert!(p.boxes.iter().any(|(t, _)| t == "Duplicate view"), "{what}: its menu is open");
+        // the result tab has both, inside the window
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(3);
+        let result = tab_rect(&rig, 1);
+        let p = right_click(&mut rig, result.center());
+        let rerun = text_box(&p, "Re-run with changes");
+        let save = text_box(&p, "Save run\u{2026}");
+        assert!(inside(rerun, screen) && inside(save, screen), "{what}: the menu is inside the window");
+        // Save run… by a real click
+        rig.click(save.center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SaveRun, "{what}");
+        rig.draw(6);
+        let title = format!("{}  Save run", theme::ph::CLOCK_COUNTER_CLOCKWISE);
+        assert_dialog_fits(&rig.ctx, &title, &what);
+        assert_eq!(rig.app.runs.draft.as_ref().map(|d| d.name.clone()), Some("Repricing gap (Loans)".to_string()), "{what}: named after the tab");
+        // a name that cannot be a file name: Save is disabled and nothing is written
+        rig.app.runs.draft.as_mut().expect("draft").name = "a/b".into();
+        rig.draw(3);
+        rig.click(runs_button(&rig, "Save").center());
+        assert!(list_runs(&runs_dir()).is_empty(), "{what}: nothing was written");
+        // a good name
+        rig.app.runs.draft.as_mut().expect("draft").name = "rg".into();
+        rig.draw(3);
+        rig.click(runs_button(&rig, "Save").center());
+        settle(&mut rig.app);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: closed after saving: {}", rig.app.status_message);
+        assert_eq!(list_runs(&runs_dir()), vec!["rg".to_string()], "{what}");
+        let saved = load_run(&runs_dir(), "rg").expect("loads");
+        assert!(matches!(&saved.run, ToolRun::RepricingGap(r) if r.source == "Loans" && r.spec.shock_bps == 100.0), "{what}: {:?}", saved.run);
+        assert!(rig.app.status_message.contains("Saved the run"), "{what}: {}", rig.app.status_message);
+        // the same name again asks before it replaces the file
+        rig.app.open_save_run(1);
+        rig.app.runs.draft.as_mut().expect("draft").name = "rg".into();
+        rig.draw(4);
+        rig.click(runs_button(&rig, "Save").center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SaveRun, "{what}: still open, asking");
+        rig.draw(4);
+        assert!(rig.app.runs.draft.as_ref().is_some_and(|d| d.confirm_replace && d.error.contains("exists")), "{what}");
+        let replace = runs_button(&rig, "Replace");
+        let msg = rig.app.runs.rects.message.expect("the message is drawn");
+        assert!(inside(msg, rig.ctx.screen_rect()) && inside(replace, rig.ctx.screen_rect()), "{what}");
+        rig.click(replace.center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: replaced and closed");
+        // Cancel closes without writing
+        rig.app.open_save_run(1);
+        rig.app.runs.draft.as_mut().expect("draft").name = "other".into();
+        rig.draw(4);
+        rig.click(runs_button(&rig, "Cancel").center());
+        assert_eq!(list_runs(&runs_dir()), vec!["rg".to_string()], "{what}");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn p1_re_run_with_changes_opens_the_tools_dialog_with_the_saved_inputs() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = p1_rig("p6p1b", ppp, w, h);
+        let what = rig.what.clone();
+        // from the menu of the result tab
+        let result = tab_rect(&rig, 1);
+        let p = right_click(&mut rig, result.center());
+        rig.click(text_box(&p, "Re-run with changes").center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::RateShockSim, "{what}: {}", rig.app.status_message);
+        assert_eq!(rig.app.active_tab, 0, "{what}: the dialog reads the source tab");
+        let s = &rig.app.shock;
+        assert_eq!((s.bal_col.as_str(), s.rate_col.as_str(), s.mat_col.as_str(), s.side_col.as_str(), s.bps), ("BAL", "RATE", "MAT", "SIDE", 100.0), "{what}");
+        assert_eq!(rig.app.buckets.cutoff, "2026-10-31", "{what}");
+        rig.draw(6);
+        // File > Saved tool runs lists a saved run; its button prefills the dialog again
+        rig.app.active_tool = ActiveToolModal::None;
+        let run = rig.app.tab_run(1).expect("the run");
+        save_run(&runs_dir(), "saved one", &run).expect("saves");
+        std::fs::write(runs_dir().join("broken.json"), "{no").expect("broken");
+        rig.app.run_command(&rig.ctx, CommandId::SavedRuns);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SavedRuns, "{what}");
+        let p = rig.draw(6);
+        let title = format!("{}  Saved tool runs", theme::ph::CLOCK_COUNTER_CLOCKWISE);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        assert!(p.boxes.iter().any(|(t, b)| t.starts_with("saved one") && inside(*b, r.window)), "{what}: the run is listed with its description");
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("broken:")), "{what}: a file that cannot be read says so");
+        let b = runs_button(&rig, "Re-run saved one");
+        assert!(inside(b, r.window), "{what}");
+        rig.click(b.center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::RateShockSim, "{what}: the button opens the tool's dialog");
+        // a run whose tab is not open names it
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.app.tabs.remove(0);
+        rig.app.rerun_tab_with_changes(0);
+        assert!(rig.app.status_message.contains("Re-run") && rig.app.status_message.contains("not open"), "{what}: {}", rig.app.status_message);
+        rig.app.status_message.clear();
+        assert!(rig.app.prefill_run(&run).is_err());
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn p1_every_tool_dialog_takes_its_inputs_from_a_saved_run() {
+    use micro_parquet::cashflow::{CfInputSpec, Scenario};
+    let mut rig = p1_rig("p6p1c", 1.05, 1219.05, 685.71);
+    let root = rig.app.paths.root_dir.clone();
+    // a second tab for the runs that read two
+    let src = parquet_source(&root, "loans2", p1_book());
+    rig.app.create_tab_from_source("Sept".into(), src, vec![], HashMap::new());
+    settle(&mut rig.app);
+    let names = |a: &str| a.to_string();
+    let tab_of = |rig: &Rig, n: &str| rig.app.tabs.iter().position(|t| t.title == n).expect("tab");
+    let (loans, sept) = (tab_of(&rig, "Loans"), tab_of(&rig, "Sept"));
+
+    let cf = CfInputSpec { role: P1GapRole::Side("SIDE".into()), principal_col: "BAL".into(), rate_col: Some("RATE".into()), maturity_col: "MAT".into(), default_currency: "BDT".into(), ..Default::default() };
+    // gap ladder
+    let run = ToolRun::GapLadder(GapLadderRun { inputs: vec![GapInputRun { source: names("Loans"), spec: GapInputSpec { role: P1GapRole::Side("SIDE".into()), amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: "ACNO".into() }, GapInputRun { source: names("Sept"), spec: GapInputSpec { role: P1GapRole::Liability, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() }], preset: CustomBucketDef::default_presets()[1].name.clone(), preset_def: None, cutoff: "2026-09-30".into(), null_as_sight: false, behaviour_file: String::new() });
+    rig.app.prefill_run(&run).expect("gap");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::GapLadder);
+    let g = &rig.app.gap;
+    assert_eq!((g.rows.len(), g.rows[0].tab, g.rows[1].tab, g.cutoff.as_str(), g.null_as_sight, g.preset_idx), (2, loans, sept, "2026-09-30", false, 1));
+    assert_eq!((g.rows[0].role, g.rows[0].side_col.as_str(), g.rows[0].amount_col.as_str(), g.rows[1].role), (crate::ui::gap_ladder::RoleChoice::Side, "SIDE", "BAL", crate::ui::gap_ladder::RoleChoice::Liability));
+    // IRRBB ladder and six scenarios
+    let run = ToolRun::IrrbbLadder(IrrbbLadderRun { inputs: vec![CfInputRun { source: names("Sept"), spec: cf.clone() }], cutoff: "2026-08-31".into(), mode: micro_parquet::cashflow::CashFlowMode::PrincipalOnly, scenario: Scenario::ParallelUp, behaviour_file: String::new(), blank_maturity_on: true });
+    rig.app.prefill_run(&run).expect("cf");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::IrrbbLadder);
+    let c = &rig.app.cf;
+    assert_eq!((c.lines[0].tab, c.cutoff.as_str(), c.blank_on, c.scenario, c.lines[0].rate_col.as_str(), c.lines[0].side_col.as_str()), (sept, "2026-08-31", true, Scenario::ParallelUp, "RATE", "SIDE"));
+    let run = ToolRun::IrrbbSix(IrrbbSixRun { inputs: vec![CfInputRun { source: names("Loans"), spec: cf }], cutoff: "2026-10-31".into(), mode: micro_parquet::cashflow::CashFlowMode::PrincipalOnly, blank_maturity_on: false, tier1: 5_000_000.0, compounding: micro_parquet::irrbb::Compounding::Continuous, post_shock_floor_pct: Some(0.0), nii_floor_pct: None, behaviour_file: String::new(), beta_file: String::new(), view: IrrbbView::Results });
+    rig.app.prefill_run(&run).expect("irrbb");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::IrrbbSix);
+    let i = &rig.app.irrbb;
+    assert_eq!((i.tier1.as_str(), i.post_floor_on, i.nii_floor_on, i.compounding, i.cutoff.as_str(), i.lines[0].tab), ("5000000", true, false, micro_parquet::irrbb::Compounding::Continuous, "2026-10-31", loans));
+    // migration, reconcile, join
+    let run = ToolRun::ClMigration(ClMigrationRun { prev: names("Sept"), curr: names("Loans"), spec: micro_parquet::banking::ClMigrationSpec { key_col: "ACNO".into(), bal_col: "BAL".into(), cl_col: "SIDE".into(), segment_col: Some("RATE".into()), pct_of_row: true, ..Default::default() } });
+    rig.app.prefill_run(&run).expect("migration");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::ClMigration);
+    let m = &rig.app.cl_migration;
+    assert_eq!((m.prev_tab, m.curr_tab, m.key_col.as_str(), m.segment_col.as_str(), m.pct_of_row), (sept, loans, "ACNO", "RATE", true));
+    let run = ToolRun::PeriodReconcile(PeriodReconcileRun { prev: names("Sept"), curr: names("Loans"), key_col: "ACNO".into(), bal_col: "BAL".into(), rate_col: Some("RATE".into()), cl_status_col: None });
+    rig.app.prefill_run(&run).expect("reconcile");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::ReconcilePeriods);
+    assert_eq!((rig.app.recon.prev_tab, rig.app.recon.curr_tab, rig.app.recon.rate_col.as_str(), rig.app.recon.cl_col.as_str()), (sept, loans, "RATE", ""));
+    let run = ToolRun::Join(JoinRun { left: names("Loans"), right: names("Sept"), kind: SqlJoinKind::Inner, keys: vec!["ACNO".into(), "SIDE".into()], right_cols_to_keep: vec![], keep_first_duplicate_right: true });
+    rig.app.prefill_run(&run).expect("join");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::JoinTabs);
+    let j = &rig.app.join;
+    assert_eq!((j.left_tab, j.right_tab, j.kind, j.keys_input.as_str(), j.keep_first), (loans, sept, SqlJoinKind::Inner, "ACNO, SIDE", true));
+    // CL-1, liquidity, IFRS 9
+    let run = ToolRun::Cl1Summary(Cl1SummaryRun { source: names("Loans"), spec: micro_parquet::cl1::Cl1Spec { category_col: None, fixed_category: "Demand".into(), grade_col: "SIDE".into(), measure_cols: vec![("outstanding".into(), "BAL".into())] }, template_file: String::new() });
+    rig.app.prefill_run(&run).expect("cl1");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::Cl1Summary);
+    assert!(!rig.app.cl1.category_by_col && rig.app.cl1.grade_col == "SIDE" && rig.app.cl1.measure_cols[0].1 == "BAL", "{:?}", rig.app.cl1.measure_cols);
+    let run = ToolRun::Liquidity(LiquidityRun { source: names("Loans"), spec: micro_parquet::liquidity::LiqSpec { gl_col: "ACNO".into(), balance_col: "BAL".into(), sign: micro_parquet::liquidity::BalanceSign::NormalSide, maturity_col: Some("MAT".into()), maturity_unit: micro_parquet::liquidity::MaturityUnit::Days }, map_file: "sample_basel.json".into(), view: micro_parquet::models::LiquidityView::Summary });
+    rig.app.prefill_run(&run).expect("liquidity");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::Liquidity);
+    assert_eq!((rig.app.liq.gl_col.as_str(), rig.app.liq.maturity_col.as_str(), rig.app.liq.map_sel.as_str(), rig.app.liq.maturity_unit), ("ACNO", "MAT", "sample_basel.json", micro_parquet::liquidity::MaturityUnit::Days));
+    let ecl_step: TransformStep = serde_json::from_value(serde_json::json!({"IfrsEcl": {"fixed_segment": "Corporate", "drawn_col": "BAL", "eir_col": "RATE", "maturity_col": "MAT", "classified_stage3": true, "cutoff_date": "2026-10-31"}})).expect("step");
+    let run = ToolRun::EclSummary(EclSummaryRun { source: names("Loans"), ecl_step: Some(ecl_step), spec: micro_parquet::ecl::EclSummarySpec { grade_col: "SIDE".into(), provision_col: "ACNO".into() } });
+    rig.app.prefill_run(&run).expect("ecl");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::IfrsEcl);
+    assert_eq!((rig.app.ecl.drawn_col.as_str(), rig.app.ecl.eir_col.as_str(), rig.app.ecl.cutoff.as_str(), rig.app.ecl.provision_col.as_str()), ("BAL", "RATE", "2026-10-31", "ACNO"));
+    // stack and pivot
+    let files = vec![StackFileRun { path: root.join("a.csv"), is_parquet: false, config: IngestionConfig::default() }, StackFileRun { path: root.join("b.csv"), is_parquet: false, config: IngestionConfig::default() }];
+    rig.app.prefill_run(&ToolRun::Stack(StackRun { files, include_source_col: false })).expect("stack");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::StackFiles);
+    assert_eq!((rig.app.stack.files_list.len(), rig.app.stack.include_source), (2, false));
+    let spec = PivotSpec { rows: vec!["SIDE".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], ..Default::default() };
+    rig.app.prefill_run(&ToolRun::PivotTab(PivotTabRun { source: names("Sept"), pivot: Some(TransformStep::from_pivot_spec(spec)) })).expect("pivot");
+    assert_eq!(rig.app.active_tool, ActiveToolModal::PivotBuilder);
+    assert_eq!((rig.app.active_tab, rig.app.pivot_builder.spec.rows.clone(), rig.app.pivot_builder.new_tab), (sept, vec!["SIDE".to_string()], true));
+    micro_parquet::rules::set_data_dir_override(None);
+}

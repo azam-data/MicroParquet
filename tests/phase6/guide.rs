@@ -3,12 +3,13 @@
 
 use crate::common::*;
 use crate::guide::{check_guide, check_guide_file, read_guide};
+use micro_parquet::engine::compile_tab_lazy;
 use micro_parquet::models::*;
 use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 3] = ["custom-sort-lists", "sql-editor", "chart"];
+pub const P6_GUIDE_TOOLS: [&str; 4] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -91,4 +92,40 @@ fn guide_chart() {
     let total: f64 = floats(&df, "Balance").iter().flatten().sum();
     assert!((floats(&table, "Sum of Balance").iter().flatten().sum::<f64>() - total).abs() < 1e-6, "Other keeps the total");
     check_guide("chart", "guide_chart", &[md(&df, &["Term Period", "Balance:2"]), md(&table, &["Term Period", "Sum of Balance:2", "Rows"])]);
+}
+
+#[test]
+fn guide_saved_tool_runs() {
+    use micro_parquet::tool_runs::*;
+    struct Env {
+        tabs: Vec<(String, RunTab)>,
+        paths: PortablePaths,
+    }
+    impl RunEnv for Env {
+        fn tab(&self, name: &str) -> anyhow::Result<RunTab> {
+            self.tabs.iter().find(|(n, _)| n == name).map(|(_, t)| t.clone()).ok_or_else(|| anyhow::anyhow!("The tab '{name}' is not open."))
+        }
+        fn name_of(&self, source: &TabSource, steps: &[TransformStep]) -> anyhow::Result<String> {
+            let key = |s: &TabSource, st: &[TransformStep]| format!("{:?}|{:?}", s, st);
+            self.tabs.iter().find(|(_, t)| key(&t.source, &t.steps) == key(source, steps)).map(|(n, _)| n.clone()).ok_or_else(|| anyhow::anyhow!("no tab"))
+        }
+        fn paths(&self) -> &PortablePaths {
+            &self.paths
+        }
+    }
+    let d = dir("g_runs");
+    let left = DataFrame::new(vec![Series::new("ACNO".into(), &["A1", "A2", "A3"]), Series::new("BAL".into(), &[1.0, 2.0, 3.0])]).expect("left");
+    let right = DataFrame::new(vec![Series::new("ACNO".into(), &["A1", "A3", "A3"]), Series::new("Grade".into(), &["STD", "SS", "SS"])]).expect("right");
+    let (l, r) = (parquet(&d, "loans", &left), parquet(&d, "grades", &right));
+    let paths = PortablePaths { root_dir: d.clone(), macros_dir: d.join("m"), schemas_dir: d.join("s"), curves_dir: d.join("c"), buckets_file: d.join("b.json"), temp_dir: d.join("t") };
+    let env = Env { tabs: vec![("Loans".into(), RunTab { source: l.clone(), steps: vec![] }), ("Grades".into(), RunTab { source: r.clone(), steps: vec![] })], paths };
+    let join = TabSource::JoinedTabs { left_source: Box::new(l), left_steps: vec![], right_source: Box::new(r), right_steps: vec![], join_kind: SqlJoinKind::Left, join_keys: vec!["ACNO".into()], right_cols_to_keep: vec![], keep_first_duplicate_right: true };
+    let first = compile_tab_lazy(&join, &[], &d).expect("compiles").collect().expect("collects");
+    let run = ToolRun::from_source(&join, &[], &env).expect("the run");
+    save_run(&d.join("runs"), "monthly join", &run).expect("saves");
+    let loaded = load_run(&d.join("runs"), "monthly join").expect("loads");
+    let (_, again_src, again_steps) = loaded.run.build(&env).expect("builds").remove(0);
+    let again = compile_tab_lazy(&again_src, &again_steps, &d).expect("compiles").collect().expect("collects");
+    assert!(first.equals_missing(&again), "the made-again tab is the same");
+    check_guide("saved-tool-runs", "guide_saved_tool_runs", &[md(&left, &["ACNO", "BAL:2"]), md(&right, &["ACNO", "Grade"]), md(&again, &["ACNO", "BAL:2", "Grade"])]);
 }

@@ -16,7 +16,7 @@ use chrono::NaiveDate;
 use polars::prelude::*;
 
 /// How the curve's rates are quoted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Compounding {
     /// Annual compounding: the rate used in e^(−R·t) is ln(1 + y).
     #[default]

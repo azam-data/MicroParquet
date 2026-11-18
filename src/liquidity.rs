@@ -239,7 +239,7 @@ pub fn load_map(name: &str) -> Result<LiqMap> {
 // ---------------------------------------------------------------------------------- the calculation
 
 /// How the balance column is signed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BalanceSign {
     /// A trial balance with debits positive and credits negative: a liability is the balance × −1.
     #[default]
@@ -257,7 +257,7 @@ impl BalanceSign {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MaturityUnit {
     #[default]
     Months,
@@ -284,7 +284,8 @@ impl MaturityUnit {
 }
 
 /// The columns of the GL tab.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LiqSpec {
     pub gl_col: String,
     pub balance_col: String,

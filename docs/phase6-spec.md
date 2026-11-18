@@ -372,4 +372,8 @@ Owner answers on session A: live zoom 50–200% accepted (U6); "(blank)" as the 
 U7:
 - "(blank)" is the flag `or_blank` of the condition (same rows as an extra is-blank condition joined with OR, without disturbing the group's join).
 - No "(blank)" entry in the conditional column's picker (blanks have their own result). The picker is an inline panel under the row. "Select all" selects the listed values.
+P1 (details in docs/phase6-progress.md D28–D31):
+- A run keeps file names and typed inputs, not file contents; source tabs by tab title (or file name); a result tab with steps of its own is refused.
+- "Re-run with changes" opens the tool's dialog pre-filled; File ▸ "Saved tool runs" (Ctrl+K) lists `portable_data/runs`.
+- The period reconcile table is sorted by key so a re-run is identical (row order only).
 </accepted_deviations>

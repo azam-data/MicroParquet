@@ -28,6 +28,7 @@ pub mod schema_templates;
 pub mod settings;
 pub mod sort_lists;
 pub mod steps_edit;
+pub mod tool_runs;
 pub mod summary;
 pub mod table_layout;
 pub mod tab_jobs;

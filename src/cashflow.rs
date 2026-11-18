@@ -66,7 +66,7 @@ impl Side {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum RateType {
     #[default]
     Fixed,
@@ -90,7 +90,7 @@ impl RateType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Repayment {
     #[default]
     Bullet,
@@ -117,7 +117,7 @@ impl Repayment {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Frequency {
     Monthly,
     Quarterly,
@@ -160,7 +160,7 @@ impl Frequency {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CashFlowMode {
     #[default]
     PrincipalAndInterest,
@@ -180,7 +180,7 @@ impl CashFlowMode {
 }
 
 /// The six IRRBB scenarios of BB §14.2 and the base case.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Scenario {
     #[default]
     Base,
@@ -668,7 +668,8 @@ pub fn ladder_from_rows(rows: &[CfRow], settings: &CfSettings, behaviour: Option
 // ------------------------------------------------------------------------------------------ tabs
 
 /// What a tab holds and where each role is. Optional roles are `None`; their defaults are used.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct CfInputSpec {
     /// Asset, liability or a side column.
     pub role: crate::banking::GapRole,

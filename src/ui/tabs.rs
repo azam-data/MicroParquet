@@ -545,6 +545,8 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         let mut tab_to_close: Option<usize> = None;
         let mut duplicate_tab: Option<usize> = None;
+        let mut rerun_tab: Option<usize> = None;
+        let mut save_run_tab: Option<usize> = None;
         let mut select: Option<usize> = None;
         let mut new_tab = false;
         let mut start_rename: Option<usize> = None;
@@ -653,6 +655,17 @@ impl MicroParquetApp {
                                         duplicate_tab = Some(idx);
                                         ui.close_menu();
                                     }
+                                    if self.tabs.get(idx).is_some_and(crate::ui::runs::tab_can_be_saved) {
+                                        ui.separator();
+                                        if ui.button("Re-run with changes").on_hover_text("Open the tool's dialog with the inputs of this result").clicked() {
+                                            rerun_tab = Some(idx);
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Save run\u{2026}").on_hover_text("Save the inputs of this result in portable_data/runs").clicked() {
+                                            save_run_tab = Some(idx);
+                                            ui.close_menu();
+                                        }
+                                    }
                                     if ui.button("Close tab").clicked() {
                                         tab_to_close = Some(idx);
                                         ui.close_menu();
@@ -690,6 +703,12 @@ impl MicroParquetApp {
         }
         if new_tab {
             self.initiate_file_open(false);
+        }
+        if let Some(idx) = rerun_tab {
+            self.rerun_tab_with_changes(idx);
+        }
+        if let Some(idx) = save_run_tab {
+            self.open_save_run(idx);
         }
         if let Some(idx) = duplicate_tab {
             if let Some(orig) = self.tabs.get(idx).cloned() {

@@ -244,7 +244,8 @@ pub fn apply_rate_shock_sim(
 }
 
 /// Everything the rate-shock step takes (the dialog, the step and the repricing-gap tab share it).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct RateShockSpec {
     pub bal_col: String,
     pub rate_col: String,
@@ -926,7 +927,9 @@ pub fn build_period_reconcile_lazy_with(
         final_lf = final_lf.with_column(cl_mig);
     }
 
-    Ok(final_lf)
+    // The rows come out of a hash group-by and join in any order, so the same two months could give
+    // a different row order on each run. Sorted by key, the table is the same every time (Phase 6 P1).
+    Ok(final_lf.sort([key_col], SortMultipleOptions::default().with_nulls_last(true).with_maintain_order(true)))
 }
 
 /// Keys with more than one row in the previous and in the current period, from a reconcile
@@ -1870,7 +1873,7 @@ pub fn cl_code_error(column: &str, codes: &[String]) -> String {
 // ---------------------------------------------------------------------------------------------
 
 /// What the cells of the migration matrix hold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MigrationMeasure {
     /// Balance in BDT: the previous month's balance of an account that was there, the current
     /// month's for a new one.
@@ -1933,7 +1936,7 @@ pub fn migration_shade(from: &str, to: &str) -> Shade {
 
 /// Whose balance an account that is in both months carries in the matrix. A new account always
 /// uses the current month's balance and a closed/repaid one the previous month's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MigrationBasis {
     /// Last month's balance (the default): the "Previous month total" row adds up to last month's total.
     #[default]
@@ -1952,7 +1955,8 @@ impl MigrationBasis {
 }
 
 /// The settings of a migration matrix.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct ClMigrationSpec {
     pub key_col: String,
     pub bal_col: String,
@@ -2178,9 +2182,10 @@ pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrat
 // ---------------------------------------------------------------------------------------------
 
 /// How the rows of one tab count in the ladder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum GapRole {
     /// Every row is an asset (an inflow).
+    #[default]
     Asset,
     /// Every row is a liability (an outflow).
     Liability,
@@ -2189,7 +2194,8 @@ pub enum GapRole {
 }
 
 /// What a tab contributes to the ladder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct GapInputSpec {
     pub role: GapRole,
     pub amount_col: String,

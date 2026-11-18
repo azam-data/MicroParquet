@@ -2218,18 +2218,20 @@ pub enum TabSource {
 }
 
 /// Which table of the LCR / NSFR run a tab shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum LiquidityView {
     /// "LCR/NSFR lines": the line detail (code, label, amount, factor, weighted).
+    #[default]
     Lines,
     /// "LCR/NSFR summary": HQLA, net cash outflows, ASF, RSF, the two ratios and their flags.
     Summary,
 }
 
 /// Which table of the six-scenario run a tab shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum IrrbbView {
     /// "IRRBB results": the scenarios, their EVE change, loss and ΔNII.
+    #[default]
     Results,
     /// "IRRBB cash flows": the cash-flow ladder with the base present values.
     CashFlows,

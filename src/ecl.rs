@@ -693,7 +693,8 @@ pub fn spec_of(step: &crate::models::TransformStep) -> Result<EclSpec> {
 pub const SUMMARY_COLUMNS: [&str; 8] = ["Section", "Group", "Loans", "EAD", "ECL", "Regulatory provision", "Higher of", "Shortfall to Loan Loss Reserve"];
 
 /// What the summary reads from a table that has the ECL columns.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct EclSummarySpec {
     /// The classification grade (`CL_Final`).
     pub grade_col: String,

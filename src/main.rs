@@ -113,6 +113,10 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// "Save run" of a result tab (Phase 6 P1).
+    SaveRun,
+    /// File ▸ "Saved tool runs" (Phase 6 P1).
+    SavedRuns,
     ManageColumns,
     ConditionalCol,
     MathFormula,
@@ -240,6 +244,7 @@ pub struct MicroParquetApp {
     pub filter: FilterState,
     pub sort: SortState,
     pub sort_lists: SortListsState,
+    pub runs: RunsState,
     /// The value picker of the filter or conditional-column dialog that is open, and the number
     /// of distinct values last listed for each column (for "3 of 42 selected").
     pub picker: PickerPanel,
@@ -359,6 +364,7 @@ impl MicroParquetApp {
             filter: FilterState::default(),
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
+            runs: RunsState::default(),
             picker: PickerPanel::default(),
             picker_totals: HashMap::new(),
             picker_tool: ActiveToolModal::None,

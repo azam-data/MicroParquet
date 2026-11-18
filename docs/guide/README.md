@@ -23,6 +23,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Column inspector](column-inspector.md): facts about one column.
 - [SQL editor](sql-editor.md): a query on the tab's table, with history and the last error.
 - [Chart](chart.md): bars or a line of one number by a category (and a series), over the whole tab.
+- [Saved tool runs](saved-tool-runs.md): keep the inputs of a result tab in a file and re-run the tool with other inputs.
 
 ## Treasury & ALM
 

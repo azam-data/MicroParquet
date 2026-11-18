@@ -1,7 +1,7 @@
 # Phase 6 progress
 
 Branch: `phase6` (from `origin/main` at 9aadb59, which holds Phase 5 and the Phase 6 spec). Run unattended; resume from the first task that is not DONE.
-Asked for in this run, in this order: U3, U1, U2, U6, U4, U5, U7. P1–P6 were not asked for.
+Session A asked for U3, U1, U2, U6, U4, U5, U7 (all DONE). Session B (owner answers recorded below) asks for U1 correction, then P1, P2, P3, P4, P5, P6 in that order.
 Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compiled into the `phase3` test binary, like phase4/5) and `src/ui/render_tests_p6.rs` (headless egui at 1219×686 and 1600×900 pt).
 
 | Task | Status | Commit | Tests added | Deviations |
@@ -13,6 +13,8 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 | U4 | DONE | (this commit) | render_tests_p6 ×3 (title strings for no tab / an open tab / closed again and the viewport command sent once; landing page has no heading or tagline, 3 buttons centred and clicked on their rects; About: Help menu click, fits at both scales, version, build date, capabilities, folder + Open folder click, key, OFL fonts); l5 version assertions now read the Cargo version | D18–D19 |
 | U5 | DONE | (this commit) | tests/phase6/u5.rs ×10 (sums equal a group-by over all 250 rows, tenor/list/value order, Int32 and Decimal, Count without a number column, min/max/avg, W.Avg Phase 2 rule and mixed signs, Top N 3 + Other with totals, text value refused with its type, series ≤ 8 + Other, blanks last, old specs); render_tests_p6 ×4 (x-axis labels are the category names, title with unit, controls inside the window, Tenor / Count by clicks, series + Top N + Line, choices saved per tab and taken back, text value refused, Open chart data as tab, tooltip text); guide_chart + completeness | D20–D23 |
 | U7 | DONE | (this commit) | tests/phase6/u7.rs ×8 (every distinct value with counts over 250 rows, two values, comma in a value, (blank), Not in list, typed numbers and dates, 3,000-row column with 2,000 values and search, old comma list + Phase 5 fixture, conditional rules, Python); render_tests_p6 ×5 (list with counts at both scales, real clicks on check boxes, Select all / Clear / search, (blank), not in list, note and worker search, conditional picker, custom-list order); filter and conditional-column guides updated | D24–D27 |
+| U1 fix | DONE | (own commit) | render_tests_p6 ×2 (a matching Parquet file opens the Parquet Schema dialog with the applied line and Undo, Lock Schema & Open makes the renamed Parquet tab and a filter on the new name works; "Apply without asking" opens it at once with a message) | D8 corrected |
+| P1 | DONE | (this commit) | tests/phase6/p1.rs ×10 (all 12 tools: run → save → reload → re-run gives an identical table; the IRRBB results footer; refusals), render_tests_p6 ×3 (result-tab menu, Save run / Replace / Cancel, Re-run with changes, Saved tool runs list, every tool's dialog prefilled), guide_saved_tool_runs + completeness | D28–D31 |
 
 ## Owner answers on session A
 - D15 live zoom 50–200%: accepted. D24 `or_blank` flag: accepted. D20 series 8 in total (7 + Other): accepted. U1 correction (Parquet like CSV): done in its own commit.
@@ -45,3 +47,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 - D25 (U7): the conditional column's picker has no "(blank)" entry: a blank on either side of a rule already has its own result (the blank choice below the rules).
 - D26 (U7): the picker is an inline panel under the condition's row (not a pop-up), one open at a time; the old text of an equals / in-list condition shows as picked and becomes the picked values on the first click. Operators "is not in list" (filter) and "Not in List" (conditional) are new.
 - D27 (U7): a large column lists the 1,000 most frequent values; "Select all" selects the values listed (and the search results), not the unlisted ones.
+- D28 (P1): a run keeps file names (rule, curve, beta, behaviour, map, template) and typed inputs, not the file contents; the files are read again when the run is made, as the dialogs do. The gap ladder run also keeps the preset's definition, used only when no preset of that name exists any more.
+- D29 (P1): source tabs are named by the tab's title, else the first tab opened straight from a file of that name; a result tab's source that has no tab open any more is named by its file. A result tab with steps of its own is refused ("Save the steps as a macro").
+- D30 (P1): "Re-run with changes" opens the tool's dialog with the run's inputs (nothing is calculated until its own button is used). For a Stack run the dialog gets the files and "each file's own schema"; the saved configs are used when the run is made from the file (`ToolRun::build`). The IFRS 9 run keeps its ECL step and adds it again. Serde derives were added to the spec types and their enums (no change to what they hold).
+- D31 (P1): the period reconcile table is now sorted by key (it came out of a hash group-by in any order, so the same two months could give another row order on each run, which an identical re-run needs). Only the row order changes.
