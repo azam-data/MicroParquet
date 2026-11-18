@@ -98,6 +98,8 @@ pub enum ActiveToolModal {
     ConditionalCol,
     MathFormula,
     NormalizeEntity,
+    /// Clean line breaks inside text values.
+    CleanLineBreaks,
     GroupByPivot,
     /// The pivot builder (Phase 4 V1); `GroupByPivot` is the older dialog that edits old steps.
     PivotBuilder,
@@ -184,6 +186,7 @@ pub struct MicroParquetApp {
     pub cond: CondState,
     pub calc: CalcState,
     pub normaliser: NormState,
+    pub clean_breaks: CleanBreaksState,
     pub pivot: PivotState,
     pub pivot_builder: PivotBuilderState,
     pub cl_migration: ClMigrationState,
@@ -263,6 +266,7 @@ impl MicroParquetApp {
             cond: CondState::default(),
             calc: CalcState::default(),
             normaliser: NormState::default(),
+            clean_breaks: CleanBreaksState::default(),
             pivot: PivotState::default(),
             pivot_builder: PivotBuilderState::default(),
             cl_migration: ClMigrationState::default(),

@@ -13,6 +13,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Sort](sort.md): order rows by one or more columns.
 - [Calc column](calc-column.md): a new column from one arithmetic step.
 - [Conditional column](conditional-column.md): IF / ELSE IF / ELSE flags and groups.
+- [Clean line breaks](clean-line-breaks.md): one line for each value that was split over several lines.
 - [Counterparty name normaliser](name-normaliser.md): one spelling for each company.
 - [Pivot table](pivot.md): Rows, Columns, Values and Filters with totals.
 - [Summary row](summary-row.md): totals and weighted averages under the table.

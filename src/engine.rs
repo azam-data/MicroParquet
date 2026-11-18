@@ -2572,6 +2572,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             source_col,
             new_col,
         } => Ok(apply_entity_normalizer(lf, source_col, new_col)),
+        TransformStep::CleanLineBreaks { columns } => apply_clean_line_breaks(lf, columns),
         TransformStep::MaturityBucket {
             mat_col,
             cutoff_date,
@@ -2724,6 +2725,41 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(res_lf)
         }
     }
+}
+
+/// "Clean line breaks": in each chosen text column (all text columns when `columns` is empty) a
+/// value that has a line break gets every run of `\r` and `\n` replaced by one space and its ends
+/// trimmed. Values without a line break are not touched. A chosen column that is missing or is not
+/// text stops with a message.
+pub fn apply_clean_line_breaks(lf: LazyFrame, columns: &[String]) -> Result<LazyFrame> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for Clean line breaks")?;
+    let targets: Vec<String> = if columns.is_empty() {
+        schema.iter().filter(|(_, dt)| matches!(dt, DataType::String)).map(|(n, _)| n.to_string()).collect()
+    } else {
+        for c in columns {
+            match schema.get(c.as_str()) {
+                None => anyhow::bail!("Clean line breaks: the column '{}' was not found. Choose the columns again.", c),
+                Some(DataType::String) => {}
+                Some(other) => anyhow::bail!("Clean line breaks: the column '{}' is {}, not text. Choose text columns only.", c, other),
+            }
+        }
+        columns.to_vec()
+    };
+    if targets.is_empty() {
+        return Ok(lf);
+    }
+    let exprs: Vec<Expr> = targets
+        .iter()
+        .map(|c| {
+            let v = col(c.as_str());
+            when(v.clone().str().contains(lit(r"[\r\n]"), false))
+                .then(v.clone().str().replace_all(lit(r"[\r\n]+"), lit(" "), false).str().strip_chars(lit(NULL)))
+                .otherwise(v)
+                .alias(c.as_str())
+        })
+        .collect();
+    Ok(lf.with_columns(exprs))
 }
 
 /// The betas a rate-shock step reads: the content of its beta file, or none when it has none.

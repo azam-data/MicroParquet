@@ -24,6 +24,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Pivot => ph::TABLE,
         CommandId::Conditional => ph::PLUS,
         CommandId::Normaliser => ph::BUILDINGS,
+        CommandId::CleanBreaks => ph::BROOM,
         CommandId::JoinTabs => ph::LINK,
         CommandId::CopyTable => ph::CLIPBOARD_TEXT,
         CommandId::Buckets => ph::CALENDAR,
@@ -153,6 +154,10 @@ impl MicroParquetApp {
             }
             CommandId::Conditional => self.active_tool = ActiveToolModal::ConditionalCol,
             CommandId::Normaliser => self.active_tool = ActiveToolModal::NormalizeEntity,
+            CommandId::CleanBreaks => {
+                self.clean_breaks = CleanBreaksState::default();
+                self.active_tool = ActiveToolModal::CleanLineBreaks;
+            }
             CommandId::JoinTabs => self.active_tool = ActiveToolModal::JoinTabs,
             CommandId::CopyTable => self.copy_table_to_clipboard(ctx),
             CommandId::GapLadder => self.open_gap_ladder(),

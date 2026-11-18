@@ -29,7 +29,7 @@ pub const SECTIONS: [&str; 10] = [
 pub const COLUMN_TABLE_HEADER: &str = "| Column role | Required? | Type the app needs | Example values | Notes |";
 
 /// Tool ids (file names in docs/guide/): the 21 tools of Phase 4 task G0, then the tools later tasks added.
-pub const GUIDE_TOOLS: [&str; 25] = [
+pub const GUIDE_TOOLS: [&str; 26] = [
     "maturity-bucketer",
     "rate-profile",
     "rate-shock-nii",
@@ -55,6 +55,7 @@ pub const GUIDE_TOOLS: [&str; 25] = [
     "cl-migration",
     "gap-ladder",
     "yield-curves",
+    "clean-line-breaks",
 ];
 
 pub fn guide_dir() -> PathBuf {
@@ -1003,5 +1004,25 @@ fn guide_yield_curves() {
         "yield-curves",
         "guide_yield_curves",
         &[raw_table, md(&pts, &["tenor_days", "rate_pct:2"]), md(&priced, &["Account", "Tenor_Days", "Benchmark_FTP_Rate:~4", "FTP_Curve_Date"]), dup_table],
+    );
+}
+
+#[test]
+fn guide_clean_line_breaks() {
+    // five records read from a CSV; three have line breaks inside quotes (shown as ⏎ in the guide)
+    let remarks = ["Paid in full\nby cheque", "plain", "Line one\r\nLine two", "  leading and trailing\n\n\n  ", "fine"];
+    let df = frame(vec![text("Actnum", &["A1", "A2", "A3", "A4", "A5"]), text("Remarks", &remarks), nums("Balance", &[100.0, 200.0, 300.0, 400.0, 500.0])]);
+    let shown = |d: &DataFrame| {
+        let v: Vec<String> = strings(d, "Remarks").into_iter().map(|v| v.unwrap_or_default().replace("\r\n", "\u{23CE}").replace('\n', "\u{23CE}").replace('\r', "\u{23CE}")).collect();
+        let mut out = d.clone();
+        out.with_column(Series::new("Remarks".into(), v)).expect("replace");
+        out
+    };
+    let out = run_steps("guide_clean", &df, &[TransformStep::CleanLineBreaks { columns: vec![] }]).expect("the step runs");
+    assert_eq!(strings(&out, "Remarks").into_iter().map(|v| v.unwrap_or_default()).collect::<Vec<_>>(), vec!["Paid in full by cheque", "plain", "Line one Line two", "leading and trailing", "fine"]);
+    check_guide(
+        "clean-line-breaks",
+        "guide_clean_line_breaks",
+        &[md(&shown(&df), &["Actnum", "Remarks", "Balance:2"]), md(&out, &["Actnum", "Remarks", "Balance:2"])],
     );
 }

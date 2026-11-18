@@ -27,6 +27,7 @@ pub enum CommandId {
     Pivot,
     Conditional,
     Normaliser,
+    CleanBreaks,
     JoinTabs,
     CopyTable,
     // Banking
@@ -147,6 +148,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::CalcColumn, "Calc column\u{2026}", G::Transform, "formula math add divide new", N::Tab),
     c(I::Pivot, "Pivot table (Rows, Columns, Values)\u{2026}", G::Transform, "group by aggregate wavg weighted average summary crosstab subtotal", N::Tab),
     c(I::Conditional, "Conditional column (IF / ELSE)\u{2026}", G::Transform, "case when flag", N::Tab),
+    c(I::CleanBreaks, "Clean line breaks\u{2026}", G::Transform, "newline carriage return quoted multiline cell wrap spaces replace", N::Tab),
     c(I::Normaliser, "Counterparty name normaliser\u{2026}", G::Transform, "clean entity names ltd", N::Tab),
     c(I::JoinTabs, "SQL join of two open tabs\u{2026}", G::Transform, "merge lookup left right", N::TwoTabs),
     c(I::CopyTable, "Copy the table to the clipboard", G::Transform, "excel powerpoint slides paste spreadsheet", N::Tab),

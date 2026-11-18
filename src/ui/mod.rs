@@ -18,6 +18,7 @@ pub mod gap_ladder;
 pub mod jobs;
 pub mod join;
 pub mod limits;
+pub mod clean_breaks;
 pub mod normaliser;
 pub mod pivot;
 pub mod pivot_builder;
@@ -91,6 +92,7 @@ impl MicroParquetApp {
             ActiveToolModal::ConditionalCol => self.render_conditional_modal(ctx, cols),
             ActiveToolModal::MathFormula => self.render_calc_modal(ctx, cols),
             ActiveToolModal::NormalizeEntity => self.render_normaliser_modal(ctx, cols),
+            ActiveToolModal::CleanLineBreaks => self.render_clean_breaks_modal(ctx, cols),
             ActiveToolModal::GroupByPivot => self.render_pivot_modal(ctx, cols),
             ActiveToolModal::PivotBuilder => self.render_pivot_builder(ctx, cols),
             ActiveToolModal::MaturityBucket => self.render_buckets_modal(ctx, cols),

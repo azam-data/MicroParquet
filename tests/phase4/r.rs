@@ -677,3 +677,70 @@ fn i14_a_bad_curve_file_error_names_the_file_and_the_line() {
     let e = validate_points(&[FtpPoint { tenor_days: 30, ftp_rate: 8.0 }, FtpPoint { tenor_days: 30, ftp_rate: 9.0 }]).err().expect("dup").to_string();
     assert!(e.contains("Point 1 and point 2 both have the tenor 30 days"), "{e}");
 }
+
+// ------------------------------------------------------------------------------------------ 15
+
+/// A CSV with 5 records, three of them with line breaks inside quotes (\n, \r\n and a run of two).
+fn multiline_csv(d: &std::path::Path) -> TabSource {
+    let text = "Actnum,Remarks,Balance\n\
+        A1,\"Paid in full\nby cheque\",100\n\
+        A2,plain,200\n\
+        A3,\"Line one\r\nLine two\",300\n\
+        A4,\"  leading and trailing\n\n\n  \",400\n\
+        A5,fine,500\n";
+    let p = d.join("multiline.csv");
+    std::fs::write(&p, text).expect("write the CSV");
+    let config = IngestionConfig { sanitize_linebreaks: false, ..IngestionConfig::default() };
+    TabSource::SingleFile { path: p, is_parquet: false, config }
+}
+
+#[test]
+fn i15_clean_line_breaks_gives_one_space_per_run_trims_and_replays_from_a_macro() {
+    let d = dir("i15");
+    let src = multiline_csv(&d);
+    // the file: 7 lines of data but 5 records; the row check explains it with the 3 line breaks inside quotes
+    let before = micro_parquet::engine::compile_tab_lazy(&src, &[], &d).expect("compiles").collect().expect("collects");
+    assert_eq!(before.height(), 5, "the right row count: 5 records");
+    let rc = micro_parquet::engine::source_row_check(&src, &d).expect("checks").expect("a CSV has a row check");
+    assert_eq!(rc.multiline_records, 3, "{rc:?}");
+    assert!(rc.is_explained(), "the line breaks explain every missing line: {rc:?}");
+    assert!(strings(&before, "Remarks")[0].as_deref().unwrap_or("").contains('\n'), "the values still have their line breaks until the step runs");
+
+    let step = TransformStep::CleanLineBreaks { columns: vec![] };
+    let after = micro_parquet::engine::compile_tab_lazy(&src, &[step.clone()], &d).expect("compiles").collect().expect("collects");
+    assert_eq!(after.height(), 5, "no row is lost or added");
+    let remarks: Vec<String> = strings(&after, "Remarks").into_iter().map(|v| v.unwrap_or_default()).collect();
+    assert_eq!(remarks, vec!["Paid in full by cheque", "plain", "Line one Line two", "leading and trailing", "fine"], "one space per run of breaks, ends trimmed");
+    assert_eq!(strings(&after, "Actnum"), strings(&before, "Actnum"), "other columns are the same");
+    assert_eq!(floats(&after, "Balance"), floats(&before, "Balance"), "numbers are not touched");
+    // a value without a line break is not touched, even with spaces at its ends
+    let spaced = DataFrame::new(vec![Series::new("T".into(), &[" keep  ", "a\nb "])]).expect("frame");
+    let out = run_steps("i15s", &spaced, &[step.clone()]).expect("runs");
+    assert_eq!(strings(&out, "T"), vec![Some(" keep  ".to_string()), Some("a b".to_string())]);
+    // chosen columns: only those; a missing or numeric column is an error
+    let only = TransformStep::CleanLineBreaks { columns: vec!["Remarks".into()] };
+    let out = micro_parquet::engine::compile_tab_lazy(&src, &[only], &d).expect("compiles").collect().expect("collects");
+    assert_eq!(strings(&out, "Remarks")[2].as_deref(), Some("Line one Line two"));
+    let e = format!("{:#}", micro_parquet::engine::compile_tab_lazy(&src, &[TransformStep::CleanLineBreaks { columns: vec!["Nope".into()] }], &d).and_then(|lf| Ok(lf.collect()?)).err().expect("missing column"));
+    assert!(e.contains("'Nope' was not found"), "{e}");
+    let e = format!("{:#}", run_steps("i15n", &spaced.hstack(&[Series::new("N".into(), &[1.0, 2.0]).into()]).expect("hstack"), &[TransformStep::CleanLineBreaks { columns: vec!["N".into()] }]).err().expect("not text"));
+    assert!(e.contains("'N'") && e.contains("not text"), "{e}");
+
+    // a macro with the step replays to the same values (and an old macro JSON without 'columns' means all text columns)
+    let recipe = MacroRecipe {
+        name: "clean".into(), description: String::new(), created_at: String::new(), enforce_balance_control: false, control_column: None,
+        optional_ingestion_schema: None, steps: vec![step.clone()], summary: Default::default(),
+    };
+    let mp = d.join("clean.mpq.json");
+    micro_parquet::macros::save_macro_to_file(&recipe, &mp).expect("save");
+    let back = micro_parquet::macros::load_macro_from_file(&mp).expect("load");
+    assert_eq!(serde_json::to_string(&back.steps).expect("json"), serde_json::to_string(&vec![step.clone()]).expect("json"));
+    let replayed = micro_parquet::engine::compile_tab_lazy(&src, &back.steps, &d).expect("compiles").collect().expect("collects");
+    assert_eq!(strings(&replayed, "Remarks"), strings(&after, "Remarks"));
+    let bare: TransformStep = serde_json::from_str(r#"{"CleanLineBreaks":{}}"#).expect("loads without columns");
+    assert_eq!(serde_json::to_string(&bare).expect("json"), serde_json::to_string(&step).expect("json"));
+    // the Python export translates it
+    let py = micro_parquet::macros::generate_python_polars_code(&d.join("multiline.csv"), false, &IngestionConfig::default(), &back.steps, None).expect("python");
+    assert!(py.contains("str.replace_all(r\"[\\r\\n]+\", \" \")") && py.contains("str.strip_chars()"), "{py}");
+    let _ = std::fs::remove_dir_all(&d);
+}

@@ -1304,3 +1304,79 @@ fn i14_the_curves_manager_lists_bad_files_in_red_with_the_file_and_the_line() {
         micro_parquet::curves::set_curves_dir_override(None);
     }
 }
+
+fn csv_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let text = "Actnum,Remarks,Qty\nA1,\"Paid in full\nby cheque\",100\nA2,plain,200\nA3,\"Line one\r\nLine two\",300\nA4,\"x\n\n\ny\",400\nA5,fine,500\n";
+    let p = root.join("multi.csv");
+    std::fs::write(&p, text).expect("write");
+    let src = TabSource::SingleFile { path: p, is_parquet: false, config: IngestionConfig { sanitize_linebreaks: false, ..IngestionConfig::default() } };
+    open_tab(&mut app, src, vec![]);
+    let (ctx, input) = screen(ppp, w, h);
+    Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+#[test]
+fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears_the_warning() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = csv_rig("pr6i15", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(6);
+        assert!(rig.app.tabs[0].steps.is_empty(), "{what}: nothing is applied automatically");
+        let note = p.boxes.iter().find(|(t, _)| t.contains("3 records contain line breaks inside quotes")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the grey note is shown"));
+        let button = p.boxes.iter().find(|(t, _)| t == "Replace with spaces").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the button"));
+        assert!(button.left() >= note.left() && button.top() >= note.top() - 4.0 && button.bottom() <= note.bottom() + 4.0, "{what}: the button is on the note's line: {button:?} vs {note:?}");
+        rig.click(button.center());
+        let p = rig.draw(6);
+        assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}");
+        assert!(matches!(&rig.app.tabs[0].steps[0], TransformStep::CleanLineBreaks { columns } if columns.is_empty()), "{what}: {:?}", rig.app.tabs[0].steps);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("records contain line breaks inside quotes")), "{what}: the warning is gone");
+        assert!(!p.boxes.iter().any(|(t, _)| t == "Replace with spaces"), "{what}: and so is the button");
+        // the value in the table is clean: the second row's remark is on one line
+        let remarks = rig.app.tabs[0].cached_slice.column("Remarks").expect("col").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect::<Vec<_>>();
+        assert_eq!(remarks, vec!["Paid in full by cheque", "plain", "Line one Line two", "x y", "fine"], "{what}");
+        // undo brings the note back
+        rig.app.undo_steps();
+        let p = rig.draw(6);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("3 records contain line breaks inside quotes")), "{what}: undo restores the note");
+        // the Details dialog has the button too (the bar may have no room for it)
+        rig.app.row_details_open = true;
+        let p = rig.draw(6);
+        let b = p.boxes.iter().filter(|(t, _)| t == "Replace with spaces").map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: the button in the Details dialog"));
+        rig.click(b.center());
+        assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: the Details button adds the step");
+        assert!(!rig.app.row_details_open, "{what}");
+    }
+}
+
+#[test]
+fn i15_clean_line_breaks_is_a_transform_command_with_a_choice_of_columns() {
+    let cmd = micro_parquet::commands::command(CommandId::CleanBreaks).expect("the command");
+    assert!(cmd.title.contains("Clean line breaks") && cmd.group == micro_parquet::commands::CommandGroup::Transform);
+    for (ppp, w, h) in SCREENS {
+        let mut rig = csv_rig("pr6i15b", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::CleanBreaks);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::CleanLineBreaks, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &format!("{}  Clean line breaks", theme::ph::BROOM), &what);
+        for t in ["All text columns", "Only these columns:", "Clean line breaks", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog");
+        }
+        // only the chosen column: tick Remarks
+        rig.app.clean_breaks.all = false;
+        assert!(rig.app.clean_breaks_step().is_none(), "{what}: no column ticked: no step");
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Tick at least one column")), "{what}");
+        rig.app.clean_breaks.picked = vec!["Remarks".into()];
+        rig.draw(3);
+        let go = rig.draw(2).boxes.iter().filter(|(t, _)| t == "Clean line breaks").map(|(_, b)| *b).last().expect("the button");
+        rig.click(go.center());
+        assert!(matches!(&rig.app.tabs[0].steps[..], [TransformStep::CleanLineBreaks { columns }] if columns == &vec!["Remarks".to_string()]), "{what}: {:?}", rig.app.tabs[0].steps);
+        // Edit reopens it with the choice
+        assert!(rig.app.open_step_editor(0), "{what}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::CleanLineBreaks);
+        assert!(!rig.app.clean_breaks.all && rig.app.clean_breaks.picked == vec!["Remarks".to_string()], "{what}");
+    }
+}

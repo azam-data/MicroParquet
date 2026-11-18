@@ -1530,6 +1530,13 @@ pub enum TransformStep {
         source_col: String,
         new_col: String,
     },
+    /// Replaces every run of line breaks (\r\n, \n or \r) inside the text values of the chosen
+    /// columns (all text columns when none are listed) with one space and trims the ends of the
+    /// values that had one. Never applied automatically.
+    CleanLineBreaks {
+        #[serde(default)]
+        columns: Vec<String>,
+    },
     MaturityBucket {
         mat_col: String,
         cutoff_date: String,
@@ -1705,6 +1712,7 @@ impl TransformStep {
             TransformStep::ConditionalColumn { .. } => "Conditional column",
             TransformStep::MathFormula { .. } => "Calc column",
             TransformStep::NormalizeEntity { .. } => "Normalise names",
+            TransformStep::CleanLineBreaks { .. } => "Clean line breaks",
             TransformStep::MaturityBucket { .. } => "Maturity buckets",
             TransformStep::RateBand { .. } => "Rate profile",
             TransformStep::RateShockSim { .. } => "Rate shock",
@@ -1797,6 +1805,13 @@ impl TransformStep {
             ),
             TransformStep::NormalizeEntity { new_col, .. } => {
                 format!("+Normalize Entity: {}", new_col)
+            }
+            TransformStep::CleanLineBreaks { columns } => {
+                if columns.is_empty() {
+                    "Clean line breaks (all text columns)".to_string()
+                } else {
+                    format!("Clean line breaks ({})", columns.join(", "))
+                }
             }
             TransformStep::MaturityBucket {
                 new_col,

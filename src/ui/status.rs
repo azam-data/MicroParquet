@@ -46,6 +46,7 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         let mut reset_baseline_clicked = false;
         let mut open_row_details = false;
+        let mut replace_breaks = false;
         let mut open_messages = false;
         let mut status_content = egui::Rect::NOTHING;
         let mut status_bar = egui::Rect::NOTHING;
@@ -129,18 +130,32 @@ impl MicroParquetApp {
                                 }
                             }
                         }
-                        if let Some(rc) = tab.row_check.as_ref() {
+                        // The line-break note goes once the tab cleans them (the step is recorded in the Steps list).
+                        let cleaned = Self::tab_cleans_line_breaks(tab);
+                        if let Some(rc) = tab.row_check.as_ref().filter(|rc| !(cleaned && rc.is_explained())) {
                             // rows read against the file's lines: grey when line breaks inside
                             // quotes explain every missing line, a warning otherwise
                             let note = rc.status_text().map(|t| theme::icons_in_text(&t));
-                            // (its width: the text up to its cap, and the Details button)
+                            let can_clean = rc.multiline_records > 0 && !cleaned;
+                            // (its width: the text up to its cap, and the Details button; the Replace button
+                            // needs room of its own and is always in the Details dialog)
                             let note_w = note.as_ref().map(|t| theme::text_width(ui, t, theme::TEXT_SMALL).min(bar_w * theme::STATUS_LABEL_SHARE) + theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
+                            let replace_w = theme::status_button_width(ui, "Replace with spaces") + theme::STATUS_ITEM_GAP;
                             if let Some(text) = note.filter(|_| note_w.is_some_and(|w| room_for(ui, w))) {
                                 let color = if rc.is_explained() { tk.muted } else { tk.warning };
                                 theme::clipped_label(ui, egui::RichText::new(text).color(color), bar_w * theme::STATUS_LABEL_SHARE)
                                     .on_hover_text(rc.warning().unwrap_or_default());
                                 if ui.small_button("Details").on_hover_text("Which lines differ").clicked() {
                                     open_row_details = true;
+                                }
+                                if can_clean
+                                    && room_for(ui, replace_w)
+                                    && ui
+                                        .small_button("Replace with spaces")
+                                        .on_hover_text("Adds the step \"Clean line breaks\": every run of line breaks inside a text value becomes one space. Nothing changes until you click.")
+                                        .clicked()
+                                {
+                                    replace_breaks = true;
                                 }
                             }
                         }
@@ -300,6 +315,9 @@ impl MicroParquetApp {
         if open_row_details {
             self.row_details_open = true;
         }
+        if replace_breaks {
+            self.replace_line_breaks_with_spaces();
+        }
         if reset_baseline_clicked {
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.baseline_control_sum = tab.control_sum;
@@ -319,6 +337,8 @@ impl MicroParquetApp {
             return;
         };
         let mut close = false;
+        let mut clean = false;
+        let can_clean = rc.multiline_records > 0 && !self.tabs.get(self.active_tab).is_some_and(Self::tab_cleans_line_breaks);
         theme::modal("Row count details").default_width(theme::DIALOG_W_TOOL).show(ctx, |d| {
             d.body(|ui| {
                 ui.label(
@@ -358,11 +378,20 @@ impl MicroParquetApp {
                 }
             });
             d.footer(|ui| {
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
+                ui.horizontal_wrapped(|ui| {
+                    if can_clean && ui.button("Replace with spaces").on_hover_text("Adds the step \"Clean line breaks\" for all text columns").clicked() {
+                        clean = true;
+                        close = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
             });
         });
+        if clean {
+            self.replace_line_breaks_with_spaces();
+        }
         if close {
             self.row_details_open = false;
         }

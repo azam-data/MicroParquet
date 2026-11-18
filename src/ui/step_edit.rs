@@ -17,6 +17,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::ConditionalColumn { .. } => ActiveToolModal::ConditionalCol,
         TransformStep::MathFormula { .. } => ActiveToolModal::MathFormula,
         TransformStep::NormalizeEntity { .. } => ActiveToolModal::NormalizeEntity,
+        TransformStep::CleanLineBreaks { .. } => ActiveToolModal::CleanLineBreaks,
         TransformStep::MaturityBucket { .. } => ActiveToolModal::MaturityBucket,
         TransformStep::RateBand { .. } => ActiveToolModal::RateBand,
         TransformStep::RateShockSim { .. } => ActiveToolModal::RateShockSim,
@@ -108,6 +109,7 @@ impl MicroParquetApp {
                 source_col: self.normaliser.source_col.clone(),
                 new_col: self.normaliser.new_col.clone(),
             },
+            ActiveToolModal::CleanLineBreaks => return self.clean_breaks_step(),
             ActiveToolModal::RateBand => {
                 let band_def = self.rate_band.def().ok()?;
                 if self.rate_band.new_col.trim().is_empty() {
@@ -244,6 +246,10 @@ impl MicroParquetApp {
                 self.calc.op = op;
                 self.calc.right_is_col = right_is_col;
                 self.calc.right_val = right_val_or_col;
+            }
+            TransformStep::CleanLineBreaks { columns } => {
+                self.clean_breaks.all = columns.is_empty();
+                self.clean_breaks.picked = columns;
             }
             TransformStep::NormalizeEntity { source_col, new_col } => {
                 self.normaliser.source_col = source_col;

@@ -686,6 +686,7 @@ impl MicroParquetApp {
                     (theme::ph::PLUS, "Conditional column", ActiveToolModal::ConditionalCol),
                     (theme::ph::TABLE, "Pivot", ActiveToolModal::PivotBuilder),
                     (theme::ph::BUILDINGS, "Normalise names", ActiveToolModal::NormalizeEntity),
+                    (theme::ph::BROOM, "Clean line breaks", ActiveToolModal::CleanLineBreaks),
                     (theme::ph::CALENDAR, "Maturity buckets", ActiveToolModal::MaturityBucket),
                     (theme::ph::PERCENT, "Rate profile", ActiveToolModal::RateBand),
                     (theme::ph::CHART_LINE, "Rate shock", ActiveToolModal::RateShockSim),
