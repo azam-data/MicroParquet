@@ -1281,3 +1281,26 @@ fn i13_show_hide_summary_row_is_a_command_that_removes_and_restores_the_summary_
         assert!(bands(&rig) > 0, "{what}: back again");
     }
 }
+
+#[test]
+fn i14_the_curves_manager_lists_bad_files_in_red_with_the_file_and_the_line() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = curves_rig("pr6i14", ppp, w, h);
+        let what = rig.what.clone();
+        let dir = rig.app.paths.curves_dir.clone();
+        std::fs::write(dir.join("2026-03-01.json"), "{\n  \"currency\": \"BDT\",\n  \"points\": [\n    { \"tenor_days\": 30, \"rate_pct\": 8.0 },\n    { \"tenor_days\": 30, \"rate_pct\": 9.0 }\n  ]\n}\n").expect("write");
+        rig.app.run_command(&rig.ctx, CommandId::YieldCurves);
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &curves_title(), &what);
+        let tk = *theme::tokens(rig.app.dark_mode);
+        let red: Vec<&(String, egui::Color32)> = p.colors.iter().filter(|(t, _)| t.contains("2026-03-01.json")).collect();
+        assert!(!red.is_empty(), "{what}: the bad file is listed: {:?}", p.colors.iter().filter(|(t, _)| t.contains("json")).collect::<Vec<_>>());
+        assert!(red.iter().all(|(_, c)| *c == tk.danger), "{what}: in the danger colour");
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("both have the tenor 30 days") && t.contains("Line 4") && inside(*bx, r.window)), "{what}: it says which lines");
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("Files that cannot be used") && inside(*bx, rig.app.curves.rects.list)), "{what}");
+        // the good curves are listed in the ink colour, not red
+        let good: Vec<&(String, egui::Color32)> = p.colors.iter().filter(|(t, _)| t.starts_with("2026-07-01")).collect();
+        assert!(good.iter().all(|(_, c)| *c != tk.danger), "{what}");
+        micro_parquet::curves::set_curves_dir_override(None);
+    }
+}

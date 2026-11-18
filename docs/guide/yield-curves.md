@@ -91,7 +91,7 @@ Test: `guide_yield_curves`
 - "The file has no points." The CSV is empty.
 - "Type the curve's date as YYYY-MM-DD." / "Type the curve's currency (for example BDT). Every curve needs one." in the editor.
 - "A curve dated D already exists. Select it in the list to change it, or choose another date."
-- In the list, in red: "Curve file X.json: The file name 'X.json' is not a date…", "The file name says A but 'as_of' says B. Make them the same.", "It is not a valid curve file (…)", "Curve file X.json: The currency is missing. Every curve needs one: add \"currency\": \"BDT\"…". Fix the file in a text editor, or delete it.
+- In the list, in red: "Curve file X.json: The file name 'X.json' is not a date…", "The file name says A but 'as_of' says B. Make them the same.", "Line N: it is not a valid curve file (…)", "Line N: the file name says A but 'as_of' says B", "Line 4 and line 5 both have the tenor 30 days (8% and 9%)", "365 days (line 4) is followed by 30 days (line 5)", "Line 4: the tenor 0 is not a number of days above 0" (the line is the one in the file), "The currency is missing…" or "Line 2: the currency is empty…". Fix the file in a text editor, or delete it.
 
 ## 10. Limits and assumptions
 

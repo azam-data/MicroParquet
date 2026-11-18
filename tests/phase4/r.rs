@@ -631,3 +631,49 @@ fn i12_a_curve_csv_skips_at_most_one_heading_line_and_any_other_bad_line_gives_i
     // only a heading: no points
     assert!(err("tenor_days,rate_pct\n").contains("no points"));
 }
+
+// ------------------------------------------------------------------------------------------ 14
+
+#[test]
+fn i14_a_bad_curve_file_error_names_the_file_and_the_line() {
+    use micro_parquet::curves::*;
+    let d = dir("i14");
+    let write = |name: &str, text: &str| std::fs::write(d.join(name), text).expect("write");
+    // duplicate tenors on lines 4 and 5
+    write("2026-01-01.json", "{\n  \"currency\": \"BDT\",\n  \"points\": [\n    { \"tenor_days\": 30, \"rate_pct\": 8.0 },\n    { \"tenor_days\": 30, \"rate_pct\": 9.0 }\n  ]\n}\n");
+    // tenors out of order on lines 4 and 5
+    write("2026-02-01.json", "{\n  \"currency\": \"BDT\",\n  \"points\": [\n    { \"tenor_days\": 365, \"rate_pct\": 10.0 },\n    { \"tenor_days\": 30, \"rate_pct\": 8.0 }\n  ]\n}\n");
+    // a syntax error: a missing comma between the points, on line 5
+    write("2026-03-01.json", "{\n  \"currency\": \"BDT\",\n  \"points\": [\n    { \"tenor_days\": 30, \"rate_pct\": 8.0 }\n    { \"tenor_days\": 90, \"rate_pct\": 9.0 }\n  ]\n}\n");
+    // as_of that disagrees with the name, on line 3
+    write("2026-04-01.json", "{\n  \"currency\": \"BDT\",\n  \"as_of\": \"2026-05-01\",\n  \"points\": [ { \"tenor_days\": 30, \"rate_pct\": 8.0 } ]\n}\n");
+    // a rate that is not a number is a syntax error of the file: a tenor of 0 on line 4
+    write("2026-05-01.json", "{\n  \"currency\": \"BDT\",\n  \"points\": [\n    { \"tenor_days\": 0, \"rate_pct\": 8.0 }\n  ]\n}\n");
+    // a currency that is empty, on line 2
+    write("2026-06-01.json", "{\n  \"currency\": \"\",\n  \"points\": [ { \"tenor_days\": 30, \"rate_pct\": 8.0 } ]\n}\n");
+    write("2026-07-01.json", "{\n  \"currency\": \"BDT\",\n  \"points\": [ { \"tenor_days\": 30, \"rate_pct\": 8.0 } ]\n}\n");
+    let store = CurveStore::load(&d);
+    assert_eq!(store.curves.len(), 1, "only the good file loads: {:?}", store.problems);
+    let reason = |f: &str| store.problems.iter().find(|(n, _)| n == f).map(|(_, r)| r.clone()).unwrap_or_else(|| panic!("{f} should be a problem: {:?}", store.problems));
+    let r = reason("2026-01-01.json");
+    assert!(r.starts_with("Curve file 2026-01-01.json:") && r.contains("Line 4 and line 5 both have the tenor 30 days"), "{r}");
+    let r = reason("2026-02-01.json");
+    assert!(r.starts_with("Curve file 2026-02-01.json:") && r.contains("365 days (line 4) is followed by 30 days (line 5)"), "{r}");
+    let r = reason("2026-03-01.json");
+    assert!(r.starts_with("Curve file 2026-03-01.json:") && r.contains("Line 5:") && r.contains("not a valid curve file"), "{r}");
+    let r = reason("2026-04-01.json");
+    assert!(r.contains("Line 3: the file name says 2026-04-01 but 'as_of' says 2026-05-01"), "{r}");
+    let r = reason("2026-05-01.json");
+    assert!(r.contains("Line 4: the tenor 0 is not a number of days above 0"), "{r}");
+    let r = reason("2026-06-01.json");
+    assert!(r.contains("Line 2: the currency is empty"), "{r}");
+    // a step that reads the store stops with the first of them, naming its file
+    set_curves_dir_override(Some(d.clone()));
+    let src = parquet(&d, "deals", &dated_deals());
+    let e = format!("{:#}", micro_parquet::engine::compile_tab_lazy(&src, &[ftp_step(FtpCurveMode::OriginationDate { use_earliest_for_older: true })], &d).and_then(|lf| Ok(lf.collect()?)).err().expect("a bad curve file"));
+    assert!(e.contains("2026-01-01.json") && e.contains("Line 4"), "{e}");
+    set_curves_dir_override(None);
+    // the same checks through the editor's own validation still say "point N"
+    let e = validate_points(&[FtpPoint { tenor_days: 30, ftp_rate: 8.0 }, FtpPoint { tenor_days: 30, ftp_rate: 9.0 }]).err().expect("dup").to_string();
+    assert!(e.contains("Point 1 and point 2 both have the tenor 30 days"), "{e}");
+}

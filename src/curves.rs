@@ -65,26 +65,56 @@ pub fn curve_id(curve: &YieldCurve) -> String {
 /// Checks the points of a curve: at least one, whole tenors above 0 that strictly increase, and
 /// rates that are numbers.
 pub fn validate_points(points: &[FtpPoint]) -> Result<()> {
+    check_points(points, None)
+}
+
+/// `validate_points` where every point is named by its line in the file (`lines[i]` is the line of
+/// point `i`) when they are known, else by its number.
+fn check_points(points: &[FtpPoint], lines: Option<&[usize]>) -> Result<()> {
+    let at = |i: usize| match lines.and_then(|l| l.get(i)) {
+        Some(l) => format!("line {}", l),
+        None => format!("point {}", i + 1),
+    };
+    let at_cap = |i: usize| {
+        let t = at(i);
+        let mut c = t.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            None => t,
+        }
+    };
     if points.is_empty() {
         bail!("The curve has no points. Add at least one tenor and rate.");
     }
     for (i, p) in points.iter().enumerate() {
         if p.tenor_days < 1 {
-            bail!("Point {}: the tenor {} is not a number of days above 0.", i + 1, p.tenor_days);
+            bail!("{}: the tenor {} is not a number of days above 0.", at_cap(i), p.tenor_days);
         }
         if !p.ftp_rate.is_finite() {
-            bail!("Point {} (tenor {} days) has no valid rate.", i + 1, p.tenor_days);
+            bail!("{} (tenor {} days) has no valid rate.", at_cap(i), p.tenor_days);
         }
     }
     for (i, w) in points.windows(2).enumerate() {
         if w[0].tenor_days == w[1].tenor_days {
-            bail!("Points {} and {} both have the tenor {} days ({}% and {}%). Each tenor needs one rate.", i + 1, i + 2, w[0].tenor_days, w[0].ftp_rate, w[1].ftp_rate);
+            bail!("{} and {} both have the tenor {} days ({}% and {}%). Each tenor needs one rate.", at_cap(i), at(i + 1), w[0].tenor_days, w[0].ftp_rate, w[1].ftp_rate);
         }
         if w[0].tenor_days > w[1].tenor_days {
-            bail!("The tenors must increase: {} days (point {}) is followed by {} days (point {}).", w[0].tenor_days, i + 1, w[1].tenor_days, i + 2);
+            bail!("The tenors must increase: {} days ({}) is followed by {} days ({}).", w[0].tenor_days, at(i), w[1].tenor_days, at(i + 1));
         }
     }
     Ok(())
+}
+
+/// The 1-based line of the first occurrence of `"key"` at or after `from_line` (1-based), or `None`.
+fn line_of_key(text: &str, key: &str, from_line: usize) -> Option<usize> {
+    let pat = format!("\"{}\"", key);
+    text.lines().enumerate().skip(from_line.saturating_sub(1)).find(|(_, l)| l.contains(&pat)).map(|(n, _)| n + 1)
+}
+
+/// The line of each point: the line of each `"tenor_days"` key, in order.
+fn point_lines(text: &str, count: usize) -> Option<Vec<usize>> {
+    let lines: Vec<usize> = text.lines().enumerate().filter(|(_, l)| l.contains("\"tenor_days\"")).map(|(n, _)| n + 1).collect();
+    (lines.len() == count).then_some(lines)
 }
 
 /// Reads one curve file's text. `file_name` is the name it has (`2026-01-01.json`): its date is the
@@ -92,18 +122,22 @@ pub fn validate_points(points: &[FtpPoint]) -> Result<()> {
 pub fn parse_curve_file(file_name: &str, text: &str) -> Result<YieldCurve> {
     let stem = file_name.strip_suffix(".json").unwrap_or(file_name);
     let date = NaiveDate::parse_from_str(stem, "%Y-%m-%d").map_err(|_| anyhow!("The file name '{}' is not a date. Name a curve file after its date: 2026-01-01.json.", file_name))?;
-    let f: CurveFile = serde_json::from_str(text).map_err(|e| anyhow!("It is not a valid curve file ({}). Expected {{\"currency\", \"as_of\", \"source\", \"points\": [{{\"tenor_days\": 30, \"rate_pct\": 8.0}}]}}.", e))?;
+    let f: CurveFile = serde_json::from_str(text).map_err(|e| anyhow!("Line {}: it is not a valid curve file ({}). Expected {{\"currency\", \"as_of\", \"source\", \"points\": [{{\"tenor_days\": 30, \"rate_pct\": 8.0}}]}}.", e.line(), e))?;
     if !f.as_of.trim().is_empty() {
-        let as_of = NaiveDate::parse_from_str(f.as_of.trim(), "%Y-%m-%d").map_err(|_| anyhow!("'as_of' ({}) is not a date. Write it as YYYY-MM-DD.", f.as_of))?;
+        let as_line = line_of_key(text, "as_of", 1).unwrap_or(1);
+        let as_of = NaiveDate::parse_from_str(f.as_of.trim(), "%Y-%m-%d").map_err(|_| anyhow!("Line {}: 'as_of' ({}) is not a date. Write it as YYYY-MM-DD.", as_line, f.as_of))?;
         if as_of != date {
-            bail!("The file name says {} but 'as_of' says {}. Make them the same.", date, as_of);
+            bail!("Line {}: the file name says {} but 'as_of' says {}. Make them the same.", as_line, date, as_of);
         }
     }
     if f.currency.trim().is_empty() {
-        bail!("The currency is missing. Every curve needs one: add \"currency\": \"BDT\" (or the curve's currency) to the file.");
+        match line_of_key(text, "currency", 1) {
+            Some(l) => bail!("Line {}: the currency is empty. Every curve needs one: write \"currency\": \"BDT\" (or the curve's currency).", l),
+            None => bail!("The currency is missing. Every curve needs one: add \"currency\": \"BDT\" (or the curve's currency) near the top of the file."),
+        }
     }
     let points: Vec<FtpPoint> = f.points.iter().map(|p| FtpPoint { tenor_days: p.tenor_days, ftp_rate: p.rate_pct }).collect();
-    validate_points(&points)?;
+    check_points(&points, point_lines(text, points.len()).as_deref())?;
     Ok(YieldCurve { date, currency: f.currency, source: f.source, points })
 }
 

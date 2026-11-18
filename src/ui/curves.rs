@@ -217,6 +217,8 @@ impl MicroParquetApp {
                             ui.add_space(theme::SPACE_S);
                             ui.label(egui::RichText::new("Files that cannot be used").size(theme::TEXT_LABEL).color(tk.danger).strong());
                             for (file, reason) in &self.curves.store.problems.clone() {
+                                // the reason starts with "Curve file X.json: ": the file is named once, in front
+                                let reason = reason.strip_prefix(&format!("Curve file {}: ", file)).unwrap_or(reason);
                                 ui.add(egui::Label::new(egui::RichText::new(format!("{}: {}", file, reason)).size(theme::TEXT_LABEL).color(tk.danger)).wrap());
                             }
                         }
