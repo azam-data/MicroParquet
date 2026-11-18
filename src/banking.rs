@@ -308,6 +308,65 @@ fn effective_days_expr(spec: &RateShockSpec) -> Expr {
     }
 }
 
+/// The column that most likely holds the account number (Actnum, Account No, A/C ...), for messages that list accounts.
+pub fn guess_account_column(names: &[String]) -> Option<String> {
+    const WORDS: [&str; 7] = ["actnum", "acctnum", "acct_no", "account", "a/c", "acno", "ac_no"];
+    names.iter().find(|n| {
+        let l = n.to_lowercase();
+        WORDS.iter().any(|w| l.contains(w))
+    }).cloned()
+}
+
+/// With a floor, a row with no current rate cannot be checked against it: stop with the count and
+/// the first 5 account numbers (the rows are numbered when no column looks like an account number).
+fn check_blank_rates_for_floor(lf: LazyFrame, spec: &RateShockSpec, floor: f64) -> Result<()> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for the floor check")?;
+    if schema.get(spec.rate_col.as_str()).is_none() {
+        return Ok(()); // the step reports the missing column itself
+    }
+    let names: Vec<String> = schema.iter_names().map(|n| n.to_string()).collect();
+    let acct = guess_account_column(&names);
+    let blank = lf.with_row_index("__row", Some(1)).filter(col(spec.rate_col.as_str()).cast(DataType::Float64).is_null());
+    let n = blank
+        .clone()
+        .select([len().cast(DataType::Int64).alias("n")])
+        .collect()
+        .context("Could not check the current rates against the floor")?
+        .column("n")?
+        .i64()?
+        .get(0)
+        .unwrap_or(0);
+    if n == 0 {
+        return Ok(());
+    }
+    let mut cols = vec![col("__row").cast(DataType::Int64)];
+    if let Some(a) = &acct {
+        cols.push(col(a.as_str()).cast(DataType::String).alias("__acct"));
+    }
+    let first = blank.select(cols).limit(5).collect().context("Could not list the rows without a current rate")?;
+    let rows: Vec<i64> = first.column("__row")?.i64()?.into_iter().map(|v| v.unwrap_or(0)).collect();
+    let items: Vec<String> = match &acct {
+        Some(_) => {
+            let a: Vec<Option<String>> = first.column("__acct")?.str()?.into_iter().map(|v| v.map(str::to_string)).collect();
+            a.into_iter().zip(&rows).map(|(v, r)| match v.filter(|t| !t.trim().is_empty()) {
+                Some(t) => t,
+                None => format!("(row {r})"),
+            }).collect()
+        }
+        None => rows.iter().map(|r| format!("row {r}")).collect(),
+    };
+    bail!(
+        "ΔNII: {} row(s) have no current rate in '{}', and a floor of {}% is set, so their shocked rate cannot be checked against it. First {} {}: {}. Fill in the rate on those rows, or remove the floor.",
+        n,
+        spec.rate_col,
+        floor,
+        items.len(),
+        if acct.is_some() { "account number(s)" } else { "row(s)" },
+        items.join(", ")
+    );
+}
+
 /// ΔNII with the options of Phase 4 V5. `betas` is the content of the beta file (`spec.beta_file`
 /// is read by the caller, so a test or a headless run needs no folder). With no option set the
 /// result is exactly what the step gave before.
@@ -335,6 +394,7 @@ pub fn apply_rate_shock_betas(lf: LazyFrame, spec: &RateShockSpec, betas: &[crat
         if !f.is_finite() {
             bail!("ΔNII: the floor is not a number.");
         }
+        check_blank_rates_for_floor(lf.clone(), spec, f)?;
     }
     if given(&spec.beta_file).is_some() && given(&spec.product_col).is_none() {
         bail!("ΔNII: choose the product column the beta file is read against.");

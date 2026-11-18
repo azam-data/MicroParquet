@@ -485,3 +485,67 @@ fn i8_a_curve_in_another_currency_is_not_used_and_a_file_without_a_currency_is_a
     assert!(matches!(old, TransformStep::FtpCurveMap { ref currency, .. } if currency == "BDT"));
     set_curves_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ 9
+
+fn blank_rate_book(n_blank: usize, with_account: bool) -> DataFrame {
+    let mut accts: Vec<String> = Vec::new();
+    let mut rates: Vec<Option<f64>> = Vec::new();
+    for i in 0..n_blank {
+        accts.push(format!("A{}", i + 1));
+        rates.push(None);
+    }
+    accts.push("OK1".into());
+    rates.push(Some(2.0));
+    let n = accts.len();
+    let mut cols = vec![
+        Series::new("Balance".into(), vec![1_000_000.0; n]),
+        Series::new("Rate".into(), rates),
+        Series::new("Side".into(), vec!["Liability"; n]),
+        dates("Matdat", &vec![""; n]),
+    ];
+    if with_account {
+        cols.insert(0, Series::new("Account No".into(), accts));
+    }
+    DataFrame::new(cols).expect("book")
+}
+
+#[test]
+fn i9_with_a_floor_blank_rates_stop_the_step_with_the_count_and_the_first_five_accounts() {
+    let mut s = shock_spec(-100.0);
+    s.beta_file = None;
+    s.product_col = None;
+    // 7 rows without a rate and a floor: an error with the count and the first 5 account numbers
+    let df = blank_rate_book(7, true);
+    s.floor_pct = Some(0.0);
+    let e = format!("{:#}", micro_parquet::banking::apply_rate_shock_with(df.clone().lazy(), &s, &[]).err().expect("blank rates with a floor"));
+    assert!(e.contains("7 row(s) have no current rate in 'Rate'") && e.contains("floor of 0%"), "{e}");
+    assert!(e.contains("First 5 account number(s): A1, A2, A3, A4, A5."), "{e}");
+    assert!(!e.contains("A6") && !e.contains("OK1"), "only the first five: {e}");
+    // fewer than five: all of them
+    let e = format!("{:#}", micro_parquet::banking::apply_rate_shock_with(blank_rate_book(2, true).lazy(), &s, &[]).err().expect("two"));
+    assert!(e.contains("2 row(s)") && e.contains("First 2 account number(s): A1, A2."), "{e}");
+    // no account column: the rows are named
+    let e = format!("{:#}", micro_parquet::banking::apply_rate_shock_with(blank_rate_book(3, false).lazy(), &s, &[]).err().expect("rows"));
+    assert!(e.contains("First 3 row(s): row 1, row 2, row 3."), "{e}");
+    // the step says the same
+    let step = TransformStep::RateShockSim {
+        bal_col: "Balance".into(), rate_col: "Rate".into(), mat_col: "Matdat".into(), cutoff_date: "2026-10-31".into(), shock_bps: -100.0,
+        side_col: Some("Side".into()), reprice_col: None, beta_file: None, product_col: None, floor_pct: Some(0.0),
+    };
+    let e = format!("{:#}", run_steps("i9", &df, &[step.clone()]).err().expect("the step stops"));
+    assert!(e.contains("7 row(s) have no current rate"), "{e}");
+
+    // without a floor nothing changes: the blank rate counts as 0 (what the step always did)
+    s.floor_pct = None;
+    let out = micro_parquet::banking::apply_rate_shock_with(df.clone().lazy(), &s, &[]).expect("no floor").collect().expect("collect");
+    assert_eq!(floats(&out, "Current_Annual_Int")[0], Some(0.0));
+    close(floats(&out, "NII_Impact_BDT")[0], 10_000.0, 1e-6, "the fall of 1% on a liability saves 10,000 (blank rate treated as 0, as before)");
+    // with a floor and every rate present it runs
+    let full = DataFrame::new(vec![
+        Series::new("Balance".into(), &[1_000_000.0]), Series::new("Rate".into(), &[1.5]), Series::new("Side".into(), &["Liability"]), dates("Matdat", &[""]),
+    ]).expect("full");
+    s.floor_pct = Some(0.0);
+    let out = micro_parquet::banking::apply_rate_shock_with(full.lazy(), &s, &[]).expect("runs").collect().expect("collect");
+    close(floats(&out, "NII_Impact_BDT")[0], 10_000.0, 1e-6, "-100 bp on 1.5% with a 0% floor");
+}
