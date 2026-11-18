@@ -45,7 +45,7 @@ Turns each loan and deposit of the book into dated cash flows from the cutoff da
 
 One row per bucket and currency, BDT first. `Midpoint (years)` is the bucket's midpoint from BB Table 3. `Assets` are inflows (positive) and `Liabilities` outflows (negative), in BDT; `Net` is their sum and `Cumulative net` the running sum within the currency. After each currency's buckets a row "Matured assets, not in ladder (N)" gives the number and total principal of assets whose maturity has passed. With "Treat blank maturity as O/N" ticked and at least one such row, a row "Blank maturity, in O/N above (N)" comes first below the buckets: it gives the number of rows with no maturity date and their assets and liabilities, which are already in the O/N bucket (principal only, no interest); it is information, not an extra amount. Buckets: O/N (up to 1 day), then up to 1M, 3M, 6M, 9M, 1Y, 1.5Y, 2Y, 3Y, 4Y, 5Y, 6Y, 7Y, 8Y, 9Y, 10Y, 15Y, 20Y and over 20Y; each includes its upper bound. Time is days from the cutoff divided by 365.
 
-How the flows are made: payment dates run back from the maturity by the frequency and only those after the cutoff count. Interest of a period is the outstanding × rate ÷ payments per year (a full period, also for the first). An equal instalment loan is an annuity on the remaining payments. A floating row has one flow on its next repricing date: all its principal plus one period's interest. A matured liability goes to O/N.
+How the flows are made: payment dates run back from the maturity by the frequency and only those after the cutoff count. Interest of a period is the outstanding × rate ÷ payments per year (a full period, also for the first). An equal instalment loan is an annuity on the remaining payments. A floating row pays its scheduled payments (by its repayment type) on their own dates until its next repricing date; on the repricing date all the principal that is left and that period's interest flow, and nothing comes after. A matured liability goes to O/N.
 
 ## 7. Check your result
 
@@ -88,6 +88,16 @@ An equal-instalment loan of 120,000 at 12%, paid monthly, 12 payments left ("Pri
 
 Test: `guide_irrbb_cashflow_ladder`
 
+A floating loan of 1,200,000 at 12%, equal principal, paid monthly, maturing 2027-10-31 and repricing 2027-01-31 ("Principal + interest"): the two payments before the repricing date are 100,000 of principal and that month's interest, and on the repricing date all the 1,000,000 that is left flows with the month's interest. Nothing is after it.
+
+| Payment date | Principal | Interest | Payment |
+| --- | ---: | ---: | ---: |
+| 2026-11-30 | 100,000.00 | 12,000.00 | 112,000.00 |
+| 2026-12-31 | 100,000.00 | 11,000.00 | 111,000.00 |
+| 2027-01-31 | 1,000,000.00 | 10,000.00 | 1,010,000.00 |
+
+Test: `guide_irrbb_cashflow_ladder`
+
 ## 9. Common messages and fixes
 
 - "Cash flows: the maturity date is blank on N row(s); the first 5 values of Account_No: … Only a product that is a non-maturity deposit in the behaviour profile needs no maturity date. Fill the dates, or tick "Treat blank maturity as O/N" to put those rows in O/N." Fill the maturity dates, cover the product with a behaviour profile if it is a non-maturity deposit (a liability row needs no date then), or tick the option. The message names the account column it took the numbers from, or lists rows ("row 12").
@@ -102,7 +112,7 @@ Test: `guide_irrbb_cashflow_ladder`
 ## 10. Limits and assumptions
 
 - A full period of interest is used for the first period too (no accrued-interest split), as the specification says.
-- A floating row is not amortised before its repricing date: all remaining principal is on that date. A loan prepayment rate (CPR) is not applied to floating rows or to "At maturity" rows.
+- A floating row repays by its schedule only up to its repricing date; from that date all the principal that is left is treated as repricing there (the later amortisation is not shown). If the repricing date is not a payment date, the flow on it has a full period's interest. A loan prepayment rate (CPR) is not applied to floating rows or to "At maturity" rows. An "At maturity" floating row has no payments before the repricing date.
 - "At maturity" rows pay simple interest on the principal for the time left (days ÷ 365).
 - Non-maturity deposits use principal only, with no interest flows.
 - "Treat blank maturity as O/N" puts the whole principal of such a row in O/N, assets as well as liabilities, with no interest and no prepayment or early-redemption effect; it is a way to see the rest of the book, not a view that the deal is overnight. Only a liability whose product is a non-maturity deposit in the profile needs no maturity date without the option; a profiled loan or term deposit still needs one.

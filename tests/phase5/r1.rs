@@ -138,10 +138,11 @@ fn r1_floating_loan_has_one_flow_on_the_repricing_date() {
     // it lands in the bucket of the repricing date (30 days: 'O/N–1M')
     let res = ladder_from_rows(&[r.clone()], &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("ladder");
     assert_eq!(res.for_currency("BDT").expect("BDT").assets[1], 1_025_000.0);
-    // a repricing date after the maturity: the maturity counts
+    // a repricing date after the maturity: the maturity counts (the scheduled interest dates before it flow as well, A3)
     r.reprice = Some(d("2031-01-01"));
     let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalOnly, Scenario::Base), None).expect("flows");
-    assert_eq!(rf.flows[0].date, d("2030-06-30"));
+    assert_eq!(rf.flows.last().map(|f| f.date), Some(d("2030-06-30")));
+    close_to(rf.flows.last().map(|f| f.principal).unwrap_or(0.0), 1_000_000.0, 1e-9, "the principal is paid at the maturity");
 }
 
 #[test]
@@ -419,4 +420,84 @@ fn a2_with_the_option_a_blank_maturity_row_goes_to_o_n_and_the_note_gives_the_co
     let b = res.for_currency("BDT").expect("BDT");
     assert_eq!(b.liabilities[0], -400_000.0 - 1_000_000.0);
     assert_eq!(b.liabilities[8], -600_000.0);
+}
+
+// ------------------------------------------------------------ A3: floating amortisation
+
+fn floating_amortising(repay: Repayment, reprice: &str) -> CfRow {
+    let mut r = row(Side::Asset, 1_200_000.0, 12.0, "2027-10-31");
+    r.rate_type = RateType::Floating;
+    r.reprice = Some(d(reprice));
+    r.repayment = repay;
+    r.frequency = Frequency::Monthly;
+    r
+}
+
+#[test]
+fn a3_a_floating_equal_principal_loan_pays_its_instalments_until_the_repricing_date_and_then_everything() {
+    let r = floating_amortising(Repayment::EqualPrincipal, "2027-01-31");
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("flows");
+    let got: Vec<(NaiveDate, f64, f64)> = rf.flows.iter().map(|f| (f.date, f.principal, f.interest)).collect();
+    assert_eq!(got.len(), 3, "nothing after the repricing date: {got:?}");
+    for ((date, principal, interest), (ed, ep, ei)) in got.iter().zip([("2026-11-30", 100_000.0, 12_000.0), ("2026-12-31", 100_000.0, 11_000.0), ("2027-01-31", 1_000_000.0, 10_000.0)]) {
+        assert_eq!(*date, d(ed));
+        close_to(*principal, ep, 1e-6, &format!("principal on {ed}"));
+        close_to(*interest, ei, 1e-6, &format!("interest on {ed}"));
+    }
+    close_to(rf.flows.iter().map(|f| f.principal).sum::<f64>(), 1_200_000.0, 1e-6, "all principal flows");
+    // principal only: the same dates, no interest
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalOnly, Scenario::Base), None).expect("flows");
+    assert_eq!(rf.flows.iter().map(|f| f.principal).collect::<Vec<_>>(), vec![100_000.0, 100_000.0, 1_000_000.0]);
+    assert!(rf.flows.iter().all(|f| f.interest == 0.0));
+    // in the ladder: 2026-11-30 is 30 days out (O/N–1M), 12-31 is 61 days (1–3M), 2027-01-31 is 92 days (3–6M)
+    let res = ladder_from_rows(&[r], &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("ladder");
+    let b = res.for_currency("BDT").expect("BDT");
+    assert_eq!(b.assets[1], 112_000.0);
+    assert_eq!(b.assets[2], 111_000.0);
+    assert_eq!(b.assets[3], 1_010_000.0);
+}
+
+#[test]
+fn a3_the_repricing_date_may_fall_between_payment_dates_and_the_other_repayment_types_work_too() {
+    // repricing on 2027-01-15, between the payments of 12-31 and 01-31: the flow is on the repricing date, a full period's interest
+    let r = floating_amortising(Repayment::EqualPrincipal, "2027-01-15");
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("flows");
+    assert_eq!(rf.flows.len(), 3);
+    assert_eq!(rf.flows[2].date, d("2027-01-15"));
+    close_to(rf.flows[2].principal, 1_000_000.0, 1e-6, "what is left");
+    close_to(rf.flows[2].interest, 10_000.0, 1e-6, "a full period's interest");
+
+    // a bullet floating loan with the repricing date after some payment dates: interest is paid on those dates, the principal on the repricing date
+    let r = floating_amortising(Repayment::Bullet, "2027-01-31");
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("flows");
+    let got: Vec<(f64, f64)> = rf.flows.iter().map(|f| (f.principal, f.interest)).collect();
+    assert_eq!(got, vec![(0.0, 12_000.0), (0.0, 12_000.0), (1_200_000.0, 12_000.0)]);
+
+    // an equal-instalment floating loan: the annuity's principal parts, then what is left
+    let r = floating_amortising(Repayment::EqualInstalment, "2027-01-31");
+    let rf = generate_flows(&r, &settings(CashFlowMode::PrincipalAndInterest, Scenario::Base), None).expect("flows");
+    let pay = annuity_payment(1_200_000.0, 0.01, 12);
+    assert_eq!(rf.flows.len(), 3);
+    close_to(rf.flows[0].total(), pay, 1e-6, "first instalment");
+    close_to(rf.flows[1].total(), pay, 1e-6, "second instalment");
+    let left = 1_200_000.0 - (pay - 12_000.0) - (pay - (1_200_000.0 - (pay - 12_000.0)) * 0.01);
+    close_to(rf.flows[2].principal, left, 1e-6, "what is left on the repricing date");
+    close_to(rf.flows.iter().map(|f| f.principal).sum::<f64>(), 1_200_000.0, 1e-6, "all principal flows");
+
+    // a repricing date after the maturity: the schedule is the fixed one
+    let fixed = row(Side::Asset, 1_200_000.0, 12.0, "2027-10-31");
+    let fixed = CfRow { repayment: Repayment::EqualPrincipal, frequency: Frequency::Monthly, ..fixed };
+    let late = floating_amortising(Repayment::EqualPrincipal, "2030-01-01");
+    let s = settings(CashFlowMode::PrincipalAndInterest, Scenario::Base);
+    let (a, b) = (generate_flows(&fixed, &s, None).expect("fixed"), generate_flows(&late, &s, None).expect("floating"));
+    assert_eq!(a.flows, b.flows);
+
+    // "At maturity" floating rows and the single-flow case of the specification are unchanged
+    let mut at = row(Side::Asset, 1_000_000.0, 10.0, "2030-06-30");
+    at.rate_type = RateType::Floating;
+    at.reprice = Some(d("2026-11-30"));
+    at.frequency = Frequency::AtMaturity;
+    let rf = generate_flows(&at, &s, None).expect("flows");
+    assert_eq!(rf.flows.len(), 1);
+    close_to(rf.flows[0].interest, 1_000_000.0 * 0.10 * 30.0 / 365.0, 1e-6, "simple interest for the time left");
 }

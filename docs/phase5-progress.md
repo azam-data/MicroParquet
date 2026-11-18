@@ -18,7 +18,7 @@ Branch `phase5` (PR #7). One commit per item, `cargo test`, push, don't merge. T
 |---|---|---|---|---|
 | A1 F0 trim | DONE | (this commit) | f0 ×4 rewritten, render test i15 extended | `trim_all` on the step |
 | A2 R1 blank maturity | DONE | (this commit) | r1 a2_ ×3, render a2_ ×1 (both screens), R3 header rect check | option also in the IRRBB (six scenarios) dialog |
-| A3 R1 floating amortisation | TODO | | | |
+| A3 R1 floating amortisation | DONE | (this commit) | r1 a3_ ×2, guide table ×1; r1 floating assertion updated | |
 | A4 shipped rule files | TODO | | | |
 | A5 no CPR/TDRR in gap ladder | TODO | | | |
 | R4 | TODO | | | |

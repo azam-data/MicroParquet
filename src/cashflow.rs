@@ -328,8 +328,9 @@ const MAX_PAYMENTS: u32 = 1200;
 ///
 /// * Payment dates run back from the maturity by the frequency, keeping those after the cutoff;
 ///   each period's interest is the outstanding × rate ÷ payments per year (a full period, also for the first).
-/// * A floating row has one flow: all its principal and one period's interest, on the earlier of
-///   its next repricing date and its maturity.
+/// * A floating row runs its scheduled payments (by its repayment type) up to its next repricing
+///   date; on the earlier of that date and its maturity all the principal that is left and that
+///   period's interest flow, and nothing comes after.
 /// * A matured liability goes to O/N; a matured asset has no flows.
 /// * With a behaviour product: a non-maturity deposit splits into the non-core part (O/N) and the
 ///   core part at its average maturity (principal only); a loan's CPR and a term deposit's TDRR use
@@ -402,22 +403,14 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
 
     let per_year = row.frequency.per_year();
 
-    // a floating row: everything on the repricing date
-    if row.rate_type == RateType::Floating {
+    // a floating row: the scheduled payments before its next repricing date flow on their own
+    // dates; on the repricing date all the remaining principal and that period's interest flow
+    let reprice_on = if row.rate_type == RateType::Floating {
         let reprice = row.reprice.ok_or_else(|| anyhow!("A floating row has no repricing date."))?;
-        let eff = reprice.min(maturity);
-        let (date, t) = if eff <= cutoff { (cutoff, 0.0) } else { (eff, years(cutoff, eff)) };
-        let interest = if with_interest {
-            match per_year {
-                Some(f) => remaining * rate / f as f64,
-                None => remaining * rate * t.max(0.0),
-            }
-        } else {
-            0.0
-        };
-        out.flows.push(Flow { date, t, principal: remaining, interest });
-        return Ok(out);
-    }
+        Some(reprice.min(maturity))
+    } else {
+        None
+    };
 
     // payment dates back from the maturity
     let dates: Vec<NaiveDate> = match row.frequency.per_year() {
@@ -448,8 +441,8 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
         return Ok(out);
     }
 
-    // prepayment: assets with a CPR (a single payment at maturity has no periods to prepay in)
-    let prepay_q = match (beh.filter(|b| !b.is_nmd() && b.cpr_pct > 0.0 && row.side == Side::Asset), per_year) {
+    // prepayment: fixed-rate assets with a CPR (a single payment at maturity has no periods to prepay in)
+    let prepay_q = match (beh.filter(|b| !b.is_nmd() && b.cpr_pct > 0.0 && row.side == Side::Asset && reprice_on.is_none()), per_year) {
         (Some(b), Some(f)) => {
             let cpr = (b.cpr_pct / 100.0 * settings.scenario.cpr_multiplier()).clamp(0.0, 1.0);
             1.0 - (1.0 - cpr).powf(1.0 / f as f64)
@@ -460,6 +453,9 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
     let i = per_year.map(|f| rate / f as f64).unwrap_or(0.0);
     let mut bal = remaining;
     for (idx, date) in dates.iter().enumerate() {
+        if reprice_on.is_some_and(|r| *date >= r) {
+            break;
+        }
         let n_rem = n - idx as u32;
         let t = years(cutoff, *date);
         let interest = if !with_interest {
@@ -483,6 +479,20 @@ pub fn generate_flows(row: &CfRow, settings: &CfSettings, beh: Option<&Behaviour
         let principal = prepay + sched;
         out.flows.push(Flow { date: *date, t, principal, interest });
         bal = (bal - principal).max(0.0);
+    }
+    if let Some(r) = reprice_on {
+        // the repricing date (or the maturity, if that comes first): everything that is left
+        if bal > 0.0 {
+            let (date, t) = if r <= cutoff { (cutoff, 0.0) } else { (r, years(cutoff, r)) };
+            let interest = if !with_interest {
+                0.0
+            } else if per_year.is_some() {
+                bal * i
+            } else {
+                bal * rate * t.max(0.0)
+            };
+            out.flows.push(Flow { date, t, principal: bal, interest });
+        }
     }
     Ok(out)
 }

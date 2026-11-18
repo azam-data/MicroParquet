@@ -96,6 +96,22 @@ fn guide_irrbb_cashflow_ladder() {
         Series::new("Payment".into(), first.iter().map(|f| f.total()).collect::<Vec<_>>()),
     ])
     .expect("flows frame");
+    // a floating loan with equal principal: it pays its instalments until the repricing date, then everything
+    let mut fl = CfRow::simple(Side::Asset, 1_200_000.0, d("2027-10-31"));
+    fl.rate_pct = 12.0;
+    fl.rate_type = RateType::Floating;
+    fl.reprice = Some(d("2027-01-31"));
+    fl.repayment = Repayment::EqualPrincipal;
+    fl.frequency = Frequency::Monthly;
+    let rf = generate_flows(&fl, &CfSettings { cutoff: d("2026-10-31"), mode: CashFlowMode::PrincipalAndInterest, scenario: Scenario::Base, blank_maturity_on: false }, None).expect("flows");
+    assert_eq!(rf.flows.len(), 3);
+    let floating = DataFrame::new(vec![
+        Series::new("Payment date".into(), rf.flows.iter().map(|f| f.date.format("%Y-%m-%d").to_string()).collect::<Vec<_>>()),
+        Series::new("Principal".into(), rf.flows.iter().map(|f| f.principal).collect::<Vec<_>>()),
+        Series::new("Interest".into(), rf.flows.iter().map(|f| f.interest).collect::<Vec<_>>()),
+        Series::new("Payment".into(), rf.flows.iter().map(|f| f.total()).collect::<Vec<_>>()),
+    ])
+    .expect("floating frame");
     check_guide(
         "irrbb-cashflow-ladder",
         "guide_irrbb_cashflow_ladder",
@@ -103,6 +119,7 @@ fn guide_irrbb_cashflow_ladder() {
             md(&book, &["Account_No", "Side", "Outstanding:2", "Rate:2", "Matdat"]),
             md(&shown, &["Currency", "Bucket", "Midpoint (years):~4", "Assets:2", "Liabilities:2", "Net:2", "Cumulative net:2"]),
             md(&flows, &["Payment date", "Principal:2", "Interest:2", "Payment:2"]),
+            md(&floating, &["Payment date", "Principal:2", "Interest:2", "Payment:2"]),
         ],
     );
 }
