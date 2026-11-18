@@ -115,6 +115,8 @@ pub const TAB_STRIP_H: f32 = 40.0;
 /// The cross of a tab: its square hit area, and the width of the rename box.
 pub const TAB_CLOSE_SIZE: f32 = 22.0;
 pub const TAB_RENAME_W: f32 = 160.0;
+/// For how many frames the strip keeps scrolling to a tab that became active.
+pub const TAB_SCROLL_FRAMES: u8 = 4;
 /// One half, for centring.
 pub const HALF: f32 = 0.5;
 pub const STATUS_BAR_H: f32 = 32.0;

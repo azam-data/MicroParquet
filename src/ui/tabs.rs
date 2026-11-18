@@ -183,7 +183,11 @@ impl MicroParquetApp {
         let step_label = step.short_label();
         if open_new_tab {
             let mut new_steps = curr.steps.clone();
-            let title = format!("{} - {}", curr.title, step.short_label());
+            // a pivot tab is named after its first row field ("Pivot: Segment"); other steps after the tab and the step
+            let title = match step.as_pivot_spec() {
+                Some(spec) => pivot_tab_title(&spec),
+                None => format!("{} - {}", curr.title, step.short_label()),
+            };
             new_steps.push(step);
             self.create_tab_from_source(title, curr.source, new_steps, updated_formats);
         } else {
@@ -431,8 +435,17 @@ impl MicroParquetApp {
         let mut report = TabStripReport::default();
         let active_before = self.active_tab;
         let last_active: Option<usize> = ctx.data(|d| d.get_temp(egui::Id::new("tab_strip_last_active")));
-        let active_changed = last_active != Some(active_before);
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("tab_strip_last_active"), active_before));
+        // the strip scrolls to the active tab for a few frames after it changes (the first frames do not know the widths yet)
+        let scroll_id = egui::Id::new("tab_strip_scroll_frames");
+        let mut scroll_frames: u8 = ctx.data(|d| d.get_temp(scroll_id)).unwrap_or(0);
+        if last_active != Some(active_before) {
+            scroll_frames = theme::TAB_SCROLL_FRAMES;
+        }
+        let active_changed = scroll_frames > 0;
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("tab_strip_last_active"), active_before);
+            d.insert_temp(scroll_id, scroll_frames.saturating_sub(1));
+        });
         egui::TopBottomPanel::top("tab_strip")
             .exact_height(theme::TAB_STRIP_H)
             .frame(egui::Frame::none().fill(tk.bg).inner_margin(theme::MARGIN_TAB_STRIP))
@@ -441,6 +454,7 @@ impl MicroParquetApp {
                 report.strip = ui.available_rect_before_wrap();
                 egui::ScrollArea::horizontal()
                     .id_salt("tab_strip_scroll")
+                    .animated(false)
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -575,6 +589,15 @@ impl MicroParquetApp {
     }
 }
 
+/// The default name of a pivot tab: "Pivot: <first row field>" (the first column field when there
+/// are no rows, "Pivot" when there is neither).
+pub fn pivot_tab_title(spec: &PivotSpec) -> String {
+    match spec.rows.first().or(spec.columns.first()) {
+        Some(f) => format!("Pivot: {}", f),
+        None => "Pivot".to_string(),
+    }
+}
+
 /// A tab's name shown in the strip: at most 24 characters, the last one "…" when it is longer
 /// (the full name is on hover and in the rename box).
 pub const TAB_TITLE_MAX_CHARS: usize = 24;
@@ -631,6 +654,24 @@ pub fn tab_strip_report(ctx: &egui::Context) -> Option<TabStripReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_tab_names_are_cut_at_24_characters_with_an_ellipsis() {
+        assert_eq!(shorten_tab_title("Loans"), "Loans");
+        let exactly = "123456789012345678901234";
+        assert_eq!(shorten_tab_title(exactly), exactly, "24 characters fit");
+        let cut = shorten_tab_title("CL migration (Sep 2026 to Oct 2026)");
+        assert!(cut.chars().count() <= 24, "{cut}");
+        assert_eq!(cut, "CL migration (Sep 2026\u{2026}", "the space before the cut is dropped");
+        // a trailing space before the cut does not leave a gap before the ellipsis
+        assert_eq!(shorten_tab_title("1234567890123456789012 abcdef"), "1234567890123456789012\u{2026}");
+        // characters, not bytes
+        let multi = shorten_tab_title(&"\u{e9}".repeat(30));
+        assert_eq!(multi.chars().count(), 24);
+        assert_eq!(pivot_tab_title(&PivotSpec { rows: vec!["Segment".into()], columns: vec!["Bank".into()], ..Default::default() }), "Pivot: Segment");
+        assert_eq!(pivot_tab_title(&PivotSpec { columns: vec!["Bank".into()], ..Default::default() }), "Pivot: Bank");
+        assert_eq!(pivot_tab_title(&PivotSpec::default()), "Pivot");
+    }
 
     #[test]
     fn tab_indices_stay_valid_after_close() {

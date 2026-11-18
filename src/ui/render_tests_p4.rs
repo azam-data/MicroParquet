@@ -1493,3 +1493,126 @@ fn i16_ctrl_w_and_the_middle_button_close_a_tab() {
         rig.draw(3);
     }
 }
+
+const LONG: &str = "Exposure by counterparty and sector, Bangladesh Bank return, October 2026";
+
+fn assert_strip_fits(rig: &Rig, what: &str) {
+    let r = strip(rig);
+    assert!(!r.cells.is_empty(), "{what}");
+    let screen = rig.ctx.screen_rect();
+    for c in &r.cells {
+        assert!(c.shown.chars().count() <= 24, "{what}: '{}' is at most 24 characters", c.shown);
+        assert!(inside(c.label, c.tab), "{what}: the label {:?} of '{}' is inside its tab {:?}", c.label, c.shown, c.tab);
+        assert!(inside(c.close, c.tab), "{what}: the cross {:?} is inside the tab {:?}", c.close, c.tab);
+        assert!(!c.label.intersects(c.close) || c.label.intersect(c.close).width() < 0.5, "{what}: the label and the cross of '{}' do not overlap", c.shown);
+        assert!(c.tab.top() >= r.strip.top() - 0.5 && c.tab.bottom() <= r.strip.bottom() + 0.5, "{what}: the tab {:?} is inside the strip {:?} vertically", c.tab, r.strip);
+    }
+    // the tab that is active is in view
+    let active = r.cells.iter().find(|c| c.index == rig.app.active_tab).expect("the active tab");
+    assert!(active.tab.left() >= screen.left() - 0.5 && active.tab.right() <= screen.right() + 0.5, "{what}: the active tab {:?} is within the window {:?}", active.tab, screen);
+}
+
+#[test]
+fn i18_tab_names_are_cut_at_24_characters_with_the_full_name_on_hover_and_no_label_overflows() {
+    for (ppp, w, h) in SCREENS {
+        let names = [LONG, "Loans", "CL migration (Sep 2026 to Oct 2026)", "Pivot: Segment", "Deposits by branch and product", LONG, "Short", "Another quite long tab name indeed"];
+        let mut rig = tabs_rig("pr6i18a", ppp, w, h, &names);
+        let what = rig.what.clone();
+        assert_strip_fits(&rig, &what);
+        let r = strip(&rig);
+        for c in &r.cells {
+            if c.full.chars().count() > 24 {
+                assert!(c.shown.ends_with('\u{2026}') && c.full.starts_with(c.shown.trim_end_matches('\u{2026}')), "{what}: '{}' is the start of '{}'", c.shown, c.full);
+            } else {
+                assert_eq!(c.shown, c.full, "{what}");
+            }
+        }
+        // the painted text is the shortened name, never the long one
+        let p = rig.draw(2);
+        assert!(!p.boxes.iter().any(|(t, bx)| t.contains("Bangladesh Bank return") && bx.top() < 100.0 && bx.top() > 40.0), "{what}: the long name is not painted in the strip");
+        // each active tab in turn stays in view and inside its strip
+        for i in 0..rig.app.tabs.len() {
+            rig.app.active_tab = i;
+            rig.draw(4);
+            assert_strip_fits(&rig, &format!("{what} (tab {i} active)"));
+        }
+        // the full name is on hover
+        let r = strip(&rig);
+        let c = r.cells.iter().find(|c| c.full == LONG && inside(c.tab, rig.ctx.screen_rect())).expect("a long tab in view");
+        let at = c.tab.center();
+        rig.input.time = Some(10.0);
+        rig.step(vec![egui::Event::PointerMoved(at)]);
+        // the pointer stays still while the clock runs: the tooltip appears
+        let mut p = rig.step(vec![]);
+        for t in [11.0, 12.0, 13.0, 14.0] {
+            rig.input.time = Some(t);
+            p = rig.step(vec![]);
+        }
+        assert!(p.boxes.iter().any(|(t, _)| t == LONG), "{what}: the whole name is the tooltip: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("Exposure")).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn i18_a_double_click_renames_a_tab_enter_keeps_escape_cancels_and_a_pivot_tab_is_named_after_its_row_field() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = tabs_rig("pr6i18b", ppp, w, h, &["Second"]);
+        let what = rig.what.clone();
+        let r = strip(&rig);
+        let at = egui::pos2(r.cells[1].label.center().x, r.cells[1].tab.center().y);
+        // double click: two clicks 0.1 s apart
+        let click_at = |rig: &mut Rig, t: f64| {
+            rig.input.time = Some(t);
+            rig.step(vec![egui::Event::PointerMoved(at), egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+            rig.step(vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+        };
+        click_at(&mut rig, 100.0);
+        click_at(&mut rig, 100.1);
+        rig.draw(4);
+        assert!(rig.app.tab_rename.is_some(), "{what}: a double click starts the rename");
+        assert_eq!(rig.app.tab_rename.as_ref().map(|r| r.text.as_str()), Some("Second"), "{what}: the box starts with the full name");
+        // select all and type a new name, then Enter
+        rig.input.time = Some(110.0);
+        rig.step(vec![egui::Event::Key { key: egui::Key::A, physical_key: Some(egui::Key::A), pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }]);
+        rig.step(vec![egui::Event::Text("ALCO October".into())]);
+        rig.draw(2);
+        rig.step(vec![egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.step(vec![egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed: false, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(4);
+        assert_eq!(rig.app.tabs[1].title, "ALCO October", "{what}: Enter keeps the new name");
+        assert!(rig.app.tab_rename.is_none(), "{what}");
+        // Escape cancels
+        rig.app.tab_rename = Some(crate::ui::tabs::TabRename { tab_id: rig.app.tabs[1].id, text: "ALCO October".into(), focused: false });
+        rig.draw(3);
+        rig.step(vec![egui::Event::Text(" changed".into())]);
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(4);
+        assert_eq!(rig.app.tabs[1].title, "ALCO October", "{what}: Escape leaves the name as it was");
+        assert!(rig.app.tab_rename.is_none(), "{what}");
+        // the full title is kept when it is longer than the strip shows
+        rig.app.tabs[1].title = LONG.to_string();
+        rig.draw(3);
+        assert_strip_fits(&rig, &what);
+        assert_eq!(strip(&rig).cells[1].full, LONG);
+    }
+}
+
+#[test]
+fn i18_a_new_pivot_tab_is_named_pivot_and_its_first_row_field() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig::new("pr6i18c", ppp, w, h, 0);
+        rig.open_pivot();
+        let what = rig.what.clone();
+        {
+            let s = &mut rig.app.pivot_builder.spec;
+            s.rows = vec!["Bank".into(), "Bucket".into()];
+            s.values = vec![sum_balance()];
+        }
+        rig.draw(6);
+        let create = rig.rects().buttons.iter().find(|(n, _)| n == "Create pivot tab").map(|(_, r)| *r).expect("the primary button");
+        rig.click(create.center());
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}");
+        assert_eq!(rig.app.tabs[1].title, "Pivot: Bank", "{what}");
+        assert_strip_fits(&rig, &what);
+    }
+}
