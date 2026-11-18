@@ -1,0 +1,10 @@
+{
+  "as_of": "2021-04-13",
+  "source": "Bangladesh Bank BRPD, Guidelines on Interest Rate Risk in the Banking Book, 13 April 2021: Table 2 (shock sizes; Bangladesh Bank revises the BDT shocks from time to time), section 13.1 (outlier test) and section 14.2 (scenarios)",
+  "sample": false,
+  "decay_x": 4,
+  "outlier_pct": 15,
+  "currencies": [
+    { "currency": "BDT", "parallel_bp": 400, "short_bp": 500, "long_bp": 300 }
+  ]
+}

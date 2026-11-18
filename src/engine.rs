@@ -1345,7 +1345,7 @@ fn raw_text_expr(col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr
     text_expr_from(col(&col_cfg.name), col_cfg, config)
 }
 
-fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, config: &IngestionConfig) -> Expr {
+fn text_expr_from(mut e: Expr, col_cfg: &ColumnSchemaConfig, _config: &IngestionConfig) -> Expr {
     // Line breaks are not cleaned here: the "Clean line breaks" step does it (see
     // `hoist_clean_line_breaks`), so there is one implementation.
     if col_cfg.pii_mask != PiiMaskMode::None {
@@ -1642,6 +1642,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(curr_source, out);
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
+        TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::RepricingGap { source, .. } => collect_masked_columns(source, out),
     }
 }
@@ -1659,6 +1660,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
+        TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::RepricingGap { source, .. } => source_masks_pii(source),
     }
 }
@@ -1794,6 +1796,11 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             parts.extend(source_parse_failures(curr_source, temp_dir)?);
         }
         TabSource::GapLadder { inputs, .. } => {
+            for i in inputs {
+                parts.extend(source_parse_failures(&i.source, temp_dir)?);
+            }
+        }
+        TabSource::IrrbbLadder { inputs, .. } => {
             for i in inputs {
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
@@ -2388,6 +2395,16 @@ pub fn compile_tab_lazy(
                 lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
             }
             crate::banking::build_gap_ladder(lfs, preset, cutoff_date, *null_as_sight, limits.as_ref())?.lazy()
+        }
+        TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour } => {
+            let cutoff = NaiveDate::parse_from_str(cutoff_date.trim(), "%Y-%m-%d").context("Cutoff Date must be YYYY-MM-DD")?;
+            let mut lfs = Vec::with_capacity(inputs.len());
+            for i in inputs {
+                lfs.push((compile_tab_lazy(&i.source, &i.steps, temp_dir)?, i.spec.clone()));
+            }
+            let settings = crate::cashflow::CfSettings { cutoff, mode: *mode, scenario: *scenario };
+            let res = crate::cashflow::build_ladder(lfs, &settings, behaviour.as_ref().map(|b| &b.1))?;
+            crate::cashflow::ladder_frame(&res)?.lazy()
         }
         TabSource::ClMigration {
             prev_source,

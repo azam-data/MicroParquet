@@ -27,7 +27,7 @@ pub use micro_parquet::models::{
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,
     CondOp, CustomBucketDef, FilterCondition, FilterOp, FtpInterpolation, GroupJoin, SortLevel, SummaryAgg, SummarySpec, FtpPoint, IngestionConfig, MacroRecipe, MathOp,
     MetricFormatType, NumberDisplayFormat, ParquetDialect, ParseFailure, PiiMaskMode, PortablePaths,
-    SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep, GapTabInput,
+    SignConvention, SplitExportFormat, SqlJoinKind, TabSource, TabState, TransformStep, GapTabInput, CfTabInput,
 };
 pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
 pub use micro_parquet::tab_jobs::{
@@ -57,6 +57,7 @@ pub use crate::ui::export::{ExportState, GuardedExport};
 pub use crate::ui::filter::FilterState;
 pub use crate::ui::curves::CurvesState;
 pub use crate::ui::ftp::FtpState;
+pub use crate::ui::cashflow_ladder::CfLadderState;
 pub use crate::ui::gap_ladder::GapState;
 pub use crate::ui::jobs::PendingRefresh;
 pub use crate::ui::join::JoinState;

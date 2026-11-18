@@ -255,6 +255,11 @@ pub const CURVES_LIST_W: f32 = 270.0;
 pub const CURVES_BODY_MIN_H: f32 = 300.0;
 pub const GAP_COMBO_W: f32 = 150.0;
 pub const GAP_COMBO_NARROW_W: f32 = 120.0;
+/// The column and default choices of the IRRBB tools' dialogs.
+pub const CF_COMBO_W: f32 = 160.0;
+pub const CF_DEFAULT_W: f32 = 130.0;
+pub const CF_WIDE_W: f32 = 150.0;
+pub const CF_DIALOG_W: f32 = 1040.0;
 pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
 pub const LIST_MAX_H_S: f32 = 120.0;

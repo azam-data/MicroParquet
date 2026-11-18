@@ -42,3 +42,7 @@ mod r;
 // Phase 5 tests (tests/phase5/) are compiled into this binary too, for the same reason.
 #[path = "../phase5/f0.rs"]
 mod f0;
+#[path = "../phase5/r1.rs"]
+mod r1;
+#[path = "../phase5/guide.rs"]
+mod guide5;

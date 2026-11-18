@@ -1,0 +1,10 @@
+{
+  "as_of": "2021-04-13",
+  "source": "Bangladesh Bank BRPD, Guidelines on Interest Rate Risk in the Banking Book, 13 April 2021: Table 4 (caps on the core part and the average maturity of non-maturity deposits)",
+  "sample": false,
+  "categories": [
+    { "name": "Retail transactional", "core_cap_pct": 90, "max_avg_maturity_years": 5 },
+    { "name": "Retail non-transactional", "core_cap_pct": 70, "max_avg_maturity_years": 4.5 },
+    { "name": "Wholesale", "core_cap_pct": 50, "max_avg_maturity_years": 4 }
+  ]
+}

@@ -14,7 +14,7 @@ pub enum RoleChoice {
 }
 
 impl RoleChoice {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             RoleChoice::Asset => "Asset / inflow",
             RoleChoice::Liability => "Liability / outflow",

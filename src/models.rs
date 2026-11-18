@@ -1949,6 +1949,16 @@ pub enum TabSource {
         /// The limits read from `portable_data/gap_limits` when the tab was built.
         limits: Option<crate::banking::GapLimitsFile>,
     },
+    /// The IRRBB cash-flow ladder (Phase 5 R1): the dated cash flows of the chosen tabs in the 19
+    /// buckets of the Bangladesh Bank guideline, by currency.
+    IrrbbLadder {
+        inputs: Vec<CfTabInput>,
+        cutoff_date: String,
+        mode: crate::cashflow::CashFlowMode,
+        scenario: crate::cashflow::Scenario,
+        /// The behaviour profile used (its file name and content when the tab was built).
+        behaviour: Option<(String, crate::behaviour::BehaviourFile)>,
+    },
     /// The CL migration matrix of two months (Phase 4 V2).
     ClMigration {
         prev_source: Box<TabSource>,
@@ -1957,6 +1967,14 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// A tab that feeds the IRRBB cash-flow tools: where its rows come from and what its columns mean.
+#[derive(Clone, Debug)]
+pub struct CfTabInput {
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::cashflow::CfInputSpec,
 }
 
 /// A tab that feeds the liquidity gap ladder: where its rows come from and how they count.

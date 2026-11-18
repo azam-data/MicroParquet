@@ -11,7 +11,7 @@ use crate::ui::tests::{open_tab, parquet_source, settle, test_app};
 use micro_parquet::commands::CommandId;
 use polars::prelude::{NamedFrom, Series};
 
-const SCREENS: [(f32, f32, f32); 2] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)];
+pub(crate) const SCREENS: [(f32, f32, f32); 2] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)];
 const EN: &str = "\u{2013}";
 
 /// Bucket, Bank, Balance, Rate and `extra` more columns, one with a very long name.
@@ -38,11 +38,11 @@ fn title() -> String {
     format!("{}  Pivot table", theme::ph::TABLE)
 }
 
-struct Rig {
-    app: MicroParquetApp,
-    ctx: egui::Context,
-    input: egui::RawInput,
-    what: String,
+pub(crate) struct Rig {
+    pub(crate) app: MicroParquetApp,
+    pub(crate) ctx: egui::Context,
+    pub(crate) input: egui::RawInput,
+    pub(crate) what: String,
 }
 
 impl Rig {
@@ -55,7 +55,7 @@ impl Rig {
     }
 
     /// Runs `n` frames and the finished jobs; returns what the last one painted.
-    fn draw(&mut self, n: usize) -> Painted {
+    pub(crate) fn draw(&mut self, n: usize) -> Painted {
         let mut last = None;
         for _ in 0..n {
             settle(&mut self.app);
@@ -66,7 +66,7 @@ impl Rig {
         last.expect("a frame")
     }
 
-    fn step(&mut self, events: Vec<egui::Event>) -> Painted {
+    pub(crate) fn step(&mut self, events: Vec<egui::Event>) -> Painted {
         let mut i = self.input.clone();
         i.events = events;
         settle(&mut self.app);
@@ -75,14 +75,14 @@ impl Rig {
     }
 
     /// A click a second after the last one: without a clock every click counts as a double click.
-    fn click_later(&mut self, pos: egui::Pos2) -> Painted {
+    pub(crate) fn click_later(&mut self, pos: egui::Pos2) -> Painted {
         self.input.time = Some(self.input.time.unwrap_or(0.0) + 1.0);
         let p = self.click(pos);
         self.input.time = Some(self.input.time.unwrap_or(0.0) + 1.0);
         p
     }
 
-    fn click(&mut self, pos: egui::Pos2) -> Painted {
+    pub(crate) fn click(&mut self, pos: egui::Pos2) -> Painted {
         let press = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
         let release = vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
         self.step(press);
@@ -628,7 +628,7 @@ fn gap_rig(name: &str, ppp: f32, w: f32, h: f32, limits: Option<f64>) -> Rig {
     Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
 }
 
-fn click_text(rig: &mut Rig, p: &Painted, text: &str, after: egui::Rect) -> Painted {
+pub(crate) fn click_text(rig: &mut Rig, p: &Painted, text: &str, after: egui::Rect) -> Painted {
     let b = p.boxes.iter().filter(|(t, bx)| t.contains(text) && bx.top() >= after.top() - 1.0).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{}: '{text}' is on screen", rig.what));
     rig.click(b.center())
 }

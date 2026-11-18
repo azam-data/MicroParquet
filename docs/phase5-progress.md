@@ -7,3 +7,4 @@ Asked for in this run: F0, R1, R2, R3 (in that order). R4–R7 were not asked fo
 | Task | Status | Commit | Tests added | Deviations | Open questions |
 |---|---|---|---|---|---|
 | F0 | DONE | (this commit) | tests/phase5/f0.rs ×4, render_tests_p5 ×1 | see spec `<accepted_deviations>` (F0) | |
+| R1 | DONE | (this commit) | tests/phase5/r1.rs ×13 (buckets, annuity, equal principal, bullet, slotting/matured, floating, TDRR, CPR, NMD, currencies, tab roles, errors, profile column) + guide_irrbb_cashflow_ladder + guide completeness; render_tests_p5 ×3 at 1219×686 and 1600×900 pt (dialog rects, real clicks on role and mode combos, build; error in the fixed header; Banking menu + search) | see spec (R1) | |
