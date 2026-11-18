@@ -17,12 +17,14 @@ pub struct CurveRects {
     pub fields: Vec<(String, egui::Rect)>,
     pub buttons: Vec<(String, egui::Rect)>,
     pub message: egui::Rect,
+    /// The warning above the fields of a stored curve.
+    pub warning: egui::Rect,
 }
 
 impl Default for CurveRects {
     fn default() -> Self {
         let n = egui::Rect::NOTHING;
-        Self { list: n, list_rows: Vec::new(), editor: n, point_rows: Vec::new(), fields: Vec::new(), buttons: Vec::new(), message: n }
+        Self { list: n, list_rows: Vec::new(), editor: n, point_rows: Vec::new(), fields: Vec::new(), buttons: Vec::new(), message: n, warning: n }
     }
 }
 
@@ -44,6 +46,8 @@ pub struct CurvesState {
     /// A line under the editor: (is it an error?, text).
     pub message: Option<(bool, String)>,
     pub confirm_delete: bool,
+    /// "Save curve" would change a curve that is already stored: asks first.
+    pub confirm_overwrite: bool,
     pub rects: CurveRects,
 }
 
@@ -67,6 +71,7 @@ impl CurvesState {
             self.editor = CurveEditor { date: c.date.format("%Y-%m-%d").to_string(), currency: c.currency.clone(), source: c.source.clone(), points: c.points.clone(), opened_from: Some(c.date) };
             self.message = None;
             self.confirm_delete = false;
+            self.confirm_overwrite = false;
         }
     }
 
@@ -75,6 +80,7 @@ impl CurvesState {
         self.editor = CurveEditor { currency: "BDT".to_string(), points: vec![FtpPoint { tenor_days: 30, ftp_rate: 0.0 }, FtpPoint { tenor_days: 365, ftp_rate: 0.0 }], ..Default::default() };
         self.message = None;
         self.confirm_delete = false;
+        self.confirm_overwrite = false;
     }
 
     /// Replaces the points with those of a CSV; the reason when the text is not a curve.
@@ -106,6 +112,48 @@ impl CurvesState {
         self.editor.opened_from = Some(curve.date);
         self.message = Some((false, format!("Saved {}.", path.display())));
         Ok(path)
+    }
+
+    /// The stored curve the editor was opened from.
+    pub fn opened_curve(&self) -> Option<&YieldCurve> {
+        let d = self.editor.opened_from?;
+        self.store.curves.iter().find(|c| c.date == d)
+    }
+
+    /// True when "Save curve" would replace a stored curve with different content.
+    pub fn would_change_stored_curve(&self) -> bool {
+        match (self.typed_curve(), self.opened_curve()) {
+            (Ok(typed), Some(old)) => typed.date == old.date && typed != *old,
+            _ => false,
+        }
+    }
+
+    /// "Save curve" in the dialog: a new date is saved at once; a change to a stored curve first
+    /// asks (`confirm_overwrite`), and no change writes nothing.
+    pub fn save_asking(&mut self) -> Result<(), String> {
+        let typed = self.typed_curve()?;
+        if let Some(old) = self.opened_curve() {
+            if old.date == typed.date {
+                if *old == typed {
+                    self.message = Some((false, "Nothing changed, so nothing was saved.".to_string()));
+                    return Ok(());
+                }
+                self.message = None;
+                self.confirm_overwrite = true;
+                return Ok(());
+            }
+        }
+        self.save().map(|_| ())
+    }
+
+    /// Writes the editor's curve under the date typed, leaving the curve it was opened from as it was.
+    /// The date must be a new one.
+    pub fn save_as_new_date(&mut self) -> Result<std::path::PathBuf, String> {
+        let typed = self.typed_curve()?;
+        if self.editor.opened_from == Some(typed.date) {
+            return Err(format!("The date is still {}. Type the new curve's date first (for example the day the rates changed), then click Save as new date.", typed.date));
+        }
+        self.save()
     }
 
     /// Deletes the curve that was opened.
@@ -174,6 +222,16 @@ impl MicroParquetApp {
                     // the editor
                     let w = ui.available_width();
                     let ed = ui.allocate_ui_with_layout(egui::vec2(w, theme::CURVES_BODY_MIN_H), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        if let Some(old) = self.curves.opened_curve() {
+                            let text = format!(
+                                "You are editing the curve dated {} (FTP_Curve_Id {}). Saving over it changes the FTP of every deal priced on it and its FTP_Curve_Id. To keep it, type a new date and click \"Save as new date\".",
+                                old.date.format("%Y-%m-%d"),
+                                micro_parquet::curves::curve_id(old)
+                            );
+                            let b = ui.add(egui::Label::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                            rects.warning = b.rect;
+                            ui.add_space(theme::SPACE_S);
+                        }
                         egui::Grid::new("curve_fields").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_S)).show(ui, |ui| {
                             ui.label("Date (YYYY-MM-DD):");
                             let r = ui.add(egui::TextEdit::singleline(&mut self.curves.editor.date).desired_width(theme::GAP_COMBO_NARROW_W));
@@ -225,6 +283,9 @@ impl MicroParquetApp {
                                 (Ok(_), Some((false, m))) => {
                                     ui.add(egui::Label::new(egui::RichText::new(m).color(tk.muted)).wrap());
                                 }
+                                (Ok(c), _) if self.curves.confirm_overwrite => {
+                                    ui.add(egui::Label::new(egui::RichText::new(format!("Replace the stored curve of {} with these points? Its FTP_Curve_Id changes, and so does the FTP of deals priced on it.", c.date)).color(tk.warning)).wrap());
+                                }
                                 (Ok(c), None) => {
                                     ui.add(egui::Label::new(egui::RichText::new(format!("Ready to save as {}.", micro_parquet::curves::curve_file_name(c.date))).color(tk.muted)).wrap());
                                 }
@@ -246,7 +307,13 @@ impl MicroParquetApp {
                             action = Some(id);
                         }
                     };
-                    add(ui, "Save curve", check.is_ok(), true, "save");
+                    if self.curves.confirm_overwrite {
+                        add(ui, "Yes, replace it", true, true, "overwrite_yes");
+                        add(ui, "No", true, false, "overwrite_no");
+                    } else {
+                        add(ui, "Save curve", check.is_ok(), true, "save");
+                        add(ui, "Save as new date", check.is_ok() && self.curves.editor.opened_from.is_some(), false, "save_new");
+                    }
                     add(ui, "New curve", true, false, "new");
                     add(ui, "Import CSV\u{2026}", true, false, "import");
                     if self.curves.confirm_delete {
@@ -262,10 +329,22 @@ impl MicroParquetApp {
         self.curves.rects = rects;
         match action {
             Some("save") => {
+                if let Err(e) = self.curves.save_asking() {
+                    self.curves.message = Some((true, e));
+                }
+            }
+            Some("save_new") => {
+                if let Err(e) = self.curves.save_as_new_date() {
+                    self.curves.message = Some((true, e));
+                }
+            }
+            Some("overwrite_yes") => {
+                self.curves.confirm_overwrite = false;
                 if let Err(e) = self.curves.save() {
                     self.curves.message = Some((true, e));
                 }
             }
+            Some("overwrite_no") => self.curves.confirm_overwrite = false,
             Some("new") => self.curves.new_curve(),
             Some("import") => {
                 if let Some(p) = rfd::FileDialog::new().add_filter("CSV", &["csv", "txt"]).set_title("Import a curve: two columns, tenor_days and rate_pct").pick_file() {

@@ -350,3 +350,83 @@ fn i6_the_step_reads_up_and_down_betas_from_the_file() {
     close(floats(&down, "NII_Impact_BDT")[0], 6_000.0, 1e-6, "step, fall");
     micro_parquet::betas::set_betas_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ 7
+
+fn dated_deals() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Deal".into(), &["D1", "D2"]),
+        dates("Opndat", &["2026-03-15", "2026-08-01"]),
+        dates("Matdat", &["2026-09-28", "2027-02-14"]),
+        Series::new("Balance".into(), &[1_000_000.0, 1_000_000.0]),
+        Series::new("Rate".into(), &[9.0, 9.0]),
+    ])
+    .expect("deals")
+}
+
+fn curve_of(date: &str, a: f64, b: f64) -> micro_parquet::curves::YieldCurve {
+    micro_parquet::curves::YieldCurve {
+        date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("date"),
+        currency: "BDT".into(),
+        source: "test".into(),
+        points: vec![FtpPoint { tenor_days: 30, ftp_rate: a }, FtpPoint { tenor_days: 365, ftp_rate: b }],
+    }
+}
+
+fn ftp_step(currency_free_mode: FtpCurveMode) -> TransformStep {
+    TransformStep::FtpCurveMap {
+        opndat_col: "Opndat".into(),
+        matdat_col: "Matdat".into(),
+        bal_col: "Balance".into(),
+        rate_col: "Rate".into(),
+        curve: vec![],
+        is_liability: true,
+        interpolation: FtpInterpolation::Linear,
+        curve_mode: currency_free_mode,
+    }
+}
+
+#[test]
+fn i7_editing_a_curve_changes_ftp_curve_id_and_only_for_the_deals_priced_on_it() {
+    use micro_parquet::curves::*;
+    let d = dir("i7");
+    let steps = vec![ftp_step(FtpCurveMode::OriginationDate { use_earliest_for_older: false })];
+    let src = parquet(&d, "deals", &dated_deals());
+    save_curve(&d.join("c"), &curve_of("2026-01-01", 8.0, 10.0)).expect("saves");
+    save_curve(&d.join("c"), &curve_of("2026-07-01", 9.0, 11.0)).expect("saves");
+    set_curves_dir_override(Some(d.join("c")));
+    let run = || {
+        let out = micro_parquet::engine::compile_tab_lazy(&src, &steps, &d).expect("compiles").collect().expect("collects");
+        strings(&out, "FTP_Curve_Id")
+    };
+    let before = run();
+    assert!(before.iter().all(|i| i.as_ref().is_some_and(|s| s.len() == 8 && s.chars().all(|c| c.is_ascii_hexdigit()))), "8 hex characters: {before:?}");
+    assert_ne!(before[0], before[1], "the two deals are priced on two different curves");
+    assert_eq!(run(), before, "the same files give the same ids");
+    // the id of a curve is a function of its content
+    assert_eq!(Some(curve_id(&curve_of("2026-01-01", 8.0, 10.0))), before[0]);
+    // edit the January curve (one rate): its id changes, July's does not
+    save_curve(&d.join("c"), &curve_of("2026-01-01", 8.0, 10.5)).expect("saves");
+    let after = run();
+    assert_ne!(after[0], before[0], "the edited curve has a new id");
+    assert_eq!(after[1], before[1], "the other curve is untouched");
+    // the date, the currency and the source are part of the content too
+    let base = curve_id(&curve_of("2026-01-01", 8.0, 10.0));
+    let mut c = curve_of("2026-01-01", 8.0, 10.0);
+    c.source = "changed".into();
+    assert_ne!(curve_id(&c), base);
+    let mut c = curve_of("2026-01-01", 8.0, 10.0);
+    c.currency = "USD".into();
+    assert_ne!(curve_id(&c), base);
+    // a fixed date has the column too
+    let out = micro_parquet::engine::compile_tab_lazy(&src, &[ftp_step(FtpCurveMode::FixedDate { date: "2026-06-30".into() })], &d).expect("compiles").collect().expect("collects");
+    assert_eq!(strings(&out, "FTP_Curve_Id"), vec![after[0].clone(), after[0].clone()]);
+    // an old step that types its curve has no such column
+    let out = run_steps("i7typed", &dated_deals(), &[TransformStep::FtpCurveMap {
+        opndat_col: "Opndat".into(), matdat_col: "Matdat".into(), bal_col: "Balance".into(), rate_col: "Rate".into(),
+        curve: vec![FtpPoint { tenor_days: 30, ftp_rate: 8.0 }, FtpPoint { tenor_days: 365, ftp_rate: 10.0 }],
+        is_liability: true, interpolation: FtpInterpolation::Linear, curve_mode: FtpCurveMode::Inline,
+    }]).expect("typed");
+    assert!(out.column("FTP_Curve_Id").is_err());
+    set_curves_dir_override(None);
+}

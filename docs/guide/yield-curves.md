@@ -30,12 +30,12 @@ Keeps the treasury yield curves by date, one file per curve in `portable_data/cu
 2. The list on the left shows the curves, newest first, with their currency and number of points; click one to edit it. Files that cannot be used are listed under it in red with the reason.
 3. To make a new curve click "New curve", type the "Date (YYYY-MM-DD):", "Currency:" and "Source:", and fill the points ("Add point" adds a row; the cross removes one).
 4. To import, click "Import CSV…" and choose the file; its points replace the points in the editor. Set the date, then save.
-5. Click "Save curve". It is written as `<date>.json`. A message says if the points are not valid; nothing is written then. A date that already has a curve is not overwritten unless you opened that curve.
+5. When you open a stored curve, a warning above the fields says which curve it is and its FTP_Curve_Id: saving over it changes the FTP of every deal priced on it. Click "Save as new date" to keep that curve as it is: type the new date first, and the changes are written under it. "Save curve" on a changed stored curve asks "Yes, replace it" / "No" first. A message says if the points are not valid; nothing is written then. A date that already has a curve is not overwritten unless you opened that curve.
 6. To remove a curve, open it, click "Delete" and confirm with "Yes, delete it".
 
 ## 6. What you get
 
-Files in `portable_data/curves`, one per date, in this form: `{"currency": "BDT", "as_of": "2026-01-01", "source": "...", "points": [{"tenor_days": 30, "rate_pct": 8.0}, ...]}`. The FTP step reads them when it runs. Changing the date of an opened curve and saving makes a new file and leaves the old one.
+Files in `portable_data/curves`, one per date, in this form: `{"currency": "BDT", "as_of": "2026-01-01", "source": "...", "points": [{"tenor_days": 30, "rate_pct": 8.0}, ...]}`. The FTP step reads them when it runs. Changing the date of an opened curve and saving makes a new file and leaves the old one. The FTP result carries `FTP_Curve_Id`, the first 8 hex characters of a hash of the curve's date, currency, source and points: it changes whenever any of them is edited, whatever the file's spacing.
 
 ## 7. Check your result
 

@@ -42,12 +42,13 @@ Gives each deposit or loan a funds-transfer-pricing (FTP) benchmark rate from a 
 
 ## 6. What you get
 
-`Tenor_Days` (maturity − open, at least 1), `Benchmark_FTP_Rate` (percent), `FTP_Method` (which rule gave the rate: "Linear 91d-182d", "Next point up 91d", "First point 30d (at or below curve start)", "Last point 1825d (beyond curve)" or "MISSING_DATE"), `FTP_Spread_Pct` (liability: FTP − account rate; asset: account rate − FTP) and `Annual_FTP_Margin_BDT` = balance × spread / 100. Below the first curve point the first rate applies, beyond the last the last rate. With a curve from the store two columns more: `FTP_Curve_Date` (the date of the curve that priced the deal) and, with the option for older deals, `FTP_Note` ("earliest curve used" on the deals that are older than every curve).
+`Tenor_Days` (maturity − open, at least 1), `Benchmark_FTP_Rate` (percent), `FTP_Method` (which rule gave the rate: "Linear 91d-182d", "Next point up 91d", "First point 30d (at or below curve start)", "Last point 1825d (beyond curve)" or "MISSING_DATE"), `FTP_Spread_Pct` (liability: FTP − account rate; asset: account rate − FTP) and `Annual_FTP_Margin_BDT` = balance × spread / 100. Below the first curve point the first rate applies, beyond the last the last rate. With a curve from the store these columns more: `FTP_Curve_Date` (the date of the curve that priced the deal), `FTP_Curve_Id` (8 hex characters that identify the content of that curve: if anyone edits the curve file, the id of the deals priced afterwards changes, so a number in an ALCO pack can be traced to the exact curve) and, with the option for older deals, `FTP_Note` ("earliest curve used" on the deals that are older than every curve).
 
 ## 7. Check your result
 
 - Spread × balance, summed, is the book's FTP margin; compare with the NII from the GL for the same book.
 - Spot-check one row: 100 days between the 91-day (9.50) and 182-day (10.10) points = 9.50 + 9/91 × 0.60 = 9.5593.
+- Keep the `FTP_Curve_Id` of the month-end run with the pack: if a later run shows another id for the same deals, the curve file was edited.
 - Pivot the result by `FTP_Curve_Date`: every deal opened in a period should show the curve of that period.
 - Count of MISSING_DATE rows should be zero; the status bar warns when it is not.
 

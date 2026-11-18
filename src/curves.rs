@@ -50,6 +50,18 @@ pub fn curve_file_name(date: NaiveDate) -> String {
     format!("{}.json", date.format("%Y-%m-%d"))
 }
 
+/// The identity of a curve's content: the first 8 hex characters of a hash of its date, currency,
+/// source and points. Editing any of them changes it, so `FTP_Curve_Id` says which version of a
+/// curve priced a deal even when the file was changed afterwards. (The hash is over the content,
+/// not the file's spacing, so a file saved again without changes keeps its id.)
+pub fn curve_id(curve: &YieldCurve) -> String {
+    let mut text = format!("{}|{}|{}", curve.date.format("%Y-%m-%d"), curve.currency.trim(), curve.source.trim());
+    for p in &curve.points {
+        text.push_str(&format!("|{}:{:?}", p.tenor_days, p.ftp_rate));
+    }
+    blake3::hash(text.as_bytes()).to_hex()[..8].to_string()
+}
+
 /// Checks the points of a curve: at least one, whole tenors above 0 that strictly increase, and
 /// rates that are numbers.
 pub fn validate_points(points: &[FtpPoint]) -> Result<()> {

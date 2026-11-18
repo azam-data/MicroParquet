@@ -2333,6 +2333,8 @@ pub fn build_gap_ladder(
 pub const FTP_NOTE_EARLIEST: &str = "earliest curve used";
 /// The column that says which curve priced each deal.
 pub const FTP_CURVE_DATE_COLUMN: &str = "FTP_Curve_Date";
+/// The column that identifies the content of the curve that priced each deal (8 hex characters).
+pub const FTP_CURVE_ID_COLUMN: &str = "FTP_Curve_Id";
 
 fn days_since_epoch(d: NaiveDate) -> i64 {
     (d - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or(NaiveDate::MIN)).num_days()
@@ -2369,7 +2371,9 @@ pub fn apply_ftp_dated_curves(
                 bail!("FTP: no yield curve is dated on or before {}; the earliest is {}. Add an earlier curve or choose a later date.", d, earliest.date);
             };
             let lf = apply_ftp_curve_map(lf, opndat_col, matdat_col, bal_col, rate_col, &c.points, is_liability, interpolation)?;
-            Ok(lf.with_column(lit(days_since_epoch(c.date) as i32).cast(DataType::Date).alias(FTP_CURVE_DATE_COLUMN)))
+            Ok(lf
+                .with_column(lit(days_since_epoch(c.date) as i32).cast(DataType::Date).alias(FTP_CURVE_DATE_COLUMN))
+                .with_column(lit(crate::curves::curve_id(c)).alias(FTP_CURVE_ID_COLUMN)))
         }
         FtpCurveMode::OriginationDate { use_earliest_for_older } => {
             let lf = ensure_date(lf, opndat_col)?;
@@ -2413,7 +2417,9 @@ pub fn apply_ftp_dated_curves(
                 .alias("Tenor_Days");
             let mut rate: Expr = lit(NULL).cast(DataType::Float64);
             let mut method: Expr = lit(NULL).cast(DataType::String);
+            let mut curve_id: Expr = lit(NULL).cast(DataType::String);
             for c in &sorted {
+                curve_id = when(col("__ftp_curve_days").eq(lit(days_since_epoch(c.date)))).then(lit(crate::curves::curve_id(c))).otherwise(curve_id);
                 let (r, m) = ftp_rate_exprs(&c.points, interpolation).with_context(|| format!("The yield curve of {} cannot be used", c.date))?;
                 let hit = col("__ftp_curve_days").eq(lit(days_since_epoch(c.date)));
                 rate = when(hit.clone()).then(r).otherwise(rate);
@@ -2430,7 +2436,8 @@ pub fn apply_ftp_dated_curves(
                 .with_columns([rate, method])
                 .with_column(spread)
                 .with_column(margin)
-                .with_column(col("__ftp_curve_days").cast(DataType::Int32).cast(DataType::Date).alias(FTP_CURVE_DATE_COLUMN));
+                .with_column(col("__ftp_curve_days").cast(DataType::Int32).cast(DataType::Date).alias(FTP_CURVE_DATE_COLUMN))
+                .with_column(curve_id.alias(FTP_CURVE_ID_COLUMN));
             if *use_earliest_for_older {
                 out = out.with_column(when(col(opndat_col).is_not_null().and(older)).then(lit(FTP_NOTE_EARLIEST)).otherwise(lit(NULL).cast(DataType::String)).alias("FTP_Note"));
             }

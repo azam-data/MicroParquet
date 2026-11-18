@@ -828,6 +828,10 @@ fn the_yield_curves_manager_lists_edits_saves_imports_and_deletes_with_every_par
         rig.draw(3);
         let save = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Save curve").map(|(_, r)| *r).expect("save");
         rig.click(save.center());
+        assert!(!std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file").contains("10.5"), "{what}: the first click only asks");
+        let p = rig.draw(3);
+        let yes = p.boxes.iter().find(|(t, _)| t.contains("Yes, replace it")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the question"));
+        rig.click(yes.center());
         let text = std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file");
         assert!(text.contains("10.5"), "{what}: saved: {text}");
         // a new curve typed by real key input: its date, then save
@@ -1204,6 +1208,52 @@ fn i5_the_ftp_dialog_opens_on_stored_curves_only_when_curve_files_exist_and_an_o
         assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Typed, "{what}: no files, no stored curves");
         let p = rig.draw(4);
         assert!(p.boxes.iter().any(|(t, _)| t.contains("Ad-hoc curve")), "{what}");
+        micro_parquet::curves::set_curves_dir_override(None);
+    }
+}
+
+#[test]
+fn i7_the_curves_manager_warns_about_a_stored_curve_and_save_as_new_date_keeps_the_old_one() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = curves_rig("pr6i7", ppp, w, h);
+        let what = rig.what.clone();
+        let dir = rig.app.paths.curves_dir.clone();
+        rig.app.run_command(&rig.ctx, CommandId::YieldCurves);
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &curves_title(), &what);
+        // the latest stored curve is open: the warning says which curve and its id, and offers Save as new date
+        let id = micro_parquet::curves::curve_id(rig.app.curves.opened_curve().expect("a curve is open"));
+        assert!(p.boxes.iter().any(|(t, bx)| t.contains("You are editing the curve dated 2026-07-01") && t.contains(&id) && inside(*bx, r.window)), "{what}: the warning names the curve and its id {id}");
+        assert!(rig.app.curves.rects.warning.is_positive() && inside(rig.app.curves.rects.warning, rig.app.curves.rects.editor), "{what}: the warning is inside the editor");
+        assert!(p.boxes.iter().any(|(t, bx)| t == "Save as new date" && inside(*bx, r.footer)), "{what}");
+        // a new curve has no such warning
+        rig.app.curves.new_curve();
+        let p = rig.draw(3);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("You are editing the curve dated")), "{what}");
+        assert!(!p.boxes.iter().any(|(t, _)| t == "Save as new date") || rig.app.curves.editor.opened_from.is_none(), "{what}");
+        // open the January curve, change a rate, keep the date: Save as new date refuses and says why
+        rig.app.curves.open(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("date"));
+        rig.app.curves.editor.points[0].ftp_rate = 8.25;
+        rig.draw(3);
+        let january = std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file");
+        let btn = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Save as new date").map(|(_, r)| *r).expect("button");
+        rig.click(btn.center());
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("The date is still 2026-01-01")), "{what}: the reason");
+        assert_eq!(std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file"), january, "{what}: nothing written");
+        // with a new date it writes a new file and leaves January alone
+        rig.app.curves.editor.date = "2026-03-01".into();
+        rig.draw(3);
+        let btn = rig.app.curves.rects.buttons.iter().find(|(n, _)| n == "Save as new date").map(|(_, r)| *r).expect("button");
+        rig.click(btn.center());
+        assert!(dir.join("2026-03-01.json").exists(), "{what}: the new date is a file");
+        assert!(std::fs::read_to_string(dir.join("2026-03-01.json")).expect("file").contains("8.25"), "{what}");
+        assert_eq!(std::fs::read_to_string(dir.join("2026-01-01.json")).expect("file"), january, "{what}: January is as it was");
+        // an existing date is not taken by Save as new date
+        rig.app.curves.open(chrono::NaiveDate::from_ymd_opt(2026, 3, 1).expect("date"));
+        rig.app.curves.editor.date = "2026-07-01".into();
+        let e = rig.app.curves.save_as_new_date().err().expect("exists");
+        assert!(e.contains("already exists"), "{what}: {e}");
         micro_parquet::curves::set_curves_dir_override(None);
     }
 }
