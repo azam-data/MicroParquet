@@ -65,10 +65,7 @@ fn main() -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!(
-                "MicroParquet v{} — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .with_title(ui::tabs::window_title(None))
             .with_inner_size(theme::WINDOW_SIZE)
             .with_min_inner_size(theme::WINDOW_MIN_SIZE),
         ..Default::default()
@@ -88,6 +85,25 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// What Help > About drew (the render tests read it).
+#[derive(Clone, Copy, Debug)]
+pub struct AboutRects {
+    pub version: egui::Rect,
+    pub build: egui::Rect,
+    pub folder: egui::Rect,
+    pub open_folder: egui::Rect,
+    pub key: egui::Rect,
+    pub fonts: egui::Rect,
+    pub close: egui::Rect,
+}
+
+impl Default for AboutRects {
+    fn default() -> Self {
+        let n = egui::Rect::NOTHING;
+        Self { version: n, build: n, folder: n, open_folder: n, key: n, fonts: n, close: n }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +221,17 @@ pub struct MicroParquetApp {
     pub right_panel_dragging: bool,
     /// What the SQL tab drew (for the render tests).
     pub sql_rects: ui::sql::SqlRects,
+    /// The title the window has now ("MicroParquet v1.6.0 — loans.csv"), and what About drew.
+    pub window_title: String,
+    pub about_rects: AboutRects,
+    /// The folder "Open folder" in About last opened (tests read it; the program starts the
+    /// file manager).
+    pub opened_folder: Option<PathBuf>,
+    /// Tests: the file the "Open" dialog would give (`None` = cancelled), and how often it was asked for.
+    #[cfg(test)]
+    pub test_pick: Option<PathBuf>,
+    #[cfg(test)]
+    pub file_dialog_requests: u32,
     batch_modal: BatchModalState,
     active_tool: ActiveToolModal,
     status_message: String,
@@ -310,6 +337,13 @@ impl MicroParquetApp {
             right_panel_w: settings.right_panel_width.unwrap_or(ui::theme::RIGHT_PANEL_W).max(ui::theme::RIGHT_PANEL_W),
             right_panel_dragging: false,
             sql_rects: ui::sql::SqlRects::default(),
+            window_title: ui::tabs::window_title(None),
+            about_rects: AboutRects::default(),
+            opened_folder: None,
+            #[cfg(test)]
+            test_pick: None,
+            #[cfg(test)]
+            file_dialog_requests: 0,
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
             status_message:
@@ -391,6 +425,7 @@ impl MicroParquetApp {
         }
         self.handle_palette_shortcut(ctx);
         self.handle_zoom_keys(ctx);
+        self.update_window_title(ctx);
         self.handle_step_shortcuts(ctx);
         self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
@@ -562,30 +597,96 @@ impl MicroParquetApp {
         resp
     }
 
-    fn render_about(&mut self, ctx: &egui::Context) {
+    pub(crate) fn render_about(&mut self, ctx: &egui::Context) {
         if !self.show_about {
             return;
         }
+        let tk = *theme::tokens(self.dark_mode);
         let mut open = true;
         let mut close = false;
-        theme::modal("About MicroParquet").open(&mut open).show(ctx, |d| {
+        let mut open_folder = false;
+        let mut rects = AboutRects::default();
+        let key_text = match micro_parquet::engine::read_pii_key(&micro_parquet::engine::pii_key_path()) {
+            Ok(Some(k)) => micro_parquet::engine::pii_key_fingerprint(&k),
+            Ok(None) => "not created yet (it is made the first time a column is masked)".to_string(),
+            Err(e) => format!("could not be read: {:#}", e),
+        };
+        let folder = self.paths.root_dir.display().to_string();
+        theme::modal("About MicroParquet").open(&mut open).default_width(theme::DIALOG_W_ABOUT).show(ctx, |d| {
             d.body(|ui| {
-                ui.label(theme::semibold(format!("MicroParquet {}", env!("CARGO_PKG_VERSION"))));
-                ui.label("Portable Parquet / CSV viewer, converter and editor for treasury, ALM and finance work.");
+                ui.set_max_width(ui.available_width());
+                let wrap = |ui: &mut egui::Ui, text: String| {
+                    ui.add(egui::Label::new(text).wrap());
+                };
+                rects.version = ui.label(theme::semibold(format!("MicroParquet v{}", env!("CARGO_PKG_VERSION"))).size(theme::TEXT_HEADING)).rect;
+                rects.build = ui.label(egui::RichText::new(format!("Built {}", env!("MP_BUILD_DATE"))).color(tk.muted)).rect;
                 ui.add_space(theme::SPACE_S);
-                ui.label(format!("Data folder: {}", self.paths.root_dir.display()));
+                wrap(ui, "Portable CSV/Parquet viewer, converter and editor for treasury, ALM and loans analytics.".to_string());
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("What it does"));
+                for line in [
+                    "Out-of-core Polars engine: big files stay on disk",
+                    "Multi-tab views, each with its own steps",
+                    "Custom maturity buckets and rate bands",
+                    "Per-metric number formats (Crore, Lakh, Million, Thousand)",
+                ] {
+                    wrap(ui, format!("\u{2022}  {}", line));
+                }
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("Data folder (portable_data)"));
+                ui.horizontal(|ui| {
+                    rects.folder = ui.add(egui::Label::new(theme::mono(folder.clone())).truncate()).on_hover_text(folder.clone()).rect;
+                });
+                let b = ui.button("Open folder");
+                rects.open_folder = b.rect;
+                if b.clicked() {
+                    open_folder = true;
+                }
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("Masking key"));
+                rects.key = ui.add(egui::Label::new(theme::mono(key_text.clone())).wrap()).rect;
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("Fonts"));
+                rects.fonts = ui
+                    .add(egui::Label::new("Source Sans 3 and JetBrains Mono, both under the SIL Open Font License 1.1 (OFL). The licence texts are in assets/fonts and THIRD_PARTY_NOTICES.md.").wrap())
+                    .rect;
             });
             d.footer(|ui| {
-                if ui.button("Close").clicked() {
+                let b = ui.button("Close");
+                rects.close = b.rect;
+                if b.clicked() {
                     close = true;
                 }
             });
         });
+        self.about_rects = rects;
+        if open_folder {
+            self.open_data_folder();
+        }
         if close {
             open = false;
         }
         if !open {
             self.show_about = false;
+        }
+    }
+
+    /// Shows the data folder in the system's file manager.
+    fn open_data_folder(&mut self) {
+        let dir = self.paths.root_dir.clone();
+        self.opened_folder = Some(dir.clone());
+        #[cfg(not(test))]
+        {
+            let result = if cfg!(target_os = "windows") {
+                std::process::Command::new("explorer").arg(&dir).spawn()
+            } else if cfg!(target_os = "macos") {
+                std::process::Command::new("open").arg(&dir).spawn()
+            } else {
+                std::process::Command::new("xdg-open").arg(&dir).spawn()
+            };
+            if let Err(e) = result {
+                self.status_message = format!("Could not open the folder {}: {}", dir.display(), e);
+            }
         }
     }
 }

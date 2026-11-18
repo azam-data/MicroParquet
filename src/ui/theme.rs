@@ -238,6 +238,7 @@ pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL
 pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
 // dialogs: widths (the schema dialog's is above) and the lists inside them
 pub const DIALOG_W_SORT: f32 = 700.0;
+pub const DIALOG_W_ABOUT: f32 = 560.0;
 pub const DIALOG_W_FILTER: f32 = 640.0;
 pub const DIALOG_W_TOOL: f32 = 680.0;
 pub const DIALOG_W_PIVOT: f32 = 720.0;
@@ -365,8 +366,6 @@ pub const MARGIN_TAB_STRIP: egui::Margin = egui::Margin { left: 12.0, right: 12.
 pub fn margin_tab(active: bool) -> egui::Margin {
     egui::Margin::symmetric(14.0, if active { 7.0 } else { 5.0 })
 }
-pub const EMPTY_STATE_TOP: f32 = 90.0;
-pub const EMPTY_STATE_GAP: f32 = 20.0;
 // right panel
 pub const MARGIN_SEGMENTED: egui::Margin = egui::Margin::same(3.0);
 pub const MARGIN_SEGMENTED_OUTER: egui::Margin = egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 };

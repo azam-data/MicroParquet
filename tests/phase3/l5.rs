@@ -103,7 +103,7 @@ fn l5_dir_is_writable_checks_by_writing() {
 
 #[test]
 fn l5_one_version_number_everywhere() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "1.3.0");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "1.6.0");
     let d = dir("ver");
     let p = d.join("m.mpq.json");
     let recipe = MacroRecipe {
@@ -246,7 +246,7 @@ fn l5_a_phase2_macro_and_a_phase3_macro_load_and_round_trip() {
     save_macro_to_file(&r3, &p3).unwrap();
     let back = load_macro_from_file(&p3).unwrap();
     assert_eq!(back.steps.len(), 4);
-    assert_eq!(macro_file_version(&p3).as_deref(), Some("1.3.0"));
+    assert_eq!(macro_file_version(&p3).as_deref(), Some(env!("CARGO_PKG_VERSION")));
     std::fs::remove_dir_all(&d).ok();
 }
 

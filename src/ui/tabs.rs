@@ -11,12 +11,40 @@ pub(crate) fn tab_index_after_close(sel: usize, closed: usize, new_len: usize) -
     shifted.min(new_len.saturating_sub(1))
 }
 
+/// The window title: "MicroParquet v1.6.0", and " — <file name>" when a tab is open.
+pub fn window_title(file: Option<&str>) -> String {
+    match file.map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) => format!("MicroParquet v{} \u{2014} {}", env!("CARGO_PKG_VERSION"), f),
+        None => format!("MicroParquet v{}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 impl MicroParquetApp {
+    /// The name of the active tab's file (a tab made by a tool has its own title).
+    pub(crate) fn active_file_name(&self) -> Option<String> {
+        let tab = self.tabs.get(self.active_tab)?;
+        let first = micro_parquet::steps_edit::source_files(&tab.source).first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        Some(first.unwrap_or_else(|| tab.title.clone()))
+    }
+
+    /// Keeps the window's title bar in step with the active tab.
+    pub(crate) fn update_window_title(&mut self, ctx: &egui::Context) {
+        let title = window_title(self.active_file_name().as_deref());
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+    }
+
     pub(crate) fn initiate_file_open(&mut self, direct_convert_only: bool) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Data Files (CSV, Parquet)", &["csv", "parquet"])
-            .pick_file()
-        else {
+        #[cfg(test)]
+        let picked = {
+            self.file_dialog_requests += 1;
+            self.test_pick.take()
+        };
+        #[cfg(not(test))]
+        let picked = rfd::FileDialog::new().add_filter("Data Files (CSV, Parquet)", &["csv", "parquet"]).pick_file();
+        let Some(path) = picked else {
             return;
         };
         self.open_data_file(path, direct_convert_only);
@@ -445,29 +473,42 @@ impl MicroParquetApp {
         self.tab_id_counter
     }
 
+    /// The start screen: three buttons, in the middle of the window (nothing else).
     pub(crate) fn render_empty_state(&mut self, ui: &mut egui::Ui) {
+        // the height of the three buttons is measured the frame before (the first frame guesses)
+        let id = egui::Id::new("empty_state_h");
+        let guess = 3.0 * ui.spacing().interact_size.y + 2.0 * theme::SPACE_S; // not a size: three buttons, two gaps
+        let content_h = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(guess);
+        let top = ((ui.available_height() - content_h) / 2.0).max(0.0);
+        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
         ui.vertical_centered(|ui| {
-            ui.add_space(theme::EMPTY_STATE_TOP);
-            ui.heading(format!(
-                "MicroParquet {}: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
-                env!("CARGO_PKG_VERSION")
-            ));
-            ui.label("Out-of-Core Polars Engine • Multi-Tab Views • Custom Maturity Buckets • Per-Metric Formats");
-            ui.add_space(theme::EMPTY_STATE_GAP);
-            if theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...").clicked() {
+            ui.add_space(top);
+            let r = theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...");
+            rects.push(("open".to_string(), r.rect));
+            if r.clicked() {
                 self.initiate_file_open(false);
             }
             ui.add_space(theme::SPACE_S);
-            if ui.button("\u{E466} Stack / Merge Multiple Files...").clicked() {
+            let r = ui.button("\u{E466} Stack / Merge Multiple Files...");
+            rects.push(("stack".to_string(), r.rect));
+            if r.clicked() {
                 self.active_tool = ActiveToolModal::StackFiles;
             }
             ui.add_space(theme::SPACE_S);
-            if ui
-                .button("\u{E094} Launch Recursive Folder Batch Converter...")
-                .clicked()
-            {
+            let r = ui.button("\u{E094} Launch Recursive Folder Batch Converter...");
+            rects.push(("batch".to_string(), r.rect));
+            if r.clicked() {
                 self.batch_modal.open = true;
             }
+        });
+        // (the buttons' own rectangles: the panel's rectangle is always the whole area)
+        let used = match (rects.first(), rects.last()) {
+            (Some((_, f)), Some((_, l))) => l.bottom() - f.top(),
+            _ => content_h,
+        };
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(id, used.max(0.0));
+            d.insert_temp(egui::Id::new("empty_state_rects"), rects);
         });
     }
 

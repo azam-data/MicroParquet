@@ -10,7 +10,7 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 | U1 | DONE | (this commit) | tests/phase6/u1.rs ×10 (rename order and typing, header match and no match, duplicate names, stack, batch, Python, old schema, warning with the step named, parse failures and masks, swap), render_tests_p6 ×5 (both screens; real clicks on Undo, Lock Schema & Open, picker buttons, Apply anyway / Cancel) | D7–D10 |
 | U2 | DONE | (this commit) | src/settings.rs ×2 unit; render_tests_p6 ×8 (drag to 500, clamp to half the window and to today's width, save and restart, double-click reset, three tabs in one row at both widths, 30 steps scroll to the last step and click it, SQL tab layout, 12-line Ctrl+Enter and Ctrl+Shift+Enter, bad query error, history of 10, View menu and Ctrl+K); guide_sql_editor + completeness | D11–D14 |
 | U6 | DONE | (this commit) | render_tests_p6 ×5 (90% written as 0.9 and restart starts at it, 5.0 held to 2.0 with a message, damaged and missing file, Ctrl+= / Ctrl+- / Ctrl+0 and the 50%–200% limits, status-bar label click at both scales with Zoom in and Set as default by real clicks, Ctrl+K commands, 31 default choices and the View menu list) | D15–D17 |
-| U4 | | | | |
+| U4 | DONE | (this commit) | render_tests_p6 ×3 (title strings for no tab / an open tab / closed again and the viewport command sent once; landing page has no heading or tagline, 3 buttons centred and clicked on their rects; About: Help menu click, fits at both scales, version, build date, capabilities, folder + Open folder click, key, OFL fonts); l5 version assertions now read the Cargo version | D18–D19 |
 | U5 | | | | |
 | U7 | | | | |
 
@@ -32,3 +32,5 @@ Each task is one commit "Phase 6 <ID>: ...". New tests: `tests/phase6/` (compile
 - D15 (U6): the live zoom now runs 50%–200% (it was 80%–150%) and stays in 5% steps; Zoom in / Zoom out still move by 10%.
 - D16 (U6): the status-bar zoom label is the right-most item (right of "Messages") and is left out when the bar is narrower than 900 pt, so the last message keeps its room in a small window. egui's own Ctrl+= / Ctrl+- zoom is switched off (the app's own keys replace it).
 - D17 (U6): the new Ctrl+K commands are "Reset zoom to the default" and "Set the current zoom as the default"; the Zoom menu stays open after Zoom in / Zoom out so they can be repeated.
+- D18 (U4): the build date comes from a small `build.rs` (std only, no crate; `SOURCE_DATE_EPOCH` is honoured), the version is 1.6.0 in Cargo.toml and Cargo.lock. Two Phase 3 assertions that spelled "1.3.0" now read `CARGO_PKG_VERSION`.
+- D19 (U4): the title uses the first file of the active tab's source ("MicroParquet v1.6.0 — loans.csv"), or the tab's title for a tab made by a tool; "Open folder" starts the system file manager (explorer, open or xdg-open).

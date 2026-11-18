@@ -910,3 +910,116 @@ fn u6_the_default_zoom_runs_from_50_to_200_percent_in_5_percent_steps() {
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ------------------------------------------------------------------------------------------ U4
+
+fn app_texts(p: &Painted) -> Vec<String> {
+    p.texts.iter().map(|(t, _, _)| t.clone()).collect()
+}
+
+#[test]
+fn u4_the_window_title_is_the_version_and_the_active_file() {
+    assert_eq!(crate::ui::tabs::window_title(None), "MicroParquet v1.6.0");
+    assert_eq!(crate::ui::tabs::window_title(Some("loans_2026-11.csv")), "MicroParquet v1.6.0 \u{2014} loans_2026-11.csv");
+    assert_eq!(crate::ui::tabs::window_title(Some("  ")), "MicroParquet v1.6.0", "a blank name adds nothing");
+    for (ppp, w, h) in SCREENS {
+        let mut app = test_app("p6u4a");
+        let (ctx, input) = screen(ppp, w, h);
+        let title_cmd = |out: &egui::FullOutput| {
+            out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.iter().filter_map(|c| if let egui::ViewportCommand::Title(t) = c { Some(t.clone()) } else { None }).collect::<Vec<_>>()).unwrap_or_default()
+        };
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        assert_eq!(app.window_title, "MicroParquet v1.6.0", "no tab: version only");
+        let _ = title_cmd(&out);
+        // open a file: the title says which
+        let p = app.paths.root_dir.join("loans_2026-11.csv");
+        std::fs::write(&p, "A,B\n1,2\n").expect("csv");
+        let src = TabSource::SingleFile { path: p, is_parquet: false, config: micro_parquet::engine::auto_detect_smart_schema(&app.paths.root_dir.join("loans_2026-11.csv")).expect("schema") };
+        app.create_tab_from_source("Loans".into(), src, vec![], HashMap::new());
+        settle(&mut app);
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        assert_eq!(app.window_title, "MicroParquet v1.6.0 \u{2014} loans_2026-11.csv", "an open tab: the file name");
+        assert_eq!(title_cmd(&out), vec!["MicroParquet v1.6.0 \u{2014} loans_2026-11.csv".to_string()], "the title was sent to the window");
+        // the same title is not sent again
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        assert!(title_cmd(&out).is_empty());
+        // closing the tab goes back to the version only
+        app.close_tab(0);
+        let out = ctx.run(input.clone(), |c| app.frame_ui(c));
+        assert_eq!(title_cmd(&out), vec!["MicroParquet v1.6.0".to_string()]);
+    }
+}
+
+#[test]
+fn u4_the_landing_page_has_three_buttons_in_the_middle_and_no_heading_or_tagline() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = Rig { app: test_app("p6u4b"), ctx: screen(ppp, w, h).0, input: screen(ppp, w, h).1, what: format!("ppp {ppp} {w}x{h}") };
+        let what = rig.what.clone();
+        let p = rig.draw(5);
+        let all = app_texts(&p).join(" | ");
+        for gone in ["Portable CSV/Parquet", "Out-of-Core Polars Engine", "Multi-Tab Views", "Per-Metric Formats", "Analytics Workstation"] {
+            assert!(!all.contains(gone), "{what}: the text '{gone}' is gone from the landing page: {all}");
+        }
+        let rects: Vec<(String, egui::Rect)> = rig.ctx.data(|d| d.get_temp(egui::Id::new("empty_state_rects"))).expect("the landing page drew its buttons");
+        assert_eq!(rects.len(), 3, "{what}");
+        for (n, r) in &rects {
+            assert!(inside(*r, rig.ctx.screen_rect()), "{what}: '{n}' {r:?} is in the window");
+        }
+        // centred vertically in the area between the top bar and the status bar
+        let top = rects.first().map(|(_, r)| r.top()).expect("rect");
+        let bottom = rects.last().map(|(_, r)| r.bottom()).expect("rect");
+        let area_top = theme::TOP_BAR_H;
+        let area_bottom = rig.ctx.screen_rect().bottom() - theme::STATUS_BAR_H;
+        let (mid_buttons, mid_area) = ((top + bottom) / 2.0, (area_top + area_bottom) / 2.0);
+        assert!((mid_buttons - mid_area).abs() < 0.12 * (area_bottom - area_top), "{what}: the buttons ({mid_buttons}) are in the middle of the area ({mid_area})");
+        // every button works by a click on its real rectangle
+        let open = rects[0].1;
+        rig.click(open.center());
+        assert_eq!(rig.app.file_dialog_requests, 1, "{what}: the Open button asks for a file");
+        rig.click(rects[1].1.center());
+        assert_eq!(rig.app.active_tool, ActiveToolModal::StackFiles, "{what}: Stack / Merge");
+        rig.app.active_tool = ActiveToolModal::None;
+        let rects: Vec<(String, egui::Rect)> = rig.ctx.data(|d| d.get_temp(egui::Id::new("empty_state_rects"))).expect("rects");
+        rig.draw(2);
+        rig.click(rects[2].1.center());
+        assert!(rig.app.batch_modal.open, "{what}: the batch converter opens");
+    }
+}
+
+#[test]
+fn u4_about_has_the_version_build_date_capabilities_folder_key_and_fonts_and_fits_at_both_scales() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6u4c", ppp, w, h);
+        let what = rig.what.clone();
+        // Help > About MicroParquet by clicks
+        let p = rig.draw(3);
+        let help = p.boxes.iter().find(|(t, _)| t == "Help").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Help menu"));
+        rig.click(help.center());
+        let p = rig.draw(3);
+        let about = p.boxes.iter().find(|(t, _)| t.contains("About MicroParquet")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Help lists About"));
+        rig.click(about.center());
+        assert!(rig.app.show_about, "{what}");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, "About MicroParquet", &what);
+        let a = rig.app.about_rects;
+        for (n, rc) in [("version", a.version), ("build", a.build), ("folder", a.folder), ("Open folder", a.open_folder), ("key", a.key), ("fonts", a.fonts), ("Close", a.close)] {
+            assert!(rc.is_positive() && inside(rc, r.window), "{what}: '{n}' {rc:?} is inside the dialog {:?}", r.window);
+        }
+        let all = app_texts(&p).join(" | ");
+        assert!(all.contains("MicroParquet v1.6.0"), "{what}: {all}");
+        let built = all.split("Built ").nth(1).map(|s| s.chars().take(10).collect::<String>()).unwrap_or_default();
+        assert!(built.len() == 10 && built.as_bytes()[4] == b'-' && built.as_bytes()[7] == b'-' && built[..4].parse::<u32>().is_ok_and(|y| y >= 2026), "{what}: a build date YYYY-MM-DD: '{built}'");
+        for t in ["Portable CSV/Parquet viewer", "Out-of-core Polars engine", "Multi-tab views", "Custom maturity buckets", "Per-metric number formats", "SIL Open Font License 1.1 (OFL)", "Masking key", "Data folder (portable_data)"] {
+            assert!(all.contains(t), "{what}: About says '{t}'");
+        }
+        // the folder path is the real one, whole or cut with its full text on hover
+        let root = rig.app.paths.root_dir.display().to_string();
+        assert!(p.shown.iter().any(|(t, _)| root.starts_with(t.trim_end_matches('\u{2026}')) && t.len() > 10), "{what}: the data folder {root} shows");
+        // "Open folder" by a real click
+        rig.click(a.open_folder.center());
+        assert_eq!(rig.app.opened_folder.as_deref(), Some(rig.app.paths.root_dir.as_path()), "{what}");
+        rig.click(rig.app.about_rects.close.center());
+        assert!(!rig.app.show_about, "{what}: Close");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
