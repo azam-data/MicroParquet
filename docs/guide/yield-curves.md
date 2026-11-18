@@ -13,7 +13,7 @@ Keeps the treasury yield curves by date, one file per curve in `portable_data/cu
 ## 3. Before you start
 
 - The curve from treasury: tenors in days and rates in percent, and the date it takes effect.
-- For an import, a CSV with two columns: tenor in whole days, rate in percent (a heading line is allowed; comma, semicolon or tab; a % after the rate is allowed).
+- For an import, a CSV with two columns: tenor in whole days, rate in percent (one heading line at the top is skipped, no more; comma, semicolon or tab; a % after the rate is allowed).
 
 ## 4. Columns you need
 
@@ -87,7 +87,7 @@ Test: `guide_yield_curves`
 
 - "The tenors must increase: 365 days (line 1) is followed by 30 days (line 2)." Sort the CSV by tenor.
 - "Lines 2 and 3 both have the tenor 30 days (8% and 8.5%). Each tenor needs one rate." Remove one line.
-- "Line N: expected two columns (tenor_days, rate_pct), found 3." / "Line N: 'abc' is not a whole number of days." / "Line N: 'high' is not a rate in percent." / "Line N: the tenor 0 is not a number of days above 0." Fix that line.
+- "Line N: expected two columns (tenor_days, rate_pct), found 3." / (a second title or heading line gives "Line 2: 'tenor_days' is not a whole number of days." Delete the extra line) / "Line N: 'abc' is not a whole number of days." / "Line N: 'high' is not a rate in percent." / "Line N: the tenor 0 is not a number of days above 0." Fix that line.
 - "The file has no points." The CSV is empty.
 - "Type the curve's date as YYYY-MM-DD." / "Type the curve's currency (for example BDT). Every curve needs one." in the editor.
 - "A curve dated D already exists. Select it in the list to change it, or choose another date."

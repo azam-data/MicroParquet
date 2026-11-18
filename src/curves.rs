@@ -207,28 +207,36 @@ impl CurveStore {
     }
 }
 
-/// Reads a two-column CSV (tenor_days, rate_pct) into points: a heading line is allowed, the
+/// Reads a two-column CSV (tenor_days, rate_pct) into points: one heading line is allowed (no more), the
 /// separator is a comma, a semicolon or a tab, and a rate may end in a %. The points must be valid
 /// (see [`validate_points`]); every message names the line.
 pub fn parse_curve_csv(text: &str) -> Result<Vec<FtpPoint>> {
     let mut points: Vec<FtpPoint> = Vec::new();
     let mut lines_of: Vec<usize> = Vec::new();
+    // At most one heading line is skipped: the first line with anything on it, and only when it does
+    // not start with a number of days. Any other line that cannot be read is an error with its number.
+    let mut seen_content = false;
     for (n, raw) in text.lines().enumerate() {
         let line_no = n + 1;
         let line = raw.trim().trim_start_matches('\u{feff}');
         if line.is_empty() {
             continue;
         }
+        let first_content = !seen_content;
+        seen_content = true;
         let cells: Vec<&str> = line.split([',', ';', '\t']).map(str::trim).collect();
+        let tenor: Result<i64, _> = cells[0].parse::<i64>();
+        if first_content && tenor.is_err() {
+            let rate_unreadable = cells.len() != 2 || cells[1].trim_end_matches('%').trim().replace(',', ".").parse::<f64>().is_err();
+            if rate_unreadable {
+                // the heading line
+                continue;
+            }
+        }
         if cells.len() != 2 {
             bail!("Line {}: expected two columns (tenor_days, rate_pct), found {}.", line_no, cells.len());
         }
-        let tenor: Result<i64, _> = cells[0].parse::<i64>();
         let rate: Result<f64, _> = cells[1].trim_end_matches('%').trim().replace(',', ".").parse::<f64>();
-        if points.is_empty() && tenor.is_err() && rate.is_err() {
-            // the heading line
-            continue;
-        }
         let tenor = tenor.map_err(|_| anyhow!("Line {}: '{}' is not a whole number of days.", line_no, cells[0]))?;
         let rate = rate.map_err(|_| anyhow!("Line {}: '{}' is not a rate in percent.", line_no, cells[1]))?;
         points.push(FtpPoint { tenor_days: tenor, ftp_rate: rate });

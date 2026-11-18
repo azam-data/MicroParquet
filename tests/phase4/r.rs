@@ -598,3 +598,36 @@ fn i11_the_repricing_gap_names_its_last_bucket_gt_12m_and_notes_how_many_rows_ha
     let g = build_repricing_gap(book(&["2026-09-01"], &[""]).lazy(), &spec(None), &[]).expect("builds");
     assert_eq!(labels(&g).len(), 6);
 }
+
+// ------------------------------------------------------------------------------------------ 12
+
+#[test]
+fn i12_a_curve_csv_skips_at_most_one_heading_line_and_any_other_bad_line_gives_its_number() {
+    use micro_parquet::curves::parse_curve_csv;
+    let pts = |t: &str| parse_curve_csv(t).unwrap_or_else(|e| panic!("{t:?}: {e:#}"));
+    // no heading, one heading, a heading after blank lines, a BOM, semicolons and a % sign
+    assert_eq!(pts("30,8\n365,10\n").len(), 2);
+    assert_eq!(pts("tenor_days,rate_pct\n30,8\n365,10\n").len(), 2);
+    assert_eq!(pts("\n\n\u{feff}tenor_days;rate_pct\n30;8\n365;10%\n").len(), 2);
+    let err = |t: &str| format!("{:#}", parse_curve_csv(t).err().unwrap_or_else(|| panic!("{t:?} must be refused")));
+    // two heading-like lines: the second is an error, with its number
+    let e = err("Treasury curve\ntenor_days,rate_pct\n30,8\n365,10\n");
+    assert!(e.contains("Line 2:") && e.contains("'tenor_days'"), "{e}");
+    // a bad line in the middle or at the end
+    let e = err("tenor_days,rate_pct\n30,8\nninety,9\n365,10\n");
+    assert!(e.contains("Line 3: 'ninety' is not a whole number of days"), "{e}");
+    let e = err("30,8\n90,abc\n");
+    assert!(e.contains("Line 2: 'abc' is not a rate in percent"), "{e}");
+    let e = err("30,8\n365,10\nTotal\n");
+    assert!(e.contains("Line 3:"), "{e}");
+    // line numbers count the blank lines too, and a heading line is not counted as a point
+    let e = err("\ntenor_days,rate_pct\n\n30,8\n\nx,9\n");
+    assert!(e.contains("Line 6: 'x' is not a whole number of days"), "{e}");
+    // a data-looking first line is never skipped
+    let e = err("30,8,1\n");
+    assert!(e.contains("Line 1: expected two columns"), "{e}");
+    let e = err("abc,9\n30,8\n");
+    assert!(e.contains("Line 1: 'abc' is not a whole number of days"), "a line with a rate and no tenor is not a heading: {e}");
+    // only a heading: no points
+    assert!(err("tenor_days,rate_pct\n").contains("no points"));
+}
