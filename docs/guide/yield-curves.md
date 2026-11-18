@@ -89,13 +89,14 @@ Test: `guide_yield_curves`
 - "Lines 2 and 3 both have the tenor 30 days (8% and 8.5%). Each tenor needs one rate." Remove one line.
 - "Line N: expected two columns (tenor_days, rate_pct), found 3." / "Line N: 'abc' is not a whole number of days." / "Line N: 'high' is not a rate in percent." / "Line N: the tenor 0 is not a number of days above 0." Fix that line.
 - "The file has no points." The CSV is empty.
-- "Type the curve's date as YYYY-MM-DD." in the editor.
+- "Type the curve's date as YYYY-MM-DD." / "Type the curve's currency (for example BDT). Every curve needs one." in the editor.
 - "A curve dated D already exists. Select it in the list to change it, or choose another date."
-- In the list, in red: "Curve file X.json: The file name 'X.json' is not a date…", "The file name says A but 'as_of' says B. Make them the same.", "It is not a valid curve file (…)". Fix the file in a text editor, or delete it.
+- In the list, in red: "Curve file X.json: The file name 'X.json' is not a date…", "The file name says A but 'as_of' says B. Make them the same.", "It is not a valid curve file (…)", "Curve file X.json: The currency is missing. Every curve needs one: add \"currency\": \"BDT\"…". Fix the file in a text editor, or delete it.
 
 ## 10. Limits and assumptions
 
-- One curve per date and file; a currency other than the one in the file is not checked against the deals.
+- One curve per date and file. Every file must say its currency; an FTP step uses only the curves in its own Currency (BDT unless changed), so a USD curve is never used for BDT deals. The deals' own currency is not checked: use a tab that holds one currency.
+- One damaged or currency-less file in the folder stops every FTP step that reads the store (the step does not guess), until it is fixed or deleted.
 - Rates are percent per year at each tenor; there is no conversion between compounding bases.
 - A CSV import replaces the points in the editor, it does not merge.
 - There is no history of changes: a saved curve overwrites the file of its date.

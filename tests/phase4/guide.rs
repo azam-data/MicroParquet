@@ -406,7 +406,7 @@ fn guide_ftp_curve_mapper() {
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
 
-        curve_mode: Default::default(),
+        curve_mode: Default::default(), currency: "BDT".into(),
     };
     let out = run_steps("g_ftp", &df, &[step]).expect("the FTP mapper runs");
     // review.rs t11_ftp_step_vs_interpolation: 100 days = 9.50 + 9/91 × 0.60, 31 days = 8.75 + 1/61 × 0.75

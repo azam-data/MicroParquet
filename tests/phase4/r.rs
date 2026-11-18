@@ -382,7 +382,7 @@ fn ftp_step(currency_free_mode: FtpCurveMode) -> TransformStep {
         curve: vec![],
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
-        curve_mode: currency_free_mode,
+        curve_mode: currency_free_mode, currency: "BDT".into(),
     }
 }
 
@@ -425,8 +425,63 @@ fn i7_editing_a_curve_changes_ftp_curve_id_and_only_for_the_deals_priced_on_it()
     let out = run_steps("i7typed", &dated_deals(), &[TransformStep::FtpCurveMap {
         opndat_col: "Opndat".into(), matdat_col: "Matdat".into(), bal_col: "Balance".into(), rate_col: "Rate".into(),
         curve: vec![FtpPoint { tenor_days: 30, ftp_rate: 8.0 }, FtpPoint { tenor_days: 365, ftp_rate: 10.0 }],
-        is_liability: true, interpolation: FtpInterpolation::Linear, curve_mode: FtpCurveMode::Inline,
+        is_liability: true, interpolation: FtpInterpolation::Linear, curve_mode: FtpCurveMode::Inline, currency: "BDT".into(),
     }]).expect("typed");
     assert!(out.column("FTP_Curve_Id").is_err());
+    set_curves_dir_override(None);
+}
+
+// ------------------------------------------------------------------------------------------ 8
+
+#[test]
+fn i8_a_curve_in_another_currency_is_not_used_and_a_file_without_a_currency_is_an_error_naming_it() {
+    use micro_parquet::curves::*;
+    let d = dir("i8");
+    let cdir = d.join("c");
+    let src = parquet(&d, "deals", &dated_deals());
+    let bdt_step = |mode| ftp_step(mode);
+    let origination = FtpCurveMode::OriginationDate { use_earliest_for_older: true };
+    save_curve(&cdir, &curve_of("2026-01-01", 8.0, 10.0)).expect("saves");
+    // a USD curve in between: dated after the BDT one and before the second deal
+    let mut usd = curve_of("2026-05-01", 1.0, 2.0);
+    usd.currency = "USD".into();
+    save_curve(&cdir, &usd).expect("saves");
+    set_curves_dir_override(Some(cdir.clone()));
+
+    // the BDT step ignores it: both deals are priced on the BDT curve of January (the second deal would have used May's)
+    let out = micro_parquet::engine::compile_tab_lazy(&src, &[bdt_step(origination.clone())], &d).expect("compiles").collect().expect("collects");
+    let cd = out.column("FTP_Curve_Date").expect("col").cast(&DataType::String).expect("cast");
+    let cd: Vec<Option<String>> = cd.str().expect("str").into_iter().map(|v| v.map(str::to_string)).collect();
+    assert_eq!(cd, vec![Some("2026-01-01".to_string()), Some("2026-01-01".to_string())], "the USD curve of 2026-05-01 was not used");
+    close(floats(&out, "Benchmark_FTP_Rate")[1], 8.0 + (197.0 - 30.0) / (365.0 - 30.0) * 2.0, 1e-5, "the 197-day deal on the January BDT curve");
+    // the same step in USD uses the USD curve only
+    let mut usd_step = bdt_step(origination.clone());
+    if let TransformStep::FtpCurveMap { currency, .. } = &mut usd_step {
+        *currency = "usd".into();
+    }
+    let out = micro_parquet::engine::compile_tab_lazy(&src, &[usd_step], &d).expect("compiles").collect().expect("collects");
+    let rates = floats(&out, "Benchmark_FTP_Rate");
+    assert!(rates[1].is_some_and(|r| r < 3.0), "the August deal is priced on the USD curve: {rates:?}");
+    // the skipped curve is listed in a note
+    let notes = micro_parquet::engine::blank_balance_notes(&src, &[bdt_step(origination.clone())], &d).expect("notes");
+    assert!(notes.iter().any(|n| n.contains("skipped 1 curve(s) in another currency than BDT") && n.contains("2026-05-01 (USD)")), "{notes:?}");
+    // only a USD file in the store: a BDT step stops and says what it found
+    std::fs::remove_file(cdir.join("2026-01-01.json")).expect("remove");
+    let e = format!("{:#}", micro_parquet::engine::compile_tab_lazy(&src, &[bdt_step(origination.clone())], &d).and_then(|lf| Ok(lf.collect()?)).err().expect("no BDT curve"));
+    assert!(e.contains("no yield curve in BDT") && e.contains("2026-05-01 (USD)"), "{e}");
+
+    // a file with no currency: an error that names the file, from the parser and from the step
+    std::fs::write(cdir.join("2026-02-01.json"), r#"{ "as_of": "2026-02-01", "points": [ { "tenor_days": 30, "rate_pct": 8.0 } ] }"#).expect("write");
+    let e = parse_curve_file("2026-02-01.json", &std::fs::read_to_string(cdir.join("2026-02-01.json")).expect("read")).err().expect("no currency").to_string();
+    assert!(e.contains("currency is missing"), "{e}");
+    let store = CurveStore::load(&cdir);
+    assert!(store.problems.iter().any(|(f, r)| f == "2026-02-01.json" && r.contains("Curve file 2026-02-01.json") && r.contains("currency is missing")), "{:?}", store.problems);
+    let e = format!("{:#}", micro_parquet::engine::compile_tab_lazy(&src, &[bdt_step(origination)], &d).and_then(|lf| Ok(lf.collect()?)).err().expect("a curve without currency"));
+    assert!(e.contains("2026-02-01.json") && e.contains("currency is missing"), "{e}");
+    // a blank currency in the editor is refused too (it is saved only with one)
+    assert!(parse_curve_file("2026-03-01.json", r#"{ "currency": "  ", "points": [ { "tenor_days": 30, "rate_pct": 8.0 } ] }"#).is_err());
+    // an old step without the field reads BDT
+    let old: TransformStep = serde_json::from_str(r#"{"FtpCurveMap":{"opndat_col":"O","matdat_col":"M","bal_col":"B","rate_col":"R","curve":[],"is_liability":true,"curve_mode":{"OriginationDate":{"use_earliest_for_older":false}}}}"#).expect("loads");
+    assert!(matches!(old, TransformStep::FtpCurveMap { ref currency, .. } if currency == "BDT"));
     set_curves_dir_override(None);
 }

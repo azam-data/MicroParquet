@@ -154,6 +154,7 @@ impl MicroParquetApp {
                 is_liability: self.ftp.is_liability,
                 interpolation: self.ftp.interpolation,
                 curve_mode: self.ftp.curve_mode(),
+                currency: self.ftp.currency.trim().to_string(),
             },
             ActiveToolModal::BankingAudit => TransformStep::BankingHygieneAudit {
                 opndat_col: self.audit.opn_col.clone(),
@@ -306,7 +307,8 @@ impl MicroParquetApp {
                 self.shock.side_col = side_col.unwrap_or_default();
                 self.shock.side_cols_seen = columns.to_vec();
             }
-            TransformStep::FtpCurveMap { opndat_col, matdat_col, bal_col, rate_col, curve, is_liability, interpolation, curve_mode } => {
+            TransformStep::FtpCurveMap { opndat_col, matdat_col, bal_col, rate_col, curve, is_liability, interpolation, curve_mode, currency } => {
+                self.ftp.currency = currency;
                 self.ftp.opn_col = opndat_col;
                 self.ftp.mat_col = matdat_col;
                 self.ftp.bal_col = bal_col;

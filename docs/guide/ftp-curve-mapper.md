@@ -35,6 +35,7 @@ Gives each deposit or loan a funds-transfer-pricing (FTP) benchmark rate from a 
 4. Under "Yield curve:" choose where the curve comes from:
    - "Stored curves (origination date)": every deal is priced on the curve of its origination date (the latest curve on or before its open date). Tick "Use the earliest curve for older deals" if some deals are older than your oldest curve. The dialog opens on this choice when the folder portable_data/curves has curve files.
    - "Stored curve on or before one date:" and type the date (YYYY-MM-DD): every deal is priced on the latest curve dated on or before that date.
+   - Under the two stored choices, "Currency:" (BDT by default): only stored curves in that currency are used. Curves in other currencies are skipped, and the status bar lists them.
    - "Ad-hoc curve (typed below)": edit "Tenor Days:" and "FTP %:" in the list that follows. The dialog opens on this choice when there are no curve files, and an older step that used a typed curve keeps it when you edit it.
 5. The line under the choices says how many curves the store has; "Yield curves…" opens the manager to add or change them.
 6. Choose "Rate between tenor points:" Linear (the default for a new step) or next point up.
@@ -101,6 +102,9 @@ Test: `guide_ftp_curve_mapper`
 - "FTP: no yield curve is dated on or before D; the earliest is E." (fixed date). Choose a later date or add an earlier curve.
 - "FTP: the curve date 'X' is not a date. Write it as YYYY-MM-DD."
 - "There are no yield curves in portable_data/curves." Add one in Yield curves.
+- "FTP: there is no yield curve in BDT in portable_data/curves (found 2026-01-01 (USD))…" Every stored curve is in another currency: add a BDT curve, or change "Currency:".
+- "Curve file X.json: The currency is missing…" Add `"currency": "BDT"` to the file.
+- Status bar: "skipped N curve(s) in another currency than BDT: 2026-03-01 (USD)". Not an error; those curves were not used.
 - "Curve file 2026-03-01.json: …" a curve file in the store cannot be used (the reason follows). Fix or delete it; the step does not guess.
 - "Column 'X' is String, not a date. Set it to a Date type…"
 - Status-bar warning about rows with a missing open or maturity date: fix the dates in the source or exclude those rows.

@@ -188,7 +188,7 @@ fn rich_recipe() -> MacroRecipe {
                 is_liability: true,
                 interpolation: FtpInterpolation::Linear,
 
-                curve_mode: Default::default(),
+                curve_mode: Default::default(), currency: "BDT".into(),
             },
         ],
         summary: Default::default(),

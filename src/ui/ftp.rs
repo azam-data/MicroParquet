@@ -15,6 +15,8 @@ pub struct FtpState {
     pub curve_source: CurveSource,
     pub fixed_date: String,
     pub use_earliest: bool,
+    /// The currency of the curves the step reads (default BDT).
+    pub currency: String,
     /// The curves of `portable_data/curves`, read when the dialog opens.
     pub store: micro_parquet::curves::CurveStore,
 }
@@ -82,6 +84,7 @@ impl Default for FtpState {
             curve_source: CurveSource::Typed,
             fixed_date: String::new(),
             use_earliest: false,
+            currency: micro_parquet::models::default_ftp_currency(),
             store: micro_parquet::curves::CurveStore::default(),
         }
     }
@@ -147,6 +150,13 @@ impl MicroParquetApp {
                         ui.add_enabled(self.ftp.curve_source == CurveSource::FixedDate, egui::TextEdit::singleline(&mut self.ftp.fixed_date).hint_text("YYYY-MM-DD").desired_width(theme::GAP_COMBO_NARROW_W));
                     });
                     ui.radio_value(&mut self.ftp.curve_source, CurveSource::Typed, "Ad-hoc curve (typed below)");
+                    if self.ftp.curve_source != CurveSource::Typed {
+                        ui.horizontal(|ui| {
+                            ui.label("Currency:");
+                            ui.add(egui::TextEdit::singleline(&mut self.ftp.currency).desired_width(theme::GAP_COMBO_NARROW_W).hint_text("BDT"));
+                            ui.label("Only curves in this currency are used.");
+                        });
+                    }
                     let tk = *theme::tokens(self.dark_mode);
                     let info = if self.ftp.curve_source == CurveSource::Typed {
                         None
@@ -222,7 +232,7 @@ impl MicroParquetApp {
                 if f.store.curves.is_empty() {
                     Some("There are no curves yet. Add one in Yield curves, or type the curve.".to_string())
                 } else {
-                    None
+                    f.store.for_currency(&f.currency).err().map(|e| format!("{:#}", e))
                 }
             }
             CurveSource::FixedDate => {
@@ -232,9 +242,13 @@ impl MicroParquetApp {
                 let Ok(d) = chrono::NaiveDate::parse_from_str(f.fixed_date.trim(), "%Y-%m-%d") else {
                     return Some("Type the curve date as YYYY-MM-DD (for example 2026-06-30).".to_string());
                 };
-                match f.store.on_or_before(d) {
+                let used = match f.store.for_currency(&f.currency) {
+                    Ok((used, _)) => used,
+                    Err(e) => return Some(format!("{:#}", e)),
+                };
+                match used.iter().rev().find(|c| c.date <= d) {
                     Some(_) => None,
-                    None => Some(format!("No curve is dated on or before {}. Add one in Yield curves.", d)),
+                    None => Some(format!("No {} curve is dated on or before {}. Add one in Yield curves.", f.currency.trim().to_uppercase(), d)),
                 }
             }
         }

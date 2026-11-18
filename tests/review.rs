@@ -2592,7 +2592,7 @@ fn t11c_ftp_missing_date_is_not_a_one_day_tenor() {
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
 
-        curve_mode: Default::default(),
+        curve_mode: Default::default(), currency: "BDT".into(),
     };
     let notes = blank_balance_notes(&src, &[step], &tmpdir()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");

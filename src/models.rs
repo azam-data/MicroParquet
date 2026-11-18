@@ -730,6 +730,11 @@ fn default_true() -> bool {
     true
 }
 
+/// The currency an FTP step reads curves in unless it says otherwise.
+pub fn default_ftp_currency() -> String {
+    "BDT".to_string()
+}
+
 /// Header mark for each sorted column: its level (1-based) and whether it is highest first. The
 /// last sort step decides the order, so its levels are the ones shown.
 pub fn sort_marks(steps: &[TransformStep]) -> HashMap<String, (usize, bool)> {
@@ -1577,6 +1582,10 @@ pub enum TransformStep {
         /// curve of the store on a fixed date, or each deal's own curve by its open date (V4).
         #[serde(default)]
         curve_mode: FtpCurveMode,
+        /// The currency of the curves a step that reads the store uses (default BDT); curves of
+        /// other currencies are skipped with a note.
+        #[serde(default = "default_ftp_currency")]
+        currency: String,
     },
     BankingHygieneAudit {
         opndat_col: String,

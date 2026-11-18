@@ -2616,6 +2616,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             is_liability,
             interpolation,
             curve_mode,
+            currency,
         } => match curve_mode {
             crate::models::FtpCurveMode::Inline => apply_ftp_curve_map(
                 lf,
@@ -2629,7 +2630,7 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             ),
             dated => {
                 let store = crate::curves::CurveStore::load(&crate::curves::curves_dir());
-                let curves = store.strict()?.to_vec();
+                let (curves, _skipped) = store.for_currency(currency)?;
                 crate::banking::apply_ftp_dated_curves(lf, opndat_col, matdat_col, bal_col, rate_col, &curves, dated, *is_liability, *interpolation)
             }
         },
@@ -3409,6 +3410,23 @@ pub fn blank_balance_notes(
 ) -> Result<Vec<String>> {
     let mut notes = Vec::new();
     for (i, step) in steps.iter().enumerate() {
+        if let TransformStep::FtpCurveMap { curve_mode, currency, .. } = step {
+            if !matches!(curve_mode, crate::models::FtpCurveMode::Inline) {
+                // curves of other currencies are not used: say which
+                let store = crate::curves::CurveStore::load(&crate::curves::curves_dir());
+                if let Ok((_, skipped)) = store.for_currency(currency) {
+                    if !skipped.is_empty() {
+                        notes.push(format!(
+                            "{}: skipped {} curve(s) in another currency than {}: {}",
+                            step.short_label(),
+                            skipped.len(),
+                            currency.trim(),
+                            skipped.iter().map(|c| format!("{} ({})", c.date.format("%Y-%m-%d"), c.currency)).collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                }
+            }
+        }
         if let TransformStep::FtpCurveMap { opndat_col, matdat_col, .. } = step {
             let input = compile_tab_lazy(source, &steps[..i], temp_dir)?;
             let n = count_missing_ftp_dates(input, opndat_col, matdat_col)?;

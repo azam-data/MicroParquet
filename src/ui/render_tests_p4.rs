@@ -898,7 +898,7 @@ fn the_ftp_dialog_chooses_the_curve_source_and_the_step_prices_each_deal_on_its_
         assert!(p.boxes.iter().any(|(t, bx)| t.contains("Type the curve date as YYYY-MM-DD") && inside(*bx, r.window)), "{what}");
         assert!(rig.app.ftp_curve_problem().is_some());
         rig.app.ftp.fixed_date = "2025-06-30".into();
-        assert!(rig.app.ftp_curve_problem().expect("none that early").contains("No curve is dated on or before 2025-06-30"), "{what}");
+        assert!(rig.app.ftp_curve_problem().expect("none that early").contains("No BDT curve is dated on or before 2025-06-30"), "{what}");
         rig.app.ftp.fixed_date = "2026-06-30".into();
         assert!(rig.app.ftp_curve_problem().is_none(), "{what}");
         // origination: choose it with a real click on its radio button
@@ -1192,7 +1192,7 @@ fn i5_the_ftp_dialog_opens_on_stored_curves_only_when_curve_files_exist_and_an_o
             curve: default_bd_ftp_curve(),
             is_liability: true,
             interpolation: FtpInterpolation::Linear,
-            curve_mode: FtpCurveMode::Inline,
+            curve_mode: FtpCurveMode::Inline, currency: "BDT".into(),
         };
         rig.app.push_step_to_active_tab(step, false);
         rig.draw(4);

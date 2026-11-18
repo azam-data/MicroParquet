@@ -172,9 +172,9 @@ fn v4_curve_files_are_dated_checked_saved_listed_and_deleted() {
     assert_eq!(load_curve_file(&p).expect("loads"), c);
     save_curve(&dir, &curve("2026-07-01", vec![pt(30, 9.0), pt(365, 11.0)])).expect("saves");
     // a file the program cannot use is listed with its reason and the others still load
-    std::fs::write(dir.join("2026-03-01.json"), r#"{"points":[{"tenor_days":30,"rate_pct":8},{"tenor_days":30,"rate_pct":9}]}"#).expect("write");
-    std::fs::write(dir.join("not-a-date.json"), r#"{"points":[{"tenor_days":30,"rate_pct":8}]}"#).expect("write");
-    std::fs::write(dir.join("2026-04-01.json"), r#"{"as_of":"2026-04-02","points":[{"tenor_days":30,"rate_pct":8}]}"#).expect("write");
+    std::fs::write(dir.join("2026-03-01.json"), r#"{"currency":"BDT","points":[{"tenor_days":30,"rate_pct":8},{"tenor_days":30,"rate_pct":9}]}"#).expect("write");
+    std::fs::write(dir.join("not-a-date.json"), r#"{"currency":"BDT","points":[{"tenor_days":30,"rate_pct":8}]}"#).expect("write");
+    std::fs::write(dir.join("2026-04-01.json"), r#"{"currency":"BDT","as_of":"2026-04-02","points":[{"tenor_days":30,"rate_pct":8}]}"#).expect("write");
     std::fs::write(dir.join("2026-05-01.json"), "{ nope").expect("write");
     let store = CurveStore::load(&dir);
     assert_eq!(store.curves.iter().map(|c| c.date.to_string()).collect::<Vec<_>>(), vec!["2026-01-01", "2026-07-01"]);
@@ -212,7 +212,7 @@ fn step(mode: FtpCurveMode) -> TransformStep {
         curve: vec![],
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
-        curve_mode: mode,
+        curve_mode: mode, currency: "BDT".into(),
     }
 }
 
@@ -246,7 +246,7 @@ fn v4_the_step_reads_the_store_and_follows_an_edited_curve_and_old_steps_are_unc
         curve: vec![pt(30, 8.0), pt(365, 10.0)],
         is_liability: true,
         interpolation: FtpInterpolation::Linear,
-        curve_mode: FtpCurveMode::Inline,
+        curve_mode: FtpCurveMode::Inline, currency: "BDT".into(),
     };
     let out = compile_tab_lazy(&src, &[typed_with_points], &dir).expect("compiles").collect().expect("collects");
     close(floats(&out, "Benchmark_FTP_Rate")[0], 8.99701, 0.00001, "typed curve, as before");

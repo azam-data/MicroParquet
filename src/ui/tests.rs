@@ -415,7 +415,7 @@ fn one_step_per_modal() -> Vec<TransformStep> {
             is_liability: false,
             interpolation: FtpInterpolation::NextPointUp,
 
-            curve_mode: Default::default(),
+            curve_mode: Default::default(), currency: "BDT".into(),
         },
         TransformStep::BankingHygieneAudit {
             opndat_col: "Opndat".into(),

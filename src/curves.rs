@@ -99,6 +99,9 @@ pub fn parse_curve_file(file_name: &str, text: &str) -> Result<YieldCurve> {
             bail!("The file name says {} but 'as_of' says {}. Make them the same.", date, as_of);
         }
     }
+    if f.currency.trim().is_empty() {
+        bail!("The currency is missing. Every curve needs one: add \"currency\": \"BDT\" (or the curve's currency) to the file.");
+    }
     let points: Vec<FtpPoint> = f.points.iter().map(|p| FtpPoint { tenor_days: p.tenor_days, ftp_rate: p.rate_pct }).collect();
     validate_points(&points)?;
     Ok(YieldCurve { date, currency: f.currency, source: f.source, points })
@@ -180,6 +183,27 @@ impl CurveStore {
 
     pub fn earliest(&self) -> Option<&YieldCurve> {
         self.curves.first()
+    }
+
+    /// The curves in `currency` (compared ignoring case and spaces) and the curves of other
+    /// currencies that are skipped. A file that cannot be read stops this, naming the file (the
+    /// FTP step does not guess a damaged file's currency).
+    pub fn for_currency(&self, currency: &str) -> Result<(Vec<YieldCurve>, Vec<YieldCurve>)> {
+        self.strict()?;
+        let want = currency.trim().to_uppercase();
+        if want.is_empty() {
+            bail!("FTP: choose the currency of the curves (for example BDT).");
+        }
+        let (used, skipped): (Vec<YieldCurve>, Vec<YieldCurve>) = self.curves.iter().cloned().partition(|c| c.currency.trim().to_uppercase() == want);
+        if used.is_empty() && !skipped.is_empty() {
+            bail!(
+                "FTP: there is no yield curve in {} in portable_data/curves (found {}). Add a {} curve in Banking > Yield curves, or change the step's currency.",
+                want,
+                skipped.iter().map(|c| format!("{} ({})", c.date.format("%Y-%m-%d"), c.currency.trim())).collect::<Vec<_>>().join(", "),
+                want
+            );
+        }
+        Ok((used, skipped))
     }
 }
 

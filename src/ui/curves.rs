@@ -61,6 +61,9 @@ impl CurvesState {
     pub fn typed_curve(&self) -> Result<YieldCurve, String> {
         let e = &self.editor;
         let date = NaiveDate::parse_from_str(e.date.trim(), "%Y-%m-%d").map_err(|_| "Type the curve's date as YYYY-MM-DD (for example 2026-01-01).".to_string())?;
+        if e.currency.trim().is_empty() {
+            return Err("Type the curve's currency (for example BDT). Every curve needs one.".to_string());
+        }
         validate_points(&e.points).map_err(|err| format!("{:#}", err))?;
         Ok(YieldCurve { date, currency: e.currency.trim().to_string(), source: e.source.trim().to_string(), points: e.points.clone() })
     }
