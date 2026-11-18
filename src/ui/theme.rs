@@ -112,6 +112,11 @@ pub const TEXT_INSPECTOR_TITLE: f32 = 20.0;
 /// and the 52 px toolbar.
 pub const TOP_BAR_H: f32 = 44.0;
 pub const TAB_STRIP_H: f32 = 40.0;
+/// The cross of a tab: its square hit area, and the width of the rename box.
+pub const TAB_CLOSE_SIZE: f32 = 22.0;
+pub const TAB_RENAME_W: f32 = 160.0;
+/// One half, for centring.
+pub const HALF: f32 = 0.5;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
 pub const HEADER_ROW_H: f32 = 38.0;

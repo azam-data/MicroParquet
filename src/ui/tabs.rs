@@ -380,7 +380,43 @@ impl MicroParquetApp {
         });
     }
 
-    /// Tab strip (40 px): the active tab is white with a 2 px accent line on top.
+    /// Closes the tab at `idx`. Every stored tab index stays valid (see `tab_index_after_close`):
+    /// closing the active tab selects the tab that took its place (the new last tab when it was
+    /// the last), and closing the only tab leaves the start screen.
+    pub(crate) fn close_tab(&mut self, idx: usize) {
+        if idx >= self.tabs.len() {
+            return;
+        }
+        let closed_id = self.tabs.get(idx).map(|t| t.id);
+        self.tabs.remove(idx);
+        let new_len = self.tabs.len();
+        for sel in [&mut self.active_tab, &mut self.join.left_tab, &mut self.join.right_tab, &mut self.recon.prev_tab, &mut self.recon.curr_tab] {
+            *sel = tab_index_after_close(*sel, idx, new_len);
+        }
+        if self.tab_rename.as_ref().is_some_and(|r| Some(r.tab_id) == closed_id) {
+            self.tab_rename = None;
+        }
+        self.selected_column = None;
+        self.selected_step = None;
+        if new_len > 0 {
+            self.init_tool_defaults_from_active_tab();
+        }
+    }
+
+    /// Ctrl+W closes the active tab, unless a dialog or the search is open or a text box has the keyboard.
+    pub(crate) fn handle_tab_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.tabs.is_empty() || self.active_tool != ActiveToolModal::None || self.command_open || ctx.wants_keyboard_input() {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::W)) {
+            let at = self.active_tab;
+            self.close_tab(at);
+        }
+    }
+
+    /// Tab strip: the active tab is white with a 2 px accent line on top. A tab is one rectangle
+    /// that selects on click, closes on middle click, renames on double click; its cross sits on top
+    /// of it (registered after it, so a click on the cross is the cross's, not the tab's).
     pub(crate) fn render_tab_strip_panel(&mut self, ctx: &egui::Context) {
         if self.tabs.is_empty() {
             return;
@@ -390,67 +426,130 @@ impl MicroParquetApp {
         let mut duplicate_tab: Option<usize> = None;
         let mut select: Option<usize> = None;
         let mut new_tab = false;
+        let mut start_rename: Option<usize> = None;
+        let mut commit_rename: Option<(u64, Option<String>)> = None;
+        let mut report = TabStripReport::default();
+        let active_before = self.active_tab;
+        let last_active: Option<usize> = ctx.data(|d| d.get_temp(egui::Id::new("tab_strip_last_active")));
+        let active_changed = last_active != Some(active_before);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("tab_strip_last_active"), active_before));
         egui::TopBottomPanel::top("tab_strip")
             .exact_height(theme::TAB_STRIP_H)
-            .frame(
-                egui::Frame::none()
-                    .fill(tk.bg)
-                    .inner_margin(theme::MARGIN_TAB_STRIP),
-            )
+            .frame(egui::Frame::none().fill(tk.bg).inner_margin(theme::MARGIN_TAB_STRIP))
             .show(ctx, |ui| {
                 theme::bottom_border(ui, tk.border);
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
-                    ui.spacing_mut().item_spacing.x = theme::BAR_ITEM_GAP;
-                    for idx in 0..self.tabs.len() {
-                        let active = idx == self.active_tab;
-                        let title = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
-                        let frame = egui::Frame::none()
-                            .fill(if active { tk.surface } else { egui::Color32::TRANSPARENT })
-                            .stroke(if active { theme::line(tk.border) } else { egui::Stroke::NONE })
-                            .rounding(theme::ROUNDING_TAB_TOP)
-                            .inner_margin(theme::margin_tab(active));
-                        let out = frame.show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = theme::SPACE_S;
-                                let text = if active {
-                                    theme::semibold(title.clone()).color(tk.ink)
-                                } else {
-                                    egui::RichText::new(title.clone()).color(tk.muted)
+                report.strip = ui.available_rect_before_wrap();
+                egui::ScrollArea::horizontal()
+                    .id_salt("tab_strip_scroll")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
+                            ui.spacing_mut().item_spacing.x = theme::BAR_ITEM_GAP;
+                            for idx in 0..self.tabs.len() {
+                                let active = idx == self.active_tab;
+                                let (tab_id, title) = match self.tabs.get(idx) {
+                                    Some(t) => (t.id, t.title.clone()),
+                                    None => continue,
                                 };
-                                let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-                                if label.clicked() {
-                                    select = Some(idx);
+                                let renaming = self.tab_rename.as_ref().is_some_and(|r| r.tab_id == tab_id);
+                                let shown = shorten_tab_title(&title);
+                                let rich = if active { theme::semibold(shown.clone()).color(tk.ink) } else { egui::RichText::new(shown.clone()).color(tk.muted) };
+                                let galley = egui::WidgetText::from(rich).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+                                let pad = theme::margin_tab(active);
+                                let label_w = if renaming { theme::TAB_RENAME_W } else { galley.size().x };
+                                let w = pad.left + label_w + theme::SPACE_S + theme::TAB_CLOSE_SIZE + pad.right * theme::HALF;
+                                let h = (galley.size().y + pad.top + pad.bottom).max(theme::TAB_CLOSE_SIZE + theme::SPACE_S);
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+                                // the tab
+                                let painter = ui.painter();
+                                painter.rect(rect, theme::ROUNDING_TAB_TOP, if active { tk.surface } else { egui::Color32::TRANSPARENT }, if active { theme::line(tk.border) } else { egui::Stroke::NONE });
+                                if active {
+                                    painter.hline(rect.x_range(), rect.top() + 1.0, theme::line_thick(tk.accent));
                                 }
-                                if theme::icon_button(ui, theme::ph::X, "Close tab").clicked() {
+                                let label_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + pad.left, rect.center().y - galley.size().y * theme::HALF), egui::vec2(label_w, galley.size().y));
+                                let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - pad.right * theme::HALF - theme::TAB_CLOSE_SIZE * theme::HALF, rect.center().y), egui::vec2(theme::TAB_CLOSE_SIZE, theme::TAB_CLOSE_SIZE));
+                                // the cross: registered after the tab, so it gets the click on it
+                                let close = ui.interact(close_rect, ui.id().with(("tab_close", tab_id)), egui::Sense::click());
+                                if close.hovered() {
+                                    ui.painter().rect_filled(close_rect, theme::RADIUS_CONTROL, tk.zebra);
+                                }
+                                ui.painter().text(close_rect.center(), egui::Align2::CENTER_CENTER, theme::ph::X, egui::FontId::proportional(theme::TEXT_BASE), if close.hovered() { tk.ink } else { tk.ink2 });
+                                let close = close.on_hover_text("Close tab (Ctrl+W)");
+                                if renaming {
+                                    let mut buf = self.tab_rename.as_ref().map(|r| r.text.clone()).unwrap_or_default();
+                                    let edit = ui.put(label_rect, egui::TextEdit::singleline(&mut buf).desired_width(label_w).frame(false));
+                                    if let Some(r) = self.tab_rename.as_mut() {
+                                        r.text = buf.clone();
+                                        if !r.focused {
+                                            edit.request_focus();
+                                            r.focused = true;
+                                        }
+                                    }
+                                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                    if esc {
+                                        commit_rename = Some((tab_id, None));
+                                    } else if enter || (edit.lost_focus() && !edit.has_focus()) {
+                                        commit_rename = Some((tab_id, Some(buf)));
+                                    }
+                                } else {
+                                    ui.painter().galley(label_rect.min, galley, tk.ink);
+                                }
+                                // events
+                                if close.clicked() {
                                     tab_to_close = Some(idx);
+                                } else if !renaming {
+                                    if resp.double_clicked() {
+                                        start_rename = Some(idx);
+                                    } else if resp.clicked() {
+                                        select = Some(idx);
+                                    }
+                                    if resp.middle_clicked() {
+                                        tab_to_close = Some(idx);
+                                    }
                                 }
-                            });
-                        });
-                        if active {
-                            let r = out.response.rect;
-                            ui.painter().hline(r.x_range(), r.top() + 1.0, theme::line_thick(tk.accent));
-                        }
-                        let resp = out.response.interact(egui::Sense::click());
-                        if resp.clicked() {
-                            select = Some(idx);
-                        }
-                        resp.context_menu(|ui| {
-                            if ui.button("Duplicate view").clicked() {
-                                duplicate_tab = Some(idx);
-                                ui.close_menu();
+                                if active && active_changed {
+                                    resp.scroll_to_me(None);
+                                }
+                                let resp = if shown != title { resp.on_hover_text(title.clone()) } else { resp };
+                                resp.context_menu(|ui| {
+                                    if ui.button("Rename").clicked() {
+                                        start_rename = Some(idx);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Duplicate view").clicked() {
+                                        duplicate_tab = Some(idx);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Close tab").clicked() {
+                                        tab_to_close = Some(idx);
+                                        ui.close_menu();
+                                    }
+                                });
+                                report.cells.push(TabCell { index: idx, tab: rect, label: label_rect, close: close_rect, shown, full: title });
                             }
-                            if ui.button("Close tab").clicked() {
-                                tab_to_close = Some(idx);
-                                ui.close_menu();
+                            if theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
+                                new_tab = true;
                             }
                         });
-                    }
-                    if theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
-                        new_tab = true;
-                    }
-                });
+                    });
             });
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("tab_strip_report"), report));
 
+        if let Some((tab_id, text)) = commit_rename {
+            self.tab_rename = None;
+            if let Some(t) = text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.title = t;
+                }
+            }
+        }
+        if let Some(idx) = start_rename {
+            if let Some(t) = self.tabs.get(idx) {
+                self.tab_rename = Some(TabRename { tab_id: t.id, text: t.title.clone(), focused: false });
+            }
+        }
         if let Some(idx) = select {
             if idx != self.active_tab {
                 self.active_tab = idx;
@@ -471,23 +570,62 @@ impl MicroParquetApp {
             }
         }
         if let Some(idx) = tab_to_close {
-            if idx < self.tabs.len() {
-                self.tabs.remove(idx);
-                // Every stored tab index must stay valid (see tab_index_after_close)
-                let new_len = self.tabs.len();
-                for sel in [
-                    &mut self.active_tab,
-                    &mut self.join.left_tab,
-                    &mut self.join.right_tab,
-                    &mut self.recon.prev_tab,
-                    &mut self.recon.curr_tab,
-                ] {
-                    *sel = tab_index_after_close(*sel, idx, new_len);
-                }
-                self.selected_column = None;
-            }
+            self.close_tab(idx);
         }
     }
+}
+
+/// A tab's name shown in the strip: at most 24 characters, the last one "…" when it is longer
+/// (the full name is on hover and in the rename box).
+pub const TAB_TITLE_MAX_CHARS: usize = 24;
+
+pub fn shorten_tab_title(title: &str) -> String {
+    let n = title.chars().count();
+    if n <= TAB_TITLE_MAX_CHARS {
+        title.to_string()
+    } else {
+        let mut s: String = title.chars().take(TAB_TITLE_MAX_CHARS - 1).collect();
+        s = s.trim_end().to_string();
+        s.push('\u{2026}');
+        s
+    }
+}
+
+/// A tab being renamed: its text so far.
+#[derive(Clone, Debug)]
+pub struct TabRename {
+    pub tab_id: u64,
+    pub text: String,
+    /// The text box was given the keyboard.
+    pub focused: bool,
+}
+
+/// What the strip drew for one tab, for the render tests.
+#[derive(Clone, Debug)]
+pub struct TabCell {
+    pub index: usize,
+    pub tab: egui::Rect,
+    pub label: egui::Rect,
+    pub close: egui::Rect,
+    pub shown: String,
+    pub full: String,
+}
+
+/// What the strip drew in its last frame.
+#[derive(Clone, Debug)]
+pub struct TabStripReport {
+    pub strip: egui::Rect,
+    pub cells: Vec<TabCell>,
+}
+
+impl Default for TabStripReport {
+    fn default() -> Self {
+        Self { strip: egui::Rect::NOTHING, cells: Vec::new() }
+    }
+}
+
+pub fn tab_strip_report(ctx: &egui::Context) -> Option<TabStripReport> {
+    ctx.data(|d| d.get_temp::<TabStripReport>(egui::Id::new("tab_strip_report")))
 }
 
 #[cfg(test)]

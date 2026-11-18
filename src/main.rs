@@ -187,6 +187,8 @@ pub struct MicroParquetApp {
     pub calc: CalcState,
     pub normaliser: NormState,
     pub clean_breaks: CleanBreaksState,
+    /// The tab whose name is being edited in the strip.
+    pub tab_rename: Option<crate::ui::tabs::TabRename>,
     pub pivot: PivotState,
     pub pivot_builder: PivotBuilderState,
     pub cl_migration: ClMigrationState,
@@ -267,6 +269,7 @@ impl MicroParquetApp {
             calc: CalcState::default(),
             normaliser: NormState::default(),
             clean_breaks: CleanBreaksState::default(),
+            tab_rename: None,
             pivot: PivotState::default(),
             pivot_builder: PivotBuilderState::default(),
             cl_migration: ClMigrationState::default(),
@@ -313,6 +316,7 @@ impl MicroParquetApp {
         }
         self.handle_palette_shortcut(ctx);
         self.handle_step_shortcuts(ctx);
+        self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
         self.render_tab_strip_panel(ctx);
         self.render_status_bar(ctx);

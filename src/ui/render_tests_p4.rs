@@ -74,6 +74,14 @@ impl Rig {
         collect_painted(&out.shapes)
     }
 
+    /// A click a second after the last one: without a clock every click counts as a double click.
+    fn click_later(&mut self, pos: egui::Pos2) -> Painted {
+        self.input.time = Some(self.input.time.unwrap_or(0.0) + 1.0);
+        let p = self.click(pos);
+        self.input.time = Some(self.input.time.unwrap_or(0.0) + 1.0);
+        p
+    }
+
     fn click(&mut self, pos: egui::Pos2) -> Painted {
         let press = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
         let release = vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
@@ -1378,5 +1386,110 @@ fn i15_clean_line_breaks_is_a_transform_command_with_a_choice_of_columns() {
         assert!(rig.app.open_step_editor(0), "{what}");
         assert_eq!(rig.app.active_tool, ActiveToolModal::CleanLineBreaks);
         assert!(!rig.app.clean_breaks.all && rig.app.clean_breaks.picked == vec!["Remarks".to_string()], "{what}");
+    }
+}
+
+fn tabs_rig(name: &str, ppp: f32, w: f32, h: f32, extra_tabs: &[&str]) -> Rig {
+    let mut rig = Rig::new(name, ppp, w, h, 0);
+    for (i, t) in extra_tabs.iter().enumerate() {
+        let src = parquet_source(&rig.app.paths.root_dir.clone(), &format!("tab{i}"), book(0));
+        rig.app.create_tab_from_source(t.to_string(), src, vec![], HashMap::new());
+        settle(&mut rig.app);
+    }
+    rig.draw(6);
+    rig
+}
+
+fn strip(rig: &Rig) -> crate::ui::tabs::TabStripReport {
+    crate::ui::tabs::tab_strip_report(&rig.ctx).expect("the strip was drawn")
+}
+
+fn press_key(rig: &mut Rig, key: egui::Key, modifiers: egui::Modifiers) {
+    let ev = |pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    rig.input.modifiers = modifiers;
+    rig.step(vec![ev(true)]);
+    rig.step(vec![ev(false)]);
+    rig.input.modifiers = egui::Modifiers::NONE;
+    rig.draw(3);
+}
+
+#[test]
+fn i16_clicking_the_cross_of_a_tab_closes_it_and_the_neighbour_is_selected() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = tabs_rig("pr6i16a", ppp, w, h, &["Second", "Third"]);
+        let what = rig.what.clone();
+        assert_eq!(rig.app.tabs.len(), 3, "{what}");
+        assert_eq!(rig.app.active_tab, 2, "{what}: the newest tab is active");
+        // close the middle tab by clicking the real cross rectangle
+        let r = strip(&rig);
+        assert_eq!(r.cells.len(), 3, "{what}");
+        let cross = r.cells[1].close;
+        assert!(inside(cross, r.cells[1].tab), "{what}: the cross {cross:?} is inside its tab {:?}", r.cells[1].tab);
+        rig.click_later(cross.center());
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: the click on the cross closed the tab");
+        assert_eq!(rig.app.tabs[1].title, "Third", "{what}: the right one was closed");
+        assert_eq!(rig.app.active_tab, 1, "{what}: the active tab is still the same tab (Third)");
+        // closing the ACTIVE tab selects its neighbour (the one that took its place, or the new last)
+        let r = strip(&rig);
+        rig.click_later(r.cells[1].close.center());
+        assert_eq!(rig.app.tabs.len(), 1, "{what}");
+        assert_eq!(rig.app.active_tab, 0, "{what}: the last tab was closed, the new last one is active");
+        // closing the first of two: the tab that took its place
+        let mut rig = tabs_rig("pr6i16b", ppp, w, h, &["Second", "Third"]);
+        rig.app.active_tab = 0;
+        rig.draw(3);
+        let r = strip(&rig);
+        rig.click_later(r.cells[0].close.center());
+        assert_eq!(rig.app.tabs.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), vec!["Second", "Third"], "{what}");
+        assert_eq!(rig.app.active_tab, 0, "{what}: the neighbour (Second) is active");
+        // a click on the tab itself selects it and does not close it
+        let r = strip(&rig);
+        rig.click_later(egui::pos2(r.cells[1].label.center().x, r.cells[1].tab.center().y));
+        assert_eq!((rig.app.tabs.len(), rig.app.active_tab), (2, 1), "{what}");
+        // closing the last tab shows the start screen
+        let r = strip(&rig);
+        rig.click_later(r.cells[1].close.center());
+        let r = strip(&rig);
+        rig.click_later(r.cells[0].close.center());
+        assert!(rig.app.tabs.is_empty(), "{what}");
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Open") || t.contains("open")), "{what}: the start screen is drawn");
+        assert_eq!(rig.app.active_tab, 0, "{what}");
+    }
+}
+
+#[test]
+fn i16_ctrl_w_and_the_middle_button_close_a_tab() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = tabs_rig("pr6i16c", ppp, w, h, &["Second", "Third"]);
+        let what = rig.what.clone();
+        // Ctrl+W closes the active tab (Third, the last): the new last one is active
+        press_key(&mut rig, egui::Key::W, egui::Modifiers::COMMAND);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: Ctrl+W closed the active tab");
+        assert_eq!((rig.app.tabs[1].title.as_str(), rig.app.active_tab), ("Second", 1), "{what}");
+        // W alone does nothing
+        press_key(&mut rig, egui::Key::W, egui::Modifiers::NONE);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}");
+        // a dialog open: Ctrl+W leaves the tabs alone
+        rig.app.active_tool = ActiveToolModal::MathFormula;
+        rig.draw(3);
+        press_key(&mut rig, egui::Key::W, egui::Modifiers::COMMAND);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: not while a dialog is open");
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        // a middle click on a tab (not the active one) closes it and keeps the active tab
+        let r = strip(&rig);
+        let pos = egui::pos2(r.cells[0].label.center().x, r.cells[0].tab.center().y);
+        let mid = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+        rig.step(vec![egui::Event::PointerMoved(pos), mid(true)]);
+        rig.step(vec![mid(false)]);
+        rig.draw(3);
+        assert_eq!(rig.app.tabs.len(), 1, "{what}: the middle click closed the tab");
+        assert_eq!(rig.app.tabs[0].title, "Second", "{what}");
+        assert_eq!(rig.app.active_tab, 0, "{what}");
+        // Ctrl+W on the last tab: the start screen
+        press_key(&mut rig, egui::Key::W, egui::Modifiers::COMMAND);
+        assert!(rig.app.tabs.is_empty(), "{what}");
+        rig.draw(3);
     }
 }
