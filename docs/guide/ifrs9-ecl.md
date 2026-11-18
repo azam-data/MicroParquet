@@ -13,7 +13,8 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 ## 3. Before you start
 
 - A loan tab with the drawn amount, the effective interest rate (%), the maturity date (Date) and, for the staging, the days past due and the classification grade (`CL_Final` from "Classify by overdue"). Optional: the undrawn amount, forborne flag, "SICR not assessed" flag, the ratings at origination and now (numbers; a bigger number is worse), the previous stage and the days performing.
-- The staging rules `portable_data/rules/ifrs9_staging/<date>.json` (built in as 2026-03-08, written if missing; 30 and 90 days past due, 90 and 365 days for cure, the classified grades, and a rating downgrade of 2 notches, which is a sample value).
+- The staging rules `portable_data/rules/ifrs9_staging/<date>.json` (built in as 2026-03-08, written if missing; 30 and 90 days past due, 90 and 365 days for cure and the classified grades: the circular's own numbers).
+- The bank policy `portable_data/policy/ifrs9_bank_policy.json` (built in, written if missing, marked "sample": true until the bank confirms it): whether classified grades are Stage 3 (the default of the dialog's tick box; true when the file does not say) and the rating downgrade in notches (2 in the sample). These are the bank's own choices, not the circular's. While the file is a sample, the banner shows. A file with no "sample" key counts as a sample.
 - The parameters `portable_data/ecl_params/<date>.json` (a sample is written if missing): for each segment the cumulative PD by year, LGD % and CCF %; and the scenarios with weight % and PD multiplier. Section 5.9: one scenario (its weight is not used, nothing is weighted), or three or more whose weights sum to 100; exactly two are refused. The latest file dated on or before the cutoff is used; an existing file is never overwritten.
 - For the summary: the Provision step's `Required_Provision_BDT`.
 
@@ -37,12 +38,12 @@ Puts each loan in Stage 1, 2 or 3 and works out its expected credit loss (ECL), 
 1. Open the loan tab. Choose Banking ▸ Loans & credit ▸ "IFRS 9 ECL…" (Ctrl+K: "ifrs 9").
 2. Read the yellow "Sample parameters" line while the parameter file is a sample. Type the "Cutoff date (YYYY-MM-DD)".
 3. Choose the "Segment" (the same for every row, or from a column) and the columns of the roles above. Leave optional roles on "(none)".
-4. Tick or untick "Classified grades (SS, DF, B/L) are Stage 3" (ticked by default; it is the app's alignment, because the circular gives no mapping from the classification grades to stages).
+4. Tick or untick "Classified grades (SS, DF, B/L) are Stage 3" (ticked by default; it is the bank policy's choice, because the circular gives no mapping from the classification grades to stages; edit `classified_stage3` in the policy file to change the default).
 5. Click "Calculate IFRS 9 ECL" to add the step. Or choose the "Regulatory provision (summary)" column and click "Calculate ECL and open the summary" to add the step and open the tab "IFRS 9 summary".
 
 ## 6. What you get
 
-Six new columns at the end: `Stage` (1, 2 or 3), `Stage_Reason` (the first thing that put the loan in that stage: "90+ DPD", "Classified SS", "30+ DPD", "Forborne", "SICR not assessed", "Rating down 2 notches or more", "Cure period not over (N of 90 days performing)", or "Performing"), `EAD` (drawn + CCF × undrawn), `ECL`, `ECL_Rule_File` and `ECL_Params_File` (the files used). The status bar counts the loans in each stage.
+Six new columns at the end: `Stage` (1, 2 or 3), `Stage_Reason` (the first thing that put the loan in that stage: "90+ DPD", "Classified SS", "30+ DPD", "Forborne", "SICR not assessed", "Rating down 2 notches or more", "Cure period not over (N of 90 days performing)", or "Performing"), `EAD` (drawn + CCF × undrawn), `ECL`, `ECL_Rule_File` and `ECL_Params_File` (the files used: the staging file and the bank policy file). The status bar counts the loans in each stage.
 
 How the stage is set: Stage 3 at 90 or more days past due, or a classified grade; Stage 2 at 30 or more days past due, forborne, SICR not assessed, or a rating downgrade; otherwise Stage 1. Cure: a loan whose previous stage was worse moves back one stage for each full cure period of days performing (90 days; 365 days for a forborne exposure), never better than the stage its current criteria give (a loan cured to Stage 1 that is 45 days past due now is Stage 2).
 
@@ -115,7 +116,7 @@ Test: `guide_ifrs9_ecl`
 ## 10. Limits and assumptions
 
 - The parameters that ship are a sample (illustrative PD, LGD, CCF and scenarios); the ECL is only as good as the parameters you put in.
-- "Classified grades are Stage 3" is the app's alignment; the circular gives no mapping from Circular 15/2024 grades to stages. The rating downgrade of 2 notches is a sample value.
+- "Classified grades are Stage 3" and the rating downgrade of 2 notches are the bank's own choices, in `portable_data/policy/ifrs9_bank_policy.json` (a sample until confirmed): the circular gives no mapping from Circular 15/2024 grades to stages and names no number of notches.
 - Cure is read as one stage back for each full cure period (90 days, or 365 for forborne), which is one reading of section 4.5.5; check it against your policy.
 - A Stage 1 or 2 loan with a maturity on or before the cutoff uses a remaining term of 1 year (the status bar counts them); a loan that needs a longer PD curve than the file has stops the run.
 - Year-end discounting at the effective interest rate; no collateral cash-flow model, no stage-3 time value of recoveries, no off-balance-sheet products other than the undrawn amount through the CCF.

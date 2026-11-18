@@ -72,6 +72,8 @@ pub const IRRBB_NMD_CAPS: BuiltIn = ("2021-04-13", include_str!("../assets/rules
 pub const IFRS9_STAGING: BuiltIn = ("2026-03-08", include_str!("../assets/rules/ifrs9_staging/2026-03-08.json"));
 /// The built-in SAMPLE ECL parameters (the owner replaces them with the bank's own).
 pub const ECL_PARAMS: BuiltIn = ("2026-03-08", include_str!("../assets/ecl_params/2026-03-08.json"));
+/// The built-in SAMPLE bank policy of the IFRS 9 staging (`portable_data/policy/ifrs9_bank_policy.json`).
+pub const IFRS9_POLICY: &str = include_str!("../assets/policy/ifrs9_bank_policy.json");
 pub const CL_OVERDUE: BuiltIn = ("2025-04-01", include_str!("../assets/rules/cl_overdue/2025-04-01.json"));
 
 /// Every shipped rule file: its folder under `portable_data/rules/` and its built-in copy. The tests
@@ -98,6 +100,16 @@ pub fn write_text_if_missing(path: &Path, text: &str) {
     }
     if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
         let _ = f.write_all(text.as_bytes());
+    }
+}
+
+/// The "sample" flag of a rule or policy file: a file that does not say is treated as a sample (the
+/// banner shows), and a value that is not true or false is refused.
+pub fn sample_flag(value: &serde_json::Value, label: &str) -> Result<bool> {
+    match value.get("sample") {
+        None | Some(serde_json::Value::Null) => Ok(true),
+        Some(serde_json::Value::Bool(b)) => Ok(*b),
+        Some(other) => bail!("The rule file {} has \"sample\": {}, which is not true or false.", label, other),
     }
 }
 

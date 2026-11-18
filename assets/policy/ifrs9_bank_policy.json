@@ -1,0 +1,10 @@
+{
+  "source": "SAMPLE bank policy for IFRS 9 staging: the choices below are the bank's own, not Bangladesh Bank's. The owner must confirm them against the bank's credit risk policy before the ECL goes into a return.",
+  "sample": true,
+  "classified_stage3": true,
+  "rating_downgrade_notches": 2,
+  "notes": [
+    "Classified grades (SS, DF, B/L in CL_Final) are Stage 3 by default: this is the app's alignment, because BRPD Circular 06/2026 gives no mapping from the Circular 15/2024 grades to stages. Untick the option in the dialog to leave them to the days-past-due test.",
+    "A rating downgrade of 2 notches or more is Stage 2: 2 is a sample value, the circular names no number."
+  ]
+}

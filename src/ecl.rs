@@ -31,14 +31,9 @@ pub struct StagingRules {
     pub sicr_dpd: i64,
     /// Days past due from which the loan is in default (Stage 3).
     pub default_dpd: i64,
-    /// The CL_Final grades that count as Stage 3 when the option is on.
+    /// The grades of Circular 15/2024 that count as Stage 3 when the bank's policy says so.
     #[serde(default)]
     pub classified_grades: Vec<String>,
-    /// The default of the dialog's option "Classified grades are Stage 3" (the app's alignment).
-    #[serde(default = "yes")]
-    pub classified_is_stage3: bool,
-    /// A downgrade of this many notches or more is a significant increase in credit risk.
-    pub rating_downgrade_notches: i64,
     /// Days performing before one stage back (§4.5.5), and for forborne exposures.
     pub cure_days: i64,
     pub cure_days_forborne: i64,
@@ -48,6 +43,46 @@ pub struct StagingRules {
 
 fn yes() -> bool {
     true
+}
+
+/// The bank's own staging choices, `portable_data/policy/ifrs9_bank_policy.json` (a sample until the
+/// owner has confirmed them): they are not in the Bangladesh Bank circular.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct BankPolicy {
+    /// The default of the dialog's option "Classified grades (SS, DF, B/L) are Stage 3" (the app's alignment).
+    #[serde(default = "yes")]
+    pub classified_stage3: bool,
+    /// A downgrade of this many notches or more is a significant increase in credit risk.
+    pub rating_downgrade_notches: i64,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// The policy file as read: its name for the output, its source and whether it is a sample.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolicyFile {
+    pub data: BankPolicy,
+    pub file: String,
+    pub source: String,
+    pub sample: bool,
+}
+
+pub const POLICY_FILE: &str = "policy/ifrs9_bank_policy.json";
+
+/// Reads the bank policy (written from the built-in sample when missing; an existing file is never
+/// overwritten). A file with no "sample" key counts as a sample.
+pub fn load_policy() -> Result<PolicyFile> {
+    let path = crate::rules::data_dir().join("policy").join("ifrs9_bank_policy.json");
+    crate::rules::write_text_if_missing(&path, crate::rules::IFRS9_POLICY);
+    let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the policy file {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| anyhow!("The policy file {} is not valid JSON: {}.", POLICY_FILE, e))?;
+    let sample = crate::rules::sample_flag(&value, POLICY_FILE)?;
+    let source = value.get("source").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("The policy file {} has no \"source\" (who decided these choices).", POLICY_FILE))?.to_string();
+    let data: BankPolicy = serde_json::from_value(value).map_err(|e| anyhow!("The policy file {} could not be read: {}.", POLICY_FILE, e))?;
+    if data.rating_downgrade_notches < 1 {
+        bail!("The policy file {}: rating_downgrade_notches must be at least 1.", POLICY_FILE);
+    }
+    Ok(PolicyFile { data, file: POLICY_FILE.to_string(), source, sample })
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -78,8 +113,8 @@ pub fn check_staging(r: &StagingRules, file: &str) -> Result<()> {
     if !(r.sicr_dpd > 0 && r.default_dpd > r.sicr_dpd) {
         bail!("The rule file {}: default_dpd ({}) must be above sicr_dpd ({}), and both above 0.", file, r.default_dpd, r.sicr_dpd);
     }
-    if r.rating_downgrade_notches < 1 || r.cure_days < 1 || r.cure_days_forborne < 1 {
-        bail!("The rule file {}: rating_downgrade_notches, cure_days and cure_days_forborne must each be at least 1.", file);
+    if r.cure_days < 1 || r.cure_days_forborne < 1 {
+        bail!("The rule file {}: cure_days and cure_days_forborne must each be at least 1.", file);
     }
     for g in &r.classified_grades {
         if crate::overdue::grade_rank(g).is_none() {
@@ -301,7 +336,7 @@ fn parse_stage(s: &str) -> Option<u8> {
 }
 
 /// Runs staging and ECL over the rows of `df`.
-pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>, params: &RuleFile<EclParams>, params_warnings: &[String], cl_map: &[(String, String)]) -> Result<EclOutput> {
+pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>, policy: &PolicyFile, params: &RuleFile<EclParams>, params_warnings: &[String], cl_map: &[(String, String)]) -> Result<EclOutput> {
     let who = "IFRS 9 ECL";
     let cutoff = spec.cutoff.ok_or_else(|| anyhow!("{}: type the cutoff date as YYYY-MM-DD (for example 2026-10-31).", who))?;
     let height = df.height();
@@ -503,8 +538,8 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
         if let (Some(a), Some(b)) = (&r0, &r1) {
             match (a[i], b[i]) {
                 (Some(a), Some(b)) => {
-                    if b - a >= rules.rating_downgrade_notches as f64 {
-                        set(2, format!("Rating down {} notches or more", rules.rating_downgrade_notches));
+                    if b - a >= policy.data.rating_downgrade_notches as f64 {
+                        set(2, format!("Rating down {} notches or more", policy.data.rating_downgrade_notches));
                     }
                 }
                 _ => stats.no_rating += 1,
@@ -585,7 +620,7 @@ pub fn compute(df: &DataFrame, spec: &EclSpec, staging: &RuleFile<StagingRules>,
     for s in &stage {
         stats.stage_counts[(*s as usize).clamp(1, 3) - 1] += 1;
     }
-    Ok(EclOutput { stage: stage.iter().map(|s| *s as i64).collect(), reason, ead, ecl, rule_file: staging.meta.file.clone(), params_file: params.meta.file.clone(), stats })
+    Ok(EclOutput { stage: stage.iter().map(|s| *s as i64).collect(), reason, ead, ecl, rule_file: format!("{}; {}", staging.meta.file, policy.file), params_file: params.meta.file.clone(), stats })
 }
 
 /// Loads the two files for the cutoff and runs the table through them.
@@ -606,7 +641,8 @@ pub fn classify_lazy(lf: LazyFrame, spec: &EclSpec) -> Result<(LazyFrame, EclSta
     };
     let df = lf.collect().context("IFRS 9 ECL could not read the table")?;
     let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
-    let out = compute(&df, spec, &staging, &params, &warnings, &cl_map)?;
+    let policy = load_policy()?;
+    let out = compute(&df, spec, &staging, &policy, &params, &warnings, &cl_map)?;
     let mut df = df;
     let n = df.height();
     df.with_column(Series::new("Stage".into(), out.stage))?;

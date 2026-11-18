@@ -614,7 +614,7 @@ fn r3_a_small_tier_1_makes_the_bank_an_outlier_and_a_sample_shock_file_shows_the
         // a sample shock file dated later than the BB file, in the data folder
         let dir = rig.app.paths.root_dir.join("portable_data").join("rules").join("irrbb_shocks");
         std::fs::create_dir_all(&dir).expect("folder");
-        std::fs::write(dir.join("2026-01-01.json"), r#"{"as_of":"2026-01-01","source":"Sample numbers","sample":true,"currencies":[{"currency":"BDT","parallel_bp":400,"short_bp":500,"long_bp":300}]}"#).expect("write");
+        std::fs::write(dir.join("2026-01-01.json"), r#"{"as_of":"2026-01-01","source":"Sample numbers","sample":true,"decay_x":4,"outlier_pct":15,"currencies":[{"currency":"BDT","parallel_bp":400,"short_bp":500,"long_bp":300}]}"#).expect("write");
         rig.app.run_command(&rig.ctx, CommandId::IrrbbSix);
         rig.app.irrbb.cutoff = "2026-10-31".into();
         rig.app.irrbb.tier1 = "600000".into();

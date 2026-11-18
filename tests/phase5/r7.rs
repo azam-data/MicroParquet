@@ -94,7 +94,7 @@ fn r7_single_scenario_stage_1_is_8181_82_stage_2_19338_84_stage_3_450000() {
         near(floats(&out, "EAD")[0], 1_000_000.0, "EAD");
     }
     let out = run("r7a2", &data, &stage_book(0), &s).expect("runs");
-    assert_eq!(strings(&out, "ECL_Rule_File")[0].as_deref(), Some("ifrs9_staging/2026-03-08.json"));
+    assert_eq!(strings(&out, "ECL_Rule_File")[0].as_deref(), Some("ifrs9_staging/2026-03-08.json; policy/ifrs9_bank_policy.json"));
     assert_eq!(strings(&out, "ECL_Params_File")[0].as_deref(), Some("ecl_params/2026-03-08.json"));
 }
 
@@ -329,16 +329,15 @@ fn r7_the_staging_rule_file_is_the_circulars_not_a_sample_and_the_params_are_a_s
     let v: serde_json::Value = serde_json::from_str(text).expect("json");
     assert_eq!(v["sample"], serde_json::json!(false));
     let src = v["source"].as_str().unwrap_or("");
-    assert!(src.contains("Circular No. 06") && src.contains("8 March 2026") && src.contains("4.5.5") && src.contains("app's alignment") && src.contains("sample value"), "{src}");
+    assert!(src.contains("Circular No. 06") && src.contains("8 March 2026") && src.contains("4.5.5") && src.contains("ifrs9_bank_policy.json"), "{src}");
     let data = dir("r7h");
     set_data_dir_override(Some(data.clone()));
     let cutoff = chrono::NaiveDate::from_ymd_opt(2026, 10, 31).expect("date");
     let r = load_staging(cutoff).expect("loads");
-    assert_eq!((r.data.sicr_dpd, r.data.default_dpd, r.data.rating_downgrade_notches, r.data.cure_days, r.data.cure_days_forborne), (30, 90, 2, 90, 365));
+    assert_eq!((r.data.sicr_dpd, r.data.default_dpd, r.data.cure_days, r.data.cure_days_forborne), (30, 90, 90, 365));
     assert_eq!(r.data.classified_grades, vec!["SS", "DF", "B/L"]);
-    assert!(r.data.classified_is_stage3, "the option is on by default");
-    assert!(r.data.notes.iter().any(|n| n.contains("app's alignment")));
     assert!(!r.meta.sample);
+    assert!(v.get("rating_downgrade_notches").is_none() && v.get("classified_is_stage3").is_none(), "the bank's choices are not in the circular's file");
     // the parameters are a sample, written to portable_data/ecl_params when missing
     let (p, warnings) = load_params(cutoff).expect("loads");
     assert!(p.meta.sample && p.meta.source.contains("SAMPLE") && p.data.scenarios.len() >= 3 && warnings.is_empty());
@@ -594,4 +593,51 @@ fn d7_a_matured_stage_1_or_2_loan_uses_a_one_year_term_and_a_blank_forborne_or_s
     let mut df = book(&[1.0], &["2028-10-31"]);
     df.with_column(Series::new("Forborne".into(), &["  "])).expect("col");
     assert!(format!("{:#}", run("d7d", &data_with("d7dd", one_scenario()), &df, &step(&|s| s["forborne_col"] = serde_json::json!("Forborne"))).err().expect("blank text")).contains("is blank"));
+}
+
+#[test]
+fn d8_the_banks_own_choices_are_in_a_sample_policy_file_and_the_banner_shows() {
+    let (text, built_in) = (micro_parquet::rules::IFRS9_POLICY, micro_parquet::rules::IFRS9_POLICY);
+    let v: serde_json::Value = serde_json::from_str(text).expect("json");
+    assert_eq!(v["sample"], serde_json::json!(true));
+    assert_eq!((v["rating_downgrade_notches"].as_i64(), v["classified_stage3"].as_bool()), (Some(2), Some(true)));
+    assert_eq!(built_in, std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join("policy").join("ifrs9_bank_policy.json")).expect("source copy"));
+    let data = dir("r7d8");
+    set_data_dir_override(Some(data.clone()));
+    // written when missing, a sample, with the app's defaults
+    let p = load_policy().expect("loads");
+    assert!(p.sample && p.data.classified_stage3 && p.data.rating_downgrade_notches == 2 && p.file == "policy/ifrs9_bank_policy.json");
+    assert!(data.join("policy").join("ifrs9_bank_policy.json").exists());
+    // an edited file is read, never overwritten; classified_stage3 left out defaults to true
+    let f = data.join("policy").join("ifrs9_bank_policy.json");
+    std::fs::write(&f, r#"{"source": "ALCO 2026-10", "sample": false, "rating_downgrade_notches": 3}"#).expect("edit");
+    let p = load_policy().expect("loads");
+    assert!(!p.sample && p.data.classified_stage3 && p.data.rating_downgrade_notches == 3 && p.source == "ALCO 2026-10");
+    // no "sample" key counts as a sample; a non-boolean value is refused
+    std::fs::write(&f, r#"{"source": "x", "rating_downgrade_notches": 2}"#).expect("edit");
+    assert!(load_policy().expect("loads").sample);
+    std::fs::write(&f, r#"{"source": "x", "sample": "no", "rating_downgrade_notches": 2}"#).expect("edit");
+    let e = format!("{:#}", load_policy().err().expect("refused"));
+    assert!(e.contains("policy/ifrs9_bank_policy.json") && e.contains("not true or false"), "{e}");
+    // the notches rule is the policy's: a 2-notch downgrade is Stage 2 at 2 notches, Stage 1 at 3
+    let mut df = book(&[1.0], &["2028-10-31"]);
+    df.with_column(Series::new("Rating0".into(), &[3.0])).expect("col");
+    df.with_column(Series::new("Rating1".into(), &[5.0])).expect("col");
+    let st = step(&|s| {
+        s["rating_orig_col"] = serde_json::json!("Rating0");
+        s["rating_now_col"] = serde_json::json!("Rating1");
+    });
+    let data = data_with("r7d8d", one_scenario());
+    for (notches, want) in [(3, 1), (2, 2)] {
+        let policy = data.join("policy");
+        std::fs::create_dir_all(&policy).expect("folder");
+        std::fs::write(policy.join("ifrs9_bank_policy.json"), format!(r#"{{"source": "x", "sample": false, "rating_downgrade_notches": {notches}}}"#)).expect("write");
+        let out = run("r7d8r", &data, &df, &st).expect("runs");
+        assert_eq!(ints(&out, "Stage"), vec![Some(want)], "{notches} notches");
+    }
+    // a policy file without the notches is refused with its name
+    std::fs::write(data.join("policy").join("ifrs9_bank_policy.json"), r#"{"source": "x", "sample": false}"#).expect("write");
+    let e = format!("{:#}", run("r7d8e", &data, &df, &st).err().expect("refused"));
+    assert!(e.contains("policy/ifrs9_bank_policy.json") && e.contains("rating_downgrade_notches"), "{e}");
+    set_data_dir_override(None);
 }

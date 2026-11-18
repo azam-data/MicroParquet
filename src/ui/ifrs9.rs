@@ -4,7 +4,7 @@
 
 use crate::ui::pick::{col_combo, field_label, guess_column, text_combo, DialogRects};
 use crate::ui::prelude::*;
-use micro_parquet::ecl::{load_params, load_staging, EclSummarySpec};
+use micro_parquet::ecl::{load_params, load_policy, load_staging, EclSummarySpec};
 
 pub const IFRS9_TITLE: &str = "IFRS 9 ECL (BRPD 06/2026)";
 
@@ -94,6 +94,9 @@ impl MicroParquetApp {
         s.prev_col = guess_column(&cols, &["prev_stage", "previous_stage"]);
         s.days_col = guess_column(&cols, &["days_performing", "performing"]);
         s.provision_col = guess_column(&cols, &["required_provision", "provision_required"]);
+        if let Ok(p) = load_policy() {
+            s.classified_stage3 = p.data.classified_stage3;
+        }
         s.files = None;
         self.active_tool = ActiveToolModal::IfrsEcl;
     }
@@ -107,15 +110,18 @@ impl MicroParquetApp {
         let r = match chrono::NaiveDate::parse_from_str(&key, "%Y-%m-%d") {
             Err(_) => Err("Type the cutoff date as YYYY-MM-DD (for example 2026-10-31).".to_string()),
             Ok(d) => load_staging(d).map_err(|e| format!("{:#}", e)).and_then(|st| {
-                load_params(d).map_err(|e| format!("{:#}", e)).map(|(p, warnings)| EclFiles {
-                    staging_file: st.meta.file.clone(),
-                    params_file: p.meta.file.clone(),
-                    sample: p.meta.sample,
-                    source: p.meta.source.clone(),
-                    segments: p.data.segments.iter().map(|s| s.name.clone()).collect(),
-                    notes: st.data.notes.clone(),
-                    warnings,
-                    classified_default: st.data.classified_is_stage3,
+                load_params(d).map_err(|e| format!("{:#}", e)).and_then(|(p, warnings)| {
+                    let policy = load_policy().map_err(|e| format!("{:#}", e))?;
+                    Ok(EclFiles {
+                        staging_file: st.meta.file.clone(),
+                        params_file: p.meta.file.clone(),
+                        sample: p.meta.sample || policy.sample,
+                        source: p.meta.source.clone(),
+                        segments: p.data.segments.iter().map(|s| s.name.clone()).collect(),
+                        notes: policy.data.notes.clone(),
+                        warnings,
+                        classified_default: policy.data.classified_stage3,
+                    })
                 })
             }),
         };
@@ -195,7 +201,7 @@ impl MicroParquetApp {
         theme::modal(&title).default_width(theme::DIALOG_W_PIVOT).fill_height().show(ctx, |d| {
             d.header(|ui| {
                 if files.as_ref().is_some_and(|f| f.sample) {
-                    let r = ui.scope(|ui| theme::warning_label(ui, "Sample parameters: the ECL parameters in use (PD curves, LGD, CCF, scenarios) are a sample. Replace them with the bank's own before the ECL goes into a return."));
+                    let r = ui.scope(|ui| theme::warning_label(ui, "Sample parameters: the ECL parameters in use (PD curves, LGD, CCF, scenarios) or the bank policy (policy/ifrs9_bank_policy.json) are a sample. Replace them with the bank's own before the ECL goes into a return."));
                     rects.banner = r.response.rect;
                 }
                 ui.horizontal_wrapped(|ui| {
