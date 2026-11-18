@@ -33,9 +33,9 @@ Gives each deposit or loan a funds-transfer-pricing (FTP) benchmark rate from a 
 2. In "Automated FTP Yield Curve Tenor Mapper" pick "Open Date:", "Maturity Date:", "Balance Col:" and "Int Rate Col:".
 3. Tick "Liability Book (Deposits/Borrowings: Spread = FTP Rate - Account Rate)" for deposits and borrowings; leave it unticked for loans.
 4. Under "Yield curve:" choose where the curve comes from:
-   - "The curve typed below": edit "Tenor Days:" and "FTP %:" in the list that follows.
-   - "The curve on or before one date:" and type the date (YYYY-MM-DD): every deal is priced on the latest curve dated on or before that date.
-   - "Each deal's own curve: the latest curve on or before its open date": every deal is priced on the curve of its origination date. Tick "Use the earliest curve for older deals" if some deals are older than your oldest curve.
+   - "Stored curves (origination date)": every deal is priced on the curve of its origination date (the latest curve on or before its open date). Tick "Use the earliest curve for older deals" if some deals are older than your oldest curve. The dialog opens on this choice when the folder portable_data/curves has curve files.
+   - "Stored curve on or before one date:" and type the date (YYYY-MM-DD): every deal is priced on the latest curve dated on or before that date.
+   - "Ad-hoc curve (typed below)": edit "Tenor Days:" and "FTP %:" in the list that follows. The dialog opens on this choice when there are no curve files, and an older step that used a typed curve keeps it when you edit it.
 5. The line under the choices says how many curves the store has; "Yield curves…" opens the manager to add or change them.
 6. Choose "Rate between tenor points:" Linear (the default for a new step) or next point up.
 7. Click "Map FTP Rates & Compute Margin".

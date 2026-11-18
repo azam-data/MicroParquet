@@ -881,7 +881,8 @@ fn the_ftp_dialog_chooses_the_curve_source_and_the_step_prices_each_deal_on_its_
         let p = rig.draw(6);
         let ftp_title = "\u{E538} Automated FTP Yield Curve Tenor Mapper";
         let r = assert_dialog_fits(&rig.ctx, ftp_title, &what);
-        for t in ["Yield curve:", "The curve typed below", "The curve on or before one date:", "Each deal's own curve", "Use the earliest curve for older deals", "Yield curves\u{2026}"] {
+        assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Origination, "{what}: curve files exist, so the dialog opens on the stored curves");
+        for t in ["Yield curve:", "Ad-hoc curve", "Stored curve on or before one date:", "Stored curves (origination date)", "Use the earliest curve for older deals", "Yield curves\u{2026}"] {
             assert!(p.boxes.iter().any(|(x, bx)| x.contains(t) && inside(*bx, r.window)), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
         // a fixed date that is not a date: the message, and the button does nothing
@@ -911,7 +912,7 @@ fn the_ftp_dialog_chooses_the_curve_source_and_the_step_prices_each_deal_on_its_
         let _ = rig.draw(3);
         let _ = p;
         let p = rig.draw(1);
-        let radio = p.boxes.iter().find(|(t, _)| t.contains("Each deal's own curve")).map(|(_, b)| *b).expect("radio text");
+        let radio = p.boxes.iter().find(|(t, _)| t.contains("Stored curves (origination date)")).map(|(_, b)| *b).expect("radio text");
         rig.click(egui::pos2(radio.left() - theme::SPACE_L, radio.center().y));
         assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Origination, "{what}: the click chose it");
         let p = rig.draw(4);
@@ -1166,5 +1167,43 @@ fn i1_an_old_pivot_step_converts_to_the_new_pivot_only_after_the_confirmation_li
         assert!(matches!(rig.app.tabs[0].steps[0], TransformStep::PivotTable { .. }), "{what}: {:?}", rig.app.tabs[0].steps);
         assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
         assert!(rig.app.tabs[0].available_columns().contains(&"Sum of Balance".to_string()), "{what}: {:?}", rig.app.tabs[0].available_columns());
+    }
+}
+
+#[test]
+fn i5_the_ftp_dialog_opens_on_stored_curves_only_when_curve_files_exist_and_an_old_step_keeps_its_curve() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = curves_rig("pr6i5", ppp, w, h);
+        let what = rig.what.clone();
+        let dir = rig.app.paths.curves_dir.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Ftp);
+        assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Origination, "{what}: curve files exist");
+        rig.app.active_tool = ActiveToolModal::None;
+        // an old step with the typed curve keeps it when edited, although curve files exist
+        let step = TransformStep::FtpCurveMap {
+            opndat_col: "Opndat".into(),
+            matdat_col: "Matdat".into(),
+            bal_col: "Balance".into(),
+            rate_col: "Int Rate".into(),
+            curve: default_bd_ftp_curve(),
+            is_liability: true,
+            interpolation: FtpInterpolation::Linear,
+            curve_mode: FtpCurveMode::Inline,
+        };
+        rig.app.push_step_to_active_tab(step, false);
+        rig.draw(4);
+        assert!(rig.app.open_step_editor(0), "{what}");
+        assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Typed, "{what}: the step's own choice");
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.app.editing = None;
+        // no curve files: the ad-hoc curve
+        for e in std::fs::read_dir(&dir).expect("dir").flatten() {
+            let _ = std::fs::remove_file(e.path());
+        }
+        rig.app.run_command(&rig.ctx, CommandId::Ftp);
+        assert_eq!(rig.app.ftp.curve_source, crate::ui::ftp::CurveSource::Typed, "{what}: no files, no stored curves");
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Ad-hoc curve")), "{what}");
+        micro_parquet::curves::set_curves_dir_override(None);
     }
 }

@@ -53,6 +53,16 @@ impl FtpState {
         }
     }
 
+    /// True when the curve folder holds any curve file (readable or not).
+    pub fn has_curve_files(&self) -> bool {
+        !self.store.curves.is_empty() || !self.store.problems.is_empty()
+    }
+
+    /// The dialog of a new step opens on the stored curves when there are curve files, else on the ad-hoc curve.
+    pub fn choose_default_source(&mut self) {
+        self.curve_source = if self.has_curve_files() { CurveSource::Origination } else { CurveSource::Typed };
+    }
+
     /// Reads the curve folder again.
     pub fn reload_store(&mut self) {
         self.store = micro_parquet::curves::CurveStore::load(&micro_parquet::curves::curves_dir());
@@ -130,13 +140,13 @@ impl MicroParquetApp {
                     );
                     ui.separator();
                     ui.strong("Yield curve:");
-                    ui.radio_value(&mut self.ftp.curve_source, CurveSource::Typed, "The curve typed below");
+                    ui.radio_value(&mut self.ftp.curve_source, CurveSource::Origination, "Stored curves (origination date): each deal's own curve, the latest on or before its open date");
+                    ui.add_enabled(self.ftp.curve_source == CurveSource::Origination, egui::Checkbox::new(&mut self.ftp.use_earliest, "Use the earliest curve for older deals"));
                     ui.horizontal_wrapped(|ui| {
-                        ui.radio_value(&mut self.ftp.curve_source, CurveSource::FixedDate, "The curve on or before one date:");
+                        ui.radio_value(&mut self.ftp.curve_source, CurveSource::FixedDate, "Stored curve on or before one date:");
                         ui.add_enabled(self.ftp.curve_source == CurveSource::FixedDate, egui::TextEdit::singleline(&mut self.ftp.fixed_date).hint_text("YYYY-MM-DD").desired_width(theme::GAP_COMBO_NARROW_W));
                     });
-                    ui.radio_value(&mut self.ftp.curve_source, CurveSource::Origination, "Each deal's own curve: the latest curve on or before its open date");
-                    ui.add_enabled(self.ftp.curve_source == CurveSource::Origination, egui::Checkbox::new(&mut self.ftp.use_earliest, "Use the earliest curve for older deals"));
+                    ui.radio_value(&mut self.ftp.curve_source, CurveSource::Typed, "Ad-hoc curve (typed below)");
                     let tk = *theme::tokens(self.dark_mode);
                     let info = if self.ftp.curve_source == CurveSource::Typed {
                         None

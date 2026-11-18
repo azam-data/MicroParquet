@@ -170,6 +170,7 @@ impl MicroParquetApp {
             CommandId::Duration => self.active_tool = ActiveToolModal::DurationAnalysis,
             CommandId::Ftp => {
                 self.ftp.reload_store();
+                self.ftp.choose_default_source();
                 self.active_tool = ActiveToolModal::FtpCurveMap;
             }
             CommandId::YieldCurves => self.open_yield_curves(),
