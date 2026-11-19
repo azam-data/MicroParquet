@@ -206,7 +206,7 @@ fn p4_a_rule_set_is_a_file_with_the_sample_written_on_first_use_and_marked() {
     save_ruleset(&dirp, &mine).expect("saves");
     assert_eq!(load_ruleset(&dirp, "bank").expect("loads"), mine);
     assert!(save_ruleset(&dirp, &DqRuleSet { name: "a/b".into(), ..mine.clone() }).is_err());
-    std::fs::write(dirp.join("sample.json"), "{\"rules\": []}").expect("edit");
+    std::fs::write(dirp.join("sample.json"), "{\"green_min\": 98, \"amber_min\": 95, \"rules\": []}").expect("edit");
     assert!(format!("{:#}", load_ruleset(&dirp, "sample").expect_err("no rules")).contains("no rules"));
     assert!(load_ruleset(&dirp, "missing").is_err());
     // the file's JSON puts the kind next to the name
@@ -268,4 +268,23 @@ fn p4_the_scorecard_is_a_tab_with_a_failing_rows_view_a_saved_run_and_steps_befo
     let (_, used) = micro_parquet::rules::track_used_files(|| compile_tab_lazy(&mk(DqView::Scorecard, vec![]), &[], &d).and_then(|lf| Ok(lf.collect()?)).expect("runs"));
     micro_parquet::rules::set_data_dir_override(None);
     assert!(used.iter().any(|u| u.kind == "Data-quality rules" && u.file == "dq_rules/acceptance.json"), "{used:?}");
+}
+
+#[test]
+fn g4_a_rules_file_without_green_min_or_amber_min_is_refused_naming_the_file_and_the_field() {
+    let dirp = dir("g4_dq");
+    let mine = DqRuleSet { name: "bank".into(), green_min: 97.0, amber_min: 90.0, rules: vec![DqRule { name: "r".into(), kind: DqKind::Range { column: "Balance".into(), min: Some(0.0), max: None } }], ..Default::default() };
+    save_ruleset(&dirp, &mine).expect("saves");
+    let text = std::fs::read_to_string(dirp.join("bank.json")).expect("read");
+    let mut v: serde_json::Value = serde_json::from_str(&text).expect("json");
+    for field in ["green_min", "amber_min"] {
+        let mut w = v.clone();
+        w.as_object_mut().expect("object").remove(field);
+        std::fs::write(dirp.join("bank.json"), serde_json::to_string_pretty(&w).expect("text")).expect("write");
+        let msg = format!("{:#}", load_ruleset(&dirp, "bank").expect_err("missing threshold"));
+        assert!(msg.contains("bank.json") && msg.contains(&format!("no '{field}'")), "{msg}");
+    }
+    v["green_min"] = serde_json::json!("high");
+    std::fs::write(dirp.join("bank.json"), serde_json::to_string_pretty(&v).expect("text")).expect("write");
+    assert!(format!("{:#}", load_ruleset(&dirp, "bank").expect_err("not a number")).contains("no 'green_min'"));
 }

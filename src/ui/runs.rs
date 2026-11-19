@@ -6,7 +6,7 @@ use crate::ui::cashflow_ladder::CfLine;
 use crate::ui::gap_ladder::{GapRow, RoleChoice};
 use crate::ui::prelude::*;
 use micro_parquet::banking::GapRole;
-use micro_parquet::tool_runs::{describe, list_runs, load_run, run_file_stem, run_path, runs_dir, save_run, RunEnv, RunTab, SavedRun, ToolRun};
+use micro_parquet::tool_runs::{changed_files_warning, describe, hash_used_files, list_runs, load_run, run_file_stem, run_path, runs_dir, save_run_with, FileHash, RunEnv, RunTab, SavedRun, SourceId, ToolRun};
 
 /// The open tabs seen as the sources of a run.
 pub struct AppRunEnv<'a> {
@@ -40,6 +40,34 @@ impl RunEnv for AppRunEnv<'_> {
     fn paths(&self) -> &PortablePaths {
         self.paths
     }
+
+    fn source_id(&self, name: &str) -> Option<SourceId> {
+        let t = tab_by_name(self.tabs, name)?;
+        let path = tab_file(t)?;
+        let blake3 = micro_parquet::packs::file_hash(&path).unwrap_or_default();
+        Some(SourceId { name: name.to_string(), path: path.display().to_string(), blake3 })
+    }
+
+    fn resolve(&self, id: &SourceId) -> anyhow::Result<(String, Option<String>)> {
+        let same: Vec<&TabState> = self.tabs.iter().filter(|t| tab_file(t).is_some_and(|p| p.display().to_string() == id.path)).collect();
+        match same.as_slice() {
+            [] => anyhow::bail!("The source '{}' ({}) is not open. Open that file first.", id.name, id.path),
+            [t] => {
+                let now = micro_parquet::packs::file_hash(std::path::Path::new(&id.path)).unwrap_or_default();
+                let warn = (!id.blake3.is_empty() && now != id.blake3).then(|| format!("The file {} has changed since the run was saved.", id.path));
+                Ok((t.title.clone(), warn))
+            }
+            many => anyhow::bail!("The source '{}' ({}) is open in {} tabs ({}). Close the extra tabs so the run knows which one to read.", id.name, id.path, many.len(), many.iter().map(|t| format!("'{}'", t.title)).collect::<Vec<_>>().join(", ")),
+        }
+    }
+}
+
+/// The file a tab was opened from (tabs made by a tool have none).
+pub fn tab_file(t: &TabState) -> Option<std::path::PathBuf> {
+    match &t.source {
+        TabSource::SingleFile { path, .. } => Some(path.clone()),
+        _ => None,
+    }
 }
 
 /// The tab called `name`: a tab with that title, else the first tab opened from a file of that name.
@@ -70,6 +98,9 @@ pub struct RunsRects {
 #[derive(Clone, Debug)]
 pub struct SaveRunDraft {
     pub run: ToolRun,
+    /// The files behind the source tabs and the files the run read, kept with the saved run.
+    pub sources: Vec<SourceId>,
+    pub files: Vec<FileHash>,
     pub name: String,
     pub error: String,
     /// A run of this name exists: the next Save replaces it.
@@ -104,7 +135,16 @@ impl MicroParquetApp {
             Ok(run) => {
                 let name = self.tabs.get(idx).map(|t| t.title.clone()).unwrap_or_default();
                 let name = micro_parquet::paths::sanitize_file_name(&name);
-                self.runs.draft = Some(SaveRunDraft { run, name, error: String::new(), confirm_replace: false });
+                let sources = run.source_ids(&self.run_env());
+                // the rule files the run reads are those its tab reads when it is made (as the report pack's Cover lists them)
+                let files = match self.tabs.get(idx) {
+                    Some(t) => {
+                        let (_, used) = micro_parquet::rules::track_used_files(|| micro_parquet::engine::compile_tab_lazy(&t.source, &tab_steps(t), &self.paths.temp_dir).map(|_| ()));
+                        hash_used_files(&used)
+                    }
+                    None => Vec::new(),
+                };
+                self.runs.draft = Some(SaveRunDraft { run, sources, files, name, error: String::new(), confirm_replace: false });
                 self.active_tool = ActiveToolModal::SaveRun;
             }
             Err(e) => self.status_message = format!("Save run: {}", e),
@@ -143,6 +183,19 @@ impl MicroParquetApp {
 
     fn tab_indices(&self, names: &[String]) -> Result<Vec<usize>, String> {
         names.iter().map(|n| self.tab_index(n)).collect()
+    }
+
+    /// A saved run: its sources are found by file (not by title), then the dialog opens; a file that
+    /// changed since the run was saved is said in the status bar.
+    pub(crate) fn prefill_saved(&mut self, saved: &SavedRun) -> Result<(), String> {
+        let mut run = saved.run.clone();
+        let mut warnings = run.resolve_sources(&saved.sources, &self.run_env()).map_err(|e| format!("{:#}", e))?;
+        warnings.extend(changed_files_warning(&saved.files));
+        self.prefill_run(&run)?;
+        if !warnings.is_empty() {
+            self.status_message = format!("Re-run: {}", warnings.join(" "));
+        }
+        Ok(())
     }
 
     /// Opens the dialog of the run's tool with the run's inputs in it. Every tab it names must be open.
@@ -267,6 +320,7 @@ impl MicroParquetApp {
                 s.product_col = r.spec.product_col.clone();
                 s.balance_col = r.spec.balance_col.clone();
                 s.daily = r.spec.daily;
+                s.date_col = r.spec.date_col.clone();
                 s.start = r.spec.start.clone();
                 s.end = r.spec.end.clone();
                 s.income = format!("{}", r.spec.income);
@@ -420,7 +474,7 @@ impl MicroParquetApp {
                     draft.error = format!("A saved run called '{}' exists. Choose Replace to overwrite it, or type another name.", draft.name.trim());
                     draft.confirm_replace = true;
                 }
-                Ok(_) => match save_run(&dir, &draft.name, &draft.run) {
+                Ok(_) => match save_run_with(&dir, &draft.name, &draft.run, draft.sources.clone(), draft.files.clone()) {
                     Ok(p) => {
                         self.status_message = format!("Saved the run as {}.", p.display());
                         close = true;
@@ -441,7 +495,7 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         let mut rects = RunsRects::default();
         let mut close = false;
-        let mut chosen: Option<ToolRun> = None;
+        let mut chosen: Option<SavedRun> = None;
         let saved = self.runs.saved.clone();
         let title = format!("{}  Saved tool runs", theme::ph::CLOCK_COUNTER_CLOCKWISE);
         theme::modal(&title).default_width(theme::CURVES_DIALOG_W).show(ctx, |d| {
@@ -457,7 +511,7 @@ impl MicroParquetApp {
                                     let b = ui.button("Re-run with changes");
                                     rects.buttons.push((format!("Re-run {}", name), b.rect));
                                     if b.clicked() {
-                                        chosen = Some(s.run.clone());
+                                        chosen = Some(s.clone());
                                     }
                                 }
                                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| match r {
@@ -485,9 +539,9 @@ impl MicroParquetApp {
             });
         });
         self.runs.rects = rects;
-        if let Some(run) = chosen {
+        if let Some(saved) = chosen {
             // on success the tool's dialog is now the active one; on failure this list stays open
-            if let Err(e) = self.prefill_run(&run) {
+            if let Err(e) = self.prefill_saved(&saved) {
                 self.status_message = format!("Re-run: {}", e);
             }
             return ModalOutcome { close: false, step: None };

@@ -29,14 +29,14 @@ Keeps or removes rows that meet one or more conditions (equals, greater than, be
 
 1. Open the tab and click the Filter button on the toolbar (or Ctrl+K: "filter"). The same button edits the tab's first filter.
 2. In "Filter rows" choose "Rows must meet": "all conditions (and)" or "any condition (or)".
-3. Pick a column, a condition and a value; click "+ Add condition" for more. For "equals", "does not equal", "is in list" and "is not in list" the value box is a picker: click "pick values" (or "3 of 42 selected") and tick the values from the column's own list, with the number of rows of each, counted over the whole tab as it stands before this filter. Use "Search values", "Select all" and "Clear"; "(blank)" is an entry of its own and adds the blank rows. One value stores "equals", several store "is in list" ("is not in list" when you started from "does not equal"). A value with a comma in it, such as "Khulna, West", is one value. A column with more than 1,000 values lists the 1,000 most frequent with the note "Showing 1,000 of N; search to find others"; the search looks through all of them.
+3. Pick a column, a condition and a value; click "+ Add condition" for more. For "equals", "does not equal", "is in list" and "is not in list" the value box is a picker: click "pick values" (or "3 of 42 selected") and tick the values from the column's own list, with the number of rows of each, counted over the whole tab as it stands before this filter. Use "Search values", "Select all listed" (the values on the list, or the search results, not the ones left off it) and "Clear"; "(blank)" is an entry of its own and adds the blank rows. One value stores "equals", several store "is in list" ("is not in list" when you started from "does not equal"). A value with a comma in it, such as "Khulna, West", is one value. A column with more than 1,000 values lists the 1,000 most frequent with the note "Showing 1,000 of N; search to find others"; the search looks through all of them.
 4. Choose "Keep matching rows" or "Delete matching rows".
 5. Click "Apply to current tab", or "Open filtered view in new tab".
 6. To change it later, click the filter chip above the table, or Edit on the step, then "Save filter". "Remove this condition" takes one condition out; removing the last one removes the filter.
 
 ## 6. What you get
 
-The same columns with fewer rows. Conditions on rows whose value is blank are "unknown": "Keep matching" drops those rows and "Delete matching" keeps them. The status bar shows the new row count and the control total.
+The same columns with fewer rows. Conditions on rows whose value is blank are "unknown": "Keep matching" drops those rows and "Delete matching" keeps them. The exception is "is not in list" (typed or picked): a blank row (empty text, spaces or nothing) is not in the list, so it stays unless "(blank)" is ticked. Numbers are compared in the column's own type, so 17-digit account numbers and amounts stay exact. The status bar shows the new row count and the control total.
 
 ## 7. Check your result
 

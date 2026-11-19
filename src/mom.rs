@@ -99,12 +99,18 @@ impl Agg {
     }
 }
 
+/// One month: the sums of each key (matched trimmed and ignoring capitals) and the spellings met.
+struct Month {
+    aggs: BTreeMap<Vec<String>, Agg>,
+    spellings: BTreeMap<Vec<String>, std::collections::BTreeSet<Vec<String>>>,
+}
+
 fn numeric(dt: &DataType) -> bool {
     dt.is_numeric() || matches!(dt, DataType::Decimal(..))
 }
 
 /// The keys of one month with their sums. A blank key, a non-number balance or a balance without a rate is an error.
-fn month(lf: LazyFrame, spec: &MomSpec, which: &str) -> Result<BTreeMap<Vec<String>, Agg>> {
+fn month(lf: LazyFrame, spec: &MomSpec, which: &str) -> Result<Month> {
     let schema = lf.clone().collect_schema()?;
     let need = |c: &str, what: &str| -> Result<DataType> { schema.get(c).cloned().ok_or_else(|| anyhow!("MoM variance: the {} has no {} column '{}'. Choose a column both months have.", which, what, c)) };
     for k in &spec.key_cols {
@@ -142,7 +148,11 @@ fn month(lf: LazyFrame, spec: &MomSpec, which: &str) -> Result<BTreeMap<Vec<Stri
     let rates: Option<Vec<Option<f64>>> = if rate.is_some() { Some(df.column("__r")?.f64()?.into_iter().collect()) } else { None };
     let counts: Option<Vec<Option<f64>>> = if cnt.is_some() { Some(df.column("__c")?.f64()?.into_iter().collect()) } else { None };
     let mut out: BTreeMap<Vec<String>, Agg> = BTreeMap::new();
+    let mut spellings: BTreeMap<Vec<String>, std::collections::BTreeSet<Vec<String>>> = BTreeMap::new();
     let (mut blank_keys, mut no_rate) = (0usize, 0usize);
+    // rows with a key but no balance (or no count when a count column is chosen): the run stops
+    let (mut blank_bal, mut blank_cnt): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let (mut n_blank_bal, mut n_blank_cnt) = (0usize, 0usize);
     for i in 0..df.height() {
         let mut key = Vec::with_capacity(keys.len());
         let mut blank = false;
@@ -156,11 +166,26 @@ fn month(lf: LazyFrame, spec: &MomSpec, which: &str) -> Result<BTreeMap<Vec<Stri
             blank_keys += 1;
             continue;
         }
-        let a = out.entry(key).or_default();
-        if let Some(c) = counts.as_ref().and_then(|c| c[i]) {
-            a.count += c;
+        let label = key.join(" / ");
+        let norm: Vec<String> = key.iter().map(|t| t.to_lowercase()).collect();
+        spellings.entry(norm.clone()).or_default().insert(key);
+        let a = out.entry(norm).or_default();
+        if let Some(c) = counts.as_ref() {
+            match c[i].filter(|v| v.is_finite()) {
+                Some(c) => a.count += c,
+                None => {
+                    n_blank_cnt += 1;
+                    if blank_cnt.len() < 5 {
+                        blank_cnt.push(label.clone());
+                    }
+                }
+            }
         }
         let Some(b) = bal[i].filter(|b| b.is_finite()) else {
+            n_blank_bal += 1;
+            if blank_bal.len() < 5 {
+                blank_bal.push(label);
+            }
             continue;
         };
         a.bal += b;
@@ -177,26 +202,54 @@ fn month(lf: LazyFrame, spec: &MomSpec, which: &str) -> Result<BTreeMap<Vec<Stri
     if blank_keys > 0 {
         bail!("MoM variance: {} row(s) of the {} have a blank key ({}). Fill them or filter them out first.", blank_keys, which, spec.key_cols.join(" / "));
     }
+    if n_blank_bal > 0 {
+        bail!("MoM variance: {} row(s) of the {} have a blank balance in '{}' (first keys: {}). Fill the balance or filter those rows out; a blank would count as 0.", n_blank_bal, which, spec.bal_col, blank_bal.join(", "));
+    }
+    if n_blank_cnt > 0 {
+        bail!("MoM variance: {} row(s) of the {} have a blank count in '{}' (first keys: {}). Fill the count or filter those rows out.", n_blank_cnt, which, spec.count_col.as_deref().unwrap_or(""), blank_cnt.join(", "));
+    }
     if no_rate > 0 {
         bail!("MoM variance: {} row(s) of the {} have a balance but no rate in '{}'. Fill the rate or filter those rows out; the interest would be wrong otherwise.", no_rate, which, rate.unwrap_or(""));
     }
-    Ok(out)
+    Ok(Month { aggs: out, spellings })
 }
 
 /// The variance table: a row per key of either month.
 pub fn build_mom(prev: LazyFrame, curr: LazyFrame, spec: &MomSpec) -> Result<DataFrame> {
+    Ok(build_mom_noted(prev, curr, spec)?.0)
+}
+
+/// The variance table and the notes about it (keys that were matched although they were spelt differently).
+/// Keys are matched trimmed and ignoring capitals; the table shows the current month's spelling
+/// (the previous month's for a closed key).
+pub fn build_mom_noted(prev: LazyFrame, curr: LazyFrame, spec: &MomSpec) -> Result<(DataFrame, Vec<String>)> {
     spec.check()?;
-    let p = month(prev, spec, "previous month")?;
-    let c = month(curr, spec, "current month")?;
+    let pm = month(prev, spec, "previous month")?;
+    let cm = month(curr, spec, "current month")?;
+    let (p, c) = (&pm.aggs, &cm.aggs);
     let mut keys: Vec<Vec<String>> = p.keys().chain(c.keys()).cloned().collect();
-    keys.sort_by_key(|k| k.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>());
+    keys.sort();
     keys.dedup();
     let n = keys.len();
+    // the shown spelling, and the keys that were merged
+    let mut shown: Vec<Vec<String>> = Vec::with_capacity(n);
+    let mut merged: Vec<String> = Vec::new();
+    for k in &keys {
+        let in_curr = cm.spellings.get(k);
+        let mut all: std::collections::BTreeSet<&Vec<String>> = pm.spellings.get(k).into_iter().flatten().collect();
+        all.extend(in_curr.into_iter().flatten());
+        let pick = in_curr.and_then(|s| s.iter().next()).or_else(|| pm.spellings.get(k).and_then(|s| s.iter().next())).cloned().unwrap_or_else(|| k.clone());
+        if all.len() > 1 {
+            merged.push(format!("{} (shown as {})", all.iter().map(|s| s.join(" / ")).collect::<Vec<_>>().join(" + "), pick.join(" / ")));
+        }
+        shown.push(pick);
+    }
+    let notes: Vec<String> = if merged.is_empty() { Vec::new() } else { vec![format!("Note: keys that differ only in capital letters or spaces around them were added together: {}.", merged.join("; "))] };
     let with_rate = spec.has_rate();
     let with_count = spec.has_count();
     let mut cols: Vec<Series> = Vec::new();
     for (i, name) in spec.key_cols.iter().enumerate() {
-        cols.push(Series::new(name.as_str().into(), keys.iter().map(|k| k[i].clone()).collect::<Vec<String>>()));
+        cols.push(Series::new(name.as_str().into(), shown.iter().map(|k| k[i].clone()).collect::<Vec<String>>()));
     }
     let zero = Agg::default();
     let status: Vec<String> = keys.iter().map(|k| match (p.contains_key(k), c.contains_key(k)) {
@@ -238,7 +291,7 @@ pub fn build_mom(prev: LazyFrame, curr: LazyFrame, spec: &MomSpec) -> Result<Dat
         cols.push(f("Rate effect", eff(&|pb, _, pr, cr| pb * (cr - pr))));
         cols.push(f("Mix effect", eff(&|pb, cb, pr, cr| (cb - pb) * (cr - pr))));
     }
-    Ok(DataFrame::new(cols)?)
+    Ok((DataFrame::new(cols)?, notes))
 }
 
 /// The column formats of the variance table: percentages as percentages, rates with their decimals.

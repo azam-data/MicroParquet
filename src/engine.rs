@@ -2463,12 +2463,17 @@ pub fn compile_tab_lazy(
             }
         }
         TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
+            refuse_same_file("MoM variance", prev_source, prev_steps, curr_source, curr_steps)?;
             let prev_lf = compile_tab_lazy(prev_source, prev_steps, temp_dir)?;
             let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
-            let df = crate::mom::build_mom(prev_lf, curr_lf, spec)?;
+            let (df, notes) = crate::mom::build_mom_noted(prev_lf, curr_lf, spec)?;
             match view {
                 crate::models::MomView::Variance => df.lazy(),
-                crate::models::MomView::Commentary => crate::mom::commentary_frame(&crate::mom::mom_commentary(&df, spec)?)?.lazy(),
+                crate::models::MomView::Commentary => {
+                    let mut lines = crate::mom::mom_commentary(&df, spec)?;
+                    lines.extend(notes);
+                    crate::mom::commentary_frame(&lines)?.lazy()
+                }
             }
         }
         TabSource::EclSummary { source, steps, spec } => {
@@ -2535,6 +2540,7 @@ pub fn compile_tab_lazy(
             curr_steps,
             spec,
         } => {
+            refuse_same_file("CL migration", prev_source, prev_steps, curr_source, curr_steps)?;
             let prev_lf = compile_tab_lazy(prev_source, prev_steps, temp_dir)?;
             let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
             crate::banking::build_cl_migration(prev_lf, curr_lf, spec)?.lazy()
@@ -2950,6 +2956,21 @@ pub fn rate_shock_betas(spec: &RateShockSpec) -> Result<Vec<crate::betas::BetaRo
     }
 }
 
+/// A comparison of two months made of one file twice gives no change at all; it is refused rather than shown.
+/// (Two different filters of one file are a real comparison, so only the same file with the same steps is refused.)
+fn refuse_same_file(what: &str, prev: &TabSource, prev_steps: &[TransformStep], curr: &TabSource, curr_steps: &[TransformStep]) -> Result<()> {
+    if let (TabSource::SingleFile { path: a, .. }, TabSource::SingleFile { path: b, .. }) = (prev, curr) {
+        if format!("{:?}", prev_steps) == format!("{:?}", curr_steps) {
+            if let (Ok(x), Ok(y)) = (crate::packs::file_hash(a), crate::packs::file_hash(b)) {
+                if x == y {
+                    anyhow::bail!("{}: the previous and the current month are the same file ({}, and the same content as {}). Choose the other month's file.", what, a.display(), b.display());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Builds a filter condition that compares by the column's real type: text columns compare
 /// as text (so 17-digit account numbers stay exact), numeric columns as numbers and date
 /// columns as dates. A value that doesn't fit the column type is an error, not a silent miss.
@@ -2978,10 +2999,11 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
             expr
         }
         FilterOp::NotInList => {
-            // a typed list is not in the text of this operator: it is the old "In List" turned round
-            // (a blank is unknown, like in every other comparison)
+            // a typed list is the old "In List" turned round; a blank row ("" or null) is not in the
+            // list, so it stays (as with the picker, whose "(blank)" entry is how to leave blanks out)
             let positive = build_filter_expr(col_name, FilterOp::InList, raw_val, schema)?;
-            when(col(col_name).is_null()).then(lit(NULL).cast(DataType::Boolean)).otherwise(positive.not())
+            let dtype = schema.get(col_name).ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this filter.", col_name))?;
+            when(blank_of(col_name, dtype)).then(lit(true)).otherwise(positive.not())
         }
         FilterOp::Eq | FilterOp::NotEq | FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
             let (lhs, rhs) = typed_operand(col_name, trimmed, schema)?;
@@ -2997,18 +3019,78 @@ fn build_filter_expr(col_name: &str, op: FilterOp, raw_val: &str, schema: &Schem
     })
 }
 
+/// `text` ("-12.5", "7", "0.30") written with exactly `scale` decimals, as a decimal column prints
+/// its values; `None` when it is not a plain number or has more decimals than the scale.
+fn decimal_text(text: &str, scale: usize) -> Option<String> {
+    let (neg, body) = match text.strip_prefix('-') {
+        Some(b) => (true, b),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+    if int.is_empty() && frac.is_empty() || !int.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let frac = if frac.len() > scale {
+        if frac[scale..].chars().any(|c| c != '0') {
+            return None;
+        }
+        frac[..scale].to_string()
+    } else {
+        format!("{:0<w$}", frac, w = scale)
+    };
+    let int = if int.is_empty() { "0" } else { int };
+    let zero = int.chars().all(|c| c == '0') && frac.chars().all(|c| c == '0');
+    let mut out = String::new();
+    if neg && !zero {
+        out.push('-');
+    }
+    out.push_str(int);
+    if scale > 0 {
+        out.push('.');
+        out.push_str(&frac);
+    }
+    Some(out)
+}
+
 /// "In the picked values", compared by the column's real type (Phase 6 U7): text as text, numbers
 /// as numbers, dates as dates (YYYY-MM-DD); other types as the text they are shown as. A value
 /// that does not fit the column's type is an error, not a silent miss.
 fn typed_values_in(name: &str, values: &[String], dtype: &DataType) -> Result<Expr> {
     let c = col(name);
-    if dtype.is_numeric() || matches!(dtype, DataType::Decimal(..)) {
-        let mut nums = Vec::with_capacity(values.len());
-        for v in values {
-            let n = v.trim().replace(',', "").parse::<f64>().map_err(|_| anyhow::anyhow!("'{}' is not a number for numeric column '{}'", v, name))?;
-            nums.push(n);
+    // numbers are compared in the column's own type, never through f64: 17-digit amounts and
+    // account numbers stay exact
+    let clean = |v: &String| v.trim().replace(',', "");
+    match dtype {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => {
+            let mut nums: Vec<i64> = Vec::with_capacity(values.len());
+            for v in values {
+                nums.push(clean(v).parse::<i64>().map_err(|_| anyhow::anyhow!("'{}' is not a whole number for column '{}' ({})", v, name, dtype))?);
+            }
+            return Ok(c.cast(DataType::Int64).is_in(lit(Series::new("picked".into(), nums))));
         }
-        return Ok(c.cast(DataType::Float64).is_in(lit(Series::new("picked".into(), nums))));
+        DataType::UInt64 => {
+            let mut nums: Vec<u64> = Vec::with_capacity(values.len());
+            for v in values {
+                nums.push(clean(v).parse::<u64>().map_err(|_| anyhow::anyhow!("'{}' is not a whole number (0 or more) for column '{}' ({})", v, name, dtype))?);
+            }
+            return Ok(c.cast(DataType::UInt64).is_in(lit(Series::new("picked".into(), nums))));
+        }
+        DataType::Decimal(_, Some(scale)) => {
+            // decimal text with the column's scale ("12.5" is "12.50" in a 2-decimal column)
+            let mut texts: Vec<String> = Vec::with_capacity(values.len());
+            for v in values {
+                texts.push(decimal_text(&clean(v), *scale).ok_or_else(|| anyhow::anyhow!("'{}' is not a number with at most {} decimals for column '{}'", v, scale, name))?);
+            }
+            return Ok(c.cast(DataType::String).is_in(lit(Series::new("picked".into(), texts))));
+        }
+        _ if dtype.is_numeric() || matches!(dtype, DataType::Decimal(..)) => {
+            let mut nums = Vec::with_capacity(values.len());
+            for v in values {
+                nums.push(clean(v).parse::<f64>().map_err(|_| anyhow::anyhow!("'{}' is not a number for numeric column '{}'", v, name))?);
+            }
+            return Ok(c.cast(DataType::Float64).is_in(lit(Series::new("picked".into(), nums))));
+        }
+        _ => {}
     }
     if matches!(dtype, DataType::Date) {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).context("Internal date error (epoch)")?;
@@ -3024,9 +3106,10 @@ fn typed_values_in(name: &str, values: &[String], dtype: &DataType) -> Result<Ex
 }
 
 /// A condition on picked values: in the list (or blank, when "(blank)" was picked), or its
-/// opposite. A blank value never matches "in the list"; for the opposite it is unknown (so "Keep
-/// matching" drops it) unless "(blank)" was picked, which leaves blanks out for certain.
-fn membership_expr(name: &str, values: &[String], or_blank: bool, negate: bool, schema: &Schema) -> Result<Expr> {
+/// opposite. A blank value never matches "in the list". For "not in list" a blank row ("" or null)
+/// is kept unless "(blank)" was picked (`keep_blank`); for "is not" it is unknown (so "Keep matching"
+/// drops it), as in every comparison.
+fn membership_expr(name: &str, values: &[String], or_blank: bool, negate: bool, keep_blank: bool, schema: &Schema) -> Result<Expr> {
     let dtype = schema.get(name).ok_or_else(|| anyhow::anyhow!("Column '{}' was not found. Check the column chosen in this filter.", name))?;
     let blank = blank_of(name, dtype);
     let mut positive = if values.is_empty() { lit(false) } else { typed_values_in(name, values, dtype)?.fill_null(lit(false)) };
@@ -3037,6 +3120,8 @@ fn membership_expr(name: &str, values: &[String], or_blank: bool, negate: bool, 
         positive
     } else if or_blank {
         positive.not()
+    } else if keep_blank {
+        when(blank).then(lit(true)).otherwise(positive.not())
     } else {
         when(blank).then(lit(NULL).cast(DataType::Boolean)).otherwise(positive.not())
     })
@@ -3093,7 +3178,7 @@ fn build_condition_expr(cond: &FilterCondition, schema: &Schema) -> Result<Expr>
     let value = cond.value.trim();
     if cond.uses_values() {
         let negate = matches!(cond.op, CondOp::NotEquals | CondOp::NotInList);
-        return membership_expr(name, &cond.values, cond.or_blank, negate, schema);
+        return membership_expr(name, &cond.values, cond.or_blank, negate, matches!(cond.op, CondOp::NotInList), schema);
     }
     Ok(match cond.op {
         CondOp::NotInList => build_filter_expr(name, FilterOp::NotInList, value, schema)?,
@@ -3207,7 +3292,7 @@ impl CompareKind {
 /// right must be of the same kind (number with number, date with date, text with text).
 fn build_rule_expr(r: &CondRule, schema: &Schema) -> Result<Expr> {
     if !r.values.is_empty() && !r.compare_is_col && matches!(r.op, FilterOp::Eq | FilterOp::NotEq | FilterOp::InList | FilterOp::NotInList) {
-        return membership_expr(&r.col_name, &r.values, false, matches!(r.op, FilterOp::NotEq | FilterOp::NotInList), schema);
+        return membership_expr(&r.col_name, &r.values, false, matches!(r.op, FilterOp::NotEq | FilterOp::NotInList), matches!(r.op, FilterOp::NotInList), schema);
     }
     if !r.compare_is_col || matches!(r.op, FilterOp::IsNull | FilterOp::IsNotNull) {
         return build_filter_expr(&r.col_name, r.op, &r.compare_val, schema);

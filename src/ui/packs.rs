@@ -3,7 +3,8 @@
 
 use crate::ui::prelude::*;
 use micro_parquet::packs::*;
-use micro_parquet::tool_runs::ToolRun;
+use crate::ui::runs::tab_file;
+use micro_parquet::tool_runs::{RunEnv, ToolRun};
 use std::collections::BTreeMap;
 
 /// What the dialog drew, for the render tests.
@@ -95,7 +96,7 @@ impl MicroParquetApp {
             n += 1;
         }
         let exec = tab.exec_steps.min(tab.steps.len());
-        let input = PackInput { slot: slot.clone(), schema_template: None, schema: Some(config.clone()), steps: tab.steps[..exec].to_vec(), required_columns: required, captured_from: tab.title.clone() };
+        let input = PackInput { slot: slot.clone(), schema_template: None, schema: Some(config.clone()), steps: tab.steps[..exec].to_vec(), required_columns: required, captured_from: tab.title.clone(), captured_path: tab_file(tab).map(|p| p.display().to_string()).unwrap_or_default(), captured_hash: tab_file(tab).and_then(|p| micro_parquet::packs::file_hash(&p).ok()).unwrap_or_default() };
         self.packs.pack.inputs.push(input);
         self.sync_pack_files();
         self.pack_message(false, format!("Added the slot '{}': {} column(s) and {} step(s) of the tab.", slot, self.packs.pack.inputs.last().map(|i| i.required_columns.len()).unwrap_or(0), exec));
@@ -108,12 +109,18 @@ impl MicroParquetApp {
             Ok(r) => r,
             Err(e) => return self.pack_message(true, format!("This tab cannot be an item: {}", e)),
         };
-        let slots: Vec<(String, String)> = self.packs.pack.inputs.iter().map(|i| (i.slot.clone(), i.captured_from.clone())).collect();
+        // each source tab is found by its file first (two tabs may share a title), then by its title
+        let env = self.run_env();
+        let paths: std::collections::HashMap<String, String> = run.source_names().into_iter().filter_map(|n| env.source_id(&n).map(|id| (n, id.path))).collect();
+        let slots: Vec<(String, String, String)> = self.packs.pack.inputs.iter().map(|i| (i.slot.clone(), i.captured_from.clone(), i.captured_path.clone())).collect();
         let mut run = run;
         let mut missing: Vec<String> = Vec::new();
-        run.each_source_name(&mut |n| match slots.iter().find(|(s, c)| s == n || c == n) {
-            Some((s, _)) => *n = s.clone(),
-            None => missing.push(n.clone()),
+        run.each_source_name(&mut |n| {
+            let by_path = paths.get(n.as_str()).filter(|p| !p.is_empty()).and_then(|p| slots.iter().find(|(_, _, sp)| sp == p));
+            match by_path.or_else(|| slots.iter().find(|(s, c, sp)| s == n || (c == n && sp.is_empty()))) {
+                Some((s, _, _)) => *n = s.clone(),
+                None => missing.push(n.clone()),
+            }
         });
         if !missing.is_empty() {
             missing.dedup();

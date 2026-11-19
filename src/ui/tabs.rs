@@ -6,6 +6,14 @@ use crate::ui::prelude::*;
 /// Indices after the closed tab shift down so they keep pointing at the same tab. An index at
 /// the closed tab moves to the tab that took its place (or the new last tab). Any result is
 /// clamped to 0..new_len, and is 0 when no tabs are left.
+/// `title`, or "title (2)", "title (3)" … when a tab of that name is open: the title names the tab.
+pub(crate) fn unique_tab_title(tabs: &[TabState], title: &str) -> String {
+    if !tabs.iter().any(|t| t.title == title) {
+        return title.to_string();
+    }
+    (2..).map(|n| format!("{} ({})", title, n)).find(|t| !tabs.iter().any(|x| &x.title == t)).unwrap_or_else(|| title.to_string())
+}
+
 pub(crate) fn tab_index_after_close(sel: usize, closed: usize, new_len: usize) -> usize {
     let shifted = if sel > closed { sel - 1 } else { sel };
     shifted.min(new_len.saturating_sub(1))
@@ -713,7 +721,7 @@ impl MicroParquetApp {
         if let Some(idx) = duplicate_tab {
             if let Some(orig) = self.tabs.get(idx).cloned() {
                 let mut cloned = orig;
-                cloned.title = format!("View of {}", cloned.title);
+                cloned.title = unique_tab_title(&self.tabs, &format!("View of {}", cloned.title));
                 cloned.id = self.next_tab_id();
                 self.tabs.push(cloned);
                 self.active_tab = self.tabs.len() - 1;

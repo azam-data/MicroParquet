@@ -240,3 +240,29 @@ fn u5_a_spec_saved_without_the_new_fields_loads_and_keeps_its_defaults() {
     assert_eq!(ChartScale::Follow.fixed(), None);
     assert_eq!(ChartScale::Plain.fixed(), Some(None));
 }
+
+#[test]
+fn g5_a_category_of_only_blank_values_shows_blank_not_zero_and_top_n_ranks_by_absolute_value() {
+    let df = DataFrame::new(vec![
+        Series::new("K".into(), &["A", "A", "B", "B", "C", "D"]),
+        Series::new("V".into(), &[Some(10.0), Some(5.0), None, None, Some(-500.0), Some(20.0)]),
+    ])
+    .expect("frame");
+    for agg in [ChartAgg::Sum, ChartAgg::Average, ChartAgg::Min, ChartAgg::Max] {
+        let d = compute_chart(df.clone().lazy(), &spec("K", Some("V"), agg)).expect("chart");
+        let b = d.categories.iter().position(|c| c == "B").expect("B");
+        assert_eq!(d.values[0][b], None, "{agg:?}: all blank is blank, not 0");
+        let a = d.categories.iter().position(|c| c == "A").expect("A");
+        assert!(d.values[0][a].is_some(), "{agg:?}");
+    }
+    // Count still counts the rows
+    let d = compute_chart(df.clone().lazy(), &spec("K", None, ChartAgg::Count)).expect("count");
+    let b = d.categories.iter().position(|c| c == "B").expect("B");
+    assert_eq!(d.values[0][b], Some(2.0));
+    // Top N by absolute value: C (-500) is the largest, then D (20)
+    let mut s = spec("K", Some("V"), ChartAgg::Sum);
+    s.top_n = 2;
+    let d = compute_chart(df.lazy(), &s).expect("chart");
+    let kept: Vec<&str> = d.categories.iter().map(String::as_str).filter(|c| *c != "Other").collect();
+    assert!(kept.contains(&"C") && kept.contains(&"D") && !kept.contains(&"A"), "{kept:?}");
+}

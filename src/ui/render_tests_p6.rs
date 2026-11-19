@@ -1282,7 +1282,7 @@ fn u7_the_picker_lists_every_distinct_value_with_its_count_and_two_clicks_pick_t
         assert!(p.boxes.iter().any(|(t, b)| *t == blanks.to_string() && b.center().y > blank_row.top() && b.center().y < blank_row.bottom()), "{what}: (blank) has its count {blanks}");
         assert_eq!(pk.rows.len(), 5, "{what}: four names and the blank entry");
         assert!(p.boxes.iter().any(|(t, _)| t == "0 of 5 selected"), "{what}: the summary");
-        for t in ["Select all", "Clear"] {
+        for t in ["Select all listed", "Clear"] {
             assert!(p.boxes.iter().any(|(x, _)| x == t), "{what}: '{t}'");
         }
         // two real clicks on the check boxes
@@ -1334,7 +1334,7 @@ fn u7_a_value_with_a_comma_blank_not_in_list_select_all_and_clear_work_by_real_c
         let clear = rig.app.picker.rects.clear.expect("Clear");
         rig.click(clear.center());
         assert!(rig.app.filter.conditions[0].values.is_empty() && !rig.app.filter.conditions[0].or_blank, "{what}: Clear");
-        let all = rig.app.picker.rects.select_all.expect("Select all");
+        let all = rig.app.picker.rects.select_all.expect("Select all listed");
         rig.click(all.center());
         let c = rig.app.filter.conditions[0].clone();
         assert_eq!((c.values.len(), c.or_blank, c.op), (4, true, CondOp::InList), "{what}: Select all picks every listed value and (blank)");
@@ -1354,7 +1354,7 @@ fn u7_a_value_with_a_comma_blank_not_in_list_select_all_and_clear_work_by_real_c
         let step = TransformStep::FilterGroup { conditions: rig.app.filter.conditions.clone(), join: GroupJoin::And, keep_matching: true };
         rig.app.push_step_to_active_tab(step, false);
         settle(&mut rig.app);
-        assert_eq!(rig.app.tabs[0].total_rows, zone_rows(250, &[WEST, KHULNA]), "{what}: not in list keeps the other named zones (a blank is unknown)");
+        assert_eq!(rig.app.tabs[0].total_rows, 250 - zone_rows(250, &[DHAKA, CTG]), "{what}: not in list keeps every other row, the blank ones too (G6)");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
@@ -2238,4 +2238,48 @@ fn p6_the_gap_dialog_has_the_stress_option_that_needs_a_profile_and_names_the_ta
         assert!(!rig.app.gap_ladder_source().expect("source").0.contains("stressed"), "{what}");
         micro_parquet::rules::set_data_dir_override(None);
     }
+}
+
+#[test]
+fn g7_two_tabs_of_the_same_title_get_unique_titles_and_a_saved_run_finds_its_file_by_path() {
+    use micro_parquet::tool_runs::{PivotTabRun, RunEnv};
+    let mut app = test_app("p6g7");
+    let root = app.paths.root_dir.clone();
+    let mut paths = Vec::new();
+    for dir in ["a", "b"] {
+        std::fs::create_dir_all(root.join(dir)).expect("dir");
+        let p = root.join(dir).join("loans.csv");
+        std::fs::write(&p, format!("ACNO,BAL\n{dir}1,10\n{dir}2,20\n")).expect("csv");
+        let cfg = micro_parquet::engine::auto_detect_smart_schema(&p).expect("schema");
+        app.create_tab_from_source("loans.csv".into(), TabSource::SingleFile { path: p.clone(), is_parquet: false, config: cfg }, vec![], HashMap::new());
+        settle(&mut app);
+        paths.push(p);
+    }
+    let titles: Vec<String> = app.tabs.iter().map(|t| t.title.clone()).collect();
+    assert_eq!(titles, ["loans.csv", "loans.csv (2)"], "the title names the tab");
+    // the run reads the second one; its identity is the file of that tab, not the title
+    let mut run = ToolRun::PivotTab(PivotTabRun { source: "loans.csv (2)".into(), pivot: None });
+    let ids = run.source_ids(&app.run_env());
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids[0].path, paths[1].display().to_string());
+    assert_eq!(ids[0].blake3, micro_parquet::packs::file_hash(&paths[1]).expect("hash"));
+    // the tabs are renamed and reordered: the run still finds the file in the other folder
+    app.tabs[1].title = "Second".into();
+    app.tabs[0].title = "loans.csv (2)".into();
+    let warnings = run.resolve_sources(&ids, &app.run_env()).expect("resolves");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(run.source_names(), vec!["Second".to_string()], "found by its path");
+    // the file changed since: a warning, not a refusal
+    std::fs::write(&paths[1], "ACNO,BAL\nb1,99\n").expect("change");
+    let (_, warn) = app.run_env().resolve(&ids[0]).expect("still found");
+    assert!(warn.is_some_and(|w| w.contains("has changed since the run was saved")));
+    // open twice: refused naming it; not open at all: refused naming it
+    let cfg = micro_parquet::engine::auto_detect_smart_schema(&paths[1]).expect("schema");
+    app.create_tab_from_source("again".into(), TabSource::SingleFile { path: paths[1].clone(), is_parquet: false, config: cfg }, vec![], HashMap::new());
+    settle(&mut app);
+    let err = format!("{:#}", app.run_env().resolve(&ids[0]).expect_err("ambiguous"));
+    assert!(err.contains("loans.csv (2)") && err.contains("open in 2 tabs"), "{err}");
+    app.tabs.truncate(1);
+    let err = format!("{:#}", app.run_env().resolve(&ids[0]).expect_err("missing"));
+    assert!(err.contains("is not open") && err.contains("loans.csv (2)"), "{err}");
 }

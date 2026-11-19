@@ -184,6 +184,7 @@ impl MicroParquetApp {
                 if let Some(sum) = self.pending_summary.remove(&tab.id) {
                     tab.summary = sum;
                 }
+                tab.title = crate::ui::tabs::unique_tab_title(&self.tabs, &tab.title);
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();

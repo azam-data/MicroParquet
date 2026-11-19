@@ -121,6 +121,8 @@ pub struct MudarabaSpec {
     pub balance_col: String,
     /// The rows are daily balances: the average is their sum ÷ the days of the period.
     pub daily: bool,
+    /// With `daily`: the column holding the day of each balance (a date, or text as YYYY-MM-DD).
+    pub date_col: String,
     pub start: String,
     pub end: String,
     /// The investment income of the period.
@@ -168,12 +170,51 @@ pub fn build_mudaraba(df: &DataFrame, spec: &MudarabaSpec, params: &RuleFile<Psr
     let mut avg: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     let mut shown: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let (mut blank_codes, mut negatives) = (0usize, 0usize);
-    for (p, b) in prod.str()?.into_iter().zip(bal.f64()?.into_iter()) {
+    let (mut blank_bal, mut n_blank_bal) = (Vec::<String>::new(), 0usize);
+    // daily balances: the day of each row (checked against the period) and the days each product has
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).context("Internal date error (epoch)")?;
+    let day_of: Option<Vec<Option<i32>>> = if spec.daily {
+        let dc = spec.date_col.trim();
+        if dc.is_empty() {
+            bail!("Mudaraba: with daily balances, choose the column that holds the day of each balance.");
+        }
+        let c = col(dc, "date")?;
+        let before = c.null_count();
+        let as_date = c.cast(&DataType::Date).map_err(|_| anyhow!("Mudaraba: the date column '{}' is {}, not a date. Dates are YYYY-MM-DD.", dc, c.dtype()))?;
+        if as_date.null_count() > before {
+            bail!("Mudaraba: {} value(s) of the date column '{}' are not dates (YYYY-MM-DD). Fix them in Schema & Ingestion.", as_date.null_count() - before, dc);
+        }
+        Some(as_date.cast(&DataType::Int32)?.i32()?.into_iter().collect())
+    } else {
+        None
+    };
+    let (p_start, p_end) = spec.dates()?;
+    let (d0, d1) = ((p_start - epoch).num_days() as i32, (p_end - epoch).num_days() as i32);
+    let mut outside = 0usize;
+    let mut days_seen: std::collections::HashMap<String, std::collections::BTreeSet<i32>> = std::collections::HashMap::new();
+    for (i, (p, b)) in prod.str()?.into_iter().zip(bal.f64()?.into_iter()).enumerate() {
         let Some(code) = p.map(str::trim).filter(|c| !c.is_empty()) else {
             blank_codes += 1;
             continue;
         };
-        let Some(b) = b.filter(|b| b.is_finite()) else { continue };
+        let Some(b) = b.filter(|b| b.is_finite()) else {
+            n_blank_bal += 1;
+            if blank_bal.len() < 5 {
+                blank_bal.push(code.to_string());
+            }
+            continue;
+        };
+        if let Some(days_col) = &day_of {
+            match days_col[i] {
+                Some(d) if d >= d0 && d <= d1 => {
+                    days_seen.entry(normalise_product(code)).or_default().insert(d);
+                }
+                _ => {
+                    outside += 1;
+                    continue;
+                }
+            }
+        }
         if b < 0.0 {
             negatives += 1;
         }
@@ -183,6 +224,21 @@ pub fn build_mudaraba(df: &DataFrame, spec: &MudarabaSpec, params: &RuleFile<Psr
             shown.insert(k.clone(), code.to_string());
         }
         *avg.entry(k).or_insert(0.0) += b;
+    }
+    if n_blank_bal > 0 {
+        bail!("Mudaraba: {} row(s) have a blank balance in '{}' (first products: {}). Fill them or filter them out; a blank would count as 0.", n_blank_bal, spec.balance_col, blank_bal.join(", "));
+    }
+    if outside > 0 {
+        bail!("Mudaraba: {} row(s) are dated outside the period {} to {} (or have no date) in '{}'. Filter them out or correct the period.", outside, p_start.format("%Y-%m-%d"), p_end.format("%Y-%m-%d"), spec.date_col.trim());
+    }
+    if spec.daily {
+        let miss: Vec<String> = order.iter().filter_map(|k| {
+            let have = days_seen.get(k).map_or(0, |s| s.len()) as i64;
+            (have < days as i64).then(|| format!("{} ({} of {} days missing)", shown[k], days as i64 - have, days as i64))
+        }).collect();
+        if !miss.is_empty() {
+            bail!("Mudaraba: daily balances are missing for {}. Every product needs a balance for every day of the period; add the missing days (a missing day is not counted as 0).", miss.join("; "));
+        }
     }
     if blank_codes > 0 {
         bail!("Mudaraba: {} row(s) have no product code in '{}'. Fill them or filter them out.", blank_codes, spec.product_col);

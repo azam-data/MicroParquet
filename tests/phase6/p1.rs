@@ -399,3 +399,32 @@ fn p1_a_run_file_with_missing_fields_loads_with_defaults_and_the_runs_are_listed
     assert_eq!(list_runs(&d), vec!["bad".to_string(), "old".to_string()]);
     let _ = BehaviourFile::default();
 }
+
+#[test]
+fn h4_a_saved_run_keeps_the_hash_of_each_file_it_read_and_warns_naming_a_file_that_changed() {
+    use micro_parquet::rules::UsedFile;
+    let d = dir("h4_files");
+    set_data_dir_override(Some(d.clone()));
+    std::fs::create_dir_all(d.join("irrbb_shocks")).expect("dir");
+    std::fs::write(d.join("irrbb_shocks/x.json"), "{\"a\":1}").expect("file");
+    std::fs::write(d.join("y.json"), "{\"b\":1}").expect("file");
+    let used = vec![
+        UsedFile { kind: "IRRBB curve".into(), file: "irrbb_shocks/x.json".into(), as_of: String::new(), source: String::new(), sample: false },
+        UsedFile { kind: "Rule file".into(), file: "y.json".into(), as_of: String::new(), source: String::new(), sample: false },
+    ];
+    let files = hash_used_files(&used);
+    assert_eq!(files.len(), 2);
+    assert!(changed_files_warning(&files).is_none(), "nothing changed");
+    // the hashes travel in the saved run's file
+    let run = ToolRun::PivotTab(PivotTabRun { source: "Sept".into(), pivot: None });
+    save_run_with(&d.join("runs"), "h4", &run, vec![], files.clone()).expect("saves");
+    let back = load_run(&d.join("runs"), "h4").expect("loads");
+    assert_eq!(back.files, files);
+    std::fs::write(d.join("irrbb_shocks/x.json"), "{\"a\":2}").expect("edit");
+    let w = changed_files_warning(&back.files).expect("a warning");
+    assert!(w.contains("irrbb_shocks/x.json") && !w.contains("y.json"), "{w}");
+    // a file that is gone counts as changed
+    std::fs::remove_file(d.join("y.json")).expect("remove");
+    assert!(changed_files_warning(&back.files).expect("warning").contains("y.json"));
+    set_data_dir_override(None);
+}

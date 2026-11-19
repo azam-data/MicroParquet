@@ -21,6 +21,8 @@ pub struct MudState {
     pub balance_col: String,
     /// The rows are daily balances (their sum ÷ the days) instead of an average balance.
     pub daily: bool,
+    /// With daily balances: the column that holds the day of each balance.
+    pub date_col: String,
     pub start: String,
     pub end: String,
     pub income: String,
@@ -32,7 +34,7 @@ pub struct MudState {
 
 impl Default for MudState {
     fn default() -> Self {
-        Self { product_col: String::new(), balance_col: String::new(), daily: false, start: String::new(), end: String::new(), income: String::new(), other: "0".to_string(), params: None, rects: MudRects::default() }
+        Self { product_col: String::new(), balance_col: String::new(), daily: false, date_col: String::new(), start: String::new(), end: String::new(), income: String::new(), other: "0".to_string(), params: None, rects: MudRects::default() }
     }
 }
 
@@ -93,9 +95,12 @@ impl MicroParquetApp {
                 return Err(format!("Choose the {} column.", what));
             }
         }
+        if m.daily && (m.date_col.trim().is_empty() || !cols.contains(&m.date_col)) {
+            return Err("Choose the column that holds the day of each balance.".to_string());
+        }
         let income = number(&m.income).filter(|v| *v >= 0.0).ok_or_else(|| "Type the investment income of the period as a number (0 or more).".to_string())?;
         let other = number(&m.other).filter(|v| *v >= 0.0).ok_or_else(|| "Type the other investable funds as a number (0 or more).".to_string())?;
-        let spec = MudarabaSpec { product_col: m.product_col.clone(), balance_col: m.balance_col.clone(), daily: m.daily, start: m.start.trim().to_string(), end: m.end.trim().to_string(), income, other_investable: other };
+        let spec = MudarabaSpec { product_col: m.product_col.clone(), balance_col: m.balance_col.clone(), daily: m.daily, date_col: if m.daily { m.date_col.clone() } else { String::new() }, start: m.start.trim().to_string(), end: m.end.trim().to_string(), income, other_investable: other };
         spec.dates().map_err(|e| format!("{:#}", e))?;
         match &m.params {
             Some((k, Err(e))) if *k == spec.end => return Err(e.clone()),
@@ -139,9 +144,12 @@ impl MicroParquetApp {
                     ui.label("The balance is:");
                     ui.horizontal(|ui| {
                         ui.radio_value(&mut self.mud.daily, false, "the average of the period");
-                        ui.radio_value(&mut self.mud.daily, true, "a daily balance (average = sum \u{f7} days)");
+                        ui.radio_value(&mut self.mud.daily, true, "a daily balance (average = sum \u{f7} days; every day needed)");
                     });
                     ui.end_row();
+                    if self.mud.daily {
+                        pick(ui, "Day of the balance:", "mud_day", &mut self.mud.date_col, &mut rects);
+                    }
                     let mut field = |ui: &mut egui::Ui, label: &str, text: &mut String, rects: &mut MudRects| {
                         ui.label(label);
                         let r = ui.add(egui::TextEdit::singleline(text).desired_width(theme::MIGRATION_COMBO_W));

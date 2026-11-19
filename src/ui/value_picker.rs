@@ -95,7 +95,7 @@ pub fn picker_body(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPane
         ui.horizontal(|ui| {
             let r = ui.add(egui::TextEdit::singleline(&mut panel.search).desired_width(theme::PICKER_SEARCH_W).hint_text("Search values"));
             rects.search = Some(r.rect);
-            let all = ui.button("Select all");
+            let all = ui.button("Select all listed");
             rects.select_all = Some(all.rect);
             if all.clicked() {
                 for (k, _) in &shown {

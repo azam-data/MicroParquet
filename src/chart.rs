@@ -268,7 +268,8 @@ pub fn validate_chart(schema: &Schema, spec: &ChartSpec) -> Result<()> {
 fn agg_exprs(spec: &ChartSpec) -> (Expr, Option<Expr>) {
     match spec.agg {
         ChartAgg::Count => (len().cast(DataType::Float64), None),
-        ChartAgg::Sum => (col("__v").sum().cast(DataType::Float64), None),
+        // a group whose values are all blank has no sum (blank, not 0); Count still counts the rows
+        ChartAgg::Sum => (when(col("__v").count().gt(lit(0))).then(col("__v").sum().cast(DataType::Float64)).otherwise(lit(NULL).cast(DataType::Float64)), None),
         ChartAgg::Average => (col("__v").mean().cast(DataType::Float64), None),
         ChartAgg::Min => (col("__v").min().cast(DataType::Float64), None),
         ChartAgg::Max => (col("__v").max().cast(DataType::Float64), None),
@@ -329,9 +330,10 @@ pub fn compute_chart(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let cat_values = numbers(&by_category, "__a")?;
     let distinct_categories = cat_names.len();
     // largest first (a blank total last): these are the categories that stay
+    // (by the size of the value, whatever its sign: a large negative total is a top category)
     let mut ranked: Vec<usize> = (0..cat_names.len()).collect();
     ranked.sort_by(|&a, &b| match (cat_values[a], cat_values[b]) {
-        (Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(Ordering::Equal),
+        (Some(x), Some(y)) => y.abs().partial_cmp(&x.abs()).unwrap_or(Ordering::Equal),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
@@ -354,7 +356,7 @@ pub fn compute_chart(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         let vals = numbers(&by_series, "__a")?;
         let mut idx: Vec<usize> = (0..names.len()).collect();
         idx.sort_by(|&a, &b| match (vals[a], vals[b]) {
-            (Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(Ordering::Equal),
+            (Some(x), Some(y)) => y.abs().partial_cmp(&x.abs()).unwrap_or(Ordering::Equal),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,

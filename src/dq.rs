@@ -234,6 +234,13 @@ pub fn load_ruleset(dir: &Path, name: &str) -> Result<DqRuleSet> {
     crate::rules::write_text_if_missing(&dir.join(SAMPLE_FILE), SAMPLE_RULES);
     let path = dir.join(format!("{}.json", s));
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the rule set {}", path.display()))?;
+    // the thresholds decide Green, Amber and Red: a file that does not state them is refused, never given 98 / 95
+    let raw: serde_json::Value = serde_json::from_str(&text).map_err(|e| anyhow!("The rule set {} is not valid: {}.", path.display(), e))?;
+    for field in ["green_min", "amber_min"] {
+        if !raw.get(field).is_some_and(|v| v.is_number()) {
+            bail!("The rule set {} has no '{}' (a number, the overall score in percent). Add it to the file; no threshold is assumed.", path.display(), field);
+        }
+    }
     let mut set: DqRuleSet = serde_json::from_str(&text).map_err(|e| anyhow!("The rule set {} is not valid: {}.", path.display(), e))?;
     set.name = s;
     set.check().map_err(|e| anyhow!("The rule set {}: {:#}", path.display(), e))?;

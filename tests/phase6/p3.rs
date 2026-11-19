@@ -225,3 +225,62 @@ fn p3_the_tab_source_gives_both_tables_and_the_run_is_saved_and_made_again() {
     let mut c = back.run.clone();
     assert!(!c.set_cutoff("2026-10-31"));
 }
+
+#[test]
+fn g2_keys_are_matched_trimmed_and_ignoring_capitals_shown_as_the_current_month_and_noted() {
+    let p = month(&[("TD", 600.0, 8.0), ("td ", 400.0, 8.0), ("SB", 500.0, 3.0)]);
+    let c = month(&[("td", 1100.0, 8.5), ("sb", 450.0, 3.0)]);
+    let (df, notes) = build_mom_noted(p.clone().lazy(), c.clone().lazy(), &spec()).expect("variance");
+    assert_eq!(df.height(), 2, "TD/td is one row, SB/sb is one row");
+    let keys: Vec<String> = strings(&df, "Product").into_iter().flatten().collect();
+    assert_eq!(keys, vec!["sb", "td"], "shown with the current month's spelling");
+    near(at(&df, "td", "Prev balance"), 1000.0 * CR, "the two previous spellings add up");
+    near(at(&df, "td", "Change"), 100.0 * CR, "change");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("TD + td") && notes[0].contains("shown as td") && notes[0].contains("SB + sb"), "{notes:?}");
+    assert!(df.column("Status").expect("status").str().expect("str").into_iter().all(|s| s == Some("")), "none is New or Closed");
+    // the same case in both months: nothing to note
+    let (_, none) = build_mom_noted(prev().lazy(), curr().lazy(), &spec()).expect("variance");
+    assert!(none.is_empty());
+    // the commentary tab ends with the note
+    let d = dir("g2_tab");
+    let (ps, cs) = (parquet(&d, "sept", &p), parquet(&d, "oct", &c));
+    let tab = TabSource::MomVariance { prev_source: Box::new(ps), prev_steps: vec![], curr_source: Box::new(cs), curr_steps: vec![], spec: spec(), view: MomView::Commentary };
+    let text = compile_tab_lazy(&tab, &[], &d).expect("compiles").collect().expect("collects");
+    let lines: Vec<String> = strings(&text, COMMENTARY_COLUMN).into_iter().flatten().collect();
+    assert!(lines.last().is_some_and(|l| l.starts_with("Note: keys that differ only in capital letters")), "{lines:?}");
+}
+
+#[test]
+fn g3_a_blank_balance_or_count_stops_the_run_with_the_count_and_the_first_five_keys() {
+    let blank_bal = DataFrame::new(vec![
+        Series::new("Product".into(), ["A", "B", "C", "D", "E", "F", "G"]),
+        Series::new("Balance".into(), [Some(1.0), None, None, None, None, None, None, ]),
+        Series::new("Rate".into(), [8.0; 7]),
+    ])
+    .expect("frame");
+    let msg = format!("{:#}", run(&blank_bal, &curr(), &spec()).expect_err("blank balance"));
+    assert!(msg.contains("6 row(s) of the previous month have a blank balance") && msg.contains("first keys: B, C, D, E, F") && !msg.contains("G)"), "{msg}");
+    let with_count = MomSpec { count_col: Some("N".into()), ..spec() };
+    let mut c = curr();
+    c.with_column(Series::new("N".into(), [Some(3.0), None])).expect("count");
+    let mut p = prev();
+    p.with_column(Series::new("N".into(), [1.0, 2.0])).expect("count");
+    let msg = format!("{:#}", run(&p, &c, &with_count).expect_err("blank count"));
+    assert!(msg.contains("1 row(s) of the current month have a blank count") && msg.contains("SB"), "{msg}");
+}
+
+#[test]
+fn g7_the_same_file_twice_is_refused_as_both_months_but_a_different_file_is_not() {
+    let d = dir("g7_same");
+    let a = parquet(&d, "sept", &prev());
+    let TabSource::SingleFile { path, .. } = &a else { panic!("a file source") };
+    let copy = d.join("sept_copy.parquet");
+    std::fs::copy(path, &copy).expect("copy");
+    let b = TabSource::SingleFile { path: copy, is_parquet: true, config: IngestionConfig::default() };
+    let mk = |p: &TabSource, c: &TabSource| TabSource::MomVariance { prev_source: Box::new(p.clone()), prev_steps: vec![], curr_source: Box::new(c.clone()), curr_steps: vec![], spec: spec(), view: MomView::Variance };
+    let err = compile_tab_lazy(&mk(&a, &b), &[], &d).err().expect("refused");
+    assert!(format!("{err:#}").contains("the previous and the current month are the same file"), "{err:#}");
+    let other = parquet(&d, "oct", &curr());
+    compile_tab_lazy(&mk(&a, &other), &[], &d).expect("two different files compile");
+}

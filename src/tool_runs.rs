@@ -38,6 +38,57 @@ pub trait RunEnv {
     /// The name of the tab whose source and steps these are.
     fn name_of(&self, source: &TabSource, steps: &[TransformStep]) -> Result<String>;
     fn paths(&self) -> &PortablePaths;
+    /// Which file the source called `name` is (path and blake3 hash), when it is one. Tabs made by a tool have none.
+    fn source_id(&self, _name: &str) -> Option<SourceId> {
+        None
+    }
+    /// The source this identity names, now: its name here, and a warning when the file changed since it was saved.
+    /// Refuses a source that is not open, or open more than once.
+    fn resolve(&self, id: &SourceId) -> Result<(String, Option<String>)> {
+        Ok((id.name.clone(), None))
+    }
+}
+
+/// A source of a run as it was when the run was saved: its title, and the file with its content hash.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct SourceId {
+    pub name: String,
+    pub path: String,
+    pub blake3: String,
+}
+
+/// A rule, curve, profile or parameter file a run read, with its hash when it was saved.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct FileHash {
+    pub kind: String,
+    /// As the Cover names it (`irrbb_shocks/2021-04-13.json`), under `portable_data`.
+    pub file: String,
+    pub blake3: String,
+}
+
+/// The hashes of the files a run read (those that can be read now).
+pub fn hash_used_files(used: &[crate::rules::UsedFile]) -> Vec<FileHash> {
+    let root = crate::rules::data_dir();
+    used.iter()
+        .filter_map(|u| crate::packs::file_hash(&root.join(&u.file)).ok().map(|h| FileHash { kind: u.kind.clone(), file: u.file.clone(), blake3: h }))
+        .collect()
+}
+
+/// Warnings for the saved files that have changed (or are gone) since the run was saved.
+pub fn changed_files_warning(saved: &[FileHash]) -> Option<String> {
+    let root = crate::rules::data_dir();
+    let changed: Vec<String> = saved
+        .iter()
+        .filter(|f| crate::packs::file_hash(&root.join(&f.file)).map(|h| h != f.blake3).unwrap_or(true))
+        .map(|f| f.file.clone())
+        .collect();
+    if changed.is_empty() {
+        None
+    } else {
+        Some(format!("These files changed since the run was saved, so the numbers may differ from last time: {}.", changed.join(", ")))
+    }
 }
 
 fn name_of_base(env: &dyn RunEnv, source: &TabSource, steps: &[TransformStep]) -> Result<String> {
@@ -268,6 +319,10 @@ pub struct SavedRun {
     pub name: String,
     pub app_version: String,
     pub run: ToolRun,
+    /// The file (path and hash) behind each source tab, so the run finds the same file again.
+    pub sources: Vec<SourceId>,
+    /// The rule, curve, profile and parameter files the run read, with their hashes.
+    pub files: Vec<FileHash>,
 }
 
 const NOT_A_TOOL: &str = "This tab was not made by a tool whose run can be saved (repricing gap, gap ladder, IRRBB, CL migration, CL-1, LCR/NSFR, IFRS 9 summary, period reconcile, join, stack or pivot tab).";
@@ -311,6 +366,37 @@ impl ToolRun {
     }
 
     /// The names of the source tabs the run reads, in the order of its inputs.
+    /// The file identity of each source of the run (those that are files).
+    pub fn source_ids(&self, env: &dyn RunEnv) -> Vec<SourceId> {
+        let mut out: Vec<SourceId> = Vec::new();
+        for n in self.source_names() {
+            if let Some(id) = env.source_id(&n) {
+                if !out.iter().any(|o| o.name == id.name) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+
+    /// Points each source at the open tab of the same file (by path), whatever the tab is called now.
+    /// Returns the warnings (a file that changed since the run was saved).
+    pub fn resolve_sources(&mut self, ids: &[SourceId], env: &dyn RunEnv) -> Result<Vec<String>> {
+        let mut warnings = Vec::new();
+        let mut renames: Vec<(String, String)> = Vec::new();
+        for id in ids.iter().filter(|i| !i.path.is_empty()) {
+            let (now, warn) = env.resolve(id)?;
+            warnings.extend(warn);
+            renames.push((id.name.clone(), now));
+        }
+        self.each_source_name(&mut |n| {
+            if let Some((_, now)) = renames.iter().find(|(old, _)| old == n) {
+                *n = now.clone();
+            }
+        });
+        Ok(warnings)
+    }
+
     pub fn source_names(&self) -> Vec<String> {
         let mut c = self.clone();
         let mut v = Vec::new();
@@ -711,9 +797,14 @@ pub fn run_path(dir: &Path, name: &str) -> Result<PathBuf> {
 
 /// Writes `portable_data/runs/<name>.json`. An existing run of that name is replaced.
 pub fn save_run(dir: &Path, name: &str, run: &ToolRun) -> Result<PathBuf> {
+    save_run_with(dir, name, run, Vec::new(), Vec::new())
+}
+
+/// Saves a run with the files behind its source tabs and the files it read.
+pub fn save_run_with(dir: &Path, name: &str, run: &ToolRun, sources: Vec<SourceId>, files: Vec<FileHash>) -> Result<PathBuf> {
     let path = run_path(dir, name)?;
     std::fs::create_dir_all(dir).with_context(|| format!("Could not create the folder {}", dir.display()))?;
-    let saved = SavedRun { name: run_file_stem(name)?, app_version: env!("CARGO_PKG_VERSION").to_string(), run: run.clone() };
+    let saved = SavedRun { name: run_file_stem(name)?, app_version: env!("CARGO_PKG_VERSION").to_string(), run: run.clone(), sources, files };
     let text = serde_json::to_string_pretty(&saved)?;
     let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
     std::fs::write(&tmp, text).with_context(|| format!("Could not write the run {}", path.display()))?;

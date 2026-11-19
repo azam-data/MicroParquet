@@ -42,6 +42,10 @@ pub struct PackInput {
     pub required_columns: Vec<String>,
     /// The tab the slot was made from, so an item made from a result of that tab points at the slot.
     pub captured_from: String,
+    /// The file of that tab and its blake3 hash (empty for a tab made by a tool): an item finds its slot by
+    /// this file, not by a title that two tabs may share.
+    pub captured_path: String,
+    pub captured_hash: String,
 }
 
 /// What an item puts on its sheet.

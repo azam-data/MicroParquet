@@ -28,7 +28,7 @@ fn deposits() -> DataFrame {
 }
 
 fn spec() -> MudarabaSpec {
-    MudarabaSpec { product_col: "Product".into(), balance_col: "Avg".into(), daily: false, start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 }
+    MudarabaSpec { product_col: "Product".into(), balance_col: "Avg".into(), daily: false, date_col: String::new(), start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 }
 }
 
 fn run(df: &DataFrame, s: &MudarabaSpec) -> anyhow::Result<DataFrame> {
@@ -154,14 +154,16 @@ fn p5_daily_balances_are_reduced_to_the_average_and_the_tab_and_the_saved_run_wo
     // 30 days of 200 / 300 / 500 give the same averages as the acceptance example
     let mut p = Vec::new();
     let mut b = Vec::new();
-    for _ in 0..30 {
+    let mut days = Vec::new();
+    for day in 1..=30 {
         for (k, v) in [("MSND", 200.0), ("MSB", 300.0), ("MTDR-1Y", 500.0)] {
             p.push(k);
             b.push(v);
+            days.push(format!("2026-11-{day:02}"));
         }
     }
-    let daily = DataFrame::new(vec![Series::new("Product".into(), p), Series::new("Avg".into(), b)]).expect("daily");
-    let s = MudarabaSpec { daily: true, ..spec() };
+    let daily = DataFrame::new(vec![Series::new("Product".into(), p), Series::new("Avg".into(), b), Series::new("Day".into(), days)]).expect("daily");
+    let s = MudarabaSpec { daily: true, date_col: "Day".into(), ..spec() };
     let df = run(&daily, &s).expect("daily distribution");
     near(cell(&df, "MSND", "Average balance"), 200.0, 1e-9, "the average of the daily balances");
     near(cell(&df, "Depositors' share", "Profit"), 6.72, 1e-9, "the same pool");
@@ -196,4 +198,48 @@ fn p5_daily_balances_are_reduced_to_the_average_and_the_tab_and_the_saved_run_wo
     assert_eq!(title, "Mudaraba profit distribution");
     assert!(t.equals_missing(&compile_tab_lazy(&s2, &st2, &d).expect("compiles").collect().expect("collects")));
     set_data_dir_override(None);
+}
+
+#[test]
+fn g3_blank_balances_dates_outside_the_period_and_missing_days_stop_the_run_naming_them() {
+    let d = dir("g3_isl");
+    set_data_dir_override(Some(d.clone()));
+    params(&d, 4.0, 70.0);
+    let frame = |rows: &[(&str, Option<f64>, &str)]| DataFrame::new(vec![
+        Series::new("Product".into(), rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+        Series::new("Avg".into(), rows.iter().map(|r| r.1).collect::<Vec<_>>()),
+        Series::new("Day".into(), rows.iter().map(|r| r.2).collect::<Vec<_>>()),
+    ]).expect("frame");
+    // a blank average balance: the count and the products
+    let blank = frame(&[("MSND", Some(1.0), "2026-11-01"), ("MSB", None, "2026-11-01"), ("MTDR-1Y", None, "2026-11-01")]);
+    let msg = format!("{:#}", run(&blank, &spec()).expect_err("blank"));
+    assert!(msg.contains("2 row(s) have a blank balance") && msg.contains("MSB, MTDR-1Y"), "{msg}");
+    // daily: every product has a balance for every one of the 30 days
+    let daily = MudarabaSpec { daily: true, date_col: "Day".into(), ..spec() };
+    let full = |skip: Option<(&str, u32)>, extra: Option<&str>| {
+        let mut rows: Vec<(String, Option<f64>, String)> = Vec::new();
+        for day in 1..=30u32 {
+            for k in ["MSND", "MSB", "MTDR-1Y"] {
+                if skip == Some((k, day)) || skip == Some((k, 99)) && day <= 3 {
+                    continue;
+                }
+                rows.push((k.to_string(), Some(100.0), format!("2026-11-{day:02}")));
+            }
+        }
+        if let Some(e) = extra {
+            rows.push(("MSND".to_string(), Some(100.0), e.to_string()));
+        }
+        DataFrame::new(vec![
+            Series::new("Product".into(), rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>()),
+            Series::new("Avg".into(), rows.iter().map(|r| r.1).collect::<Vec<_>>()),
+            Series::new("Day".into(), rows.iter().map(|r| r.2.clone()).collect::<Vec<_>>()),
+        ]).expect("frame")
+    };
+    run(&full(None, None), &daily).expect("a full month runs");
+    let msg = format!("{:#}", run(&full(None, Some("2026-12-02")), &daily).expect_err("outside"));
+    assert!(msg.contains("1 row(s) are dated outside the period 2026-11-01 to 2026-11-30"), "{msg}");
+    let msg = format!("{:#}", run(&full(Some(("MSB", 99)), None), &daily).expect_err("missing days"));
+    assert!(msg.contains("MSB (3 of 30 days missing)") && !msg.contains("MSND ("), "{msg}");
+    let no_col = MudarabaSpec { date_col: String::new(), ..daily.clone() };
+    assert!(format!("{:#}", run(&full(None, None), &no_col).expect_err("no date column")).contains("choose the column that holds the day"));
 }

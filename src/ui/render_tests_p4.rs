@@ -1575,8 +1575,9 @@ fn i18_tab_names_are_cut_at_24_characters_with_the_full_name_on_hover_and_no_lab
         }
         // the full name is on hover
         let r = strip(&rig);
-        let c = r.cells.iter().find(|c| c.full == LONG && inside(c.tab, rig.ctx.screen_rect())).expect("a long tab in view");
+        let c = r.cells.iter().find(|c| c.full.starts_with(LONG) && inside(c.tab, rig.ctx.screen_rect())).expect("a long tab in view");
         let at = c.tab.center();
+        let full_name = c.full.clone();
         rig.input.time = Some(10.0);
         rig.step(vec![egui::Event::PointerMoved(at)]);
         // the pointer stays still while the clock runs: the tooltip appears
@@ -1585,7 +1586,7 @@ fn i18_tab_names_are_cut_at_24_characters_with_the_full_name_on_hover_and_no_lab
             rig.input.time = Some(t);
             p = rig.step(vec![]);
         }
-        assert!(p.boxes.iter().any(|(t, _)| t == LONG), "{what}: the whole name is the tooltip: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("Exposure")).collect::<Vec<_>>());
+        assert!(p.boxes.iter().any(|(t, _)| *t == full_name), "{what}: the whole name is the tooltip: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("Exposure")).collect::<Vec<_>>());
     }
 }
 

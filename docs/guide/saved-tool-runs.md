@@ -20,7 +20,7 @@ Keeps everything you gave a tool (the cutoff date, which column is the balance, 
 
 | Column role | Required? | Type the app needs | Example values | Notes |
 | --- | --- | --- | --- | --- |
-| Source tab name | Yes, for each tab the tool reads | The tab's title (the file name for a tab opened from a file) | Loans, Sept 2026.csv | Two tabs with the same title: the first is used. |
+| Source tab name | Yes, for each tab the tool reads | The tab's title (the file name for a tab opened from a file) | Loans, Sept 2026.csv | Two tabs of one title are made unique ("loans.csv", "loans.csv (2)"). The saved run also keeps each source's file path and blake3 hash and finds the tab by that file; a file that is not open, or is open in two tabs, is refused naming it. |
 | Columns of each tab | As the tool needs | As the tool says | BAL, MAT, RATE | They are saved by name; a column that is gone is reported by the tool when you run it. |
 | Rule, curve, beta, behaviour and map files | As the tool needs | Files in `portable_data` | `behaviour/2026.json`, `sample_basel.json` | Saved by name and read again when the run is made: a changed file gives a changed result. |
 
@@ -29,8 +29,9 @@ Keeps everything you gave a tool (the cutoff date, which column is the balance, 
 1. Make the result tab with its tool (for example Banking ▸ Treasury & ALM ▸ "Liquidity gap ladder").
 2. Right-click the result tab's name and choose "Save run…" (Ctrl+K: "Saved tool runs" lists the saved ones).
 3. Type a name (no `/ \ : * ? " < > |`) and choose "Save". The file is `portable_data/runs/<name>.json`. A name that exists asks you to choose "Replace".
-4. To use it again, open File ▸ "Saved tool runs…" (Ctrl+K: "Saved tool runs") and choose "Re-run with changes" next to the run. Or right-click a result tab and choose "Re-run with changes" to repeat that tab with other inputs.
-5. The tool's dialog opens with the saved inputs. Change the cutoff date (or anything else) and run the tool as usual.
+4. A run also keeps a blake3 hash of every rule, curve, profile and parameter file it read. When you re-run it, a file that has changed since (or is gone) is named in the status bar: the numbers may differ from last time. The dialog still opens.
+5. To use it again, open File ▸ "Saved tool runs…" (Ctrl+K: "Saved tool runs") and choose "Re-run with changes" next to the run. Or right-click a result tab and choose "Re-run with changes" to repeat that tab with other inputs.
+6. The tool's dialog opens with the saved inputs. Change the cutoff date (or anything else) and run the tool as usual.
 
 ## 6. What you get
 

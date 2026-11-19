@@ -90,9 +90,9 @@ fn u7_blank_adds_the_blank_rows_and_not_in_list_leaves_the_picked_values_out() {
     // only "(blank)": the blank rows
     let only_blank = keep(&df, vec![cond(CondOp::Equals, &[], true)], true);
     assert_eq!(only_blank.height(), blank_rows);
-    // Not in list: the picked values are out; a blank is unknown (Keep matching drops it, Delete matching keeps it)
+    // Not in list: the picked values are out; the blank rows ("", spaces and null) are not in the list, so they stay
     let not_in = keep(&df, vec![cond(CondOp::NotInList, &["DHAKA NORTH", "CTG SOUTH"], false)], true);
-    assert_eq!(not_in.height(), named("WEST-1 ZONE") + named("Khulna, West") + all.iter().filter(|v| v.as_deref().is_some_and(|t| t.trim().is_empty() && !t.is_empty())).count() * 0);
+    assert_eq!(not_in.height(), named("WEST-1 ZONE") + named("Khulna, West") + blank_rows);
     assert!(zones_of(&not_in).iter().flatten().all(|z| z != "DHAKA NORTH" && z != "CTG SOUTH"));
     // "(blank)" picked as well: blanks are left out for certain, so Delete matching keeps only the others
     let gone = keep(&df, vec![cond(CondOp::NotInList, &["DHAKA NORTH"], true)], false);
@@ -178,7 +178,7 @@ fn u7_a_conditional_column_rule_with_picked_values_matches_them() {
     let step = TransformStep::ConditionalColumn { new_col: "Flag".into(), rules: vec![not], fallback: "In".into(), output_as_float: false, blank_result: BlankRule::FallThrough };
     let out = run_steps("u7_cc2", &df, &[step]).expect("runs");
     let n_out = strings(&out, "Flag").iter().filter(|f| f.as_deref() == Some("Out")).count();
-    assert_eq!(n_out, zones_of(&df).iter().filter(|z| z.as_deref().is_some_and(|t| !t.trim().is_empty() && t != "DHAKA NORTH")).count());
+    assert_eq!(n_out, zones_of(&df).iter().filter(|z| z.as_deref() != Some("DHAKA NORTH")).count(), "blank rows are not in the list, so they are 'Out' too (as in a filter)");
 }
 
 #[test]
@@ -189,4 +189,57 @@ fn u7_the_python_export_has_the_picked_values_with_their_commas() {
     assert!(py.contains("_mp_in_values(\"Zone\", [\"Khulna, West\", \"CTG SOUTH\"], lf.collect_schema()[\"Zone\"], True, False)"), "{py}");
     let none = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("x.parquet"), true, &IngestionConfig::default(), &[TransformStep::FilterGroup { conditions: vec![FilterCondition { column: "Z".into(), op: CondOp::InList, value: "a, b".into(), ..Default::default() }], join: GroupJoin::And, keep_matching: true }], None).expect("python");
     assert!(!none.contains("_mp_in_values"), "an old list is exported as before");
+}
+
+fn one_col(name: &str, s: Series) -> DataFrame {
+    DataFrame::new(vec![s.with_name(name.into())]).expect("frame")
+}
+
+fn picked(col: &str, values: &[&str]) -> FilterCondition {
+    FilterCondition { column: col.into(), op: CondOp::InList, values: values.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+}
+
+#[test]
+fn g1_picked_numbers_are_compared_in_the_columns_own_type_never_through_f64() {
+    // two 17-digit values that are the same f64
+    assert_eq!(12345678901234567_i64 as f64, 12345678901234568_i64 as f64, "the premise: f64 cannot tell them apart");
+    let df = one_col("Acct", Series::new("x".into(), [12345678901234567_i64, 12345678901234568, 5]));
+    let one = keep_col(&df, vec![picked("Acct", &["12345678901234567"])]);
+    assert_eq!(one.height(), 1, "picking the first returns one row");
+    assert_eq!(one.column("Acct").expect("col").i64().expect("i64").get(0), Some(12345678901234567));
+    let both = keep_col(&df, vec![picked("Acct", &["12,345,678,901,234,568", "5"])]);
+    assert_eq!(both.height(), 2);
+    // unsigned 64-bit above i64::MAX
+    let big = 18_000_000_000_000_000_001_u64;
+    let u = one_col("N", Series::new("x".into(), [big, big + 1, 3_u64]));
+    assert_eq!(keep_col(&u, vec![picked("N", &["18000000000000000001"])]).height(), 1);
+    // decimals compare as decimal text: "12.5" is "12.50" in a two-decimal column
+    let dec = Series::new("x".into(), [12.5_f64, 12.51, 7.0]).cast(&DataType::Decimal(Some(18), Some(2))).expect("decimal");
+    let d = one_col("Amt", dec);
+    assert_eq!(keep_col(&d, vec![picked("Amt", &["12.5"])]).height(), 1);
+    assert_eq!(keep_col(&d, vec![picked("Amt", &["12.51", "7"])]).height(), 2);
+    let err = run_steps("g1_dec", &d, &[TransformStep::FilterGroup { conditions: vec![picked("Amt", &["12.505"])], join: GroupJoin::And, keep_matching: true }]).expect_err("too many decimals");
+    assert!(format!("{err:#}").contains("'12.505' is not a number with at most 2 decimals"), "{err:#}");
+    // a fraction in a whole-number column is refused naming the value
+    let err = run_steps("g1_int", &df, &[TransformStep::FilterGroup { conditions: vec![picked("Acct", &["5.5"])], join: GroupJoin::And, keep_matching: true }]).expect_err("not whole");
+    assert!(format!("{err:#}").contains("'5.5' is not a whole number"), "{err:#}");
+}
+
+fn keep_col(df: &DataFrame, conds: Vec<FilterCondition>) -> DataFrame {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let name = format!("u7_col{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    run_steps(&name, df, &[TransformStep::FilterGroup { conditions: conds, join: GroupJoin::And, keep_matching: true }]).expect("the filter runs")
+}
+
+#[test]
+fn g6_typed_and_picked_not_in_list_keep_blank_rows_unless_blank_is_picked() {
+    let df = one_col("Zone", Series::new("x".into(), [Some("A"), Some(""), None, Some("B")]));
+    // picker
+    let not_a = keep_col(&df, vec![FilterCondition { column: "Zone".into(), op: CondOp::NotInList, values: vec!["A".into()], ..Default::default() }]);
+    assert_eq!(not_a.height(), 3, "picker: '', null and B stay");
+    let not_a_blank = keep_col(&df, vec![FilterCondition { column: "Zone".into(), op: CondOp::NotInList, values: vec!["A".into()], or_blank: true, ..Default::default() }]);
+    assert_eq!(strings(&not_a_blank, "Zone"), vec![Some("B".to_string())], "with (blank): only B");
+    // typed list: the same rows
+    let typed = keep_col(&df, vec![FilterCondition { column: "Zone".into(), op: CondOp::NotInList, value: "A".into(), ..Default::default() }]);
+    assert_eq!(typed.height(), 3, "typed: the same three rows");
 }
