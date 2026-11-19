@@ -52,6 +52,27 @@ pub struct ChartOpenState {
     pub rects: Vec<(String, egui::Rect)>,
 }
 
+/// One saved chart in the chart book dialog.
+#[derive(Clone, Debug)]
+pub struct BookEntry {
+    pub name: String,
+    pub spec: Option<ChartSpec>,
+    /// Why it cannot go in the book (columns the tab lacks, a damaged file).
+    pub problem: Option<String>,
+    pub checked: bool,
+}
+
+/// State of the "Chart book (HTML)…" dialog.
+#[derive(Default)]
+pub struct ChartBookState {
+    pub entries: Vec<BookEntry>,
+    pub title: String,
+    pub message: Option<(bool, String)>,
+    pub rects: Vec<(String, egui::Rect)>,
+    /// Tests: write here instead of asking for a file.
+    pub path_override: Option<std::path::PathBuf>,
+}
+
 fn is_number_dtype(dt: &polars::prelude::DataType) -> bool {
     dt.is_numeric() || matches!(dt, polars::prelude::DataType::Decimal(..))
 }
@@ -448,6 +469,142 @@ impl MicroParquetApp {
         ModalOutcome { close, step: None }
     }
 
+    // ------------------------------------------------------------------------------- chart book
+
+    /// Charts ▸ "Chart book (HTML)…": the saved charts that fit the active tab, ticked, then one page.
+    pub(crate) fn open_chart_book(&mut self) {
+        let avail = self.tabs.get(self.active_tab).map(|t| t.available_columns()).unwrap_or_default();
+        let entries = library::list_charts(&self.charts_dir())
+            .into_iter()
+            .map(|(name, path)| match library::load_chart(&path) {
+                Ok((_, spec)) => {
+                    let missing = library::missing_columns(&spec, &avail);
+                    let problem = (!missing.is_empty()).then(|| format!("this tab has no column {}", missing.join(", ")));
+                    BookEntry { name, checked: problem.is_none(), spec: Some(spec), problem }
+                }
+                Err(e) => BookEntry { name, spec: None, problem: Some(format!("{:#}", e)), checked: false },
+            })
+            .collect();
+        self.chart_book = ChartBookState { entries, title: "Charts".to_string(), ..Default::default() };
+        self.active_tool = ActiveToolModal::ChartBook;
+    }
+
+    /// The charts ticked in the book dialog, each with how its numbers are written on the active tab.
+    pub(crate) fn chart_book_selection(&self) -> Vec<(String, ChartSpec, micro_parquet::charts::layout::LayoutOpts)> {
+        self.chart_book
+            .entries
+            .iter()
+            .filter(|e| e.checked && e.problem.is_none())
+            .filter_map(|e| {
+                let spec = e.spec.clone()?;
+                let scale = self.chart_scale(&spec);
+                let opts = micro_parquet::charts::layout::LayoutOpts {
+                    dark: false,
+                    divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+                    decimals: self.global_decimals,
+                    unit: scale.as_ref().map(crate::ui::chart::scale_word).unwrap_or("").to_string(),
+                    bare: false,
+                    colours: Some(spec.colour_map.clone()),
+                };
+                Some((e.name.clone(), spec, opts))
+            })
+            .collect()
+    }
+
+    /// Sends the book to the worker: it calculates every ticked chart over the whole tab and writes the page.
+    pub(crate) fn chart_book_write_to(&mut self, path: std::path::PathBuf) -> Result<(), String> {
+        let charts = self.chart_book_selection();
+        if charts.is_empty() {
+            return Err("Tick at least one chart for the book.".to_string());
+        }
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return Err("Open the tab the charts are made for first.".to_string());
+        };
+        let exec = tab.exec_steps.min(tab.steps.len());
+        let req = micro_parquet::tab_jobs::ChartBookRequest {
+            source: tab.source.clone(),
+            steps: tab.steps[..exec].to_vec(),
+            temp_dir: self.paths.temp_dir.clone(),
+            charts,
+            title: if self.chart_book.title.trim().is_empty() { "Charts".to_string() } else { self.chart_book.title.trim().to_string() },
+            date: chrono::Local::now().format("%-d %B %Y").to_string(),
+            path,
+        };
+        self.jobs.submit(JobKey::unique(JobKind::Export), "Writing the chart book", true, move |ctx| micro_parquet::tab_jobs::chart_book_job(req, ctx));
+        Ok(())
+    }
+
+    pub(crate) fn render_chart_book_modal(&mut self, ctx: &egui::Context, _cols: Vec<String>) -> ModalOutcome {
+        let tk = *theme::tokens(self.dark_mode);
+        let mut close = false;
+        let mut write = false;
+        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
+        let mut entries = self.chart_book.entries.clone();
+        let mut title = self.chart_book.title.clone();
+        let message = self.chart_book.message.clone();
+        let dir = self.charts_dir();
+        let any = entries.iter().any(|e| e.checked && e.problem.is_none());
+        let heading = format!("{}  Chart book (HTML)", theme::ph::FILES);
+        theme::modal(&heading).default_width(theme::DIALOG_W_SORT).show(ctx, |d| {
+            d.body(|ui| {
+                ui.label(egui::RichText::new("One web page with several of your saved charts, calculated on the active tab. Saved charts are in the charts folder:").color(tk.muted));
+                ui.label(egui::RichText::new(dir.display().to_string()).color(tk.muted));
+                ui.horizontal(|ui| {
+                    ui.label("Title");
+                    let r = ui.add(egui::TextEdit::singleline(&mut title).desired_width(theme::CHART_REF_LABEL_W * 2.0));
+                    rects.push(("Title".to_string(), r.rect));
+                });
+                if entries.is_empty() {
+                    ui.label("No saved chart yet. Make one in the Chart tab and choose \"Save chart\u{2026}\".");
+                }
+                for (i, e) in entries.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        let r = ui.add_enabled(e.problem.is_none(), egui::Checkbox::new(&mut e.checked, &e.name));
+                        rects.push((format!("Chart {i}"), r.rect));
+                        if let Some(p) = &e.problem {
+                            ui.label(egui::RichText::new(format!("not used: {p}")).size(theme::TEXT_LABEL).color(tk.warning));
+                        }
+                    });
+                }
+                if let Some((bad, m)) = &message {
+                    ui.add(egui::Label::new(egui::RichText::new(m).color(if *bad { tk.danger } else { tk.success })).wrap());
+                }
+            });
+            d.footer(|ui| {
+                let b = ui.add_enabled(any, egui::Button::new("Write chart book\u{2026}"));
+                rects.push(("Write chart book".to_string(), b.rect));
+                if b.clicked() {
+                    write = true;
+                }
+                let b = ui.button("Close");
+                rects.push(("Close".to_string(), b.rect));
+                if b.clicked() {
+                    close = true;
+                }
+            });
+        });
+        self.chart_book.entries = entries;
+        self.chart_book.title = title;
+        if write {
+            let name = format!("{}.html", micro_parquet::charts::echarts::file_stem(&self.chart_book.title));
+            let picked = match self.chart_book.path_override.clone() {
+                Some(p) => Some(p),
+                None => rfd::FileDialog::new().add_filter("HTML page", &["html"]).set_file_name(&name).set_title("Save the chart book").save_file(),
+            };
+            if let Some(path) = picked {
+                match self.chart_book_write_to(path) {
+                    Ok(()) => {
+                        self.status_message = "Writing the chart book\u{2026}".to_string();
+                        close = true;
+                    }
+                    Err(e) => self.chart_book.message = Some((true, e)),
+                }
+            }
+        }
+        self.chart_book.rects = rects;
+        ModalOutcome { close, step: None }
+    }
+
     // ---------------------------------------------------------------------- studio controls
 
     /// The studio controls under the Phase 6 ones: shape, then Titles and look, Reference lines and
@@ -667,6 +824,28 @@ impl MicroParquetApp {
             spec.measures[0].agg = spec.agg;
             spec.measures[0].weight = spec.weight.clone();
         }
+        // ---- advanced options: JSON merged over the ECharts option of the HTML page
+        let label = if spec.advanced_json.trim().is_empty() { "Advanced options (HTML only)".to_string() } else { "Advanced options (HTML only, set)".to_string() };
+        let h = egui::CollapsingHeader::new(label).id_salt("chart_advanced").show(ui, |ui| {
+            ui.label(egui::RichText::new("JSON merged over the chart's ECharts option, for what the controls cannot do. It changes the HTML page only: the chart in the app and the Excel chart ignore it.").size(theme::TEXT_LABEL).color(tk.muted));
+            let r = ui.add(egui::TextEdit::multiline(&mut spec.advanced_json).font(egui::TextStyle::Monospace).desired_rows(6).desired_width(f32::INFINITY).lock_focus(true).hint_text("{ \"legend\": { \"show\": false } }"));
+            rects.fields.push(("Advanced options".to_string(), r.rect));
+            match micro_parquet::charts::echarts::validate_advanced(&spec.advanced_json) {
+                Ok(_) => {}
+                Err(e) => {
+                    ui.add(egui::Label::new(egui::RichText::new(format!("{:#}", e)).size(theme::TEXT_LABEL).color(tk.danger)).wrap());
+                }
+            }
+            ui.horizontal(|ui| {
+                let b = ui.add_enabled(!spec.advanced_json.is_empty(), egui::Button::new("Reset"));
+                rects.fields.push(("Advanced reset".to_string(), b.rect));
+                if b.clicked() {
+                    spec.advanced_json.clear();
+                }
+            });
+            ui.label(egui::RichText::new(format!("Every option is listed in the ECharts option reference: {}", micro_parquet::charts::echarts::ECHARTS_OPTION_REFERENCE)).size(theme::TEXT_LABEL).color(tk.muted));
+        });
+        rects.fields.push(("Advanced options header".to_string(), h.header_response.rect));
     }
 
     /// The buttons of the studio: save, open and the two kinds of tab.

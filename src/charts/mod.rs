@@ -6,6 +6,7 @@ pub mod axis;
 pub mod calc;
 pub mod colours;
 pub mod data;
+pub mod echarts;
 pub mod gallery;
 pub mod layout;
 pub mod library;

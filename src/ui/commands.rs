@@ -67,6 +67,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ChartNew | CommandId::ChartThis => ph::CHART_BAR,
         CommandId::ChartOpenSaved => ph::FOLDER_OPEN,
         CommandId::ChartBook => ph::FILES,
+        CommandId::ExportChartHtml => ph::FILE_HTML,
         CommandId::ToggleSummary => ph::SIGMA,
         CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
@@ -268,7 +269,8 @@ impl MicroParquetApp {
             CommandId::ChartNew => self.open_chart_gallery(),
             CommandId::ChartThis => self.chart_this_result(),
             CommandId::ChartOpenSaved => self.open_chart_open(),
-            CommandId::ChartBook => {}
+            CommandId::ChartBook => self.open_chart_book(),
+            CommandId::ExportChartHtml => self.chart_export_html(),
             CommandId::SavedRuns => self.open_saved_runs(),
             CommandId::Packs => self.open_packs(),
             CommandId::Mudaraba => self.open_mudaraba(),

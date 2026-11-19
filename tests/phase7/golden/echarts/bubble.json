@@ -1,0 +1,641 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "graphic": [
+    {
+      "left": 20.0,
+      "silent": true,
+      "style": {
+        "fill": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 9.0,
+        "fontWeight": "400",
+        "text": "5 series are shown as the 2 largest and \"Other\": scatter charts show at most 3 colours."
+      },
+      "top": 454.0,
+      "type": "text"
+    }
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 330.0,
+      "left": 12.0,
+      "right": 24.0,
+      "top": 90.0
+    }
+  ],
+  "legend": {
+    "data": [
+      {
+        "itemStyle": {
+          "color": "#2a78d6"
+        },
+        "name": "C"
+      },
+      {
+        "itemStyle": {
+          "color": "#eb6834"
+        },
+        "name": "E"
+      },
+      {
+        "itemStyle": {
+          "color": "#c3c2b7"
+        },
+        "name": "Other"
+      }
+    ],
+    "icon": "roundRect",
+    "itemGap": 18,
+    "itemHeight": 10,
+    "itemWidth": 10,
+    "left": 20.0,
+    "textStyle": {
+      "color": "#52514e",
+      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "top": 58.0
+  },
+  "series": [
+    {
+      "data": [
+        {
+          "symbolSize": 41.732137,
+          "tip": "Tenor: 2.00\nRate: 10.19\nSize: 260.00\nBranch: C",
+          "value": [
+            2.0,
+            10.191762,
+            260.0
+          ]
+        },
+        {
+          "symbolSize": 36.738634,
+          "tip": "Tenor: 4.50\nRate: 8.08\nSize: 180.00\nBranch: C",
+          "value": [
+            4.5,
+            8.075411,
+            180.0
+          ]
+        },
+        {
+          "symbolSize": 30.439089,
+          "tip": "Tenor: 7.00\nRate: 6.91\nSize: 100.00\nBranch: C",
+          "value": [
+            7.0,
+            6.914705,
+            100.0
+          ]
+        },
+        {
+          "symbolSize": 43.937439,
+          "tip": "Tenor: 9.50\nRate: 10.31\nSize: 300.00\nBranch: C",
+          "value": [
+            9.5,
+            10.308609,
+            300.0
+          ]
+        },
+        {
+          "symbolSize": 39.349589,
+          "tip": "Tenor: 12.00\nRate: 10.24\nSize: 220.00\nBranch: C",
+          "value": [
+            12.0,
+            10.236456,
+            220.0
+          ]
+        },
+        {
+          "symbolSize": 33.817424,
+          "tip": "Tenor: 14.50\nRate: 7.52\nSize: 140.00\nBranch: C",
+          "value": [
+            14.5,
+            7.520116,
+            140.0
+          ]
+        },
+        {
+          "symbolSize": 46.0,
+          "tip": "Tenor: 17.00\nRate: 9.73\nSize: 340.00\nBranch: C",
+          "value": [
+            17.0,
+            9.727258,
+            340.0
+          ]
+        },
+        {
+          "symbolSize": 41.732137,
+          "tip": "Tenor: 19.50\nRate: 11.86\nSize: 260.00\nBranch: C",
+          "value": [
+            19.5,
+            11.86486,
+            260.0
+          ]
+        }
+      ],
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#2a78d6",
+        "opacity": 0.7
+      },
+      "name": "C",
+      "symbolSize": 8.0,
+      "type": "scatter"
+    },
+    {
+      "data": [
+        {
+          "symbolSize": 36.738634,
+          "tip": "Tenor: 1.00\nRate: 9.45\nSize: 180.00\nBranch: E",
+          "value": [
+            1.0,
+            9.448576,
+            180.0
+          ]
+        },
+        {
+          "symbolSize": 30.439089,
+          "tip": "Tenor: 3.50\nRate: 9.40\nSize: 100.00\nBranch: E",
+          "value": [
+            3.5,
+            9.398089,
+            100.0
+          ]
+        },
+        {
+          "symbolSize": 43.937439,
+          "tip": "Tenor: 6.00\nRate: 6.67\nSize: 300.00\nBranch: E",
+          "value": [
+            6.0,
+            6.673738,
+            300.0
+          ]
+        },
+        {
+          "symbolSize": 39.349589,
+          "tip": "Tenor: 8.50\nRate: 8.86\nSize: 220.00\nBranch: E",
+          "value": [
+            8.5,
+            8.863629,
+            220.0
+          ]
+        },
+        {
+          "symbolSize": 33.817424,
+          "tip": "Tenor: 11.00\nRate: 11.02\nSize: 140.00\nBranch: E",
+          "value": [
+            11.0,
+            11.01875,
+            140.0
+          ]
+        },
+        {
+          "symbolSize": 46.0,
+          "tip": "Tenor: 13.50\nRate: 8.28\nSize: 340.00\nBranch: E",
+          "value": [
+            13.5,
+            8.278793,
+            340.0
+          ]
+        },
+        {
+          "symbolSize": 41.732137,
+          "tip": "Tenor: 16.00\nRate: 8.27\nSize: 260.00\nBranch: E",
+          "value": [
+            16.0,
+            8.271679,
+            260.0
+          ]
+        },
+        {
+          "symbolSize": 36.738634,
+          "tip": "Tenor: 18.50\nRate: 11.65\nSize: 180.00\nBranch: E",
+          "value": [
+            18.5,
+            11.653352,
+            180.0
+          ]
+        }
+      ],
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#eb6834",
+        "opacity": 0.7
+      },
+      "name": "E",
+      "symbolSize": 8.0,
+      "type": "scatter"
+    },
+    {
+      "data": [
+        {
+          "symbolSize": 30.439089,
+          "tip": "Tenor: 0.00\nRate: 8.00\nSize: 100.00\nBranch: Other",
+          "value": [
+            0.0,
+            8.0,
+            100.0
+          ]
+        },
+        {
+          "symbolSize": 33.817424,
+          "tip": "Tenor: 0.50\nRate: 8.77\nSize: 140.00\nBranch: Other",
+          "value": [
+            0.5,
+            8.773231,
+            140.0
+          ]
+        },
+        {
+          "symbolSize": 39.349589,
+          "tip": "Tenor: 1.50\nRate: 9.94\nSize: 220.00\nBranch: Other",
+          "value": [
+            1.5,
+            9.941397,
+            220.0
+          ]
+        },
+        {
+          "symbolSize": 43.937439,
+          "tip": "Tenor: 2.50\nRate: 10.17\nSize: 300.00\nBranch: Other",
+          "value": [
+            2.5,
+            10.17255,
+            300.0
+          ]
+        },
+        {
+          "symbolSize": 46.0,
+          "tip": "Tenor: 3.00\nRate: 9.89\nSize: 340.00\nBranch: Other",
+          "value": [
+            3.0,
+            9.893131,
+            340.0
+          ]
+        },
+        {
+          "symbolSize": 33.817424,
+          "tip": "Tenor: 4.00\nRate: 8.76\nSize: 140.00\nBranch: Other",
+          "value": [
+            4.0,
+            8.761193,
+            140.0
+          ]
+        },
+        {
+          "symbolSize": 39.349589,
+          "tip": "Tenor: 5.00\nRate: 7.44\nSize: 220.00\nBranch: Other",
+          "value": [
+            5.0,
+            7.440328,
+            220.0
+          ]
+        },
+        {
+          "symbolSize": 41.732137,
+          "tip": "Tenor: 5.50\nRate: 6.95\nSize: 260.00\nBranch: Other",
+          "value": [
+            5.5,
+            6.948666,
+            260.0
+          ]
+        },
+        {
+          "symbolSize": 46.0,
+          "tip": "Tenor: 6.50\nRate: 6.66\nSize: 340.00\nBranch: Other",
+          "value": [
+            6.5,
+            6.65952,
+            340.0
+          ]
+        },
+        {
+          "symbolSize": 33.817424,
+          "tip": "Tenor: 7.50\nRate: 7.41\nSize: 140.00\nBranch: Other",
+          "value": [
+            7.5,
+            7.41152,
+            140.0
+          ]
+        },
+        {
+          "symbolSize": 36.738634,
+          "tip": "Tenor: 8.00\nRate: 8.09\nSize: 180.00\nBranch: Other",
+          "value": [
+            8.0,
+            8.089493,
+            180.0
+          ]
+        },
+        {
+          "symbolSize": 41.732137,
+          "tip": "Tenor: 9.00\nRate: 9.64\nSize: 260.00\nBranch: Other",
+          "value": [
+            9.0,
+            9.635921,
+            260.0
+          ]
+        },
+        {
+          "symbolSize": 46.0,
+          "tip": "Tenor: 10.00\nRate: 10.80\nSize: 340.00\nBranch: Other",
+          "value": [
+            10.0,
+            10.797416,
+            340.0
+          ]
+        },
+        {
+          "symbolSize": 30.439089,
+          "tip": "Tenor: 10.50\nRate: 11.04\nSize: 100.00\nBranch: Other",
+          "value": [
+            10.5,
+            11.042951,
+            100.0
+          ]
+        },
+        {
+          "symbolSize": 36.738634,
+          "tip": "Tenor: 11.50\nRate: 10.73\nSize: 180.00\nBranch: Other",
+          "value": [
+            11.5,
+            10.734854,
+            180.0
+          ]
+        },
+        {
+          "symbolSize": 41.732137,
+          "tip": "Tenor: 12.50\nRate: 9.60\nSize: 260.00\nBranch: Other",
+          "value": [
+            12.5,
+            9.597779,
+            260.0
+          ]
+        },
+        {
+          "symbolSize": 43.937439,
+          "tip": "Tenor: 13.00\nRate: 8.91\nSize: 300.00\nBranch: Other",
+          "value": [
+            13.0,
+            8.912031,
+            300.0
+          ]
+        },
+        {
+          "symbolSize": 30.439089,
+          "tip": "Tenor: 14.00\nRate: 7.79\nSize: 100.00\nBranch: Other",
+          "value": [
+            14.0,
+            7.790538,
+            100.0
+          ]
+        },
+        {
+          "symbolSize": 36.738634,
+          "tip": "Tenor: 15.00\nRate: 7.51\nSize: 180.00\nBranch: Other",
+          "value": [
+            15.0,
+            7.510895,
+            180.0
+          ]
+        },
+        {
+          "symbolSize": 39.349589,
+          "tip": "Tenor: 15.50\nRate: 7.77\nSize: 220.00\nBranch: Other",
+          "value": [
+            15.5,
+            7.77089,
+            220.0
+          ]
+        },
+        {
+          "symbolSize": 43.937439,
+          "tip": "Tenor: 16.50\nRate: 8.95\nSize: 300.00\nBranch: Other",
+          "value": [
+            16.5,
+            8.95225,
+            300.0
+          ]
+        },
+        {
+          "symbolSize": 30.439089,
+          "tip": "Tenor: 17.50\nRate: 10.50\nSize: 100.00\nBranch: Other",
+          "value": [
+            17.5,
+            10.498577,
+            100.0
+          ]
+        },
+        {
+          "symbolSize": 33.817424,
+          "tip": "Tenor: 18.00\nRate: 11.17\nSize: 140.00\nBranch: Other",
+          "value": [
+            18.0,
+            11.16858,
+            140.0
+          ]
+        },
+        {
+          "symbolSize": 39.349589,
+          "tip": "Tenor: 19.00\nRate: 11.89\nSize: 220.00\nBranch: Other",
+          "value": [
+            19.0,
+            11.894048,
+            220.0
+          ]
+        }
+      ],
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#c3c2b7",
+        "opacity": 0.7
+      },
+      "name": "Other",
+      "symbolSize": 8.0,
+      "type": "scatter"
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Sum of Rate · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Rate against Tenor",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain"
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7"
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 5.0,
+      "max": 20.0,
+      "min": 0.0,
+      "name": "Tenor",
+      "nameGap": 28,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "fontWeight": "400"
+      },
+      "scale": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": false
+      },
+      "type": "value"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain"
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7"
+        },
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 2.0,
+      "max": 12.0,
+      "min": 6.0,
+      "name": "Rate",
+      "nameGap": 44,
+      "nameLocation": "middle",
+      "nameTextStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "fontWeight": "400"
+      },
+      "scale": true,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    }
+  ]
+}

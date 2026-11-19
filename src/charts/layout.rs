@@ -365,7 +365,7 @@ struct Plan<'a> {
     index: usize,
 }
 
-fn value_kind(spec: &ChartSpec, measure: usize) -> ValueKind {
+pub(crate) fn value_kind(spec: &ChartSpec, measure: usize) -> ValueKind {
     match spec.kind {
         ChartKind::Histogram => return ValueKind::Count,
         ChartKind::BoxPlot => return ValueKind::Plain,
@@ -381,7 +381,7 @@ fn value_kind(spec: &ChartSpec, measure: usize) -> ValueKind {
     }
 }
 
-fn scaled(v: f64, vk: ValueKind, opts: &LayoutOpts) -> f64 {
+pub(crate) fn scaled(v: f64, vk: ValueKind, opts: &LayoutOpts) -> f64 {
     if vk == ValueKind::Amount {
         v / opts.divisor
     } else {
@@ -544,7 +544,7 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
 
     // the reasons there is nothing to draw
     if data.spec.kind.html_only() {
-        b.out.message = Some(format!("{} charts are drawn in the HTML export (Export \u{25b8} Chart to HTML). Choose another form to see this chart here.", data.spec.kind.label()));
+        b.out.message = Some(format!("{} charts are drawn in a web page: click \"Preview in browser\" in the Chart tab, or use Export \u{25b8} Chart to HTML. Choose another form to see this chart here.", data.spec.kind.label()));
     } else if let Some(r) = data.empty_reason() {
         b.out.message = Some(format!("No data to chart: {}.", r));
     }
@@ -652,7 +652,7 @@ fn share_bases(values: &[Vec<Option<f64>>], t: Transform) -> Vec<Vec<Option<f64>
     values.iter().map(|r| r.iter().map(|_| None).collect()).collect()
 }
 
-fn base_word(t: Transform) -> &'static str {
+pub(crate) fn base_word(t: Transform) -> &'static str {
     match t {
         Transform::ShareOfTotal => "of the total",
         Transform::ShareOfCategory => "of the category total",
@@ -1637,7 +1637,8 @@ fn heatmap_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
             let radius = t::HEAT_RADIUS_PX.min(cell.width().min(cell.height()) / 2.0);
             b.rect(cell, fill, [radius; 4]);
             let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, 1) } else { value_text(scaled(v, vk, opts), vk, opts.decimals, false) };
-            let tc = if step >= t::SEQUENTIAL_WHITE_TEXT_FROM { Color32::WHITE } else { ink_c };
+            // the pale steps are pale in the dark theme too, so their text is the light theme's dark ink
+            let tc = if step >= t::SEQUENTIAL_WHITE_TEXT_FROM { Color32::WHITE } else { rgb(t::INK_LIGHT.ink) };
             let tr = b.rect_for(&text, t::DATA_LABEL_PT, Face::Regular, Anchor::Centre, cell.center());
             if cell.contains_rect(tr) {
                 b.put(Role::Cell, &text, Anchor::Centre, cell.center(), t::DATA_LABEL_PT, Face::Regular, tc);

@@ -35,6 +35,11 @@ pub struct ChartState {
     pub rects: ChartRects,
     /// The Table view instead of the plot.
     pub show_table: bool,
+    /// What the last HTML export or preview said (true = a problem).
+    pub export_message: Option<(bool, String)>,
+    /// Tests: write here instead of asking for a file, and never start the browser.
+    pub export_path_override: Option<std::path::PathBuf>,
+    pub no_browser: bool,
 }
 
 /// What the studio's buttons asked for this frame.
@@ -57,7 +62,7 @@ pub struct ChartTabInfo {
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false }
     }
 }
 
@@ -558,6 +563,24 @@ impl MicroParquetApp {
                 self.open_chart_open();
             }
         });
+        ui.horizontal(|ui| {
+            let ready = self.chart.data.is_some() && !self.chart.busy;
+            let b = ui.add_enabled(ready, egui::Button::new("Export to HTML\u{2026}"));
+            rects.fields.push(("Export to HTML".to_string(), b.rect));
+            if b.clicked() {
+                self.chart_export_html();
+            }
+            let b = ui.add_enabled(ready, egui::Button::new("Preview in browser"));
+            rects.fields.push(("Preview in browser".to_string(), b.rect));
+            if b.clicked() {
+                let open = !self.chart.no_browser;
+                self.chart_preview_in_browser(open);
+            }
+        });
+        if let Some((bad, m)) = self.chart.export_message.clone() {
+            let tk = *theme::tokens(self.dark_mode);
+            ui.add(egui::Label::new(egui::RichText::new(m).size(theme::TEXT_LABEL).color(if bad { tk.danger } else { tk.success })).wrap());
+        }
         self.studio_sections(ui, &mut spec, &avail, &numeric, rects);
         if spec != self.chart.spec {
             self.chart_set_spec(spec);
@@ -607,6 +630,94 @@ impl MicroParquetApp {
         self.chart.spec = spec;
         self.chart_save_choices();
         self.chart_tick();
+    }
+
+    /// The calculated chart with the live look settings, and how its numbers are written, for the HTML page.
+    pub(crate) fn chart_export_parts(&self) -> Result<(ChartData, micro_parquet::charts::layout::LayoutOpts), String> {
+        if self.chart.busy {
+            return Err("The chart is still being calculated. Wait for it to finish, then try again.".to_string());
+        }
+        let Some(d) = self.chart.data.as_ref() else {
+            return Err("There is no chart to write yet. Fix the problem shown above the chart first.".to_string());
+        };
+        let scale = self.chart_scale(&self.chart.spec);
+        let opts = micro_parquet::charts::layout::LayoutOpts {
+            dark: false,
+            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+            decimals: self.global_decimals,
+            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+            bare: false,
+            colours: Some(self.chart.spec.colour_map.clone()),
+        };
+        let mut data = d.clone();
+        data.spec = self.chart.spec.clone();
+        Ok((data, opts))
+    }
+
+    /// Export ▸ "Chart to HTML…": asks where, then writes the one file.
+    pub(crate) fn chart_export_html(&mut self) {
+        self.chart_attach_tab_pub();
+        let (data, opts) = match self.chart_export_parts() {
+            Ok(x) => x,
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                return;
+            }
+        };
+        let name = format!("{}.html", micro_parquet::charts::echarts::file_stem(&micro_parquet::charts::layout::chart_title(&data)));
+        let picked = match self.chart.export_path_override.clone() {
+            Some(p) => Some(p),
+            None => rfd::FileDialog::new().add_filter("HTML page", &["html"]).set_file_name(&name).set_title("Save the chart as a web page").save_file(),
+        };
+        let Some(path) = picked else {
+            return;
+        };
+        self.chart_write_html_to(&path);
+    }
+
+    /// Writes the chart's page to `path` and says so (or why not) in the studio and the status line.
+    pub(crate) fn chart_write_html_to(&mut self, path: &std::path::Path) -> bool {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::echarts::write_chart_html(path, &d, &o).map_err(|e| format!("{:#}", e)));
+        match r {
+            Ok(()) => {
+                let m = format!("Chart written to {}. Open it in any browser; it needs no internet.", path.display());
+                self.chart.export_message = Some((false, m.clone()));
+                self.status_message = m;
+                true
+            }
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                false
+            }
+        }
+    }
+
+    /// "Preview in browser": the page is written to a temporary file and opened with the default browser
+    /// (nothing goes over the network). `open` is false in tests.
+    pub(crate) fn chart_preview_in_browser(&mut self, open: bool) -> Option<std::path::PathBuf> {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::echarts::write_preview(&d, &o).map_err(|e| format!("{:#}", e)));
+        let path = match r {
+            Ok(p) => p,
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                return None;
+            }
+        };
+        if open {
+            if let Err(e) = micro_parquet::charts::echarts::open_in_browser(&path) {
+                let m = format!("{:#}", e);
+                self.chart.export_message = Some((true, m.clone()));
+                self.status_message = m;
+                return Some(path);
+            }
+        }
+        let m = format!("Preview opened in your browser from {} (a temporary file on this computer).", path.display());
+        self.chart.export_message = Some((false, m.clone()));
+        self.status_message = m;
+        Some(path)
     }
 
     pub(crate) fn chart_attach_tab_pub(&mut self) {

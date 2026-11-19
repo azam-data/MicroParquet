@@ -299,6 +299,36 @@ pub fn waterfall_steps(start: (&str, f64), deltas: &[(String, f64)], end: Option
     Ok(out)
 }
 
+/// A waterfall as three stacked series (the form Excel and ECharts draw): an invisible base, and the
+/// visible bar split at zero into its positive and its negative part. `base + pos` is the top of a bar
+/// above zero; `base + neg` the bottom of one below it; a bar across zero has base 0.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterfallStack {
+    pub base: Vec<f64>,
+    pub pos: Vec<f64>,
+    pub neg: Vec<f64>,
+}
+
+pub fn waterfall_stack(steps: &[WaterfallStep]) -> WaterfallStack {
+    let mut out = WaterfallStack { base: Vec::new(), pos: Vec::new(), neg: Vec::new() };
+    for s in steps {
+        if s.base >= 0.0 {
+            out.base.push(s.base);
+            out.pos.push(s.top - s.base);
+            out.neg.push(0.0);
+        } else if s.top <= 0.0 {
+            out.base.push(s.top);
+            out.pos.push(0.0);
+            out.neg.push(s.base - s.top);
+        } else {
+            out.base.push(0.0);
+            out.pos.push(s.top);
+            out.neg.push(s.base);
+        }
+    }
+    out
+}
+
 fn fmt2(v: f64) -> String {
     crate::models::format_with_commas(v, 2)
 }

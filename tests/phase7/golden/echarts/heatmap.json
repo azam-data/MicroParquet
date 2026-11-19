@@ -1,0 +1,515 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 160.0,
+      "left": 12.0,
+      "right": 24.0,
+      "top": 86.0
+    }
+  ],
+  "series": [
+    {
+      "data": [
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#0d366b"
+          },
+          "label": {
+            "color": "#ffffff",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "96.7",
+            "show": true
+          },
+          "tip": "Previous: STD\nCurrent: STD\nSum of Balance: 96.67%\n1 rows\nPercent of the row total",
+          "value": [
+            0,
+            0,
+            96.673597
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "3.3",
+            "show": true
+          },
+          "tip": "Previous: STD\nCurrent: SMA\nSum of Balance: 3.33%\n1 rows\nPercent of the row total",
+          "value": [
+            1,
+            0,
+            3.326403
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: STD\nCurrent: SS\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            2,
+            0,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: STD\nCurrent: DF\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            3,
+            0,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: SMA\nCurrent: STD\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            0,
+            1,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#184f95"
+          },
+          "label": {
+            "color": "#ffffff",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "81.1",
+            "show": true
+          },
+          "tip": "Previous: SMA\nCurrent: SMA\nSum of Balance: 81.13%\n1 rows\nPercent of the row total",
+          "value": [
+            1,
+            1,
+            81.134565
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#9ec5f4"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "18.9",
+            "show": true
+          },
+          "tip": "Previous: SMA\nCurrent: SS\nSum of Balance: 18.87%\n1 rows\nPercent of the row total",
+          "value": [
+            2,
+            1,
+            18.865435
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: SMA\nCurrent: DF\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            3,
+            1,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: SS\nCurrent: STD\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            0,
+            2,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: SS\nCurrent: SMA\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            1,
+            2,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#184f95"
+          },
+          "label": {
+            "color": "#ffffff",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "80.7",
+            "show": true
+          },
+          "tip": "Previous: SS\nCurrent: SS\nSum of Balance: 80.73%\n1 rows\nPercent of the row total",
+          "value": [
+            2,
+            2,
+            80.729761
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#9ec5f4"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "19.3",
+            "show": true
+          },
+          "tip": "Previous: SS\nCurrent: DF\nSum of Balance: 19.27%\n1 rows\nPercent of the row total",
+          "value": [
+            3,
+            2,
+            19.270239
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: DF\nCurrent: STD\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            0,
+            3,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: DF\nCurrent: SMA\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            1,
+            3,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#cde2fb"
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "0.0",
+            "show": true
+          },
+          "tip": "Previous: DF\nCurrent: SS\nSum of Balance: 0.00%\n0 rows\nPercent of the row total",
+          "value": [
+            2,
+            3,
+            0.0
+          ]
+        },
+        {
+          "itemStyle": {
+            "borderColor": "#fcfcfb",
+            "borderRadius": 2.0,
+            "borderWidth": 1,
+            "color": "#0d366b"
+          },
+          "label": {
+            "color": "#ffffff",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "100.0",
+            "show": true
+          },
+          "tip": "Previous: DF\nCurrent: DF\nSum of Balance: 100.00%\n1 rows\nPercent of the row total",
+          "value": [
+            3,
+            3,
+            100.0
+          ]
+        }
+      ],
+      "name": "Sum of Balance",
+      "type": "heatmap"
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Sum of Balance · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Sum of Balance by Current and Previous",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": true,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "STD",
+        "SMA",
+        "SS",
+        "DF"
+      ],
+      "gridIndex": 0,
+      "inverse": false,
+      "position": "top",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": true,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "STD",
+        "SMA",
+        "SS",
+        "DF"
+      ],
+      "gridIndex": 0,
+      "inverse": true,
+      "position": "left",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ]
+}

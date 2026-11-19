@@ -626,7 +626,7 @@ fn c1_an_empty_chart_says_no_data_to_chart_with_the_reason_and_a_too_small_chart
     let mut s = spec(ChartKind::Sankey);
     s.series = None;
     let l = lay(&data(&s), 900.0, 560.0, false);
-    assert!(l.message.as_deref().unwrap().contains("HTML export"));
+    assert!(l.message.as_deref().unwrap().contains("Preview in browser"));
 }
 
 #[test]

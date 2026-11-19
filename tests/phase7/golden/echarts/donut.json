@@ -1,0 +1,173 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "series": [
+    {
+      "avoidLabelOverlap": true,
+      "center": [
+        "50%",
+        "55%"
+      ],
+      "data": [
+        {
+          "itemStyle": {
+            "color": "#2a78d6"
+          },
+          "label": {
+            "formatter": "Current  17.1%"
+          },
+          "name": "Current",
+          "tip": "Product: Current\nSum of Balance: 1,455.00\nShare: 17.1%\n6 rows",
+          "value": 1455.0
+        },
+        {
+          "itemStyle": {
+            "color": "#eb6834"
+          },
+          "label": {
+            "formatter": "Foreign  13.6%"
+          },
+          "name": "Foreign",
+          "tip": "Product: Foreign\nSum of Balance: 1,155.00\nShare: 13.6%\n6 rows",
+          "value": 1155.0
+        },
+        {
+          "itemStyle": {
+            "color": "#1baf7a"
+          },
+          "label": {
+            "formatter": "Savings  24.1%"
+          },
+          "name": "Savings",
+          "tip": "Product: Savings\nSum of Balance: 2,055.00\nShare: 24.1%\n6 rows",
+          "value": 2055.0
+        },
+        {
+          "itemStyle": {
+            "color": "#eda100"
+          },
+          "label": {
+            "formatter": "Term deposits  45.2%"
+          },
+          "name": "Term deposits",
+          "tip": "Product: Term deposits\nSum of Balance: 3,855.00\nShare: 45.2%\n6 rows",
+          "value": 3855.0
+        }
+      ],
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 2
+      },
+      "label": {
+        "color": "#0b0b0b",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "show": true
+      },
+      "labelLine": {
+        "lineStyle": {
+          "color": "#c3c2b7"
+        }
+      },
+      "radius": [
+        "54%",
+        "76%"
+      ],
+      "type": "pie"
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Sum of Balance · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Sum of Balance by Product",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  }
+}

@@ -425,6 +425,36 @@ pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult>
     Ok(ChartResult { tab_id, token, data })
 }
 
+/// A chart book to calculate and write on the worker (Phase 7 C3): several saved charts of one tab on one HTML page.
+pub struct ChartBookRequest {
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub temp_dir: PathBuf,
+    /// Name, chart and how its numbers are written.
+    pub charts: Vec<(String, crate::chart::ChartSpec, crate::charts::layout::LayoutOpts)>,
+    pub title: String,
+    pub date: String,
+    pub path: PathBuf,
+}
+
+/// Calculates each chart over the whole tab and writes the page. One chart that cannot be drawn stops the
+/// book: no file is written.
+pub fn chart_book_job(req: ChartBookRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    use anyhow::Context;
+    ctx.set_progress("Calculating the charts\u{2026}", None);
+    let ChartBookRequest { source, steps, temp_dir, charts, title, date, path } = req;
+    let lf = compile_tab_lazy(&source, &steps, &temp_dir).map(|lf| crate::pivot_table::without_total_rows(lf, &steps))?;
+    let mut datas = Vec::new();
+    for (name, spec, opts) in &charts {
+        ctx.check()?;
+        let d = crate::charts::calc::compute(lf.clone(), spec).with_context(|| format!("Chart '{}'", name))?;
+        datas.push((d, opts.clone()));
+    }
+    let items: Vec<crate::charts::echarts::BookItem> = datas.iter().map(|(d, o)| crate::charts::echarts::BookItem { data: d, opts: o.clone() }).collect();
+    crate::charts::echarts::write_chart_book(&path, &title, &date, &items)?;
+    Ok(JobOutput::Exported(ExportOutcome { message: format!("Chart book with {} chart(s) written to {}", items.len(), path.display()), path_used: None, written: Some(path) }))
+}
+
 // --------------------------------------------------------------------------- data-quality scorecard
 
 pub struct DqRequest {

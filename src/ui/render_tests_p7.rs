@@ -393,6 +393,28 @@ fn scroll_into_view(rig: &mut Rig, at: egui::Pos2, rect_of: &dyn Fn(&Rig) -> Opt
     panic!("{}: {what} could not be scrolled into view", rig.what);
 }
 
+/// Like `scroll_into_view`, but the control must also be clear of the panel's own header (a control
+/// scrolled under it is on screen but cannot be clicked): `min_top` is the lowest y it may have.
+fn scroll_clear_of_header(rig: &mut Rig, at: egui::Pos2, rect_of: &dyn Fn(&Rig) -> Option<egui::Rect>, what: &str, min_top: f32) -> egui::Rect {
+    rig.ctx.style_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
+    let screen = rig.ctx.screen_rect();
+    for _ in 0..80 {
+        rig.draw(2);
+        let mut dir = -120.0;
+        if let Some(r) = rect_of(rig) {
+            if r.top() >= min_top && r.bottom() <= screen.bottom() - theme::STATUS_BAR_H && r.is_positive() {
+                return r;
+            }
+            if r.top() < min_top {
+                dir = 120.0;
+            }
+        }
+        bump(rig, 0.2);
+        rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, dir), modifiers: egui::Modifiers::NONE }]);
+    }
+    panic!("{}: {what} could not be scrolled clear of the header", rig.what);
+}
+
 fn bar_box(p: &Painted, text: &str) -> Option<egui::Rect> {
     let in_bar = |b: &egui::Rect| b.top() < theme::TOP_BAR_H;
     p.boxes.iter().find(|(t, b)| t.trim() == text && in_bar(b)).or_else(|| p.boxes.iter().find(|(t, b)| t.contains(text) && in_bar(b))).map(|(_, b)| *b)
@@ -419,9 +441,9 @@ fn c2_the_charts_menu_sits_between_banking_and_export_is_clickable_and_its_items
             let r = item(&p, t).unwrap_or_else(|| panic!("{what}: the Charts menu lists '{t}'"));
             assert!(inside(r, screen), "{what}: '{t}' is inside the window");
         }
-        // on a file tab "Chart this result" and the chart book say why they are greyed
-        assert!(rig.app.command_unavailable(CommandId::ChartThis).is_some() && rig.app.command_unavailable(CommandId::ChartBook).is_some(), "{what}");
-        assert!(rig.app.command_unavailable(CommandId::ChartNew).is_none() && rig.app.command_unavailable(CommandId::ChartOpenSaved).is_none(), "{what}");
+        // on a file tab "Chart this result" says why it is greyed; the others are open
+        assert!(rig.app.command_unavailable(CommandId::ChartThis).is_some(), "{what}");
+        assert!(rig.app.command_unavailable(CommandId::ChartNew).is_none() && rig.app.command_unavailable(CommandId::ChartOpenSaved).is_none() && rig.app.command_unavailable(CommandId::ChartBook).is_none(), "{what}");
         // New chart… opens the gallery
         let r = item(&p, "New chart\u{2026}").expect("New chart");
         pclick(&mut rig, r);
@@ -617,6 +639,99 @@ fn c2_a_chart_is_saved_by_name_and_opened_again_identically_by_real_clicks() {
         let p = rig.draw(4);
         assert_eq!(rig.app.active_tool, ActiveToolModal::ChartOpen, "{what}: the dialog stays open on a refusal");
         assert!(p.boxes.iter().any(|(t, _)| t.contains("does not have: Nonexistent")), "{what}: the refusal names the column");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+// ------------------------------------------------------------------------------------------------ C3
+
+#[test]
+fn c3_export_preview_advanced_options_and_the_chart_book_work_by_real_clicks() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig("p7c3html", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(10);
+        let dir = rig.app.paths.root_dir.join("c3out");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let page = dir.join("chart.html");
+        rig.app.chart.export_path_override = Some(page.clone());
+        rig.app.chart.no_browser = true;
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field_rect = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        // Export to HTML: the file is written, offline, and the studio says where
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Export to HTML"), "Export to HTML", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(4);
+        let html = std::fs::read_to_string(&page).unwrap_or_else(|e| panic!("{what}: the page was written: {e}"));
+        assert!(html.contains("class=\"mp-chart\"") && html.contains("echarts"), "{what}");
+        let msg = rig.app.chart.export_message.clone().expect("a message");
+        assert!(!msg.0 && msg.1.contains("chart.html") && msg.1.contains("needs no internet"), "{what}: {msg:?}");
+        // Preview in browser: a temporary file, no browser started by the test
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Preview in browser"), "Preview in browser", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(4);
+        let msg = rig.app.chart.export_message.clone().expect("a message");
+        assert!(!msg.0 && msg.1.contains("Preview opened"), "{what}: {msg:?}");
+        // Advanced options: open, type invalid JSON, the line and column are shown and the export is refused
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Advanced options header"), "Advanced options", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(3);
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Advanced options"), "the advanced box", 190.0);
+        pclick(&mut rig, r);
+        rig.step(vec![egui::Event::Text("{ \"legend\": ".into())]);
+        rig.draw(4);
+        assert_eq!(rig.app.chart.spec.advanced_json, "{ \"legend\": ", "{what}: typed into the box");
+        let p = rig.draw(2);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("not valid JSON") && t.contains("line 1")), "{what}: the mistake is shown with its place");
+        std::fs::remove_file(&page).ok();
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Export to HTML"), "Export to HTML", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert!(!page.exists(), "{what}: nothing is written when the advanced JSON is invalid");
+        let msg = rig.app.chart.export_message.clone().expect("a message");
+        assert!(msg.0 && msg.1.contains("not valid JSON"), "{what}: {msg:?}");
+        // Reset clears the box; a valid object is merged into the page and the chart in the app ignores it
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Advanced reset"), "Reset", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(3);
+        assert!(rig.app.chart.spec.advanced_json.is_empty(), "{what}: Reset");
+        rig.app.chart.spec.advanced_json = "{ \"legend\": { \"show\": false } }".into();
+        rig.draw(6);
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert!(shown.layout.message.is_none(), "{what}: the chart in the app ignores the advanced options");
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Export to HTML"), "Export to HTML", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert!(std::fs::read_to_string(&page).expect("written").contains("\"legend\":{\"show\":false}"), "{what}: the advanced option is in the page");
+        // the chart book: save the chart, open the dialog through the menu command, tick, write
+        let dirc = rig.app.charts_dir();
+        let mut spec = rig.app.chart.spec.clone();
+        spec.advanced_json.clear();
+        micro_parquet::charts::library::save_chart(&dirc, "Term mix", &spec).expect("saved");
+        let ctx = rig.ctx.clone();
+        rig.app.run_command(&ctx, CommandId::ChartBook);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartBook, "{what}: Charts > Chart book opens the dialog");
+        assert_dialog_fits(&rig.ctx, &format!("{}  Chart book (HTML)", theme::ph::FILES), &what);
+        assert!(rig.app.chart_book.entries.iter().any(|e| e.name == "Term mix" && e.checked && e.problem.is_none()), "{what}");
+        let book = dir.join("book.html");
+        rig.app.chart_book.path_override = Some(book.clone());
+        rig.app.chart_book.title = "ALCO charts".into();
+        rig.draw(3);
+        let write = rig.app.chart_book.rects.iter().find(|(n, _)| n == "Write chart book").map(|(_, r)| *r).expect("Write chart book");
+        pclick(&mut rig, write);
+        for _ in 0..200 {
+            rig.draw(2);
+            if book.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let b = std::fs::read_to_string(&book).unwrap_or_else(|e| panic!("{what}: the chart book was written by the worker: {e}"));
+        assert_eq!(b.matches("class=\"mp-chart\"").count(), 1, "{what}");
+        assert!(b.contains("<h1>ALCO charts</h1>"), "{what}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }

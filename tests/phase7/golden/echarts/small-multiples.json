@@ -1,0 +1,1013 @@
+{
+  "animation": false,
+  "axisPointer": {
+    "link": [
+      {
+        "xAxisIndex": "all"
+      }
+    ]
+  },
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 150.0,
+      "left": "2.00%",
+      "top": 86.0,
+      "width": "21.00%"
+    },
+    {
+      "containLabel": true,
+      "height": 150.0,
+      "left": "26.00%",
+      "top": 86.0,
+      "width": "21.00%"
+    },
+    {
+      "containLabel": true,
+      "height": 150.0,
+      "left": "50.00%",
+      "top": 86.0,
+      "width": "21.00%"
+    },
+    {
+      "containLabel": true,
+      "height": 150.0,
+      "left": "74.00%",
+      "top": 86.0,
+      "width": "21.00%"
+    }
+  ],
+  "series": [
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "200.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: May\nSum of Balance: 200.00\n1 rows",
+          "value": 200.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "217.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jun\nSum of Balance: 217.00\n1 rows",
+          "value": 217.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "234.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jul\nSum of Balance: 234.00\n1 rows",
+          "value": 234.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "251.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Aug\nSum of Balance: 251.00\n1 rows",
+          "value": 251.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "268.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Sep\nSum of Balance: 268.00\n1 rows",
+          "value": 268.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "285.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Oct\nSum of Balance: 285.00\n1 rows",
+          "value": 285.0
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 0,
+        "color": "#2a78d6"
+      },
+      "name": "",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    },
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "150.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: May\nSum of Balance: 150.00\n1 rows",
+          "value": 150.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "167.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jun\nSum of Balance: 167.00\n1 rows",
+          "value": 167.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "184.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jul\nSum of Balance: 184.00\n1 rows",
+          "value": 184.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "201.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Aug\nSum of Balance: 201.00\n1 rows",
+          "value": 201.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "218.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Sep\nSum of Balance: 218.00\n1 rows",
+          "value": 218.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "235.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Oct\nSum of Balance: 235.00\n1 rows",
+          "value": 235.0
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 0,
+        "color": "#2a78d6"
+      },
+      "name": "",
+      "type": "bar",
+      "xAxisIndex": 1,
+      "yAxisIndex": 1
+    },
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "300.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: May\nSum of Balance: 300.00\n1 rows",
+          "value": 300.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "317.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jun\nSum of Balance: 317.00\n1 rows",
+          "value": 317.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "334.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jul\nSum of Balance: 334.00\n1 rows",
+          "value": 334.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "351.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Aug\nSum of Balance: 351.00\n1 rows",
+          "value": 351.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "368.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Sep\nSum of Balance: 368.00\n1 rows",
+          "value": 368.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "385.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Oct\nSum of Balance: 385.00\n1 rows",
+          "value": 385.0
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 0,
+        "color": "#2a78d6"
+      },
+      "name": "",
+      "type": "bar",
+      "xAxisIndex": 2,
+      "yAxisIndex": 2
+    },
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "600.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: May\nSum of Balance: 600.00\n1 rows",
+          "value": 600.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "617.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jun\nSum of Balance: 617.00\n1 rows",
+          "value": 617.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "634.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jul\nSum of Balance: 634.00\n1 rows",
+          "value": 634.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "651.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Aug\nSum of Balance: 651.00\n1 rows",
+          "value": 651.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "668.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Sep\nSum of Balance: 668.00\n1 rows",
+          "value": 668.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "685.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Oct\nSum of Balance: 685.00\n1 rows",
+          "value": 685.0
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 0,
+        "color": "#2a78d6"
+      },
+      "name": "",
+      "type": "bar",
+      "xAxisIndex": 3,
+      "yAxisIndex": 3
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Sum of Balance · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Sum of Balance by Month",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    },
+    {
+      "left": "2.00%",
+      "text": "Current",
+      "textStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "600"
+      },
+      "top": 64.0
+    },
+    {
+      "left": "26.00%",
+      "text": "Foreign",
+      "textStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "600"
+      },
+      "top": 64.0
+    },
+    {
+      "left": "50.00%",
+      "text": "Savings",
+      "textStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "600"
+      },
+      "top": 64.0
+    },
+    {
+      "left": "74.00%",
+      "text": "Term deposits",
+      "textStyle": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "600"
+      },
+      "top": 64.0
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": true,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 0,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    },
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": true,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 1,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    },
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": true,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 2,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    },
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": true,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 3,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 200.0,
+      "max": 800.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    },
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": false
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 1,
+      "interval": 200.0,
+      "max": 800.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    },
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": false
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 2,
+      "interval": 200.0,
+      "max": 800.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    },
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": false
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 3,
+      "interval": 200.0,
+      "max": 800.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    }
+  ]
+}

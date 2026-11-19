@@ -2503,7 +2503,9 @@ fn f2_the_chart_tab_has_a_pop_out_button_only_where_windows_work_and_the_window_
         let screen2 = ctx2.screen_rect();
         let plot = rig.app.chart.rects.plot.unwrap_or_else(|| panic!("{what}: the chart in its window"));
         assert!(inside(plot, screen2), "{what}: the plot {plot:?} is inside the window {screen2:?}");
-        for (n, f) in &rig.app.chart.rects.fields {
+        // the Phase 6 controls are all in the window; the studio sections of Phase 7 (they scroll) are not required to be
+        let studio = ["Save chart", "Open saved chart", "Export to HTML", "Preview in browser", "Titles and look", "Reference lines", "Measures and panels", "Advanced options header", "Advanced options", "Advanced reset"];
+        for (n, f) in rig.app.chart.rects.fields.iter().filter(|(n, _)| !studio.contains(&n.as_str())) {
             assert!(inside(*f, screen2), "{what}: '{n}' {f:?} is in the window");
         }
         assert!(q.boxes.iter().any(|(t, _)| t.starts_with("Sum of Balance by Term Period")), "{what}: the title");

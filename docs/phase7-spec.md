@@ -343,4 +343,5 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
   3. Write Δ, not "d": ΔEVE and ΔNII everywhere (titles, axes, tooltips, HTML, Excel), tested in all three renderers.
   4. C3 adds "Preview in browser" for the HTML-only forms (Sankey, Treemap): it writes a temp HTML file and opens the default browser. Nothing goes over the network.
   5. Accepted as is: `tokens.rs`, blank cell for a percent of a zero total, histogram bars filling their band, horizontal axis names, chart tab in `settings.json`, panel scrolls by scrollbar.
+- C3: the vendored ECharts file holds six `http(s)://` strings (XML namespace names and licence comments, never fetched); the page around it has none, and the test pins both. Title, subtitle and footnote are inside the chart so PNG/SVG carry them. Stacked segments use a 1 px surface-colour border (ECharts has no gap setting). Function-valued options are names ("@fmt:amount:2") that the page's script replaces.
 </accepted_deviations>

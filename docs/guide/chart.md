@@ -36,6 +36,10 @@ Draws bars or a line of one number by one category, calculated over the whole ta
 7. "Scale" follows the value column's display format (Crore, Lakh, Million, Thousand or plain) unless you choose another.
 8. "Open chart data as tab" puts the table behind the chart in a new tab, which can be exported to Excel or PDF.
 9. The choices are kept for the tab (by its file name) for the next session.
+10. "Export to HTML…" (also Export ▸ "Chart to HTML…") writes the chart as one web page. It has the title, subtitle and footnote, a Table switch, a light/dark switch and a toolbox with "Save as PNG", "Save as SVG" and "Data view". The page works offline and contains no web address: send it by e-mail or put it on a share.
+11. "Preview in browser" writes the same page to a temporary file and opens it with your default browser. Sankey and Treemap are drawn only this way (the chart in the app says so).
+12. "Advanced options (HTML only)" is a box for JSON that is merged over the page's ECharts option, for what the controls cannot do. It is checked as you type (a mistake is shown with its line and column); "Reset" clears it. The chart in the app and the Excel chart never use it.
+13. Charts ▸ "Chart book (HTML)…" puts several saved charts of the active tab on one page: a title, the date and a two-column grid.
 
 ## 6. What you get
 
@@ -89,4 +93,5 @@ Test: `guide_chart`
 - A category called "Other" in the data is kept apart from the rest ("Other categories").
 - Count counts rows; the value column is not used.
 - On a pivot table the subtotal and Grand total rows are not charted.
+- The HTML page carries Apache ECharts 6.1.0 inside it (about 1 MB); a chart of 1,000 points is under 2 MB. A donut with more than 5 parts, a waterfall that does not add up and invalid advanced JSON stop the export with a message, and no file is written.
 - The first chart of a tab picks the first text column and the first number column; change them as needed.

@@ -126,6 +126,7 @@ impl MicroParquetApp {
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),
             ActiveToolModal::ChartOpen => self.render_chart_open_modal(ctx, cols),
+            ActiveToolModal::ChartBook => self.render_chart_book_modal(ctx, cols),
             ActiveToolModal::Mudaraba => self.render_mudaraba_modal(ctx, cols),
             ActiveToolModal::DqScorecard => self.render_dq_modal(ctx, cols),
             ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),

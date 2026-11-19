@@ -8,6 +8,8 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 | C1 | DONE | (see git log: "Phase 7 C1") | tests/phase7/c1.rs ×22 (layout rules, all forms); render_tests_p7 ×4 (every form × light/dark × 3 sizes with real fonts, hover by real rect, Table toggle and Chart tab by real clicks, screenshots) |
 | C2 | DONE | (see git log: "Phase 7 C2") | tests/phase7/c2.rs ×9 (suggestion rules, gallery catalogue, card to columns, saved charts round trip and plain errors, Charts commands and Ctrl+K); render_tests_p7 ×4 (Charts menu order and clicks, gallery cards/suggest by real rects at 3 sizes, studio sections typed and clicked, save and open by real clicks) |
 
+| C3 | DONE | (see git log: "Phase 7 C3") | tests/phase7/c3.rs ×16 (golden option of all 20 forms, dark option, offline page, vendored file, 2 MB limit, Sankey values, treemap, waterfall bases, donut refusal, marks, theme, advanced JSON, chart book, preview/write, Δ); render_tests_p7 ×1 (Export, Preview, advanced box, Reset, chart book by real clicks at 3 sizes); `tools/html_chart_png.js` loads every page in headless Chromium with the network blocked (no script error, no request) and saves PNGs `docs/guide/img/charts/html-*.png` |
+
 ## Deviations (also in `docs/phase7-spec.md` `<accepted_deviations>`)
 
 - C0-1: the palette and size literals live in `src/charts/tokens.rs` (library crate), not in `src/ui/theme.rs`: the HTML and Excel renderers are in the library and cannot read the binary's theme. `theme.rs` exposes them as `Color32`/`f32` tokens (`CHART_*`), and both the library test (`c0_every_hex_value…`) and the UI test pin every hex value.
@@ -33,3 +35,13 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 - D3: Δ (not "d") in ΔEVE and ΔNII everywhere; tested in all three renderers.
 - D4: C3 "Preview in browser" for Sankey and Treemap (temp HTML file, default browser, no network).
 - D5: accepted as is: tokens.rs; blank cell for % of zero total; histogram bars fill their band; horizontal axis names; chart tab in settings.json; panel scrolls by scrollbar.
+
+## C3 deviations
+
+- C3-1: the vendored `echarts.min.js` (6.1.0, SHA-256 in `THIRD_PARTY_NOTICES.md`) contains six `http(s)://` strings: XML namespace names (`www.w3.org/...`) and two licence comments. None is ever fetched. The test asserts that the page *without* the library has no `http`, `src=`, `href=`, `url(` or `@import`, and that the library holds exactly those six strings, so a new one in a future version is noticed. The page was also opened in headless Chromium with every network request blocked: it drew, with no error.
+- C3-2: the title, subtitle and footnote are drawn inside the chart (ECharts `title` and `graphic`), so "Save as PNG/SVG" carries them; the page has only the Table and Dark/Light buttons above the chart.
+- C3-3: ECharts has no "gap between segments" setting, so stacked and grouped bars use a 1 px border in the surface colour (a 2 px gap between neighbours), the one place a border is used.
+- C3-4: formatters, tooltips and the toolbox's SVG button are functions in ECharts; the option holds names (`@fmt:amount:2`, `@tip`, `@axistip`, `@saveSvg`) that the page's script swaps for functions. The advanced box may use the same names.
+- C3-5: Sankey node names are "From STD" / "To STD" (a grade is on both sides) and their label shows the grade; node values are the sums of their links. A flow table needs the Series column (from) and the Category column (to).
+- C3-6: `Needs::Later` was removed from the command list; "Chart book (HTML)…" and "Chart to HTML…" need an open tab. The book dialog lists the saved charts that fit the active tab; the worker calculates each over the whole tab and writes the page (one that cannot be drawn stops the book and nothing is written).
+- C3-7: tests can set `chart.export_path_override`, `chart.no_browser` and `chart_book.path_override`, so a click never opens a file dialog or the browser.
