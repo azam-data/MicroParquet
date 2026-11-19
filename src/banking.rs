@@ -1086,7 +1086,7 @@ pub const PROVISION_RULES_FILE: &str = "provision_rules.json";
 /// the older defaults reachable through `default_*(version)` so untouched files can be upgraded.
 pub const RULE_FILES_VERSION: u32 = 3;
 
-const CL_GRADES: [&str; 5] = ["STD", "SMA", "SS", "DF", "BL"];
+pub const CL_GRADES: [&str; 5] = ["STD", "SMA", "SS", "DF", "BL"];
 const REG_CATEGORIES: [&str; 3] = ["SHORT_TERM_AGRI", "CMSME", "OTHER"];
 /// Collateral types whose eligible security is deducted without the 15%-of-outstanding floor.
 const FLOOR_EXEMPT_COLLATERAL: [&str; 5] = [

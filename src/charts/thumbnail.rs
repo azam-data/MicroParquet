@@ -124,7 +124,7 @@ pub fn paint_thumbnail(p: &Painter, r: Rect, kind: ChartKind, stack: Stack, hori
                 for cc in 0..cols {
                     let v = if rr == cc.min(rows - 1) { 12 } else { (cc + rr * 2) % 6 };
                     let cell = Rect::from_min_size(pos2(area.left() + cc as f32 * cw + 1.0, area.top() + rr as f32 * ch + 1.0), vec2(cw - 2.0, ch - 2.0));
-                    p.rect_filled(cell, Rounding::same(t::HEAT_RADIUS_SHARE * cell.width().min(cell.height())), c(t::SEQUENTIAL[v.min(12)]));
+                    p.rect_filled(cell, Rounding::same(t::HEAT_RADIUS_PX.min(cell.width().min(cell.height()) / 2.0)), c(t::SEQUENTIAL[v.min(12)]));
                 }
             }
         }

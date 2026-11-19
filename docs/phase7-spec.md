@@ -337,4 +337,10 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 - C2: "Chart this result" opens the studio (templates are C5); "Chart book" is disabled until C3; the studio's extra sections are under the chart in the side panel and beside it in the pop-out; the right panel no longer drag-scrolls; Phase 6 tests adjusted for the Charts menu and the chart's own title.
 - C1: a chart tab is a normal tab (the chart's data table) drawn as a chart in the main area; tabs are not restored at start-up, so "saved with the session" is `settings.json` `chart_tabs`.
 - C0: a percentage of a zero total is blank with a note; a waterfall that does not add up, and more than 12 facet values, are refused with a message.
+- Owner decisions on Session A (19 Nov 2026), these replace the earlier C1 lines they contradict:
+  1. Heatmap: rows AND columns follow the custom order list; with no list, CL/grade codes use `cl_code_map` order (STD, SMA, SS, DF, BL), other text sorts naturally. Every row×column pair is drawn; a missing pair is a 0.0 cell in the lightest sequential step, with its value label. Cell corner radius 2 px (not 6% of the cell), gaps stay 2 px. Same rules in the HTML and Excel renderers (replaces C1-5, "heatmap rows follow series size").
+  2. Stacked area: fill opacity about 35% (pinned in `tokens.rs`), with a 2 px line on top of each layer (replaces 55%).
+  3. Write Δ, not "d": ΔEVE and ΔNII everywhere (titles, axes, tooltips, HTML, Excel), tested in all three renderers.
+  4. C3 adds "Preview in browser" for the HTML-only forms (Sankey, Treemap): it writes a temp HTML file and opens the default browser. Nothing goes over the network.
+  5. Accepted as is: `tokens.rs`, blank cell for a percent of a zero total, histogram bars filling their band, horizontal axis names, chart tab in `settings.json`, panel scrolls by scrollbar.
 </accepted_deviations>

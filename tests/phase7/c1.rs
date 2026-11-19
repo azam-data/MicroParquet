@@ -465,7 +465,8 @@ fn c1_a_heatmap_has_rounded_cells_a_two_pixel_gap_and_white_text_on_dark_cells()
     for l in all_sizes(&d, "heatmap") {
         assert!(l.message.is_none(), "{:?}", l.message);
         let cells: Vec<_> = l.marks.iter().filter(|m| m.kind == MarkKind::Cell).collect();
-        assert_eq!(cells.len(), 7);
+        // every row × column pair is a cell (3 rows × 5 columns), the pairs without data are 0.0
+        assert_eq!(cells.len(), 15);
         // cells of one row are two pixels apart
         let mut row0: Vec<_> = cells.iter().filter(|m| m.series == cells[0].series).collect();
         row0.sort_by(|a, b| a.rect.left().partial_cmp(&b.rect.left()).unwrap());
@@ -485,9 +486,9 @@ fn c1_a_heatmap_has_rounded_cells_a_two_pixel_gap_and_white_text_on_dark_cells()
         if let Some(tx) = t_dark {
             assert_eq!(tx.colour, egui::Color32::WHITE);
         }
-        // rounded: radius 6% of the cell
+        // rounded: 2 px corners
         let radius = l.prims.iter().find_map(|p| if let micro_parquet::charts::layout::Prim::Rect { rect, round, .. } = p { if *rect == dark_cell.rect { Some(round[0]) } else { None } } else { None }).unwrap();
-        assert!((radius - t::HEAT_RADIUS_SHARE * dark_cell.rect.width().min(dark_cell.rect.height())).abs() < 0.01);
+        assert!((radius - t::HEAT_RADIUS_PX).abs() < 0.01);
         let h = hit_test(&l, dark_cell.rect.center()).unwrap();
         assert!(h.tip.contains("Percent of the row total") && h.tip.contains("rows"), "{}", h.tip);
     }

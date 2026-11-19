@@ -95,10 +95,12 @@ pub const MARKER_PX: f32 = 8.0;
 pub const MARKER_RING_PX: f32 = 2.0;
 /// The fill under an area, as a share of the series colour's opacity.
 pub const AREA_OPACITY: f32 = 0.10;
+/// The fill of a stacked area layer (a 2 px line of the full colour runs along its top).
+pub const STACKED_AREA_OPACITY: f32 = 0.35;
 pub const GRID_PX: f32 = 1.0;
 pub const REFERENCE_LINE_PX: f32 = 1.5;
-/// Heatmap cell radius as a share of the cell, and its surface gap.
-pub const HEAT_RADIUS_SHARE: f32 = 0.06;
+/// Heatmap cell corner radius and the surface gap between cells (owner decision, Session A review).
+pub const HEAT_RADIUS_PX: f32 = 2.0;
 pub const HEAT_GAP_PX: f32 = 2.0;
 /// Padding around the plot, as a share of the chart.
 pub const PADDING_SHARE: f32 = 0.03;
@@ -118,3 +120,29 @@ pub const MAX_FACETS: usize = 12;
 pub const MAX_PANELS: usize = 3;
 /// Scatter, bubble and small-multiple colour series are capped at this many.
 pub const MAX_SCATTER_SERIES: usize = 3;
+
+/// Writes the change symbol as a delta sign: "dEVE" becomes "ΔEVE" and "dNII" "ΔNII" (whole words only),
+/// in every renderer (titles, axes, tooltips, HTML, Excel).
+pub fn delta(text: &str) -> String {
+    if !text.contains("dEVE") && !text.contains("dNII") {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 2);
+    let mut i = 0;
+    while i < chars.len() {
+        let rest: String = chars[i..chars.len().min(i + 4)].iter().collect();
+        let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
+        let after = chars.get(i + 4).copied();
+        let after_ok = after.map_or(true, |c| !c.is_alphanumeric());
+        if before_ok && after_ok && (rest == "dEVE" || rest == "dNII") {
+            out.push('\u{394}');
+            out.push_str(&rest[1..]);
+            i += 4;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}

@@ -1,6 +1,6 @@
 # Phase 7 progress (chart studio)
 
-Branch `phase7`. Tasks done in this session: C0, C1, C2 (in that order). Resume from this file.
+Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisions 1–5, then C3, C4, C5. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -25,3 +25,11 @@ Branch `phase7`. Tasks done in this session: C0, C1, C2 (in that order). Resume 
 - C2-3: Phase 6 tests adjusted for the intended changes: the menu order has Charts; the "Chart" toolbar button test matches the label exactly (the Charts menu contains the word); the quick chart's status line ("… all 250 rows (Crore)") is found by its text now that the chart has its own title; fields under the chart are not required to be inside the window (they scroll).
 - C2-4: a reference line's label goes beside the line where there is room; when the line crosses the bars it stands above the plot after a short piece of the line in the status colour. The extra measures are panels (never a second axis); a facet and several measures at once are allowed.
 - C2-5: `Needs::ResultTab` / `Needs::Later` were added to the command list (a tool's result tab is any tab that is not a file, a stack or a join).
+
+## Owner decisions on Session A (also in the spec `<accepted_deviations>`)
+
+- D1: heatmap rows and columns follow the custom order list; with no list, CL grade codes use `cl_code_map` order (STD, SMA, SS, DF, BL), other text sorts naturally. Every row×column pair is drawn; a missing pair is a 0.0 cell in the lightest step with its label. Radius 2 px, gaps 2 px. Same in HTML and Excel. Replaces C1-5.
+- D2: stacked area fill about 35% (in `tokens.rs`), 2 px line on top of each layer. Replaces the 55% of C1-2.
+- D3: Δ (not "d") in ΔEVE and ΔNII everywhere; tested in all three renderers.
+- D4: C3 "Preview in browser" for Sankey and Treemap (temp HTML file, default browser, no network).
+- D5: accepted as is: tokens.rs; blank cell for % of zero total; histogram bars fill their band; horizontal axis names; chart tab in settings.json; panel scrolls by scrollbar.

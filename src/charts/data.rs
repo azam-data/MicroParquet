@@ -348,14 +348,73 @@ pub struct HeatMatrix {
     pub notes: Vec<String>,
 }
 
+/// The order of a heatmap's rows or columns: the custom order list when the chart has one; with none, CL
+/// grade codes follow the CL order (STD, SMA, SS, DF, BL) and other text sorts naturally. "Other" stays last.
+fn heat_order(names: &[String], spec: &ChartSpec, other: &str) -> Vec<usize> {
+    use crate::sort_lists::SortOrder;
+    let is_other = |s: &str| s == other || s == "Other" || s == "Other categories" || s == "Other series";
+    let cl_rank = |s: &str| crate::banking::CL_GRADES.iter().position(|g| g.eq_ignore_ascii_case(s.trim()));
+    let named: Vec<&String> = names.iter().filter(|n| !is_other(n)).collect();
+    let all_cl = !named.is_empty() && named.iter().all(|n| cl_rank(n).is_some());
+    let mut idx: Vec<usize> = (0..names.len()).collect();
+    idx.sort_by(|&a, &b| {
+        let (x, y) = (&names[a], &names[b]);
+        match (is_other(x), is_other(y)) {
+            (true, true) => return std::cmp::Ordering::Equal,
+            (true, false) => return std::cmp::Ordering::Greater,
+            (false, true) => return std::cmp::Ordering::Less,
+            _ => {}
+        }
+        if spec.order.is_natural() && all_cl {
+            cl_rank(x).cmp(&cl_rank(y))
+        } else {
+            let key = |s: &String| if s == BLANK { None } else { Some(s.clone()) };
+            let order = if spec.order.is_natural() { &SortOrder::Natural } else { &spec.order };
+            order.compare(&key(x), &key(y))
+        }
+    });
+    idx
+}
+
+const BLANK: &str = "(blank)";
+
 /// The heatmap matrix of a chart table, with the transform applied ("% of row" is `Transform::ShareOfSeries`).
+/// Rows and columns follow the order list (see `heat_order`); every row × column pair is a cell, and a pair
+/// with no data is 0.0 (its `counts` entry is 0).
 pub fn heatmap(data: &ChartData, t: Transform) -> HeatMatrix {
-    let (cells, notes) = apply_transform(&data.values, t);
-    let row_totals = data.values.iter().map(|r| sum_of(r.iter())).collect();
+    let (cells0, notes) = apply_transform(&data.values, t);
+    let row_totals0: Vec<Option<f64>> = data.values.iter().map(|r| sum_of(r.iter())).collect();
+    let ro = heat_order(&data.series, &data.spec, "");
+    let co = heat_order(&data.categories, &data.spec, "");
+    let mut cells: Matrix = Vec::new();
+    let mut counts: Vec<Vec<u64>> = Vec::new();
+    for &r in &ro {
+        let mut crow = Vec::new();
+        let mut nrow = Vec::new();
+        for &c in &co {
+            let n = data.rows.get(r).and_then(|x| x.get(c)).copied().unwrap_or(0);
+            let v = cells0.get(r).and_then(|x| x.get(c)).copied().flatten();
+            // a pair with no rows is a real zero; a pair whose percentage could not be worked out stays blank
+            crow.push(if n == 0 { Some(0.0) } else { v });
+            nrow.push(n);
+        }
+        cells.push(crow);
+        counts.push(nrow);
+    }
+    let row_totals = ro.iter().map(|&r| row_totals0.get(r).copied().flatten()).collect();
     let flat: Vec<f64> = cells.iter().flatten().flatten().copied().collect();
     let min = flat.iter().copied().fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.min(v))));
     let max = flat.iter().copied().fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.max(v))));
-    HeatMatrix { rows: data.series.clone(), cols: data.categories.clone(), cells, counts: data.rows.clone(), row_totals, min, max, notes }
+    HeatMatrix {
+        rows: ro.iter().filter_map(|&r| data.series.get(r).cloned()).collect(),
+        cols: co.iter().filter_map(|&c| data.categories.get(c).cloned()).collect(),
+        cells,
+        counts,
+        row_totals,
+        min,
+        max,
+        notes,
+    }
 }
 
 /// The step (0 to 12) of the sequential ramp for a value between `lo` and `hi`.

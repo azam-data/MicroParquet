@@ -26,7 +26,6 @@ const LABEL_MAX_BARS: usize = 12;
 const BUBBLE_MIN_R: f32 = 6.0;
 const BUBBLE_MAX_R: f32 = 22.0;
 const BUBBLE_ALPHA: f32 = 0.7;
-const STACKED_AREA_ALPHA: f32 = 0.55;
 const DONUT_HOLE: f32 = 0.62;
 const SMALL_PANEL_W: f32 = 190.0;
 const SMALL_PANEL_H: f32 = 140.0;
@@ -281,12 +280,12 @@ struct Builder<'a> {
 
 impl<'a> Builder<'a> {
     fn size(&self, s: &str, pt: f32, face: Face) -> Vec2 {
-        self.m.size(s, pt, face == Face::Semibold)
+        self.m.size(&t::delta(s), pt, face == Face::Semibold)
     }
 
     fn width_fn(&self, pt: f32, face: Face) -> impl Fn(&str) -> f32 + 'a {
         let m = self.m;
-        move |s: &str| m.size(s, pt, face == Face::Semibold).x
+        move |s: &str| m.size(&t::delta(s), pt, face == Face::Semibold).x
     }
 
     fn rect_for(&self, s: &str, pt: f32, face: Face, anchor: Anchor, at: Pos2) -> Rect {
@@ -308,7 +307,7 @@ impl<'a> Builder<'a> {
     /// Writes a text without any check.
     fn put(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
         let rect = self.rect_for(s, pt, face, anchor, at);
-        self.out.texts.push(LText { text: s.to_string(), rect, pt, face, colour, role });
+        self.out.texts.push(LText { text: t::delta(s), rect, pt, face, colour, role });
         rect
     }
 
@@ -454,6 +453,17 @@ impl ChartLayout {
 
 /// Lays the chart out in `rect`.
 pub fn layout_chart(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
+    let mut out = layout_chart_inner(data, rect, opts, m);
+    for mk in out.marks.iter_mut() {
+        mk.tip = t::delta(&mk.tip);
+    }
+    for c in out.crosshairs.iter_mut() {
+        c.tip = t::delta(&c.tip);
+    }
+    out
+}
+
+fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
     let ink = t::ink(opts.dark);
     let mut b = Builder { m, ink, dark: opts.dark, bounds: rect, out: ChartLayout::empty(rect, rgb(ink.surface), opts.dark) };
     let pad = (rect.width() * t::PADDING_SHARE).max(t::MIN_SPACE_PX);
@@ -1375,7 +1385,7 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
         let pts: Vec<Option<Pos2>> = (0..n_cat).map(|c| point(si, c)).collect();
         // area fill under the line (a band between cumulative tops when stacked)
         if area {
-            let fill = if stacked_area { alpha(colour, STACKED_AREA_ALPHA) } else { alpha(colour, t::AREA_OPACITY) };
+            let fill = if stacked_area { alpha(colour, t::STACKED_AREA_OPACITY) } else { alpha(colour, t::AREA_OPACITY) };
             let mut tris: Vec<[Pos2; 3]> = Vec::new();
             for c in 0..n_cat.saturating_sub(1) {
                 if let (Some(a), Some(d)) = (pts[c], pts[c + 1]) {
@@ -1619,13 +1629,12 @@ fn heatmap_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
     for ri in 0..rows {
         for ci in 0..cols {
             let Some(v) = h.cells[ri][ci] else { continue };
-            if h.counts.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(0) == 0 {
-                continue;
-            }
+            let missing = h.counts.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(0) == 0;
             let cell = Rect::from_min_size(pos2(grid.left() + cw * ci as f32 + gap / 2.0, grid.top() + ch * ri as f32 + gap / 2.0), vec2((cw - gap).max(1.0), (ch - gap).max(1.0)));
-            let step = sequential_step(v, lo, hi);
+            // a missing pair is a 0.0 cell in the lightest step
+            let step = if missing { 0 } else { sequential_step(v, lo, hi) };
             let fill = rgb(t::SEQUENTIAL[step]);
-            let radius = t::HEAT_RADIUS_SHARE * cell.width().min(cell.height());
+            let radius = t::HEAT_RADIUS_PX.min(cell.width().min(cell.height()) / 2.0);
             b.rect(cell, fill, [radius; 4]);
             let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, 1) } else { value_text(scaled(v, vk, opts), vk, opts.decimals, false) };
             let tc = if step >= t::SEQUENTIAL_WHITE_TEXT_FROM { Color32::WHITE } else { ink_c };
