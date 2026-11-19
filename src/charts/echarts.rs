@@ -151,7 +151,10 @@ impl<'a> Env<'a> {
         }
         if p.vk == ValueKind::Percent {
             let ml = spec.measure_list();
-            out.push_str(&format!("\nPercent {}", base_word(ml.get(p.measure).map(|m| m.transform).unwrap_or(Transform::None))));
+            let word = base_word(ml.get(p.measure).map(|m| m.transform).unwrap_or(Transform::None));
+            if !word.is_empty() {
+                out.push_str(&format!("\nPercent {}", word));
+            }
         }
         lit_tip(&out)
     }
@@ -240,6 +243,9 @@ fn foot_lines(data: &ChartData) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     if !data.spec.footnote.trim().is_empty() {
         parts.push(data.spec.footnote.trim().to_string());
+    }
+    if !data.spec.limit_note.trim().is_empty() {
+        parts.push(format!("\u{2014} {}", data.spec.limit_note.trim()));
     }
     parts.extend(data.notes.iter().cloned());
     if parts.is_empty() {
@@ -581,6 +587,44 @@ fn line_series(env: &Env, p: &Plan, grid: usize) -> Vec<Value> {
     out
 }
 
+/// Per-category limits: a short tick in the status colour at each limit, and a ring with the text on a breach.
+fn tick_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> {
+    let spec = &env.data.spec;
+    let panel = if env.data.facets.is_empty() { p.idx } else { 0 };
+    let ticks: Vec<_> = spec.limit_ticks.iter().filter(|l| l.panel == panel).collect();
+    if ticks.is_empty() {
+        return Vec::new();
+    }
+    let at = |cat: &str, v: f64| -> Value {
+        if horizontal {
+            json!([num(v), lit(cat)])
+        } else {
+            json!([lit(cat), num(v)])
+        }
+    };
+    let mut out = Vec::new();
+    let tick_items: Vec<Value> = ticks
+        .iter()
+        .map(|l| json!({"value": at(&l.category, scaled(l.value, p.vk, env.opts)), "itemStyle": {"color": hx(l.status.hex())}}))
+        .collect();
+    let size = if horizontal { json!([t::REFERENCE_LINE_PX, 34]) } else { json!([44, t::REFERENCE_LINE_PX]) };
+    out.push(json!({"name": "Limit", "type": "scatter", "xAxisIndex": grid, "yAxisIndex": grid, "data": tick_items, "symbol": "rect", "symbolSize": size, "silent": true, "tooltip": {"show": false}, "z": 6}));
+    let rings: Vec<Value> = ticks
+        .iter()
+        .filter(|l| !l.breach.is_empty())
+        .filter_map(|l| {
+            let ci = p.cats.iter().position(|c| *c == l.category)?;
+            let v = p.series.first()?.vals.get(ci).copied().flatten()?;
+            Some(json!({"value": at(&l.category, scaled(v, p.vk, env.opts)), "label": label_style(env, &l.breach, if horizontal { "right" } else { "top" }),
+                        "itemStyle": {"color": "rgba(0,0,0,0)", "borderColor": hx(l.status.hex()), "borderWidth": t::REFERENCE_LINE_PX}}))
+        })
+        .collect();
+    if !rings.is_empty() {
+        out.push(json!({"name": "Breach", "type": "scatter", "xAxisIndex": grid, "yAxisIndex": grid, "data": rings, "symbol": "circle", "symbolSize": t::MARKER_PX + 10.0, "silent": true, "tooltip": {"show": false}, "z": 7}));
+    }
+    out
+}
+
 /// The panels of a cartesian chart (bars, lines, areas, histogram): grids, axes and series.
 struct Grids {
     grid: Vec<Value>,
@@ -637,6 +681,10 @@ fn cartesian(env: &Env, plans: &[Plan], legend_h: f64, foot_h: f64) -> Grids {
             lo2 = lo2.min(rl.value);
             hi2 = hi2.max(rl.value);
         }
+        for lt in spec.limit_ticks.iter().filter(|l| l.panel == p.idx.min(if multi { 0 } else { usize::MAX })) {
+            lo2 = lo2.min(lt.value);
+            hi2 = hi2.max(lt.value);
+        }
         let grid_lines = true;
         let x_cat = category_axis(env, i, p.cats, hz, last_row || multi, p.kind == ChartKind::Histogram || matches!(p.kind, ChartKind::Bar));
         let y_val = value_axis(env, i, lo2, hi2, p.vk, hz, !multi || c == 0, include_zero, grid_lines);
@@ -657,6 +705,7 @@ fn cartesian(env: &Env, plans: &[Plan], legend_h: f64, foot_h: f64) -> Grids {
             _ => bar_series(env, p, i, hz),
         };
         g.series.extend(series);
+        g.series.extend(tick_series(env, p, i, hz));
     }
     g.height = top0 + rows as f64 * ph + (rows as f64 - 1.0) * gap + if n > 1 || multi { 22.0 * rows as f64 } else { 0.0 } + AXIS_H + foot_h + 6.0;
     g

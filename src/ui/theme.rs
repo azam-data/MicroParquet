@@ -468,6 +468,8 @@ pub const CHART_TOOLTIP_W: f32 = 260.0;
 pub const CHART_GALLERY_W: f32 = 1040.0;
 pub const CHART_CARD_W: f32 = 232.0;
 pub const CHART_CARD_H: f32 = 196.0;
+/// A banking template card: name, tool, form and the use / avoid lines (no thumbnail).
+pub const CHART_TEMPLATE_CARD_H: f32 = 268.0;
 pub const CHART_THUMB_H: f32 = 70.0;
 pub const CHART_TEXT_FIELD_W: f32 = 150.0;
 pub const CHART_REF_LABEL_W: f32 = 90.0;

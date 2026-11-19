@@ -14,18 +14,18 @@ use polars::prelude::*;
 
 use egui::{pos2, Rect};
 
-const SIZES: [(f32, f32); 3] = [(316.0, 420.0), (900.0, 560.0), (1219.0, 686.0)];
+pub(crate) const SIZES: [(f32, f32); 3] = [(316.0, 420.0), (900.0, 560.0), (1219.0, 686.0)];
 
-fn lay(d: &ChartData, w: f32, h: f32, dark: bool) -> ChartLayout {
+pub(crate) fn lay(d: &ChartData, w: f32, h: f32, dark: bool) -> ChartLayout {
     layout_chart(d, Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(w, h)), &LayoutOpts { dark, divisor: 1.0, decimals: 2, unit: "BDT".into(), bare: false, colours: None }, &ApproxMeasure)
 }
 
-fn overlap(a: Rect, b: Rect) -> bool {
+pub(crate) fn overlap(a: Rect, b: Rect) -> bool {
     a.intersects(b) && a.intersect(b).width() > 0.5 && a.intersect(b).height() > 0.5
 }
 
 /// The rules every chart obeys, whatever its form.
-fn check(l: &ChartLayout, what: &str) {
+pub(crate) fn check(l: &ChartLayout, what: &str) {
     let bounds = if l.needed_height > l.rect.height() { Rect::from_min_size(l.rect.min, egui::vec2(l.rect.width(), l.needed_height)) } else { l.rect };
     for (i, a) in l.texts.iter().enumerate() {
         assert!(bounds.contains_rect(a.rect), "{what}: the text '{}' {:?} leaves the chart {:?}", a.text, a.rect, bounds);
@@ -85,7 +85,7 @@ fn data(s: &ChartSpec) -> ChartData {
     compute(frame().lazy(), s).unwrap()
 }
 
-fn all_sizes(d: &ChartData, what: &str) -> Vec<ChartLayout> {
+pub(crate) fn all_sizes(d: &ChartData, what: &str) -> Vec<ChartLayout> {
     let mut out = Vec::new();
     for dark in [false, true] {
         for (w, h) in SIZES {

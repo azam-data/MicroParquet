@@ -139,7 +139,10 @@ impl MicroParquetApp {
         let key = tab_key(tab);
         let saved = self.settings.chart.get(&key).and_then(|v| serde_json::from_value::<ChartSpec>(v.clone()).ok());
         let cols = tab.available_columns();
+        let pending = self.chart_pending.remove(&tab.id);
         let spec = match saved {
+            // a template's chart for this tab (it was opened for it)
+            _ if pending.is_some() => pending.unwrap_or_default(),
             // a saved choice that names a column this tab no longer has is not used
             Some(s) if cols.contains(&s.category) && s.value.as_ref().is_none_or(|v| cols.contains(v)) && s.series.as_ref().is_none_or(|v| cols.contains(v)) => s,
             _ => {
@@ -770,12 +773,91 @@ impl MicroParquetApp {
         self.chart_attach_tab();
     }
 
-    /// Charts ▸ "Chart this result": the studio on the result tab (the banking templates of Phase 7 C5
-    /// are applied here; until then the studio opens with the first sensible choices for the tab).
+    /// Charts ▸ "Chart this result": the banking template that fits the active result tab is applied (the
+    /// studio opens with it, every setting still editable); with several (or no) fitting templates the
+    /// gallery's "Banking templates" is shown.
     pub(crate) fn chart_this_result(&mut self) {
-        self.chart_attach_tab();
+        use micro_parquet::charts::templates::detect;
+        let found = self.tabs.get(self.active_tab).map(|t| detect(&t.cached_slice)).unwrap_or_default();
+        match found.as_slice() {
+            [one] => match self.chart_apply_template(*one) {
+                Ok(m) => self.status_message = m,
+                Err(e) => self.status_message = e,
+            },
+            [] => {
+                self.chart_attach_tab();
+                self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+                self.status_message = "No banking template fits this tab, so the studio is open on it. Charts \u{25b8} New chart \u{25b8} Banking templates lists them.".to_string();
+            }
+            _ => self.open_chart_gallery(),
+        }
+    }
+
+    /// The scale and thresholds a template's finding is written with.
+    pub(crate) fn chart_template_ctx(&self, t: micro_parquet::charts::templates::Template) -> micro_parquet::charts::templates::Ctx {
+        use micro_parquet::charts::templates::{Ctx, Template};
+        let mut ctx = Ctx { decimals: self.global_decimals, ..Ctx::default() };
+        let tab = self.tabs.get(self.active_tab);
+        if t == Template::NiiBridge {
+            let col = "Volume effect";
+            let fmt = tab.and_then(|t| t.col_formats.get(col));
+            if let Some(s) = micro_parquet::models::resolved_scale(col, fmt, self.num_format) {
+                ctx.divisor = s.divisor;
+                ctx.suffix = s.suffix.to_string();
+            }
+        }
+        if let Some(TabSource::DqScorecard { rules, .. }) = tab.map(|t| &t.source) {
+            ctx.dq_green = rules.green_min;
+            ctx.dq_amber = rules.amber_min;
+        }
+        ctx
+    }
+
+    /// Applies a banking template to the active tab: its table (when the chart needs numbers the tab does not
+    /// have as columns) opens as a tab of its own, and the studio shows the template's chart with the
+    /// finding as its title. Returns the message for the status line.
+    pub(crate) fn chart_apply_template(&mut self, t: micro_parquet::charts::templates::Template) -> Result<String, String> {
+        use micro_parquet::charts::templates::{prepare, yield_curves, CurveInput, Template};
+        let ctx = self.chart_template_ctx(t);
+        let prepared = if t == Template::YieldCurves {
+            let store = micro_parquet::curves::CurveStore::load(&micro_parquet::curves::curves_dir());
+            let inputs: Vec<CurveInput> = store.curves.iter().map(CurveInput::from).collect();
+            yield_curves(&inputs)
+        } else {
+            let Some(tab) = self.tabs.get(self.active_tab) else {
+                return Err("Open a tab first.".to_string());
+            };
+            if matches!(t, Template::ClassifiedTrend | Template::BehaviourProfile) && tab.total_rows > tab.cached_slice.height() {
+                return Err(format!(
+                    "{}: this tab has {} rows and the template reads them all at once. Make a pivot with one row per month and grade (or per month-end) first, then chart that.",
+                    t.name(),
+                    format_with_commas(tab.total_rows as f64, 0)
+                ));
+            }
+            prepare(t, &tab.cached_slice, &ctx)
+        }
+        .map_err(|e| format!("{:#}", e))?;
         self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
-        self.status_message = "Chart: the studio is open on this result tab.".to_string();
+        let message = format!("Chart this \u{2014} {}: {}.", t.name(), prepared.finding);
+        match prepared.table {
+            Some(mut df) => {
+                std::fs::create_dir_all(&self.paths.temp_dir).map_err(|e| format!("The chart table could not be written: {}", e))?;
+                let path = self.paths.temp_dir.join(format!("chart_template_{}_{}.parquet", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+                let f = std::fs::File::create(&path).map_err(|e| format!("The chart table could not be written: {}", e))?;
+                polars::prelude::ParquetWriter::new(f).finish(&mut df).map_err(|e| format!("The chart table could not be written: {}", e))?;
+                let src = TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() };
+                // the columns that keep their name keep their display format (Crore, Lakh, …)
+                let formats: HashMap<String, ColumnFormatSpec> = self.tabs.get(self.active_tab).map(|tab| tab.col_formats.iter().filter(|(k, _)| df.get_column_names().iter().any(|n| n.as_str() == k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+                let id = self.create_tab_from_source_with(prepared.tab_title.clone(), src, Vec::new(), formats, None);
+                self.chart_pending.insert(id, prepared.spec);
+            }
+            None => {
+                self.chart_attach_tab();
+                self.chart_set_spec(prepared.spec);
+            }
+        }
+        self.status_message = message.clone();
+        Ok(message)
     }
 
     /// The tooltip of one bar or point: the category (whole), the series, the value in the chart's

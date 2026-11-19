@@ -9,6 +9,7 @@ use crate::ui::prelude::*;
 use micro_parquet::charts::gallery::{apply_card, card_by_id, cards_for, fit_columns, Card, Question};
 use micro_parquet::charts::library;
 use micro_parquet::charts::spec::{ChartAgg, ChartKind, ChartSpec, MeasureSpec, RefLine, Stack, Status, Transform};
+use micro_parquet::charts::templates::Template;
 use micro_parquet::charts::suggest::{looks_ordered, suggest, ColKind, SuggestCol, SuggestFlags, Suggestion};
 use micro_parquet::charts::thumbnail::paint_thumbnail;
 
@@ -22,6 +23,8 @@ pub struct GalleryRects {
     pub use_suggestion: Option<egui::Rect>,
     pub waterfall_box: Option<egui::Rect>,
     pub close: Option<egui::Rect>,
+    /// The banking template cards (by template id).
+    pub templates: Vec<(String, egui::Rect)>,
 }
 
 /// State of the gallery dialog.
@@ -32,6 +35,8 @@ pub struct ChartGalleryState {
     pub change_between_totals: bool,
     pub suggestion: Option<Result<Suggestion, String>>,
     pub rects: GalleryRects,
+    /// Why a template could not be applied (plain words), shown under the cards.
+    pub template_message: Option<String>,
 }
 
 /// State of the "Save chart…" dialog.
@@ -139,7 +144,7 @@ impl MicroParquetApp {
         spec.measures.clear();
         spec.size = None;
         if s.kind == ChartKind::Heatmap {
-            spec.measures = vec![MeasureSpec { column: spec.value.clone(), agg: spec.agg, weight: None, label: String::new(), transform: Transform::ShareOfSeries }];
+            spec.measures = vec![MeasureSpec { column: spec.value.clone(), agg: spec.agg, weight: None, label: String::new(), transform: Transform::ShareOfSeries, pct: false }];
         }
         if s.keep_order && !s.by_value && spec.order.is_natural() {
             // dates, months and the like sort naturally; an ordered text column keeps its natural order too
@@ -158,6 +163,9 @@ impl MicroParquetApp {
         let mut take_card: Option<&'static Card> = None;
         let mut run_suggest = false;
         let mut use_suggestion = false;
+        let mut take_template: Option<Template> = None;
+        let template_fits: Vec<Template> = self.tabs.get(self.active_tab).map(|t| micro_parquet::charts::templates::detect(&t.cached_slice)).unwrap_or_default();
+        let template_message = self.chart_gallery.template_message.clone();
         let columns = self.chart_suggest_columns();
         let mut picked = self.chart_gallery.picked.clone();
         let mut change = self.chart_gallery.change_between_totals;
@@ -262,8 +270,39 @@ impl MicroParquetApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(theme::semibold("Banking templates"));
-                    ui.label(egui::RichText::new("On a tool's result tab, Charts \u{25b8} \"Chart this result\" opens the studio with the template for that tool.").color(tk.muted));
+                    ui.label(egui::RichText::new("The chart a banker would draw from a tool's result, with the finding as its title. Open the tool's result tab, then click its card (greyed cards do not fit this tab).").color(tk.muted));
                 });
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(theme::SPACE_M, theme::SPACE_M);
+                    for tpl in Template::all() {
+                        let fits_tab = *tpl == Template::YieldCurves || template_fits.contains(tpl);
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(theme::CHART_CARD_W, theme::CHART_TEMPLATE_CARD_H), egui::Sense::click());
+                        let hover = resp.hovered() && fits_tab;
+                        ui.painter().rect(rect, theme::RADIUS_PANEL, tk.surface, egui::Stroke::new(theme::CHART_GRID_PX, if hover { tk.accent } else { tk.border }));
+                        let text_w = rect.width() - 2.0 * theme::SPACE_S;
+                        let ink = if fits_tab { tk.ink } else { tk.muted };
+                        let mut y = rect.top() + theme::SPACE_S;
+                        for (text, font, colour) in [
+                            (tpl.name().to_string(), egui::FontId::new(theme::TEXT_BASE, theme::family_semibold()), ink),
+                            (format!("From: {}", tpl.source()), egui::FontId::new(theme::TEXT_LABEL, egui::FontFamily::Proportional), tk.ink2),
+                            (tpl.form().to_string(), egui::FontId::new(theme::TEXT_LABEL, egui::FontFamily::Proportional), tk.ink2),
+                            (format!("Use it when {}", tpl.use_when()), egui::FontId::new(theme::TEXT_LABEL, egui::FontFamily::Proportional), tk.ink2),
+                            (format!("Avoid it when {}", tpl.avoid_when()), egui::FontId::new(theme::TEXT_LABEL, egui::FontFamily::Proportional), tk.ink2),
+                        ] {
+                            let g = ui.painter().layout(text, font, if fits_tab { colour } else { tk.muted }, text_w);
+                            let gh = g.size().y;
+                            ui.painter().galley(egui::pos2(rect.left() + theme::SPACE_S, y), g, colour);
+                            y += gh + theme::SPACE_XS;
+                        }
+                        rects.templates.push((tpl.id().to_string(), rect));
+                        if resp.clicked() {
+                            take_template = Some(*tpl);
+                        }
+                    }
+                });
+                if let Some(m) = &template_message {
+                    ui.add(egui::Label::new(egui::RichText::new(m).color(tk.danger)).wrap());
+                }
             });
             d.footer(|ui| {
                 let b = ui.button("Close");
@@ -289,6 +328,12 @@ impl MicroParquetApp {
         if let Some(card) = take_card {
             self.chart_use_card(card);
             close = true;
+        }
+        if let Some(tpl) = take_template {
+            match self.chart_apply_template(tpl) {
+                Ok(_) => close = true,
+                Err(e) => self.chart_gallery.template_message = Some(e),
+            }
         }
         self.chart_gallery.rects = rects;
         ModalOutcome { close, step: None }

@@ -454,10 +454,14 @@ fn grid_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usiz
     };
     let linked = panels.len() > 1;
     let mut row = top;
+    let mut panel_no = 0usize;
     for (kind, mi, ptitle) in &panels {
         let heading = if linked { format!("{}: {}", title, ptitle) } else { title.to_string() };
         let mut chart = cartesian_chart(cx, &g, *kind, *mi, &heading, d)?;
         add_reference_lines(cx, ws, &g, &end, &mut chart, *mi, *kind)?;
+        let free = end.next_col + spec.ref_lines.len() as u16;
+        add_limit_ticks(cx, ws, &g, &end, &mut chart, panel_no, *mi, *kind, free)?;
+        panel_no += 1;
         ws.insert_chart(row, end.next_col + 1, &chart).map_err(x)?;
         charts += 1;
         row += 19;
@@ -490,6 +494,43 @@ fn add_reference_lines(cx: &Cx, ws: &mut Worksheet, g: &GridCols, end: &GridEnd,
     }
     chart.combine(&line_chart);
     Ok(())
+}
+
+/// Per-category limits: a "Limit" column (and the breach text) in the table and dash markers on the chart.
+fn add_limit_ticks(cx: &Cx, ws: &mut Worksheet, g: &GridCols, end: &GridEnd, chart: &mut Chart, panel: usize, measure: usize, kind: ChartKind, first_free_col: u16) -> Result<u16> {
+    let d = cx.data;
+    let spec = &d.spec;
+    let ticks: Vec<_> = spec.limit_ticks.iter().filter(|l| l.panel == panel).collect();
+    if ticks.is_empty() || !matches!(kind, ChartKind::Bar | ChartKind::Line | ChartKind::Area) || (spec.horizontal && kind == ChartKind::Bar) {
+        return Ok(first_free_col);
+    }
+    let vk = value_kind(spec, measure);
+    let col = first_free_col.max(end.next_col);
+    ws.write_string_with_format(g.header_row, col, "Limit", &cx.head).map_err(x)?;
+    ws.write_string_with_format(g.header_row, col + 1, "Breach", &cx.head).map_err(x)?;
+    for lt in &ticks {
+        if let Some(i) = d.categories.iter().position(|c| *c == lt.category) {
+            let r = g.first_row + i as u32;
+            ws.write_number_with_format(r, col, scaled(lt.value, vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
+            if !lt.breach.is_empty() {
+                ws.write_string_with_format(r, col + 1, t::delta(&lt.breach), &cx.text).map_err(x)?;
+            }
+        }
+    }
+    let colour = ticks.first().map(|l| l.status.hex()).unwrap_or(t::STATUS_CRITICAL);
+    let mut line_chart = Chart::new(ChartType::Line);
+    let mut mk = ChartMarker::new();
+    let mut mf = ChartFormat::new();
+    mf.set_solid_fill(&ChartSolidFill::new().set_color(rgb(colour))).set_border(&ChartLine::new().set_color(rgb(colour)).set_width(1.5));
+    mk.set_type(ChartMarkerType::LongDash).set_size(14).set_format(&mut mf);
+    let s = line_chart.add_series();
+    s.set_categories(&range(&cx.sheet, g.first_row, 0, g.last_row, 0)).set_values(&range(&cx.sheet, g.first_row, col, g.last_row, col)).set_name(if spec.limit_note.trim().is_empty() { "Limit" } else { spec.limit_note.trim() });
+    s.set_format(&mut ChartFormat::new().set_no_line().clone());
+    s.set_marker(&mk);
+    chart.combine(&line_chart);
+    ws.set_column_width(col, 14).map_err(x)?;
+    ws.set_column_width(col + 1, 30).map_err(x)?;
+    Ok(col + 2)
 }
 
 // ---------------------------------------------------------------------------------------- waterfall

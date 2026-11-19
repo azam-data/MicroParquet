@@ -374,7 +374,7 @@ pub(crate) fn value_kind(spec: &ChartSpec, measure: usize) -> ValueKind {
     let ml = spec.measure_list();
     let m = ml.get(measure).or(ml.first());
     match m {
-        Some(m) if matches!(m.transform, Transform::ShareOfTotal | Transform::ShareOfCategory | Transform::ShareOfSeries) => ValueKind::Percent,
+        Some(m) if matches!(m.transform, Transform::ShareOfTotal | Transform::ShareOfCategory | Transform::ShareOfSeries) || m.pct => ValueKind::Percent,
         Some(m) if m.agg == ChartAgg::Count => ValueKind::Count,
         Some(m) if m.agg == ChartAgg::WeightedAvg || m.agg == ChartAgg::Average => ValueKind::Plain,
         _ => ValueKind::Amount,
@@ -823,6 +823,9 @@ fn panels_form(b: &mut Builder, data: &ChartData, plans: &[Plan], body: Rect, op
         for r in spec.ref_lines.iter().filter(|r| r.panel == p.index.min(if multi { 0 } else { usize::MAX })) {
             extra.push(r.value);
         }
+        for lt in spec.limit_ticks.iter().filter(|l| l.panel == p.index.min(if multi { 0 } else { usize::MAX })) {
+            extra.push(lt.value);
+        }
         let lo2 = vals.iter().chain(extra.iter()).cloned().fold(f64::INFINITY, f64::min);
         let hi2 = vals.iter().chain(extra.iter()).cloned().fold(f64::NEG_INFINITY, f64::max);
         let max_ticks = ((cell_h / 46.0).floor() as usize).clamp(3, 7);
@@ -1004,7 +1007,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
             // the label goes beside the line where there is room: along the line, above or below it
             let size = b.size(&text, t::LABEL_PT, Face::Regular);
             let mut placed = false;
-            'scan: for side in [-1.0f32, 1.0] {
+            'scan: for side in if horizontal { [1.0f32, -1.0] } else { [-1.0f32, 1.0] } {
                 for k in 0..=8usize {
                     let f = if k % 2 == 0 { 1.0 - k as f32 / 16.0 } else { k as f32 / 16.0 };
                     let (anchor, at) = if horizontal {
@@ -1033,7 +1036,81 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
             }
         }
     }
+    // per-category limit ticks, and the ring and text of a breach (drawn last: on top of the marks)
+    if matches!(p.kind, ChartKind::Bar | ChartKind::Line | ChartKind::Area) {
+        limit_ticks(b, data, p, &geom, band, &band_centre, opts, if multi_index(data) { 0 } else { panel_idx }, plot);
+    }
     let _ = (surface, label_h);
+}
+
+/// Ticks across the category bands at their limits; a breach is ringed on the mark and written beside it.
+#[allow(clippy::too_many_arguments)]
+fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32, centre: &dyn Fn(usize) -> f32, opts: &LayoutOpts, panel_idx: usize, plot: Rect) {
+    let spec = &data.spec;
+    let ink_c = rgb(b.ink.ink);
+    let muted_c = rgb(b.ink.muted);
+    let ticks: Vec<_> = spec.limit_ticks.iter().filter(|l| l.panel == panel_idx).collect();
+    if ticks.is_empty() {
+        return;
+    }
+    let half = (band * 0.35).clamp(8.0, 30.0);
+    let mut breaches: Vec<(Pos2, String, Color32, f32)> = Vec::new();
+    for lt in &ticks {
+        let Some(ci) = p.categories.iter().position(|c| *c == lt.category) else { continue };
+        let col = rgb(lt.status.hex());
+        let (c, v) = (centre(ci), g.coord(scaled(lt.value, p.vk, opts)));
+        if g.horizontal {
+            b.line(pos2(v, c - half), pos2(v, c + half), t::REFERENCE_LINE_PX, col);
+        } else {
+            b.line(pos2(c - half, v), pos2(c + half, v), t::REFERENCE_LINE_PX, col);
+        }
+        if !lt.breach.is_empty() {
+            // the first series' mark of that category
+            let val = p.series.first().and_then(|s| s.vals.get(ci)).copied().flatten();
+            if let Some(val) = val {
+                let m = g.coord(scaled(val, p.vk, opts));
+                let at = if g.horizontal { pos2(m, c) } else { pos2(c, m) };
+                b.out.prims.push(Prim::Outline { c: at, r: t::MARKER_PX / 2.0 + 5.0, w: t::REFERENCE_LINE_PX, col });
+                breaches.push((at, lt.breach.clone(), col, v));
+            }
+        }
+    }
+    for (at, text, _col, tick_v) in breaches {
+        let r = t::MARKER_PX / 2.0 + 5.0 + 3.0;
+        let size = b.size(&text, t::LABEL_PT, Face::Regular);
+        // above the ring and its limit tick, then right of it, then below it: where the text touches nothing
+        let above = if g.horizontal { at.y - r } else { (at.y - r).min(tick_v - 4.0) };
+        let tries = [
+            (Anchor::BottomLeft, pos2(at.x - r, above)),
+            (Anchor::BottomLeft, pos2(at.x - size.x / 2.0, above)),
+            (Anchor::MidLeft, pos2(at.x + r, at.y)),
+            (Anchor::TopLeft, pos2(at.x - r, at.y + r)),
+            (Anchor::BottomRight, pos2(at.x + r, at.y - r)),
+        ];
+        let mut done = false;
+        for (anchor, pos) in tries {
+            if b.try_put(Role::Reference, &text, anchor, pos, t::LABEL_PT, Face::Regular, ink_c).is_some() {
+                done = true;
+                break;
+            }
+        }
+        if !done {
+            // no free place: the text goes above the plot, never clipped
+            let y = plot.top() - size.y / 2.0 - 2.0;
+            b.put(Role::Reference, &text, Anchor::MidLeft, pos2(plot.left() + 4.0, y), t::LABEL_PT, Face::Regular, ink_c);
+        }
+    }
+    if !spec.limit_note.trim().is_empty() {
+        let note = fit_text(&format!("\u{2014} {}", spec.limit_note.trim()), (plot.width() - 6.0).max(40.0), &b.width_fn(t::LABEL_PT, Face::Regular));
+        let size = b.size(&note, t::LABEL_PT, Face::Regular);
+        let cands = [pos2(plot.right() - 2.0, plot.bottom() - 3.0), pos2(plot.right() - 2.0, plot.top() + size.y + 3.0), pos2(plot.left() + size.x + 2.0, plot.top() + size.y + 3.0)];
+        for (k, at) in cands.iter().enumerate() {
+            let anchor = if k < 2 { Anchor::BottomRight } else { Anchor::BottomRight };
+            if b.try_put(Role::Reference, &note, anchor, *at, t::LABEL_PT, Face::Regular, muted_c).is_some() {
+                break;
+            }
+        }
+    }
 }
 
 fn multi_index(data: &ChartData) -> bool {
@@ -1136,7 +1213,9 @@ fn tip_text(data: &ChartData, p: &Plan, s: usize, c: usize, v: Option<f64>, vk: 
     if vk == ValueKind::Percent {
         let ml = spec.measure_list();
         let tr = ml.get(p.measure).map(|m| m.transform).unwrap_or(Transform::None);
-        out.push_str(&format!("\nPercent {}", base_word(tr)));
+        if !base_word(tr).is_empty() {
+            out.push_str(&format!("\nPercent {}", base_word(tr)));
+        }
     }
     out
 }

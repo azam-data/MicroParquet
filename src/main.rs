@@ -279,6 +279,8 @@ pub struct MicroParquetApp {
     pub chart_save: crate::ui::chart_studio::ChartSaveState,
     pub chart_open: crate::ui::chart_studio::ChartOpenState,
     pub chart_book: crate::ui::chart_studio::ChartBookState,
+    /// A template's chart for a tab that is still being opened (by tab id): taken by the studio when the tab is ready.
+    pub chart_pending: HashMap<u64, micro_parquet::charts::spec::ChartSpec>,
     pub runs: RunsState,
     pub packs: PacksState,
     pub mom: MomState,
@@ -409,6 +411,7 @@ impl MicroParquetApp {
             chart_save: Default::default(),
             chart_open: Default::default(),
             chart_book: Default::default(),
+            chart_pending: HashMap::new(),
             runs: RunsState::default(),
             packs: PacksState::default(),
             mom: MomState::default(),

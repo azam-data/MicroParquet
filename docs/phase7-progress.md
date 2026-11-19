@@ -10,6 +10,7 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 
 | C3 | DONE | (see git log: "Phase 7 C3") | tests/phase7/c3.rs ×16 (golden option of all 20 forms, dark option, offline page, vendored file, 2 MB limit, Sankey values, treemap, waterfall bases, donut refusal, marks, theme, advanced JSON, chart book, preview/write, Δ); render_tests_p7 ×1 (Export, Preview, advanced box, Reset, chart book by real clicks at 3 sizes); `tools/html_chart_png.js` loads every page in headless Chromium with the network blocked (no script error, no request) and saves PNGs `docs/guide/img/charts/html-*.png` |
 | C4 | DONE | (see git log: "Phase 7 C4") | tests/phase7/c4.rs ×9 (every form's .xlsx opened as a zip with python3: chart type, series references on the data range, palette colours, waterfall base with no fill, heatmap scale, Δ, notes, sheet names); render_tests_p7 (Export to Excel by a real click at 3 sizes); every workbook also rendered in LibreOffice for `docs/guide/img/charts/xlsx-*.png` |
+| C5 | DONE | (see git log: "Phase 7 C5") | tests/phase7/c5.rs ×8 (each of the 13 templates on its tool's guide example: form, exact finding, three renderers, save/load; gap ladder breach ringed and labelled; limit ticks in HTML and Excel); render_tests_p7 ×2 (gallery cards and a click on the gap ladder card by real rects at 3 sizes, Chart this result) |
 
 ## Deviations (also in `docs/phase7-spec.md` `<accepted_deviations>`)
 
@@ -55,3 +56,12 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 - C4-4: reference lines are a helper column and a 1.5 px line series in the status colour on the same chart; "Chart to Excel…" writes the active chart. A tab in the multi-tab workbook export and a report-pack item get their chart in C6.
 - C4-5: box plots (not listed in the spec) are stacked columns with an invisible base and error-bar whiskers; the whisker columns are on the sheet.
 - C4-6: the Phase 3 Ctrl+K test for "excel" accepts either Excel export as the first hit (there are two now) and still requires the workbook of tabs to be found.
+
+## C5 deviations
+
+- C5-1: the finding titles follow the reference images (`docs/design/charts/01_gap_ladder.png`, `04_irrbb_scenarios.png`), not the longer examples printed in the spec: "Parallel up is the worst case at −10.5% of Tier 1" (one decimal, true minus; the spec's acceptance printed −10.50%) and the breach label "Breach: -16.7% vs −10% limit" (the value like a data label, the limit like an axis tick; the spec printed −16.67%). The gap-ladder title is "Cumulative gap turns positive after 1–3 months" (the first bucket with a positive cumulative gap, as the spec's V3 example). Other templates use the spec's wording; the NII bridge follows the image's "Higher balances explain most of the +13.5 Cr rise in total interest".
+- C5-2: new chart features the templates needed: per-category limit ticks with a breach ring and text (`ChartSpec.limit_ticks`, `limit_note`), drawn in the app, as scatter series in the HTML and as a "Limit" column with dash markers in Excel (the ring is HTML and app only); `MeasureSpec.pct` for numbers that are already percentages ("%" labels).
+- C5-3: a template whose chart needs numbers the tab does not have as columns (ΔEVE % of Tier 1, bridge steps, grade shares, NPL %) opens that small table as a tab (named "Chart: …") and charts it; the others chart the tab as it is.
+- C5-4: not done: the LCR/NSFR "HQLA composition" tall segmented bar (the ratios are drawn against their minimums); the NII bridge is for the total, not per key (filter the tab, then chart); older yield curves are de-emphasised and the latest highlighted but not labelled at their start; the behaviour-profile band is the core balance (volatility method) as a band from zero.
+- C5-5: Classified trend and Behaviour profile read the rows in the tab's view, so a tab with more rows than the view holds is refused with the pivot to make first.
+- C5-6: bar labels of a percentage use one decimal and no plus sign ("-10.5%", "4.8%"); the reference image shows two decimals and "+4.82%".

@@ -174,6 +174,8 @@ pub struct MeasureSpec {
     /// The name in legends and titles; empty = "Sum of Balance" and the like.
     pub label: String,
     pub transform: Transform,
+    /// The numbers are already percentages (a cumulative gap in % of assets, a rate): written with "%".
+    pub pct: bool,
 }
 
 /// One panel of linked panels: a form and the measures (by position in the measure list) it draws.
@@ -237,6 +239,21 @@ pub struct RefBand {
     pub to: f64,
     pub label: String,
     pub panel: usize,
+}
+
+/// A limit that belongs to one category (the minimum cumulative gap of one bucket, the minimum ratio of
+/// one bar): a short tick in the status colour across the category's band at `value`. When `breach` is
+/// not empty the mark of that category is ringed and the text is written beside the ring.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct LimitTick {
+    /// Which panel of linked panels it belongs to (0 = the first or only one).
+    pub panel: usize,
+    pub category: String,
+    pub value: f64,
+    pub status: Status,
+    /// "Breach: -7.1% vs −5% limit"; empty = the category is within its limit.
+    pub breach: String,
 }
 
 /// How the amounts are shown: the value column's own format, or one scale for the chart.
@@ -322,6 +339,10 @@ pub struct ChartSpec {
     pub takeaway: String,
     pub ref_lines: Vec<RefLine>,
     pub ref_bands: Vec<RefBand>,
+    /// Per-category limits (ticks, and rings for breaches).
+    pub limit_ticks: Vec<LimitTick>,
+    /// What the ticks mean, written once under the plot ("red ticks: minimum cumulative gap").
+    pub limit_note: String,
     /// One category or series that is emphasised; the rest are de-emphasised.
     pub highlight: Option<String>,
     pub colour_map: ColourMap,
@@ -359,6 +380,8 @@ impl Default for ChartSpec {
             takeaway: String::new(),
             ref_lines: Vec::new(),
             ref_bands: Vec::new(),
+            limit_ticks: Vec::new(),
+            limit_note: String::new(),
             highlight: None,
             colour_map: ColourMap::default(),
             advanced_json: String::new(),
@@ -371,7 +394,7 @@ impl ChartSpec {
     /// The measures to calculate: `measures`, or the Phase 6 value/agg/weight as the only one.
     pub fn measure_list(&self) -> Vec<MeasureSpec> {
         if self.measures.is_empty() {
-            vec![MeasureSpec { column: self.value.clone(), agg: self.agg, weight: self.weight.clone(), label: String::new(), transform: Transform::None }]
+            vec![MeasureSpec { column: self.value.clone(), agg: self.agg, weight: self.weight.clone(), label: String::new(), transform: Transform::None, pct: false }]
         } else {
             self.measures.clone()
         }

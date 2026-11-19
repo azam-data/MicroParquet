@@ -261,11 +261,10 @@ fn c1_the_screenshots_of_every_form_are_written_when_python_with_pillow_is_there
     let tmp = std::env::temp_dir().join(format!("mp_p7_shots_{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("tmp");
     let (ppp, w, h) = SIZES3[0];
-    for (name, data) in all_forms() {
+    let mut forms = all_forms();
+    forms.extend(template_forms());
+    for (name, data) in forms {
         for dark in [false, true] {
-            if dark && !matches!(name, "stacked" | "heatmap" | "irrbb-reference") {
-                continue;
-            }
             let (ctx, input) = screen(ppp, w, h);
             let _ = draw_chart(&ctx, &input, &data, dark, vec![]);
             let (shown, _) = draw_chart(&ctx, &input, &data, dark, vec![]);
@@ -281,6 +280,34 @@ fn c1_the_screenshots_of_every_form_are_written_when_python_with_pillow_is_there
     let _ = last_shown;
 }
 
+/// The banking templates on their guide examples (name of the screenshot, chart), for the guide's images.
+fn template_forms() -> Vec<(&'static str, ChartData)> {
+    use micro_parquet::charts::samples as sm;
+    use micro_parquet::charts::templates::{prepare, yield_curves, Ctx, Template};
+    let ctx = Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() };
+    let mut out: Vec<(&'static str, ChartData)> = Vec::new();
+    let mut add = |name: &'static str, t: Template, df: DataFrame| {
+        let p = prepare(t, &df, &ctx).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        let src = p.table.unwrap_or(df);
+        out.push((name, compute(src.lazy(), &p.spec).unwrap_or_else(|e| panic!("{name}: {e:#}"))));
+    };
+    add("tpl-gap-ladder", Template::GapLadder, sm::ladder_table());
+    add("tpl-repricing-gap", Template::RepricingGap, sm::repricing());
+    add("tpl-nii-bridge", Template::NiiBridge, sm::mom_table());
+    add("tpl-cl-migration", Template::ClMigration, sm::cl_matrix_large());
+    add("tpl-classified-trend", Template::ClassifiedTrend, sm::classified());
+    add("tpl-irrbb-scenarios", Template::IrrbbScenarios, sm::irrbb_results());
+    add("tpl-lcr-nsfr", Template::LcrNsfr, sm::lcr_summary());
+    add("tpl-ecl-by-stage", Template::EclByStage, sm::ecl_summary());
+    add("tpl-deposit-mix", Template::DepositMix, sm::mix());
+    add("tpl-rate-profile", Template::RateProfile, sm::rate_bands());
+    add("tpl-behaviour-profile", Template::BehaviourProfile, sm::history(8));
+    add("tpl-data-quality", Template::DataQuality, sm::scorecard());
+    let y = yield_curves(&sm::curves()).expect("curves");
+    out.push(("tpl-yield-curves", compute(y.table.expect("table").lazy(), &y.spec).expect("curves chart")));
+    out
+}
+
 // ------------------------------------------------------------------- Table toggle and the Chart tab
 
 use crate::ui::render_tests_p4::Rig;
@@ -288,9 +315,6 @@ use crate::ui::tests::{open_tab as _open_tab_unused, parquet_source, test_app};
 use std::collections::HashMap;
 
 fn chart_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
-    let mut app = test_app(name);
-    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
-    let root = app.paths.root_dir.clone();
     let n = 250usize;
     let tenors = ["6m", "1y", "1m", "100D", "3m"];
     let df = DataFrame::new(vec![
@@ -299,6 +323,13 @@ fn chart_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
         Series::new("Balance".into(), (0..n).map(|i| 10_000_000.0 + i as f64 * 1_000_000.0).collect::<Vec<f64>>()).into(),
     ])
     .expect("frame");
+    chart_rig_with(name, df, ppp, w, h)
+}
+
+fn chart_rig_with(name: &str, df: DataFrame, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let root = app.paths.root_dir.clone();
     let src = parquet_source(&root, "book", df);
     app.create_tab_from_source("book".into(), src, vec![], HashMap::new());
     crate::ui::tests::settle(&mut app);
@@ -744,5 +775,86 @@ fn c3_export_preview_advanced_options_and_the_chart_book_work_by_real_clicks() {
         assert!(b.contains("<h1>ALCO charts</h1>"), "{what}");
         assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed");
     }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+// ------------------------------------------------------------------------------------------------ C5
+
+use micro_parquet::charts::samples::ladder_table;
+
+fn settle_tabs(rig: &mut Rig, tabs: usize) {
+    for _ in 0..200 {
+        rig.draw(2);
+        if rig.app.tabs.len() >= tabs && !rig.app.chart.busy && rig.app.chart.data.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn c5_the_gallery_lists_the_banking_templates_and_a_click_on_the_gap_ladder_charts_it_with_the_breach_ringed() {
+    use micro_parquet::charts::layout::Prim;
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig_with("p7c5gal", ladder_table(), ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(6);
+        rig.app.run_command(&rig.ctx, CommandId::ChartNew);
+        rig.draw(6);
+        let dlg = theme::dialog_report(&rig.ctx, &gallery_title()).expect("the dialog");
+        let g = rig.app.chart_gallery.rects.clone();
+        assert_eq!(g.templates.len(), 13, "{what}: every banking template has a card");
+        for (i, (a, ra)) in g.templates.iter().enumerate() {
+            for (b, rb) in g.templates.iter().skip(i + 1) {
+                assert!(!overlap(*ra, *rb), "{what}: the template cards '{a}' and '{b}' overlap");
+            }
+        }
+        // a card that does not fit this tab says why, and the gallery stays open
+        let at = dlg.body.center();
+        let r = scroll_into_view(&mut rig, at, &|rig: &Rig| rig.app.chart_gallery.rects.templates.iter().find(|(n, _)| n == "irrbb-scenarios").map(|(_, r)| *r), "the IRRBB card");
+        assert!(inside(r, dlg.window), "{what}: the IRRBB card is in the dialog");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartGallery, "{what}: a template that does not fit leaves the gallery open");
+        let msg = rig.app.chart_gallery.template_message.clone().unwrap_or_default();
+        assert!(msg.contains("no column 'Scenario'") && msg.contains("IRRBB"), "{what}: {msg}");
+        // the gap ladder card fits: click it
+        let r = scroll_clear_of_header(&mut rig, at, &|rig: &Rig| rig.app.chart_gallery.rects.templates.iter().find(|(n, _)| n == "gap-ladder").map(|(_, r)| *r), "the gap ladder card", dlg.body.top() + 4.0);
+        assert!(inside(r, dlg.window), "{what}: the gap ladder card is in the dialog");
+        pclick(&mut rig, r);
+        settle_tabs(&mut rig, 2);
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the gallery closed");
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: the chart's table is a tab of its own");
+        assert_eq!(rig.app.tabs[rig.app.active_tab].title, "Chart: gap ladder", "{what}");
+        assert_eq!(rig.app.chart.spec.title, "Cumulative gap turns positive after 1\u{2013}3 months", "{what}: the finding is the title");
+        assert_eq!(rig.app.chart.spec.panels.len(), 2, "{what}: linked panels");
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert!(shown.layout.message.is_none(), "{what}: {:?} {:?}", shown.layout.message, rig.app.chart.error);
+        assert!(shown.layout.texts.iter().any(|t| t.role == Role::Title && t.text.starts_with("Cumulative gap turns positive")), "{what}: the finding is drawn as the title");
+        assert!(shown.layout.texts.iter().any(|t| t.role == Role::Reference && t.text == "Breach: -16.7% vs \u{2212}10% limit"), "{what}: the breach is labelled");
+        assert_eq!(shown.layout.prims.iter().filter(|p| matches!(p, Prim::Outline { .. })).count(), 1, "{what}: and ringed");
+        // (the side panel's right edge can round up by a pixel at a fractional scale)
+        assert_rules(&shown, rig.ctx.screen_rect().expand(2.0), &what);
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn c5_chart_this_applies_the_one_template_that_fits_and_says_so_when_none_does() {
+    let mut rig = chart_rig_with("p7c5this", ladder_table(), 1.05, 1291.0, 700.0);
+    rig.draw(6);
+    rig.app.chart_this_result();
+    settle_tabs(&mut rig, 2);
+    rig.draw(4);
+    // (the status line is taken over by the new tab's loading message: the finding is the chart's title)
+    assert_eq!(rig.app.tabs.len(), 2, "the template's table opened as a tab");
+    assert_eq!(rig.app.chart.spec.title, "Cumulative gap turns positive after 1\u{2013}3 months");
+    assert!(rig.app.chart.spec.takeaway.is_empty(), "the takeaway is left for the user: the studio is still editable");
+    // a tab no template fits: the studio opens and the message points at the gallery
+    let mut rig = chart_rig("p7c5none", 1.05, 1291.0, 700.0);
+    rig.draw(6);
+    rig.app.chart_this_result();
+    assert!(rig.app.status_message.contains("No banking template fits"), "{}", rig.app.status_message);
     micro_parquet::rules::set_data_dir_override(None);
 }
