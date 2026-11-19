@@ -1,5 +1,6 @@
 //! Build script: records the build date (UTC, YYYY-MM-DD) for Help > About MicroParquet.
 //! `SOURCE_DATE_EPOCH` (seconds since 1970) makes a build reproducible.
+//! On Windows it also embeds the app icon (`assets/icon/microparquet.ico`) into the .exe.
 
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     // days since 1970-01-01 to a calendar date (Howard Hinnant's algorithm)
@@ -25,4 +26,15 @@ fn main() {
         .unwrap_or(0);
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     println!("cargo:rustc-env=MP_BUILD_DATE={:04}-{:02}-{:02}", y, m, d);
+
+    // The .exe's own icon (Explorer, a pinned taskbar shortcut); the window icon is set at run time.
+    #[cfg(windows)]
+    {
+        println!("cargo:rerun-if-changed=assets/icon/microparquet.ico");
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/icon/microparquet.ico");
+        if let Err(e) = res.compile() {
+            panic!("Could not embed the Windows icon (assets/icon/microparquet.ico): {e}");
+        }
+    }
 }

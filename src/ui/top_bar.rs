@@ -216,14 +216,7 @@ impl MicroParquetApp {
 
         // app mark
         let (rect, _) = ui.allocate_exact_size(egui::vec2(theme::APP_MARK_SIZE, theme::APP_MARK_SIZE), egui::Sense::hover());
-        ui.painter().rect_filled(rect, theme::APP_MARK_RADIUS, tk.accent);
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "M",
-            egui::FontId::new(theme::TEXT_MARK, theme::family_bold()),
-            theme::on_accent(self.dark_mode),
-        );
+        theme::paint_app_logo(ui.painter(), rect);
         rects.push(("Mark".to_string(), rect));
 
         // the menus: File, Edit, View, Banking, Export, Help (they never fold)

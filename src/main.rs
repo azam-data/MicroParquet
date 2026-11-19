@@ -76,7 +76,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title(ui::tabs::window_title(None))
             .with_inner_size(theme::WINDOW_SIZE)
-            .with_min_inner_size(theme::WINDOW_MIN_SIZE),
+            .with_min_inner_size(theme::WINDOW_MIN_SIZE)
+            .with_icon(std::sync::Arc::new(theme::app_icon())),
         ..Default::default()
     };
 

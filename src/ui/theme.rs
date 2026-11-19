@@ -178,6 +178,42 @@ pub const SCHEMA_COL_MIN_W: f32 = 60.0;
 /// Top bar pieces.
 pub const APP_MARK_SIZE: f32 = 18.0;
 pub const APP_MARK_RADIUS: f32 = 4.0;
+
+/// The app logo (assets/icon/microparquet.svg): a navy tile with three rising column-planks, drawn
+/// in a 1024-unit design square. The menu-bar mark paints it with these; the window and taskbar
+/// icon is the rendered `assets/icon/icon_256.rgba`.
+pub const LOGO_TILE: Color32 = hex(0x1F3A5F);
+pub const LOGO_PLANKS: [Color32; 3] = [hex(0x9CC3F0), hex(0xFFFFFF), hex(0x5B9BE6)];
+const LOGO_UNITS: f32 = 1024.0;
+const LOGO_PLANK_X: [f32; 3] = [175.0, 417.0, 659.0];
+const LOGO_PLANK_W: f32 = 190.0;
+const LOGO_PLANK_TOP: [f32; 3] = [470.0, 340.0, 210.0];
+const LOGO_PLANK_BASE: f32 = 820.0;
+const LOGO_PLANK_ROUND: f32 = 34.0;
+/// Side of the window icon (`assets/icon/icon_256.rgba`, RGBA, 4 bytes a pixel).
+pub const APP_ICON_SIDE: u32 = 256;
+
+/// Paints the app logo in `rect` (a square): the tile, then the three planks.
+pub fn paint_app_logo(painter: &egui::Painter, rect: egui::Rect) {
+    let s = rect.width() / LOGO_UNITS;
+    painter.rect_filled(rect, APP_MARK_RADIUS, LOGO_TILE);
+    for i in 0..3 {
+        let plank = egui::Rect::from_min_max(
+            rect.min + egui::vec2(LOGO_PLANK_X[i] * s, LOGO_PLANK_TOP[i] * s),
+            rect.min + egui::vec2((LOGO_PLANK_X[i] + LOGO_PLANK_W) * s, LOGO_PLANK_BASE * s),
+        );
+        painter.rect_filled(plank, LOGO_PLANK_ROUND * s, LOGO_PLANKS[i]);
+    }
+}
+
+/// The window and taskbar icon (replaces eframe's default "e").
+pub fn app_icon() -> egui::IconData {
+    egui::IconData {
+        rgba: include_bytes!("../../assets/icon/icon_256.rgba").to_vec(),
+        width: APP_ICON_SIDE,
+        height: APP_ICON_SIDE,
+    }
+}
 pub const TEXT_MARK: f32 = 11.0;
 pub const TEXT_KEYCAP: f32 = 11.0;
 pub const BAR_ITEM_GAP: f32 = 2.0;
@@ -1246,6 +1282,18 @@ pub fn warning_label(ui: &mut egui::Ui, msg: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn app_icon_is_a_256_square_with_transparent_corners() {
+        let icon = super::app_icon();
+        let side = super::APP_ICON_SIDE as usize;
+        assert_eq!((icon.width, icon.height), (super::APP_ICON_SIDE, super::APP_ICON_SIDE));
+        assert_eq!(icon.rgba.len(), side * side * 4);
+        // the rounded tile leaves the corner transparent and fills the middle
+        assert_eq!(icon.rgba[3], 0);
+        let mid = (side / 2 * side + side / 2) * 4;
+        assert_eq!(icon.rgba[mid + 3], 255);
+    }
     use super::*;
 
     #[test]
