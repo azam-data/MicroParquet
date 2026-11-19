@@ -64,6 +64,7 @@ fn monthly_pack() -> ReportPack {
         cutoff: "2020-01-31".into(),
         null_as_sight: true,
         behaviour_file: String::new(),
+        stress_tdrr: false,
     });
     let cl1 = ToolRun::Cl1Summary(Cl1SummaryRun {
         source: "Loans".into(),

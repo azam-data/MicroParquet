@@ -1692,7 +1692,7 @@ fn p1_every_tool_dialog_takes_its_inputs_from_a_saved_run() {
 
     let cf = CfInputSpec { role: P1GapRole::Side("SIDE".into()), principal_col: "BAL".into(), rate_col: Some("RATE".into()), maturity_col: "MAT".into(), default_currency: "BDT".into(), ..Default::default() };
     // gap ladder
-    let run = ToolRun::GapLadder(GapLadderRun { inputs: vec![GapInputRun { source: names("Loans"), spec: GapInputSpec { role: P1GapRole::Side("SIDE".into()), amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: "ACNO".into() }, GapInputRun { source: names("Sept"), spec: GapInputSpec { role: P1GapRole::Liability, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() }], preset: CustomBucketDef::default_presets()[1].name.clone(), preset_def: None, cutoff: "2026-09-30".into(), null_as_sight: false, behaviour_file: String::new() });
+    let run = ToolRun::GapLadder(GapLadderRun { inputs: vec![GapInputRun { source: names("Loans"), spec: GapInputSpec { role: P1GapRole::Side("SIDE".into()), amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: "ACNO".into() }, GapInputRun { source: names("Sept"), spec: GapInputSpec { role: P1GapRole::Liability, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() }], preset: CustomBucketDef::default_presets()[1].name.clone(), preset_def: None, cutoff: "2026-09-30".into(), null_as_sight: false, behaviour_file: String::new(), stress_tdrr: false });
     rig.app.prefill_run(&run).expect("gap");
     assert_eq!(rig.app.active_tool, ActiveToolModal::GapLadder);
     let g = &rig.app.gap;
@@ -2192,4 +2192,50 @@ fn p5_a_product_without_a_weightage_stops_the_build_and_is_named() {
     assert_eq!(rig.app.tabs.len(), 1, "no tab is made");
     assert!(rig.app.status_message.contains("MFD-X") && rig.app.status_message.contains("no weightage"), "{}", rig.app.status_message);
     micro_parquet::rules::set_data_dir_override(None);
+}
+
+// ---- P6: the gap ladder's TDRR stress option
+
+#[test]
+fn p6_the_gap_dialog_has_the_stress_option_that_needs_a_profile_and_names_the_tab_stressed() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = p1_rig("p6p6a", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        let dir = root.join("behaviour");
+        std::fs::create_dir_all(&dir).expect("folder");
+        std::fs::write(dir.join("2026-10-31.json"), r#"{"as_of":"2026-10-31","source":"test","sample":false,"products":[{"product":"A1","tdrr_pct":10}]}"#).expect("profile");
+        rig.app.active_tab = 0;
+        rig.app.run_command(&rig.ctx, CommandId::GapLadder);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::GapLadder, "{what}");
+        rig.draw(8);
+        let title = format!("{}  Liquidity gap ladder", theme::ph::CHART_BAR);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        let setting = |rig: &Rig, n: &str| rig.app.gap.rects.settings.iter().find(|(x, _)| x == n).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the setting '{n}'", rig.what));
+        let stress = setting(&rig, "Stress TDRR");
+        assert!(inside(stress, r.window), "{what}: the stress option {stress:?} is inside the dialog {:?}", r.window);
+        // it is greyed until a profile is applied: a click does nothing
+        pclick(&mut rig, stress);
+        assert!(!rig.app.gap.stress_tdrr, "{what}: disabled without a behaviour profile");
+        // apply the profile by a click on its checkbox, choose the file, then the stress by a click
+        let apply = setting(&rig, "Apply behaviour profile");
+        pclick(&mut rig, apply);
+        assert!(rig.app.gap.apply_behaviour, "{what}");
+        rig.app.gap.behaviour_sel = "2026-10-31.json".into();
+        rig.app.gap.rows[0].product_col = "ACNO".into();
+        rig.app.gap.rows[0].amount_col = "BAL".into();
+        rig.app.gap.rows[0].maturity_col = "MAT".into();
+        rig.app.gap.cutoff = "2026-10-31".into();
+        rig.draw(8);
+        let stress = setting(&rig, "Stress TDRR");
+        pclick(&mut rig, stress);
+        assert!(rig.app.gap.stress_tdrr, "{what}: ticked by a click");
+        let (title, source) = rig.app.gap_ladder_source().unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(title.ends_with("(stressed)"), "{what}: {title}");
+        assert!(matches!(&source, TabSource::GapLadder { behaviour: Some(b), .. } if b.stress_tdrr), "{what}");
+        // unticked, the name is as before
+        rig.app.gap.stress_tdrr = false;
+        assert!(!rig.app.gap_ladder_source().expect("source").0.contains("stressed"), "{what}");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
 }

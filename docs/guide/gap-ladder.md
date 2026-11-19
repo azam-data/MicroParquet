@@ -33,6 +33,7 @@ Lays out the bank's inflows (assets) and outflows (liabilities) by maturity buck
 4. Choose "Bucket preset:" and type "Cutoff date (YYYY-MM-DD):".
 5. Leave "Treat a blank maturity as sight" ticked for current and savings accounts, or untick it to put them in the preset's long bucket.
 6. Optional: tick "Apply behaviour profile", choose the file made in the Behaviour profile tool, and choose the "Product" column of each line. The volatile part of each profiled deposit then goes in the first bucket and its core part in the bucket that holds its average maturity (see behaviour-profile.md). Unticked, the ladder is as it was.
+6b. Optional liquidity stress: with the behaviour profile applied, tick "Stress: early withdrawal (TDRR)". For each term-deposit product of the profile (a product with no category and a TDRR above 0), its TDRR × its balance moves from its maturity bucket to the first bucket, and the tab's name ends "(stressed)". A term deposit of 1,000 in the 1–3 months bucket with a TDRR of 10% then has 100 in the first bucket and 900 in 1–3 months; unticked, 1,000 stays in 1–3 months.
 7. Read the note under the settings: it says whether a limits file was found for the preset.
 8. Click "Build gap ladder". The ladder opens in a new tab "Gap ladder (preset)". Limits are read when the tab is built: build again after you change the file.
 
@@ -123,7 +124,7 @@ Test: `guide_gap_ladder`
 ## 10. Limits and assumptions
 
 - Without "Apply behaviour profile" a deposit with no maturity date is placed wholly in the sight bucket (or the long bucket), which overstates the early outflows. With it, only the split of non-maturity deposits (volatile part in the first bucket, core part at its average maturity) changes.
-- The gap ladder has no loan prepayment (CPR) and no term deposit early redemption (TDRR), by decision: a CPR or TDRR in the behaviour profile changes nothing here, and every loan and term deposit stays in the bucket of its contractual maturity. Use Banking ▸ Treasury & ALM ▸ "IRRBB cash-flow ladder" (or "IRRBB (six scenarios)") when you need them.
+- The gap ladder has no loan prepayment (CPR), by decision: a CPR in the behaviour profile changes nothing here. A TDRR changes the ladder only when "Stress: early withdrawal (TDRR)" is ticked (it is a stress, not the base case); otherwise every term deposit stays in the bucket of its contractual maturity. With the stress on, the profile must have at least one term deposit with a TDRR above 0, or the ladder is refused. Assets are never stressed, and the total outflow does not change: the money only moves to the first bucket. Use Banking ▸ Treasury & ALM ▸ "IRRBB cash-flow ladder" (or "IRRBB (six scenarios)") when you need them.
 - Contractual maturity only; no prepayment, rollover or off-balance-sheet items unless you add them as rows.
 - One currency at a time: filter the tabs first.
 - The limits are minimum cumulative gaps as a percentage of total assets; other limit types are not checked.

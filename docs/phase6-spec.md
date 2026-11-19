@@ -385,4 +385,6 @@ P4 (details in docs/phase6-progress.md D41–D44):
 - The tool is in the Transform menu (there is no Data menu); the type rule shows examples, not rows; rule sets are `dq_rules/<name>.json` with a sample written on first use.
 P5 (details in docs/phase6-progress.md D45–D47):
 - CRR, PSR and weightages come only from the parameter file (shown, not typed); the footer is rows of the same table; Banking gets the heading "Islamic window".
+P6 (details in docs/phase6-progress.md D48–D50):
+- The stress needs a behaviour profile with a term deposit that has a TDRR (else refused); a `plan` job makes the build matrix from the "platforms" input.
 </accepted_deviations>

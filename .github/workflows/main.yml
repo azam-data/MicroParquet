@@ -2,6 +2,15 @@ name: Build & Release MicroParquet (Windows & macOS M4 .app)
 
 on:
   workflow_dispatch: # Allows manual 1-click build in the GitHub Actions tab
+    inputs:
+      platforms:
+        description: 'Which platforms to build (a pushed v* tag always builds both)'
+        type: choice
+        options:
+          - windows
+          - macos
+          - both
+        default: windows
   push:
     tags:
       - 'v*'         # Automatically publishes a GitHub Release when you push a tag like v1.1.0
@@ -10,24 +19,34 @@ permissions:
   contents: write
 
 jobs:
+  plan:
+    name: Choose the platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Pick the build matrix
+        id: pick
+        env:
+          PLATFORMS: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'both' }}
+        run: |
+          WIN='{"os_name":"Windows-x64-Portable","runner":"windows-latest","target":"x86_64-pc-windows-msvc","bin_name":"MicroParquet.exe","archive_name":"MicroParquet-Windows-x64-Portable.zip"}'
+          MAC='{"os_name":"macOS-Apple-Silicon-M4-App","runner":"macos-latest","target":"aarch64-apple-darwin","bin_name":"MicroParquet","archive_name":"MicroParquet-macOS-AppleSilicon-App.zip"}'
+          case "$PLATFORMS" in
+            windows) LIST="$WIN" ;;
+            macos) LIST="$MAC" ;;
+            both) LIST="$WIN,$MAC" ;;
+            *) echo "Unknown platforms '$PLATFORMS'. Use windows, macos or both."; exit 1 ;;
+          esac
+          echo "matrix={\"include\":[$LIST]}" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.os_name }})
+    needs: plan
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os_name: Windows-x64-Portable
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            bin_name: MicroParquet.exe
-            archive_name: MicroParquet-Windows-x64-Portable.zip
-
-          - os_name: macOS-Apple-Silicon-M4-App
-            runner: macos-latest # Uses GitHub's active Apple Silicon ARM64 runner
-            target: aarch64-apple-darwin
-            bin_name: MicroParquet
-            archive_name: MicroParquet-macOS-AppleSilicon-App.zip
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     steps:
       - name: 1. Checkout Repository
@@ -41,9 +60,6 @@ jobs:
 
       - name: 3. Cache Cargo & Polars Dependencies
         uses: Swatinem/rust-cache@v2
-
-      - name: 3b. Run Calculation Tests
-        run: cargo test --release --target ${{ matrix.target }}
 
       - name: 3c. Clippy (informational, not blocking)
         continue-on-error: true

@@ -74,11 +74,13 @@ pub struct GapLadderRun {
     pub null_as_sight: bool,
     /// The behaviour profile's file name ("" = none, the Phase 4 ladder).
     pub behaviour_file: String,
+    /// "Stress: early withdrawal (TDRR)" (needs the behaviour profile).
+    pub stress_tdrr: bool,
 }
 
 impl Default for GapLadderRun {
     fn default() -> Self {
-        Self { inputs: Vec::new(), preset: String::new(), preset_def: None, cutoff: String::new(), null_as_sight: true, behaviour_file: String::new() }
+        Self { inputs: Vec::new(), preset: String::new(), preset_def: None, cutoff: String::new(), null_as_sight: true, behaviour_file: String::new(), stress_tdrr: false }
     }
 }
 
@@ -387,7 +389,7 @@ impl ToolRun {
                     let product_col = behaviour.as_ref().and_then(|b| b.product_cols.get(i).cloned()).unwrap_or_default();
                     runs.push(GapInputRun { source: name(&inp.source, &inp.steps)?, spec: inp.spec.clone(), product_col });
                 }
-                Ok(ToolRun::GapLadder(GapLadderRun { inputs: runs, preset: preset.name.clone(), preset_def: Some(preset.clone()), cutoff: cutoff_date.clone(), null_as_sight: *null_as_sight, behaviour_file: behaviour.as_ref().map(|b| b.file_name.clone()).unwrap_or_default() }))
+                Ok(ToolRun::GapLadder(GapLadderRun { inputs: runs, preset: preset.name.clone(), preset_def: Some(preset.clone()), cutoff: cutoff_date.clone(), null_as_sight: *null_as_sight, behaviour_file: behaviour.as_ref().map(|b| b.file_name.clone()).unwrap_or_default(), stress_tdrr: behaviour.as_ref().is_some_and(|b| b.stress_tdrr) }))
             }
             TabSource::IrrbbLadder { inputs, cutoff_date, mode, scenario, behaviour, blank_maturity_on } => {
                 no_extra_steps(tab_steps)?;
@@ -514,9 +516,12 @@ impl ToolRun {
                         product_cols.push(i.product_col.clone());
                     }
                     let file = crate::behaviour::load_behaviour(&crate::rules::behaviour_dir(), &r.behaviour_file)?.data;
-                    Some(GapBehaviour { file_name: r.behaviour_file.clone(), file, product_cols })
+                    Some(GapBehaviour { file_name: r.behaviour_file.clone(), file, product_cols, stress_tdrr: r.stress_tdrr })
                 };
-                let title = format!("Gap ladder ({})", preset.name);
+                if r.stress_tdrr && behaviour.is_none() {
+                    bail!("The saved gap ladder has the TDRR stress on but no behaviour profile. Choose a profile in the dialog.");
+                }
+                let title = if r.stress_tdrr { format!("Gap ladder ({}) (stressed)", preset.name) } else { format!("Gap ladder ({})", preset.name) };
                 Ok(vec![(title, TabSource::GapLadder { inputs, preset, cutoff_date: r.cutoff.trim().to_string(), null_as_sight: r.null_as_sight, limits, behaviour })])
             }
             ToolRun::IrrbbLadder(r) => {

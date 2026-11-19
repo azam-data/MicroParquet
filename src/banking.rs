@@ -2332,6 +2332,9 @@ pub struct GapBehaviour {
     pub file_name: String,
     pub file: crate::behaviour::BehaviourFile,
     pub product_cols: Vec<String>,
+    /// "Stress: early withdrawal (TDRR)" (Phase 6 P6): for each term-deposit product of the profile
+    /// (one with no category and a TDRR), TDRR × its balance moves from its maturity bucket to the first bucket.
+    pub stress_tdrr: bool,
 }
 
 /// The label of the bucket that holds `days` days after the cutoff (a negative number is overdue).
@@ -2378,6 +2381,14 @@ pub fn build_gap_ladder_behaviour(
                 .collect()
         })
         .unwrap_or_default();
+    // the term-deposit products of the profile with an early-redemption rate, when the stress is on
+    let td: Vec<(String, f64)> = match behaviour {
+        Some(b) if b.stress_tdrr => b.file.products.iter().filter(|p| !p.is_nmd() && p.tdrr_pct > 0.0).map(|p| (crate::behaviour::normalise_product(&p.product), (p.tdrr_pct / 100.0).clamp(0.0, 1.0))).collect(),
+        _ => Vec::new(),
+    };
+    if behaviour.is_some_and(|b| b.stress_tdrr) && td.is_empty() {
+        bail!("Gap ladder: \"Stress: early withdrawal (TDRR)\" is on, but the behaviour profile has no term-deposit product with a TDRR above 0. Add the TDRR of the term deposits in the behaviour profile, or turn the stress off.");
+    }
     let mut parts: Vec<LazyFrame> = Vec::new();
     for (idx, (lf, spec)) in inputs.into_iter().enumerate() {
         let mut lf = lf;
@@ -2411,13 +2422,18 @@ pub fn build_gap_ladder_behaviour(
                 when(sign.clone().lt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__out"),
             ])
         };
-        match (&product_col, nmd.is_empty()) {
-            (Some(pc), false) => {
+        match &product_col {
+            Some(pc) if !nmd.is_empty() || !td.is_empty() => {
                 let code = normalise_code_expr(col(pc.as_str()));
                 let core = nmd.iter().rev().fold(lit(NULL).cast(DataType::Float64), |acc, (c, core, _)| when(code.clone().eq(lit(c.clone()))).then(lit(*core)).otherwise(acc));
                 let core_bucket = nmd.iter().rev().fold(lit(NULL).cast(DataType::String), |acc, (c, _, b)| when(code.clone().eq(lit(c.clone()))).then(lit(b.clone())).otherwise(acc));
+                let tdrr = td.iter().rev().fold(lit(NULL).cast(DataType::Float64), |acc, (c, r)| when(code.clone().eq(lit(c.clone()))).then(lit(*r)).otherwise(acc));
                 let is_nmd = core.clone().is_not_null().and(sign.clone().lt(lit(0.0)));
-                parts.push(normal(lf.clone().filter(is_nmd.clone().not())));
+                // a term deposit under stress: its early-withdrawn part moves to the first bucket, the rest stays in its own
+                let is_td = tdrr.clone().is_not_null().and(sign.clone().lt(lit(0.0))).and(is_nmd.clone().not());
+                parts.push(normal(lf.clone().filter(is_nmd.clone().not().and(is_td.clone().not()))));
+                parts.push(lf.clone().filter(is_td.clone()).select([col("__bucket"), lit(0.0).alias("__in"), (amt.clone() * (lit(1.0) - tdrr.clone())).alias("__out")]));
+                parts.push(lf.clone().filter(is_td).select([lit(order[0].clone()).alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * tdrr).alias("__out")]));
                 // the volatile part: first bucket; the core part: the bucket of the average maturity (outflows)
                 parts.push(lf.clone().filter(is_nmd.clone()).select([lit(order[0].clone()).alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * (lit(1.0) - core.clone())).alias("__out")]));
                 parts.push(lf.filter(is_nmd).select([core_bucket.alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * core).alias("__out")]));

@@ -162,6 +162,7 @@ impl MicroParquetApp {
                 self.gap.null_as_sight = r.null_as_sight;
                 self.gap.limits = None;
                 self.gap.apply_behaviour = !r.behaviour_file.is_empty();
+                self.gap.stress_tdrr = r.stress_tdrr;
                 if !r.behaviour_file.is_empty() {
                     self.gap.behaviour_sel = r.behaviour_file.clone();
                 }
