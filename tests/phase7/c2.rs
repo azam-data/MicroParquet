@@ -192,6 +192,7 @@ fn c2_the_charts_group_has_its_four_commands_with_reasons_when_they_cannot_run()
     // the chart book (C3) and the HTML export of one chart need an open tab
     assert!(why(CommandId::ChartBook, st(0, false)).is_some() && why(CommandId::ChartBook, st(3, true)).is_none());
     assert!(why(CommandId::ExportChartHtml, st(0, false)).is_some() && why(CommandId::ExportChartHtml, st(1, false)).is_none());
+    assert!(why(CommandId::ExportChartXlsx, st(0, false)).is_some() && why(CommandId::ExportChartXlsx, st(1, false)).is_none());
     // Ctrl+K finds them by what they do
     let entries: Vec<micro_parquet::commands::Entry> = micro_parquet::commands::COMMANDS.iter().map(|c| micro_parquet::commands::Entry { label: c.title, words: c.words, recent: None }).collect();
     let top = |q: &str| micro_parquet::commands::COMMANDS[micro_parquet::commands::rank(q, &entries)[0]].id;

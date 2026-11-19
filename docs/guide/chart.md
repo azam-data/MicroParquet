@@ -39,7 +39,8 @@ Draws bars or a line of one number by one category, calculated over the whole ta
 10. "Export to HTML…" (also Export ▸ "Chart to HTML…") writes the chart as one web page. It has the title, subtitle and footnote, a Table switch, a light/dark switch and a toolbox with "Save as PNG", "Save as SVG" and "Data view". The page works offline and contains no web address: send it by e-mail or put it on a share.
 11. "Preview in browser" writes the same page to a temporary file and opens it with your default browser. Sankey and Treemap are drawn only this way (the chart in the app says so).
 12. "Advanced options (HTML only)" is a box for JSON that is merged over the page's ECharts option, for what the controls cannot do. It is checked as you type (a mistake is shown with its line and column); "Reset" clears it. The chart in the app and the Excel chart never use it.
-13. Charts ▸ "Chart book (HTML)…" puts several saved charts of the active tab on one page: a title, the date and a two-column grid.
+13. "Export to Excel…" (also Export ▸ "Chart to Excel…") writes a workbook: the chart's numbers on a sheet and a native Excel chart beside them (editable in Excel and Power BI), in the same palette and Segoe UI. A waterfall is a stacked column with an invisible base series; a heatmap is the table under a three-colour scale; linked panels and small multiples are one chart each, one under the other; a bubble chart is written as a scatter, a stepped line as an ordinary line, and Sankey and treemap only as data, each with a note on the sheet.
+14. Charts ▸ "Chart book (HTML)…" puts several saved charts of the active tab on one page: a title, the date and a two-column grid.
 
 ## 6. What you get
 

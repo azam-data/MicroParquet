@@ -14,3 +14,4 @@ pub mod spec;
 pub mod suggest;
 pub mod thumbnail;
 pub mod tokens;
+pub mod xlsx;

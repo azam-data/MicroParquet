@@ -69,10 +69,6 @@ fn hx(c: u32) -> String {
     t::hex_text(c)
 }
 
-fn opt_num(v: Option<f64>) -> Value {
-    v.map(num).unwrap_or(Value::Null)
-}
-
 /// Text for a literal ECharts label: the template syntax `{...}` is not meant here.
 fn lit(s: &str) -> String {
     t::delta(s).replace('{', "(").replace('}', ")")

@@ -108,3 +108,5 @@ mod p7_c2;
 mod p7_d;
 #[path = "../phase7/c3.rs"]
 mod p7_c3;
+#[path = "../phase7/c4.rs"]
+mod p7_c4;

@@ -9,6 +9,7 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 | C2 | DONE | (see git log: "Phase 7 C2") | tests/phase7/c2.rs ×9 (suggestion rules, gallery catalogue, card to columns, saved charts round trip and plain errors, Charts commands and Ctrl+K); render_tests_p7 ×4 (Charts menu order and clicks, gallery cards/suggest by real rects at 3 sizes, studio sections typed and clicked, save and open by real clicks) |
 
 | C3 | DONE | (see git log: "Phase 7 C3") | tests/phase7/c3.rs ×16 (golden option of all 20 forms, dark option, offline page, vendored file, 2 MB limit, Sankey values, treemap, waterfall bases, donut refusal, marks, theme, advanced JSON, chart book, preview/write, Δ); render_tests_p7 ×1 (Export, Preview, advanced box, Reset, chart book by real clicks at 3 sizes); `tools/html_chart_png.js` loads every page in headless Chromium with the network blocked (no script error, no request) and saves PNGs `docs/guide/img/charts/html-*.png` |
+| C4 | DONE | (see git log: "Phase 7 C4") | tests/phase7/c4.rs ×9 (every form's .xlsx opened as a zip with python3: chart type, series references on the data range, palette colours, waterfall base with no fill, heatmap scale, Δ, notes, sheet names); render_tests_p7 (Export to Excel by a real click at 3 sizes); every workbook also rendered in LibreOffice for `docs/guide/img/charts/xlsx-*.png` |
 
 ## Deviations (also in `docs/phase7-spec.md` `<accepted_deviations>`)
 
@@ -45,3 +46,12 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 - C3-5: Sankey node names are "From STD" / "To STD" (a grade is on both sides) and their label shows the grade; node values are the sums of their links. A flow table needs the Series column (from) and the Category column (to).
 - C3-6: `Needs::Later` was removed from the command list; "Chart book (HTML)…" and "Chart to HTML…" need an open tab. The book dialog lists the saved charts that fit the active tab; the worker calculates each over the whole tab and writes the page (one that cannot be drawn stops the book and nothing is written).
 - C3-7: tests can set `chart.export_path_override`, `chart.no_browser` and `chart_book.path_override`, so a click never opens a file dialog or the browser.
+
+## C4 deviations
+
+- C4-1: the chart's title is the chart title in Excel; the subtitle and footnote are cells above the table (Excel's chart title has one text style, so two sizes in one title are not possible with rust_xlsxwriter).
+- C4-2: Excel has no bubble chart in rust_xlsxwriter 0.79 (a scatter with a note and the size column), no stepped line (an ordinary line, noted), and no cap of 24 px on bars (the gap width is set instead).
+- C4-3: the zip is read by `python3` in the tests (no new crate, so no zip reader in Rust); they are skipped with a note where `python3` is missing.
+- C4-4: reference lines are a helper column and a 1.5 px line series in the status colour on the same chart; "Chart to Excel…" writes the active chart. A tab in the multi-tab workbook export and a report-pack item get their chart in C6.
+- C4-5: box plots (not listed in the spec) are stacked columns with an invisible base and error-bar whiskers; the whisker columns are on the sheet.
+- C4-6: the Phase 3 Ctrl+K test for "excel" accepts either Excel export as the first hit (there are two now) and still requires the workbook of tabs to be found.

@@ -16,11 +16,11 @@ use polars::prelude::*;
 use serde_json::Value;
 use std::path::PathBuf;
 
-fn opts() -> LayoutOpts {
+pub(crate) fn opts() -> LayoutOpts {
     LayoutOpts { dark: false, divisor: 1.0, decimals: 2, unit: "BDT".into(), bare: false, colours: None }
 }
 
-fn frame() -> DataFrame {
+pub(crate) fn frame() -> DataFrame {
     let months = ["May", "Jun", "Jul", "Aug", "Sep", "Oct"];
     let (mut m, mut p, mut v, mut r) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (i, mo) in months.iter().enumerate() {
@@ -34,15 +34,15 @@ fn frame() -> DataFrame {
     DataFrame::new(vec![Series::new("Month".into(), m).into(), Series::new("Product".into(), p).into(), Series::new("Balance".into(), v).into(), Series::new("Rate".into(), r).into()]).unwrap()
 }
 
-fn months() -> SortOrder {
+pub(crate) fn months() -> SortOrder {
     SortOrder::List { name: "m".into(), values: ["May", "Jun", "Jul", "Aug", "Sep", "Oct"].map(String::from).to_vec(), case_insensitive: true }
 }
 
-fn base(kind: ChartKind) -> ChartSpec {
+pub(crate) fn base(kind: ChartKind) -> ChartSpec {
     ChartSpec { category: "Month".into(), series: Some("Product".into()), value: Some("Balance".into()), order: months(), kind, ..Default::default() }
 }
 
-fn data(s: &ChartSpec) -> ChartData {
+pub(crate) fn data(s: &ChartSpec) -> ChartData {
     compute(frame().lazy(), s).unwrap()
 }
 
@@ -58,7 +58,7 @@ fn points() -> DataFrame {
 }
 
 /// The V2 example of the CL migration guide as flows: STD to SMA 100, SS to DF 50, STD closed 30, New to STD 20.
-fn flows() -> DataFrame {
+pub(crate) fn flows() -> DataFrame {
     DataFrame::new(vec![
         Series::new("Previous".into(), ["STD", "SS", "STD", "New"]).into(),
         Series::new("Current".into(), ["SMA", "DF", "Closed/Repaid", "STD"]).into(),
@@ -67,11 +67,11 @@ fn flows() -> DataFrame {
     .unwrap()
 }
 
-fn flow_spec(kind: ChartKind, series: bool) -> ChartSpec {
+pub(crate) fn flow_spec(kind: ChartKind, series: bool) -> ChartSpec {
     ChartSpec { category: "Current".into(), series: if series { Some("Previous".into()) } else { None }, value: Some("Balance".into()), kind, ..Default::default() }
 }
 
-fn bridge() -> ChartData {
+pub(crate) fn bridge() -> ChartData {
     let df = DataFrame::new(vec![Series::new("Step".into(), ["Sep interest", "Volume", "Rate", "Mix", "Oct interest"]).into(), Series::new("Amount".into(), [80.0, 8.0, 5.0, 0.5, 93.5]).into()]).unwrap();
     let s = ChartSpec {
         category: "Step".into(),
@@ -83,7 +83,7 @@ fn bridge() -> ChartData {
     compute(df.lazy(), &s).unwrap()
 }
 
-fn heat() -> ChartData {
+pub(crate) fn heat() -> ChartData {
     let prev = ["STD", "STD", "SMA", "SMA", "SS", "SS", "DF"];
     let cur = ["STD", "SMA", "SMA", "SS", "SS", "DF", "DF"];
     let bal = [930.0, 32.0, 615.0, 143.0, 708.0, 169.0, 80.0];
@@ -94,7 +94,7 @@ fn heat() -> ChartData {
 }
 
 /// Every form, by the name of its golden file.
-fn forms() -> Vec<(&'static str, ChartData)> {
+pub(crate) fn forms() -> Vec<(&'static str, ChartData)> {
     let mut v: Vec<(&'static str, ChartData)> = Vec::new();
     let mut s = base(ChartKind::Bar);
     s.series = None;

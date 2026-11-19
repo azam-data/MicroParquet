@@ -62,6 +62,7 @@ pub enum CommandId {
     ChartBook,
     // Export
     ExportChartHtml,
+    ExportChartXlsx,
     ExportParquet,
     ExportCsv,
     ExportXlsx,
@@ -210,6 +211,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
     c(I::ExportXlsx, "Export tabs to an Excel workbook\u{2026}", G::Export, "xlsx save spreadsheet totals", N::Tab),
     c(I::ExportChartHtml, "Chart to HTML\u{2026}", G::Export, "echarts html page interactive png svg sankey treemap offline web browser share", N::Tab),
+    c(I::ExportChartXlsx, "Chart to Excel\u{2026}", G::Export, "xlsx native editable chart workbook spreadsheet columns bars line waterfall heatmap", N::Tab),
     c(I::ExportCl1, "Export the CL-1 summary to Excel\u{2026}", G::Export, "cl1 excel xlsx template return layout merged headers", N::Tab),
     c(I::ExportPdf, "Export tabs to a PDF report\u{2026}", G::Export, "save print", N::Tab),
     c(I::ExportSplit, "Split export by column\u{2026}", G::Export, "partition branch files", N::Tab),

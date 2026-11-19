@@ -667,6 +667,17 @@ fn c3_export_preview_advanced_options_and_the_chart_book_work_by_real_clicks() {
         assert!(html.contains("class=\"mp-chart\"") && html.contains("echarts"), "{what}");
         let msg = rig.app.chart.export_message.clone().expect("a message");
         assert!(!msg.0 && msg.1.contains("chart.html") && msg.1.contains("needs no internet"), "{what}: {msg:?}");
+        // Export to Excel: a workbook with the numbers and a native chart
+        let book_x = dir.join("chart.xlsx");
+        rig.app.chart.export_path_override = Some(book_x.clone());
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Export to Excel"), "Export to Excel", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(4);
+        let bytes = std::fs::read(&book_x).unwrap_or_else(|e| panic!("{what}: the workbook was written: {e}"));
+        assert!(bytes.starts_with(b"PK"), "{what}: an .xlsx is a zip");
+        let msg = rig.app.chart.export_message.clone().expect("a message");
+        assert!(!msg.0 && msg.1.contains("chart.xlsx") && msg.1.contains("native chart"), "{what}: {msg:?}");
+        rig.app.chart.export_path_override = Some(page.clone());
         // Preview in browser: a temporary file, no browser started by the test
         let r = scroll_clear_of_header(&mut rig, at, &field_rect("Preview in browser"), "Preview in browser", 190.0);
         pclick(&mut rig, r);

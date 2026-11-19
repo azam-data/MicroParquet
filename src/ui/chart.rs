@@ -563,12 +563,17 @@ impl MicroParquetApp {
                 self.open_chart_open();
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let ready = self.chart.data.is_some() && !self.chart.busy;
             let b = ui.add_enabled(ready, egui::Button::new("Export to HTML\u{2026}"));
             rects.fields.push(("Export to HTML".to_string(), b.rect));
             if b.clicked() {
                 self.chart_export_html();
+            }
+            let b = ui.add_enabled(ready, egui::Button::new("Export to Excel\u{2026}"));
+            rects.fields.push(("Export to Excel".to_string(), b.rect));
+            if b.clicked() {
+                self.chart_export_xlsx();
             }
             let b = ui.add_enabled(ready, egui::Button::new("Preview in browser"));
             rects.fields.push(("Preview in browser".to_string(), b.rect));
@@ -657,8 +662,8 @@ impl MicroParquetApp {
     /// Export ▸ "Chart to HTML…": asks where, then writes the one file.
     pub(crate) fn chart_export_html(&mut self) {
         self.chart_attach_tab_pub();
-        let (data, opts) = match self.chart_export_parts() {
-            Ok(x) => x,
+        let data = match self.chart_export_parts() {
+            Ok((d, _)) => d,
             Err(e) => {
                 self.chart.export_message = Some((true, e.clone()));
                 self.status_message = e;
@@ -674,6 +679,47 @@ impl MicroParquetApp {
             return;
         };
         self.chart_write_html_to(&path);
+    }
+
+    /// Export ▸ "Chart to Excel…": the chart's numbers on a sheet with a native Excel chart beside them.
+    pub(crate) fn chart_export_xlsx(&mut self) {
+        self.chart_attach_tab_pub();
+        let data = match self.chart_export_parts() {
+            Ok((d, _)) => d,
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                return;
+            }
+        };
+        let name = format!("{}.xlsx", micro_parquet::charts::echarts::file_stem(&micro_parquet::charts::layout::chart_title(&data)));
+        let picked = match self.chart.export_path_override.clone() {
+            Some(p) => Some(p),
+            None => rfd::FileDialog::new().add_filter("Excel workbook", &["xlsx"]).set_file_name(&name).set_title("Save the chart as an Excel workbook").save_file(),
+        };
+        let Some(path) = picked else {
+            return;
+        };
+        self.chart_write_xlsx_to(&path);
+    }
+
+    /// Writes the workbook to `path` and says so (or why not) in the studio and the status line.
+    pub(crate) fn chart_write_xlsx_to(&mut self, path: &std::path::Path) -> bool {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::xlsx::write_chart_xlsx(path, &d, &o).map_err(|e| format!("{:#}", e)));
+        match r {
+            Ok(info) => {
+                let extra = info.note.map(|n| format!(" {}", n)).unwrap_or_default();
+                let m = format!("Chart written to {}: the numbers on the sheet '{}' and {} native chart(s) beside them.{}", path.display(), info.sheet, info.charts, extra);
+                self.chart.export_message = Some((false, m.clone()));
+                self.status_message = m;
+                true
+            }
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                false
+            }
+        }
     }
 
     /// Writes the chart's page to `path` and says so (or why not) in the studio and the status line.

@@ -69,7 +69,10 @@ fn t6_the_real_list_finds_what_a_banker_would_type() {
     let top = |q: &str| COMMANDS[order(q, &entries)[0]].id;
     assert_eq!(top("filter"), CommandId::Filter);
     assert_eq!(top("sort"), CommandId::Sort);
-    assert_eq!(top("excel"), CommandId::ExportXlsx);
+    // two commands are about Excel since Phase 7: the workbook of tabs and the chart workbook
+    assert!([CommandId::ExportXlsx, CommandId::ExportChartXlsx].contains(&top("excel")));
+    let excel: Vec<CommandId> = order("excel", &entries).iter().map(|i| COMMANDS[*i].id).collect();
+    assert!(excel.contains(&CommandId::ExportXlsx), "the workbook of tabs is still found by 'excel'");
     assert_eq!(top("pdf"), CommandId::ExportPdf);
     assert_eq!(top("dark"), CommandId::ToggleTheme);
     assert_eq!(top("provision"), CommandId::Provision);
