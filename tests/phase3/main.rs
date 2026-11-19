@@ -100,3 +100,5 @@ mod guide6;
 // Phase 7 tests (tests/phase7/) are compiled into this binary too.
 #[path = "../phase7/c0.rs"]
 mod p7_c0;
+#[path = "../phase7/c1.rs"]
+mod p7_c1;

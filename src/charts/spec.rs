@@ -386,7 +386,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -397,7 +397,10 @@ impl ChartSpec {
             self.top_n,
             self.measures,
             self.size,
-            self.facet
+            self.facet,
+            // the point, histogram and box forms calculate their own tables; the other forms share one
+            matches!(self.kind, ChartKind::Scatter | ChartKind::Bubble | ChartKind::Histogram | ChartKind::BoxPlot) as u8 * (1 + self.kind as u8),
+            self.bins
         )
     }
 }

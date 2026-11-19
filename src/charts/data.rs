@@ -22,6 +22,42 @@ pub struct FacetData {
     pub data: Box<ChartData>,
 }
 
+/// One point of a scatter or bubble chart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScatterPoint {
+    pub x: f64,
+    pub y: f64,
+    pub size: Option<f64>,
+    /// Position in `ChartData::series`.
+    pub series: usize,
+}
+
+/// A histogram: equal bins from the 1st to the 99th percentile (as in the Phase 5 column inspector).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Histogram {
+    /// `bins + 1` edges.
+    pub edges: Vec<f64>,
+    pub counts: Vec<u64>,
+    /// The values below the first edge and above the last.
+    pub below: u64,
+    pub above: u64,
+}
+
+/// The five numbers of a box plot (whiskers reach the furthest value within 1.5 × the interquartile range).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct BoxStat {
+    pub category: String,
+    pub n: u64,
+    pub min: f64,
+    pub q1: f64,
+    pub median: f64,
+    pub q3: f64,
+    pub max: f64,
+    pub low_whisker: f64,
+    pub high_whisker: f64,
+    pub outliers: Vec<f64>,
+}
+
 /// The calculated chart. The primary measure is `values` / `rows`; further measures are in `extra`.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ChartData {
@@ -51,6 +87,13 @@ pub struct ChartData {
     pub size: Option<MeasureData>,
     /// Small multiples, when the chart has a facet.
     pub facets: Vec<FacetData>,
+    /// Scatter and bubble: the points (at most 5,000 per series) and how many rows they stand for.
+    pub points: Vec<ScatterPoint>,
+    pub points_total: u64,
+    /// Histogram: the bins (the categories are their labels, the values their counts).
+    pub hist: Option<Histogram>,
+    /// Box plot: one box per category.
+    pub boxes: Vec<BoxStat>,
 }
 
 impl ChartData {
@@ -90,11 +133,27 @@ impl ChartData {
 
     /// True when there is nothing to draw.
     pub fn is_empty(&self) -> bool {
-        self.categories.is_empty() || self.values.iter().all(|r| r.iter().all(|v| v.is_none()))
+        self.empty_reason().is_some()
     }
 
     /// The reason there is nothing to chart, for "No data to chart: <reason>".
     pub fn empty_reason(&self) -> Option<String> {
+        use super::spec::ChartKind;
+        match self.spec.kind {
+            ChartKind::Scatter | ChartKind::Bubble => {
+                if self.points.is_empty() {
+                    return Some("no row has both an x and a y number".to_string());
+                }
+                return None;
+            }
+            ChartKind::BoxPlot => {
+                if self.boxes.is_empty() {
+                    return Some("no category has a number to summarise".to_string());
+                }
+                return None;
+            }
+            _ => {}
+        }
         if self.categories.is_empty() {
             Some("the tab has no rows after its steps".to_string())
         } else if self.values.iter().all(|r| r.iter().all(|v| v.is_none())) {

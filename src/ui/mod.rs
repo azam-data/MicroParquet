@@ -5,6 +5,7 @@ pub mod batch;
 pub mod buckets;
 pub mod calc_column;
 pub mod chart;
+pub mod chart_render;
 pub mod cl_migration;
 pub mod columns;
 pub mod commands;

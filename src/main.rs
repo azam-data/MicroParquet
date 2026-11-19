@@ -194,6 +194,8 @@ pub struct MicroParquetApp {
     chart_popped: bool,
     /// How many times the chart was popped out (the render tests read it: a backend without windows docks it back at once).
     chart_pop_requests: u32,
+    /// The tabs that are charts (Phase 7: "Open as tab"), by tab id: they fill the main area with the chart.
+    chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -342,6 +344,7 @@ impl MicroParquetApp {
             show_steps_sidebar: true,
             chart_popped: false,
             chart_pop_requests: 0,
+            chart_tabs: HashMap::new(),
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -491,6 +494,10 @@ impl MicroParquetApp {
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     self.render_empty_state(ui);
+                    return;
+                }
+                if self.active_is_chart_tab() {
+                    self.render_chart_main(ui);
                     return;
                 }
                 self.render_pivot_bar(ui);

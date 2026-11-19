@@ -16,12 +16,12 @@ pub use crate::charts::data::ChartData;
 pub use crate::charts::spec::{ChartAgg, ChartKind, ChartScale, ChartSpec, DEFAULT_TOP_N};
 
 /// A column the chart can add up: integers, floats and decimals.
-fn is_number(dt: &DataType) -> bool {
+pub(crate) fn is_number(dt: &DataType) -> bool {
     dt.is_numeric() || matches!(dt, DataType::Decimal(..))
 }
 
 /// The value-column check with the column's type in the message.
-fn type_word(dt: &DataType) -> String {
+pub(crate) fn type_word(dt: &DataType) -> String {
     if dt.is_string() {
         "Text".to_string()
     } else if matches!(dt, DataType::Date | DataType::Datetime(_, _)) {

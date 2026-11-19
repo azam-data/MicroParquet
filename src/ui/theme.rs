@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Response, RichText, Rounding, Stroke};
 
-const fn hex(rgb: u32) -> Color32 {
+pub const fn hex(rgb: u32) -> Color32 {
     Color32::from_rgb(((rgb >> 16) & 0xFF) as u8, ((rgb >> 8) & 0xFF) as u8, (rgb & 0xFF) as u8)
 }
 
@@ -463,6 +463,10 @@ pub const SQL_HISTORY_CHARS: usize = 44;
 pub const SQL_HISTORY_POPUP_H: f32 = 420.0;
 // chart
 pub const CHART_H: f32 = 175.0;
+pub const CHART_TOOLTIP_W: f32 = 260.0;
+pub const CHART_MIN_W: f32 = 200.0;
+pub const CHART_MIN_H: f32 = 175.0;
+pub const CHART_MAX_H: f32 = 520.0;
 pub const CHART_BAR_W: f64 = 0.65;
 /// The chart's controls and marks.
 pub const CHART_COMBO_W: f32 = 130.0;

@@ -2,10 +2,10 @@
 //! a size encoding, small-multiple facets and the transforms (percent of total, running sum). It runs
 //! over the whole tab after its steps and returns the `ChartData` every renderer reads.
 
-use super::data::{apply_transform, ChartData, FacetData, MeasureData};
-use super::spec::{ChartSpec, MeasureSpec, Transform};
-use super::tokens::MAX_FACETS;
-use crate::chart::{compute_chart_fixed, FixedKept};
+use super::data::{apply_transform, BoxStat, ChartData, FacetData, Histogram, MeasureData, ScatterPoint};
+use super::spec::{ChartKind, ChartSpec, MeasureSpec, Transform};
+use super::tokens::{MAX_FACETS, MAX_POINTS, MAX_SCATTER_SERIES};
+use crate::chart::{compute_chart_fixed, FixedKept, OTHER_LABEL};
 use crate::pivot_table::{key_text_expr, BLANK_LABEL};
 use anyhow::{bail, Context, Result};
 use polars::prelude::*;
@@ -39,6 +39,20 @@ fn align(primary: &ChartData, other: &ChartData, name: String) -> MeasureData {
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    let mut data = match spec.kind {
+        ChartKind::Scatter | ChartKind::Bubble => compute_points(lf.clone(), spec)?,
+        ChartKind::Histogram => compute_histogram(lf.clone(), spec)?,
+        ChartKind::BoxPlot => compute_boxes(lf.clone(), spec)?,
+        _ => compute_grid(lf.clone(), spec)?,
+    };
+    if let Some(f) = spec.facet.as_deref().filter(|f| !f.trim().is_empty()) {
+        data.facets = compute_facets(lf, spec, f)?;
+    }
+    Ok(data)
+}
+
+/// The aggregated grid: categories by series, for one or several measures.
+fn compute_grid(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let measures = spec.measure_list();
     let mut notes: Vec<String> = Vec::new();
     // the primary measure decides the categories, their order and what is folded into "Other"
@@ -73,10 +87,6 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         }
     }
     data.notes.extend(notes);
-
-    if let Some(f) = spec.facet.as_deref().filter(|f| !f.trim().is_empty()) {
-        data.facets = compute_facets(lf, spec, f)?;
-    }
     Ok(data)
 }
 
@@ -118,4 +128,247 @@ fn compute_facets(lf: LazyFrame, spec: &ChartSpec, facet: &str) -> Result<Vec<Fa
         out.push(FacetData { name: names[i].clone(), data: Box::new(d) });
     }
     Ok(out)
+}
+
+// ------------------------------------------------------------------------ scatter, histogram, box plot
+
+/// The numbers of a column (blank = `None`), refused with the column's type when it is not a number.
+fn number_column(lf: &LazyFrame, schema: &Schema, name: &str, what: &str) -> Result<Vec<Option<f64>>> {
+    let Some(dt) = schema.get(name) else { bail!("Chart: the {} column '{}' was not found. Choose another column.", what, name) };
+    if !crate::chart::is_number(dt) {
+        bail!("Chart: the {} column '{}' is {}, not a number. Set it to a number in Schema & Ingestion, or choose another column.", what, name, crate::chart::type_word(dt));
+    }
+    let df = lf.clone().select([col(name).cast(DataType::Float64).alias("__x")]).collect().with_context(|| format!("Chart: could not read '{}'", name))?;
+    Ok(df.column("__x")?.f64()?.into_iter().collect())
+}
+
+fn text_column(lf: &LazyFrame, schema: &Schema, name: &str) -> Result<Vec<String>> {
+    let dt = schema.get(name).cloned().unwrap_or(DataType::String);
+    let df = lf.clone().select([key_text_expr(name, &dt).fill_null(lit(BLANK_LABEL)).alias("__t")]).collect().with_context(|| format!("Chart: could not read '{}'", name))?;
+    Ok(df.column("__t")?.str()?.into_iter().map(|v| v.unwrap_or("").to_string()).collect())
+}
+
+fn schema_of(lf: &LazyFrame) -> Result<Schema> {
+    let mut l = lf.clone();
+    Ok((*l.collect_schema().context("Chart: could not read the columns of the tab")?).clone())
+}
+
+/// Scatter and bubble: x is the Category column, y the first measure's column (rows are not added up),
+/// the bubble size the size column, the colour the series column (at most 3, the rest "Other").
+fn compute_points(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    if spec.category.trim().is_empty() {
+        bail!("Chart: choose the X column (a number) for the scatter.");
+    }
+    let schema = schema_of(&lf)?;
+    let ml = spec.measure_list();
+    let Some(ycol) = ml[0].column.clone().filter(|c| !c.trim().is_empty()) else { bail!("Chart: choose the Y column (a number) for the scatter.") };
+    let xs = number_column(&lf, &schema, &spec.category, "X")?;
+    let ys = number_column(&lf, &schema, &ycol, "Y")?;
+    let sizes = match (spec.kind, spec.size.as_ref().and_then(|s| s.column.clone())) {
+        (ChartKind::Bubble, Some(c)) => Some(number_column(&lf, &schema, &c, "size")?),
+        (ChartKind::Bubble, None) => bail!("Chart: a bubble chart needs a Size column (a number). Choose one, or use a scatter."),
+        _ => None,
+    };
+    let serie = match &spec.series {
+        Some(s) => Some(text_column(&lf, &schema, s)?),
+        None => None,
+    };
+    let n = xs.len();
+    // the series, by their number of points; more than 3 become the top 2 and "Other"
+    let mut notes = Vec::new();
+    let mut names: Vec<String> = vec![String::new()];
+    let mut assign: Vec<usize> = vec![0; n];
+    if let Some(sv) = &serie {
+        let mut count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, t) in sv.iter().enumerate() {
+            if xs[i].is_some() && ys[i].is_some() {
+                *count.entry(t.as_str()).or_default() += 1;
+            }
+        }
+        let mut ranked: Vec<(&str, usize)> = count.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let fold = ranked.len() > MAX_SCATTER_SERIES;
+        let keep = if fold { MAX_SCATTER_SERIES - 1 } else { ranked.len() };
+        names = ranked.iter().take(keep).map(|(t, _)| t.to_string()).collect();
+        if fold {
+            notes.push(format!("{} series are shown as the {} largest and \"{}\": scatter charts show at most {} colours.", ranked.len(), keep, OTHER_LABEL, MAX_SCATTER_SERIES));
+            names.push(OTHER_LABEL.to_string());
+        }
+        if names.is_empty() {
+            names.push(String::new());
+        }
+        for (i, t) in sv.iter().enumerate() {
+            assign[i] = names.iter().position(|x| x == t).unwrap_or(names.len() - 1);
+        }
+    }
+    // the rows with both numbers; at most MAX_POINTS per series (every k-th row)
+    let mut per_series: Vec<Vec<usize>> = vec![Vec::new(); names.len()];
+    let mut total = 0u64;
+    for i in 0..n {
+        if xs[i].is_some() && ys[i].is_some() {
+            total += 1;
+            per_series[assign[i]].push(i);
+        }
+    }
+    let mut points = Vec::new();
+    let mut sampled = false;
+    for (si, rows) in per_series.iter().enumerate() {
+        let stride = rows.len().div_ceil(MAX_POINTS).max(1);
+        sampled |= stride > 1;
+        for &i in rows.iter().step_by(stride) {
+            if let (Some(x), Some(y)) = (xs[i], ys[i]) {
+                points.push(ScatterPoint { x, y, size: sizes.as_ref().and_then(|s| s[i]), series: si });
+            }
+        }
+    }
+    if sampled {
+        notes.push(format!("Showing a {}-point sample of {}", crate::models::format_with_commas(MAX_POINTS as f64, 0), crate::models::format_with_commas(total as f64, 0)));
+    }
+    let skipped = n as u64 - total;
+    if skipped > 0 {
+        notes.push(format!("{} row(s) have a blank x or y and are not drawn.", skipped));
+    }
+    Ok(ChartData {
+        spec: spec.clone(),
+        series: names,
+        total_rows: n as u64,
+        points,
+        points_total: total,
+        measure_names: vec![measure_name(&ml[0])],
+        notes,
+        ..ChartData::default()
+    })
+}
+
+/// The `q`-quantile (0 to 1) of sorted values by linear interpolation.
+pub fn quantile_sorted(sorted: &[f64], q: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let pos = q.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
+    let (a, b) = (sorted.get(lo).copied()?, sorted.get(hi).copied()?);
+    Some(a + (b - a) * (pos - lo as f64))
+}
+
+/// A label for a bin edge: as few decimals as tell the edges apart.
+fn edge_label(v: f64, step: f64) -> String {
+    let decimals = if step >= 10.0 { 0 } else if step >= 1.0 { 1 } else if step >= 0.1 { 2 } else { 4 };
+    crate::models::format_with_commas(v, decimals)
+}
+
+/// Histogram of the first measure's column: equal bins between the 1st and 99th percentile (Phase 5).
+fn compute_histogram(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    let schema = schema_of(&lf)?;
+    let ml = spec.measure_list();
+    let column = match ml[0].column.clone().filter(|c| !c.trim().is_empty()).or_else(|| Some(spec.category.clone()).filter(|c| !c.trim().is_empty())) {
+        Some(c) => c,
+        None => bail!("Chart: choose the number column for the histogram."),
+    };
+    let all = number_column(&lf, &schema, &column, "histogram")?;
+    let total = all.len() as u64;
+    let mut vals: Vec<f64> = all.into_iter().flatten().filter(|v| v.is_finite()).collect();
+    if vals.is_empty() {
+        bail!("Chart: '{}' has no numbers to put in a histogram.", column);
+    }
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let bins = spec.bins.unwrap_or(crate::column_stats::HISTOGRAM_BINS).clamp(2, 100);
+    let nearest = |q: f64| vals.get((q * (vals.len() - 1) as f64).round() as usize).copied().unwrap_or(vals[0]);
+    let (lo, hi) = (nearest(0.01), nearest(0.99));
+    let span = hi - lo;
+    let mut counts = vec![0u64; bins];
+    let (mut below, mut above) = (0u64, 0u64);
+    for v in &vals {
+        if *v < lo {
+            below += 1;
+        } else if *v > hi {
+            above += 1;
+        } else if span > 0.0 {
+            counts[(((v - lo) / span * bins as f64).floor() as usize).min(bins - 1)] += 1;
+        } else {
+            counts[0] += 1;
+        }
+    }
+    let step = if span > 0.0 { span / bins as f64 } else { 1.0 };
+    let edges: Vec<f64> = (0..=bins).map(|i| lo + step * i as f64).collect();
+    let categories: Vec<String> = (0..bins).map(|i| format!("{} to {}", edge_label(edges[i], step), edge_label(edges[i + 1], step))).collect();
+    let mut notes = Vec::new();
+    if below + above > 0 {
+        notes.push(format!("{} value(s) below {} and {} above {} are not in the bars (the bars span the 1st to the 99th percentile).", below, edge_label(lo, step), above, edge_label(hi, step)));
+    }
+    if total as usize > vals.len() {
+        notes.push(format!("{} blank value(s) are not counted.", total as usize - vals.len()));
+    }
+    Ok(ChartData {
+        spec: spec.clone(),
+        categories,
+        series: vec![String::new()],
+        values: vec![counts.iter().map(|c| Some(*c as f64)).collect()],
+        rows: vec![counts.clone()],
+        total_rows: total,
+        distinct_categories: bins,
+        measure_names: vec![format!("Rows by {}", column)],
+        hist: Some(Histogram { edges, counts, below, above }),
+        notes,
+        ..ChartData::default()
+    })
+}
+
+/// Box plot: one box per category over the first measure's column.
+fn compute_boxes(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    if spec.category.trim().is_empty() {
+        bail!("Chart: choose the Category (X) column for the box plot.");
+    }
+    let schema = schema_of(&lf)?;
+    let ml = spec.measure_list();
+    let Some(vcol) = ml[0].column.clone().filter(|c| !c.trim().is_empty()) else { bail!("Chart: choose the Value column (a number) for the box plot.") };
+    if schema.get(spec.category.as_str()).is_none() {
+        bail!("Chart: the category column '{}' was not found. Choose another column.", spec.category);
+    }
+    let cats = text_column(&lf, &schema, &spec.category)?;
+    let vals = number_column(&lf, &schema, &vcol, "value")?;
+    let mut groups: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    for (c, v) in cats.iter().zip(vals.iter()) {
+        if let Some(v) = v.filter(|v| v.is_finite()) {
+            groups.entry(c.clone()).or_default().push(v);
+        }
+    }
+    let distinct = groups.len();
+    let mut names: Vec<String> = groups.keys().cloned().collect();
+    // the categories with most values stay (Top N), in the chart's order
+    names.sort_by(|a, b| groups[b].len().cmp(&groups[a].len()).then_with(|| a.cmp(b)));
+    let mut notes = Vec::new();
+    if names.len() > spec.top_n.max(1) {
+        notes.push(format!("{} categories have numbers; the {} with most values are shown.", names.len(), spec.top_n.max(1)));
+        names.truncate(spec.top_n.max(1));
+    }
+    let key = |c: &String| -> Option<String> { if c == BLANK_LABEL { None } else { Some(c.clone()) } };
+    names.sort_by(|a, b| spec.order.compare(&key(a), &key(b)));
+    let mut boxes = Vec::new();
+    for c in &names {
+        let mut v = groups[c].clone();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let (q1, med, q3) = (quantile_sorted(&v, 0.25), quantile_sorted(&v, 0.5), quantile_sorted(&v, 0.75));
+        let (Some(q1), Some(median), Some(q3)) = (q1, med, q3) else { continue };
+        let iqr = q3 - q1;
+        let (lo_fence, hi_fence) = (q1 - 1.5 * iqr, q3 + 1.5 * iqr);
+        let low_whisker = v.iter().copied().find(|x| *x >= lo_fence).unwrap_or(q1);
+        let high_whisker = v.iter().rev().copied().find(|x| *x <= hi_fence).unwrap_or(q3);
+        let outliers: Vec<f64> = v.iter().copied().filter(|x| *x < lo_fence || *x > hi_fence).take(200).collect();
+        boxes.push(BoxStat { category: c.clone(), n: v.len() as u64, min: v[0], q1, median, q3, max: v[v.len() - 1], low_whisker, high_whisker, outliers });
+    }
+    let total: u64 = boxes.iter().map(|b| b.n).sum();
+    Ok(ChartData {
+        spec: spec.clone(),
+        categories: boxes.iter().map(|b| b.category.clone()).collect(),
+        series: vec![String::new()],
+        values: vec![boxes.iter().map(|b| Some(b.median)).collect()],
+        rows: vec![boxes.iter().map(|b| b.n).collect()],
+        total_rows: total,
+        distinct_categories: distinct,
+        measure_names: vec![format!("Median of {}", vcol)],
+        boxes,
+        notes,
+        ..ChartData::default()
+    })
 }

@@ -33,11 +33,23 @@ pub struct ChartState {
     /// The settings as last written to `settings.json`.
     pub saved: String,
     pub rects: ChartRects,
+    /// The Table view instead of the plot.
+    pub show_table: bool,
+}
+
+/// A chart that is a tab of its own ("Open as tab"): what it shows and in what scale.
+#[derive(Clone, Debug)]
+pub struct ChartTabInfo {
+    pub data: ChartData,
+    pub show_table: bool,
+    pub divisor: f64,
+    pub decimals: usize,
+    pub unit: String,
 }
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default() }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false }
     }
 }
 
@@ -212,6 +224,71 @@ impl MicroParquetApp {
         }
     }
 
+    /// "Open as tab": the chart in a tab of its own that fills the main area. The tab is the chart's data
+    /// table (so it can be exported like any tab); the main area draws the chart, with a Table toggle.
+    pub(crate) fn chart_open_as_chart_tab(&mut self) {
+        let Some(data) = self.chart.data.clone() else {
+            self.status_message = "There is no chart data yet.".to_string();
+            return;
+        };
+        let scale = self.chart_scale(&self.chart.spec);
+        let info = ChartTabInfo {
+            data: data.clone(),
+            show_table: false,
+            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+            decimals: self.global_decimals,
+            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+        };
+        let result = (|| -> anyhow::Result<TabSource> {
+            let mut df = chart_table(&data)?;
+            std::fs::create_dir_all(&self.paths.temp_dir)?;
+            let path = self.paths.temp_dir.join(format!("chart_tab_{}_{}.parquet", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+            let f = std::fs::File::create(&path)?;
+            polars::prelude::ParquetWriter::new(f).finish(&mut df)?;
+            Ok(TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() })
+        })();
+        match result {
+            Ok(src) => {
+                let title = format!("Chart: {}", micro_parquet::charts::layout::chart_title(&data));
+                let id = self.create_tab_from_source_with(title.clone(), src, Vec::new(), HashMap::new(), None);
+                self.chart_tabs.insert(id, info);
+                // kept with the session: the chart's own settings, by the title of the tab it charts
+                if let Ok(spec) = serde_json::to_value(&data.spec) {
+                    self.settings.chart_tabs.push(serde_json::json!({"title": title, "source": self.chart.tab_key, "spec": spec}));
+                    self.save_settings();
+                }
+            }
+            Err(e) => self.status_message = format!("The chart could not be opened as a tab: {:#}", e),
+        }
+    }
+
+    pub(crate) fn active_is_chart_tab(&self) -> bool {
+        self.tabs.get(self.active_tab).is_some_and(|t| self.chart_tabs.contains_key(&t.id))
+    }
+
+    /// What fills the main area while a chart tab is active: a Table / Chart toggle, then the chart.
+    pub(crate) fn render_chart_main(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) else { return };
+        let dark = self.dark_mode;
+        let Some(info) = self.chart_tabs.get_mut(&id) else { return };
+        let label = if info.show_table { format!("{}  Show chart", egui_phosphor::regular::CHART_BAR) } else { format!("{}  Table", egui_phosphor::regular::TABLE) };
+        let b = ui.button(label);
+        if b.clicked() {
+            info.show_table = !info.show_table;
+        }
+        ui.add_space(theme::SPACE_S);
+        let opts = micro_parquet::charts::layout::LayoutOpts { dark, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: None };
+        if info.show_table {
+            crate::ui::chart_render::show_table(ui, &info.data, &opts);
+        } else {
+            let data = info.data.clone();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let h = ui.available_height().max(theme::CHART_MIN_H);
+                crate::ui::chart_render::show_chart(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h));
+            });
+        }
+    }
+
     /// The Chart tab of the side panel: the chart with a "Pop out" button (only where native windows
     /// work), or, while it is in its own window, a note with "Dock back".
     pub(crate) fn render_chart_tab(&mut self, ui: &mut egui::Ui) {
@@ -285,6 +362,8 @@ impl MicroParquetApp {
         let order_lists = self.sort_lists.lists.clone();
         let mut rects = ChartRects::default();
         let mut open_tab = false;
+        let mut open_chart_tab = false;
+        let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
         let pop_button = self.chart.rects.pop_button;
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
@@ -388,14 +467,30 @@ impl MicroParquetApp {
             if b.clicked() {
                 open_tab = true;
             }
+            ui.label("View");
+            ui.horizontal(|ui| {
+                let b = ui.selectable_label(show_table, "Table");
+                add(ui, "Table", &mut rects, b.rect);
+                if b.clicked() {
+                    show_table = !show_table;
+                }
+                let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Chart tab"));
+                add(ui, "Open as chart tab", &mut rects, b.rect);
+                if b.clicked() {
+                    open_chart_tab = true;
+                }
+            });
+            ui.end_row();
         });
         rects.controls = Some(controls.response.rect);
+        self.chart.show_table = show_table;
         if spec != self.chart.spec {
             self.chart.spec = spec;
             self.chart_save_choices();
             self.chart_tick();
         }
         // the title, then the plot (or why there is none)
+        let mut new_map: Option<micro_parquet::charts::colours::ColourMap> = None;
         let scale = self.chart_scale(&self.chart.spec);
         let unit = scale.as_ref().map(scale_word).filter(|u| !u.is_empty()).map(str::to_string);
         match (&self.chart.data, &self.chart.error) {
@@ -411,7 +506,14 @@ impl MicroParquetApp {
                 if !d.notes.is_empty() {
                     rects.notes = Some(ui.add(egui::Label::new(egui::RichText::new(d.notes.join(" ")).color(tk.muted).size(theme::TEXT_LABEL)).wrap()).rect);
                 }
-                rects.plot = Some(self.draw_chart_plot(ui, d, scale));
+                if self.chart.show_table {
+                    let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: String::new(), bare: true, colours: None };
+                    crate::ui::chart_render::show_table(ui, d, &opts);
+                } else {
+                    let (plot, map) = self.draw_chart_plot(ui, d, scale);
+                    rects.plot = Some(plot);
+                    new_map = Some(map);
+                }
             }
             (None, None) => {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
@@ -419,8 +521,18 @@ impl MicroParquetApp {
         }
         rects.pop_button = pop_button;
         self.chart.rects = rects;
+        if let Some(m) = new_map.filter(|m| *m != self.chart.spec.colour_map) {
+            self.chart.spec.colour_map = m.clone();
+            if let Some(d) = self.chart.data.as_mut() {
+                d.spec.colour_map = m;
+            }
+            self.chart_save_choices();
+        }
         if open_tab {
             self.chart_open_as_tab();
+        }
+        if open_chart_tab {
+            self.chart_open_as_chart_tab();
         }
     }
 
@@ -440,94 +552,31 @@ impl MicroParquetApp {
         format!("{}: {}{}\n{}\n{} rows", spec.category, d.categories.get(i).cloned().unwrap_or_default(), series, v, format_with_commas(rows as f64, 0))
     }
 
-    /// The bars or lines. The x-axis names the categories (a long name is cut, the tooltip has it
-    /// whole), a tooltip gives the category, series, value and number of rows.
-    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> egui::Rect {
-        let divisor = scale.map(|s| s.divisor).unwrap_or(1.0);
-        let n = d.categories.len();
-        let s_n = d.series.len().max(1);
-        let spec = d.spec.clone();
-        let tip = |j: usize, i: usize| -> String { self.chart_tip(d, j, i) };
-        let labels: Vec<String> = d.categories.iter().map(|c| short_label(c, theme::CHART_LABEL_CHARS)).collect();
-        let avail_w = ui.available_width();
-        let per_label = theme::CHART_LABEL_W;
-        let every = ((n as f32 * per_label / avail_w.max(per_label)).ceil() as usize).max(1);
-        let mut plot = egui_plot::Plot::new("chart_plot")
-            .height(theme::CHART_H)
-            .show_axes([true, true])
-            .allow_zoom(false)
-            .allow_drag(false)
-            .allow_scroll(false)
-            .allow_boxed_zoom(false)
-            .include_y(0.0)
-            .x_axis_formatter(move |mark, _| {
-                let i = mark.value.round();
-                let between = (mark.value - i).abs() > 0.01; // not a size: a mark between two categories
-                if between || i < 0.0 || i as usize >= labels.len() {
-                    String::new()
-                } else {
-                    labels[i as usize].clone()
-                }
-            })
-            .x_grid_spacer(move |input| {
-                let (lo, hi) = input.bounds;
-                let mut marks = Vec::new();
-                let mut i = lo.max(0.0).ceil() as i64;
-                while (i as f64) <= hi && i < n as i64 {
-                    if i as usize % every == 0 {
-                        marks.push(egui_plot::GridMark { value: i as f64, step_size: every as f64 });
-                    }
-                    i += 1;
-                }
-                marks
-            })
-            .y_axis_formatter(|mark, _| format_with_commas(mark.value, if mark.step_size >= 1.0 { 0 } else { 2 }));
-        if let Some(sc) = scale {
-            plot = plot.y_axis_label(scale_word(&sc).to_string());
-        }
-        if spec.series.is_some() {
-            plot = plot.legend(egui_plot::Legend::default());
-        }
-        if spec.kind == ChartKind::Line {
-            let names = d.series.clone();
-            let cats = d.categories.clone();
-            let vals = d.values.clone();
-            let rows = d.rows.clone();
-            let texts: Vec<Vec<String>> = (0..s_n).map(|j| (0..n).map(|i| tip(j, i)).collect()).collect();
-            let _ = (&cats, &vals, &rows);
-            plot = plot.label_formatter(move |name, pt| {
-                let i = pt.x.round();
-                let j = names.iter().position(|s| s == name).unwrap_or(0);
-                if i < 0.0 || i as usize >= n {
-                    return String::new();
-                }
-                texts.get(j).and_then(|t| t.get(i as usize)).cloned().unwrap_or_default()
-            });
-        }
-        let out = plot.show(ui, |plot_ui| {
-            for j in 0..s_n {
-                let name = d.series.get(j).cloned().unwrap_or_default();
-                match spec.kind {
-                    ChartKind::Bar => {
-                        let w = theme::CHART_GROUP_W / s_n as f64;
-                        let bars: Vec<egui_plot::Bar> = (0..n)
-                            .filter_map(|i| {
-                                let v = d.values[j][i]?;
-                                let x = i as f64 + (j as f64 - (s_n as f64 - 1.0) / 2.0) * w;
-                                Some(egui_plot::Bar::new(x, v / divisor).width(w * theme::CHART_BAR_FILL).name(tip(j, i)))
-                            })
-                            .collect();
-                        plot_ui.bar_chart(egui_plot::BarChart::new(bars).name(name).element_formatter(Box::new(|bar, _| bar.name.clone())));
-                    }
-                    // the Phase 6 drawer draws two forms; the other forms are drawn by the Phase 7 renderer (C1)
-                    _ => {
-                        let pts: Vec<[f64; 2]> = (0..n).filter_map(|i| d.values[j][i].map(|v| [i as f64, v / divisor])).collect();
-                        plot_ui.line(egui_plot::Line::new(egui_plot::PlotPoints::from(pts.clone())).name(name.clone()).width(theme::CHART_LINE_W));
-                        plot_ui.points(egui_plot::Points::new(egui_plot::PlotPoints::from(pts)).name(name).radius(theme::CHART_POINT_R));
-                    }
-                }
-            }
-        });
-        out.response.rect
+    /// The chart: drawn by the Phase 7 renderer (`chart_render`) in the quick-chart layout (plot and
+    /// legend; the title line and notes above are the Phase 6 ones). Returns the chart's rectangle and
+    /// the colour map with every series in it, which the caller stores in the spec.
+    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap) {
+        let opts = micro_parquet::charts::layout::LayoutOpts {
+            dark: self.dark_mode,
+            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+            decimals: self.global_decimals,
+            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+            bare: true,
+            colours: Some(self.chart.spec.colour_map.clone()),
+        };
+        // what is drawn follows the live choices; the numbers are the calculated ones
+        let live = &self.chart.spec;
+        let shown;
+        let data = if d.spec == *live {
+            d
+        } else {
+            let mut c = d.clone();
+            c.spec = live.clone();
+            shown = c;
+            &shown
+        };
+        let out = crate::ui::chart_render::show_chart(ui, egui::Id::new("chart_plot"), data, &opts, None);
+        let plot = out.layout.panels.first().map(|p| p.plot).unwrap_or(out.rect);
+        (plot, out.layout.colour_map)
     }
 }

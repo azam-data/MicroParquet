@@ -520,6 +520,9 @@ impl MicroParquetApp {
             return;
         }
         let closed_id = self.tabs.get(idx).map(|t| t.id);
+        if let Some(id) = closed_id {
+            self.chart_tabs.remove(&id);
+        }
         self.tabs.remove(idx);
         let new_len = self.tabs.len();
         for sel in [&mut self.active_tab, &mut self.join.left_tab, &mut self.join.right_tab, &mut self.recon.prev_tab, &mut self.recon.curr_tab] {
