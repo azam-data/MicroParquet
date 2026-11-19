@@ -248,6 +248,8 @@ pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL
 pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
 // dialogs: widths (the schema dialog's is above) and the lists inside them
 pub const DIALOG_W_SORT: f32 = 700.0;
+/// The width of the PDF export dialog's title box.
+pub const PDF_TITLE_FIELD_W: f32 = 320.0;
 pub const DIALOG_W_ABOUT: f32 = 560.0;
 pub const DIALOG_W_FILTER: f32 = 640.0;
 pub const DIALOG_W_TOOL: f32 = 680.0;

@@ -480,7 +480,7 @@ impl MicroParquetApp {
             }
             Some(Act::ChooseOut) => {
                 #[cfg(not(test))]
-                if let Some(p) = rfd::FileDialog::new().add_filter("Excel workbook", &["xlsx"]).set_file_name(format!("{}.xlsx", micro_parquet::paths::sanitize_file_name(&self.packs.pack.name))).save_file() {
+                if let Some(p) = crate::ui::save_dialog::choose_save_path(&crate::ui::save_dialog::SaveSpec::new("Excel workbook (*.xlsx)", "xlsx", format!("{}.xlsx", micro_parquet::paths::sanitize_file_name(&self.packs.pack.name)))) {
                     self.packs.out_path = p.display().to_string();
                 }
             }

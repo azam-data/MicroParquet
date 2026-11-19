@@ -92,5 +92,7 @@ mod k2;
 mod k3;
 #[path = "../phase6/k4.rs"]
 mod k4;
+#[path = "../phase6/l2.rs"]
+mod l2_pdf;
 #[path = "../phase6/guide.rs"]
 mod guide6;

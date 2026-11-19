@@ -504,6 +504,7 @@ impl MicroParquetApp {
         self.render_schema_confirm(ctx);
         self.render_export_guard(ctx);
         self.render_text_number_guard(ctx);
+        self.render_pdf_options(ctx);
         self.render_batch_modal(ctx);
         self.render_active_tool_modal(ctx);
         self.render_about(ctx);

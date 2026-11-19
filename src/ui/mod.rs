@@ -13,6 +13,7 @@ pub mod curves;
 pub mod dq;
 pub mod duration;
 pub mod export;
+pub mod save_dialog;
 pub mod filter;
 pub mod ftp;
 pub mod behaviour_profile;
@@ -54,6 +55,8 @@ pub mod tabs;
 pub mod top_bar;
 pub mod value_picker;
 pub mod zoom;
+#[cfg(test)]
+mod export_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]

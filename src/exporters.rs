@@ -608,14 +608,36 @@ pub struct PdfTab {
     pub summary: Vec<SummaryCell>,
 }
 
+/// What the PDF export dialog asks (L2).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PdfOptions {
+    /// The heading of every page; blank = no heading line.
+    pub title: String,
+    pub page: crate::pdf_layout::PdfPage,
+}
+
 pub fn export_pdf_tabs(
     tabs: Vec<PdfTab>,
     out_path: &Path,
     num_format: NumberDisplayFormat,
     global_decimals: usize,
 ) -> Result<PdfExportReport> {
+    export_pdf_tabs_with(tabs, out_path, num_format, global_decimals, &PdfOptions::default())
+}
+
+/// `export_pdf_tabs` with the title and the paper chosen in the export dialog.
+pub fn export_pdf_tabs_with(
+    tabs: Vec<PdfTab>,
+    out_path: &Path,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    opts: &PdfOptions,
+) -> Result<PdfExportReport> {
     use crate::pdf_layout::*;
-    let (doc, page1, layer1) = PdfDocument::new("MicroParquet Banking & ALCO Report", Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer 1");
+    let (page_w, page_h) = (opts.page.width_mm(), opts.page.height_mm());
+    let heading: Vec<String> = wrap_text_mm(opts.title.trim(), opts.page.usable_w_mm(), TITLE_PT, FontKind::Bold);
+    let doc_title = if heading.is_empty() { "Report".to_string() } else { heading.join(" ") };
+    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(page_w), Mm(page_h), "Layer 1");
 
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_reg = doc.add_builtin_font(BuiltinFont::Helvetica)?;
@@ -640,13 +662,13 @@ pub fn export_pdf_tabs(
         if truncated {
             report.truncated_tabs.push(title.clone());
         }
-        let layout = layout_pdf_tab(&title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB);
+        let layout = layout_pdf_tab_on(&opts.page, &title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB);
         let n_parts = layout.parts.len();
         let total_height = df.height();
 
         for (pi, part) in layout.parts.iter().enumerate() {
             if !first_page {
-                let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
                 current_page = p;
                 current_layer = l;
             }
@@ -656,9 +678,12 @@ pub fn export_pdf_tabs(
 
             // Title, unit, notes and the column headers at the top of every page of the part.
             let page_header = |layer: &PdfLayerReference| -> f32 {
-                let mut y = 194.0f32;
-                layer.use_text(format!("MicroParquet Report — {}", title), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
-                y -= 5.5;
+                let mut y = opts.page.top_mm();
+                // the heading is what was typed in the export dialog; with none there is no heading line
+                for line in &heading {
+                    layer.use_text(line.clone(), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
+                    y -= 5.5;
+                }
                 if let Some(u) = &layout.unit_line {
                     layer.use_text(u.clone(), NOTE_PT, Mm(LEFT_MM), Mm(y), &font_reg);
                     y -= 4.5;
@@ -710,7 +735,7 @@ pub fn export_pdf_tabs(
 
             for row in &part.rows {
                 if y_mm < 15.0 {
-                    let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                    let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
                     current_page = p;
                     current_layer = l;
                     y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
@@ -731,7 +756,7 @@ pub fn export_pdf_tabs(
             // The summary of the whole result as a band in the summary colour under the rows.
             if part.summary.iter().any(|c| c.is_some()) {
                 if y_mm < 26.0 {
-                    let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                    let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
                     current_page = p;
                     current_layer = l;
                     y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));

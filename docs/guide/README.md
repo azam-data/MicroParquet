@@ -62,3 +62,12 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 
 - [Split export](split-export.md): one file per branch or other value, with a manifest.
 - [Batch](batch.md): convert a whole folder tree.
+
+
+## Exports: file names, file types and the PDF options
+
+Every "save as" box offers only the file type it writes (CSV, Parquet, Excel workbook, PDF, macro, Python script), and a name typed without the extension gets it before anything is written, so an export is never a file without an extension. The box suggests a name from the tab: the tab's title, cleaned of characters Windows does not allow ("Pivot: Segment" is suggested as "Pivot_ Segment.csv"). For an Excel workbook or PDF of several tabs it is "<first ticked tab> and N more.xlsx".
+
+PDF: "Export Selected Tabs to a .pdf…" first asks for a Title (blank = no heading line; whatever you type is printed at the top of every page, wrapped if it is longer than the page), the Orientation (Portrait or Landscape) and the Page size (A4 or Legal), then opens the save box, which suggests the title as the file name (or the tab's title when there is none). The last choices are remembered in settings.json. Columns that do not fit the page width continue on the following pages with the row labels repeated; a narrow page (Portrait) therefore needs more pages than a wide one.
+
+Parquet, CSV, Excel, PDF and the split export all write through a temporary name and rename it when finished, so a failed export leaves no half file. The file signatures are PAR1 (Parquet), PK (Excel, a zip file) and %PDF (PDF); a CSV is plain text. If a file you exported opens as unreadable characters, look at its first characters in Notepad: PAR1 means it is a Parquet file, PK an Excel workbook, %PDF a PDF; then it was saved with the wrong export command or a wrong extension.

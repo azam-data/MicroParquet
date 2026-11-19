@@ -1932,3 +1932,76 @@ fn k5_the_summary_row_and_the_status_bar_warn_when_a_step_hides_a_pivots_total_r
         assert!(!p.boxes.iter().any(|(t, _)| t.contains(warn)), "{what}: no warning after a Calc column");
     }
 }
+
+fn pdf_page_and_first_text(bytes: &[u8]) -> ((f32, f32), String) {
+    let s = String::from_utf8_lossy(bytes);
+    let mb: Vec<f32> = s.split("/MediaBox[").nth(1).and_then(|p| p.split(']').next()).unwrap_or("").split_whitespace().filter_map(|n| n.parse().ok()).collect();
+    let first = s
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix('<').and_then(|r| r.strip_suffix("> Tj")).map(str::to_string))
+        .next()
+        .map(|hex| (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()).map(|b| b as char).collect::<String>())
+        .unwrap_or_default();
+    ((mb.get(2).copied().unwrap_or(0.0), mb.get(3).copied().unwrap_or(0.0)), first)
+}
+
+#[test]
+fn l2_the_pdf_options_dialog_fits_takes_the_choices_remembers_them_and_writes_the_pdf() {
+    use crate::ui::save_dialog::{set_save_hook, SaveSpec};
+    for (ppp, w, h) in SCREENS3 {
+        let mut rig = Rig::new("pr6l2", ppp, w, h, 0);
+        let what = rig.what.clone();
+        let out = rig.app.paths.root_dir.join("out");
+        std::fs::create_dir_all(&out).expect("out");
+        let asked: std::rc::Rc<std::cell::RefCell<Vec<SaveSpec>>> = Default::default();
+        let (log, dir) = (asked.clone(), out.clone());
+        set_save_hook(Some(Box::new(move |spec: &SaveSpec| {
+            log.borrow_mut().push(spec.clone());
+            Some(dir.join(std::path::Path::new(&spec.default_name).file_stem().expect("stem")))
+        })));
+        rig.app.export.multi_checks = vec![true];
+        rig.app.run_guarded_export(crate::ui::export::GuardedExport::MultiPdf);
+        let p = rig.draw(8);
+        let r = assert_dialog_fits(&rig.ctx, "\u{E702}  PDF export options", &what);
+        for t in ["Title", "Orientation", "Page size", "Portrait", "Landscape", "A4", "Legal", "Choose file\u{2026}", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, b)| x == t && inside(*b, r.window)), "{what}: '{t}' is in the dialog: {:?}", p.boxes.iter().map(|(x, _)| x.clone()).collect::<Vec<_>>());
+        }
+        assert!(asked.borrow().is_empty(), "{what}: no save dialog before the options");
+        let find = |p: &Painted, t: &str| p.boxes.iter().filter(|(x, _)| x == t).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: '{t}'"));
+        // the defaults: no title, landscape, A4
+        let o = rig.app.export.pdf_options.clone().expect("open");
+        assert!(o.title.is_empty() && !o.portrait && !o.legal, "{what}: {o:?}");
+        // portrait, Legal, and a title typed into the box
+        rig.click(find(&p, "Portrait").center());
+        let p2 = rig.draw(2);
+        rig.click(find(&p2, "Legal").center());
+        let hint = rig.draw(2).boxes.iter().find(|(t, _)| t.contains("blank = no heading line")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the title box"));
+        rig.click(hint.center());
+        rig.step(vec![egui::Event::Text("Q3 pack".to_string())]);
+        let p = rig.draw(3);
+        let o = rig.app.export.pdf_options.clone().expect("still open");
+        assert!(o.portrait && o.legal && o.title == "Q3 pack", "{what}: {o:?}");
+        rig.click(find(&p, "Choose file\u{2026}").center());
+        assert!(rig.app.export.pdf_options.is_none(), "{what}: the dialog closed");
+        settle(&mut rig.app);
+        set_save_hook(None);
+        assert_eq!(asked.borrow().last().map(|s| s.default_name.clone()).as_deref(), Some("Q3 pack.pdf"), "{what}: the suggested name is the title");
+        let file = out.join("Q3 pack.pdf");
+        let bytes = std::fs::read(&file).unwrap_or_else(|e| panic!("{what}: {file:?}: {e}"));
+        assert!(bytes.starts_with(b"%PDF"));
+        let ((pw, ph), first) = pdf_page_and_first_text(&bytes);
+        assert!((pw - 612.0).abs() < 1.0 && (ph - 1008.0).abs() < 1.0, "{what}: Legal portrait: {pw} x {ph}");
+        assert_eq!(first, "Q3 pack", "{what}");
+        // remembered in settings.json and offered again
+        let (saved, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);
+        assert!(saved.pdf_title == "Q3 pack" && saved.pdf_portrait && saved.pdf_legal, "{what}: {saved:?}");
+        rig.app.run_guarded_export(crate::ui::export::GuardedExport::MultiPdf);
+        rig.draw(6);
+        let o = rig.app.export.pdf_options.clone().expect("open again");
+        assert!(o.title == "Q3 pack" && o.portrait && o.legal, "{what}: the last choices come back: {o:?}");
+        // Cancel closes it and writes nothing more
+        let p = rig.draw(2);
+        rig.click(find(&p, "Cancel").center());
+        assert!(rig.app.export.pdf_options.is_none(), "{what}");
+    }
+}

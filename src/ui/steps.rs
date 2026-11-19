@@ -213,11 +213,9 @@ impl MicroParquetApp {
                                     steps: tab.steps.clone(),
                                     summary: tab.summary.clone(),
                                 };
-                                if let Some(save_path) = rfd::FileDialog::new()
-                                    .set_directory(&self.paths.macros_dir)
-                                    .set_file_name(micro_parquet::paths::default_export_file_name(&self.macros.name, "mpq.json"))
-                                    .save_file()
-                                {
+                                if let Some(save_path) = crate::ui::save_dialog::choose_save_path(
+                                    &crate::ui::save_dialog::SaveSpec::new("MicroParquet Macro (*.mpq.json)", "mpq.json", micro_parquet::paths::default_export_file_name(&self.macros.name, "mpq.json")).in_dir(&self.paths.macros_dir),
+                                ) {
                                     match save_macro_to_file(&recipe, &save_path) {
                                         Ok(_) => {
                                             self.status_message =
@@ -271,10 +269,7 @@ impl MicroParquetApp {
                             );
                         }
                         if ui.button("\u{E248} Save as .py Script...").clicked() {
-                            if let Some(p) = rfd::FileDialog::new()
-                                .set_file_name("micro_parquet_pipeline.py")
-                                .save_file()
-                            {
+                            if let Some(p) = crate::ui::save_dialog::choose_save_path(&crate::ui::save_dialog::SaveSpec::new("Python script (*.py)", "py", "micro_parquet_pipeline.py")) {
                                 self.status_message =
                                     match std::fs::write(&p, &self.macros.python_code) {
                                         Ok(()) => format!(

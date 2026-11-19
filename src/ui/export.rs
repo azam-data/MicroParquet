@@ -1,6 +1,7 @@
 //! Screen module `export` (moved out of main.rs by Phase 3 R1).
 
 use crate::ui::prelude::*;
+use crate::ui::save_dialog::{choose_folder, choose_save_path, SaveSpec};
 
 /// State of this screen (moved out of `MicroParquetApp` by R1).
 pub struct ExportState {
@@ -20,6 +21,17 @@ pub struct ExportState {
     /// Parquet never get one.
     pub totals_xlsx: bool,
     pub totals_pdf: bool,
+    /// The PDF options dialog (L2), open between the Export button and the save dialog.
+    pub pdf_options: Option<PdfOptionsDialog>,
+}
+
+/// The PDF export's questions: heading, orientation and paper.
+#[derive(Clone, Debug)]
+pub struct PdfOptionsDialog {
+    pub sidecar: Option<Vec<ParseFailure>>,
+    pub title: String,
+    pub portrait: bool,
+    pub legal: bool,
 }
 
 /// An export that starts when its Text-column check finds nothing (or the user decides).
@@ -49,6 +61,7 @@ impl Default for ExportState {
             text_guard: None,
             check_token: 0,
             totals_xlsx: false,
+            pdf_options: None,
             totals_pdf: true,
         }
     }
@@ -103,7 +116,7 @@ impl MicroParquetApp {
                         }
 
                         if ui
-                            .button("\u{E702} Export Selected Tabs to Single Landscape .pdf...")
+                            .button("\u{E702} Export Selected Tabs to a .pdf...")
                             .clicked()
                         {
                             self.run_guarded_export(GuardedExport::MultiPdf);
@@ -425,10 +438,7 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        let Some(out_path) = rfd::FileDialog::new()
-            .set_file_name(micro_parquet::paths::default_export_file_name(&tab.title, "parquet"))
-            .save_file()
-        else {
+        let Some(out_path) = choose_save_path(&SaveSpec::new("Parquet (*.parquet)", "parquet", micro_parquet::paths::default_export_file_name(&tab.title, "parquet"))) else {
             return;
         };
         let (source, steps) = (tab.source.clone(), tab.steps.clone());
@@ -443,10 +453,7 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        let Some(out_path) = rfd::FileDialog::new()
-            .set_file_name(micro_parquet::paths::default_export_file_name(&tab.title, "csv"))
-            .save_file()
-        else {
+        let Some(out_path) = choose_save_path(&SaveSpec::new("CSV (*.csv)", "csv", micro_parquet::paths::default_export_file_name(&tab.title, "csv"))) else {
             return;
         };
         let (source, steps) = (tab.source.clone(), tab.steps.clone());
@@ -467,10 +474,7 @@ impl MicroParquetApp {
     }
 
     pub(crate) fn export_multi_tab_xlsx(&mut self, sidecar: Option<Vec<ParseFailure>>) {
-        let Some(out_path) = rfd::FileDialog::new()
-            .set_file_name("Consolidated_ALCO_Views.xlsx")
-            .save_file()
-        else {
+        let Some(out_path) = choose_save_path(&SaveSpec::new("Excel workbook (*.xlsx)", "xlsx", self.default_xlsx_name())) else {
             return;
         };
         let tabs = self.ticked_export_tabs();
@@ -483,28 +487,121 @@ impl MicroParquetApp {
         });
     }
 
+    /// The suggested name of the Excel workbook (L3): the active tab's title, or the first ticked tab's
+    /// "and N more" when several are ticked.
+    pub(crate) fn default_xlsx_name(&self) -> String {
+        micro_parquet::paths::default_export_file_name(&self.export_stem(), "xlsx")
+    }
+
+    /// The suggested name of the PDF (L3): the heading typed in the options dialog, else as the workbook.
+    pub(crate) fn default_pdf_name(&self) -> String {
+        let typed = self.settings.pdf_title.trim();
+        let stem = if typed.is_empty() { self.export_stem() } else { typed.to_string() };
+        micro_parquet::paths::default_export_file_name(&stem, "pdf")
+    }
+
+    /// "<tab title>", or "<first ticked tab title> and N more".
+    fn export_stem(&self) -> String {
+        let ticked: Vec<&TabState> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.export.multi_checks.get(*i).copied().unwrap_or(false))
+            .map(|(_, t)| t)
+            .collect();
+        match ticked.as_slice() {
+            [] => self.tabs.get(self.active_tab).map(|t| t.title.clone()).unwrap_or_default(),
+            [one] => one.title.clone(),
+            [first, rest @ ..] => format!("{} and {} more", first.title, rest.len()),
+        }
+    }
+
+    /// The PDF button: first the options dialog (heading, orientation, paper), then the save dialog.
     pub(crate) fn export_multi_tab_pdf(&mut self, sidecar: Option<Vec<ParseFailure>>) {
-        let Some(out_path) = rfd::FileDialog::new()
-            .set_file_name("Consolidated_ALCO_Report.pdf")
-            .save_file()
-        else {
+        self.export.pdf_options = Some(PdfOptionsDialog {
+            sidecar,
+            title: self.settings.pdf_title.clone(),
+            portrait: self.settings.pdf_portrait,
+            legal: self.settings.pdf_legal,
+        });
+    }
+
+    /// "Choose file…" in the options dialog: remember the choices, ask for the file, write the PDF.
+    pub(crate) fn confirm_pdf_options(&mut self) {
+        let Some(o) = self.export.pdf_options.take() else {
             return;
         };
+        self.settings.pdf_title = o.title.clone();
+        self.settings.pdf_portrait = o.portrait;
+        self.settings.pdf_legal = o.legal;
+        self.save_settings();
+        let Some(out_path) = choose_save_path(&SaveSpec::new("PDF (*.pdf)", "pdf", self.default_pdf_name())) else {
+            return;
+        };
+        let opts = PdfOptions { title: o.title, page: micro_parquet::pdf_layout::PdfPage { landscape: !o.portrait, legal: o.legal } };
+        let sidecar = o.sidecar;
         let tabs = self.ticked_export_tabs();
         let temp = self.paths.temp_dir.clone();
         let (fmt, dec) = (self.num_format, self.global_decimals);
         let label = format!("PDF export {}", file_label(&out_path));
         let totals = self.export.totals_pdf;
         self.submit_export(label, move |ctx| {
-            export_tabs_pdf(&tabs, &temp, &out_path, fmt, dec, totals, sidecar.as_deref(), ctx)
+            export_tabs_pdf_with(&tabs, &temp, &out_path, fmt, dec, totals, sidecar.as_deref(), &opts, ctx)
         });
+    }
+
+    /// The options dialog of the PDF export.
+    pub(crate) fn render_pdf_options(&mut self, ctx: &egui::Context) {
+        let Some(o) = self.export.pdf_options.as_mut() else {
+            return;
+        };
+        let mut go = false;
+        let mut cancel = false;
+        theme::modal("\u{E702}  PDF export options").show(ctx, |d| {
+            d.body(|ui| {
+                egui::Grid::new("pdf_options_grid").num_columns(2).spacing([theme::SPACE_M, theme::SPACE_S]).show(ui, |ui| {
+                    ui.label("Title");
+                    ui.add(egui::TextEdit::singleline(&mut o.title).hint_text("blank = no heading line").desired_width(theme::PDF_TITLE_FIELD_W));
+                    ui.end_row();
+                    ui.label("Orientation");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut o.portrait, true, "Portrait");
+                        ui.radio_value(&mut o.portrait, false, "Landscape");
+                    });
+                    ui.end_row();
+                    ui.label("Page size");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut o.legal, false, "A4");
+                        ui.radio_value(&mut o.legal, true, "Legal");
+                    });
+                    ui.end_row();
+                });
+                ui.add_space(theme::SPACE_S);
+                ui.add(egui::Label::new("The title is printed at the top of every page. Columns that do not fit the page width continue on the following pages with the row labels repeated.").wrap());
+            });
+            d.footer(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if theme::primary_button(ui, "Choose file\u{2026}").clicked() {
+                        go = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        });
+        if go {
+            self.confirm_pdf_options();
+        } else if cancel {
+            self.export.pdf_options = None;
+        }
     }
 
     pub(crate) fn export_split_by_column(&mut self, sidecar: Option<Vec<ParseFailure>>) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        let Some(out_dir) = rfd::FileDialog::new().pick_folder() else {
+        let Some(out_dir) = choose_folder() else {
             return;
         };
         let (source, steps) = (tab.source.clone(), tab.steps.clone());

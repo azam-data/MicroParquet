@@ -582,11 +582,9 @@ impl MicroParquetApp {
                     .clicked()
                 {
                     let _ = std::fs::create_dir_all(&self.paths.schemas_dir);
-                    if let Some(save_path) = rfd::FileDialog::new()
-                        .set_directory(&self.paths.schemas_dir)
-                        .set_file_name("wb_schema.schema.json")
-                        .save_file()
-                    {
+                    if let Some(save_path) = crate::ui::save_dialog::choose_save_path(
+                        &crate::ui::save_dialog::SaveSpec::new("Schema template (*.schema.json)", "json", "wb_schema.schema.json").in_dir(&self.paths.schemas_dir),
+                    ) {
                         if let Ok(json) = serde_json::to_string_pretty(&modal.config) {
                             let _ = std::fs::write(save_path, json);
                             self.status_message = "Saved schema template.".to_string();
@@ -629,7 +627,7 @@ impl MicroParquetApp {
                     .on_hover_text("Saves the 32-byte key file. Keep it as safe as the data: anyone with it can check guesses against the masks.")
                     .clicked()
                 {
-                    if let Some(dest) = rfd::FileDialog::new().set_file_name("pii_key.bin").save_file() {
+                    if let Some(dest) = crate::ui::save_dialog::choose_save_path(&crate::ui::save_dialog::SaveSpec::new("Key file (*.bin)", "bin", "pii_key.bin")) {
                         self.status_message = match export_pii_key(&key_path, &dest) {
                             Ok(_) => format!("Exported the PII key to {:?}. Keep it safe.", dest),
                             Err(e) => format!("Key export failed: {:#}", e),

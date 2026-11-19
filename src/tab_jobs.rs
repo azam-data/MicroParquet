@@ -12,7 +12,7 @@ use crate::engine::{
     weighted_mixed_sign_notes, write_parse_failures_csv, NumericLookingColumn,
 };
 use crate::exporters::{
-    export_pdf_tabs, export_selected_tabs_to_xlsx_scaled, split_and_export_by_column_ctx, PdfTab,
+    export_pdf_tabs, export_pdf_tabs_with, export_selected_tabs_to_xlsx_scaled, PdfOptions, split_and_export_by_column_ctx, PdfTab,
     ScaledTabToExport, XlsxScale, PDF_MAX_ROWS_PER_TAB,
 };
 use crate::jobs::{write_atomic, JobCtx};
@@ -703,6 +703,22 @@ pub fn export_tabs_pdf(
     sidecar: Option<&[ParseFailure]>,
     ctx: &JobCtx,
 ) -> Result<ExportOutcome> {
+    export_tabs_pdf_with(tabs, temp_dir, out_path, num_format, global_decimals, totals_row, sidecar, &PdfOptions::default(), ctx)
+}
+
+/// `export_tabs_pdf` with the title and the paper chosen in the export dialog.
+#[allow(clippy::too_many_arguments)]
+pub fn export_tabs_pdf_with(
+    tabs: &[ExportTab],
+    temp_dir: &Path,
+    out_path: &Path,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    totals_row: bool,
+    sidecar: Option<&[ParseFailure]>,
+    opts: &PdfOptions,
+    ctx: &JobCtx,
+) -> Result<ExportOutcome> {
     let mut collected = Vec::new();
     let mut failed = Vec::new();
     for (i, tab) in tabs.iter().enumerate() {
@@ -729,7 +745,7 @@ pub fn export_tabs_pdf(
     }
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
     let rep = write_atomic(out_path, ctx, |tmp| {
-        export_pdf_tabs(collected, tmp, num_format, global_decimals)
+        export_pdf_tabs_with(collected, tmp, num_format, global_decimals, opts)
     })?;
     let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
     let s = rep.summary();

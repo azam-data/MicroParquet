@@ -203,7 +203,7 @@ impl MicroParquetApp {
             self.status_message = "The active tab is not a CL-1 summary. Build one first (Banking \u{25b8} Loans & credit \u{25b8} CL-1 summary), then export it.".to_string();
             return;
         }
-        let Some(out_path) = rfd::FileDialog::new().set_file_name(micro_parquet::paths::default_export_file_name(&tab.title, "xlsx")).save_file() else {
+        let Some(out_path) = crate::ui::save_dialog::choose_save_path(&crate::ui::save_dialog::SaveSpec::new("Excel workbook (*.xlsx)", "xlsx", micro_parquet::paths::default_export_file_name(&tab.title, "xlsx"))) else {
             return;
         };
         self.export_cl1_excel_to(out_path);
