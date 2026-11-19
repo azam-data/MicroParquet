@@ -155,7 +155,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::LoadMacro, "Load and replay a macro on this tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::LoadMacroNewTab, "Load and replay a macro into a new tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::PythonExport, "Export the steps as a Python script\u{2026}", G::File, "py polars code", N::Tab),
-    c(I::DqScorecard, "Data-quality scorecard\u{2026}", G::Transform, "dq completeness unique duplicate blank range consistency control total gl rag green amber red score hygiene", N::Tab),
+    c(I::DqScorecard, "Data-quality scorecard\u{2026}", G::Edit, "data checks dq completeness unique duplicate blank range consistency control total gl rag green amber red score hygiene", N::Tab),
     c(I::SavedRuns, "Saved tool runs: re-run one\u{2026}", G::File, "repeat again rerun result tab gap ladder irrbb reconcile json inputs", N::Nothing),
     c(I::Quit, "Quit", G::File, "exit close", N::Nothing),
     c(I::Undo, "Undo the last change to the steps", G::Edit, "ctrl z back", N::Undo),
@@ -189,7 +189,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
     c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
-    c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Banking, "hygiene ghost exceptions quality", N::Tab),
+    c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Edit, "hygiene audit data checks ghost exceptions quality", N::Tab),
     c(I::Mudaraba, "Mudaraba profit distribution\u{2026}", G::Banking, "islamic window psr weightage profit sharing ratio mudarib depositors pool crr investable shariah", N::Tab),
     c(I::Packs, "Report packs: build and run\u{2026}", G::Banking, "monthly workbook cover slots items alco return pack headless", N::Nothing),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
@@ -226,7 +226,7 @@ pub const COMMANDS: &[Command] = &[
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
         CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves | CommandId::MomVariance => Some("Treasury & ALM"),
-        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration => Some("Loans & credit"),
         CommandId::Mudaraba => Some("Islamic window"),
         CommandId::Packs => Some("Reports"),
         _ => None,
@@ -242,19 +242,30 @@ pub fn in_group(group: CommandGroup) -> impl Iterator<Item = &'static Command> {
     COMMANDS.iter().filter(move |c| c.group == group)
 }
 
-/// The toolbar: groups of buttons, then the menus (their items are the commands of that group).
+/// The toolbar: groups of buttons (File / Edit / View / Banking / Export / Help are menus that never fold).
 pub const TOOLBAR_BUTTONS_FILE: &[CommandId] = &[I::OpenFile, I::Stack, I::Batch];
-pub const TOOLBAR_BUTTONS_TRANSFORM: &[CommandId] = &[I::Filter, I::Sort, I::Columns, I::CalcColumn, I::Pivot];
-/// Items of the toolbar's "More" menu.
-pub const TOOLBAR_MORE: &[CommandId] = &[I::Conditional, I::Normaliser, I::JoinTabs, I::ToggleSql, I::ToggleChart, I::CopyTable];
+pub const TOOLBAR_BUTTONS_TRANSFORM: &[CommandId] = &[I::Filter, I::Sort, I::Columns, I::CalcColumn, I::Pivot, I::RateProfile];
+pub const TOOLBAR_BUTTONS_VIEW: &[CommandId] = &[I::ToggleChart, I::ToggleSql];
+/// The items of the Edit menu below Undo and Redo (Undo and Redo come first).
+pub const EDIT_MENU: &[CommandId] = &[I::Undo, I::Redo, I::Conditional, I::Normaliser, I::CleanBreaks, I::JoinTabs, I::CopyTable];
+/// Edit ▸ "Data checks".
+pub const DATA_CHECKS: &[CommandId] = &[I::Audit, I::DqScorecard];
 
-/// Every command the toolbar can reach: its buttons, the More menu, and the Banking and Export
-/// menus.
-pub fn toolbar_commands() -> Vec<CommandId> {
+/// Every toolbar button in the order the bar draws them.
+pub fn toolbar_buttons() -> Vec<CommandId> {
     let mut v: Vec<CommandId> = Vec::new();
     v.extend_from_slice(TOOLBAR_BUTTONS_FILE);
     v.extend_from_slice(TOOLBAR_BUTTONS_TRANSFORM);
-    v.extend_from_slice(TOOLBAR_MORE);
+    v.extend_from_slice(TOOLBAR_BUTTONS_VIEW);
+    v
+}
+
+/// Every command the toolbar can reach: its buttons, the Edit menu and its Data checks, and the
+/// Banking and Export menus.
+pub fn toolbar_commands() -> Vec<CommandId> {
+    let mut v = toolbar_buttons();
+    v.extend_from_slice(EDIT_MENU);
+    v.extend_from_slice(DATA_CHECKS);
     v.extend(in_group(CommandGroup::Banking).map(|c| c.id));
     v.extend(in_group(CommandGroup::Export).map(|c| c.id));
     v

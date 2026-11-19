@@ -2505,3 +2505,135 @@ fn f2_the_chart_tab_has_a_pop_out_button_only_where_windows_work_and_the_window_
         assert!(q.boxes.iter().any(|(t, _)| t.starts_with("Sum of Balance by Term Period")), "{what}: the title");
     }
 }
+
+// ------------------------------------------------------------------------------------------ F3
+
+fn bar_box(p: &Painted, text: &str) -> Option<egui::Rect> {
+    let in_bar = |b: &egui::Rect| b.top() < theme::TOP_BAR_H;
+    p.boxes.iter().find(|(t, b)| t.trim() == text.trim() && in_bar(b)).or_else(|| p.boxes.iter().find(|(t, b)| matches!(text, "Banking" | "Export") && t.contains(text) && in_bar(b))).map(|(_, b)| *b)
+}
+
+fn click_menu(rig: &mut Rig, name: &str) -> Painted {
+    let p = rig.draw(3);
+    let b = bar_box(&p, name).unwrap_or_else(|| panic!("{}: the menu '{name}' is in the bar", rig.what));
+    pclick(rig, b);
+    rig.draw(3)
+}
+
+#[test]
+fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_the_transforms_and_data_checks() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6f3a", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(4);
+        // left to right: File, Edit, View, Banking, Export, Help, then the toolbar buttons
+        let xs: Vec<f32> = ["File", "Edit", "View", "Help"].iter().map(|n| bar_box(&p, n).unwrap_or_else(|| panic!("{what}: {n}")).left()).collect();
+        let banking = p.boxes.iter().find(|(t, b)| t.contains("Banking") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Banking");
+        let export = p.boxes.iter().find(|(t, b)| t.contains("Export") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Export");
+        assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < banking && banking < export && export < xs[3], "{what}: the order of the menus: {xs:?} {banking} {export}");
+        assert!(bar_box(&p, "More").is_none(), "{what}: no More menu any more");
+        // Edit: Undo, Redo, the transforms, Data checks
+        let p = click_menu(&mut rig, "Edit");
+        for want in ["Undo", "Redo", "Conditional column", "Counterparty name normaliser", "Clean line breaks", "Data checks"] {
+            assert!(p.boxes.iter().any(|(t, _)| t.contains(want)), "{what}: Edit lists '{want}': {:?}", p.boxes.iter().filter(|(_, b)| b.top() > 40.0 && b.top() < 400.0 && b.left() < 400.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        }
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("hygiene") || t.contains("dirty-data")), "{what}: the auditor is under Data checks");
+        let dc = p.boxes.iter().find(|(t, _)| t.trim() == "Data checks").map(|(_, b)| *b).expect("Data checks");
+        pclick(&mut rig, dc);
+        let p = rig.draw(3);
+        let audit = p.boxes.iter().find(|(t, _)| t.contains("dirty-data auditor")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Data checks lists the hygiene audit"));
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Data-quality scorecard")), "{what}: and the scorecard");
+        pclick(&mut rig, audit);
+        rig.draw(3);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::BankingAudit, "{what}: Edit > Data checks > the auditor opens it");
+        rig.app.active_tool = ActiveToolModal::None;
+        // the scorecard through the same menu
+        let _ = click_menu(&mut rig, "Edit");
+        let p = rig.draw(3);
+        let dc = p.boxes.iter().find(|(t, _)| t.trim() == "Data checks").map(|(_, b)| *b).expect("Data checks");
+        pclick(&mut rig, dc);
+        let p = rig.draw(3);
+        let sc = p.boxes.iter().find(|(t, _)| t.contains("Data-quality scorecard")).map(|(_, b)| *b).expect("scorecard");
+        pclick(&mut rig, sc);
+        rig.draw(3);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::DqScorecard, "{what}: and the scorecard");
+        rig.app.active_tool = ActiveToolModal::None;
+        // Banking no longer lists the auditor; Ctrl+K still finds both
+        let p = click_menu(&mut rig, "Banking");
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("dirty-data auditor")), "{what}: not in Banking");
+        let entries: Vec<micro_parquet::commands::Entry> = micro_parquet::commands::COMMANDS.iter().map(|c| micro_parquet::commands::Entry { label: c.title, words: c.words, recent: None }).collect();
+        for (q, id) in [("hygiene audit", CommandId::Audit), ("data checks", CommandId::DqScorecard), ("data quality", CommandId::DqScorecard)] {
+            let top: Vec<CommandId> = micro_parquet::commands::rank(q, &entries).iter().take(3).map(|i| micro_parquet::commands::COMMANDS[*i].id).collect();
+            assert!(top.contains(&id), "{what}: Ctrl+K '{q}' finds {id:?}: {top:?}");
+        }
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn f3_view_toolbar_buttons_switch_each_button_off_and_on_and_are_saved() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = term_rig("p6f3b", ppp, w, h);
+        let what = rig.what.clone();
+        let icon = |id: CommandId| crate::ui::commands::command_icon(id).to_string();
+        let p = rig.draw(4);
+        for id in micro_parquet::commands::toolbar_buttons() {
+            assert!(p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.contains(crate::ui::commands::toolbar_label(id)))), "{what}: {id:?} is on the bar");
+        }
+        let _ = click_menu(&mut rig, "View");
+        let p = rig.draw(3);
+        let tb = p.boxes.iter().find(|(t, _)| t.trim() == "Toolbar buttons").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View lists Toolbar buttons"));
+        pclick(&mut rig, tb);
+        let p = rig.draw(3);
+        for id in micro_parquet::commands::toolbar_buttons() {
+            let n = crate::ui::commands::toolbar_label(id);
+            assert!(p.boxes.iter().any(|(t, b)| t == n && b.top() > theme::TOP_BAR_H), "{what}: the submenu has a box for '{n}'");
+        }
+        // untick Pivot and Chart
+        for n in ["Pivot", "Chart"] {
+            let b = rig.app_view_box(n);
+            pclick(&mut rig, b);
+            rig.draw(3);
+        }
+        assert_eq!(rig.app.settings.toolbar_hidden, vec!["Pivot".to_string(), "Chart".to_string()], "{what}");
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.ctx.request_repaint();
+        // close the menu and look at the bar
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        let p = rig.draw(4);
+        let has_icon = |id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.contains(crate::ui::commands::toolbar_label(id))));
+        assert!(!has_icon(CommandId::Pivot) && !has_icon(CommandId::ToggleChart), "{what}: Pivot and Chart are off the bar");
+        assert!(has_icon(CommandId::Filter) && has_icon(CommandId::ToggleSql) && has_icon(CommandId::RateProfile), "{what}: the others stay");
+        let (again, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);
+        assert_eq!(again.toolbar_hidden, vec!["Pivot".to_string(), "Chart".to_string()], "{what}: saved in settings.json");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+impl Rig {
+    /// The box of a checkbox of the open View submenu (below the bar).
+    fn app_view_box(&mut self, name: &str) -> egui::Rect {
+        let p = self.draw(2);
+        p.boxes.iter().filter(|(t, b)| t == name && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{}: a box for '{name}'", self.what))
+    }
+}
+
+#[test]
+fn f3_in_a_narrow_window_buttons_fold_into_the_overflow_menu_and_a_folded_one_still_runs() {
+    // narrow: the menus stay, the buttons from the right fold into »
+    let mut rig = term_rig("p6f3c", 1.0, 760.0, 600.0);
+    let what = rig.what.clone();
+    let p = rig.draw(6);
+    for n in ["File", "Edit", "View", "Help"] {
+        assert!(bar_box(&p, n).is_some(), "{what}: the menu '{n}' is still there");
+    }
+    let over = bar_box(&p, "\u{bb}").unwrap_or_else(|| panic!("{what}: the » button is there"));
+    assert!(bar_box(&p, &crate::ui::commands::command_icon(CommandId::ToggleSql)).is_none(), "{what}: SQL (the last button) is folded");
+    let p = { pclick(&mut rig, over); rig.draw(3) };
+    let item = p.boxes.iter().filter(|(t, b)| t.contains("SQL editor") && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: the overflow menu lists the SQL editor: {:?}", p.boxes.iter().filter(|(_, b)| b.top() > theme::TOP_BAR_H && b.top() < 300.0).map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+    rig.app.show_steps_sidebar = false;
+    pclick(&mut rig, item);
+    rig.draw(3);
+    assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: the folded SQL button ran");
+    micro_parquet::rules::set_data_dir_override(None);
+}

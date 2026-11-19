@@ -528,6 +528,25 @@ impl MicroParquetApp {
         .response
     }
 
+    fn edit_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
+        use micro_parquet::commands::{DATA_CHECKS, EDIT_MENU};
+        ui.menu_button("Edit", |ui| {
+            for (i, id) in EDIT_MENU.iter().enumerate() {
+                if i == 2 {
+                    ui.separator();
+                }
+                self.command_menu_item(ui, ctx, *id);
+            }
+            ui.separator();
+            ui.menu_button("Data checks", |ui| {
+                for id in DATA_CHECKS {
+                    self.command_menu_item(ui, ctx, *id);
+                }
+            });
+        })
+        .response
+    }
+
     fn view_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
         ui.menu_button("View", |ui| {
             let theme_label = if self.dark_mode { "Switch to Light Theme" } else { "Switch to Dark Theme" };
@@ -554,6 +573,19 @@ impl MicroParquetApp {
                 }
             });
             ui.separator();
+            ui.menu_button("Toolbar buttons", |ui| {
+                for id in micro_parquet::commands::toolbar_buttons() {
+                    let name = ui::commands::toolbar_label(id);
+                    let mut on = !self.settings.toolbar_hidden.iter().any(|n| n == name);
+                    if ui.checkbox(&mut on, name).changed() {
+                        self.settings.toolbar_hidden.retain(|n| n != name);
+                        if !on {
+                            self.settings.toolbar_hidden.push(name.to_string());
+                        }
+                        self.save_settings();
+                    }
+                }
+            });
             ui.menu_button("Side panel", |ui| {
                 for t in ui::steps::RightTab::ALL {
                     let mut on = !self.settings.side_panel_hidden.iter().any(|n| n == t.name());

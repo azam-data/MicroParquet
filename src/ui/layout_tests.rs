@@ -3,7 +3,7 @@
 
 use crate::ui::prelude::*;
 use crate::ui::tests::test_app;
-use crate::ui::top_bar::{plan_bar, BarKey, BAR_ITEMS, FOLD_ORDER, LADDER};
+use crate::ui::top_bar::{ladder, plan_bar, BAR_ITEMS, MENUS};
 use micro_parquet::commands::CommandId;
 
 /// The window of the owner's smallest supported screen: 1280×720 pixels at 105% UI scale.
@@ -81,12 +81,11 @@ fn the_top_bar_is_one_44_px_strip() {
     let top = rects.iter().map(|(_, r)| r.top()).fold(f32::MAX, f32::min);
     let bottom = rects.iter().map(|(_, r)| r.bottom()).fold(f32::MIN, f32::max);
     assert!(top >= 0.0 && bottom <= theme::TOP_BAR_H, "items lie inside the first 44 px: {top}..{bottom}");
-    // order: mark, File, View, Help, ..., More, then the search box at the far right
+    // order: mark, the six menus, the buttons, then the search box at the far right
     let names: Vec<&str> = rects.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(&names[..4], &["Mark", "File", "View", "Help"]);
+    assert_eq!(&names[..7], &["Mark", "File", "Edit", "View", "Banking", "Export", "Help"], "{names:?}");
     assert_eq!(*names.last().unwrap_or(&""), "Search");
-    let more = names.iter().position(|n| *n == "More").expect("a More menu is always there");
-    assert_eq!(more + 2, names.len(), "More is the last item before the search box: {names:?}");
+    assert_eq!(names[7], "OpenFile", "the toolbar buttons follow the menus: {names:?}");
 }
 
 #[test]
@@ -99,90 +98,79 @@ fn nothing_overlaps_at_1280_by_720_and_105_percent() {
     assert!(search.width() >= theme::SEARCH_MIN_W - 1.0, "{search:?}");
 }
 
-/// The toolbar buttons drawn in a bar: the names of `bar_rects_at`'s rectangles that are items.
-const ITEM_NAMES: [&str; 10] = ["OpenFile", "Stack", "Batch", "Filter", "Sort", "Columns", "CalcColumn", "Pivot", "Banking", "Export"];
-/// `FOLD_ORDER` by those names.
-const FOLD_NAMES: [&str; 7] = ["CalcColumn", "Columns", "Batch", "Stack", "Sort", "Filter", "Pivot"];
+/// The toolbar buttons by the names `bar_rects_at` gives their rectangles.
+const ITEM_NAMES: [&str; 11] = ["OpenFile", "Stack", "Batch", "Filter", "Sort", "Columns", "CalcColumn", "Pivot", "RateProfile", "ToggleChart", "ToggleSql"];
 
 #[test]
-fn nothing_overlaps_at_any_window_width_and_open_banking_export_search_never_go() {
+fn nothing_overlaps_at_any_window_width_the_menus_and_search_never_go_and_buttons_fold_from_the_right() {
     // from the smallest window the app allows up to a wide monitor, in 20 px steps
     let mut w = 800.0;
     while w <= 2560.0 {
         let (screen, rects) = bar_rects_at(w);
         assert_no_overlap(&rects, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), theme::TOP_BAR_H)), &format!("{w} px"));
         let has = |n: &str| rects.iter().any(|(r, _)| r == n);
-        for never in ["OpenFile", "Banking", "Export", "Search", "More"] {
+        for never in MENUS.iter().copied().chain(["Search"]) {
             assert!(has(never), "{w} px: '{never}' is always in the bar");
         }
-        // what is missing is a first part of the fold order, nothing else
+        // what is missing is the end of the button list (they fold from the right), and then "»" is there
         let missing: Vec<&str> = ITEM_NAMES.iter().copied().filter(|n| !has(n)).collect();
-        assert!(missing.len() <= FOLD_NAMES.len() && missing.iter().all(|m| FOLD_NAMES[..missing.len()].contains(m)), "{w} px: folded {missing:?} is not a start of {FOLD_NAMES:?}");
+        assert!(missing.iter().eq(ITEM_NAMES[ITEM_NAMES.len() - missing.len()..].iter()), "{w} px: folded {missing:?} is not the end of {ITEM_NAMES:?}");
+        assert_eq!(has("Overflow"), !missing.is_empty(), "{w} px: the » button is there exactly when a button is folded");
         w += 20.0;
     }
 }
 
 #[test]
-fn items_fold_in_the_set_order_and_icons_come_before_the_second_fold() {
-    assert_eq!(FOLD_ORDER.len(), 7);
-    let names: Vec<String> = FOLD_ORDER.iter().map(|k| match k { BarKey::Cmd(id) => format!("{id:?}"), other => format!("{other:?}") }).collect();
-    assert_eq!(names, FOLD_NAMES, "Calc column, Columns, Batch, Stack, Sort, Filter, Pivot");
-    for never in [BarKey::Cmd(CommandId::OpenFile), BarKey::Banking, BarKey::Export] {
-        assert!(!FOLD_ORDER.contains(&never) && BAR_ITEMS.iter().any(|(k, _)| *k == never), "{never:?} never folds");
-    }
-    // every other item of the bar folds
-    assert_eq!(BAR_ITEMS.len(), FOLD_ORDER.len() + 3);
-    // the ladder: one fold with labels, then icon-only, then more folds (icon-only)
-    assert_eq!(LADDER[0], (0, false));
-    assert_eq!(LADDER[1], (1, false));
-    assert_eq!(LADDER[2], (1, true), "icon-only comes before the second fold");
-    assert!(LADDER[2..].windows(2).all(|w| w[1].0 == w[0].0 + 1 && w[1].1));
-
+fn the_ladder_goes_labels_then_icons_then_folds_from_the_right() {
+    let l = ladder(11);
+    assert_eq!(l[0], (0, false));
+    assert_eq!(l[1], (0, true), "icon-only comes before the first fold");
+    assert!(l[2..].windows(2).all(|w| w[1].0 == w[0].0 + 1 && w[1].1) && l[2] == (1, true) && l.last() == Some(&(11, true)));
     // walk the width down: the state only moves along the ladder, never back
-    let label = [80.0; 10];
-    let icon = [40.0; 10];
+    let n = 11;
+    let (label, icon, groups) = (vec![80.0; n], vec![40.0; n], vec![0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2]);
     let mut seen: Vec<(usize, bool)> = Vec::new();
     let mut avail = 3000.0;
     while avail > 100.0 {
-        let p = plan_bar(avail, 100.0, &label, &icon, 90.0, 20.0, 2.0);
+        let p = plan_bar(avail, 100.0, &label, &icon, &groups, 30.0, 20.0, 2.0);
         if seen.last() != Some(&(p.folded, p.icon_only)) {
             seen.push((p.folded, p.icon_only));
         }
         assert!(p.search_w >= theme::SEARCH_ICON_W && p.search_w <= theme::SEARCH_MAX_W);
         avail -= 1.0;
     }
-    assert_eq!(seen, LADDER.to_vec(), "every state is reached, in order");
-    // exact widths: labels for 8 items need 100 + groups(4*22) + 8*80 + 2 gaps within groups.. + More; check the edge both ways
-    let fits = |avail: f32| plan_bar(avail, 100.0, &label, &icon, 90.0, 20.0, 2.0);
-    assert_eq!(fits(5000.0).folded, 0);
-    let edge = (1000..4000).map(|a| a as f32).find(|a| fits(*a).folded == 0).expect("an edge");
-    assert!(fits(edge - 1.0).folded >= 1, "one pixel narrower folds Calc column");
-    assert!(!fits(edge - 1.0).icon_only, "a single fold keeps the labels");
+    // (the first fold does not narrow the bar: the » button is as wide as the icon it takes away, so that state may be skipped)
+    let mut it = l.iter();
+    assert!(seen.iter().all(|s| it.any(|x| x == s)), "the states come in the ladder's order: {seen:?}");
+    assert!(seen.first() == l.first() && seen.contains(&(0, true)) && seen.last() == l.last(), "{seen:?}");
+    // the edge between labels and icons: one pixel narrower and the labels go
+    let fits = |avail: f32| plan_bar(avail, 100.0, &label, &icon, &groups, 30.0, 20.0, 2.0);
+    let edge = (1000..5000).map(|a| a as f32).find(|a| !fits(*a).icon_only).expect("an edge");
+    assert!(fits(edge - 1.0).icon_only && fits(edge - 1.0).folded == 0, "one pixel narrower gives icons, nothing folded yet");
+    // no visible buttons at all: nothing to fold, and the search box takes the room
+    let none = plan_bar(600.0, 100.0, &[], &[], &[], 30.0, 20.0, 2.0);
+    assert_eq!((none.folded, none.icon_only), (0, false));
 }
 
 #[test]
 fn the_bar_items_are_the_toolbar_commands() {
-    let mut cmds: Vec<CommandId> = micro_parquet::commands::TOOLBAR_BUTTONS_FILE.to_vec();
-    cmds.extend_from_slice(micro_parquet::commands::TOOLBAR_BUTTONS_TRANSFORM);
-    let in_bar: Vec<CommandId> = BAR_ITEMS.iter().filter_map(|(k, _)| if let BarKey::Cmd(id) = k { Some(*id) } else { None }).collect();
-    assert_eq!(in_bar, cmds, "same buttons, same order");
+    let in_bar: Vec<CommandId> = BAR_ITEMS.iter().map(|(id, _)| *id).collect();
+    assert_eq!(in_bar, micro_parquet::commands::toolbar_buttons(), "same buttons, same order");
+    assert_eq!(in_bar.len(), 11);
 }
 
 #[test]
-fn at_1280_by_720_and_105_percent_open_banking_export_and_search_are_all_visible() {
+fn at_1280_by_720_and_105_percent_the_menus_and_search_are_all_visible() {
     let (screen, rects) = bar_rects_at(WIN_W_PX);
     let rect = |n: &str| rects.iter().find(|(r, _)| r == n).map(|(_, r)| *r).unwrap_or_else(|| panic!("'{n}' is not in the bar: {rects:?}"));
-    for n in ["OpenFile", "Banking", "Export", "Search"] {
+    for n in ["File", "Edit", "View", "Banking", "Export", "Help", "OpenFile", "Search"] {
         let r = rect(n);
         assert!(r.width() > 20.0 && r.right() <= screen.right() && r.left() >= 0.0, "{n}: {r:?}");
     }
     assert!(rect("Search").width() >= theme::SEARCH_MIN_W - 1.0, "{:?}", rect("Search"));
     // the narrow box keeps its icon and "Search…" (the Ctrl K badge needs more room)
     let texts = bar_texts_at(WIN_W_PX);
-    assert!(texts.iter().any(|t| t == "Search\u{2026}"), "{texts:?}");
-    // the buttons keep their labels (only Calc column is in More), not icons only
-    assert!(rect("Filter").width() > 50.0 && rect("OpenFile").width() > 50.0, "labelled buttons: Filter {:?}", rect("Filter"));
-    assert!(!rects.iter().any(|(n, _)| n == "CalcColumn") && rects.iter().any(|(n, _)| n == "Columns" || n == "Pivot"), "only Calc column is folded: {rects:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Search")), "{texts:?}");
     assert_no_overlap(&rects, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), theme::TOP_BAR_H)), "1280");
 }
 
@@ -240,7 +228,7 @@ fn the_version_is_in_help_about_not_in_the_bar() {
         }
     }
     let mut app = test_app("barv");
-    let (ctx, input) = headless(1600.0, WIN_H_PX, UI_SCALE); // wide enough for the Ctrl K badge
+    let (ctx, input) = headless(2400.0, WIN_H_PX, UI_SCALE); // wide enough for the Ctrl K badge
     let mut texts = Vec::new();
     for _ in 0..2 {
         let out = ctx.run(input.clone(), |ctx| {

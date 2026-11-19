@@ -27,7 +27,7 @@ Checks a tab against a set of rules and gives each rule a pass percentage (rows 
 
 ## 5. Step by step
 
-1. Open the tab to check. Choose Transform ▸ "Data-quality scorecard…" (Ctrl+K: "data quality").
+1. Open the tab to check. Choose Edit ▸ Data checks ▸ "Data-quality scorecard…" (Ctrl+K: "data quality").
 2. Open a saved rule set ("Open a rule set") or build one: choose a "Kind", the column or columns, the limits, and choose "Add rule". "Remove" deletes a rule.
 3. Set "Green from" and "Amber from" (for example 98 and 95). Below Amber is Red. Both are required in the rules file (`green_min` and `amber_min`): a file without them is refused, naming the file and the field, and no default is assumed.
 4. Name the rule set and choose "Save rule set" (`portable_data/dq_rules/<name>.json`).

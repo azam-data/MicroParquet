@@ -86,6 +86,9 @@ pub fn toolbar_label(id: CommandId) -> &'static str {
         CommandId::Columns => "Columns",
         CommandId::CalcColumn => "Calc column",
         CommandId::Pivot => "Pivot",
+        CommandId::RateProfile => "Rate profile",
+        CommandId::ToggleChart => "Chart",
+        CommandId::ToggleSql => "SQL",
         other => cmds::command(other).map(|c| c.title).unwrap_or(""),
     }
 }

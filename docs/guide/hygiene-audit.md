@@ -31,7 +31,7 @@ Flags accounts with data problems that distort ALM and regulatory numbers: "ghos
 
 ## 5. Step by step
 
-1. Open the tab, then choose Banking ▾ → "Core banking dirty-data auditor…" (Ctrl+K: "audit").
+1. Open the tab, then choose Edit ▸ Data checks ▸ "Core banking dirty-data auditor…" (Ctrl+K: "audit").
 2. In "Core Banking Dirty Data & Ghost Account Auditor" pick "Open Date:", "Maturity Date:", "Close Date:", "Status (Acstat):", "Balance Col:", "Int Rate Col:" and the account column.
 3. Type "Reporting Cutoff Date (YYYY-MM-DD):" and "Active status codes (comma-separated, any case):".
 4. Set "Rate outlier below %:" and "or above %:".

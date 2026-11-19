@@ -29,7 +29,7 @@ Summarises a table the way Excel's pivot does: the Rows you pick go down the sid
 
 ## 5. Step by step
 
-1. Open the tab and click the Pivot button on the Transform group of the toolbar (or press Ctrl+K and type "pivot"). The dialog "Pivot table" opens; its title line says which tab and step it works on.
+1. Open the tab and click the Pivot button of the toolbar (if it is not there, tick View ▸ Toolbar buttons ▸ "Pivot"; in a narrow window it is under the » button) (or press Ctrl+K and type "pivot"). The dialog "Pivot table" opens; its title line says which tab and step it works on.
 2. Find fields in the list under FIELDS (type "Search N fields…" to narrow it). The badge shows the type: Aa text, # number, D date.
 3. Drag a field into Rows, Columns, Values or Filters, or click the three dots beside the field and choose "Add to Rows", "Add to Columns", "Add to Values" or "Add to Filters". The cross on a chip removes the field.
 4. For each Values field choose the aggregation on its chip: Sum, Count, Count distinct, Average, Min, Max or W.Avg (then choose the weight column after "by").

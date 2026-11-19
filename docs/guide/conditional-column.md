@@ -27,7 +27,7 @@ Adds a column whose value depends on tests of other columns: IF a test is true T
 
 ## 5. Step by step
 
-1. Open the tab, then choose More ▾ → "Conditional column (IF / ELSE)…" (Ctrl+K: "conditional").
+1. Open the tab, then choose Edit ▸ "Conditional column (IF / ELSE)…" (Ctrl+K: "conditional").
 2. In "Add Conditional Column (IF / ELSE IF / ELSE)" type "New Column Name:".
 3. For the first rule choose the column, the comparison, the value (or switch it to another column) and the "THEN" value. For "== (Equals)", "!= (Not Equals)", "In List" and "Not in List" the value is picked from the column's own list (with the number of rows of each, over the whole tab before this step): tick one value for equals, several for "In List". A value with a comma in it is one value. There is no "(blank)" entry: blanks have their own result (step 6). With "Fall through" a blank row is not in a list, so "Not in List" gives it the THEN value (as the filter keeps it).
 4. Click "Add ELSE IF Branch" for each further rule.
