@@ -276,7 +276,52 @@ fn key_of(name: &str) -> String {
 }
 
 /// Reads one slot's file: schema, required columns, steps, checks. Returns what the tabs of the pack read from.
-fn load_slot(input: &PackInput, file: &Path, paths: &PortablePaths, ctx: &JobCtx) -> Result<(SlotData, SlotInfo, Vec<String>)> {
+/// The columns a slot's items and steps name (lower case); `None` when an item puts the whole slot table
+/// on a sheet, so that every column is used. A column named anywhere in an item's setup or the slot's steps counts.
+fn columns_used_of_slot(pack: &ReportPack, input: &PackInput) -> Option<std::collections::HashSet<String>> {
+    fn strings_of(v: &serde_json::Value, out: &mut std::collections::HashSet<String>) {
+        match v {
+            serde_json::Value::String(t) => {
+                out.insert(t.trim().to_lowercase());
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| strings_of(x, out)),
+            serde_json::Value::Object(m) => m.values().for_each(|x| strings_of(x, out)),
+            _ => {}
+        }
+    }
+    let mut names = std::collections::HashSet::new();
+    if let Ok(v) = serde_json::to_value(&input.steps) {
+        strings_of(&v, &mut names);
+    }
+    for item in &pack.items {
+        match &item.source {
+            PackItemKind::Steps { slot } if key_of(slot) == key_of(&input.slot) => return None,
+            PackItemKind::Pivot { slot, pivot } if key_of(slot) == key_of(&input.slot) => {
+                if let Ok(v) = serde_json::to_value(pivot) {
+                    strings_of(&v, &mut names);
+                }
+            }
+            PackItemKind::Run { run } if run.source_names().iter().any(|n| key_of(n) == key_of(&input.slot)) => {
+                if let Ok(v) = serde_json::to_value(run) {
+                    strings_of(&v, &mut names);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(names)
+}
+
+/// A column with values that could not be converted but that no item and no step of the slot uses: listed on the Cover.
+#[derive(Clone, Debug)]
+struct UnusedFailure {
+    slot: String,
+    column: String,
+    count: usize,
+    examples: String,
+}
+
+fn load_slot(pack: &ReportPack, input: &PackInput, file: &Path, paths: &PortablePaths, ctx: &JobCtx) -> Result<(SlotData, SlotInfo, Vec<String>, Vec<UnusedFailure>)> {
     let slot = input.slot.trim();
     if !file.is_file() {
         bail!("Slot '{}': the file {} is not there. Choose the file of this month.", slot, file.display());
@@ -321,10 +366,14 @@ fn load_slot(input: &PackInput, file: &Path, paths: &PortablePaths, ctx: &JobCtx
     ctx.check()?;
     ensure_pii_key_for(&source)?;
     let failures = source_parse_failures(&source, &paths.temp_dir)?;
-    if !failures.is_empty() {
-        let list: Vec<String> = failures.iter().map(|f| format!("'{}' has {} (for example {})", f.column, f.count, f.examples.join(" | "))).collect();
+    // a failure stops the run when the column is one an item or a step uses; in another column it is a warning on the Cover
+    let used_cols = columns_used_of_slot(pack, input);
+    let (blocking, harmless): (Vec<_>, Vec<_>) = failures.into_iter().partition(|f| used_cols.as_ref().is_none_or(|u| u.contains(&f.column.trim().to_lowercase())));
+    if !blocking.is_empty() {
+        let list: Vec<String> = blocking.iter().map(|f| format!("'{}' has {} (for example {})", f.column, f.count, f.examples.join(" | "))).collect();
         bail!("Slot '{}': values that could not be converted to the column's type: {}. Fix the file or the slot's schema; the pack does not leave them out.", slot, list.join("; "));
     }
+    let unused: Vec<UnusedFailure> = harmless.into_iter().map(|f| UnusedFailure { slot: slot.to_string(), column: f.column.clone(), count: f.count, examples: f.examples.join(" | ") }).collect();
     let mut notes: Vec<String> = Vec::new();
     if let Some(w) = source_row_check(&source, &paths.temp_dir)?.and_then(|c| c.warning()) {
         notes.push(format!("{}: {}", slot, w));
@@ -334,7 +383,7 @@ fn load_slot(input: &PackInput, file: &Path, paths: &PortablePaths, ctx: &JobCtx
     let lf = compile_tab_lazy(&source, &input.steps, &paths.temp_dir).map_err(|e| anyhow!("Slot '{}': its steps could not be run on {}: {:#}", slot, file.display(), e))?;
     let rows = lf.select([len().alias("n")]).collect()?.column("n").ok().and_then(|c| c.cast(&DataType::Int64).ok()).and_then(|c| c.i64().ok().and_then(|v| v.get(0))).unwrap_or(0).max(0) as usize;
     let info = SlotInfo { slot: slot.to_string(), file_name: file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), rows, hash: file_hash(file)? };
-    Ok((SlotData { source, steps: input.steps.clone() }, info, notes))
+    Ok((SlotData { source, steps: input.steps.clone() }, info, notes, unused))
 }
 
 fn cover_frame(rows: Vec<[String; 6]>) -> Result<DataFrame> {
@@ -367,12 +416,14 @@ pub fn run_pack(pack: &ReportPack, spec: &PackRunSpec, paths: &PortablePaths, ru
     let mut infos: Vec<SlotInfo> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     let mut used: Vec<crate::rules::UsedFile> = Vec::new();
+    let mut unused_failures: Vec<UnusedFailure> = Vec::new();
     for (n, input) in pack.inputs.iter().enumerate() {
         ctx.check()?;
         ctx.set_progress(format!("Reading {}", input.slot), Some(n as f32 / total as f32));
         let file = spec.files.iter().find(|(k, _)| key_of(k) == key_of(&input.slot)).map(|(_, v)| v.clone()).ok_or_else(|| anyhow!("The slot '{}' has no file.", input.slot))?;
-        let (res, files) = crate::rules::track_used_files(|| load_slot(input, &file, paths, ctx));
-        let (data, info, n_notes) = res?;
+        let (res, files) = crate::rules::track_used_files(|| load_slot(pack, input, &file, paths, ctx));
+        let (data, info, n_notes, n_unused) = res?;
+        unused_failures.extend(n_unused);
         for f in files {
             if !used.contains(&f) {
                 used.push(f);
@@ -434,6 +485,9 @@ pub fn run_pack(pack: &ReportPack, spec: &PackRunSpec, paths: &PortablePaths, ru
     rows.push(r("Cutoff date", cutoff, ""));
     if used.iter().any(|u| u.sample) {
         rows.push(r("Warning", "Sample parameters", "Some files below are marked sample: confirm their numbers before they go into a return."));
+    }
+    for u in &unused_failures {
+        rows.push(["Warning".to_string(), format!("{}: {}", u.slot, u.column), format!("{} value(s) could not be converted to the column's type (for example {}); no item and no step uses this column, so the run went on", u.count, u.examples), format_with_commas(u.count as f64, 0), blank(), blank()]);
     }
     for i in &infos {
         rows.push([ "Input".to_string(), i.slot.clone(), i.file_name.clone(), format_with_commas(i.rows as f64, 0), i.hash.clone(), blank() ]);

@@ -301,3 +301,46 @@ fn p2_a_slot_with_a_saved_schema_reads_the_file_with_it_and_a_pdf_can_be_asked_f
     let e = format!("{:#}", run_pack(&bad, &spec, &rig.paths, "t", &JobCtx::inert()).expect_err("no template"));
     assert!(e.contains("Slot 'Loans'") && e.contains("'gone'"), "{e}");
 }
+
+#[test]
+fn e2_a_parse_failure_stops_the_run_only_in_a_column_an_item_or_step_uses_else_it_is_a_cover_warning() {
+    let rig = Rig::new("p2_e2");
+    // a deposits file with a column JUNK that the schema reads as a number and that has bad values
+    let file = rig.root.join("deposits_junk.csv");
+    std::fs::write(&file, "ACNO,BAL,MAT,PROD,JUNK\nD1,3000000,2026-12-31,SB,1\nD2,1500000,2027-06-30,TD,abc\nD3,500000,2026-11-30,TD,x\n").expect("csv");
+    let mut cfg = micro_parquet::engine::auto_detect_smart_schema(&file).expect("schema");
+    for c in cfg.columns.iter_mut() {
+        match c.name.as_str() {
+            "JUNK" | "BAL" => c.dtype = ColDataType::Float64,
+            _ => {}
+        }
+    }
+    let spec = PackRunSpec { files: BTreeMap::from([("Deposits".to_string(), file.clone())]), cutoff: "2026-10-31".to_string() };
+    let slot = PackInput { slot: "Deposits".into(), schema: Some(cfg), required_columns: vec!["ACNO".into(), "BAL".into(), "PROD".into()], ..Default::default() };
+    // a pivot on PROD and BAL does not use JUNK: the run goes on and the Cover warns with the column and the count
+    let pivot_only = ReportPack {
+        name: "e2".into(),
+        inputs: vec![slot.clone()],
+        items: vec![PackItem { title: "By product".into(), sheet: "Deposits".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot_step()) }, col_formats: Default::default() }],
+        output: PackOutput::default(),
+    };
+    let r = run_pack(&pivot_only, &spec, &rig.paths, "t", &JobCtx::inert()).unwrap_or_else(|e| panic!("{e:#}"));
+    let cover = &r.cover;
+    let col = |n: &str| -> Vec<String> { cover.column(n).expect("col").str().expect("str").into_iter().map(|v| v.unwrap_or("").to_string()).collect() };
+    let (sect, name, rows) = (col("Section"), col("Name"), col("Rows"));
+    let w = sect.iter().position(|s| s == "Warning").expect("a warning row on the Cover");
+    assert_eq!((name[w].as_str(), rows[w].as_str()), ("Deposits: JUNK", "2"), "the column and the count");
+    // a Steps item puts every column on a sheet, so the same file is refused naming the column
+    let mut all = pivot_only.clone();
+    all.items[0].source = PackItemKind::Steps { slot: "Deposits".into() };
+    let e = format!("{:#}", run_pack(&all, &spec, &rig.paths, "t", &JobCtx::inert()).expect_err("used column"));
+    assert!(e.contains("'JUNK' has 2"), "{e}");
+    // a pivot that does use the column stops too
+    let mut uses = pivot_only.clone();
+    uses.items[0].source = PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "JUNK".into(), agg: PivotAgg::Sum, weight_col: None }], ..Default::default() })) };
+    assert!(format!("{:#}", run_pack(&uses, &spec, &rig.paths, "t", &JobCtx::inert()).expect_err("pivot uses it")).contains("'JUNK' has 2"));
+    // a step of the slot that names it counts as use
+    let mut stepped = pivot_only.clone();
+    stepped.inputs[0].steps = vec![TransformStep::FilterRows { column: "JUNK".into(), operator: FilterOp::IsNotNull, value: String::new(), keep_matching: true }];
+    assert!(format!("{:#}", run_pack(&stepped, &spec, &rig.paths, "t", &JobCtx::inert()).expect_err("step uses it")).contains("'JUNK' has 2"));
+}

@@ -4,7 +4,7 @@
 
 Shares the investment income of a period among the Mudaraba deposit products, using the weightage method: the pool income is split between the depositors and the bank as Mudarib by the profit-sharing ratio (PSR), and the depositors' share is divided between the products in proportion to average balance × weightage. For each product it shows the profit and the indicative rate per year.
 
-**It only calculates.** The method, the weightages, the CRR and the PSR must be the ones approved by the bank's Shariah Supervisory Committee (SSC). Every one of them is read from a file, `portable_data/islamic/psr_<YYYY-MM-DD>.json`; none is fixed in the program and none is typed in the dialog. The file that ships with the app is a **sample** (it says so, and a banner shows while it is in use): replace it with the bank's own before any figure is used.
+**It only calculates.** The method, the weightages, the CRR and the PSR must be the ones approved by the bank's Shariah Supervisory Committee (SSC). Every one of them is read from a file, `portable_data/islamic/psr_<YYYY-MM-DD>.json`; none is fixed in the program. The dialog shows them and has "Edit parameters…", which saves the numbers you type as a NEW file dated today (never over an existing file). The file that ships with the app is a **sample** (it says so, and a banner shows while it is in use): replace it with the bank's own before any figure is used.
 
 ## 2. When to use it
 
@@ -34,7 +34,7 @@ The file `psr_<date>.json` holds `crr_pct`, `psr_pct` and the list of weightages
 2. Choose "Product code" and "Balance", and say whether the balance is the average of the period or a daily balance.
 3. Type "Period start" and "Period end" (YYYY-MM-DD). The days are end − start + 1.
 4. Type "Investment income of the period" and "Other investable funds".
-5. Read the Parameters box: the file in force, its CRR, PSR and weightages. If it is a sample, the banner says so.
+5. Read the Parameters box: the file in force, its CRR, PSR and weightages. If it is a sample, the banner says so. To change them, click "Edit parameters…", type the CRR, the depositors' PSR, who approved them (required) and each product's weightage, and click "Save as psr_<today>.json". The new file applies to periods ending on or after today; the old files stay, so earlier periods still use the numbers in force then. A file of today's date that already exists is never overwritten (the dialog says so). The monthly income and the other investable funds stay typed in the dialog.
 6. Choose "Build distribution".
 
 ## 6. What you get

@@ -24,14 +24,14 @@ pub fn islamic_dir() -> PathBuf {
     crate::rules::data_dir().join(ISLAMIC_FOLDER)
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Weightage {
     pub product: String,
     pub weight: f64,
 }
 
 /// The numbers of a `psr_<date>.json` file.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PsrFile {
     /// The reserve deducted from the deposits before they are investable, in percent.
     pub crr_pct: f64,
@@ -70,6 +70,38 @@ fn check_psr(f: &PsrFile, label: &str) -> Result<()> {
         seen.push(k);
     }
     Ok(())
+}
+
+/// Writes a NEW parameter file `psr_<date>.json` (E1): the numbers the owner typed, `sample: false`, and
+/// who approved them. A file of that date is never overwritten (edit it by hand, or give the new numbers
+/// a later date); the old files stay, so a past period still reads the numbers in force then.
+pub fn save_psr_new(date: NaiveDate, f: &PsrFile, source: &str) -> Result<PathBuf> {
+    let name = format!("psr_{}.json", date.format("%Y-%m-%d"));
+    check_psr(f, &name)?;
+    if source.trim().is_empty() {
+        bail!("Type the source of these numbers (for example the committee's approval and its date): the file records it.");
+    }
+    let dir = islamic_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("Could not create the folder {}", dir.display()))?;
+    let path = dir.join(&name);
+    if path.exists() {
+        bail!("{} already exists. A parameter file is never overwritten: edit it by hand, or save the new numbers on a later day.", path.display());
+    }
+    let body = serde_json::json!({
+        "as_of": date.format("%Y-%m-%d").to_string(),
+        "source": source.trim(),
+        "sample": false,
+        "crr_pct": f.crr_pct,
+        "psr_pct": f.psr_pct,
+        "weightages": f.weightages,
+    });
+    let tmp = dir.join(format!(".{}.{}.tmp", name, std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string_pretty(&body)?).with_context(|| format!("Could not write {}", path.display()))?;
+    // `hard_link` fails when the name appeared meanwhile, so even a race never overwrites a file
+    let linked = std::fs::hard_link(&tmp, &path);
+    let _ = std::fs::remove_file(&tmp);
+    linked.with_context(|| format!("Could not write {} (it may already exist)", path.display()))?;
+    Ok(path)
 }
 
 /// `(date, path)` of the `psr_<date>.json` files, oldest first.

@@ -243,3 +243,26 @@ fn g3_blank_balances_dates_outside_the_period_and_missing_days_stop_the_run_nami
     let no_col = MudarabaSpec { date_col: String::new(), ..daily.clone() };
     assert!(format!("{:#}", run(&full(None, None), &no_col).expect_err("no date column")).contains("choose the column that holds the day"));
 }
+
+#[test]
+fn e1_a_new_parameter_file_is_written_dated_and_an_existing_one_is_never_overwritten() {
+    use micro_parquet::islamic::{save_psr_new, PsrFile, Weightage};
+    let d = dir("e1_psr");
+    set_data_dir_override(Some(d.clone()));
+    let f = PsrFile { crr_pct: 5.0, psr_pct: 65.0, weightages: vec![Weightage { product: "MSND".into(), weight: 0.5 }] };
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).expect("date");
+    let path = save_psr_new(date, &f, "SSC approval").expect("saves");
+    assert!(path.ends_with("islamic/psr_2026-11-19.json"), "{path:?}");
+    let before = std::fs::read(&path).expect("read");
+    let err = format!("{:#}", save_psr_new(date, &PsrFile { crr_pct: 1.0, ..f.clone() }, "other").expect_err("exists"));
+    assert!(err.contains("never overwritten"), "{err}");
+    assert_eq!(std::fs::read(&path).expect("read"), before);
+    // the new file is the one in force for a period ending after it, and the sample is not needed
+    let r = micro_parquet::islamic::load_psr(chrono::NaiveDate::from_ymd_opt(2026, 11, 30).expect("date")).expect("loads");
+    assert_eq!((r.data.crr_pct, r.meta.sample), (5.0, false));
+    // bad numbers and a missing source are refused before anything is written
+    assert!(save_psr_new(chrono::NaiveDate::from_ymd_opt(2026, 12, 1).expect("date"), &PsrFile { crr_pct: 150.0, ..f.clone() }, "x").is_err());
+    assert!(save_psr_new(chrono::NaiveDate::from_ymd_opt(2026, 12, 1).expect("date"), &f, "  ").is_err());
+    assert!(!d.join("islamic/psr_2026-12-01.json").exists());
+    set_data_dir_override(None);
+}

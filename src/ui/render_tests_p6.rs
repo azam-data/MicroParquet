@@ -2283,3 +2283,78 @@ fn g7_two_tabs_of_the_same_title_get_unique_titles_and_a_saved_run_finds_its_fil
     let err = format!("{:#}", app.run_env().resolve(&ids[0]).expect_err("missing"));
     assert!(err.contains("is not open") && err.contains("loans.csv (2)"), "{err}");
 }
+
+/// Scrolls the Mudaraba dialog's body with the wheel until the control is inside the window, then clicks it.
+fn mud_scroll_click(rig: &mut Rig, name: &str) {
+    let title = format!("{}  Mudaraba profit distribution", theme::ph::SCALES);
+    for _ in 0..40 {
+        let b = mud_btn(rig, name);
+        let body = theme::dialog_report(&rig.ctx, &title).expect("the dialog").body;
+        if b.top() > body.top() + 4.0 && b.bottom() < body.bottom() - 4.0 {
+            return pclick(rig, b);
+        }
+        let at = body.center();
+        let dy = if b.top() <= body.top() + 4.0 { 60.0 } else { -60.0 };
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.3);
+        rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, dy), modifiers: egui::Modifiers::NONE }]);
+        for _ in 0..3 {
+            rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+            rig.draw(1);
+        }
+    }
+    panic!("{}: could not bring '{name}' into the window", rig.what);
+}
+
+#[test]
+fn e1_edit_parameters_saves_a_new_file_dated_today_and_never_overwrites() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = mud_rig("p6e1", ppp, w, h, false);
+        let what = rig.what.clone();
+        let dir = micro_parquet::islamic::islamic_dir();
+        rig.app.run_command(&rig.ctx, CommandId::Mudaraba);
+        rig.draw(8);
+        let sample = dir.join("psr_2026-01-01.json");
+        let sample_before = std::fs::read(&sample).expect("the sample was written");
+        mud_scroll_click(&mut rig, "Edit parameters\u{2026}");
+        rig.draw(6);
+        let title = format!("{}  Mudaraba profit distribution", theme::ph::SCALES);
+        assert_dialog_fits(&rig.ctx, &title, &what);
+        let d = rig.app.mud.edit.clone().unwrap_or_else(|| panic!("{what}: the editor opened"));
+        assert_eq!((d.crr.as_str(), d.psr.as_str(), d.weightages.len()), ("4", "70", 5), "{what}: it starts from the file in force");
+        // no source typed: refused, nothing written
+        mud_scroll_click(&mut rig, "Save new file");
+        rig.draw(4);
+        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let new_file = dir.join(format!("psr_{today}.json"));
+        assert!(!new_file.exists(), "{what}: refused without a source");
+        assert!(rig.app.mud.edit.as_ref().and_then(|d| d.message.clone()).is_some_and(|(bad, m)| bad && m.contains("source")), "{what}: {:?}", rig.app.mud.edit.as_ref().map(|d| d.message.clone()));
+        // type new numbers and save
+        {
+            let e = rig.app.mud.edit.as_mut().expect("editor");
+            e.crr = "5".into();
+            e.psr = "65".into();
+            e.source = "SSC approval 2026-11-19".into();
+            e.weightages[0].1 = "0.5".into();
+        }
+        rig.draw(4);
+        mud_scroll_click(&mut rig, "Save new file");
+        rig.draw(4);
+        let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&new_file).unwrap_or_else(|e| panic!("{what}: the new file: {e}"))).expect("json");
+        assert_eq!((saved["crr_pct"].as_f64(), saved["psr_pct"].as_f64(), saved["sample"].as_bool(), saved["as_of"].as_str()), (Some(5.0), Some(65.0), Some(false), Some(today.as_str())), "{what}");
+        assert_eq!(saved["source"].as_str(), Some("SSC approval 2026-11-19"));
+        assert_eq!(saved["weightages"][0]["weight"].as_f64(), Some(0.5));
+        assert_eq!(std::fs::read(&sample).expect("sample"), sample_before, "{what}: the old file is untouched");
+        assert!(rig.app.mud.edit.is_none(), "{what}: the editor closed");
+        // a second save on the same day is refused and the file keeps its content
+        let before = std::fs::read(&new_file).expect("read");
+        mud_scroll_click(&mut rig, "Edit parameters\u{2026}");
+        rig.draw(4);
+        rig.app.mud.edit.as_mut().expect("editor").source = "again".into();
+        rig.draw(2);
+        mud_scroll_click(&mut rig, "Save new file");
+        rig.draw(4);
+        assert!(rig.app.mud.edit.as_ref().and_then(|d| d.message.clone()).is_some_and(|(bad, m)| bad && m.contains("never overwritten")), "{what}: {:?}", rig.app.mud.edit.as_ref().map(|d| d.message.clone()));
+        assert_eq!(std::fs::read(&new_file).expect("read"), before, "{what}: never overwritten");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}

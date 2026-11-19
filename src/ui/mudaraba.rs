@@ -4,7 +4,7 @@
 //! Supervisory Committee must have approved; a shipped file is a sample and the dialog says so.
 
 use crate::ui::prelude::*;
-use micro_parquet::islamic::{load_psr, MudarabaSpec, PsrFile, MUDARABA_COLUMNS};
+use micro_parquet::islamic::{load_psr, save_psr_new, MudarabaSpec, PsrFile, Weightage, MUDARABA_COLUMNS};
 use micro_parquet::rules::RuleFile;
 
 #[derive(Clone, Debug, Default)]
@@ -16,7 +16,19 @@ pub struct MudRects {
     pub params: Option<egui::Rect>,
 }
 
+/// The parameter editor: the numbers as typed. Saving writes a new file dated today.
+#[derive(Clone, Debug, Default)]
+pub struct PsrDraft {
+    pub crr: String,
+    pub psr: String,
+    pub source: String,
+    pub weightages: Vec<(String, String)>,
+    pub message: Option<(bool, String)>,
+}
+
 pub struct MudState {
+    /// Open while the parameters are being edited ("Edit parameters…").
+    pub edit: Option<PsrDraft>,
     pub product_col: String,
     pub balance_col: String,
     /// The rows are daily balances (their sum ÷ the days) instead of an average balance.
@@ -34,7 +46,29 @@ pub struct MudState {
 
 impl Default for MudState {
     fn default() -> Self {
-        Self { product_col: String::new(), balance_col: String::new(), daily: false, date_col: String::new(), start: String::new(), end: String::new(), income: String::new(), other: "0".to_string(), params: None, rects: MudRects::default() }
+        Self { edit: None, product_col: String::new(), balance_col: String::new(), daily: false, date_col: String::new(), start: String::new(), end: String::new(), income: String::new(), other: "0".to_string(), params: None, rects: MudRects::default() }
+    }
+}
+
+impl PsrDraft {
+    fn from_file(f: Option<&PsrFile>) -> PsrDraft {
+        match f {
+            Some(f) => PsrDraft { crr: f.crr_pct.to_string(), psr: f.psr_pct.to_string(), source: String::new(), weightages: f.weightages.iter().map(|w| (w.product.clone(), w.weight.to_string())).collect(), message: None },
+            None => PsrDraft { weightages: vec![(String::new(), String::new())], ..Default::default() },
+        }
+    }
+
+    /// The numbers typed, or the first one that is not a number.
+    fn to_file(&self) -> Result<PsrFile, String> {
+        let num = |t: &str, what: &str| number(t).ok_or_else(|| format!("Type {} as a number.", what));
+        let mut weightages = Vec::new();
+        for (p, w) in &self.weightages {
+            if p.trim().is_empty() && w.trim().is_empty() {
+                continue;
+            }
+            weightages.push(Weightage { product: p.trim().to_string(), weight: num(w, &format!("the weightage of '{}'", p.trim()))? });
+        }
+        Ok(PsrFile { crr_pct: num(&self.crr, "the CRR (%)")?, psr_pct: num(&self.psr, "the depositors' PSR (%)")?, weightages })
     }
 }
 
@@ -162,7 +196,7 @@ impl MicroParquetApp {
                     field(ui, "Other investable funds:", &mut self.mud.other, &mut rects);
                 });
                 ui.add_space(theme::SPACE_S);
-                let card = theme::card(ui, "Parameters (from the file; nothing is typed here)", |ui| match &self.mud.params {
+                let card = theme::card(ui, "Parameters in force (read from the file)", |ui| match &self.mud.params {
                     Some((_, Ok(f))) => {
                         ui.add(egui::Label::new(format!("{} as of {}: CRR {}%, depositors' PSR {}%, {} weightage(s).", f.meta.file, f.meta.as_of.format("%Y-%m-%d"), f.data.crr_pct, f.data.psr_pct, f.data.weightages.len())).wrap());
                         ui.add(egui::Label::new(egui::RichText::new(format!("Source: {}", f.meta.source)).color(tk.muted).size(theme::TEXT_LABEL)).wrap());
@@ -175,6 +209,93 @@ impl MicroParquetApp {
                     None => {}
                 });
                 rects.params = Some(card);
+                // "Edit parameters…": the numbers in a form; saving writes a NEW file dated today (never overwrites)
+                let today = chrono::Local::now().date_naive();
+                let mut save = false;
+                let mut stop = false;
+                let mut open_edit = false;
+                if self.mud.edit.is_none() {
+                    let b = ui.button("Edit parameters\u{2026}").on_hover_text("Type new numbers; they are saved as a new file dated today, and the old files stay.");
+                    rects.buttons.push(("Edit parameters\u{2026}".to_string(), b.rect));
+                    open_edit = b.clicked();
+                } else if let Some(draft) = self.mud.edit.as_mut() {
+                    theme::card(ui, "Edit parameters (saved as a new file dated today)", |ui| {
+                        egui::Grid::new("mud_psr_grid").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_S)).show(ui, |ui| {
+                            for (label, text) in [("CRR (%):", &mut draft.crr), ("Depositors' PSR (%):", &mut draft.psr), ("Source (who approved):", &mut draft.source)] {
+                                ui.label(label);
+                                let r = ui.add(egui::TextEdit::singleline(text).desired_width(theme::MIGRATION_COMBO_W));
+                                rects.fields.push((label.trim_end_matches(':').to_string(), r.rect));
+                                ui.end_row();
+                            }
+                        });
+                        ui.label(egui::RichText::new("Weightage of each product (product code, weight):").color(tk.muted).size(theme::TEXT_LABEL));
+                        let mut remove: Option<usize> = None;
+                        for (i, (p, w)) in draft.weightages.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                let a = ui.add(egui::TextEdit::singleline(p).desired_width(theme::MIGRATION_COMBO_W * 0.6));
+                                let b = ui.add(egui::TextEdit::singleline(w).desired_width(theme::MIGRATION_COMBO_W * 0.3));
+                                rects.fields.push((format!("Product {}", i + 1), a.rect));
+                                rects.fields.push((format!("Weight {}", i + 1), b.rect));
+                                let x = ui.small_button("\u{d7}").on_hover_text("Remove this product");
+                                rects.buttons.push((format!("Remove {}", i + 1), x.rect));
+                                if x.clicked() {
+                                    remove = Some(i);
+                                }
+                            });
+                        }
+                        if let Some(i) = remove {
+                            draft.weightages.remove(i);
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            let add = ui.button("+ Add product");
+                            rects.buttons.push(("+ Add product".to_string(), add.rect));
+                            if add.clicked() {
+                                draft.weightages.push((String::new(), String::new()));
+                            }
+                            let label = format!("Save as psr_{}.json", today.format("%Y-%m-%d"));
+                            let s = theme::primary_button(ui, &label);
+                            rects.buttons.push(("Save new file".to_string(), s.rect));
+                            save = s.clicked();
+                            let c = ui.button("Cancel edit");
+                            rects.buttons.push(("Cancel edit".to_string(), c.rect));
+                            stop = c.clicked();
+                        });
+                        ui.add(egui::Label::new(egui::RichText::new(format!("The new file applies to periods ending on or after {}; earlier periods keep the file in force then. An existing file of that date is never overwritten.", today.format("%Y-%m-%d"))).color(tk.muted).size(theme::TEXT_LABEL)).wrap());
+                        if let Some((bad, m)) = &draft.message {
+                            if *bad {
+                                theme::error_label(ui, m);
+                            } else {
+                                ui.label(m.as_str());
+                            }
+                        }
+                    });
+                }
+                if open_edit {
+                    let cur = match &self.mud.params {
+                        Some((_, Ok(f))) => Some(f.data.clone()),
+                        _ => None,
+                    };
+                    self.mud.edit = Some(PsrDraft::from_file(cur.as_ref()));
+                }
+                if stop {
+                    self.mud.edit = None;
+                }
+                if save {
+                    let result = self.mud.edit.as_ref().map(|d| d.to_file().and_then(|f| save_psr_new(today, &f, &d.source).map_err(|e| format!("{:#}", e))));
+                    match result {
+                        Some(Ok(path)) => {
+                            self.status_message = format!("Saved the parameters as {}.", path.display());
+                            self.mud.edit = None;
+                            self.mud.params = None;
+                        }
+                        Some(Err(e)) => {
+                            if let Some(d) = self.mud.edit.as_mut() {
+                                d.message = Some((true, e));
+                            }
+                        }
+                        None => {}
+                    }
+                }
                 if let Some(p) = &problem {
                     ui.add_space(theme::SPACE_S);
                     theme::error_label(ui, p);
