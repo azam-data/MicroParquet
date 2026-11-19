@@ -74,6 +74,22 @@ The sheet "By product":
 
 Test: `guide_report_packs`
 
+### Charts in a pack
+
+An item can carry a chart. In the Items card, each item has a **Chart** choice under its row:
+
+- **No chart** (the default);
+- **Saved chart: <name>**, a chart saved from the Chart tab (it must use columns the item's table has);
+- **Template: <name>**, one of the banking templates (for example Gap ladder on the liquidity gap ladder item). The yield-curves template is not offered: it reads the curve store, not a table.
+
+When the pack runs, the chart is calculated over the item's whole table, in the pack's money scale and decimals. The workbook gets, right after the item's sheet, a sheet called "<sheet> chart" with the chart's table and a native, editable Excel chart beside it (a template with a companion chart, such as the LCR/NSFR HQLA composition, gets "<sheet> chart 2" too). The Cover lists each chart under its sheet. Tick **Also write an HTML chart book** in the Output card to write `<pack>-charts.html` next to the workbook: every chart of the pack on one page, dated at the cutoff.
+
+Headless: a pack that asks for the book writes `<pack>-charts.html` beside the `--export-xlsx` file; `--export-html <file>` names the book yourself (and asks for it even when the pack does not). A pack with no chart cannot make a book, and says so.
+
+If any chart cannot be drawn (the saved chart is missing, a column is missing, the template does not fit the item's table) the run stops with the item's name and the reason, and **no file is written**: not the workbook, not the book.
+
+Limits: a chart sheet's name is the item's sheet plus " chart", so the sheet name of a charted item is at most 20 characters; the PDF has no charts.
+
 ## 9. Common messages and fixes
 
 - "The pack 'monthly' needs a file for the slot 'Deposits'." Choose the file (headless: `--slot Deposits=<file>`).
@@ -81,6 +97,7 @@ Test: `guide_report_packs`
 - "Slot 'Loans': the file … lacks the column(s) …" The file is not the layout the slot was made with: use the right file or make the slot again.
 - "Slot 'Loans': values that could not be converted…" Fix the file or the slot's schema; a pack does not leave such values out.
 - "The item 'Gap ladder' (sheet 'Gap') failed: …" The reason follows (a missing column, a missing rule file). No workbook is written.
+- "The item 'Deposits table' (sheet 'Deposits') could not be charted (chart: …)": the saved chart is not in the charts folder, needs a column the table lacks, or the template does not fit. Fix the item's Chart choice; nothing is written.
 - "Add the input slot from the open tab 'Loans' first" when adding an item: add that tab as a slot, then the item.
 
 ## 10. Limits and assumptions

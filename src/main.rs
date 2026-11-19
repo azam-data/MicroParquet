@@ -26,6 +26,9 @@ pub(crate) struct CliArgs {
     export_xlsx: Option<PathBuf>,
     #[arg(long)]
     export_pdf: Option<PathBuf>,
+    /// With --pack: write the pack's charts as one HTML chart book to this file.
+    #[arg(long)]
+    export_html: Option<PathBuf>,
     /// Export even when the control column has values that could not be converted.
     #[arg(long)]
     allow_parse_failures: bool,

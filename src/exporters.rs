@@ -284,6 +284,28 @@ pub fn write_xlsx_tabs_noted(
     rows_per_sheet: usize,
     scale: Option<XlsxScale>,
 ) -> Result<XlsxExportReport> {
+    write_xlsx_tabs_charted(tabs, Vec::new(), errors, totals_errors, out_path, rows_per_sheet, scale)
+}
+
+/// The native Excel charts of a tab (Phase 7 C6): each chart gets a sheet of its own right after the
+/// tab's sheet, named "<sheet> chart", with the chart's table and the chart beside it.
+#[derive(Clone, Debug)]
+pub struct TabCharts {
+    /// The title of the tab the charts belong to (as in `XlsxTab::title`).
+    pub tab_title: String,
+    pub charts: Vec<(crate::charts::data::ChartData, crate::charts::layout::LayoutOpts)>,
+}
+
+/// `write_xlsx_tabs_noted` with native charts after the sheets of the tabs that have them.
+pub fn write_xlsx_tabs_charted(
+    tabs: Vec<XlsxTab>,
+    tab_charts: Vec<TabCharts>,
+    errors: Vec<(String, String)>,
+    totals_errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
+) -> Result<XlsxExportReport> {
     let rows_per_sheet = rows_per_sheet.max(1);
     let mut workbook = Workbook::new();
     let mut report = XlsxExportReport::default();
@@ -430,6 +452,13 @@ pub fn write_xlsx_tabs_noted(
             // Totals: two rows (what each cell is, then its value) under the last part of the data.
             if part + 1 == sheet_count && !summary.is_empty() {
                 write_xlsx_totals(worksheet, &summary, cols, last - first, &col_scales, &col_formats, scale)?;
+            }
+        }
+        // the tab's charts: a sheet each, right after the tab's own
+        if let Some(tc) = tab_charts.iter().find(|t| t.tab_title == raw_title) {
+            for (n, (data, opts)) in tc.charts.iter().enumerate() {
+                let name = crate::charts::pack::chart_sheet_name(&base_name, n);
+                crate::charts::xlsx::add_chart_sheet(&mut workbook, &name, data, opts).with_context(|| format!("Excel: the chart of '{}' could not be written", raw_title))?;
             }
         }
         report.sheets.push((raw_title, sheet_count));

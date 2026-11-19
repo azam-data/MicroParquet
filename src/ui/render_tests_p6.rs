@@ -1885,7 +1885,7 @@ fn p2_the_pack_builder_fits_builds_a_pack_by_clicks_saves_it_and_runs_it() {
         pclick_btn(&mut rig, "New pack");
         assert!(rig.app.packs.pack.inputs.is_empty(), "{what}");
         rig.app.packs.pack.name = "monthly".into();
-        rig.app.packs.pack.items.push(PackItem { title: "x".into(), sheet: "x".into(), source: PackItemKind::Steps { slot: "A".into() }, col_formats: Default::default() });
+        rig.app.packs.pack.items.push(PackItem { title: "x".into(), sheet: "x".into(), source: PackItemKind::Steps { slot: "A".into() }, col_formats: Default::default(), chart: None });
         rig.app.packs.pack.inputs.push(PackInput { slot: "A".into(), ..Default::default() });
         rig.draw(8);
         pclick_btn(&mut rig, "Save pack");
@@ -1915,6 +1915,99 @@ fn p2_the_pack_builder_fits_builds_a_pack_by_clicks_saves_it_and_runs_it() {
         settle(&mut rig.app);
         assert!(!root.join("out.xlsx").exists(), "{what}: nothing written");
         assert!(rig.app.status_message.contains("failed") && rig.app.status_message.contains("'Deposits'"), "{what}: {}", rig.app.status_message);
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+/// Scrolls the pack dialog with the wheel until the named field or button is inside its body.
+fn pack_scroll_to(rig: &mut Rig, name: &str) -> egui::Rect {
+    rig.ctx.style_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
+    for _ in 0..40 {
+        rig.draw(3);
+        let body = assert_dialog_fits(&rig.ctx, &packs_title(), &rig.what).body;
+        let found = rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()).find(|(n, _)| n == name).map(|(_, r)| *r);
+        if let Some(r) = found {
+            if r.is_positive() && r.top() >= body.top() + 2.0 && r.bottom() <= body.bottom() - 2.0 {
+                return r;
+            }
+        }
+        let now = rig.ctx.input(|i| i.time);
+        rig.input.time = Some(now + 0.2);
+        rig.step(vec![egui::Event::PointerMoved(body.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -80.0), modifiers: egui::Modifiers::NONE }]);
+    }
+    let body = assert_dialog_fits(&rig.ctx, &packs_title(), &rig.what).body;
+    let found = rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()).find(|(n, _)| n == name).map(|(_, r)| *r);
+    panic!("{}: '{name}' {found:?} could not be scrolled into the dialog body {body:?}", rig.what);
+}
+
+#[test]
+fn c6_an_items_chart_is_chosen_from_its_drop_down_the_chart_book_is_ticked_and_the_run_writes_both_files() {
+    use micro_parquet::charts::pack::PackChart;
+    for (ppp, w, h) in SCREENS {
+        let mut rig = packs_rig("c6packs", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Packs);
+        rig.draw(6);
+        for tab in [0usize, 1] {
+            rig.app.active_tab = tab;
+            rig.draw(8);
+            let b = pack_btn(&rig, "Add input slot from open tab");
+            pclick(&mut rig, b);
+        }
+        rig.app.active_tab = 2;
+        rig.draw(8);
+        pclick_btn(&mut rig, "Add item from result tab");
+        assert_eq!(rig.app.packs.pack.items.len(), 1, "{what}: {:?}", rig.app.packs.message);
+        assert!(rig.app.packs.pack.items[0].chart.is_none(), "{what}: an item starts without a chart");
+        rig.app.packs.pack.name = "monthly".into();
+        rig.draw(8);
+        // the chart drop-down of the item: open it by a click, then click the entry (its real rect)
+        let combo = pack_scroll_to(&mut rig, "Chart 1");
+        assert!(combo.width() > 100.0, "{what}: {combo:?}");
+        pclick(&mut rig, combo);
+        let p = rig.draw(8);
+        let entry = p.boxes.iter().find(|(t, _)| t == "Template: Gap ladder").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the entry 'Template: Gap ladder' is in the list"));
+        assert!(entry.is_positive() && rig.ctx.screen_rect().contains_rect(entry), "{what}: the entry {entry:?} is in the window");
+        pclick(&mut rig, entry);
+        rig.draw(8);
+        assert_eq!(rig.app.packs.pack.items[0].chart, Some(PackChart::Template { template: "gap-ladder".into() }), "{what}");
+        assert!(rig.app.packs.rects.fields.iter().any(|(n, _)| n == "Chart 1"), "{what}");
+        // the chart book is ticked by a click
+        assert!(!rig.app.packs.pack.output.html_charts);
+        let tick = pack_scroll_to(&mut rig, "HTML chart book");
+        pclick(&mut rig, tick);
+        rig.draw(6);
+        assert!(rig.app.packs.pack.output.html_charts, "{what}");
+        // everything still fits the dialog
+        let r2 = assert_dialog_fits(&rig.ctx, &packs_title(), &what);
+        for (n, rect) in rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()) {
+            if rect.is_positive() && rect.top() < r2.body.bottom() && rect.bottom() > r2.body.top() {
+                assert!(rect.left() >= r2.window.left() - 1.0 && rect.right() <= r2.window.right() + 1.0, "{what}: '{n}' {rect:?} is inside the dialog {:?}", r2.window);
+            }
+        }
+        // run it: the workbook and the chart book beside it
+        let root = rig.app.paths.root_dir.clone();
+        rig.app.packs.files.insert("Loans".into(), root.join("loans_oct.csv").display().to_string());
+        rig.app.packs.files.insert("Deposits".into(), root.join("deposits_oct.csv").display().to_string());
+        rig.app.packs.cutoff = "2026-10-31".into();
+        rig.app.packs.out_path = root.join("out.xlsx").display().to_string();
+        rig.draw(8);
+        pclick_btn(&mut rig, "Run pack"); // in the dialog's footer: always in view
+        settle(&mut rig.app);
+        assert!(root.join("out.xlsx").exists(), "{what}: {}", rig.app.status_message);
+        let book = root.join("monthly-charts.html");
+        assert!(book.exists(), "{what}: the chart book beside the workbook: {}", rig.app.status_message);
+        assert!(rig.app.status_message.contains("monthly-charts.html"), "{what}: {}", rig.app.status_message);
+        let _ = std::fs::remove_file(root.join("out.xlsx"));
+        let _ = std::fs::remove_file(&book);
+        // "No chart" takes it away again
+        let combo = pack_scroll_to(&mut rig, "Chart 1");
+        pclick(&mut rig, combo);
+        let p = rig.draw(8);
+        let none = p.boxes.iter().find(|(t, _)| t == "No chart").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: 'No chart' is in the list"));
+        pclick(&mut rig, none);
+        rig.draw(6);
+        assert!(rig.app.packs.pack.items[0].chart.is_none(), "{what}");
         micro_parquet::rules::set_data_dir_override(None);
     }
 }

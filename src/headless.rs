@@ -22,10 +22,16 @@ pub(crate) fn run_pack_cli(args: &crate::CliArgs, paths: &PortablePaths) -> anyh
         (None, true) => Some(xlsx.with_extension("pdf")),
         (None, false) => None,
     };
+    // the chart book: `--export-html <file>`, or `<pack>-charts.html` beside the workbook when the pack asks for it
+    let html = match (&args.export_html, pack.output.html_charts) {
+        (Some(p), _) => Some(p.clone()),
+        (None, true) => Some(html_path_for(&xlsx, &pack.name)),
+        (None, false) => None,
+    };
     let spec = PackRunSpec { files, cutoff };
     let msg = micro_parquet::jobs::run_inline(|ctx| {
         let r = run_pack(&pack, &spec, paths, &run_time_now(), ctx)?;
-        write_pack(&r, &xlsx, pdf.as_deref(), ctx)
+        write_pack_with_charts(&r, &xlsx, pdf.as_deref(), html.as_deref(), ctx)
     })?;
     println!("{}", msg);
     Ok(())
@@ -220,10 +226,10 @@ mod tests {
                 PackInput { slot: "Loans".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "MAT".into(), "GRADE".into()], ..Default::default() },
             ],
             items: vec![
-                PackItem { title: "Gap".into(), sheet: "Gap".into(), source: PackItemKind::Run { run: gap }, col_formats: Default::default() },
-                PackItem { title: "CL-1".into(), sheet: "CL1".into(), source: PackItemKind::Run { run: cl1 }, col_formats: Default::default() },
-                PackItem { title: "Table".into(), sheet: "Table".into(), source: PackItemKind::Steps { slot: "Deposits".into() }, col_formats: Default::default() },
-                PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default() },
+                PackItem { title: "Gap".into(), sheet: "Gap".into(), source: PackItemKind::Run { run: gap }, col_formats: Default::default(), chart: None },
+                PackItem { title: "CL-1".into(), sheet: "CL1".into(), source: PackItemKind::Run { run: cl1 }, col_formats: Default::default(), chart: None },
+                PackItem { title: "Table".into(), sheet: "Table".into(), source: PackItemKind::Steps { slot: "Deposits".into() }, col_formats: Default::default(), chart: None },
+                PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default(), chart: None },
             ],
             output: PackOutput::default(),
         };
@@ -279,6 +285,104 @@ mod tests {
         let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", &format!("Deposits={}", deposits.display()), "--export-xlsx", "x.xlsx"]);
         assert!(format!("{:#}", run_headless_cli(&bad, &paths).expect_err("no cutoff")).contains("--cutoff"));
         assert!(!root.join("x.xlsx").exists());
+        micro_parquet::rules::set_data_dir_override(None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// C6: `--export-html` writes the chart book of the run, the same file as the dialog's path; a chart
+    /// that cannot be drawn stops the run and nothing is written.
+    #[test]
+    fn c6_headless_export_html_gives_the_same_chart_book_as_the_dialog_path_and_a_failing_item_writes_nothing() {
+        let root = std::env::temp_dir().join(format!("mp_c6_headless_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("temp")).expect("folder");
+        micro_parquet::rules::set_data_dir_override(Some(root.clone()));
+        let paths = PortablePaths { root_dir: root.clone(), macros_dir: root.join("m"), schemas_dir: root.join("s"), curves_dir: root.join("c"), buckets_file: root.join("b.json"), temp_dir: root.join("temp") };
+        let deposits = root.join("deposits.csv");
+        std::fs::write(&deposits, "ACNO,BAL,MAT,PROD\nD1,100,2026-12-31,SB\nD2,50,2027-06-30,TD\nD3,25,2026-11-30,TD\n").expect("csv");
+        let loans = root.join("loans.csv");
+        std::fs::write(&loans, "ACNO,BAL,MAT\nL1,1000000,2027-03-31\nL2,2000000,2028-10-31\n").expect("loans");
+        let gap = micro_parquet::tool_runs::ToolRun::GapLadder(micro_parquet::tool_runs::GapLadderRun {
+            inputs: vec![
+                micro_parquet::tool_runs::GapInputRun { source: "Loans".into(), spec: micro_parquet::banking::GapInputSpec { role: micro_parquet::banking::GapRole::Asset, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() },
+                micro_parquet::tool_runs::GapInputRun { source: "Deposits".into(), spec: micro_parquet::banking::GapInputSpec { role: micro_parquet::banking::GapRole::Liability, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() },
+            ],
+            preset: CustomBucketDef::default_presets()[0].name.clone(),
+            preset_def: None,
+            cutoff: "2020-01-31".into(),
+            null_as_sight: true,
+            behaviour_file: String::new(),
+            stress_tdrr: false,
+        });
+        let mut pack = ReportPack {
+            name: "charted".into(),
+            inputs: vec![
+                PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "MAT".into(), "PROD".into()], ..Default::default() },
+                PackInput { slot: "Loans".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "MAT".into()], ..Default::default() },
+            ],
+            items: vec![PackItem { title: "Gap".into(), sheet: "Gap".into(), source: PackItemKind::Run { run: gap }, col_formats: Default::default(), chart: Some(micro_parquet::charts::pack::PackChart::Template { template: "gap-ladder".into() }) }],
+            output: PackOutput::default(),
+        };
+        save_pack(&packs_dir(), &pack).expect("saves");
+        let slots = |a: &Path, b: &Path| vec!["--slot".to_string(), format!("Deposits={}", a.display()), "--slot".to_string(), format!("Loans={}", b.display())];
+        // the dialog's path
+        let spec = PackRunSpec { files: std::collections::BTreeMap::from([("Deposits".to_string(), deposits.clone()), ("Loans".to_string(), loans.clone())]), cutoff: "2026-10-31".into() };
+        let r = micro_parquet::jobs::run_inline(|ctx| run_pack(&pack, &spec, &paths, "ui", ctx)).expect("runs");
+        let (ui_xlsx, ui_html) = (root.join("ui.xlsx"), root.join("ui.html"));
+        micro_parquet::jobs::run_inline(|ctx| write_pack_with_charts(&r, &ui_xlsx, None, Some(&ui_html), ctx)).expect("writes");
+        // the command line: --export-html names the book
+        let (cli_xlsx, cli_html) = (root.join("cli.xlsx"), root.join("cli.html"));
+        let mut argv: Vec<String> = ["MicroParquet", "--headless", "--pack", "charted"].iter().map(|s| s.to_string()).collect();
+        argv.extend(slots(&deposits, &loans));
+        argv.extend(["--cutoff", "2026-10-31", "--export-xlsx"].iter().map(|s| s.to_string()));
+        argv.push(cli_xlsx.display().to_string());
+        argv.push("--export-html".to_string());
+        argv.push(cli_html.display().to_string());
+        let args = crate::CliArgs::parse_from(argv.clone());
+        run_headless_cli(&args, &paths).expect("headless runs");
+        let (a, b) = (std::fs::read_to_string(&ui_html).expect("ui book"), std::fs::read_to_string(&cli_html).expect("cli book"));
+        assert!(a.contains("class=\"mp-chart\"") && a == b, "the chart book is the same from the command line");
+        for n in 1..=2 {
+            let e = format!("xl/charts/chart{n}.xml");
+            let (x, y) = (unzip(&ui_xlsx, &e), unzip(&cli_xlsx, &e));
+            assert!(!x.is_empty() && x == y, "{e} is the same from the command line");
+        }
+        // the pack asks for the book: it goes beside the workbook as <pack>-charts.html
+        pack.output.html_charts = true;
+        save_pack(&packs_dir(), &pack).expect("saves");
+        let beside = root.join("beside.xlsx");
+        let mut argv2: Vec<String> = ["MicroParquet", "--headless", "--pack", "charted"].iter().map(|s| s.to_string()).collect();
+        argv2.extend(slots(&deposits, &loans));
+        argv2.extend(["--cutoff", "2026-10-31", "--export-xlsx"].iter().map(|s| s.to_string()));
+        argv2.push(beside.display().to_string());
+        run_headless_cli(&crate::CliArgs::parse_from(argv2), &paths).expect("headless runs");
+        assert!(root.join("charted-charts.html").exists(), "<pack>-charts.html beside the workbook");
+        // a pack without a chart cannot make a book
+        pack.items[0].chart = None;
+        save_pack(&packs_dir(), &pack).expect("saves");
+        let (nx, nh) = (root.join("nochart.xlsx"), root.join("nochart.html"));
+        let mut argv3: Vec<String> = ["MicroParquet", "--headless", "--pack", "charted"].iter().map(|s| s.to_string()).collect();
+        argv3.extend(slots(&deposits, &loans));
+        argv3.extend(["--cutoff", "2026-10-31", "--export-xlsx"].iter().map(|s| s.to_string()));
+        argv3.push(nx.display().to_string());
+        argv3.push("--export-html".to_string());
+        argv3.push(nh.display().to_string());
+        let e = format!("{:#}", run_headless_cli(&crate::CliArgs::parse_from(argv3), &paths).expect_err("no chart"));
+        assert!(e.contains("no chart"), "{e}");
+        assert!(!nx.exists() && !nh.exists(), "nothing is written");
+        // an item whose saved chart is missing stops the run
+        pack.items[0].chart = Some(micro_parquet::charts::pack::PackChart::Saved { name: "Nothing".into() });
+        save_pack(&packs_dir(), &pack).expect("saves");
+        let (fx, fh) = (root.join("fail.xlsx"), root.join("fail.html"));
+        let mut argv4: Vec<String> = ["MicroParquet", "--headless", "--pack", "charted"].iter().map(|s| s.to_string()).collect();
+        argv4.extend(slots(&deposits, &loans));
+        argv4.extend(["--cutoff", "2026-10-31", "--export-xlsx"].iter().map(|s| s.to_string()));
+        argv4.push(fx.display().to_string());
+        argv4.push("--export-html".to_string());
+        argv4.push(fh.display().to_string());
+        let e = format!("{:#}", run_headless_cli(&crate::CliArgs::parse_from(argv4), &paths).expect_err("failing chart"));
+        assert!(e.contains("'Gap'") && e.contains("Nothing"), "{e}");
+        assert!(!fx.exists() && !fh.exists(), "nothing is written when an item fails");
         micro_parquet::rules::set_data_dir_override(None);
         let _ = std::fs::remove_dir_all(&root);
     }

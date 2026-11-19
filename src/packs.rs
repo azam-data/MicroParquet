@@ -74,6 +74,8 @@ pub struct PackItem {
     pub source: PackItemKind,
     /// The column formats the result tab had (percent columns and so on).
     pub col_formats: HashMap<String, ColumnFormatSpec>,
+    /// A chart of this item (a saved chart, or a template on a tool's result): C6.
+    pub chart: Option<crate::charts::pack::PackChart>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -84,11 +86,13 @@ pub struct PackOutput {
     /// The scale money is written in.
     pub scale: NumberDisplayFormat,
     pub decimals: usize,
+    /// Also write `<pack>-charts.html` beside the workbook: the charts of the items as one chart book.
+    pub html_charts: bool,
 }
 
 impl Default for PackOutput {
     fn default() -> Self {
-        Self { pdf: false, scale: NumberDisplayFormat::BdtCrore, decimals: 2 }
+        Self { pdf: false, scale: NumberDisplayFormat::BdtCrore, decimals: 2, html_charts: false }
     }
 }
 
@@ -184,6 +188,17 @@ pub fn validate_pack(p: &ReportPack) -> Result<()> {
             bail!("The sheet name '{}' is used twice (or is a name the workbook keeps: Cover, Export_Errors). Rename the item '{}'.", sh, label);
         }
         sheets.push(sh.to_lowercase());
+        if it.chart.is_some() {
+            if sh.chars().count() > crate::charts::pack::MAX_CHARTED_SHEET_CHARS {
+                bail!("The sheet name '{}' of the item '{}' has a chart, whose sheet is '<name> chart': use at most {} characters.", sh, label, crate::charts::pack::MAX_CHARTED_SHEET_CHARS);
+            }
+            for n in 0..2 {
+                let cs = crate::charts::pack::chart_sheet_name(sh, n).to_lowercase();
+                if sheets.contains(&cs) {
+                    bail!("The chart sheet '{}' of the item '{}' has the name of another sheet. Rename one of the items.", crate::charts::pack::chart_sheet_name(sh, n), label);
+                }
+            }
+        }
         for s in item_slots(it) {
             if !seen.iter().any(|x| x.eq_ignore_ascii_case(s.trim())) {
                 bail!("The item '{}' reads the slot '{}', which the pack does not have. Add the slot first.", label, s);
@@ -218,12 +233,16 @@ pub struct PackSheet {
     pub title: String,
     pub df: DataFrame,
     pub col_formats: HashMap<String, ColumnFormatSpec>,
+    /// The charts of the item (none without a chart): calculated when the pack ran.
+    pub charts: Vec<crate::charts::pack::ItemChart>,
 }
 
 /// A finished run: the cover, the sheets and what was read. Nothing is written yet.
 #[derive(Clone, Debug)]
 pub struct PackResult {
     pub pack: String,
+    /// The cutoff date the run was made at (the date of the chart book).
+    pub cutoff: String,
     pub cover: DataFrame,
     pub sheets: Vec<PackSheet>,
     pub inputs: Vec<SlotInfo>,
@@ -234,6 +253,7 @@ pub struct PackResult {
 /// The output choices of the pack the run used.
 #[derive(Clone, Debug)]
 pub struct PackOutputCopy {
+    pub html_charts: bool,
     pub pdf: bool,
     pub scale: NumberDisplayFormat,
     pub decimals: usize,
@@ -471,7 +491,13 @@ pub fn run_pack(pack: &ReportPack, spec: &PackRunSpec, paths: &PortablePaths, ru
                 used.push(f);
             }
         }
-        sheets.push(PackSheet { sheet: item.sheet.trim().to_string(), title: item.title.clone(), df, col_formats: item.col_formats.clone() });
+        // the item's chart, calculated over its whole table: a chart that cannot be drawn stops the run
+        let charts = match &item.chart {
+            Some(c) => crate::charts::pack::build_item_charts(&df, c, &paths.root_dir.join("charts"), &item.col_formats, pack.output.scale, pack.output.decimals)
+                .map_err(|e| anyhow!("The item '{}' (sheet '{}') could not be charted ({}): {:#}", item.title, item.sheet, c.label(), e))?,
+            None => Vec::new(),
+        };
+        sheets.push(PackSheet { sheet: item.sheet.trim().to_string(), title: item.title.clone(), df, col_formats: item.col_formats.clone(), charts });
     }
     ctx.set_progress("Writing the cover", Some(1.0));
 
@@ -494,6 +520,9 @@ pub fn run_pack(pack: &ReportPack, spec: &PackRunSpec, paths: &PortablePaths, ru
     }
     for s in &sheets {
         rows.push(r("Sheet", &s.sheet, &s.title));
+        for (n, c) in s.charts.iter().enumerate() {
+            rows.push(r("Chart", &crate::charts::pack::chart_sheet_name(&s.sheet, n), &crate::charts::pack::cover_detail(c)));
+        }
     }
     for u in &used {
         let mut detail = u.file.clone();
@@ -508,12 +537,32 @@ pub fn run_pack(pack: &ReportPack, spec: &PackRunSpec, paths: &PortablePaths, ru
     for n in &notes {
         rows.push(r("Note", "", n));
     }
-    Ok(PackResult { pack: pack.name.clone(), cover: cover_frame(rows)?, sheets, inputs: infos, used, output: PackOutputCopy { pdf: pack.output.pdf, scale: pack.output.scale, decimals: pack.output.decimals } })
+    Ok(PackResult { pack: pack.name.clone(), cutoff: cutoff.to_string(), cover: cover_frame(rows)?, sheets, inputs: infos, used, output: PackOutputCopy { html_charts: pack.output.html_charts, pdf: pack.output.pdf, scale: pack.output.scale, decimals: pack.output.decimals } })
 }
 
 /// Writes the workbook (and the PDF when the pack asks for one). Each file is written to a
 /// temporary name and renamed, so a failure leaves no partial file.
 pub fn write_pack(result: &PackResult, xlsx: &Path, pdf: Option<&Path>, ctx: &JobCtx) -> Result<String> {
+    write_pack_with_charts(result, xlsx, pdf, None, ctx)
+}
+
+/// Where the chart book of a pack goes by default: `<pack>-charts.html` beside the workbook.
+pub fn html_path_for(xlsx: &Path, pack: &str) -> PathBuf {
+    xlsx.with_file_name(format!("{}-charts.html", crate::paths::sanitize_file_name(pack)))
+}
+
+/// The charts of a result, all of them, in the order of the sheets.
+pub fn result_charts(result: &PackResult) -> Vec<&crate::charts::pack::ItemChart> {
+    result.sheets.iter().flat_map(|s| s.charts.iter()).collect()
+}
+
+/// `write_pack`, and with `html` the charts of the items as one chart book. The workbook (with the native chart
+/// of each item that has one), the PDF and the book are all written to temporary names and renamed only when
+/// every one of them is finished.
+pub fn write_pack_with_charts(result: &PackResult, xlsx: &Path, pdf: Option<&Path>, html: Option<&Path>, ctx: &JobCtx) -> Result<String> {
+    if html.is_some() && result_charts(result).is_empty() {
+        bail!("The pack '{}' has no chart to put in a chart book. Give an item a chart (Report packs, the item's Chart choice) first.", result.pack);
+    }
     let mut tabs: Vec<XlsxTab> = vec![XlsxTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new() }];
     tabs.extend(result.sheets.iter().map(|s| XlsxTab { title: s.sheet.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new() }));
     let scale = XlsxScale { num_format: result.output.scale, decimals: result.output.decimals };
@@ -521,7 +570,13 @@ pub fn write_pack(result: &PackResult, xlsx: &Path, pdf: Option<&Path>, ctx: &Jo
     // PDF that fails leaves no workbook behind either
     ctx.check()?;
     let xlsx_tmp = crate::jobs::TempOutput::new(xlsx);
-    let rep = write_xlsx_tabs_noted(tabs, Vec::new(), Vec::new(), xlsx_tmp.path(), EXCEL_MAX_DATA_ROWS, Some(scale))?;
+    let tab_charts: Vec<crate::exporters::TabCharts> = result
+        .sheets
+        .iter()
+        .filter(|s| !s.charts.is_empty())
+        .map(|s| crate::exporters::TabCharts { tab_title: s.sheet.clone(), charts: s.charts.iter().map(|c| (c.data.clone(), c.opts.clone())).collect() })
+        .collect();
+    let rep = crate::exporters::write_xlsx_tabs_charted(tabs, tab_charts, Vec::new(), Vec::new(), xlsx_tmp.path(), EXCEL_MAX_DATA_ROWS, Some(scale))?;
     let mut msg = format!("Wrote {} ({})", xlsx.display(), rep.summary());
     let mut pdf_tmp = None;
     if let Some(p) = pdf {
@@ -535,9 +590,21 @@ pub fn write_pack(result: &PackResult, xlsx: &Path, pdf: Option<&Path>, ctx: &Jo
         }
         pdf_tmp = Some(tmp);
     }
+    let mut html_tmp = None;
+    if let Some(h) = html {
+        let charts = result_charts(result);
+        let items: Vec<crate::charts::echarts::BookItem> = charts.iter().map(|c| crate::charts::echarts::BookItem { data: &c.data, opts: c.opts.clone() }).collect();
+        let tmp = crate::jobs::TempOutput::new(h);
+        crate::charts::echarts::write_chart_book(tmp.path(), &result.pack, &format!("As of {}", result.cutoff), &items)?;
+        msg.push_str(&format!("; wrote {} ({} chart(s))", h.display(), items.len()));
+        html_tmp = Some(tmp);
+    }
     ctx.check()?;
     xlsx_tmp.commit()?;
     if let Some(t) = pdf_tmp {
+        t.commit()?;
+    }
+    if let Some(t) = html_tmp {
         t.commit()?;
     }
     Ok(msg)
