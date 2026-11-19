@@ -23,8 +23,8 @@ Replaces every line break inside a text value (a Remarks or address cell that th
 
 ## 5. Step by step
 
-1. Open the tab. If the status bar shows "N records contain line breaks inside quotes", click "Replace with spaces" beside it (or open "Details" and click it there). The step "Clean line breaks" is added for all text columns and the note goes away.
-2. To choose columns, use Transform ▾ → "Clean line breaks…" (or Ctrl+K and type "line breaks"). In "Clean line breaks" choose "All text columns" or "Only these columns:" and tick them. Tick "Trim spaces on all text values" if the spaces at the ends of values without a line break should go too (it is off here by default). Then click "Clean line breaks".
+1. Open the tab. If the status bar shows "N records contain line breaks inside quotes", click "Replace with spaces" beside it (or open "Details" and click it there). In a narrow window, or with many other items on the bar, the note itself is left out and only the "Details" button stays, so the list and the "Replace with spaces" action are always one click away. The step "Clean line breaks" is added for all text columns and the note goes away.
+2. To choose columns, use Edit ▸ "Clean line breaks…" (or Ctrl+K and type "line breaks"). In "Clean line breaks" choose "All text columns" or "Only these columns:" and tick them. Tick "Trim spaces on all text values" if the spaces at the ends of values without a line break should go too (it is off here by default). Then click "Clean line breaks".
 3. To change it later, click the step in the Steps panel: its buttons appear in one row (Edit, Move up, Move down, Turn off, Duplicate, and Delete at the right end, which asks first; each has a tooltip). Click Edit. Undo (Ctrl+Z) takes the step away and the note comes back.
 4. Export as usual. The step is recorded, so a saved macro and a batch run repeat it.
 

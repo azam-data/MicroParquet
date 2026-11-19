@@ -16,7 +16,7 @@ use chrono::NaiveDate;
 use polars::prelude::*;
 
 /// How the curve's rates are quoted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Compounding {
     /// Annual compounding: the rate used in e^(−R·t) is ln(1 + y).
     #[default]
@@ -276,6 +276,7 @@ pub fn run_rows(rows: &[CfRow], spec: &IrrbbSpec) -> Result<IrrbbOutput> {
         let shock = spec.shocks.data.for_currency(c, &spec.shocks.meta.file)?;
         let curve = pick_curve(&spec.curves, c, spec.cutoff)?;
         curve_files.push((c.clone(), format!("curves/{} ({})", curve_file_name(curve.date), curve.currency.trim())));
+        crate::rules::note_used_file("Yield curve", &format!("curves/{}", curve_file_name(curve.date)), &curve.date.format("%Y-%m-%d").to_string(), &curve.source, false);
         setups.push((c.clone(), shock, curve));
     }
     let eve = |c: &str| -> Option<EveSetup> {

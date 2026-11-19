@@ -15,6 +15,7 @@ pub enum CommandId {
     LoadMacro,
     LoadMacroNewTab,
     PythonExport,
+    SavedRuns,
     Quit,
     // Edit
     Undo,
@@ -50,6 +51,10 @@ pub enum CommandId {
     Reconcile,
     ClMigration,
     Audit,
+    Packs,
+    MomVariance,
+    Mudaraba,
+    DqScorecard,
     // Export
     ExportParquet,
     ExportCsv,
@@ -63,6 +68,8 @@ pub enum CommandId {
     ToggleTheme,
     ZoomIn,
     ZoomOut,
+    ZoomReset,
+    ZoomSetDefault,
     ScaleCrore,
     ScaleLakh,
     ScaleMillion,
@@ -75,6 +82,7 @@ pub enum CommandId {
     ToggleSql,
     ToggleChart,
     ToggleSummary,
+    SortLists,
     // Help
     About,
 }
@@ -147,6 +155,8 @@ pub const COMMANDS: &[Command] = &[
     c(I::LoadMacro, "Load and replay a macro on this tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::LoadMacroNewTab, "Load and replay a macro into a new tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::PythonExport, "Export the steps as a Python script\u{2026}", G::File, "py polars code", N::Tab),
+    c(I::DqScorecard, "Data-quality scorecard\u{2026}", G::Edit, "data checks dq completeness unique duplicate blank range consistency control total gl rag green amber red score hygiene", N::Tab),
+    c(I::SavedRuns, "Saved tool runs: re-run one\u{2026}", G::File, "repeat again rerun result tab gap ladder irrbb reconcile json inputs", N::Nothing),
     c(I::Quit, "Quit", G::File, "exit close", N::Nothing),
     c(I::Undo, "Undo the last change to the steps", G::Edit, "ctrl z back", N::Undo),
     c(I::Redo, "Redo the change to the steps", G::Edit, "ctrl y forward", N::Redo),
@@ -171,6 +181,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Duration, "Duration, DV01 and \u{394}EVE\u{2026}", G::Banking, "eve irrbb modified macaulay", N::Tab),
     c(I::Ftp, "FTP yield curve mapper\u{2026}", G::Banking, "funds transfer pricing margin", N::Tab),
     c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
+    c(I::MomVariance, "MoM variance and commentary\u{2026}", G::Banking, "month on month change prev curr volume rate mix effect interest materiality narrative alco paper", N::TwoTabs),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::ClassifyOverdue, "Classify by overdue\u{2026}", G::Banking, "cl classification overdue dpd days past due months std sma ss df bl brpd 15 2024 grade stage override", N::Tab),
     c(I::IfrsEcl, "IFRS 9 ECL\u{2026}", G::Banking, "ifrs9 ifrs 9 ecl expected credit loss stage 1 2 3 sicr pd lgd ead ccf scenario cure brpd 06 2026 provision shortfall", N::Tab),
@@ -178,7 +189,9 @@ pub const COMMANDS: &[Command] = &[
     c(I::Limits, "Limit utilisation, over-limit and undrawn CCF\u{2026}", G::Banking, "credit exposure", N::Tab),
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
     c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
-    c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Banking, "hygiene ghost exceptions quality", N::Tab),
+    c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Edit, "hygiene audit data checks ghost exceptions quality", N::Tab),
+    c(I::Mudaraba, "Mudaraba profit distribution\u{2026}", G::Banking, "islamic window psr weightage profit sharing ratio mudarib depositors pool crr investable shariah", N::Tab),
+    c(I::Packs, "Report packs: build and run\u{2026}", G::Banking, "monthly workbook cover slots items alco return pack headless", N::Nothing),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
     c(I::ExportXlsx, "Export tabs to an Excel workbook\u{2026}", G::Export, "xlsx save spreadsheet totals", N::Tab),
@@ -190,6 +203,8 @@ pub const COMMANDS: &[Command] = &[
     c(I::ToggleTheme, "Switch light / dark theme", G::View, "dark mode night appearance", N::Nothing),
     c(I::ZoomIn, "Zoom in (UI scale)", G::View, "bigger larger", N::Nothing),
     c(I::ZoomOut, "Zoom out (UI scale)", G::View, "smaller", N::Nothing),
+    c(I::ZoomReset, "Reset zoom to the default", G::View, "ctrl 0 scale 100 105 percent", N::Nothing),
+    c(I::ZoomSetDefault, "Set the current zoom as the default", G::View, "start up scale percent remember save", N::Nothing),
     c(I::ScaleCrore, "Show money in Crore", G::View, "scale cr 10000000", N::Nothing),
     c(I::ScaleLakh, "Show money in Lakh", G::View, "scale lac 100000", N::Nothing),
     c(I::ScaleMillion, "Show money in Millions", G::View, "scale mn m 1000000", N::Nothing),
@@ -199,9 +214,10 @@ pub const COMMANDS: &[Command] = &[
     c(I::DecimalsUp, "More decimal places", G::View, "precision", N::Nothing),
     c(I::DecimalsDown, "Fewer decimal places", G::View, "precision", N::Nothing),
     c(I::TogglePanel, "Show or hide the right panel", G::View, "steps column inspector sidebar", N::Nothing),
-    c(I::ToggleSql, "Show or hide the SQL scratchpad bar", G::View, "query", N::Nothing),
-    c(I::ToggleChart, "Show or hide the ALCO bar chart", G::View, "graph plot", N::Nothing),
+    c(I::ToggleSql, "SQL editor", G::View, "sql query select table self scratchpad run", N::Tab),
+    c(I::ToggleChart, "Show or hide the chart", G::View, "graph plot bar line category series aggregation top n", N::Nothing),
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
+    c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
 
@@ -209,8 +225,10 @@ pub const COMMANDS: &[Command] = &[
 /// order, so the commands of one heading are next to each other).
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
-        CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves => Some("Treasury & ALM"),
-        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves | CommandId::MomVariance => Some("Treasury & ALM"),
+        CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration => Some("Loans & credit"),
+        CommandId::Mudaraba => Some("Islamic window"),
+        CommandId::Packs => Some("Reports"),
         _ => None,
     }
 }
@@ -224,19 +242,30 @@ pub fn in_group(group: CommandGroup) -> impl Iterator<Item = &'static Command> {
     COMMANDS.iter().filter(move |c| c.group == group)
 }
 
-/// The toolbar: groups of buttons, then the menus (their items are the commands of that group).
+/// The toolbar: groups of buttons (File / Edit / View / Banking / Export / Help are menus that never fold).
 pub const TOOLBAR_BUTTONS_FILE: &[CommandId] = &[I::OpenFile, I::Stack, I::Batch];
-pub const TOOLBAR_BUTTONS_TRANSFORM: &[CommandId] = &[I::Filter, I::Sort, I::Columns, I::CalcColumn, I::Pivot];
-/// Items of the toolbar's "More" menu.
-pub const TOOLBAR_MORE: &[CommandId] = &[I::Conditional, I::Normaliser, I::JoinTabs, I::ToggleSql, I::ToggleChart, I::CopyTable];
+pub const TOOLBAR_BUTTONS_TRANSFORM: &[CommandId] = &[I::Filter, I::Sort, I::Columns, I::CalcColumn, I::Pivot, I::RateProfile];
+pub const TOOLBAR_BUTTONS_VIEW: &[CommandId] = &[I::ToggleChart, I::ToggleSql];
+/// The items of the Edit menu below Undo and Redo (Undo and Redo come first).
+pub const EDIT_MENU: &[CommandId] = &[I::Undo, I::Redo, I::Conditional, I::Normaliser, I::CleanBreaks, I::JoinTabs, I::CopyTable];
+/// Edit ▸ "Data checks".
+pub const DATA_CHECKS: &[CommandId] = &[I::Audit, I::DqScorecard];
 
-/// Every command the toolbar can reach: its buttons, the More menu, and the Banking and Export
-/// menus.
-pub fn toolbar_commands() -> Vec<CommandId> {
+/// Every toolbar button in the order the bar draws them.
+pub fn toolbar_buttons() -> Vec<CommandId> {
     let mut v: Vec<CommandId> = Vec::new();
     v.extend_from_slice(TOOLBAR_BUTTONS_FILE);
     v.extend_from_slice(TOOLBAR_BUTTONS_TRANSFORM);
-    v.extend_from_slice(TOOLBAR_MORE);
+    v.extend_from_slice(TOOLBAR_BUTTONS_VIEW);
+    v
+}
+
+/// Every command the toolbar can reach: its buttons, the Edit menu and its Data checks, and the
+/// Banking and Export menus.
+pub fn toolbar_commands() -> Vec<CommandId> {
+    let mut v = toolbar_buttons();
+    v.extend_from_slice(EDIT_MENU);
+    v.extend_from_slice(DATA_CHECKS);
     v.extend(in_group(CommandGroup::Banking).map(|c| c.id));
     v.extend(in_group(CommandGroup::Export).map(|c| c.id));
     v

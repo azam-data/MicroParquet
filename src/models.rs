@@ -154,6 +154,20 @@ pub struct ColumnSchemaConfig {
     /// Empty for CSV.
     #[serde(default)]
     pub source_dtype: String,
+    /// The name the column has from the schema on (Phase 6 U1). Blank or missing keeps the
+    /// file's name. Applied after typing, Dr/Cr and masking, before any step.
+    #[serde(default)]
+    pub rename_to: Option<String>,
+}
+
+impl ColumnSchemaConfig {
+    /// The name after the rename: "Rename to" when it has text, else the file's own name.
+    pub fn final_name(&self) -> String {
+        match self.rename_to.as_deref().map(str::trim) {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => self.name.clone(),
+        }
+    }
 }
 
 /// The column type a Parquet column already has, from its `source_dtype` label; `None` for
@@ -233,6 +247,42 @@ pub struct IngestionConfig {
     pub skip_rows: usize,
     #[serde(default)]
     pub encoding: CsvTextEncoding,
+    /// A saved template with this ticked opens matching files without asking (Phase 6 U1).
+    #[serde(default)]
+    pub auto_apply: bool,
+}
+
+impl IngestionConfig {
+    /// (the file's name, the new name) of every column the schema renames.
+    pub fn rename_pairs(&self) -> Vec<(String, String)> {
+        self.columns.iter().filter_map(|c| (c.final_name() != c.name).then(|| (c.name.clone(), c.final_name()))).collect()
+    }
+
+    /// The column names after the renames, in column order.
+    pub fn final_names(&self) -> Vec<String> {
+        self.columns.iter().map(|c| c.final_name()).collect()
+    }
+
+    /// What is wrong with the final names, by column index: a name that is empty after trimming,
+    /// or one that another column has too. Empty when the names are fine.
+    pub fn rename_problems(&self) -> Vec<(usize, String)> {
+        let finals = self.final_names();
+        let mut out = Vec::new();
+        for (i, f) in finals.iter().enumerate() {
+            if f.trim().is_empty() {
+                out.push((i, "This column has no name. Type a name in \"Rename to\".".to_string()));
+                continue;
+            }
+            // names are the same when they differ only in capitals or spaces at the ends (Excel and SQL see them so)
+            let same_name = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
+            let same: Vec<usize> = finals.iter().enumerate().filter(|(_, g)| same_name(g, f)).map(|(j, _)| j).collect();
+            if same.len() > 1 {
+                let others: Vec<String> = same.iter().filter(|j| **j != i).map(|j| format!("\"{}\"", self.columns[*j].name)).collect();
+                out.push((i, format!("\"{}\" is also the name of {}. Every column needs its own name: change one \"Rename to\".", f, others.join(", "))));
+            }
+        }
+        out
+    }
 }
 
 impl Default for IngestionConfig {
@@ -247,6 +297,7 @@ impl Default for IngestionConfig {
             separator: default_csv_separator(),
             skip_rows: 0,
             encoding: CsvTextEncoding::Utf8,
+            auto_apply: false,
         }
     }
 }
@@ -562,8 +613,9 @@ pub enum BatchSchemaStrategy {
     MasterSchemaTemplate,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FilterOp {
+    #[default]
     Eq,
     NotEq,
     Gt,
@@ -575,6 +627,8 @@ pub enum FilterOp {
     IsNull,
     IsNotNull,
     InList,
+    /// Not any of the picked values (Phase 6 U7).
+    NotInList,
 }
 
 impl FilterOp {
@@ -591,6 +645,7 @@ impl FilterOp {
             FilterOp::IsNull,
             FilterOp::IsNotNull,
             FilterOp::InList,
+            FilterOp::NotInList,
         ]
     }
 
@@ -607,13 +662,15 @@ impl FilterOp {
             FilterOp::IsNull => "Is Null / Blank",
             FilterOp::IsNotNull => "Is Not Null",
             FilterOp::InList => "In List (a, b, c)",
+            FilterOp::NotInList => "Not in List",
         }
     }
 }
 
 /// Operators of the multi-condition filter (T1).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CondOp {
+    #[default]
     Equals,
     NotEquals,
     Gt,
@@ -627,6 +684,8 @@ pub enum CondOp {
     InList,
     IsBlank,
     IsNotBlank,
+    /// Not any of the picked values (Phase 6 U7).
+    NotInList,
 }
 
 impl CondOp {
@@ -643,6 +702,7 @@ impl CondOp {
             CondOp::StartsWith,
             CondOp::EndsWith,
             CondOp::InList,
+            CondOp::NotInList,
             CondOp::IsBlank,
             CondOp::IsNotBlank,
         ]
@@ -662,6 +722,7 @@ impl CondOp {
             CondOp::StartsWith => "starts with",
             CondOp::EndsWith => "ends with",
             CondOp::InList => "is in list",
+            CondOp::NotInList => "is not in list",
             CondOp::IsBlank => "is blank",
             CondOp::IsNotBlank => "is not blank",
         }
@@ -686,12 +747,13 @@ impl CondOp {
             FilterOp::IsNull => CondOp::IsBlank,
             FilterOp::IsNotNull => CondOp::IsNotBlank,
             FilterOp::InList => CondOp::InList,
+            FilterOp::NotInList => CondOp::NotInList,
         }
     }
 }
 
 /// One condition of a filter: "Balance > 1000", "Opndat between 2026-09-01 and 2026-09-30".
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct FilterCondition {
     pub column: String,
     pub op: CondOp,
@@ -700,11 +762,43 @@ pub struct FilterCondition {
     /// Upper bound of `Between` (inclusive).
     #[serde(default)]
     pub value2: String,
+    /// The values picked from the column's list (Phase 6 U7). When there are some, they are the
+    /// ones compared (a value with a comma in it is one value); `value` is then only a summary.
+    /// Dates and numbers are matched as typed values, not as text.
+    #[serde(default)]
+    pub values: Vec<String>,
+    /// "(blank)" was picked as well: blank values match (or, for "not in list", are left out too).
+    #[serde(default)]
+    pub or_blank: bool,
+}
+
+/// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
+pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
+    let mut s = values.iter().take(n).cloned().collect::<Vec<_>>().join("; ");
+    let more = values.len().saturating_sub(n);
+    if more > 0 {
+        s.push_str(&format!(" (+{})", more));
+    }
+    if blank {
+        if !s.is_empty() {
+            s.push_str("; ");
+        }
+        s.push_str("(blank)");
+    }
+    s
 }
 
 impl FilterCondition {
+    /// True when the condition compares with picked values rather than a typed text.
+    pub fn uses_values(&self) -> bool {
+        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank)
+    }
+
     /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000".
     pub fn describe(&self) -> String {
+        if self.uses_values() {
+            return format!("{} {} {}", self.column, self.op.label(), values_summary(&self.values, self.or_blank, 3));
+        }
         match self.op {
             CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", self.column, self.op.label()),
             CondOp::Between => format!("{} between {} and {}", self.column, self.value.trim(), self.value2.trim()),
@@ -811,15 +905,19 @@ pub struct SummarySpec {
 }
 
 /// One level of a multi-level sort.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct SortLevel {
     pub column: String,
     /// false = lowest first (A to Z, smallest, oldest); true = highest first.
     #[serde(default)]
     pub descending: bool,
+    /// How text values are ordered: Natural (Phase 3), a custom list or Tenor (Phase 6 U3). Steps
+    /// saved before U3 have none and sort naturally.
+    #[serde(default)]
+    pub order: crate::sort_lists::SortOrder,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct CondRule {
     pub col_name: String,
     pub op: FilterOp,
@@ -829,6 +927,10 @@ pub struct CondRule {
     /// The right-hand side is another column, not a value.
     #[serde(default)]
     pub compare_is_col: bool,
+    /// The values picked from the column's list for =, ≠, "In list" and "Not in list" (Phase 6 U7);
+    /// when there are some they are the ones compared.
+    #[serde(default)]
+    pub values: Vec<String>,
 }
 
 /// What a conditional column gives a row when a column in one of its rules is blank (null, or
@@ -1374,6 +1476,18 @@ pub struct PivotSpec {
     pub scale: PivotScale,
     #[serde(default)]
     pub sort_by_value: Option<PivotSortByValue>,
+    /// The order of the labels of a Rows or Columns field other than Natural (Phase 6 U3).
+    #[serde(default)]
+    pub field_orders: Vec<PivotFieldOrder>,
+}
+
+/// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PivotFieldOrder {
+    #[serde(default)]
+    pub field: String,
+    #[serde(default)]
+    pub order: crate::sort_lists::SortOrder,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -1746,6 +1860,8 @@ pub enum TransformStep {
         scale: PivotScale,
         #[serde(default)]
         sort_by_value: Option<PivotSortByValue>,
+        #[serde(default)]
+        field_orders: Vec<PivotFieldOrder>,
     },
     SqlQuery {
         query: String,
@@ -1821,6 +1937,7 @@ impl TransformStep {
                     op: CondOp::from_filter_op(*operator),
                     value: value.clone(),
                     value2: String::new(),
+                    ..Default::default()
                 }],
                 GroupJoin::And,
                 *keep_matching,
@@ -1949,7 +2066,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -1960,6 +2077,7 @@ impl TransformStep {
                 show_as: *show_as,
                 scale: *scale,
                 sort_by_value: *sort_by_value,
+                field_orders: field_orders.clone(),
             }),
             _ => None,
         }
@@ -1978,6 +2096,21 @@ impl TransformStep {
             show_as: spec.show_as,
             scale: spec.scale,
             sort_by_value: spec.sort_by_value,
+            field_orders: spec.field_orders,
+        }
+    }
+}
+
+impl TabSource {
+    /// The name a column has in the file when the schema renamed it (Phase 6 U1): the Column
+    /// inspector says "From file: <name>". `None` when the column keeps its name or is not a
+    /// column of a file (a result of a tool, a join).
+    pub fn file_name_of(&self, final_name: &str) -> Option<String> {
+        let from = |c: &IngestionConfig| c.columns.iter().find(|c| c.final_name() == final_name && c.name != final_name).map(|c| c.name.clone());
+        match self {
+            TabSource::SingleFile { config, .. } => from(config),
+            TabSource::VerticalStack { files, .. } => files.iter().find_map(|(_, _, c)| from(c)),
+            _ => None,
         }
     }
 }
@@ -2076,6 +2209,30 @@ pub enum TabSource {
         spec: Box<crate::irrbb::IrrbbSpec>,
         view: IrrbbView,
     },
+    /// The Mudaraba profit distribution of the Islamic window (Phase 6 P5): the deposit tab's rows
+    /// (its source and steps), shared by the parameters of `portable_data/islamic`.
+    MudarabaPool {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::islamic::MudarabaSpec,
+    },
+    /// The data-quality scorecard (Phase 6 P4): the rules run over the tab's rows (its source and steps).
+    DqScorecard {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        rules: Box<crate::dq::DqRuleSet>,
+        view: DqView,
+    },
+    /// Month-on-month variance (Phase 6 P3): the balances of two months by key, the interest
+    /// effects, and the commentary; `view` says which of the two tables this tab shows.
+    MomVariance {
+        prev_source: Box<TabSource>,
+        prev_steps: Vec<TransformStep>,
+        curr_source: Box<TabSource>,
+        curr_steps: Vec<TransformStep>,
+        spec: crate::mom::MomSpec,
+        view: MomView,
+    },
     /// The CL migration matrix of two months (Phase 4 V2).
     ClMigration {
         prev_source: Box<TabSource>,
@@ -2086,19 +2243,41 @@ pub enum TabSource {
     },
 }
 
+/// Which table of the data-quality run a tab shows.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DqView {
+    /// The scorecard: a row per rule and the overall score.
+    #[default]
+    Scorecard,
+    /// Every failing row of rule number `n` (counting from 0).
+    Failing(usize),
+}
+
+/// Which table of the month-on-month run a tab shows.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MomView {
+    /// "MoM variance": a row per key with the changes and the interest effects.
+    #[default]
+    Variance,
+    /// "MoM commentary": one sentence per row.
+    Commentary,
+}
+
 /// Which table of the LCR / NSFR run a tab shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum LiquidityView {
     /// "LCR/NSFR lines": the line detail (code, label, amount, factor, weighted).
+    #[default]
     Lines,
     /// "LCR/NSFR summary": HQLA, net cash outflows, ASF, RSF, the two ratios and their flags.
     Summary,
 }
 
 /// Which table of the six-scenario run a tab shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum IrrbbView {
     /// "IRRBB results": the scenarios, their EVE change, loss and ΔNII.
+    #[default]
     Results,
     /// "IRRBB cash flows": the cash-flow ladder with the base present values.
     CashFlows,
@@ -2138,6 +2317,10 @@ pub struct TabState {
     pub viewport_limit: usize,
     pub cached_slice: DataFrame,
     pub sql_scratchpad: String,
+    /// The tab's last 10 SQL queries run from the SQL tab, oldest first (Phase 6 U2).
+    pub sql_history: Vec<String>,
+    /// The last error of a query run from the SQL tab (shown under the editor).
+    pub sql_error: Option<String>,
     /// Values of the tab's source that could not be converted to their column type.
     pub parse_failures: Vec<ParseFailure>,
     /// For a joined tab: rows and control sum against the left table, and dropped duplicates.

@@ -64,3 +64,27 @@ mod d9;
 mod c2;
 #[path = "../phase5/guide.rs"]
 mod guide5;
+
+// Phase 6 tests (tests/phase6/) are compiled into this binary too.
+#[path = "../phase6/u3.rs"]
+mod u3;
+#[path = "../phase6/u1.rs"]
+mod u1;
+#[path = "../phase6/u5.rs"]
+mod u5;
+#[path = "../phase6/u7.rs"]
+mod u7;
+#[path = "../phase6/p1.rs"]
+mod p1;
+#[path = "../phase6/p2.rs"]
+mod p2;
+#[path = "../phase6/p3.rs"]
+mod p3;
+#[path = "../phase6/p4.rs"]
+mod p4_dq;
+#[path = "../phase6/p5.rs"]
+mod p5_islamic;
+#[path = "../phase6/p6.rs"]
+mod p6_stress;
+#[path = "../phase6/guide.rs"]
+mod guide6;

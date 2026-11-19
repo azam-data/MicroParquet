@@ -20,13 +20,15 @@ Orders the rows by one or more columns, each from lowest to highest or the rever
 | --- | --- | --- | --- | --- |
 | Column per level | Yes | Number, date or text | Brancd, Balance | A column can be used once. |
 | Direction per level | Yes | Lowest first / Highest first | Highest first for Balance | Blanks are last in either direction. |
+| Order per level | No | Natural, a custom list or Tenor | Tenor for Term Period | Text columns only. See [custom sort lists](custom-sort-lists.md). |
 
 ## 5. Step by step
 
 1. Open the tab and click the Sort button on the toolbar (or Ctrl+K: "sort"; right-click a column header also offers it).
 2. In "Sort rows" choose a column and "Lowest first" or "Highest first" for level 1.
-3. Click "Add level" for each further level; "Move up" and "Move down" change the order, "Remove this level" deletes one.
-4. Click "Apply sort". To change or take it away later, use "Edit sort" or "Remove sort".
+3. The "Order" choice of a level is Natural, one of your custom lists, or Tenor (1m, 100D, 1y by days). "Highest first" reverses a list.
+4. Click "Add level" for each further level; "Move up" and "Move down" change the order, "Remove this level" deletes one.
+5. Click "Apply sort". To change or take it away later, use "Edit sort" or "Remove sort".
 
 ## 6. What you get
 

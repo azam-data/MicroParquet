@@ -13,6 +13,8 @@ pub struct StatusReport {
     pub content: egui::Rect,
     /// The Messages button.
     pub messages: egui::Rect,
+    /// The zoom label left of it (a click opens the Zoom menu).
+    pub zoom: egui::Rect,
 }
 
 /// The status bar's last frame.
@@ -52,6 +54,7 @@ impl MicroParquetApp {
         let mut status_bar = egui::Rect::NOTHING;
         let mut status_left = egui::Rect::NOTHING;
         let mut status_button = egui::Rect::NOTHING;
+        let mut status_zoom = egui::Rect::NOTHING;
         self.log_status_message();
         let mut cancel_job: Option<u64> = None;
         egui::TopBottomPanel::bottom("status_bar")
@@ -64,7 +67,11 @@ impl MicroParquetApp {
                 // never drawn past the window.
                 let full = ui.max_rect();
                 let btn_w = theme::status_button_width(ui, "Messages");
-                let right_rect = egui::Rect::from_min_max(egui::pos2(full.right() - btn_w, full.top()), full.max);
+                // the zoom label ("105%") sits left of it, wide enough for "200%"
+                // (in a narrow window it goes first: the message keeps its room)
+                let show_zoom = full.width() >= theme::STATUS_ZOOM_MIN_BAR_W;
+                let zoom_w = if show_zoom { theme::text_width(ui, "200%", theme::TEXT_SMALL) + 2.0 * theme::SPACE_XS + theme::STATUS_ITEM_GAP } else { 0.0 };
+                let right_rect = egui::Rect::from_min_max(egui::pos2(full.right() - btn_w - zoom_w, full.top()), full.max);
                 let left_rect = egui::Rect::from_min_max(full.min, egui::pos2(right_rect.left() - theme::STATUS_ITEM_GAP, full.bottom()));
                 let bar_w = left_rect.width();
                 ui.allocate_new_ui(
@@ -141,6 +148,15 @@ impl MicroParquetApp {
                             // needs room of its own and is always in the Details dialog)
                             let note_w = note.as_ref().map(|t| theme::text_width(ui, t, theme::TEXT_SMALL).min(bar_w * theme::STATUS_LABEL_SHARE) + theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
                             let replace_w = theme::status_button_width(ui, "Replace with spaces") + theme::STATUS_ITEM_GAP;
+                            // too little room for the note and the button: the button alone (the load message
+                            // carries the same words), so the list is always one click away
+                            let button_only = note.is_some() && !note_w.is_some_and(|w| room_for(ui, w)) && room_for(ui, theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
+                            if button_only {
+                                let hover = note.clone().unwrap_or_default();
+                                if ui.small_button("Details").on_hover_text(format!("{hover}\nWhich lines differ")).clicked() {
+                                    open_row_details = true;
+                                }
+                            }
                             if let Some(text) = note.filter(|_| note_w.is_some_and(|w| room_for(ui, w))) {
                                 let color = if rc.is_explained() { tk.muted } else { tk.warning };
                                 theme::clipped_label(ui, egui::RichText::new(text).color(color), bar_w * theme::STATUS_LABEL_SHARE)
@@ -295,6 +311,18 @@ impl MicroParquetApp {
                     egui::UiBuilder::new().max_rect(right_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                     |ui| {
                         ui.style_mut().override_text_style = Some(egui::TextStyle::Small);
+                        // the zoom is the far right item: a click opens the Zoom menu (the same as View > Zoom)
+                        if show_zoom {
+                            let label = egui::RichText::new(crate::ui::zoom::percent_text(self.ui_zoom)).color(tk.muted);
+                            let z = ui
+                                .scope(|ui| {
+                                    ui.spacing_mut().button_padding.x = theme::SPACE_XS;
+                                    ui.menu_button(label, |ui| self.zoom_menu_contents(ui, ctx))
+                                })
+                                .inner;
+                            status_zoom = z.response.rect;
+                            z.response.on_hover_text("Zoom: click for the menu (Ctrl+= / Ctrl+- / Ctrl+0)");
+                        }
                         let b = ui.small_button("Messages").on_hover_text("The last 50 messages");
                         status_button = b.rect;
                         if b.clicked() {
@@ -305,7 +333,7 @@ impl MicroParquetApp {
                 status_bar = full;
                 status_left = left_rect;
             });
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("status_report"), StatusReport { bar: status_bar, left: status_left, content: status_content, messages: status_button }));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("status_report"), StatusReport { bar: status_bar, left: status_left, content: status_content, messages: status_button, zoom: status_zoom }));
         if open_messages {
             self.messages_open = true;
         }

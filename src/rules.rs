@@ -24,6 +24,43 @@ pub fn set_data_dir_override(dir: Option<PathBuf>) {
     RULES_DIR_OVERRIDE.with(|d| *d.borrow_mut() = dir);
 }
 
+/// A rule, curve, profile or parameter file a run read (Phase 6 P2: the report pack's cover lists them).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UsedFile {
+    /// What it is ("Rule file", "Behaviour profile", ...).
+    pub kind: String,
+    /// The file as the output names it (`irrbb_shocks/2021-04-13.json`).
+    pub file: String,
+    pub as_of: String,
+    pub source: String,
+    /// A sample the owner must confirm before the numbers go into a return.
+    pub sample: bool,
+}
+
+thread_local! {
+    static USED_FILES: std::cell::RefCell<Option<Vec<UsedFile>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Records that this thread's run read a file (a no-op unless [`track_used_files`] is active).
+pub fn note_used_file(kind: &str, file: &str, as_of: &str, source: &str, sample: bool) {
+    USED_FILES.with(|u| {
+        if let Some(v) = u.borrow_mut().as_mut() {
+            let f = UsedFile { kind: kind.to_string(), file: file.to_string(), as_of: as_of.to_string(), source: source.to_string(), sample };
+            if !v.contains(&f) {
+                v.push(f);
+            }
+        }
+    });
+}
+
+/// Runs `work` and returns what it gave with the files it read on this thread, in the order first read.
+pub fn track_used_files<R>(work: impl FnOnce() -> R) -> (R, Vec<UsedFile>) {
+    let before = USED_FILES.with(|u| u.borrow_mut().replace(Vec::new()));
+    let r = work();
+    let used = USED_FILES.with(|u| std::mem::replace(&mut *u.borrow_mut(), before)).unwrap_or_default();
+    (r, used)
+}
+
 /// `portable_data` (or the folder a test or headless run put in its place).
 pub fn data_dir() -> PathBuf {
     data_root()
@@ -128,6 +165,7 @@ pub fn parse_rule_text<T: DeserializeOwned>(label: &str, file_date: NaiveDate, t
     let source = value.get("source").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("The rule file {} has no \"source\" (the circular or paper the numbers come from).", label))?;
     let sample = sample_flag(&value, label)?;
     let data: T = serde_json::from_value(value.clone()).map_err(|e| anyhow!("The rule file {} could not be read: {}.", label, e))?;
+    note_used_file("Rule file", label, &as_of.format("%Y-%m-%d").to_string(), source, sample);
     Ok(RuleFile { data, meta: RuleMeta { file: label.to_string(), as_of, source: source.to_string(), sample } })
 }
 

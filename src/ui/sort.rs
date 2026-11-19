@@ -41,6 +41,7 @@ impl MicroParquetApp {
     /// Opens the sort editor on the sort step `idx` (or a new sort when `None`).
     pub(crate) fn open_sort_editor_at(&mut self, idx: Option<usize>, column: Option<&str>) {
         self.init_tool_defaults_from_active_tab();
+        self.sort_lists.reload();
         let existing = idx.and_then(|i| {
             self.tabs
                 .get(self.active_tab)
@@ -58,7 +59,7 @@ impl MicroParquetApp {
         });
         if let Some(c) = wanted {
             if !self.sort.levels.iter().any(|l| l.column == c) {
-                self.sort.levels.push(SortLevel { column: c, descending: false });
+                self.sort.levels.push(SortLevel { column: c, descending: false, ..Default::default() });
             }
         }
         self.active_tool = ActiveToolModal::SortRows;
@@ -74,10 +75,10 @@ impl MicroParquetApp {
         if add {
             match levels.iter_mut().find(|l| l.column == column) {
                 Some(l) => l.descending = descending,
-                None => levels.push(SortLevel { column: column.to_string(), descending }),
+                None => levels.push(SortLevel { column: column.to_string(), descending, ..Default::default() }),
             }
         } else {
-            levels = vec![SortLevel { column: column.to_string(), descending }];
+            levels = vec![SortLevel { column: column.to_string(), descending, ..Default::default() }];
         }
         self.apply_sort_levels(idx, levels);
     }
@@ -96,11 +97,27 @@ impl MicroParquetApp {
     }
 
     fn apply_sort_levels(&mut self, existing: Option<usize>, levels: Vec<SortLevel>) {
+        let tenor_column = levels.iter().find(|l| l.order == SortOrder::Tenor).map(|l| l.column.clone());
         let step = TransformStep::SortRows { levels };
         match existing {
             Some(i) => self.replace_step_in_active_tab(i, step, "Sort updated."),
             None => self.push_step_to_active_tab(step, false),
         }
+        if let Some(column) = tenor_column {
+            self.count_unparsed_tenors(&column);
+        }
+    }
+
+    /// After a Tenor sort: the worker lists the column's values, and the status message says how
+    /// many are not tenors (they follow the others in natural order).
+    fn count_unparsed_tenors(&mut self, column: &str) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let req = PivotValuesRequest { tab_id: tab.id, source: tab.source.clone(), steps: tab.steps.clone(), field: column.to_string(), temp_dir: self.paths.temp_dir.clone() };
+        self.sort_lists.tenor_wait = Some((tab.id, column.to_string()));
+        let key = JobKey::tab(JobKind::PivotValues, tab.id);
+        self.jobs.submit(key, "Values of a column", false, move |ctx| compute_pivot_values(req, ctx).map(|r| JobOutput::PivotValues(Box::new(r))));
     }
 
     #[allow(unused_variables)]
@@ -109,6 +126,7 @@ impl MicroParquetApp {
         let mut apply = false;
         let mut remove_sort = false;
         let editing = self.sort.editing;
+        let saved_lists = self.sort_lists.lists.clone();
         theme::modal(if editing.is_some() { "\u{E444}  Edit sort" } else { "\u{E444}  Sort rows" })
             .default_width(theme::DIALOG_W_SORT)
             .show(ctx, |d| {
@@ -129,6 +147,15 @@ impl MicroParquetApp {
                                         ui.selectable_value(&mut l.column, c.clone(), c);
                                     }
                                 });
+                            let order_text = l.order.label();
+                            egui::ComboBox::from_id_salt(("sort_order", i)).width(theme::FIELD_W_SORT_ORDER).selected_text(order_text).show_ui(ui, |ui| {
+                                ui.selectable_value(&mut l.order, SortOrder::Natural, "Natural");
+                                for list in &saved_lists {
+                                    let o = SortOrder::from_list(list);
+                                    ui.selectable_value(&mut l.order, o, &list.name);
+                                }
+                                ui.selectable_value(&mut l.order, SortOrder::Tenor, "Tenor");
+                            });
                             ui.radio_value(&mut l.descending, false, "Lowest first");
                             ui.radio_value(&mut l.descending, true, "Highest first");
                             if ui.add_enabled(i > 0, egui::Button::new(theme::ph::ARROW_UP)).on_hover_text("Move up").clicked() {
@@ -152,7 +179,7 @@ impl MicroParquetApp {
                         let used: Vec<&str> = self.sort.levels.iter().map(|l| l.column.as_str()).collect();
                         let next = avail_cols.iter().find(|c| !used.contains(&c.as_str())).or(avail_cols.first()).cloned();
                         if let Some(column) = next {
-                            self.sort.levels.push(SortLevel { column, descending: false });
+                            self.sort.levels.push(SortLevel { column, descending: false, ..Default::default() });
                         }
                     }
                     let problem = sort_problem(&self.sort.levels);

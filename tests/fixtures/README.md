@@ -25,3 +25,12 @@ loan book:
 
 `v1_an_old_group_by_pivot_macro_replays_to_what_main_gave` and the V5 tests replay them.
 Do not edit these files by hand.
+
+## Phase 6 fixture
+
+`phase6_sort_pivot_unset.mpq.json` holds a Sort step and a Pivot table step in the form `main`
+(9aadb59, Phase 5) saved them, without the Phase 6 `order` and `field_orders` fields. Those fields did
+not exist then, so the file was written by hand in that form (not by a worktree of the old code);
+`phase6_sort_pivot_unset.expected.csv` is the Phase 3 and 4 result worked out from the data: the rows
+in natural branch order with each branch's balance (CTG 173,000,000, DHK 375,000,000, SYL 0, XXX 1) and
+the grand total.

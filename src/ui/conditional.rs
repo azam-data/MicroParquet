@@ -12,6 +12,8 @@ pub struct CondState {
     pub blank_choice: BlankChoice,
     /// The text for `BlankChoice::Value`.
     pub blank_text: String,
+    /// Where the value pickers' buttons were drawn (tests).
+    pub pick_buttons: Vec<(usize, egui::Rect)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,13 +59,47 @@ impl Default for CondState {
                         compare_val: "DMT".to_string(),
                         output_val: "Dormant".to_string(),
                         compare_is_col: false,
+                        values: Vec::new(),
                     }],
             fallback: "Active/Other".to_string(),
             as_float: false,
             blank_choice: BlankChoice::Blank,
             blank_text: String::new(),
+            pick_buttons: Vec::new(),
         }
     }
+}
+
+/// The operators of a rule whose value is picked from the column's list.
+pub fn is_rule_pick_op(op: FilterOp) -> bool {
+    matches!(op, FilterOp::Eq | FilterOp::NotEq | FilterOp::InList | FilterOp::NotInList)
+}
+
+/// What a rule has picked: its values, or (an old rule) the text typed as its value.
+pub fn rule_selection(r: &CondRule) -> Vec<String> {
+    if !r.values.is_empty() {
+        return r.values.clone();
+    }
+    let t = r.compare_val.trim();
+    if t.is_empty() {
+        Vec::new()
+    } else if matches!(r.op, FilterOp::InList | FilterOp::NotInList) {
+        t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    } else {
+        vec![t.to_string()]
+    }
+}
+
+/// After a change in the picker: one value is "=", several are "In list" ("≠" / "Not in list" for the opposite).
+pub fn normalize_rule_pick(r: &mut CondRule) {
+    let negative = matches!(r.op, FilterOp::NotEq | FilterOp::NotInList);
+    r.op = match (negative, r.values.len()) {
+        (false, 0 | 1) => FilterOp::Eq,
+        (false, _) => FilterOp::InList,
+        (true, 0 | 1) => FilterOp::NotEq,
+        (true, _) => FilterOp::NotInList,
+    };
+    r.compare_val = r.values.join(", ");
 }
 
 impl MicroParquetApp {
@@ -71,6 +107,12 @@ impl MicroParquetApp {
     pub(crate) fn render_conditional_modal(&mut self, ctx: &egui::Context, avail_cols: Vec<String>) -> ModalOutcome {
         let mut close_modal = false;
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
+        let tk = *theme::tokens(self.dark_mode);
+        let mut picker = std::mem::take(&mut self.picker);
+        let totals = self.picker_totals.clone();
+        let sort_lists = self.sort_lists.lists.clone();
+        let mut ask_values: Option<(String, Option<String>)> = None;
+        let mut picker_buttons_seen: Vec<(usize, egui::Rect)> = Vec::new();
         theme::modal("\u{E3D4} Add Conditional Column (IF / ELSE IF / ELSE)")
             .collapsible(false)
             .default_width(theme::COND_BODY_W + 2.0 * theme::SPACE_M + theme::DIALOG_SCROLL_BAR_ALLOWANCE)
@@ -131,6 +173,17 @@ impl MicroParquetApp {
                                                 }
                                             });
                                     });
+                                } else if is_rule_pick_op(rule.op) {
+                                    if picker.owner == Some(idx) && picker.field != rule.col_name {
+                                        picker.owner = None;
+                                    }
+                                    let n = rule_selection(rule).len();
+                                    let label = format!("{}  \u{25be}", micro_parquet::value_picker::picker_summary(n, false, totals.get(&rule.col_name).copied()));
+                                    let b = ui.add(egui::Button::new(label).min_size(egui::vec2(theme::FIELD_W_PICK, 0.0)));
+                                    picker_buttons_seen.push((idx, b.rect));
+                                    if b.clicked() && picker.toggle(idx, &rule.col_name) {
+                                        ask_values = Some((rule.col_name.clone(), None));
+                                    }
                                 } else {
                                     ui.add(egui::TextEdit::singleline(&mut rule.compare_val).desired_width(theme::FIELD_W_S));
                                 }
@@ -144,6 +197,20 @@ impl MicroParquetApp {
                                 remove_idx = Some(idx);
                             }
                         });
+                        // the picker of this rule, open under it (blanks have their own result, set below)
+                        if picker.owner == Some(idx) && !rule.compare_is_col && is_rule_pick_op(rule.op) {
+                            let mut values = rule_selection(rule);
+                            let mut blank = false;
+                            let order = crate::ui::value_picker::picker_order(&sort_lists, &rule.col_name);
+                            let out = crate::ui::value_picker::picker_body(ui, &tk, &mut picker, &mut values, &mut blank, false, &order);
+                            if out.changed {
+                                rule.values = values;
+                                normalize_rule_pick(rule);
+                            }
+                            if let Some(req) = out.request {
+                                ask_values = Some((picker.field.clone(), req));
+                            }
+                        }
                     }
                     if let Some(i) = remove_idx {
                         if self.cond.rules.len() > 1 {
@@ -157,6 +224,7 @@ impl MicroParquetApp {
                             compare_val: String::new(),
                             output_val: String::new(),
                             compare_is_col: false,
+                            values: Vec::new(),
                         });
                     }
                     ui.horizontal(|ui| {
@@ -188,6 +256,12 @@ impl MicroParquetApp {
                     });
                 });
             });
+        self.picker = picker;
+        self.cond.pick_buttons = picker_buttons_seen;
+        if let Some((field, search)) = ask_values {
+            self.picker.field = field;
+            self.picker_request(search);
+        }
         ModalOutcome { close: close_modal, step: step_to_apply }
     }
 }

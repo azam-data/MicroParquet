@@ -227,7 +227,7 @@ fn preset() -> CustomBucketDef {
 
 fn savings_profile() -> GapBehaviour {
     let p = BehaviourProduct { product: "sav".into(), category: "Retail non-transactional".into(), core_pct: 60.0, avg_maturity_years: 3.0, method: "Typed".into(), ..BehaviourProduct::default() };
-    GapBehaviour { file_name: "2026-10-31.json".into(), file: BehaviourFile { as_of: "2026-10-31".into(), source: "test".into(), products: vec![p] }, product_cols: vec!["Product".into()] }
+    GapBehaviour { file_name: "2026-10-31.json".into(), file: BehaviourFile { as_of: "2026-10-31".into(), source: "test".into(), products: vec![p] }, product_cols: vec!["Product".into()], stress_tdrr: false }
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn a5_the_gap_ladder_does_not_use_cpr_or_tdrr() {
         // a term deposit and a loan: only a CPR or a TDRR, no category
         let fdr = BehaviourProduct { product: "FDR".into(), tdrr_pct: tdrr, ..BehaviourProduct::default() };
         let hl = BehaviourProduct { product: "HL".into(), cpr_pct: cpr, ..BehaviourProduct::default() };
-        GapBehaviour { file_name: "2026-10-31.json".into(), file: BehaviourFile { as_of: "2026-10-31".into(), source: "test".into(), products: vec![sav, fdr, hl] }, product_cols: vec!["Product".into()] }
+        GapBehaviour { file_name: "2026-10-31.json".into(), file: BehaviourFile { as_of: "2026-10-31".into(), source: "test".into(), products: vec![sav, fdr, hl] }, product_cols: vec!["Product".into()], stress_tdrr: false }
     };
     for role in [GapRole::Liability, GapRole::Asset] {
         let spec = GapInputSpec { role, amount_col: "Balance".into(), maturity_col: "Matdat".into() };

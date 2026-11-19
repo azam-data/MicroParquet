@@ -244,7 +244,8 @@ pub fn apply_rate_shock_sim(
 }
 
 /// Everything the rate-shock step takes (the dialog, the step and the repricing-gap tab share it).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct RateShockSpec {
     pub bal_col: String,
     pub rate_col: String,
@@ -926,7 +927,9 @@ pub fn build_period_reconcile_lazy_with(
         final_lf = final_lf.with_column(cl_mig);
     }
 
-    Ok(final_lf)
+    // The rows come out of a hash group-by and join in any order, so the same two months could give
+    // a different row order on each run. Sorted by key, the table is the same every time (Phase 6 P1).
+    Ok(final_lf.sort([key_col], SortMultipleOptions::default().with_nulls_last(true).with_maintain_order(true)))
 }
 
 /// Keys with more than one row in the previous and in the current period, from a reconcile
@@ -1870,7 +1873,7 @@ pub fn cl_code_error(column: &str, codes: &[String]) -> String {
 // ---------------------------------------------------------------------------------------------
 
 /// What the cells of the migration matrix hold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MigrationMeasure {
     /// Balance in BDT: the previous month's balance of an account that was there, the current
     /// month's for a new one.
@@ -1933,7 +1936,7 @@ pub fn migration_shade(from: &str, to: &str) -> Shade {
 
 /// Whose balance an account that is in both months carries in the matrix. A new account always
 /// uses the current month's balance and a closed/repaid one the previous month's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MigrationBasis {
     /// Last month's balance (the default): the "Previous month total" row adds up to last month's total.
     #[default]
@@ -1952,7 +1955,8 @@ impl MigrationBasis {
 }
 
 /// The settings of a migration matrix.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct ClMigrationSpec {
     pub key_col: String,
     pub bal_col: String,
@@ -2178,9 +2182,10 @@ pub fn build_cl_migration_with(prev: LazyFrame, curr: LazyFrame, spec: &ClMigrat
 // ---------------------------------------------------------------------------------------------
 
 /// How the rows of one tab count in the ladder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum GapRole {
     /// Every row is an asset (an inflow).
+    #[default]
     Asset,
     /// Every row is a liability (an outflow).
     Liability,
@@ -2189,7 +2194,8 @@ pub enum GapRole {
 }
 
 /// What a tab contributes to the ladder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default)]
 pub struct GapInputSpec {
     pub role: GapRole,
     pub amount_col: String,
@@ -2280,6 +2286,7 @@ pub fn load_gap_limits(dir: &Path, def: &crate::models::CustomBucketDef) -> Resu
     let txt = std::fs::read_to_string(&path).with_context(|| format!("Could not read the gap limits file {}", path.display()))?;
     let file: GapLimitsFile = serde_json::from_str(&txt).map_err(|e| anyhow!("The gap limits file {} is not valid: {}. Expected {{\"limits\": [{{\"bucket\": \"...\", \"min_cumulative_gap_pct\": -10}}]}}.", path.display(), e))?;
     validate_gap_limits(&file, def, &path.display().to_string())?;
+    crate::rules::note_used_file("Gap limits", &format!("{}/{}", GAP_LIMITS_DIR, path.file_name().and_then(|n| n.to_str()).unwrap_or("")), &file.effective_from, &file.source, false);
     Ok(Some(file))
 }
 
@@ -2325,6 +2332,9 @@ pub struct GapBehaviour {
     pub file_name: String,
     pub file: crate::behaviour::BehaviourFile,
     pub product_cols: Vec<String>,
+    /// "Stress: early withdrawal (TDRR)" (Phase 6 P6): for each term-deposit product of the profile
+    /// (one with no category and a TDRR), TDRR × its balance moves from its maturity bucket to the first bucket.
+    pub stress_tdrr: bool,
 }
 
 /// The label of the bucket that holds `days` days after the cutoff (a negative number is overdue).
@@ -2371,6 +2381,14 @@ pub fn build_gap_ladder_behaviour(
                 .collect()
         })
         .unwrap_or_default();
+    // the term-deposit products of the profile with an early-redemption rate, when the stress is on
+    let td: Vec<(String, f64)> = match behaviour {
+        Some(b) if b.stress_tdrr => b.file.products.iter().filter(|p| !p.is_nmd() && p.tdrr_pct > 0.0).map(|p| (crate::behaviour::normalise_product(&p.product), (p.tdrr_pct / 100.0).clamp(0.0, 1.0))).collect(),
+        _ => Vec::new(),
+    };
+    if behaviour.is_some_and(|b| b.stress_tdrr) && td.is_empty() {
+        bail!("Gap ladder: \"Stress: early withdrawal (TDRR)\" is on, but the behaviour profile has no term-deposit product with a TDRR above 0. Add the TDRR of the term deposits in the behaviour profile, or turn the stress off.");
+    }
     let mut parts: Vec<LazyFrame> = Vec::new();
     for (idx, (lf, spec)) in inputs.into_iter().enumerate() {
         let mut lf = lf;
@@ -2404,13 +2422,18 @@ pub fn build_gap_ladder_behaviour(
                 when(sign.clone().lt(lit(0.0))).then(amt.clone()).otherwise(lit(0.0)).alias("__out"),
             ])
         };
-        match (&product_col, nmd.is_empty()) {
-            (Some(pc), false) => {
+        match &product_col {
+            Some(pc) if !nmd.is_empty() || !td.is_empty() => {
                 let code = normalise_code_expr(col(pc.as_str()));
                 let core = nmd.iter().rev().fold(lit(NULL).cast(DataType::Float64), |acc, (c, core, _)| when(code.clone().eq(lit(c.clone()))).then(lit(*core)).otherwise(acc));
                 let core_bucket = nmd.iter().rev().fold(lit(NULL).cast(DataType::String), |acc, (c, _, b)| when(code.clone().eq(lit(c.clone()))).then(lit(b.clone())).otherwise(acc));
+                let tdrr = td.iter().rev().fold(lit(NULL).cast(DataType::Float64), |acc, (c, r)| when(code.clone().eq(lit(c.clone()))).then(lit(*r)).otherwise(acc));
                 let is_nmd = core.clone().is_not_null().and(sign.clone().lt(lit(0.0)));
-                parts.push(normal(lf.clone().filter(is_nmd.clone().not())));
+                // a term deposit under stress: its early-withdrawn part moves to the first bucket, the rest stays in its own
+                let is_td = tdrr.clone().is_not_null().and(sign.clone().lt(lit(0.0))).and(is_nmd.clone().not());
+                parts.push(normal(lf.clone().filter(is_nmd.clone().not().and(is_td.clone().not()))));
+                parts.push(lf.clone().filter(is_td.clone()).select([col("__bucket"), lit(0.0).alias("__in"), (amt.clone() * (lit(1.0) - tdrr.clone())).alias("__out")]));
+                parts.push(lf.clone().filter(is_td).select([lit(order[0].clone()).alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * tdrr).alias("__out")]));
                 // the volatile part: first bucket; the core part: the bucket of the average maturity (outflows)
                 parts.push(lf.clone().filter(is_nmd.clone()).select([lit(order[0].clone()).alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * (lit(1.0) - core.clone())).alias("__out")]));
                 parts.push(lf.filter(is_nmd).select([core_bucket.alias("__bucket"), lit(0.0).alias("__in"), (amt.clone() * core).alias("__out")]));

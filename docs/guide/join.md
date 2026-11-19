@@ -25,7 +25,7 @@ Adds columns from one open tab to another by matching one or more key columns (f
 ## 5. Step by step
 
 1. Open both tabs.
-2. Choose More ▾ → "SQL join of two open tabs…" (Ctrl+K: "join").
+2. Choose Edit ▸ "SQL join of two open tabs…" (Ctrl+K: "join").
 3. In "SQL-Style Multi-Tab Joiner" choose "Left Tab:" and "Right Tab:".
 4. Type "Join Key Column(s) (e.g. Actnum):".
 5. Choose "Join Type:".

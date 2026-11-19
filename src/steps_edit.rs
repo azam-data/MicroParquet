@@ -190,14 +190,14 @@ pub fn source_files(source: &TabSource) -> Vec<&Path> {
             v.extend(source_files(right_source));
             v
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } | TabSource::MomVariance { prev_source, curr_source, .. } => {
             let mut v = source_files(prev_source);
             v.extend(source_files(curr_source));
             v
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
         TabSource::IrrbbLadder { inputs, .. } | TabSource::Irrbb { inputs, .. } => inputs.iter().flat_map(|i| source_files(&i.source)).collect(),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => source_files(source),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => source_files(source),
     }
 }
 

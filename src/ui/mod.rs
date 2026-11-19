@@ -10,6 +10,7 @@ pub mod columns;
 pub mod commands;
 pub mod conditional;
 pub mod curves;
+pub mod dq;
 pub mod duration;
 pub mod export;
 pub mod filter;
@@ -21,6 +22,8 @@ pub mod irrbb;
 pub mod jobs;
 pub mod join;
 pub mod limits;
+pub mod mom;
+pub mod mudaraba;
 pub mod clean_breaks;
 pub mod classify_overdue;
 pub mod cl1_summary;
@@ -35,9 +38,12 @@ pub mod prelude;
 pub mod provision;
 pub mod rate_band;
 pub mod rate_shock;
+pub mod packs;
+pub mod runs;
 pub mod reconcile;
 pub mod schema;
 pub mod sort;
+pub mod sort_lists;
 pub mod sql;
 pub mod stack;
 pub mod status;
@@ -46,6 +52,8 @@ pub mod steps;
 pub mod table;
 pub mod tabs;
 pub mod top_bar;
+pub mod value_picker;
+pub mod zoom;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
@@ -54,6 +62,8 @@ mod render_tests;
 mod render_tests_p4;
 #[cfg(test)]
 mod render_tests_p5;
+#[cfg(test)]
+mod render_tests_p6;
 #[cfg(test)]
 mod tests;
 pub mod theme;
@@ -74,6 +84,12 @@ impl MicroParquetApp {
             return;
         }
 
+        // a dialog starts with a new value picker and the lists as they are on disk
+        if self.picker_tool != self.active_tool {
+            self.picker = PickerPanel::default();
+            self.picker_tool = self.active_tool;
+            self.sort_lists.reload();
+        }
         // An edit belongs to the modal it was opened in.
         if self.editing.as_ref().is_some_and(|e| e.tool != self.active_tool) {
             self.editing = None;
@@ -99,6 +115,13 @@ impl MicroParquetApp {
         let outcome = match self.active_tool {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
+            ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::Mudaraba => self.render_mudaraba_modal(ctx, cols),
+            ActiveToolModal::DqScorecard => self.render_dq_modal(ctx, cols),
+            ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),
+            ActiveToolModal::Packs => self.render_packs_modal(ctx, cols),
+            ActiveToolModal::SaveRun => self.render_save_run_modal(ctx, cols),
+            ActiveToolModal::SavedRuns => self.render_saved_runs_modal(ctx, cols),
             ActiveToolModal::ManageColumns => self.render_columns_modal(ctx, cols),
             ActiveToolModal::ConditionalCol => self.render_conditional_modal(ctx, cols),
             ActiveToolModal::MathFormula => self.render_calc_modal(ctx, cols),

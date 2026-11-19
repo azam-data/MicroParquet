@@ -111,13 +111,27 @@ impl MicroParquetApp {
                     JobKind::Load => self.status_message = format!("Pipeline error: {}", msg),
                     JobKind::PivotPreview => self.pivot_preview_failed(msg),
                     JobKind::PivotValues => {
-                        if let Some(p) = self.pivot_bar.popup.as_mut().filter(|_| !self.pivot_builder.open) {
+                        if self.sort_lists.fill_wait.take().is_some() {
+                            self.sort_lists.message = Some((true, format!("Could not read the values: {}", msg)));
+                        } else if let Some(p) = self.pivot_bar.popup.as_mut().filter(|_| !self.pivot_builder.open) {
                             p.values = Some(Err(msg));
                         } else if let Some(p) = self.pivot_builder.popup.as_mut() {
                             p.values = Some(Err(msg));
                         }
                     }
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
+                    JobKind::PickerValues => self.picker_failed(msg.clone()),
+                    JobKind::Dq => self.dq_failed(msg.clone()),
+                    JobKind::Chart => {
+                        self.chart.busy = false;
+                        self.chart.error = Some(msg.clone());
+                    }
+                    JobKind::SqlCheck => {
+                        if let Some(tab) = r.key.scope.and_then(|id| self.tabs.iter_mut().find(|t| t.id == id)) {
+                            tab.sql_error = Some(msg.clone());
+                        }
+                        self.status_message = format!("The query was not checked: {}", msg);
+                    }
                     // The band must not keep values of an older result: "—" with the reason.
                     JobKind::Summary => {
                         if let Some(tab) = r.key.scope.and_then(|id| self.tabs.iter_mut().find(|t| t.id == id)) {
@@ -154,7 +168,7 @@ impl MicroParquetApp {
         ctx.request_repaint();
     }
 
-    fn tab_position(&self, tab_id: u64) -> Option<usize> {
+    pub(crate) fn tab_position(&self, tab_id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == tab_id)
     }
 
@@ -162,10 +176,15 @@ impl MicroParquetApp {
         match out {
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
+                let status = match self.open_notes.remove(&tab.id) {
+                    Some(note) => format!("{} {}", note, status),
+                    None => status,
+                };
                 // A macro replayed into a new tab brings its summary choices.
                 if let Some(sum) = self.pending_summary.remove(&tab.id) {
                     tab.summary = sum;
                 }
+                tab.title = crate::ui::tabs::unique_tab_title(&self.tabs, &tab.title);
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
                 self.init_tool_defaults_from_active_tab();
@@ -229,7 +248,7 @@ impl MicroParquetApp {
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
             JobOutput::PivotValues(r) => {
-                if !self.apply_pivot_bar_values(&r) {
+                if !self.apply_sort_list_fill(&r) && !self.apply_pivot_bar_values(&r) {
                     self.apply_pivot_values(*r)
                 }
             }
@@ -258,23 +277,17 @@ impl MicroParquetApp {
                 }
             }
             JobOutput::Schema(s) => {
-                let SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, mut status, steps } = *s;
-                let Some(idx) = self.tab_position(tab_id) else {
+                if !s.new_breaks.is_empty() {
+                    // steps that worked would stop working: the owner is asked first (U1)
+                    self.schema_confirm = Some(*s);
                     return;
-                };
-                if let Some(tab) = self.tabs.get_mut(idx) {
-                    tab.source = new_source;
-                    tab.steps = steps;
-                    tab.parse_failures = parse_failures;
-                    tab.row_check = row_check;
                 }
-                if let Some(n) = parse_note {
-                    status.push_str(&format!(" {}", n));
-                }
-                self.active_tab = idx;
-                self.refresh_tab_at(idx, true, None);
-                self.status_message = status;
+                self.finish_schema_applied(*s);
             }
+            JobOutput::SqlChecked(r) => self.apply_sql_checked(*r),
+            JobOutput::Chart(r) => self.apply_chart_result(*r),
+            JobOutput::Picker(r) => self.apply_picker_result(*r),
+            JobOutput::Dq(r) => self.apply_dq_result(*r),
             JobOutput::TextCheck(r) => self.apply_text_check(*r),
             JobOutput::Exported(o) => {
                 self.status_message = o.message;
@@ -288,6 +301,26 @@ impl MicroParquetApp {
                 self.batch_modal.last_error = None;
             }
         }
+    }
+
+    /// The tab takes the new schema (and the steps that go with it) and reloads.
+    pub(crate) fn finish_schema_applied(&mut self, s: SchemaApplied) {
+        let SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, mut status, steps, new_breaks: _ } = s;
+        let Some(idx) = self.tab_position(tab_id) else {
+            return;
+        };
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.source = new_source;
+            tab.steps = steps;
+            tab.parse_failures = parse_failures;
+            tab.row_check = row_check;
+        }
+        if let Some(n) = parse_note {
+            status.push_str(&format!(" {}", n));
+        }
+        self.active_tab = idx;
+        self.refresh_tab_at(idx, true, None);
+        self.status_message = status;
     }
 }
 

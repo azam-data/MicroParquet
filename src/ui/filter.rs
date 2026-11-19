@@ -12,6 +12,8 @@ pub struct FilterState {
     pub join: GroupJoin,
     /// true = keep matching rows, false = delete them.
     pub keep: bool,
+    /// Where the value pickers' buttons were drawn (tests).
+    pub pick_buttons: Vec<(usize, egui::Rect)>,
 }
 
 impl Default for FilterState {
@@ -22,6 +24,7 @@ impl Default for FilterState {
             conditions: Vec::new(),
             join: GroupJoin::And,
             keep: true,
+            pick_buttons: Vec::new(),
         }
     }
 }
@@ -43,6 +46,9 @@ pub fn condition_problem(c: &FilterCondition) -> Option<String> {
     if c.op.is_unary() {
         return None;
     }
+    if is_pick_op(c.op) {
+        return if c.values.is_empty() && !c.or_blank && c.value.trim().is_empty() { Some(format!("{}: pick at least one value.", c.column)) } else { None };
+    }
     if c.value.trim().is_empty() {
         return Some(format!("{}: enter a value.", c.column));
     }
@@ -52,6 +58,39 @@ pub fn condition_problem(c: &FilterCondition) -> Option<String> {
     None
 }
 
+/// The operators whose value is picked from the column's list.
+pub fn is_pick_op(op: CondOp) -> bool {
+    matches!(op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList)
+}
+
+/// What the condition has picked: its values, or (an old filter) the text typed in the value box.
+pub fn picker_selection(c: &FilterCondition) -> Vec<String> {
+    if !c.values.is_empty() {
+        return c.values.clone();
+    }
+    let t = c.value.trim();
+    if t.is_empty() {
+        Vec::new()
+    } else if matches!(c.op, CondOp::InList | CondOp::NotInList) {
+        t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    } else {
+        vec![t.to_string()]
+    }
+}
+
+/// After a change in the picker: one value is "equals", several are "is in list" (and "does not
+/// equal" / "is not in list" for the opposite); `value` keeps a short summary.
+pub fn normalize_pick(c: &mut FilterCondition) {
+    let negative = matches!(c.op, CondOp::NotEquals | CondOp::NotInList);
+    c.op = match (negative, c.values.len()) {
+        (false, 0 | 1) => CondOp::Equals,
+        (false, _) => CondOp::InList,
+        (true, 0 | 1) => CondOp::NotEquals,
+        (true, _) => CondOp::NotInList,
+    };
+    c.value = c.values.join(", ");
+}
+
 impl MicroParquetApp {
     fn blank_condition(&self) -> FilterCondition {
         FilterCondition {
@@ -59,6 +98,7 @@ impl MicroParquetApp {
             op: CondOp::Equals,
             value: String::new(),
             value2: String::new(),
+            ..Default::default()
         }
     }
 
@@ -75,6 +115,8 @@ impl MicroParquetApp {
     /// on a new filter. `add_blank` appends an empty condition ("+ Add condition").
     pub(crate) fn open_filter_editor(&mut self, idx: Option<usize>, add_blank: bool) {
         self.init_tool_defaults_from_active_tab();
+        self.picker = PickerPanel::default();
+        self.sort_lists.reload();
         let loaded = idx.and_then(|i| {
             self.tabs
                 .get(self.active_tab)
@@ -153,6 +195,12 @@ impl MicroParquetApp {
         let mut step_to_apply: Option<(TransformStep, bool)> = None;
         let mut replace: Option<(usize, TransformStep)> = None;
         let editing = self.filter.editing;
+        let tk = *theme::tokens(self.dark_mode);
+        let mut picker = std::mem::take(&mut self.picker);
+        let totals = self.picker_totals.clone();
+        let sort_lists = self.sort_lists.lists.clone();
+        let mut ask_values: Option<(String, Option<String>)> = None;
+        let mut picker_buttons_seen: Vec<(usize, egui::Rect)> = Vec::new();
         let title = if editing.is_some() {
             "\u{E30C}  Edit filter"
         } else {
@@ -182,13 +230,19 @@ impl MicroParquetApp {
                                     ui.selectable_value(&mut c.op, *op, op.label());
                                 }
                             });
-                        if !c.op.is_unary() {
-                            ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(theme::FIELD_W_VALUE).hint_text(
-                                match c.op {
-                                    CondOp::InList => "a, b, c",
-                                    _ => "value",
-                                },
-                            ));
+                        if picker.owner == Some(i) && picker.field != c.column {
+                            picker.owner = None;
+                        }
+                        if is_pick_op(c.op) {
+                            let n = picker_selection(c).len();
+                            let label = format!("{}  \u{25be}", micro_parquet::value_picker::picker_summary(n, c.or_blank, totals.get(&c.column).copied()));
+                            let b = ui.add(egui::Button::new(label).min_size(egui::vec2(theme::FIELD_W_PICK, 0.0)));
+                            picker_buttons_seen.push((i, b.rect));
+                            if b.clicked() && picker.toggle(i, &c.column) {
+                                ask_values = Some((c.column.clone(), None));
+                            }
+                        } else if !c.op.is_unary() {
+                            ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(theme::FIELD_W_VALUE).hint_text("value"));
                             if c.op == CondOp::Between {
                                 ui.label("and");
                                 ui.add(egui::TextEdit::singleline(&mut c.value2).desired_width(theme::FIELD_W_VALUE).hint_text("upper limit"));
@@ -198,6 +252,21 @@ impl MicroParquetApp {
                             remove = Some(i);
                         }
                     });
+                    // the picker of this condition, open under its row
+                    if picker.owner == Some(i) && is_pick_op(c.op) {
+                        let mut values = picker_selection(c);
+                        let mut blank = c.or_blank;
+                        let order = crate::ui::value_picker::picker_order(&sort_lists, &c.column);
+                        let out = crate::ui::value_picker::picker_body(ui, &tk, &mut picker, &mut values, &mut blank, true, &order);
+                        if out.changed {
+                            c.values = values;
+                            c.or_blank = blank;
+                            normalize_pick(c);
+                        }
+                        if let Some(req) = out.request {
+                            ask_values = Some((picker.field.clone(), req));
+                        }
+                    }
                 }
                 if let Some(i) = remove {
                     self.filter.conditions.remove(i);
@@ -208,6 +277,7 @@ impl MicroParquetApp {
                         op: CondOp::Equals,
                         value: String::new(),
                         value2: String::new(),
+                        ..Default::default()
                     };
                     self.filter.conditions.push(c);
                 }
@@ -256,6 +326,12 @@ impl MicroParquetApp {
                 });
             });
         });
+        self.picker = picker;
+        self.filter.pick_buttons = picker_buttons_seen;
+        if let Some((field, search)) = ask_values {
+            self.picker.field = field;
+            self.picker_request(search);
+        }
         if let Some((i, step)) = replace {
             self.replace_step_in_active_tab(i, step, "Filter updated.");
         }

@@ -67,6 +67,21 @@ pub struct StepsReport {
     pub named_buttons: Vec<(String, egui::Rect)>,
 }
 
+/// The right panel's scrolling middle as drawn in the last frame (Phase 6 U2).
+#[derive(Clone, Copy, Debug)]
+pub struct RightPanelReport {
+    /// The visible part of the tab, and the size of everything in it.
+    pub scroll: egui::Rect,
+    pub content: egui::Vec2,
+    /// How far it is scrolled.
+    pub offset: f32,
+    pub tab: RightTab,
+}
+
+pub fn right_panel_report(ctx: &egui::Context) -> Option<RightPanelReport> {
+    ctx.data(|d| d.get_temp::<RightPanelReport>(egui::Id::new("right_panel_report")))
+}
+
 /// The Column tab as drawn in the last frame.
 #[derive(Clone, Debug)]
 pub struct InspectorReport {
@@ -380,15 +395,27 @@ impl MicroParquetApp {
         self.active_tool = ActiveToolModal::PythonCodePreview;
     }
 
-    /// Right panel (316 px) with two tabs: "Steps . N" and "Column".
+    /// The right panel: "Steps . N", "Column" and "SQL". It is as wide as its left edge was dragged
+    /// to (from today's width up to half the window), and each tab scrolls when its content is
+    /// taller than the panel (Phase 6 U2).
     pub(crate) fn render_right_panel(&mut self, ctx: &egui::Context) {
-        if self.tabs.is_empty() || !self.show_steps_sidebar {
+        if self.tabs.is_empty() || !self.side_panel_shown() {
             return;
+        }
+        // a tab switched off in View ▸ Side panel is not the one shown
+        let visible = self.visible_side_tabs();
+        if !visible.contains(&self.right_tab) {
+            self.right_tab = visible[0];
         }
         let tk = *theme::tokens(self.dark_mode);
         let n_steps = self.tabs.get(self.active_tab).map(|t| t.steps.len()).unwrap_or(0);
-        egui::SidePanel::right("right_panel")
-            .exact_width(theme::RIGHT_PANEL_W)
+        let max_w = (ctx.screen_rect().width() * theme::RIGHT_PANEL_MAX_SHARE).max(theme::RIGHT_PANEL_W);
+        // the width is ours (the panel is drawn at exactly this width): dragging the left edge sets it
+        let width = self.right_panel_w.clamp(theme::RIGHT_PANEL_W, max_w);
+        self.right_panel_w = width;
+        let mut grab: Option<egui::Response> = None;
+        let out = egui::SidePanel::right("right_panel")
+            .exact_width(width)
             .resizable(false)
             .frame(egui::Frame::none().fill(tk.surface))
             .show(ctx, |ui| {
@@ -401,11 +428,8 @@ impl MicroParquetApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-                            let w = (ui.available_width() - theme::SPACE_XS) / 2.0;
-                            for (tab, label) in [
-                                (RightTab::Steps, format!("Steps \u{b7} {}", n_steps)),
-                                (RightTab::Column, "Column".to_string()),
-                            ] {
+                            let w = (ui.available_width() - (visible.len() as f32 - 1.0) * theme::SPACE_XS) / visible.len() as f32;
+                            for (tab, label) in visible.iter().map(|t| (*t, if *t == RightTab::Steps { format!("Steps \u{b7} {}", n_steps) } else { t.name().to_string() })) {
                                 let on = self.right_tab == tab;
                                 let text = theme::semibold(label).color(if on { tk.ink } else { tk.muted });
                                 let btn = egui::Button::new(text)
@@ -418,11 +442,91 @@ impl MicroParquetApp {
                             }
                         });
                     });
-                match self.right_tab {
-                    RightTab::Steps => self.render_steps_tab(ui),
-                    RightTab::Column => self.render_column_tab(ui),
+                // the tab under the switch: it scrolls when it is taller than what is left
+                let panel_h = ui.available_height();
+                let tab = self.right_tab;
+                // a bar that takes its own room: it never covers a button at the panel's right edge
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                let area = egui::ScrollArea::vertical()
+                    .id_salt(("right_panel_scroll", tab as u8))
+                    .max_height(panel_h)
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                    .show(ui, |ui| match tab {
+                        RightTab::Steps => self.render_steps_tab(ui, panel_h),
+                        RightTab::Column => self.render_column_tab(ui),
+                        RightTab::Sql => self.render_sql_tab(ui, panel_h),
+                        RightTab::Chart => self.render_chart_tab(ui),
+                    });
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("right_panel_report"), RightPanelReport { scroll: area.inner_rect, content: area.content_size, offset: area.state.offset.y, tab }));
+                // the left edge: drag to resize, double-click for today's width (added last, so it is on top)
+                let panel = ui.max_rect();
+                let strip = egui::Rect::from_min_max(panel.min, egui::pos2(panel.min.x + theme::RIGHT_PANEL_GRAB, panel.max.y));
+                let r = ui.interact(strip, egui::Id::new("right_panel_grab"), egui::Sense::click_and_drag());
+                if r.hovered() || r.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    ui.painter().rect_filled(egui::Rect::from_min_max(panel.min, egui::pos2(panel.min.x + theme::LINE_THICK_W, panel.max.y)), 0.0, if r.dragged() { tk.accent } else { tk.border });
                 }
+                grab = Some(r);
             });
+        let _ = out;
+        if let Some(r) = grab {
+            if r.double_clicked() {
+                self.set_right_panel_width(None);
+            } else if r.dragged() {
+                if let Some(p) = r.interact_pointer_pos() {
+                    let w = (ctx.screen_rect().right() - p.x).clamp(theme::RIGHT_PANEL_W, max_w);
+                    if (w - self.right_panel_w).abs() > 0.01 { // not a size: a change that is not rounding
+                        self.right_panel_w = w;
+                        ctx.request_repaint();
+                    }
+                }
+                self.right_panel_dragging = true;
+            } else if self.right_panel_dragging {
+                // the drag ended: the width is kept in settings.json
+                self.right_panel_dragging = false;
+                let w = self.right_panel_w;
+                let new = if w > theme::RIGHT_PANEL_W + 0.5 { Some(w) } else { None };
+                if self.settings.right_panel_width != new {
+                    self.settings.right_panel_width = new;
+                    self.save_settings();
+                }
+            }
+        }
+    }
+
+    /// The side-panel tabs that are switched on, in order.
+    pub(crate) fn visible_side_tabs(&self) -> Vec<RightTab> {
+        RightTab::ALL.iter().copied().filter(|t| !self.settings.side_panel_hidden.iter().any(|n| n == t.name())).collect()
+    }
+
+    /// The panel is drawn when it is on and at least one of its tabs is switched on.
+    pub(crate) fn side_panel_shown(&self) -> bool {
+        self.show_steps_sidebar && !self.visible_side_tabs().is_empty()
+    }
+
+    /// View ▸ Side panel ▸ the tab: saved in settings.json. Switching a tab on shows the panel and that tab.
+    pub(crate) fn set_side_tab_visible(&mut self, tab: RightTab, on: bool) {
+        self.settings.side_panel_hidden.retain(|n| n != tab.name());
+        if !on {
+            self.settings.side_panel_hidden.push(tab.name().to_string());
+            if tab == RightTab::Chart {
+                self.chart_popped = false;
+            }
+        } else {
+            self.show_steps_sidebar = true;
+            self.right_tab = tab;
+        }
+        self.save_settings();
+    }
+
+    /// Sets the width of the right panel (clamped to today's width and half the window); `None` is
+    /// today's width. The panel takes it from the next frame.
+    pub(crate) fn set_right_panel_width(&mut self, width: Option<f32>) {
+        self.settings.right_panel_width = width.map(|w| w.max(theme::RIGHT_PANEL_W)).filter(|w| *w > theme::RIGHT_PANEL_W + 0.5);
+        self.right_panel_w = self.settings.right_panel_width.unwrap_or(theme::RIGHT_PANEL_W);
+        self.right_panel_dragging = false;
+        self.save_settings();
     }
 
     /// Applies a change to the active tab's steps (recorded for undo) and refreshes the view.
@@ -512,7 +616,7 @@ impl MicroParquetApp {
         }
     }
 
-    fn render_steps_tab(&mut self, ui: &mut egui::Ui) {
+    fn render_steps_tab(&mut self, ui: &mut egui::Ui, panel_h: f32) {
         let tk = *theme::tokens(self.dark_mode);
         let mut open_schema = false;
         let mut select: Option<usize> = None;
@@ -557,7 +661,7 @@ impl MicroParquetApp {
                     ui.label(theme::mono(count_text(tab.step_counts.first().copied())).size(theme::TEXT_COUNT).color(tk.muted));
                 });
             });
-            let list_height = (ui.available_height() - theme::STEPS_FOOTER_RESERVE).max(theme::STEPS_LIST_MIN_H);
+            let list_height = (panel_h - theme::MARGIN_PANEL_STEPS.sum().y - theme::STEPS_FOOTER_RESERVE - ui.min_rect().height()).max(theme::STEPS_LIST_MIN_H);
             egui::ScrollArea::vertical().max_height(list_height).show(ui, |ui| {
                 for (i, step) in tab.steps.iter().enumerate() {
                     let is_sel = selected == Some(i);
@@ -745,19 +849,23 @@ impl MicroParquetApp {
                     }
                 });
             }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                ui.horizontal(|ui| {
-                    let w = (ui.available_width() - theme::SPACE_M) / 3.0; // not a size: three buttons
-                    if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("Save macro").size(theme::TEXT_SMALL))).clicked() {
-                        self.active_tool = ActiveToolModal::SaveMacro;
-                    }
-                    if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("Load").size(theme::TEXT_SMALL))).clicked() {
-                        self.load_and_apply_macro_interactive(false);
-                    }
-                    if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("To .py").size(theme::TEXT_SMALL))).clicked() {
-                        self.prepare_python_preview_for_active_tab();
-                    }
-                });
+            // the three buttons sit at the foot of the panel when it is tall enough, else right after the rest
+            let left = panel_h - theme::MARGIN_PANEL_STEPS.sum().y - ui.min_rect().height() - theme::PANEL_BTN_H - ui.spacing().item_spacing.y;
+            if left > 0.0 {
+                ui.add_space(left);
+            }
+            ui.horizontal(|ui| {
+                // (the gaps between them are the item spacing: a wider total would push the panel wider)
+                let w = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0; // not a size: three buttons, two gaps
+                if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("Save macro").size(theme::TEXT_SMALL))).clicked() {
+                    self.active_tool = ActiveToolModal::SaveMacro;
+                }
+                if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("Load").size(theme::TEXT_SMALL))).clicked() {
+                    self.load_and_apply_macro_interactive(false);
+                }
+                if ui.add_sized([w, theme::PANEL_BTN_H], egui::Button::new(theme::semibold("To .py").size(theme::TEXT_SMALL))).clicked() {
+                    self.prepare_python_preview_for_active_tab();
+                }
             });
         });
 
@@ -826,7 +934,7 @@ impl MicroParquetApp {
         let mut tile_rects: Vec<(String, String, egui::Rect)> = Vec::new();
         let mut bar_rects: Vec<egui::Rect> = Vec::new();
         let mut panel_inner = egui::Rect::NOTHING;
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.scope(|ui| {
             panel_inner = ui.available_rect_before_wrap();
             egui::Frame::none().inner_margin(theme::MARGIN_PANEL_COLUMN).show(ui, |ui| {
                 let Some(tab) = self.tabs.get(self.active_tab) else {
@@ -844,6 +952,9 @@ impl MicroParquetApp {
                 let stale = stats.is_none_or(|s| s.key != key);
 
                 ui.label(theme::bold(name.clone()).size(theme::TEXT_INSPECTOR_TITLE));
+                if let Some(original) = tab.source.file_name_of(&name) {
+                    ui.add(egui::Label::new(egui::RichText::new(format!("From file: {}", original)).size(theme::TEXT_LABEL).color(tk.muted)).truncate()).on_hover_text(format!("From file: {}", original));
+                }
                 let kind_label = match stats.map(|s| &s.kind) {
                     Some(ColumnKind::Number) => "Number",
                     Some(ColumnKind::Date) => "Date",
@@ -1109,9 +1220,25 @@ impl MicroParquetApp {
     }
 }
 
-/// The two tabs of the right panel.
+/// The tabs of the right panel.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RightTab {
     Steps,
     Column,
+    Sql,
+    Chart,
+}
+
+impl RightTab {
+    pub const ALL: [RightTab; 4] = [RightTab::Steps, RightTab::Column, RightTab::Sql, RightTab::Chart];
+
+    /// The name the View menu and settings.json use.
+    pub fn name(self) -> &'static str {
+        match self {
+            RightTab::Steps => "Steps",
+            RightTab::Column => "Column",
+            RightTab::Sql => "SQL",
+            RightTab::Chart => "Chart",
+        }
+    }
 }

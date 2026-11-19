@@ -57,7 +57,7 @@ fn source(d: &std::path::Path) -> TabSource {
 }
 
 fn lv(column: &str, descending: bool) -> SortLevel {
-    SortLevel { column: column.into(), descending }
+    SortLevel { column: column.into(), descending, ..Default::default() }
 }
 
 fn order(src: &TabSource, d: &std::path::Path, levels: Vec<SortLevel>) -> Vec<i64> {

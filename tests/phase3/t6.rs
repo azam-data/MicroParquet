@@ -110,9 +110,14 @@ fn t6_every_toolbar_action_is_in_the_command_list() {
     let banking: Vec<CommandId> = in_group(CommandGroup::Banking).map(|c| c.id).collect();
     for want in [
         CommandId::Buckets, CommandId::RateShock, CommandId::Duration, CommandId::Ftp,
-        CommandId::Provision, CommandId::Limits, CommandId::Reconcile, CommandId::Audit,
+        CommandId::Provision, CommandId::Limits, CommandId::Reconcile,
     ] {
         assert!(banking.contains(&want) && toolbar.contains(&want), "{want:?}");
+    }
+    // the hygiene audit and the data-quality scorecard are in Edit ▸ Data checks (F3), not in Banking
+    let edit: Vec<CommandId> = in_group(CommandGroup::Edit).map(|c| c.id).collect();
+    for want in [CommandId::Audit, CommandId::DqScorecard] {
+        assert!(edit.contains(&want) && !banking.contains(&want) && toolbar.contains(&want) && DATA_CHECKS.contains(&want), "{want:?}");
     }
     let export: Vec<CommandId> = in_group(CommandGroup::Export).map(|c| c.id).collect();
     for want in [CommandId::ExportParquet, CommandId::ExportCsv, CommandId::ExportXlsx, CommandId::ExportPdf, CommandId::ExportSplit] {
@@ -127,8 +132,8 @@ fn t6_every_toolbar_action_is_in_the_command_list() {
     }
     // the app draws its toolbar from this list
     let main = std::fs::read_to_string("src/ui/top_bar.rs").unwrap(); // the single top bar draws it
-    // (the buttons are the top bar's BAR_ITEMS; a unit test checks they are TOOLBAR_BUTTONS_FILE + TOOLBAR_BUTTONS_TRANSFORM)
-    assert!(main.contains("BAR_ITEMS") && main.contains("TOOLBAR_MORE"));
+    // (the buttons are the top bar's BAR_ITEMS; a unit test checks they are toolbar_buttons())
+    assert!(main.contains("BAR_ITEMS") && main.contains("MENUS"));
     assert!(main.contains("CommandGroup::Banking") && main.contains("CommandGroup::Export"));
 }
 

@@ -227,10 +227,10 @@ fn fix8_text_sorts_case_insensitive_with_numbers_by_value_and_stable_ties() {
     assert!(k("DHK") > k("ctg"), "c before D once case is ignored");
     assert!(k("x0") < k("x00001"));
 
-    let asc = sort_rows(branches(), vec![SortLevel { column: "Branch".into(), descending: false }]);
+    let asc = sort_rows(branches(), vec![SortLevel { column: "Branch".into(), descending: false, ..Default::default() }]);
     // BRANCH 1; the three 2s in their source order; Branch 10; ctg; blanks last ("" then null)
     assert_eq!(asc, ids(&["d", "b", "c", "g", "a", "h", "e", "f"]));
-    let desc = sort_rows(branches(), vec![SortLevel { column: "Branch".into(), descending: true }]);
+    let desc = sort_rows(branches(), vec![SortLevel { column: "Branch".into(), descending: true, ..Default::default() }]);
     // ties keep their source order in either direction; blanks are still last
     assert_eq!(desc, ids(&["h", "a", "b", "c", "g", "d", "e", "f"]));
 }
@@ -238,7 +238,7 @@ fn fix8_text_sorts_case_insensitive_with_numbers_by_value_and_stable_ties() {
 #[test]
 fn fix8_python_sort_key_matches_the_app() {
     use micro_parquet::macros::generate_python_polars_code;
-    let step = TransformStep::SortRows { levels: vec![SortLevel { column: "Branch".into(), descending: false }] };
+    let step = TransformStep::SortRows { levels: vec![SortLevel { column: "Branch".into(), descending: false, ..Default::default() }] };
     let py = generate_python_polars_code(Path::new("x.parquet"), true, &IngestionConfig::default(), &[step], None).unwrap();
     assert!(py.contains("_mp_sort_key(pl.col(\"Branch\")"), "{py}");
     assert!(py.contains("nulls_last=True, maintain_order=True"));

@@ -343,5 +343,54 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 </report>
 
 <accepted_deviations>
-(none yet)
+U3 (details in docs/phase6-progress.md):
+- The sort step and the pivot keep a copy of the list they use (name, values, case flag), so macros replay the same order whatever happens to the list file.
+- The Sort dialog keeps "Lowest first / Highest first" and adds an "Order" choice (Natural, each list, Tenor); "Highest first" reverses a list.
+- In the pivot, "By value" is the existing sort by the first value field (Rows only).
+- Values not in a list or not a tenor follow the others in natural A→Z order, also for Z→A.
+- The count of values that are not tenors is taken from the first 2,000 distinct values.
+- The fixture `phase6_sort_pivot_unset` was written by hand in the Phase 5 form.
+U1:
+- A blank "Rename to" keeps the file's name; "empty after trimming" is reported for a file column with no name and no rename.
+- (Corrected by the owner after session A) a Parquet file that matches a saved schema behaves like a CSV: the Parquet Schema dialog opens with the template applied and the "Applied saved schema…" line with Undo, unless the template is ticked "Apply without asking".
+- The warning lists steps the worker found would break, before the tab changes; "Apply anyway" keeps them as broken steps.
+- Parse failures, masked-column names and the inspector use the final names; "Convert to Parquet…" is disabled with a bad name.
+U2:
+- The panel's resize handle is our own strip at its left edge; the panel is drawn at exactly the kept width.
+- A query is checked on the worker first; a wrong one adds no step and its message stays under the editor (also for "New tab").
+- The SQL bar is replaced by the SQL tab; View ▸ SQL and Ctrl+K "SQL editor" open it (needs an open tab).
+- Each panel tab scrolls with an always-visible solid bar (about 10 pt narrower content); a 4 pt overflow of the Steps tab's three buttons was fixed.
+U6:
+- The live zoom runs 50%–200% (was 80%–150%); Zoom in / out still step by 10%, kept on 5% values.
+- The status-bar zoom label is the right-most item and is left out of a bar narrower than 900 pt; egui's own Ctrl+= / Ctrl+- zoom is switched off.
+U4:
+- The build date comes from a std-only `build.rs`; the title names the tab's first file (or the tab's title for a tool's result). Two Phase 3 version assertions read the Cargo version instead of "1.3.0".
+U5:
+- Top N keeps N categories plus "Other"; series: at most 8 drawn in all (7 plus "Other"); both are ranked by aggregated value and "Other" is recalculated from its rows.
+- Count ignores the value column; choices are kept under the tab's first file name; the old bar chart is replaced by View ▸ Chart.
+Owner answers on session A: live zoom 50–200% accepted (U6); "(blank)" as the `or_blank` flag on the filter condition accepted (U7); chart series 8 in total, 7 plus "Other", accepted (U5).
+U7:
+- "(blank)" is the flag `or_blank` of the condition (same rows as an extra is-blank condition joined with OR, without disturbing the group's join).
+- No "(blank)" entry in the conditional column's picker (blanks have their own result). The picker is an inline panel under the row. "Select all" selects the listed values.
+P1 (details in docs/phase6-progress.md D28–D31):
+- A run keeps file names and typed inputs, not file contents; source tabs by tab title (or file name); a result tab with steps of its own is refused.
+- "Re-run with changes" opens the tool's dialog pre-filled; File ▸ "Saved tool runs" (Ctrl+K) lists `portable_data/runs`.
+- The period reconcile table is sorted by key so a re-run is identical (row order only).
+P2 (details in docs/phase6-progress.md D32–D36):
+- Sheets are numbered by the exporter ("1_Cover", "2_Gap"); the Cover is one text table including the parameter files with sample flags.
+- A slot with unconvertible values or a missing column is refused; the pack cutoff replaces the cutoff of the tools that have one; Banking gets a last heading "Reports".
+P3 (details in docs/phase6-progress.md D37–D40):
+- Two tabs (variance and commentary); thresholds kept in the tab source and the saved run; rows with a balance but no rate, and blank keys, stop the run; New/Closed keys are always in the commentary.
+P4 (details in docs/phase6-progress.md D41–D44):
+- The tool is in the Transform menu (there is no Data menu); the type rule shows examples, not rows; rule sets are `dq_rules/<name>.json` with a sample written on first use.
+P5 (details in docs/phase6-progress.md D45–D47):
+- CRR, PSR and weightages come only from the parameter file (shown, not typed); the footer is rows of the same table; Banking gets the heading "Islamic window".
+P6 (details in docs/phase6-progress.md D48–D50):
+- The stress needs a behaviour profile with a term deposit that has a TDRR (else refused); a `plan` job makes the build matrix from the "platforms" input.
+Session B (owner answers E1-E3, build findings F1-F3, review fixes G1-G11, decisions H1-H4; details in docs/phase6-progress.md, "Session B"):
+- E1: the Mudaraba dialog has "Edit parameters..." that saves a NEW psr file dated today (never overwrites). E2: a pack stops only for parse failures in columns its items or the slot's steps use; the others are a Cover warning. E3: the scorecard is in Edit > Data checks (see F3).
+- F1: the status-bar Details button stays alone when the bar has no room for the note. F2: the chart is the fourth side-panel tab with Pop out; View > Side panel has Steps, Column, SQL, Chart. F3: File, Edit, View, Banking, Export, Help, then 11 toolbar buttons with a "»" overflow; View > Toolbar buttons; Hygiene audit and Data-quality scorecard under Edit > Data checks. At 1280 px all 11 buttons are icon-only.
+- G1-G11 done as written. Notable choices: a picked "is not" keeps the old unknown-blank rule (only "not in list" keeps blanks); Mudaraba daily balances need a date column (new field, old runs must choose it); MoM/CL migration/reconcile refuse the same file only when the steps are also the same; the G1-G7 and G8-G11 groups are one commit each because they touch the same files.
+- H1: a month is 365/12 days in the Tenor order. H2: every scorecard rule is measured before the tab's steps. H3: New and Closed keys follow materiality (one summary line). H4: saved runs keep rule-file hashes and warn when one changed.
+Session C: J1 the toolbar buttons keep their labels at every width and fold from the right into "»" (no icon-only mode); J2 Mudaraba daily balances have the box "Count missing days as zero balance" (off by default, stored in the step; on: zero-filled days listed per product in the footer); the same-file refusal needs the same hash and the same steps (accepted).
 </accepted_deviations>

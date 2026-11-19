@@ -12,7 +12,7 @@ Shows the facts of one column over the whole result: how many rows and blanks, a
 
 ## 3. Before you start
 
-- Open the tab. The right panel must be shown (View menu, or Ctrl+K: "panel").
+- Open the tab. The side panel must be shown with its "Column" tab on (View ▸ Side panel ▸ "Column", or Ctrl+K: "panel").
 
 ## 4. Columns you need
 

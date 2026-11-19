@@ -6,25 +6,91 @@ use crate::ui::prelude::*;
 /// Indices after the closed tab shift down so they keep pointing at the same tab. An index at
 /// the closed tab moves to the tab that took its place (or the new last tab). Any result is
 /// clamped to 0..new_len, and is 0 when no tabs are left.
+/// `title`, or "title (2)", "title (3)" … when a tab of that name is open: the title names the tab.
+pub(crate) fn unique_tab_title(tabs: &[TabState], title: &str) -> String {
+    if !tabs.iter().any(|t| t.title == title) {
+        return title.to_string();
+    }
+    (2..).map(|n| format!("{} ({})", title, n)).find(|t| !tabs.iter().any(|x| &x.title == t)).unwrap_or_else(|| title.to_string())
+}
+
 pub(crate) fn tab_index_after_close(sel: usize, closed: usize, new_len: usize) -> usize {
     let shifted = if sel > closed { sel - 1 } else { sel };
     shifted.min(new_len.saturating_sub(1))
 }
 
+/// The window title: "MicroParquet v1.6.0", and " — <file name>" when a tab is open.
+pub fn window_title(file: Option<&str>) -> String {
+    match file.map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) => format!("MicroParquet v{} \u{2014} {}", env!("CARGO_PKG_VERSION"), f),
+        None => format!("MicroParquet v{}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 impl MicroParquetApp {
+    /// The name of the active tab's file (a tab made by a tool has its own title).
+    pub(crate) fn active_file_name(&self) -> Option<String> {
+        let tab = self.tabs.get(self.active_tab)?;
+        let first = micro_parquet::steps_edit::source_files(&tab.source).first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        Some(first.unwrap_or_else(|| tab.title.clone()))
+    }
+
+    /// Keeps the window's title bar in step with the active tab.
+    pub(crate) fn update_window_title(&mut self, ctx: &egui::Context) {
+        let title = window_title(self.active_file_name().as_deref());
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+    }
+
     pub(crate) fn initiate_file_open(&mut self, direct_convert_only: bool) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Data Files (CSV, Parquet)", &["csv", "parquet"])
-            .pick_file()
-        else {
+        #[cfg(test)]
+        let picked = {
+            self.file_dialog_requests += 1;
+            self.test_pick.take()
+        };
+        #[cfg(not(test))]
+        let picked = rfd::FileDialog::new().add_filter("Data Files (CSV, Parquet)", &["csv", "parquet"]).pick_file();
+        let Some(path) = picked else {
             return;
         };
+        self.open_data_file(path, direct_convert_only);
+    }
 
+    /// Opens a CSV or Parquet file: with the saved schema that matches its columns (Phase 6 U1),
+    /// else as before (a CSV through the Schema dialog, a Parquet file straight into a tab).
+    pub(crate) fn open_data_file(&mut self, path: PathBuf, direct_convert_only: bool) {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+
+        // the saved schemas whose original column names are this file's header names
+        let (templates, damaged) = micro_parquet::schema_templates::load_templates_checked(&self.paths.schemas_dir);
+        if !damaged.is_empty() {
+            self.status_message = format!("\u{26A0} Saved schema(s) skipped when matching this file: {}. Fix or delete the file in portable_data/schemas.", damaged.join("; "));
+        }
+        if !templates.is_empty() {
+            if let Ok(detected) = detect_file_schema(&path) {
+                let headers: Vec<String> = detected.columns.iter().map(|c| c.name.clone()).collect();
+                let matched: Vec<micro_parquet::schema_templates::SchemaTemplate> =
+                    micro_parquet::schema_templates::matching_templates(&templates, &headers).into_iter().cloned().collect();
+                match matched.len() {
+                    0 => {}
+                    1 => {
+                        self.open_with_template(path, direct_convert_only, detected, &matched[0], false);
+                        return;
+                    }
+                    _ => {
+                        self.status_message = format!("{} saved schemas match this file. Choose one.", matched.len());
+                        self.template_pick = Some(crate::ui::schema::TemplatePick { path, direct_convert_only, detected, candidates: matched, rects: Vec::new() });
+                        return;
+                    }
+                }
+            }
+        }
 
         if ext == "parquet" {
             self.create_tab_from_source(
@@ -52,12 +118,65 @@ impl MicroParquetApp {
                         parse_failures: Vec::new(),
                         is_parquet: false,
                         popped_out: false,
+                        applied: None,
                     });
                 }
                 (Err(e), _) | (_, Err(e)) => {
                     self.status_message = format!("Error reading CSV preview: {}", e);
                 }
             }
+        }
+    }
+
+    /// Opens a file with a saved schema whose columns match it. A CSV shows the Schema dialog
+    /// with the schema applied and an Undo button, unless the template is ticked "Apply without
+    /// asking" (and the choice was not made from the list of several): then the tab opens at
+    /// once. A Parquet file opens at once (its dialog is the tab's Schema button).
+    pub(crate) fn open_with_template(
+        &mut self,
+        path: PathBuf,
+        direct_convert_only: bool,
+        detected: IngestionConfig,
+        template: &micro_parquet::schema_templates::SchemaTemplate,
+        chosen_from_list: bool,
+    ) {
+        let applied_config = micro_parquet::schema_templates::apply_template(&detected, &template.config);
+        let n = applied_config.columns.len();
+        let title = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let is_parquet = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("parquet"));
+        let note = format!("Applied saved schema '{}' (all {} columns matched)", template.name, n);
+        let fine = applied_config.rename_problems().is_empty();
+        if is_parquet && direct_convert_only {
+            // converting a Parquet file is not offered here: open it as it is
+            self.create_tab_from_source(title, TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, Vec::new(), HashMap::new());
+            return;
+        }
+        // a template ticked "Apply without asking" opens the file at once, CSV and Parquet alike
+        if template.config.auto_apply && !direct_convert_only && !chosen_from_list && fine {
+            let mut config = applied_config;
+            let mut steps = Vec::new();
+            hoist_clean_line_breaks(&mut config, is_parquet, &mut steps);
+            let id = self.create_tab_from_source_with(title, TabSource::SingleFile { path, is_parquet, config }, steps, HashMap::new(), None);
+            self.open_notes.insert(id, format!("{}, opened without asking.", note));
+            return;
+        }
+        // otherwise the Schema dialog opens with the template applied (and an Undo button)
+        let preview = if is_parquet { preview_parquet_raw(&path, 5) } else { preview_csv_raw(&path, 5) };
+        match preview {
+            Ok(preview_df) => {
+                self.pending_csv_modal = Some(PendingCsvModal {
+                    csv_path: path,
+                    raw_preview_df: preview_df,
+                    config: applied_config,
+                    direct_convert_only,
+                    target_tab: None,
+                    parse_failures: Vec::new(),
+                    is_parquet,
+                    popped_out: false,
+                    applied: Some(crate::ui::schema::AppliedTemplate { name: template.name.clone(), columns: n, before: detected }),
+                });
+            }
+            Err(e) => self.status_message = format!("Error reading CSV preview: {}", e),
         }
     }
 
@@ -109,10 +228,6 @@ impl MicroParquetApp {
                 self.filter.col = first.clone();
             }
             self.columns.rename_old = first.clone();
-            self.chart.x_col = first.clone();
-        }
-        if let Some(second) = cols.get(1) {
-            self.chart.y_col = second.clone();
         }
         self.columns.list = cols
             .iter()
@@ -358,29 +473,42 @@ impl MicroParquetApp {
         self.tab_id_counter
     }
 
+    /// The start screen: three buttons, in the middle of the window (nothing else).
     pub(crate) fn render_empty_state(&mut self, ui: &mut egui::Ui) {
+        // the height of the three buttons is measured the frame before (the first frame guesses)
+        let id = egui::Id::new("empty_state_h");
+        let guess = 3.0 * ui.spacing().interact_size.y + 2.0 * theme::SPACE_S; // not a size: three buttons, two gaps
+        let content_h = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(guess);
+        let top = ((ui.available_height() - content_h) / 2.0).max(0.0);
+        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
         ui.vertical_centered(|ui| {
-            ui.add_space(theme::EMPTY_STATE_TOP);
-            ui.heading(format!(
-                "MicroParquet {}: Portable CSV/Parquet, ALM & Loans Analytics Workstation",
-                env!("CARGO_PKG_VERSION")
-            ));
-            ui.label("Out-of-Core Polars Engine • Multi-Tab Views • Custom Maturity Buckets • Per-Metric Formats");
-            ui.add_space(theme::EMPTY_STATE_GAP);
-            if theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...").clicked() {
+            ui.add_space(top);
+            let r = theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...");
+            rects.push(("open".to_string(), r.rect));
+            if r.clicked() {
                 self.initiate_file_open(false);
             }
             ui.add_space(theme::SPACE_S);
-            if ui.button("\u{E466} Stack / Merge Multiple Files...").clicked() {
+            let r = ui.button("\u{E466} Stack / Merge Multiple Files...");
+            rects.push(("stack".to_string(), r.rect));
+            if r.clicked() {
                 self.active_tool = ActiveToolModal::StackFiles;
             }
             ui.add_space(theme::SPACE_S);
-            if ui
-                .button("\u{E094} Launch Recursive Folder Batch Converter...")
-                .clicked()
-            {
+            let r = ui.button("\u{E094} Launch Recursive Folder Batch Converter...");
+            rects.push(("batch".to_string(), r.rect));
+            if r.clicked() {
                 self.batch_modal.open = true;
             }
+        });
+        // (the buttons' own rectangles: the panel's rectangle is always the whole area)
+        let used = match (rects.first(), rects.last()) {
+            (Some((_, f)), Some((_, l))) => l.bottom() - f.top(),
+            _ => content_h,
+        };
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(id, used.max(0.0));
+            d.insert_temp(egui::Id::new("empty_state_rects"), rects);
         });
     }
 
@@ -428,6 +556,8 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         let mut tab_to_close: Option<usize> = None;
         let mut duplicate_tab: Option<usize> = None;
+        let mut rerun_tab: Option<usize> = None;
+        let mut save_run_tab: Option<usize> = None;
         let mut select: Option<usize> = None;
         let mut new_tab = false;
         let mut start_rename: Option<usize> = None;
@@ -536,6 +666,17 @@ impl MicroParquetApp {
                                         duplicate_tab = Some(idx);
                                         ui.close_menu();
                                     }
+                                    if self.tabs.get(idx).is_some_and(crate::ui::runs::tab_can_be_saved) {
+                                        ui.separator();
+                                        if ui.button("Re-run with changes").on_hover_text("Open the tool's dialog with the inputs of this result").clicked() {
+                                            rerun_tab = Some(idx);
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Save run\u{2026}").on_hover_text("Save the inputs of this result in portable_data/runs").clicked() {
+                                            save_run_tab = Some(idx);
+                                            ui.close_menu();
+                                        }
+                                    }
                                     if ui.button("Close tab").clicked() {
                                         tab_to_close = Some(idx);
                                         ui.close_menu();
@@ -574,10 +715,16 @@ impl MicroParquetApp {
         if new_tab {
             self.initiate_file_open(false);
         }
+        if let Some(idx) = rerun_tab {
+            self.rerun_tab_with_changes(idx);
+        }
+        if let Some(idx) = save_run_tab {
+            self.open_save_run(idx);
+        }
         if let Some(idx) = duplicate_tab {
             if let Some(orig) = self.tabs.get(idx).cloned() {
                 let mut cloned = orig;
-                cloned.title = format!("View of {}", cloned.title);
+                cloned.title = unique_tab_title(&self.tabs, &format!("View of {}", cloned.title));
                 cloned.id = self.next_tab_id();
                 self.tabs.push(cloned);
                 self.active_tab = self.tabs.len() - 1;

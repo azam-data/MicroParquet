@@ -82,6 +82,7 @@ pub fn load_policy() -> Result<PolicyFile> {
     if data.rating_downgrade_notches < 1 {
         bail!("The policy file {}: rating_downgrade_notches must be at least 1.", POLICY_FILE);
     }
+    crate::rules::note_used_file("Policy file", POLICY_FILE, "", &source, sample);
     Ok(PolicyFile { data, file: POLICY_FILE.to_string(), source, sample })
 }
 
@@ -693,7 +694,8 @@ pub fn spec_of(step: &crate::models::TransformStep) -> Result<EclSpec> {
 pub const SUMMARY_COLUMNS: [&str; 8] = ["Section", "Group", "Loans", "EAD", "ECL", "Regulatory provision", "Higher of", "Shortfall to Loan Loss Reserve"];
 
 /// What the summary reads from a table that has the ECL columns.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct EclSummarySpec {
     /// The classification grade (`CL_Final`).
     pub grade_col: String,

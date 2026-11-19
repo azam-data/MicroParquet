@@ -45,6 +45,14 @@ pub enum JobKind {
     Batch,
     /// Applies a schema to an open tab.
     Schema,
+    /// The values of one column with their counts, for the filter's value picker.
+    PickerValues,
+    /// The numbers of the chart (the whole tab, after its steps).
+    Chart,
+    /// Checks a SQL query of the SQL tab against the tab's columns before it becomes a step.
+    SqlCheck,
+    /// The data-quality checks of a tab (Phase 6 P4).
+    Dq,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

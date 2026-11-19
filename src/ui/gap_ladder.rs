@@ -61,6 +61,8 @@ pub struct GapState {
     pub limits: Option<(usize, Result<Option<GapLimitsFile>, String>)>,
     /// "Apply behaviour profile" (Phase 5 R2): off gives the Phase 4 ladder.
     pub apply_behaviour: bool,
+    /// "Stress: early withdrawal (TDRR)" (Phase 6 P6).
+    pub stress_tdrr: bool,
     pub behaviour_files: Vec<String>,
     pub behaviour_sel: String,
     pub behaviour: Option<(String, Result<micro_parquet::behaviour::BehaviourFile, String>)>,
@@ -69,7 +71,7 @@ pub struct GapState {
 
 impl Default for GapState {
     fn default() -> Self {
-        Self { rows: Vec::new(), presets: Vec::new(), preset_idx: 0, cutoff: String::new(), null_as_sight: true, limits: None, apply_behaviour: false, behaviour_files: Vec::new(), behaviour_sel: String::new(), behaviour: None, rects: GapRects::default() }
+        Self { rows: Vec::new(), presets: Vec::new(), preset_idx: 0, cutoff: String::new(), null_as_sight: true, limits: None, apply_behaviour: false, stress_tdrr: false, behaviour_files: Vec::new(), behaviour_sel: String::new(), behaviour: None, rects: GapRects::default() }
     }
 }
 
@@ -174,11 +176,11 @@ impl MicroParquetApp {
                 }
                 product_cols.push(r.product_col.clone());
             }
-            Some(micro_parquet::banking::GapBehaviour { file_name: g.behaviour_sel.clone(), file, product_cols })
+            Some(micro_parquet::banking::GapBehaviour { file_name: g.behaviour_sel.clone(), file, product_cols, stress_tdrr: g.stress_tdrr })
         } else {
             None
         };
-        let title = format!("Gap ladder ({})", preset.name);
+        let title = if g.apply_behaviour && g.stress_tdrr { format!("Gap ladder ({}) (stressed)", preset.name) } else { format!("Gap ladder ({})", preset.name) };
         Ok((title, TabSource::GapLadder { inputs, preset, cutoff_date: g.cutoff.trim().to_string(), null_as_sight: g.null_as_sight, limits, behaviour }))
     }
 
@@ -327,6 +329,10 @@ impl MicroParquetApp {
                                 }
                             });
                             rects.settings.push(("Behaviour profile".to_string(), r.response.rect));
+                        });
+                        ui.add_enabled_ui(self.gap.apply_behaviour, |ui| {
+                            let r = ui.checkbox(&mut self.gap.stress_tdrr, "Stress: early withdrawal (TDRR)").on_hover_text("For each term-deposit product of the behaviour profile, TDRR \u{d7} its balance moves from its maturity bucket to the first bucket. The tab's name gets \"(stressed)\".");
+                            rects.settings.push(("Stress TDRR".to_string(), r.rect));
                         });
                     });
                     ui.end_row();

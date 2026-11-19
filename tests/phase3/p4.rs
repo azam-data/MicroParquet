@@ -29,7 +29,7 @@ fn strings(df: &DataFrame, name: &str) -> Vec<Option<String>> {
 // -------------------------------------------------------------------- item 3: conditional column
 
 fn rule(col: &str, op: FilterOp, rhs: &str, is_col: bool, out: &str) -> CondRule {
-    CondRule { col_name: col.into(), op, compare_val: rhs.into(), output_val: out.into(), compare_is_col: is_col }
+    CondRule { col_name: col.into(), op, compare_val: rhs.into(), output_val: out.into(), compare_is_col: is_col, ..Default::default() }
 }
 
 fn cond(rules: Vec<CondRule>, blank: BlankRule) -> TransformStep {

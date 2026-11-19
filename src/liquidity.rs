@@ -233,13 +233,15 @@ pub fn load_map(name: &str) -> Result<LiqMap> {
     crate::rules::write_text_if_missing(&maps_dir().join(SAMPLE_MAP_FILE), SAMPLE_MAP);
     let path: PathBuf = maps_dir().join(&file);
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the liquidity map {}", path.display()))?;
-    LiqMap::parse(&text, &format!("{}/{}", MAPS_FOLDER, file))
+    let m = LiqMap::parse(&text, &format!("{}/{}", MAPS_FOLDER, file))?;
+    crate::rules::note_used_file("Liquidity map", &format!("{}/{}", MAPS_FOLDER, file), &m.as_of, &m.source, m.sample);
+    Ok(m)
 }
 
 // ---------------------------------------------------------------------------------- the calculation
 
 /// How the balance column is signed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BalanceSign {
     /// A trial balance with debits positive and credits negative: a liability is the balance × −1.
     #[default]
@@ -257,7 +259,7 @@ impl BalanceSign {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MaturityUnit {
     #[default]
     Months,
@@ -284,7 +286,8 @@ impl MaturityUnit {
 }
 
 /// The columns of the GL tab.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LiqSpec {
     pub gl_col: String,
     pub balance_col: String,

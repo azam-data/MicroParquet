@@ -53,7 +53,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ExportSplit => ph::FILES,
         CommandId::ParquetArchive | CommandId::ParquetSnappy => ph::GEAR,
         CommandId::ToggleTheme => ph::MOON,
-        CommandId::ZoomIn | CommandId::ZoomOut => ph::MAGNIFYING_GLASS,
+        CommandId::ZoomIn | CommandId::ZoomOut | CommandId::ZoomReset | CommandId::ZoomSetDefault => ph::MAGNIFYING_GLASS,
         CommandId::ScaleCrore
         | CommandId::ScaleLakh
         | CommandId::ScaleMillion
@@ -65,6 +65,12 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ToggleSql => ph::TERMINAL_WINDOW,
         CommandId::ToggleChart => ph::CHART_BAR,
         CommandId::ToggleSummary => ph::SIGMA,
+        CommandId::SortLists => ph::SORT_ASCENDING,
+        CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
+        CommandId::Packs => ph::TABLE,
+        CommandId::Mudaraba => ph::SCALES,
+        CommandId::DqScorecard => ph::SCALES,
+        CommandId::MomVariance => ph::CHART_LINE,
         CommandId::About => ph::INFO,
     }
 }
@@ -80,6 +86,9 @@ pub fn toolbar_label(id: CommandId) -> &'static str {
         CommandId::Columns => "Columns",
         CommandId::CalcColumn => "Calc column",
         CommandId::Pivot => "Pivot",
+        CommandId::RateProfile => "Rate profile",
+        CommandId::ToggleChart => "Chart",
+        CommandId::ToggleSql => "SQL",
         other => cmds::command(other).map(|c| c.title).unwrap_or(""),
     }
 }
@@ -116,8 +125,13 @@ impl MicroParquetApp {
         let Some(c) = cmds::command(id) else {
             return;
         };
+        self.command_menu_item_titled(ui, ctx, id, c.title);
+    }
+
+    /// A menu item that runs a command under a shorter name than its title in the Ctrl+K search.
+    pub(crate) fn command_menu_item_titled(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: CommandId, title: &str) {
         let reason = self.command_unavailable(id);
-        let resp = ui.add_enabled(reason.is_none(), egui::Button::new(format!("{}  {}", command_icon(id), c.title)));
+        let resp = ui.add_enabled(reason.is_none(), egui::Button::new(format!("{}  {}", command_icon(id), title)));
         let resp = match reason {
             Some(r) => resp.on_disabled_hover_text(r),
             None => resp,
@@ -217,13 +231,12 @@ impl MicroParquetApp {
                 self.dark_mode = !self.dark_mode;
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
-            CommandId::ZoomIn => {
-                self.ui_zoom = theme::zoom_in(self.ui_zoom);
-                theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-            }
-            CommandId::ZoomOut => {
-                self.ui_zoom = theme::zoom_out(self.ui_zoom);
-                theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
+            CommandId::ZoomIn => self.zoom_in(ctx),
+            CommandId::ZoomOut => self.zoom_out(ctx),
+            CommandId::ZoomReset => self.zoom_reset(ctx),
+            CommandId::ZoomSetDefault => {
+                let z = self.ui_zoom;
+                self.zoom_set_default(z);
             }
             CommandId::ScaleCrore => self.num_format = NumberDisplayFormat::BdtCrore,
             CommandId::ScaleLakh => self.num_format = NumberDisplayFormat::BdtLakh,
@@ -234,9 +247,25 @@ impl MicroParquetApp {
             CommandId::DecimalsUp => self.global_decimals = (self.global_decimals + 1).min(6),
             CommandId::DecimalsDown => self.global_decimals = self.global_decimals.saturating_sub(1),
             CommandId::TogglePanel => self.show_steps_sidebar = !self.show_steps_sidebar,
-            CommandId::ToggleSql => self.show_sql_bar = !self.show_sql_bar,
-            CommandId::ToggleChart => self.show_chart_drawer = !self.show_chart_drawer,
+            CommandId::ToggleSql => {
+                // the SQL tab of the right panel (Phase 6 U2); switched on again if View ▸ Side panel had it off
+                self.set_side_tab_visible(crate::ui::steps::RightTab::Sql, true);
+            }
+            CommandId::ToggleChart => {
+                // the Chart tab of the right panel (Phase 6 F2): shown, or hidden when it is the tab in view
+                if self.side_panel_shown() && self.right_tab == crate::ui::steps::RightTab::Chart {
+                    self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, false);
+                } else {
+                    self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+                }
+            }
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
+            CommandId::SortLists => self.open_sort_lists(),
+            CommandId::SavedRuns => self.open_saved_runs(),
+            CommandId::Packs => self.open_packs(),
+            CommandId::Mudaraba => self.open_mudaraba(),
+            CommandId::DqScorecard => self.open_dq(),
+            CommandId::MomVariance => self.open_mom(),
             CommandId::About => self.show_about = true,
         }
     }

@@ -22,7 +22,7 @@ Cleans counterparty and customer names so the same company written in different 
 
 ## 5. Step by step
 
-1. Open the tab, then choose More ▾ → "Counterparty name normaliser…" (Ctrl+K: "normaliser").
+1. Open the tab, then choose Edit ▸ "Counterparty name normaliser…" (Ctrl+K: "normaliser").
 2. In "Counterparty Entity Name Normalizer" pick the "Source Name Column (e.g. Acttit):".
 3. Check "New Normalized Column:" (default Normalized_Entity).
 4. Click "Normalize Counterparty Names".

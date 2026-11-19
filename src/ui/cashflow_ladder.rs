@@ -59,6 +59,34 @@ impl CfLine {
         }
     }
 
+    /// The line of a saved run: the columns of `spec` on tab `tab` (the reverse of [`CfLine::spec`]).
+    pub fn from_spec(tab: usize, s: &CfInputSpec) -> CfLine {
+        let (role, side_col) = match &s.role {
+            GapRole::Asset => (RoleChoice::Asset, String::new()),
+            GapRole::Liability => (RoleChoice::Liability, String::new()),
+            GapRole::Side(c) => (RoleChoice::Side, c.clone()),
+        };
+        let o = |c: &Option<String>| c.clone().unwrap_or_default();
+        CfLine {
+            tab,
+            role,
+            side_col,
+            principal_col: s.principal_col.clone(),
+            maturity_col: s.maturity_col.clone(),
+            rate_col: o(&s.rate_col),
+            reprice_col: o(&s.reprice_col),
+            rate_type_col: o(&s.rate_type_col),
+            default_rate_type: s.default_rate_type,
+            repay_col: o(&s.repay_col),
+            default_repayment: s.default_repayment,
+            freq_col: o(&s.freq_col),
+            default_frequency: s.default_frequency,
+            product_col: o(&s.product_col),
+            currency_col: o(&s.currency_col),
+            default_currency: s.default_currency.clone(),
+        }
+    }
+
     /// The columns of a tab as the IRRBB tools read them, or the first thing that is missing.
     pub fn spec(&self, tab_title: &str, cols: &[String], n: usize) -> Result<CfInputSpec, String> {
         let has = |c: &String| !c.trim().is_empty() && cols.contains(c);

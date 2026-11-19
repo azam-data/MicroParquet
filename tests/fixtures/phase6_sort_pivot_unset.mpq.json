@@ -1,0 +1,33 @@
+{
+  "app_version": "1.5.0",
+  "control_column": "Balance",
+  "created_at": "9aadb59",
+  "description": "A sort and a pivot table in the form main (9aadb59, Phase 5) saved them: no order fields.",
+  "enforce_balance_control": true,
+  "name": "phase6_sort_pivot_unset",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "SortRows": {
+        "levels": [
+          { "column": "Brancd", "descending": false },
+          { "column": "Balance", "descending": true }
+        ]
+      }
+    },
+    {
+      "PivotTable": {
+        "rows": ["Brancd"],
+        "columns": [],
+        "values": [{ "field": "Balance", "agg": "Sum", "weight_col": null }],
+        "filters": [],
+        "row_totals": true,
+        "column_totals": true,
+        "subtotals": false,
+        "show_as": "NoCalculation",
+        "scale": "Global",
+        "sort_by_value": null
+      }
+    }
+  ]
+}

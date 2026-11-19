@@ -168,6 +168,7 @@ fn guide_behaviour_profile() {
         file_name: "2026-10-31.json".into(),
         file: BehaviourFile { as_of: "2026-10-31".into(), source: "example".into(), products: vec![BehaviourProduct { product: "SAV".into(), category: "Retail non-transactional".into(), core_pct: 60.0, avg_maturity_years: 3.0, method: "Typed".into(), ..BehaviourProduct::default() }] },
         product_cols: vec!["Product".into()],
+        stress_tdrr: false,
     };
     let spec = GapInputSpec { role: GapRole::Liability, amount_col: "Balance".into(), maturity_col: "Matdat".into() };
     let with = build_gap_ladder_behaviour(vec![(book.clone().lazy(), spec.clone())], &preset, "2026-10-31", true, None, Some(&beh)).expect("ladder");

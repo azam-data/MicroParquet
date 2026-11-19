@@ -424,13 +424,13 @@ mod functions {
             config: auto_detect_smart_schema(&csv(&d, "loans.csv")).unwrap(),
         };
         let r = check_schema_for_tab(
-            SchemaRequest { tab_id: 1, new_source: bad, steps: vec![], temp_dir: d.clone() },
+            SchemaRequest { tab_id: 1, new_source: bad, steps: vec![], temp_dir: d.clone(), already_broken: vec![] },
             &JobCtx::inert(),
         );
         let e = r.err().expect("a missing file must fail the check, not claim success");
         assert!(format!("{e:#}").contains("missing.csv"), "{e:#}");
         let ok = check_schema_for_tab(
-            SchemaRequest { tab_id: 1, new_source: src, steps: vec![], temp_dir: d.clone() },
+            SchemaRequest { tab_id: 1, new_source: src, steps: vec![], temp_dir: d.clone(), already_broken: vec![] },
             &JobCtx::inert(),
         )
         .unwrap();

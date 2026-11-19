@@ -29,6 +29,15 @@ pub(crate) struct CliArgs {
     /// Export even when the control column has values that could not be converted.
     #[arg(long)]
     allow_parse_failures: bool,
+    /// Run the report pack called this (`portable_data/packs/<name>.json`), with --slot, --cutoff and --export-xlsx.
+    #[arg(long)]
+    pack: Option<String>,
+    /// A file for a slot of the pack: `Loans=loans.csv`. Repeat it for each slot.
+    #[arg(long = "slot")]
+    slot: Vec<String>,
+    /// The cutoff date of the pack run, YYYY-MM-DD.
+    #[arg(long)]
+    cutoff: Option<String>,
 }
 
 fn main() -> eframe::Result<()> {
@@ -65,10 +74,7 @@ fn main() -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!(
-                "MicroParquet v{} — Portable CSV/Parquet, ALM & Loans Analytics Workstation",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .with_title(ui::tabs::window_title(None))
             .with_inner_size(theme::WINDOW_SIZE)
             .with_min_inner_size(theme::WINDOW_MIN_SIZE),
         ..Default::default()
@@ -79,8 +85,9 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             theme::load_fonts(&cc.egui_ctx);
-            theme::apply_ui_theme(&cc.egui_ctx, false, theme::UI_ZOOM_DEFAULT);
             let mut app = MicroParquetApp::new(paths, cc.egui_ctx.clone());
+            // the saved default zoom (105% when there is none)
+            theme::apply_ui_theme(&cc.egui_ctx, false, app.ui_zoom);
             if let Some(n) = rule_notice {
                 app.status_message = n;
             }
@@ -89,11 +96,44 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+/// What Help > About drew (the render tests read it).
+#[derive(Clone, Copy, Debug)]
+pub struct AboutRects {
+    pub version: egui::Rect,
+    pub build: egui::Rect,
+    pub folder: egui::Rect,
+    pub open_folder: egui::Rect,
+    pub key: egui::Rect,
+    pub fonts: egui::Rect,
+    pub close: egui::Rect,
+}
+
+impl Default for AboutRects {
+    fn default() -> Self {
+        let n = egui::Rect::NOTHING;
+        Self { version: n, build: n, folder: n, open_folder: n, key: n, fonts: n, close: n }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveToolModal {
     None,
     FilterRows,
     SortRows,
+    /// The custom sort-list manager (Phase 6 U3).
+    SortLists,
+    /// The Mudaraba profit distribution (Phase 6 P5).
+    Mudaraba,
+    /// The data-quality scorecard (Phase 6 P4).
+    DqScorecard,
+    /// Month-on-month variance (Phase 6 P3).
+    MomVariance,
+    /// Report packs (Phase 6 P2).
+    Packs,
+    /// "Save run" of a result tab (Phase 6 P1).
+    SaveRun,
+    /// File ▸ "Saved tool runs" (Phase 6 P1).
+    SavedRuns,
     ManageColumns,
     ConditionalCol,
     MathFormula,
@@ -149,8 +189,10 @@ pub struct MicroParquetApp {
     parquet_dialect: ParquetDialect,
     export_csv_mdy: bool,
     show_steps_sidebar: bool,
-    show_sql_bar: bool,
-    show_chart_drawer: bool,
+    /// The chart is shown in its own native window (View ▸ Side panel ▸ Chart ▸ Pop out).
+    chart_popped: bool,
+    /// How many times the chart was popped out (the render tests read it: a backend without windows docks it back at once).
+    chart_pop_requests: u32,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -188,6 +230,32 @@ pub struct MicroParquetApp {
     dark_mode: bool,
     ui_zoom: f32,
     pending_csv_modal: Option<PendingCsvModal>,
+    /// Several saved schemas match the file that was opened: which one? (Phase 6 U1)
+    pub template_pick: Option<crate::ui::schema::TemplatePick>,
+    /// A schema change that would break steps, waiting for "Apply anyway" or "Cancel" (U1).
+    pub schema_confirm: Option<SchemaApplied>,
+    /// A line that starts the status message of a tab that is still loading (by tab id): the
+    /// saved schema it opened with (Phase 6 U1).
+    pub open_notes: HashMap<u64, String>,
+    /// `portable_data/settings.json` (Phase 6): panel width, default zoom, chart choices.
+    pub settings: micro_parquet::settings::Settings,
+    /// The right panel: its width in points this frame, whether a drag is under way, and a counter
+    /// that gives the panel a new identity (so it starts at the width asked for).
+    pub right_panel_w: f32,
+    pub right_panel_dragging: bool,
+    /// What the SQL tab drew (for the render tests).
+    pub sql_rects: ui::sql::SqlRects,
+    /// The title the window has now ("MicroParquet v1.6.0 — loans.csv"), and what About drew.
+    pub window_title: String,
+    pub about_rects: AboutRects,
+    /// The folder "Open folder" in About last opened (tests read it; the program starts the
+    /// file manager).
+    pub opened_folder: Option<PathBuf>,
+    /// Tests: the file the "Open" dialog would give (`None` = cancelled), and how often it was asked for.
+    #[cfg(test)]
+    pub test_pick: Option<PathBuf>,
+    #[cfg(test)]
+    pub file_dialog_requests: u32,
     batch_modal: BatchModalState,
     active_tool: ActiveToolModal,
     status_message: String,
@@ -195,6 +263,18 @@ pub struct MicroParquetApp {
     // One state struct per screen (src/ui/<name>.rs)
     pub filter: FilterState,
     pub sort: SortState,
+    pub sort_lists: SortListsState,
+    pub runs: RunsState,
+    pub packs: PacksState,
+    pub mom: MomState,
+    pub dq: DqState,
+    pub mud: MudState,
+    /// The value picker of the filter or conditional-column dialog that is open, and the number
+    /// of distinct values last listed for each column (for "3 of 42 selected").
+    pub picker: PickerPanel,
+    pub picker_totals: HashMap<String, usize>,
+    /// The tool the picker was last reset for (a new dialog starts with a new picker).
+    pub picker_tool: ActiveToolModal,
     pub columns: ColumnsState,
     pub cond: CondState,
     pub calc: CalcState,
@@ -237,10 +317,16 @@ impl MicroParquetApp {
     pub fn new(paths: PortablePaths, egui_ctx: egui::Context) -> Self {
         let presets = CustomBucketDef::load_all_presets(&paths.buckets_file);
         let rate_presets = RateBandDef::load_all_presets(&paths.rate_bands_file());
+        let (settings, settings_note) = micro_parquet::settings::Settings::load(&paths.root_dir);
+        let (start_zoom, zoom_note) = settings.start_zoom(theme::UI_ZOOM_DEFAULT);
+        let settings_note = match (settings_note, zoom_note) {
+            (Some(a), Some(b)) => Some(format!("{} {}", a, b)),
+            (a, b) => a.or(b),
+        };
         let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
             .map(|t| micro_parquet::commands::recent_from_text(&t))
             .unwrap_or_default();
-        Self {
+        let mut app = Self {
             jobs: JobQueue::new(move || egui_ctx.request_repaint()),
             tab_id_counter: 0,
             pending_refresh: HashMap::new(),
@@ -253,8 +339,8 @@ impl MicroParquetApp {
             parquet_dialect: ParquetDialect::ArchiveZstd,
             export_csv_mdy: false,
             show_steps_sidebar: true,
-            show_sql_bar: false,
-            show_chart_drawer: false,
+            chart_popped: false,
+            chart_pop_requests: 0,
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -278,8 +364,22 @@ impl MicroParquetApp {
             command_box_rect: egui::Rect::NOTHING,
             recent_commands,
             dark_mode: false,
-            ui_zoom: theme::UI_ZOOM_DEFAULT,
+            ui_zoom: start_zoom,
             pending_csv_modal: None,
+            template_pick: None,
+            schema_confirm: None,
+            open_notes: HashMap::new(),
+            settings: settings.clone(),
+            right_panel_w: settings.right_panel_width.unwrap_or(ui::theme::RIGHT_PANEL_W).max(ui::theme::RIGHT_PANEL_W),
+            right_panel_dragging: false,
+            sql_rects: ui::sql::SqlRects::default(),
+            window_title: ui::tabs::window_title(None),
+            about_rects: AboutRects::default(),
+            opened_folder: None,
+            #[cfg(test)]
+            test_pick: None,
+            #[cfg(test)]
+            file_dialog_requests: 0,
             batch_modal: BatchModalState::default(),
             active_tool: ActiveToolModal::None,
             status_message:
@@ -288,6 +388,15 @@ impl MicroParquetApp {
 
             filter: FilterState::default(),
             sort: SortState::default(),
+            sort_lists: SortListsState::default(),
+            runs: RunsState::default(),
+            packs: PacksState::default(),
+            mom: MomState::default(),
+            dq: DqState::default(),
+            mud: MudState::default(),
+            picker: PickerPanel::default(),
+            picker_totals: HashMap::new(),
+            picker_tool: ActiveToolModal::None,
             columns: ColumnsState::default(),
             cond: CondState::default(),
             calc: CalcState::default(),
@@ -322,6 +431,17 @@ impl MicroParquetApp {
             macros: MacroState::default(),
             export: ExportState::default(),
             chart: ChartState::default(),
+        };
+        if let Some(note) = settings_note {
+            app.status_message = note;
+        }
+        app
+    }
+
+    /// Writes `settings.json`; a failure goes to the status line.
+    pub(crate) fn save_settings(&mut self) {
+        if let Err(e) = self.settings.save(&self.paths.root_dir) {
+            self.status_message = format!("Settings were not saved: {:#}", e);
         }
     }
 }
@@ -348,6 +468,8 @@ impl MicroParquetApp {
             }
         }
         self.handle_palette_shortcut(ctx);
+        self.handle_zoom_keys(ctx);
+        self.update_window_title(ctx);
         self.handle_step_shortcuts(ctx);
         self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
@@ -371,13 +493,14 @@ impl MicroParquetApp {
                 }
                 self.render_pivot_bar(ui);
                 self.render_filter_bar(ui);
-                self.render_sql_bar(ui);
-                self.render_chart_drawer(ui);
+                self.render_mom_commentary(ui);
                 self.render_table_area(ui);
             });
 
         // Modals
         self.render_csv_schema_modal(ctx);
+        self.render_template_picker(ctx);
+        self.render_schema_confirm(ctx);
         self.render_export_guard(ctx);
         self.render_text_number_guard(ctx);
         self.render_batch_modal(ctx);
@@ -387,6 +510,7 @@ impl MicroParquetApp {
         self.render_messages(ctx);
         self.render_command_palette(ctx);
         self.render_quit_guard(ctx);
+        self.render_chart_popout(ctx);
     }
 }
 
@@ -404,6 +528,25 @@ impl MicroParquetApp {
         .response
     }
 
+    fn edit_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
+        use micro_parquet::commands::{DATA_CHECKS, EDIT_MENU};
+        ui.menu_button("Edit", |ui| {
+            for (i, id) in EDIT_MENU.iter().enumerate() {
+                if i == 2 {
+                    ui.separator();
+                }
+                self.command_menu_item(ui, ctx, *id);
+            }
+            ui.separator();
+            ui.menu_button("Data checks", |ui| {
+                for id in DATA_CHECKS {
+                    self.command_menu_item(ui, ctx, *id);
+                }
+            });
+        })
+        .response
+    }
+
     fn view_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
         ui.menu_button("View", |ui| {
             let theme_label = if self.dark_mode { "Switch to Light Theme" } else { "Switch to Dark Theme" };
@@ -411,18 +554,8 @@ impl MicroParquetApp {
                 self.dark_mode = !self.dark_mode;
                 theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
             }
-            ui.horizontal(|ui| {
-                ui.label("UI Scale:");
-                if ui.small_button("\u{E30C}-").clicked() {
-                    self.ui_zoom = theme::zoom_out(self.ui_zoom);
-                    theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
-                ui.strong(format!("{:.0}%", self.ui_zoom * 100.0)); // not a size: percent
-                if ui.small_button("\u{E30C}+").clicked() {
-                    self.ui_zoom = theme::zoom_in(self.ui_zoom);
-                    theme::apply_ui_theme(ctx, self.dark_mode, self.ui_zoom);
-                }
-            });
+            let zoom_title = format!("Zoom  {}", ui::zoom::percent_text(self.ui_zoom));
+            ui.menu_button(zoom_title, |ui| self.zoom_menu_contents(ui, ctx));
             ui.separator();
             ui.menu_button("Default Monetary Scale", |ui| {
                 for fmt in NumberDisplayFormat::all() {
@@ -440,9 +573,28 @@ impl MicroParquetApp {
                 }
             });
             ui.separator();
-            ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
-            ui.checkbox(&mut self.show_sql_bar, "SQL scratchpad bar");
-            ui.checkbox(&mut self.show_chart_drawer, "ALCO bar chart");
+            ui.menu_button("Toolbar buttons", |ui| {
+                for id in micro_parquet::commands::toolbar_buttons() {
+                    let name = ui::commands::toolbar_label(id);
+                    let mut on = !self.settings.toolbar_hidden.iter().any(|n| n == name);
+                    if ui.checkbox(&mut on, name).changed() {
+                        self.settings.toolbar_hidden.retain(|n| n != name);
+                        if !on {
+                            self.settings.toolbar_hidden.push(name.to_string());
+                        }
+                        self.save_settings();
+                    }
+                }
+            });
+            ui.menu_button("Side panel", |ui| {
+                for t in ui::steps::RightTab::ALL {
+                    let mut on = !self.settings.side_panel_hidden.iter().any(|n| n == t.name());
+                    if ui.checkbox(&mut on, t.name()).changed() {
+                        self.set_side_tab_visible(t, on);
+                    }
+                }
+            });
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response
@@ -464,18 +616,14 @@ impl MicroParquetApp {
 
 
 
-    /// A flat toolbar button for a command; greyed with the reason when it cannot run. Icon-only
-    /// buttons say what they are in a tooltip.
-    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId, icon_only: bool) -> egui::Response {
+    /// A flat toolbar button for a command, always with its label; greyed with the reason when it cannot run.
+    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId) -> egui::Response {
         let reason = self.command_unavailable(id);
-        let label = if icon_only { "" } else { ui::commands::toolbar_label(id) };
         let btn = ui
-            .add_enabled_ui(reason.is_none(), |ui| theme::flat_button(ui, ui::commands::command_icon(id), label))
+            .add_enabled_ui(reason.is_none(), |ui| theme::flat_button(ui, ui::commands::command_icon(id), ui::commands::toolbar_label(id)))
             .inner;
         let btn = match reason {
-            Some(r) if icon_only => btn.on_disabled_hover_text(format!("{}: {}", ui::commands::toolbar_label(id), r)),
             Some(r) => btn.on_disabled_hover_text(r),
-            None if icon_only => btn.on_hover_text(ui::commands::toolbar_label(id)),
             None => btn,
         };
         if btn.clicked() {
@@ -527,30 +675,96 @@ impl MicroParquetApp {
         resp
     }
 
-    fn render_about(&mut self, ctx: &egui::Context) {
+    pub(crate) fn render_about(&mut self, ctx: &egui::Context) {
         if !self.show_about {
             return;
         }
+        let tk = *theme::tokens(self.dark_mode);
         let mut open = true;
         let mut close = false;
-        theme::modal("About MicroParquet").open(&mut open).show(ctx, |d| {
+        let mut open_folder = false;
+        let mut rects = AboutRects::default();
+        let key_text = match micro_parquet::engine::read_pii_key(&micro_parquet::engine::pii_key_path()) {
+            Ok(Some(k)) => micro_parquet::engine::pii_key_fingerprint(&k),
+            Ok(None) => "not created yet (it is made the first time a column is masked)".to_string(),
+            Err(e) => format!("could not be read: {:#}", e),
+        };
+        let folder = self.paths.root_dir.display().to_string();
+        theme::modal("About MicroParquet").open(&mut open).default_width(theme::DIALOG_W_ABOUT).show(ctx, |d| {
             d.body(|ui| {
-                ui.label(theme::semibold(format!("MicroParquet {}", env!("CARGO_PKG_VERSION"))));
-                ui.label("Portable Parquet / CSV viewer, converter and editor for treasury, ALM and finance work.");
+                ui.set_max_width(ui.available_width());
+                let wrap = |ui: &mut egui::Ui, text: String| {
+                    ui.add(egui::Label::new(text).wrap());
+                };
+                rects.version = ui.label(theme::semibold(format!("MicroParquet v{}", env!("CARGO_PKG_VERSION"))).size(theme::TEXT_HEADING)).rect;
+                rects.build = ui.label(egui::RichText::new(format!("Built {}", env!("MP_BUILD_DATE"))).color(tk.muted)).rect;
                 ui.add_space(theme::SPACE_S);
-                ui.label(format!("Data folder: {}", self.paths.root_dir.display()));
+                wrap(ui, "Portable CSV/Parquet viewer, converter and editor for treasury, ALM and loans analytics.".to_string());
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("What it does"));
+                for line in [
+                    "Out-of-core Polars engine: big files stay on disk",
+                    "Multi-tab views, each with its own steps",
+                    "Custom maturity buckets and rate bands",
+                    "Per-metric number formats (Crore, Lakh, Million, Thousand)",
+                ] {
+                    wrap(ui, format!("\u{2022}  {}", line));
+                }
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("Data folder (portable_data)"));
+                ui.horizontal(|ui| {
+                    rects.folder = ui.add(egui::Label::new(theme::mono(folder.clone())).truncate()).on_hover_text(folder.clone()).rect;
+                });
+                let b = ui.button("Open folder");
+                rects.open_folder = b.rect;
+                if b.clicked() {
+                    open_folder = true;
+                }
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("Masking key"));
+                rects.key = ui.add(egui::Label::new(theme::mono(key_text.clone())).wrap()).rect;
+                ui.add_space(theme::SPACE_S);
+                ui.label(theme::semibold("Fonts"));
+                rects.fonts = ui
+                    .add(egui::Label::new("Source Sans 3 and JetBrains Mono, both under the SIL Open Font License 1.1 (OFL). The licence texts are in assets/fonts and THIRD_PARTY_NOTICES.md.").wrap())
+                    .rect;
             });
             d.footer(|ui| {
-                if ui.button("Close").clicked() {
+                let b = ui.button("Close");
+                rects.close = b.rect;
+                if b.clicked() {
                     close = true;
                 }
             });
         });
+        self.about_rects = rects;
+        if open_folder {
+            self.open_data_folder();
+        }
         if close {
             open = false;
         }
         if !open {
             self.show_about = false;
+        }
+    }
+
+    /// Shows the data folder in the system's file manager.
+    fn open_data_folder(&mut self) {
+        let dir = self.paths.root_dir.clone();
+        self.opened_folder = Some(dir.clone());
+        #[cfg(not(test))]
+        {
+            let result = if cfg!(target_os = "windows") {
+                std::process::Command::new("explorer").arg(&dir).spawn()
+            } else if cfg!(target_os = "macos") {
+                std::process::Command::new("open").arg(&dir).spawn()
+            } else {
+                std::process::Command::new("xdg-open").arg(&dir).spawn()
+            };
+            if let Err(e) = result {
+                self.status_message = format!("Could not open the folder {}: {}", dir.display(), e);
+            }
         }
     }
 }

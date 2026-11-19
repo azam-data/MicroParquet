@@ -1390,7 +1390,7 @@ fn c1_audit_the_sort_level_buttons_work_by_a_real_click() {
         let mut rig = steps_rig("p5c1s", ppp, w, h);
         let what = rig.what.clone();
         rig.app.run_command(&rig.ctx, CommandId::Sort);
-        rig.app.sort.levels = vec![SortLevel { column: "Actnum".into(), descending: false }, SortLevel { column: "Balance".into(), descending: false }];
+        rig.app.sort.levels = vec![SortLevel { column: "Actnum".into(), descending: false, ..Default::default() }, SortLevel { column: "Balance".into(), descending: false, ..Default::default() }];
         let cols = |rig: &Rig| rig.app.sort.levels.iter().map(|l| l.column.clone()).collect::<Vec<_>>();
         let p = rig.draw(4);
         // move the first level down

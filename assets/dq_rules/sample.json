@@ -1,0 +1,14 @@
+{
+  "as_of": "2026-11-01",
+  "source": "SAMPLE: a starting set written by the app, not the bank's data-quality policy. Replace the rules and the RAG thresholds with the bank's own and set \"sample\" to false.",
+  "sample": true,
+  "green_min": 98,
+  "amber_min": 95,
+  "rules": [
+    { "name": "Account number is filled", "kind": "completeness", "column": "Account_No" },
+    { "name": "Account number is unique", "kind": "uniqueness", "columns": ["Account_No"] },
+    { "name": "Rate can be read as a number", "kind": "type_validity", "column": "Rate" },
+    { "name": "Rate is from 0 to 30", "kind": "range", "column": "Rate", "min": 0, "max": 30 },
+    { "name": "Maturity is not before the open date", "kind": "consistency", "left": "Maturity", "op": "ge", "right": "Open_Date" }
+  ]
+}

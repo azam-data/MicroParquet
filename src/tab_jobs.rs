@@ -37,6 +37,10 @@ pub enum JobOutput {
     Loaded(Box<LoadedTab>),
     Refreshed(Box<Refreshed>),
     Schema(Box<SchemaApplied>),
+    SqlChecked(Box<SqlChecked>),
+    Chart(Box<ChartResult>),
+    Picker(Box<PickerResult>),
+    Dq(Box<DqJobResult>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
 }
@@ -206,6 +210,8 @@ fn load_tab_staged(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
         viewport_limit: 100,
         cached_slice: slice,
         sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
+        sql_history: Vec::new(),
+        sql_error: None,
         parse_failures,
         join_status: join_stat,
         totals,
@@ -359,6 +365,146 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
     }
 }
 
+// ------------------------------------------------------------------------------------ value picker
+
+/// The values of a column (as the tab stands before a filter) to calculate on the worker.
+pub struct PickerRequest {
+    pub tab_id: u64,
+    pub token: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub field: String,
+    pub search: Option<String>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct PickerResult {
+    pub tab_id: u64,
+    pub token: u64,
+    pub field: String,
+    pub search: Option<String>,
+    pub values: std::result::Result<crate::value_picker::PickerValues, String>,
+}
+
+pub fn compute_picker_values(req: PickerRequest, ctx: &JobCtx) -> Result<PickerResult> {
+    ctx.set_progress("Listing the values…", None);
+    ctx.check()?;
+    let PickerRequest { tab_id, token, source, steps, field, search, temp_dir } = req;
+    let values = compile_tab_lazy(&source, &steps, &temp_dir)
+        .and_then(|lf| crate::value_picker::picker_values(lf, &field, search.as_deref(), crate::value_picker::PICKER_LIMIT))
+        .map_err(|e| format!("{:#}", e));
+    Ok(PickerResult { tab_id, token, field, search, values })
+}
+
+// ------------------------------------------------------------------------------------ chart
+
+/// The chart of a tab to calculate on the worker (Phase 6 U5).
+pub struct ChartRequest {
+    pub tab_id: u64,
+    /// Which request this is: a result for an older one is dropped.
+    pub token: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::chart::ChartSpec,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ChartResult {
+    pub tab_id: u64,
+    pub token: u64,
+    pub data: std::result::Result<crate::chart::ChartData, String>,
+}
+
+pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult> {
+    ctx.set_progress("Calculating the chart…", None);
+    ctx.check()?;
+    let ChartRequest { tab_id, token, source, steps, spec, temp_dir } = req;
+    let data = compile_tab_lazy(&source, &steps, &temp_dir)
+        .and_then(|lf| crate::chart::compute_chart(lf, &spec))
+        .map_err(|e| format!("{:#}", e));
+    Ok(ChartResult { tab_id, token, data })
+}
+
+// --------------------------------------------------------------------------- data-quality scorecard
+
+pub struct DqRequest {
+    pub tab_id: u64,
+    pub token: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub rules: crate::dq::DqRuleSet,
+    pub temp_dir: PathBuf,
+}
+
+/// The checks of a tab, with the first failing rows of each rule that has some.
+#[derive(Clone)]
+pub struct DqShown {
+    pub result: crate::dq::DqResult,
+    /// (rule number, its first failing rows).
+    pub previews: Vec<(usize, DataFrame)>,
+}
+
+pub struct DqJobResult {
+    pub tab_id: u64,
+    pub token: u64,
+    pub shown: std::result::Result<DqShown, String>,
+}
+
+pub fn compute_dq_job(req: DqRequest, ctx: &JobCtx) -> Result<DqJobResult> {
+    ctx.set_progress("Checking the data quality\u{2026}", None);
+    ctx.check()?;
+    let DqRequest { tab_id, token, source, steps, rules, temp_dir } = req;
+    let shown = (|| -> anyhow::Result<DqShown> {
+        let df = compile_tab_lazy(&source, &steps, &temp_dir)?.collect()?;
+        let types = crate::engine::dq_type_stats(&source, &rules, &temp_dir)?;
+        let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
+        let result = crate::dq::run_scorecard(&df, &types, &rules, &cl_map)?;
+        let mut previews = Vec::new();
+        for (i, r) in result.rules.iter().enumerate() {
+            if !r.failing_rows.is_empty() {
+                previews.push((i, crate::dq::failing_frame(&df, &result, i, Some(crate::dq::FAILING_PREVIEW))?));
+            }
+        }
+        Ok(DqShown { result, previews })
+    })()
+    .map_err(|e| format!("{:#}", e));
+    Ok(DqJobResult { tab_id, token, shown })
+}
+
+// ------------------------------------------------------------------------------------ SQL tab
+
+/// A query of the SQL tab to check before it is added as a step (Phase 6 U2).
+pub struct SqlCheckRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub query: String,
+    /// "New tab" instead of "Apply here".
+    pub new_tab: bool,
+    pub temp_dir: PathBuf,
+}
+
+pub struct SqlChecked {
+    pub tab_id: u64,
+    pub query: String,
+    pub new_tab: bool,
+    /// What is wrong with the query, in words; `None` when it runs on the tab's columns.
+    pub error: Option<String>,
+}
+
+/// Builds the query as the next step of the tab (on the worker) without reading the data. The
+/// error is the engine's own message, for example an unknown column.
+pub fn check_sql_query(req: SqlCheckRequest, ctx: &JobCtx) -> Result<SqlChecked> {
+    let SqlCheckRequest { tab_id, source, steps, query, new_tab, temp_dir } = req;
+    ctx.set_progress("Checking the query…", None);
+    let n = steps.len();
+    let mut all = steps;
+    all.push(TransformStep::SqlQuery { query: query.clone() });
+    let issues = crate::engine::validate_steps(&source, &all, &temp_dir)?;
+    let error = issues.into_iter().find(|i| i.index == n).map(|i| i.reason);
+    Ok(SqlChecked { tab_id, query, new_tab, error })
+}
+
 // ------------------------------------------------------------------------------------ schema
 
 pub struct SchemaRequest {
@@ -366,6 +512,8 @@ pub struct SchemaRequest {
     pub new_source: TabSource,
     pub steps: Vec<TransformStep>,
     pub temp_dir: PathBuf,
+    /// The steps that are already broken (by index): only a step the new schema breaks is reported.
+    pub already_broken: Vec<usize>,
 }
 
 pub struct SchemaApplied {
@@ -378,15 +526,27 @@ pub struct SchemaApplied {
     pub status: String,
     /// The tab's steps after the schema: the "Clean line breaks" check box adds or removes the first one.
     pub steps: Vec<TransformStep>,
+    /// Steps that worked before and would stop working with the new schema (index, reason), for
+    /// example a filter on a column the schema renames. The app asks before applying (Phase 6 U1).
+    pub new_breaks: Vec<(usize, String)>,
 }
 
 /// Checks that a tab's pipeline still builds with new ingestion settings and recounts its parse
 /// failures and rows. The tab is only changed when this succeeds (`Err` = "Schema not applied").
 pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaApplied> {
-    let SchemaRequest { tab_id, new_source, steps, temp_dir } = req;
+    let SchemaRequest { tab_id, new_source, steps, temp_dir, already_broken } = req;
     ctx.set_progress("Checking the new schema…", None);
     let key_note = ensure_pii_key_for(&new_source)?;
-    let _ = compile_tab_lazy(&new_source, &steps, &temp_dir)?;
+    // the file itself must build with the new settings
+    let _ = compile_tab_lazy(&new_source, &[], &temp_dir)?;
+    ctx.check()?;
+    // steps that worked and would stop: the app lists them and asks first. When every step still
+    // runs, the whole pipeline is built as a last check.
+    let issues = crate::engine::validate_steps(&new_source, &steps, &temp_dir).unwrap_or_default();
+    if issues.is_empty() {
+        let _ = compile_tab_lazy(&new_source, &steps, &temp_dir)?;
+    }
+    let new_breaks: Vec<(usize, String)> = issues.into_iter().filter(|i| !already_broken.contains(&i.index)).map(|i| (i.index, i.reason)).collect();
     ctx.check()?;
     let (parse_failures, parse_note) = match source_parse_failures(&new_source, &temp_dir) {
         Ok(f) => (f, None),
@@ -410,7 +570,7 @@ pub fn check_schema_for_tab(req: SchemaRequest, ctx: &JobCtx) -> Result<SchemaAp
     if let Some(n) = key_note {
         status.push_str(&format!(" 🔑 {}", n));
     }
-    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status, steps })
+    Ok(SchemaApplied { tab_id, new_source, parse_failures, parse_note, row_check, status, steps, new_breaks })
 }
 
 // ------------------------------------------------------------------------------------ exports

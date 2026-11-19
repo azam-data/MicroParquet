@@ -150,7 +150,7 @@ fn a_filter_dialog_with_80_conditions_fits_at_both_scales_and_scrolls_inside() {
         let src = parquet_source(&app.paths.root_dir.clone(), "loans", loans_frame());
         open_tab(&mut app, src, vec![]);
         app.filter.conditions = (0..80)
-            .map(|i| FilterCondition { column: format!("Col{i}"), op: CondOp::Equals, value: format!("{i}"), value2: String::new() })
+            .map(|i| FilterCondition { column: format!("Col{i}"), op: CondOp::Equals, value: format!("{i}"), value2: String::new(), ..Default::default() })
             .collect();
         app.active_tool = ActiveToolModal::FilterRows;
         let (ctx, input) = screen(ppp, w, h);

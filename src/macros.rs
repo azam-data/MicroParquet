@@ -83,6 +83,37 @@ def _mp_sort_key(e, dtype):
 
 "#;
 
+/// Python mirror of the custom-list and Tenor sort orders (`sort_lists::order_sort_keys`, U3).
+const PY_ORDER_HELPER: &str = r#"_MP_TENOR_DAYS = {"d": 1, "day": 1, "days": 1, "w": 7, "wk": 7, "wks": 7, "week": 7, "weeks": 7,
+                  "m": 30, "mon": 30, "mons": 30, "month": 30, "months": 30,
+                  "y": 365, "yr": 365, "yrs": 365, "year": 365, "years": 365}
+
+
+def _mp_tenor_days(v):
+    """Days of a tenor such as 3y, 6 M, 100D or O/N; None when the text is not one."""
+    t = v.strip().lower()
+    if t in ("o/n", "on", "overnight"):
+        return 1.0
+    m = _re.fullmatch(r"([0-9.]+)\s*([a-z]*)", t)
+    if not m or m.group(2) not in _MP_TENOR_DAYS:
+        return None
+    try:
+        return float(m.group(1)) * _MP_TENOR_DAYS[m.group(2)]
+    except ValueError:
+        return None
+
+
+def _mp_rank_keys(e, rank_fn):
+    """Three sort keys: listed (0) before the rest (1), the rank, then the natural key."""
+    blank = e.str.strip_chars() == ""
+    t = pl.when(blank).then(None).otherwise(e)
+    rank = t.map_elements(rank_fn, return_dtype=pl.Float64)
+    group = pl.when(t.is_null()).then(None).when(rank.is_null()).then(1).otherwise(0)
+    return [group, rank, t.map_elements(_mp_natural_key, return_dtype=pl.Utf8)]
+
+
+"#;
+
 /// Python mirror of `engine::parse_banking_amount` (P1 rules), emitted when a column is typed
 /// Float64 or Int64. Keep the two in step.
 const PY_AMOUNT_HELPER: &str = r#"import re as _re
@@ -396,6 +427,29 @@ pub fn generate_python_polars_code(
         }
     }
 
+    // The schema's "Rename to" names, applied after typing and before any step (Phase 6 U1).
+    let renames = ingestion.rename_pairs();
+    if !renames.is_empty() {
+        py.push_str("# 2c. Rename columns (Schema & Ingestion, \"Rename to\")\n");
+        py.push_str("lf = lf.rename({\n");
+        for (old, new) in &renames {
+            py.push_str(&format!("    \"{}\": \"{}\",\n", py_escape(old), py_escape(new)));
+        }
+        py.push_str("})\n\n");
+    }
+
+    // the helper of conditions on picked values (U7), when a step has one
+    fn uses_values(step: &TransformStep) -> bool {
+        match step.inner() {
+            TransformStep::FilterGroup { conditions, .. } => conditions.iter().any(|c| c.uses_values()),
+            TransformStep::ConditionalColumn { rules, .. } => rules.iter().any(|r| !r.values.is_empty() && !r.compare_is_col),
+            _ => false,
+        }
+    }
+    if steps.iter().any(uses_values) {
+        py.push_str(PY_VALUES_HELPER);
+    }
+
     py.push_str("# 3. Applied Transformation Pipeline Steps\n");
     for (idx, step) in steps.iter().enumerate() {
         py.push_str(&format!("# Step {}: {}\n", idx + 1, step.short_label()));
@@ -446,16 +500,42 @@ pub fn generate_python_polars_code(
                     }
                     // Blank text counts as blank (last), like the app; other text sorts by its
                     // natural key (case-insensitive, numbers by value). Other types sort as they are.
-                    let keys: Vec<String> = levels
-                        .iter()
-                        .map(|l| {
-                            format!(
-                                "_mp_sort_key(pl.col(\"{c}\"), lf.collect_schema()[\"{c}\"])",
-                                c = l.column
-                            )
-                        })
-                        .collect();
-                    let desc: Vec<&str> = levels.iter().map(|l| if l.descending { "True" } else { "False" }).collect();
+                    if levels.iter().any(|l| !l.order.is_natural()) && !py.contains("def _mp_rank_keys") {
+                        py.push_str(PY_ORDER_HELPER);
+                    }
+                    let mut keys: Vec<String> = Vec::new();
+                    let mut desc: Vec<&str> = Vec::new();
+                    for l in levels {
+                        match &l.order {
+                            crate::sort_lists::SortOrder::Natural => {
+                                keys.push(format!(
+                                    "_mp_sort_key(pl.col(\"{c}\"), lf.collect_schema()[\"{c}\"])",
+                                    c = l.column
+                                ));
+                                desc.push(if l.descending { "True" } else { "False" });
+                            }
+                            order => {
+                                let rank_fn = match order {
+                                    crate::sort_lists::SortOrder::Tenor => "_mp_tenor_days".to_string(),
+                                    crate::sort_lists::SortOrder::List { values, case_insensitive, .. } => {
+                                        let norm = |v: &str| if *case_insensitive { v.trim().to_lowercase() } else { v.trim().to_string() };
+                                        let pairs: Vec<String> = values
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, v)| format!("{}: {}.0", serde_json::to_string(&norm(v)).unwrap_or_default(), i))
+                                            .collect();
+                                        let look = if *case_insensitive { "v.strip().lower()" } else { "v.strip()" };
+                                        format!("lambda v, _r={{{}}}: _r.get({})", pairs.join(", "), look)
+                                    }
+                                    crate::sort_lists::SortOrder::Natural => String::new(),
+                                };
+                                keys.push(format!("*_mp_rank_keys(pl.col(\"{}\"), {})", l.column, rank_fn));
+                                desc.push("False");
+                                desc.push(if l.descending { "True" } else { "False" });
+                                desc.push("False");
+                            }
+                        }
+                    }
                     py.push_str(&format!(
                         "lf = lf.sort([{}], descending=[{}], nulls_last=True, maintain_order=True)\n\n",
                         keys.join(", "),
@@ -539,6 +619,8 @@ pub fn generate_python_polars_code(
                                 FilterOp::StartsWith => format!("pl.col(\"{a}\").str.starts_with(pl.col(\"{b}\"))"),
                                 _ => format!("pl.col(\"{a}\") {sym} pl.col(\"{b}\")"),
                             }
+                        } else if !r.values.is_empty() && matches!(r.op, FilterOp::Eq | FilterOp::NotEq | FilterOp::InList | FilterOp::NotInList) {
+                            py_values_expr(&r.col_name, &r.values, false, matches!(r.op, FilterOp::NotEq | FilterOp::NotInList))
                         } else {
                             py_filter_expr(&r.col_name, r.op, &r.compare_val)
                         };
@@ -803,6 +885,10 @@ pub fn generate_python_polars_code(
 /// column types: a value that is a number is compared as a number, anything else as text.
 fn py_condition_expr(c: &FilterCondition) -> String {
     let name = &c.column;
+    if c.uses_values() {
+        let negate = matches!(c.op, CondOp::NotEquals | CondOp::NotInList);
+        return py_values_expr(name, &c.values, c.or_blank, negate);
+    }
     let lit_of = |v: &str| {
         let t = v.trim();
         if t.parse::<f64>().is_ok() {
@@ -821,6 +907,7 @@ fn py_condition_expr(c: &FilterCondition) -> String {
         CondOp::Contains => py_filter_expr(name, FilterOp::Contains, &c.value),
         CondOp::StartsWith => py_filter_expr(name, FilterOp::StartsWith, &c.value),
         CondOp::InList => py_filter_expr(name, FilterOp::InList, &c.value),
+        CondOp::NotInList => py_filter_expr(name, FilterOp::NotInList, &c.value),
         CondOp::EndsWith => format!("pl.col(\"{}\").str.ends_with(\"{}\")", name, c.value.trim()),
         CondOp::Between => format!(
             "pl.col(\"{}\").is_between({}, {})",
@@ -839,9 +926,51 @@ fn py_condition_expr(c: &FilterCondition) -> String {
     }
 }
 
+/// Python for a condition on picked values (the helper `_mp_in_values` reads the column's type).
+fn py_values_expr(name: &str, values: &[String], or_blank: bool, negate: bool) -> String {
+    let items: Vec<String> = values.iter().map(|v| serde_json::to_string(v).unwrap_or_default()).collect();
+    format!(
+        "_mp_in_values(\"{n}\", [{items}], lf.collect_schema()[\"{n}\"], {b}, {neg})",
+        n = py_escape(name),
+        items = items.join(", "),
+        b = if or_blank { "True" } else { "False" },
+        neg = if negate { "True" } else { "False" }
+    )
+}
+
+/// Python mirror of the picked-values conditions (Phase 6 U7): numbers as numbers, dates as dates,
+/// the rest as text; a blank never matches "in", and is unknown for "not in" unless blank was picked.
+const PY_VALUES_HELPER: &str = r#"import datetime as _dt
+
+
+def _mp_in_values(name, values, dtype, or_blank=False, negate=False):
+    c = pl.col(name)
+    if dtype.is_numeric():
+        picked = c.cast(pl.Float64).is_in([float(v.replace(",", "")) for v in values])
+    elif dtype == pl.Date:
+        picked = c.is_in([_dt.date.fromisoformat(v.strip()) for v in values])
+    else:
+        picked = c.cast(pl.Utf8).is_in(values)
+    blank = c.is_null() | (c.cast(pl.Utf8).str.strip_chars() == "") if dtype == pl.Utf8 else c.is_null()
+    positive = picked.fill_null(False)
+    if or_blank:
+        positive = positive | blank
+    if not negate:
+        return positive
+    if or_blank:
+        return ~positive
+    return pl.when(blank).then(None).otherwise(~positive)
+
+
+"#;
+
 fn py_filter_expr(col_name: &str, op: FilterOp, val: &str) -> String {
     let trimmed = val.trim();
     match op {
+        FilterOp::NotInList => {
+            let items: Vec<String> = trimmed.split(',').map(|s| format!("\"{}\"", s.trim())).collect();
+            format!("~pl.col(\"{}\").is_in([{}])", col_name, items.join(", "))
+        }
         FilterOp::IsNull => format!("pl.col(\"{}\").is_null()", col_name),
         FilterOp::IsNotNull => format!("pl.col(\"{}\").is_not_null()", col_name),
         FilterOp::Contains => format!("pl.col(\"{}\").str.contains(\"{}\")", col_name, trimmed),

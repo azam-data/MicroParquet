@@ -119,8 +119,18 @@ pub const TAB_RENAME_W: f32 = 160.0;
 pub const TAB_SCROLL_FRAMES: u8 = 4;
 /// One half, for centring.
 pub const HALF: f32 = 0.5;
+/// The most decimal places a report can show.
+pub const MAX_DECIMALS: usize = 6;
+/// The most lines the commentary box shows before it scrolls.
+pub const MOM_BOX_ROWS: usize = 8;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
+/// The right panel can be dragged as wide as this share of the window, and its left edge reacts
+/// within this many points (double-click there goes back to the minimum width).
+pub const RIGHT_PANEL_MAX_SHARE: f32 = 0.5;
+pub const RIGHT_PANEL_GRAB: f32 = 6.0;
+/// The line drawn on the panel's edge while it is pointed at or dragged.
+pub const LINE_THICK_W: f32 = 2.0;
 pub const HEADER_ROW_H: f32 = 38.0;
 pub const SELECTOR_ROW_H: f32 = 30.0;
 pub const SUMMARY_BAND_H: f32 = 38.0;
@@ -144,6 +154,12 @@ pub const SCHEMA_DIALOG_MIN_W: f32 = 640.0;
 /// The size of the schema dialog's own native window, and the smallest it can be made.
 pub const SCHEMA_POPOUT_SIZE: [f32; 2] = [1100.0, 800.0];
 pub const SCHEMA_POPOUT_MIN_SIZE: [f32; 2] = [640.0, 480.0];
+/// The chart's own window: its size when it opens and the least it can be made.
+/// The product and weight fields of the Mudaraba parameter editor.
+pub const MUD_PRODUCT_FIELD_W: f32 = 110.0;
+pub const MUD_WEIGHT_FIELD_W: f32 = 60.0;
+pub const CHART_POPOUT_SIZE: [f32; 2] = [900.0, 560.0];
+pub const CHART_POPOUT_MIN_SIZE: [f32; 2] = [520.0, 360.0];
 /// Space between the items of the two option rows.
 pub const SCHEMA_ROW_GAP: f32 = 6.0;
 /// The Columns card is never shorter than this: the dialog scrolls instead.
@@ -153,6 +169,7 @@ pub const PREVIEW_ROWS: usize = 5;
 pub const PREVIEW_GRID_H: f32 = HEADER_ROW_H + PREVIEW_ROWS as f32 * (DATA_ROW_H + 6.0) + 8.0;
 pub const SCHEMA_COMBO_W: f32 = 96.0;
 pub const SCHEMA_COL_NAME_W: f32 = 190.0;
+pub const SCHEMA_COL_RENAME_W: f32 = 150.0;
 pub const SCHEMA_COL_TYPE_W: f32 = 118.0;
 pub const SCHEMA_COL_PII_W: f32 = 118.0;
 pub const SCHEMA_COL_SIGN_W: f32 = 118.0;
@@ -188,15 +205,30 @@ pub const SEARCH_LONG_HINT_W: f32 = 260.0;
 pub const WINDOW_SIZE: [f32; 2] = [1320.0, 740.0];
 pub const WINDOW_MIN_SIZE: [f32; 2] = [800.0, 560.0];
 pub const UI_ZOOM_DEFAULT: f32 = 1.05;
-pub const UI_ZOOM_MIN: f32 = 0.80;
-pub const UI_ZOOM_MAX: f32 = 1.50;
+pub const UI_ZOOM_MIN: f32 = 0.50;
+pub const UI_ZOOM_MAX: f32 = 2.00;
 pub const UI_ZOOM_STEP: f32 = 0.10;
+/// The status bar shows the zoom label only when the bar is at least this wide.
+pub const STATUS_ZOOM_MIN_BAR_W: f32 = 900.0;
+/// The list of default zooms in the Zoom menu scrolls above this height.
+pub const ZOOM_LIST_H: f32 = 280.0;
+/// The default zoom is chosen in steps of this much (5%).
+pub const UI_ZOOM_CHOICE_STEP: f32 = 0.05;
+/// A zoom rounded to the nearest 5% and kept between the minimum and the maximum.
+pub fn snap_zoom(z: f32) -> f32 {
+    ((z / UI_ZOOM_CHOICE_STEP).round() * UI_ZOOM_CHOICE_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+}
 /// The UI scale one step larger / smaller, kept between the minimum and the maximum.
 pub fn zoom_in(z: f32) -> f32 {
-    (z + UI_ZOOM_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+    snap_zoom(z + UI_ZOOM_STEP)
 }
 pub fn zoom_out(z: f32) -> f32 {
-    (z - UI_ZOOM_STEP).clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+    snap_zoom(z - UI_ZOOM_STEP)
+}
+/// Every default zoom the menu offers: 50% to 200% in steps of 5%.
+pub fn zoom_choices() -> Vec<f32> {
+    let n = ((UI_ZOOM_MAX - UI_ZOOM_MIN) / UI_ZOOM_CHOICE_STEP).round() as usize;
+    (0..=n).map(|i| ((UI_ZOOM_MIN + i as f32 * UI_ZOOM_CHOICE_STEP) * 100.0).round() / 100.0).collect()
 }
 /// A 1 px line (borders, dividers) and a 2 px line (the selected column's underline, the active
 /// tab's top line, the steps rail).
@@ -215,7 +247,8 @@ pub const RADIUS_BAR: f32 = 3.0;
 pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL, ne: RADIUS_CONTROL, sw: 0.0, se: 0.0 };
 pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
 // dialogs: widths (the schema dialog's is above) and the lists inside them
-pub const DIALOG_W_SORT: f32 = 560.0;
+pub const DIALOG_W_SORT: f32 = 700.0;
+pub const DIALOG_W_ABOUT: f32 = 560.0;
 pub const DIALOG_W_FILTER: f32 = 640.0;
 pub const DIALOG_W_TOOL: f32 = 680.0;
 pub const DIALOG_W_PIVOT: f32 = 720.0;
@@ -266,7 +299,7 @@ pub const BEHAVIOUR_SOURCE_W: f32 = 320.0;
 pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
 /// The height of a row of the Banking and Export menus (compact, so the Banking menu fits a 686 pt window).
-pub const MENU_ROW_H: f32 = 26.0;
+pub const MENU_ROW_H: f32 = 24.0;
 /// The combo boxes of the LCR / NSFR dialog: the map file and the balance sign.
 pub const LIQ_MAP_COMBO_W: f32 = 225.0;
 pub const LIQ_SIGN_COMBO_W: f32 = 270.0;
@@ -293,13 +326,39 @@ pub const RATE_STEP_RANGE: std::ops::RangeInclusive<f64> = 0.01..=50.0;
 pub const COND_BODY_W: f32 = 720.0;
 pub const DIALOG_SCROLL_BAR_ALLOWANCE: f32 = 16.0;
 pub const FIELD_W_VALUE: f32 = 130.0;
+/// The value picker: its search box, its list's height and the button that opens it.
+pub const PICKER_SEARCH_W: f32 = 200.0;
+pub const PICKER_LIST_H: f32 = 200.0;
+pub const FIELD_W_PICK: f32 = 150.0;
 pub const FIELD_W_OP: f32 = 120.0;
 pub const FIELD_W_COLUMN: f32 = 160.0;
 pub const FIELD_W_SORT_COLUMN: f32 = 180.0;
-pub const SQL_BAR_W: f32 = 520.0;
+/// The order choice (Natural, a list, Tenor) of a sort level.
+pub const FIELD_W_SORT_ORDER: f32 = 120.0;
+/// The name, columns and several-lines boxes of the custom sort-list manager.
+pub const FIELD_W_SORT_LIST: f32 = 300.0;
+pub const SQL_EDITOR_MIN_ROWS: usize = 8;
+/// The history drop-down's row, the error box's height and the characters of a history entry.
+pub const SQL_HISTORY_H: f32 = 28.0;
+pub const SQL_ERROR_H: f32 = 96.0;
+pub const SQL_HISTORY_CHARS: usize = 44;
+pub const SQL_HISTORY_POPUP_H: f32 = 420.0;
 // chart
 pub const CHART_H: f32 = 175.0;
 pub const CHART_BAR_W: f64 = 0.65;
+/// The chart's controls and marks.
+pub const CHART_COMBO_W: f32 = 130.0;
+pub const CHART_COMBO_NARROW_W: f32 = 90.0;
+/// Longest category name on the x-axis, and room for one.
+pub const CHART_LABEL_CHARS: usize = 14;
+pub const CHART_LABEL_W: f32 = 90.0;
+/// The width a group of bars takes of its category's 1.0, and how much of its slot a bar fills.
+pub const CHART_GROUP_W: f64 = 0.8;
+pub const CHART_BAR_FILL: f64 = 0.92;
+pub const CHART_LINE_W: f32 = 2.0;
+/// Room under the plot for the x-axis names (the render tests look for them there).
+pub const CHART_AXIS_BAND: f32 = 28.0;
+pub const CHART_POINT_R: f32 = 3.0;
 // command palette
 pub const PALETTE_W: f32 = 560.0;
 pub const PALETTE_TOP: f32 = 90.0;
@@ -334,8 +393,6 @@ pub const MARGIN_TAB_STRIP: egui::Margin = egui::Margin { left: 12.0, right: 12.
 pub fn margin_tab(active: bool) -> egui::Margin {
     egui::Margin::symmetric(14.0, if active { 7.0 } else { 5.0 })
 }
-pub const EMPTY_STATE_TOP: f32 = 90.0;
-pub const EMPTY_STATE_GAP: f32 = 20.0;
 // right panel
 pub const MARGIN_SEGMENTED: egui::Margin = egui::Margin::same(3.0);
 pub const MARGIN_SEGMENTED_OUTER: egui::Margin = egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 };
@@ -549,6 +606,8 @@ pub fn load_fonts(ctx: &egui::Context) {
 
 pub fn apply_ui_theme(ctx: &egui::Context, dark_mode: bool, zoom: f32) {
     ctx.set_zoom_factor(zoom);
+    // Ctrl+= / Ctrl+- / Ctrl+0 are the app's own (View > Zoom): egui's would zoom a second time
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
     let tk = tokens(dark_mode);
 
     let mut style = (*ctx.style()).clone();

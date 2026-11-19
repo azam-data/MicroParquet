@@ -133,6 +133,7 @@ fn read_beta_text(dir: &Path, name: &str) -> Result<(String, String)> {
         bail!("The beta file '{}' was not found in {}. Add {}.json there, or choose another file.", n, dir.display(), n);
     }
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the beta file {}", path.display()))?;
+    crate::rules::note_used_file("Beta file", &format!("betas/{}.json", n), "", "", false);
     Ok((format!("{}.json", n), text))
 }
 

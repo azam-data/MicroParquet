@@ -211,7 +211,7 @@ fn v2_the_tool_is_a_two_tab_banking_command_under_loans_and_credit_and_the_searc
     assert_eq!(banking_section(CommandId::ClMigration), Some("Loans & credit"));
     assert_eq!(banking_section(CommandId::Ftp), Some("Treasury & ALM"));
     assert_eq!(banking_section(CommandId::Filter), None, "only Banking commands have a heading");
-    // every Banking command is under one of the two headings, and the commands of a heading are together
+    // every Banking command is under a heading, and the commands of a heading are together
     let sections: Vec<&str> = in_group(CommandGroup::Banking).map(|c| banking_section(c.id).expect("a heading")).collect();
     let mut changes = 0;
     for w in sections.windows(2) {
@@ -219,7 +219,9 @@ fn v2_the_tool_is_a_two_tab_banking_command_under_loans_and_credit_and_the_searc
             changes += 1;
         }
     }
-    assert_eq!(changes, 1, "Treasury & ALM first, then Loans & credit: {sections:?}");
+    // Phase 6 added a last heading, "Reports" (report packs)
+    assert_eq!(changes, 3, "Treasury & ALM first, then Loans & credit, then the Islamic window, then Reports: {sections:?}");
+    assert_eq!((sections.first().copied(), sections.last().copied()), (Some("Treasury & ALM"), Some("Reports")));
     // searching for what bankers call it finds it first
     let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();
     for q in ["cl migration", "grade upgrade downgrade", "npl roll"] {

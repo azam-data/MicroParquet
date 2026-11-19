@@ -25,15 +25,18 @@ The dialog that opens when you open a CSV or Parquet file. It decides how each c
 | Dates | Yes | Date (D/M/YYYY or D-M-YYYY), Date (M/D/YYYY…) or Date (YYYY-MM-DD) | 05/11/2026 | Choose the style the file really uses; the preview shows how it was read. |
 | Whole numbers | No | Whole Integer (Int64) | 36 | Counts, tenors in months. |
 | Masked columns | No | No Masking / Mask Name / Mask Acct | Acttit | Masks use this PC's secret key. |
+| New column names | No | Text ("Rename to") | Account_No, Int_Rate, Balance | Blank keeps the file's name. A name must not be empty or used twice. |
 
 ## 5. Step by step
 
 1. Choose File → "Open CSV or Parquet file…" (Ctrl+K: "open") and pick the file. The dialog "Schema & Ingestion: CSV 5-Row Raw Preview, Linebreak Sanitizer & Strict Schema Lock" opens (for Parquet: "Schema & Ingestion (Parquet): Types & PII Masking").
 2. Under "Reading options" set "Separator", "Encoding" and "Lines above the header row that are skipped" if needed; click "Re-read" to apply them. Tick "Clean line breaks" (it adds the recorded step "Clean line breaks" as the first step of the tab, with "Trim spaces on all text values" on so the values are the ones the box gave before, see clean-line-breaks.md; unticking it in "Apply to tab" takes that step out), "Parse Accounting Negatives (1,234.50 -> -1234.50)" and "Pre-Heal Broken Unquoted CSV Lines" as your file needs.
 3. Under "Columns" check each column's "Target Data Type". A column with Dr/Cr values shows a warning: choose "Dr is +" or "Cr is +".
+3b. To give a column the name your steps and reports use, type it under "Rename to". The renames are applied after typing and masking and before any step, so every step, filter, pivot, macro and export uses the new names; the Column inspector shows "From file: <name in the file>". A name that is empty or used by another column turns red with the reason, and "Lock Schema & Open", "Apply Schema to This Tab" and "Save" stay disabled until it is fixed.
 4. Choose "No Masking", "Mask Name (CLIENT_XXXX)" or "Mask Acct (ACCT_XXXX)" for sensitive columns under "PII Anonymizer".
 5. Read the "Preview" and the "Parse Failures" list: values that could not be converted become blank and are counted there.
-6. Optional: "Save Schema Template (.schema.json)" to reuse, or "Load Saved Schema Template".
+6. Optional: "Save Schema Template (.schema.json)" (the default folder is `portable_data/schemas`; the renames are saved with it) to reuse, or "Load Saved Schema Template". Tick "Apply without asking" before saving to open matching files (CSV or Parquet) without this dialog; the status line then names the template.
+6b. Next time, when you open a file whose column names are the same as a saved template's original column names (trimmed, any case, any order), the dialog opens with that template applied and the line "Applied saved schema '<name>' (all N columns matched)"; "Undo" goes back to the detected types. If several templates match you pick one; if none matches (a column more or fewer) the dialog opens as always. A Parquet file with a matching template behaves the same way: the Parquet dialog opens with the template applied and the same line with "Undo". With "Apply one schema to every file", Stack and Batch apply the renames too.
 7. Click "Lock Schema & Open" (or press Enter) to open the tab, or "Convert to Parquet…" to convert without opening a tab. "Cancel" (Esc) closes without changes. To change the schema of an open tab later, use "Apply Schema to This Tab".
 
 ## 6. What you get
@@ -83,6 +86,8 @@ Test: `guide_schema_ingestion`
 - "Column 'X' has Dr/Cr amounts. Choose 'Dr is +' or 'Cr is +' for it in Schema & Ingestion." Choose the sign in the Columns card.
 - "Could not be converted (now null), e.g.: …" under Parse Failures: wrong type for those values; change the type or clean the file.
 - "Could not re-read the file: …" or "Error reading the file preview: …": check separator and encoding.
+- "\"Balance\" is also the name of \"BAL\". Every column needs its own name: change one \"Rename to\"." Two columns would have the same name; change one of the Rename to cells.
+- "These steps would stop working" when you apply a schema to an open tab: a step uses a column name the new schema removes (for example a filter on Int_Rate after you clear its rename). "Apply anyway" keeps the steps, shown as broken; Cancel leaves the tab as it was.
 - "Key export failed" / "Key import failed": check the folder or file you chose.
 
 ## 10. Limits and assumptions
@@ -90,3 +95,4 @@ Test: `guide_schema_ingestion`
 - Masks are one-way tokens made with this PC's secret key. Another PC needs the same key to get the same tokens.
 - The type is chosen per column for the whole file; mixed formats in one column are not detected.
 - Excel files are not read directly; save them as CSV first.
+- A saved schema (`*.schema.json`) that is damaged is skipped when a file is matched; the status bar names it ("Saved schema(s) skipped when matching this file: broken.schema.json is damaged …"). Two columns whose final names differ only in capitals (or spaces at the ends) are the same name and are refused.
