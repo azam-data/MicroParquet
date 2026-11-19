@@ -244,7 +244,7 @@ fn guide_mudaraba_profit_distribution() {
     let d = dir("g_mud");
     micro_parquet::rules::set_data_dir_override(Some(d.clone()));
     let deposits = DataFrame::new(vec![Series::new("Product".into(), &["MSND", "MSB", "MTDR-1Y"]), Series::new("Avg_Balance".into(), &[200.0, 300.0, 500.0])]).expect("deposits");
-    let spec = MudarabaSpec { product_col: "Product".into(), balance_col: "Avg_Balance".into(), daily: false, date_col: String::new(), start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 };
+    let spec = MudarabaSpec { product_col: "Product".into(), balance_col: "Avg_Balance".into(), daily: false, date_col: String::new(), zero_fill_missing_days: false, start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 };
     // the sample file is written and read: its numbers are the example's
     let params = load_psr(spec.dates().expect("dates").1).expect("the sample parameters");
     assert!(params.meta.sample);

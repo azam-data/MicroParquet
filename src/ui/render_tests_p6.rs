@@ -2572,7 +2572,8 @@ fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_th
 
 #[test]
 fn f3_view_toolbar_buttons_switch_each_button_off_and_on_and_are_saved() {
-    for (ppp, w, h) in SCREENS {
+    // (a wide window, so that every button is on the bar before one is switched off)
+    for (ppp, w, h) in [(1.0, 2400.0, 800.0), (0.8, 2600.0, 900.0)] {
         let mut rig = term_rig("p6f3b", ppp, w, h);
         let what = rig.what.clone();
         let icon = |id: CommandId| crate::ui::commands::command_icon(id).to_string();
@@ -2619,21 +2620,94 @@ impl Rig {
 }
 
 #[test]
-fn f3_in_a_narrow_window_buttons_fold_into_the_overflow_menu_and_a_folded_one_still_runs() {
-    // narrow: the menus stay, the buttons from the right fold into »
-    let mut rig = term_rig("p6f3c", 1.0, 760.0, 600.0);
-    let what = rig.what.clone();
-    let p = rig.draw(6);
-    for n in ["File", "Edit", "View", "Help"] {
-        assert!(bar_box(&p, n).is_some(), "{what}: the menu '{n}' is still there");
+fn j1_buttons_keep_their_labels_at_both_scales_and_at_1000_px_the_rightmost_fold_into_the_overflow_menu_with_labels() {
+    for (ppp, w, h) in [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0), (1.0, 1000.0, 686.0)] {
+        let mut rig = term_rig("p6j1", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(6);
+        let all = micro_parquet::commands::toolbar_buttons();
+        let label_of = |id: CommandId| crate::ui::commands::toolbar_label(id);
+        let painted = |p: &Painted, id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && t.trim_start_matches(|c: char| !c.is_alphanumeric()).trim() == label_of(id));
+        // the shown buttons are a front part of the list, all labelled
+        let shown: Vec<bool> = all.iter().map(|id| painted(&p, *id)).collect();
+        let n_shown = shown.iter().filter(|s| **s).count();
+        assert!(shown.iter().take(n_shown).all(|s| *s) && n_shown >= 3, "{what}: the buttons shown are the first ones, with their labels: {shown:?}");
+        for n in ["File", "Edit", "View", "Help"] {
+            assert!(bar_box(&p, n).is_some(), "{what}: menu {n}");
+        }
+        assert!(!p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && all.iter().any(|id| t.trim() == crate::ui::commands::command_icon(*id))), "{what}: no icon-only button");
+        let folded: Vec<CommandId> = all.iter().zip(&shown).filter(|(_, s)| !**s).map(|(id, _)| *id).collect();
+        let over = bar_box(&p, "\u{bb}");
+        assert_eq!(over.is_some(), !folded.is_empty(), "{what}: » exactly when something is folded");
+        if let Some(over) = over {
+            // the overflow menu lists the folded buttons by their labels, and a click runs one
+            pclick(&mut rig, over);
+            let p = rig.draw(3);
+            for id in &folded {
+                assert!(p.boxes.iter().any(|(t, b)| b.top() > theme::TOP_BAR_H && t.ends_with(label_of(*id))), "{what}: the overflow menu has '{}'", label_of(*id));
+            }
+            let sql = p.boxes.iter().filter(|(t, b)| b.top() > theme::TOP_BAR_H && t.ends_with("SQL")).map(|(_, b)| *b).last();
+            if let Some(item) = sql {
+                rig.app.show_steps_sidebar = false;
+                pclick(&mut rig, item);
+                rig.draw(3);
+                assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: the folded SQL button ran");
+            }
+        }
+        if w < 1100.0 {
+            assert!(!folded.is_empty(), "{what}: at 1000 px something is folded");
+        }
+        micro_parquet::rules::set_data_dir_override(None);
     }
-    let over = bar_box(&p, "\u{bb}").unwrap_or_else(|| panic!("{what}: the » button is there"));
-    assert!(bar_box(&p, &crate::ui::commands::command_icon(CommandId::ToggleSql)).is_none(), "{what}: SQL (the last button) is folded");
-    let p = { pclick(&mut rig, over); rig.draw(3) };
-    let item = p.boxes.iter().filter(|(t, b)| t.contains("SQL editor") && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: the overflow menu lists the SQL editor: {:?}", p.boxes.iter().filter(|(_, b)| b.top() > theme::TOP_BAR_H && b.top() < 300.0).map(|(t, _)| t.clone()).collect::<Vec<_>>()));
-    rig.app.show_steps_sidebar = false;
-    pclick(&mut rig, item);
-    rig.draw(3);
-    assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: the folded SQL button ran");
-    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn j2_the_zero_fill_box_decides_whether_a_missing_day_stops_the_run_or_is_listed_in_the_footer() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = mud_rig("p6j2", ppp, w, h, false);
+        let what = rig.what.clone();
+        // November: MSND has every day, MSB lacks the 30th
+        let (mut p, mut b, mut d) = (Vec::new(), Vec::new(), Vec::new());
+        for day in 1..=30 {
+            for (k, v) in [("MSND", 200.0), ("MSB", 300.0), ("MTDR-1Y", 500.0)] {
+                if k == "MSB" && day == 30 {
+                    continue;
+                }
+                p.push(k.to_string());
+                b.push(v);
+                d.push(format!("2026-11-{day:02}"));
+            }
+        }
+        let df = DataFrame::new(vec![Series::new("Product".into(), p), Series::new("Avg_Balance".into(), b), Series::new("Day".into(), d)]).expect("daily");
+        let src = parquet_source(&rig.app.paths.root_dir.clone(), "daily", df);
+        rig.app.create_tab_from_source("Daily".into(), src, vec![], HashMap::new());
+        settle(&mut rig.app);
+        rig.app.active_tab = 1;
+        rig.app.run_command(&rig.ctx, CommandId::Mudaraba);
+        rig.draw(6);
+        {
+            let m = &mut rig.app.mud;
+            (m.start, m.end, m.income, m.other, m.daily, m.date_col) = ("2026-11-01".into(), "2026-11-30".into(), "12".into(), "240".into(), true, "Day".into());
+        }
+        rig.draw(6);
+        mud_scroll_click(&mut rig, "Count missing days as zero balance");
+        assert!(rig.app.mud.zero_fill, "{what}: the click ticked the box");
+        rig.draw(4);
+        { let b = mud_btn(&rig, "Build distribution"); pclick(&mut rig, b); }
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 3, "{what}: {}", rig.app.status_message);
+        let t = &rig.app.tabs[2];
+        let products: Vec<String> = t.cached_slice.column("Product").expect("c").str().expect("s").into_iter().flatten().map(str::to_string).collect();
+        assert!(products.contains(&"Zero-filled days: MSB".to_string()), "{what}: the footer lists the product: {products:?}");
+        // the spec in the tab source stores the choice
+        assert!(matches!(&t.source, TabSource::MudarabaPool { spec, .. } if spec.zero_fill_missing_days), "{what}: stored in the step");
+        // unticking stores the other choice (the engine test shows that the run then stops naming the product)
+        rig.app.active_tab = 1;
+        rig.app.run_command(&rig.ctx, CommandId::Mudaraba);
+        rig.draw(4);
+        mud_scroll_click(&mut rig, "Count missing days as zero balance");
+        assert!(!rig.app.mud.zero_fill, "{what}: unticked");
+        assert!(rig.app.mudaraba_source().is_ok_and(|(_, src)| matches!(src, TabSource::MudarabaPool { spec, .. } if !spec.zero_fill_missing_days)), "{what}: the source stores the box as off");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
 }

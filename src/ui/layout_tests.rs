@@ -121,35 +121,24 @@ fn nothing_overlaps_at_any_window_width_the_menus_and_search_never_go_and_button
 }
 
 #[test]
-fn the_ladder_goes_labels_then_icons_then_folds_from_the_right() {
-    let l = ladder(11);
-    assert_eq!(l[0], (0, false));
-    assert_eq!(l[1], (0, true), "icon-only comes before the first fold");
-    assert!(l[2..].windows(2).all(|w| w[1].0 == w[0].0 + 1 && w[1].1) && l[2] == (1, true) && l.last() == Some(&(11, true)));
-    // walk the width down: the state only moves along the ladder, never back
+fn the_ladder_folds_buttons_one_by_one_from_the_right_and_never_drops_a_label() {
     let n = 11;
-    let (label, icon, groups) = (vec![80.0; n], vec![40.0; n], vec![0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2]);
-    let mut seen: Vec<(usize, bool)> = Vec::new();
+    assert_eq!(ladder(n), (0..=n).collect::<Vec<_>>());
+    let (label, groups) = (vec![80.0; n], vec![0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2]);
+    // walk the width down: more buttons fold as it narrows, one at a time, never fewer again
+    let mut seen: Vec<usize> = Vec::new();
     let mut avail = 3000.0;
     while avail > 100.0 {
-        let p = plan_bar(avail, 100.0, &label, &icon, &groups, 30.0, 20.0, 2.0);
-        if seen.last() != Some(&(p.folded, p.icon_only)) {
-            seen.push((p.folded, p.icon_only));
+        let p = plan_bar(avail, 100.0, &label, &groups, 30.0, 20.0, 2.0);
+        if seen.last() != Some(&p.folded) {
+            seen.push(p.folded);
         }
         assert!(p.search_w >= theme::SEARCH_ICON_W && p.search_w <= theme::SEARCH_MAX_W);
         avail -= 1.0;
     }
-    // (the first fold does not narrow the bar: the » button is as wide as the icon it takes away, so that state may be skipped)
-    let mut it = l.iter();
-    assert!(seen.iter().all(|s| it.any(|x| x == s)), "the states come in the ladder's order: {seen:?}");
-    assert!(seen.first() == l.first() && seen.contains(&(0, true)) && seen.last() == l.last(), "{seen:?}");
-    // the edge between labels and icons: one pixel narrower and the labels go
-    let fits = |avail: f32| plan_bar(avail, 100.0, &label, &icon, &groups, 30.0, 20.0, 2.0);
-    let edge = (1000..5000).map(|a| a as f32).find(|a| !fits(*a).icon_only).expect("an edge");
-    assert!(fits(edge - 1.0).icon_only && fits(edge - 1.0).folded == 0, "one pixel narrower gives icons, nothing folded yet");
-    // no visible buttons at all: nothing to fold, and the search box takes the room
-    let none = plan_bar(600.0, 100.0, &[], &[], &[], 30.0, 20.0, 2.0);
-    assert_eq!((none.folded, none.icon_only), (0, false));
+    assert!(seen.windows(2).all(|w| w[1] > w[0]) && seen.first() == Some(&0) && seen.last() == Some(&n), "{seen:?}");
+    // no visible buttons at all: nothing to fold
+    assert_eq!(plan_bar(600.0, 100.0, &[], &[], 30.0, 20.0, 2.0).folded, 0);
 }
 
 #[test]
@@ -168,54 +157,39 @@ fn at_1280_by_720_and_105_percent_the_menus_and_search_are_all_visible() {
         assert!(r.width() > 20.0 && r.right() <= screen.right() && r.left() >= 0.0, "{n}: {r:?}");
     }
     assert!(rect("Search").width() >= theme::SEARCH_MIN_W - 1.0, "{:?}", rect("Search"));
-    // the narrow box keeps its icon and "Search…" (the Ctrl K badge needs more room)
     let texts = bar_texts_at(WIN_W_PX);
     assert!(texts.iter().any(|t| t.starts_with("Search")), "{texts:?}");
     assert_no_overlap(&rects, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), theme::TOP_BAR_H)), "1280");
 }
 
 #[test]
-fn narrow_bars_show_icon_only_buttons_that_name_themselves_in_a_tooltip() {
-    // find a window narrow enough for icon-only buttons
-    let mut icon_w = None;
-    for w in (800..=1280).step_by(20) {
-        let (_, rects) = bar_rects_at(w as f32);
-        let has = |n: &str| rects.iter().any(|(r, _)| r == n);
-        if has("Filter") {
-            let f = rects.iter().find(|(r, _)| r == "Filter").map(|(_, r)| *r).unwrap();
-            let (_, wide) = bar_rects_at(2000.0);
-            let wide_f = wide.iter().find(|(r, _)| r == "Filter").map(|(_, r)| *r).unwrap();
-            if f.width() < wide_f.width() - 10.0 {
-                icon_w = Some((w as f32, f, rects));
-                break;
-            }
+fn buttons_keep_their_labels_at_every_width_and_a_disabled_one_says_why() {
+    for w in [800.0, 1000.0, 1280.0, 1600.0, 2400.0] {
+        let texts = bar_texts_at(w);
+        let (_, rects) = bar_rects_at(w);
+        for (name, label) in [("OpenFile", "Open"), ("Stack", "Stack"), ("Batch", "Batch"), ("Filter", "Filter"), ("Sort", "Sort"), ("Columns", "Columns"), ("CalcColumn", "Calc column"), ("Pivot", "Pivot"), ("RateProfile", "Rate profile"), ("ToggleChart", "Chart"), ("ToggleSql", "SQL")] {
+            let drawn = rects.iter().any(|(n, _)| n == name);
+            let labelled = texts.iter().any(|t| t.trim_start_matches(|c: char| !c.is_alphanumeric()).trim() == label);
+            assert_eq!(drawn, labelled, "{w} px: '{name}' is drawn exactly when its label is painted (no icon-only button)");
         }
     }
-    let (win, filter, rects) = icon_w.expect("some width in 800..1280 shows icon-only buttons");
-    // no label text is drawn; hovering a button shows its name (a disabled one, why it is off)
-    let hover_texts = |target: egui::Pos2| -> Vec<String> {
-        let mut app = test_app("bartip");
-        let (ctx, input) = headless(win, WIN_H_PX, UI_SCALE);
-        let mut texts = Vec::new();
-        for i in 0..40 {
-            let mut inp = input.clone();
-            inp.time = Some(i as f64 * 0.05);
-            inp.predicted_dt = 0.05;
-            inp.events = vec![egui::Event::PointerMoved(target)];
-            let out = ctx.run(inp, |ctx| {
-                app.render_top_bar(ctx);
-            });
-            texts = collect_painted(&out.shapes).texts.into_iter().map(|(t, _, _)| t).collect();
-        }
-        texts
-    };
-    let rect_of = |n: &str| rects.iter().find(|(r, _)| r == n).map(|(_, r)| *r).unwrap_or_else(|| panic!("{n}"));
-    let none = hover_texts(egui::pos2(win / UI_SCALE - 5.0, 300.0));
-    assert!(!none.iter().any(|t| t == "Open" || t.ends_with("Filter") || t.ends_with("Sort")), "no labels in icon-only mode: {none:?}");
-    let open = hover_texts(rect_of("OpenFile").center());
-    assert!(open.iter().any(|t| t == "Open"), "hovering the Open icon names it: {open:?}");
-    let filter_tip = hover_texts(filter.center());
-    assert!(filter_tip.iter().any(|t| t.starts_with("Filter") && t.contains("Open a file first")), "a disabled icon says what it is and why it is off: {filter_tip:?}");
+    // a disabled button (no tab is open) says why on hover
+    let (_, rects) = bar_rects_at(2400.0);
+    let filter = rects.iter().find(|(r, _)| r == "Filter").map(|(_, r)| *r).expect("Filter at 2400 px");
+    let mut app = test_app("bartip");
+    let (ctx, input) = headless(2400.0, WIN_H_PX, UI_SCALE);
+    let mut texts = Vec::new();
+    for i in 0..40 {
+        let mut inp = input.clone();
+        inp.time = Some(i as f64 * 0.05);
+        inp.predicted_dt = 0.05;
+        inp.events = vec![egui::Event::PointerMoved(filter.center())];
+        let out = ctx.run(inp, |ctx| {
+            app.render_top_bar(ctx);
+        });
+        texts = collect_painted(&out.shapes).texts.into_iter().map(|(t, _, _)| t).collect();
+    }
+    assert!(texts.iter().any(|t| t.contains("Open a file first")), "{texts:?}");
 }
 
 #[test]

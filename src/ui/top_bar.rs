@@ -1,6 +1,6 @@
 //! The single top bar (44 px): app mark, the menus File / Edit / View / Banking / Export / Help, the
-//! toolbar buttons, then the command search box at the far right. The menus never fold; buttons that
-//! do not fit fold (from the right) into a "»" menu, so nothing overlaps at any window width.
+//! toolbar buttons (always with their labels), then the command search box at the far right. The menus
+//! never fold; buttons that do not fit fold (from the right) into a "»" menu, so nothing overlaps at any window width.
 
 use crate::ui::prelude::*;
 use micro_parquet::commands::{self as cmds, CommandGroup, CommandId};
@@ -26,11 +26,10 @@ pub const BAR_ITEMS: [(CommandId, usize); 11] = [
 pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Banking", "Export", "Help"];
 
 /// How the bar is laid out: how many of the visible buttons (counted from the right) are in the
-/// overflow menu "»", whether the buttons show only their icons, and how wide the search box is.
+/// overflow menu "»", and how wide the search box is. Buttons always keep their labels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BarPlan {
     pub folded: usize,
-    pub icon_only: bool,
     pub search_w: f32,
 }
 
@@ -41,19 +40,16 @@ impl BarPlan {
     }
 }
 
-/// The states the bar goes through as the window gets narrower for `n` visible buttons: (folded,
-/// icon-only). Labels first, then icons only, then the buttons fold one by one from the right
-/// (still icon-only) into "»".
-pub fn ladder(n: usize) -> Vec<(usize, bool)> {
-    let mut v = vec![(0, false), (0, true)];
-    v.extend((1..=n).map(|f| (f, true)));
-    v
+/// The states the bar goes through as the window gets narrower for `n` visible buttons: the number
+/// folded, from none to all. A button keeps its label at every width; the rightmost ones fold into "»".
+pub fn ladder(n: usize) -> Vec<usize> {
+    (0..=n).collect()
 }
 
-/// Width of everything left of the search box in a state of the ladder.
-fn left_width(fixed: f32, label_w: &[f32], icon_w: &[f32], groups: &[usize], overflow_w: f32, gap: f32, item_gap: f32, folded: usize, icon_only: bool) -> f32 {
+/// Width of everything left of the search box when `folded` buttons are in "»".
+fn left_width(fixed: f32, label_w: &[f32], groups: &[usize], overflow_w: f32, gap: f32, item_gap: f32, folded: usize) -> f32 {
     let n = label_w.len();
-    let plan = BarPlan { folded, icon_only, search_w: 0.0 };
+    let plan = BarPlan { folded, search_w: 0.0 };
     let mut w = fixed;
     let mut last_group = usize::MAX;
     let mut in_group = 0;
@@ -70,7 +66,7 @@ fn left_width(fixed: f32, label_w: &[f32], icon_w: &[f32], groups: &[usize], ove
             w += item_gap;
         }
         in_group += 1;
-        w += if icon_only { icon_w[i] } else { label_w[i] };
+        w += label_w[i];
     }
     if folded > 0 {
         w += gap + overflow_w;
@@ -78,24 +74,23 @@ fn left_width(fixed: f32, label_w: &[f32], icon_w: &[f32], groups: &[usize], ove
     w
 }
 
-/// Decides the state of the bar: the first state of the ladder in which everything fits with the
-/// search box at least `SEARCH_MIN_W` wide. `avail` is the width of the bar's content, `fixed` the
-/// mark and the six menus, `label_w` / `icon_w` / `groups` describe the visible buttons, `overflow_w`
-/// is the "»" button, `gap` what lies between two groups and `item_gap` between two items. When even
-/// the last state does not fit, it is still the last state: the menus are never folded.
-pub fn plan_bar(avail: f32, fixed: f32, label_w: &[f32], icon_w: &[f32], groups: &[usize], overflow_w: f32, gap: f32, item_gap: f32) -> BarPlan {
+/// Decides the state of the bar: the fewest buttons folded such that everything fits with the search
+/// box at least `SEARCH_MIN_W` wide. `avail` is the width of the bar's content, `fixed` the mark and
+/// the six menus, `label_w` / `groups` describe the visible buttons, `overflow_w` is the "»" button,
+/// `gap` what lies between two groups and `item_gap` between two items. When even folding every
+/// button does not fit, that is still the state: the menus are never folded.
+pub fn plan_bar(avail: f32, fixed: f32, label_w: &[f32], groups: &[usize], overflow_w: f32, gap: f32, item_gap: f32) -> BarPlan {
     let states = ladder(label_w.len());
     let mut chosen = states[states.len() - 1];
-    for (folded, icon_only) in &states {
-        let left = left_width(fixed, label_w, icon_w, groups, overflow_w, gap, item_gap, *folded, *icon_only);
-        if left + gap + theme::SEARCH_MIN_W <= avail {
-            chosen = (*folded, *icon_only);
+    for folded in &states {
+        if left_width(fixed, label_w, groups, overflow_w, gap, item_gap, *folded) + gap + theme::SEARCH_MIN_W <= avail {
+            chosen = *folded;
             break;
         }
     }
-    let left = left_width(fixed, label_w, icon_w, groups, overflow_w, gap, item_gap, chosen.0, chosen.1);
+    let left = left_width(fixed, label_w, groups, overflow_w, gap, item_gap, chosen);
     let room = avail - left - gap;
-    BarPlan { folded: chosen.0, icon_only: chosen.1, search_w: room.clamp(theme::SEARCH_ICON_W, theme::SEARCH_MAX_W) }
+    BarPlan { folded: chosen, search_w: room.clamp(theme::SEARCH_ICON_W, theme::SEARCH_MAX_W) }
 }
 
 /// Width of a text in the body font.
@@ -120,11 +115,11 @@ fn menu_icon_label(icon: &str) -> String {
     format!("{}  {}", icon, theme::ph::CARET_DOWN)
 }
 
-/// The text of a button, with its label or icon-only.
-fn item_text(id: CommandId, icon_only: bool) -> String {
+/// The text of a button: its icon and its label.
+fn item_text(id: CommandId) -> String {
     let label = crate::ui::commands::toolbar_label(id);
     let icon = crate::ui::commands::command_icon(id);
-    if icon_only || label.is_empty() {
+    if label.is_empty() {
         icon.to_string()
     } else {
         format!("{}  {}", icon, label)
@@ -144,7 +139,6 @@ fn menu_text(name: &str) -> String {
 pub struct BarWidths {
     pub fixed: f32,
     pub label: Vec<f32>,
-    pub icon: Vec<f32>,
     pub groups: Vec<usize>,
     pub overflow: f32,
     pub gap: f32,
@@ -156,8 +150,7 @@ fn measure(ui: &egui::Ui, visible: &[(CommandId, usize)]) -> BarWidths {
     let fixed = theme::APP_MARK_SIZE + MENUS.iter().map(|t| sp + button_w(ui, &menu_text(t))).sum::<f32>();
     BarWidths {
         fixed,
-        label: visible.iter().map(|(id, _)| button_w(ui, &item_text(*id, false))).collect(),
-        icon: visible.iter().map(|(id, _)| button_w(ui, &item_text(*id, true))).collect(),
+        label: visible.iter().map(|(id, _)| button_w(ui, &item_text(*id))).collect(),
         groups: visible.iter().map(|(_, g)| *g).collect(),
         overflow: button_w(ui, OVERFLOW_LABEL),
         gap: sp + theme::BAR_SEPARATOR_W + sp,
@@ -171,7 +164,7 @@ pub const OVERFLOW_LABEL: &str = "\u{bb}";
 /// The plan for a bar `avail` wide with these visible buttons, measured with `ui`'s fonts and spacing.
 pub fn plan_for(ui: &egui::Ui, avail: f32, visible: &[(CommandId, usize)]) -> BarPlan {
     let w = measure(ui, visible);
-    plan_bar(avail, w.fixed, &w.label, &w.icon, &w.groups, w.overflow, w.gap, w.item_gap)
+    plan_bar(avail, w.fixed, &w.label, &w.groups, w.overflow, w.gap, w.item_gap)
 }
 
 /// A drawn item of the bar and where it is (tests check that none overlap).
@@ -290,9 +283,9 @@ impl MicroParquetApp {
                 last_group = *group;
             }
             let r = if matches!(id, CommandId::OpenFile | CommandId::Stack | CommandId::Batch | CommandId::ToggleChart) {
-                self.toolbar_button(ui, ctx, *id, plan.icon_only)
+                self.toolbar_button(ui, ctx, *id)
             } else {
-                ui.add_enabled_ui(has_tab, |ui| self.toolbar_button(ui, ctx, *id, plan.icon_only)).inner
+                ui.add_enabled_ui(has_tab, |ui| self.toolbar_button(ui, ctx, *id)).inner
             };
             rects.push((format!("{:?}", id), r.rect));
         }
@@ -303,8 +296,9 @@ impl MicroParquetApp {
             let folded: Vec<CommandId> = visible.iter().enumerate().filter(|(i, _)| plan.is_folded(*i, n)).map(|(_, (id, _))| *id).collect();
             let r = ui
                 .menu_button(OVERFLOW_LABEL, |ui| {
+                    // the overflow menu has the labels the buttons had
                     for id in &folded {
-                        self.command_menu_item(ui, ctx, *id);
+                        self.command_menu_item_titled(ui, ctx, *id, crate::ui::commands::toolbar_label(*id));
                     }
                 })
                 .response

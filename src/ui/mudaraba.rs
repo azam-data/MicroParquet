@@ -35,6 +35,8 @@ pub struct MudState {
     pub daily: bool,
     /// With daily balances: the column that holds the day of each balance.
     pub date_col: String,
+    /// Count a missing day as a zero balance (off: a missing day stops the run).
+    pub zero_fill: bool,
     pub start: String,
     pub end: String,
     pub income: String,
@@ -46,7 +48,7 @@ pub struct MudState {
 
 impl Default for MudState {
     fn default() -> Self {
-        Self { edit: None, product_col: String::new(), balance_col: String::new(), daily: false, date_col: String::new(), start: String::new(), end: String::new(), income: String::new(), other: "0".to_string(), params: None, rects: MudRects::default() }
+        Self { edit: None, product_col: String::new(), balance_col: String::new(), daily: false, date_col: String::new(), zero_fill: false, start: String::new(), end: String::new(), income: String::new(), other: "0".to_string(), params: None, rects: MudRects::default() }
     }
 }
 
@@ -134,7 +136,7 @@ impl MicroParquetApp {
         }
         let income = number(&m.income).filter(|v| *v >= 0.0).ok_or_else(|| "Type the investment income of the period as a number (0 or more).".to_string())?;
         let other = number(&m.other).filter(|v| *v >= 0.0).ok_or_else(|| "Type the other investable funds as a number (0 or more).".to_string())?;
-        let spec = MudarabaSpec { product_col: m.product_col.clone(), balance_col: m.balance_col.clone(), daily: m.daily, date_col: if m.daily { m.date_col.clone() } else { String::new() }, start: m.start.trim().to_string(), end: m.end.trim().to_string(), income, other_investable: other };
+        let spec = MudarabaSpec { product_col: m.product_col.clone(), balance_col: m.balance_col.clone(), daily: m.daily, date_col: if m.daily { m.date_col.clone() } else { String::new() }, zero_fill_missing_days: m.daily && m.zero_fill, start: m.start.trim().to_string(), end: m.end.trim().to_string(), income, other_investable: other };
         spec.dates().map_err(|e| format!("{:#}", e))?;
         match &m.params {
             Some((k, Err(e))) if *k == spec.end => return Err(e.clone()),
@@ -183,6 +185,10 @@ impl MicroParquetApp {
                     ui.end_row();
                     if self.mud.daily {
                         pick(ui, "Day of the balance:", "mud_day", &mut self.mud.date_col, &mut rects);
+                        ui.label("");
+                        let z = ui.checkbox(&mut self.mud.zero_fill, "Count missing days as zero balance").on_hover_text("Off: a product with a missing day stops the run. On: those days count as 0 and the table lists each product with its zero-filled days.");
+                        rects.buttons.push(("Count missing days as zero balance".to_string(), z.rect));
+                        ui.end_row();
                     }
                     let mut field = |ui: &mut egui::Ui, label: &str, text: &mut String, rects: &mut MudRects| {
                         ui.label(label);

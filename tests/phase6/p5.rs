@@ -28,7 +28,7 @@ fn deposits() -> DataFrame {
 }
 
 fn spec() -> MudarabaSpec {
-    MudarabaSpec { product_col: "Product".into(), balance_col: "Avg".into(), daily: false, date_col: String::new(), start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 }
+    MudarabaSpec { product_col: "Product".into(), balance_col: "Avg".into(), daily: false, date_col: String::new(), zero_fill_missing_days: false, start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 }
 }
 
 fn run(df: &DataFrame, s: &MudarabaSpec) -> anyhow::Result<DataFrame> {
@@ -240,6 +240,22 @@ fn g3_blank_balances_dates_outside_the_period_and_missing_days_stop_the_run_nami
     assert!(msg.contains("1 row(s) are dated outside the period 2026-11-01 to 2026-11-30"), "{msg}");
     let msg = format!("{:#}", run(&full(Some(("MSB", 99)), None), &daily).expect_err("missing days"));
     assert!(msg.contains("MSB (3 of 30 days missing)") && !msg.contains("MSND ("), "{msg}");
+    // J2: with the tick box on, the missing days count as 0 and the footer lists them; MSB has 3 days missing
+    let filled = MudarabaSpec { zero_fill_missing_days: true, ..daily.clone() };
+    let df = run(&full(Some(("MSB", 99)), None), &filled).expect("zero-filled runs");
+    near(cell(&df, "MSB", "Average balance"), 100.0 * 27.0 / 30.0, 1e-9, "27 days of 100 over 30 days");
+    near(cell(&df, "MSND", "Average balance"), 100.0, 1e-9, "a complete product is unchanged");
+    let names = strings(&df, "Product");
+    let z: Vec<&Option<String>> = names.iter().filter(|n| n.as_deref().is_some_and(|t| t.starts_with("Zero-filled days"))).collect();
+    assert_eq!(z.len(), 1, "only the product with missing days is listed: {names:?}");
+    assert_eq!(z[0].as_deref(), Some("Zero-filled days: MSB"));
+    let note = strings(&df, "Note");
+    assert!(note.iter().flatten().any(|n| n == "3 of 30 day(s) counted as a zero balance"), "{note:?}");
+    // nothing missing: no such rows even with the box on
+    let df = run(&full(None, None), &filled).expect("full month");
+    assert!(!strings(&df, "Product").iter().flatten().any(|n| n.starts_with("Zero-filled")));
+    // rows outside the period and a missing date column are still refused with the box on
+    assert!(run(&full(None, Some("2026-12-02")), &filled).is_err());
     let no_col = MudarabaSpec { date_col: String::new(), ..daily.clone() };
     assert!(format!("{:#}", run(&full(None, None), &no_col).expect_err("no date column")).contains("choose the column that holds the day"));
 }

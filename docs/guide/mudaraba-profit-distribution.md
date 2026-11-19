@@ -24,7 +24,7 @@ Shares the investment income of a period among the Mudaraba deposit products, us
 | --- | --- | --- | --- | --- |
 | Product code | Yes | Text | MSND, MSB, MTDR-1Y | Every code must have a weightage in the file; a missing one stops the run and is named. Codes match ignoring case and extra spaces. |
 | Balance | Yes | Number, 0 or more | 200 | The average of the period; or, with "a daily balance", one row per day and account: the average is their sum ÷ the days. A blank balance stops the run with the count and the first five products. |
-| Day of the balance | Only for daily balances | Date (or text as YYYY-MM-DD) | 2026-11-17 | Rows dated outside the period are refused with their count; a product that lacks a balance for any day of the period stops the run, naming it and the number of days missing. |
+| Day of the balance | Only for daily balances | Date (or text as YYYY-MM-DD) | 2026-11-17 | Rows dated outside the period are refused with their count; a product that lacks a balance for any day of the period stops the run, naming it and the number of days missing, unless "Count missing days as zero balance" is ticked. |
 
 The file `psr_<date>.json` holds `crr_pct`, `psr_pct` and the list of weightages (`product`, `weight`), with `as_of`, `source` and `sample`.
 
@@ -81,6 +81,6 @@ Test: `guide_mudaraba_profit_distribution`
 
 - The calculation is the one in section 1; a bank whose approved method differs (for example weightages by deposit tenor within a product, or a profit equalisation reserve) must not use this tool as it stands.
 - 365 days a year is used for the indicative rate.
-- With "a daily balance", each row is one account's balance for one day, and the "Day of the balance" column says which day. Every product must have a balance for every day of the period: a missing day stops the run (it is not counted as 0), and so does a row dated outside the period.
+- With "a daily balance", each row is one account's balance for one day, and the "Day of the balance" column says which day. Every product must have a balance for every day of the period: a missing day stops the run (it is not counted as 0), and so does a row dated outside the period. Tick "Count missing days as zero balance" (off by default, kept in the step) to run anyway: the missing days count as 0, and the table lists each product with its zero-filled days ("Zero-filled days: MSB", "3 of 30 day(s) counted as a zero balance").
 - The CRR is a deduction for the reserve requirement from the Mudaraba deposits; the file holds the number the bank applies.
 - The sample file is for trying the tool: its numbers are not any bank's.

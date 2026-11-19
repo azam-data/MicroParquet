@@ -616,18 +616,14 @@ impl MicroParquetApp {
 
 
 
-    /// A flat toolbar button for a command; greyed with the reason when it cannot run. Icon-only
-    /// buttons say what they are in a tooltip.
-    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId, icon_only: bool) -> egui::Response {
+    /// A flat toolbar button for a command, always with its label; greyed with the reason when it cannot run.
+    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId) -> egui::Response {
         let reason = self.command_unavailable(id);
-        let label = if icon_only { "" } else { ui::commands::toolbar_label(id) };
         let btn = ui
-            .add_enabled_ui(reason.is_none(), |ui| theme::flat_button(ui, ui::commands::command_icon(id), label))
+            .add_enabled_ui(reason.is_none(), |ui| theme::flat_button(ui, ui::commands::command_icon(id), ui::commands::toolbar_label(id)))
             .inner;
         let btn = match reason {
-            Some(r) if icon_only => btn.on_disabled_hover_text(format!("{}: {}", ui::commands::toolbar_label(id), r)),
             Some(r) => btn.on_disabled_hover_text(r),
-            None if icon_only => btn.on_hover_text(ui::commands::toolbar_label(id)),
             None => btn,
         };
         if btn.clicked() {

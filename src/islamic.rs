@@ -155,6 +155,9 @@ pub struct MudarabaSpec {
     pub daily: bool,
     /// With `daily`: the column holding the day of each balance (a date, or text as YYYY-MM-DD).
     pub date_col: String,
+    /// With `daily`: a product with no balance on some day of the period counts 0 for those days, and the
+    /// footer lists them. Off (the default): such a product stops the run.
+    pub zero_fill_missing_days: bool,
     pub start: String,
     pub end: String,
     /// The investment income of the period.
@@ -263,13 +266,19 @@ pub fn build_mudaraba(df: &DataFrame, spec: &MudarabaSpec, params: &RuleFile<Psr
     if outside > 0 {
         bail!("Mudaraba: {} row(s) are dated outside the period {} to {} (or have no date) in '{}'. Filter them out or correct the period.", outside, p_start.format("%Y-%m-%d"), p_end.format("%Y-%m-%d"), spec.date_col.trim());
     }
+    // (product, days counted as zero balance) when the owner chose to count missing days as 0
+    let mut zero_filled: Vec<(String, i64)> = Vec::new();
     if spec.daily {
-        let miss: Vec<String> = order.iter().filter_map(|k| {
+        let missing: Vec<(&String, i64)> = order.iter().filter_map(|k| {
             let have = days_seen.get(k).map_or(0, |s| s.len()) as i64;
-            (have < days as i64).then(|| format!("{} ({} of {} days missing)", shown[k], days as i64 - have, days as i64))
+            (have < days as i64).then(|| (k, days as i64 - have))
         }).collect();
+        if spec.zero_fill_missing_days {
+            zero_filled = missing.iter().map(|(k, n)| (shown[*k].clone(), *n)).collect();
+        }
+        let miss: Vec<String> = if spec.zero_fill_missing_days { Vec::new() } else { missing.iter().map(|(k, n)| format!("{} ({} of {} days missing)", shown[*k], n, days as i64)).collect() };
         if !miss.is_empty() {
-            bail!("Mudaraba: daily balances are missing for {}. Every product needs a balance for every day of the period; add the missing days (a missing day is not counted as 0).", miss.join("; "));
+            bail!("Mudaraba: daily balances are missing for {}. Every product needs a balance for every day of the period; add the missing days, or tick \"Count missing days as zero balance\".", miss.join("; "));
         }
     }
     if blank_codes > 0 {
@@ -339,6 +348,9 @@ pub fn build_mudaraba(df: &DataFrame, spec: &MudarabaSpec, params: &RuleFile<Psr
     push("Depositors' share", None, None, Some(depositors), Some(params.data.psr_pct), Some("Pool income \u{d7} the depositors' PSR (the rate column holds the PSR %)".to_string()));
     push("Mudarib share", None, None, Some(mudarib), Some(100.0 - params.data.psr_pct), Some("The rest of the pool income".to_string()));
     push("Period", None, None, None, None, Some(format!("{} to {}, {} day(s)", spec.start.trim(), spec.end.trim(), days as i64)));
+    for (product, n) in &zero_filled {
+        push(&format!("Zero-filled days: {}", product), None, None, None, None, Some(format!("{} of {} day(s) counted as a zero balance", n, days as i64)));
+    }
     push("Parameter file", None, None, None, None, Some(format!("{}, as of {}, source: {}", params.meta.file, params.meta.as_of.format("%Y-%m-%d"), params.meta.source)));
     if params.meta.sample {
         push("Sample parameters", None, None, None, None, Some("The parameter file is marked sample: the weightages and the PSR must be the bank's Shariah Supervisory Committee-approved ones before these figures are used.".to_string()));

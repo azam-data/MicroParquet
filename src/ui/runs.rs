@@ -321,6 +321,7 @@ impl MicroParquetApp {
                 s.balance_col = r.spec.balance_col.clone();
                 s.daily = r.spec.daily;
                 s.date_col = r.spec.date_col.clone();
+                s.zero_fill = r.spec.zero_fill_missing_days;
                 s.start = r.spec.start.clone();
                 s.end = r.spec.end.clone();
                 s.income = format!("{}", r.spec.income);
