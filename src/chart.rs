@@ -2,202 +2,18 @@
 //! aggregation, calculated over the whole tab after its steps (never just the page on screen).
 //! The drawer shows the result; "Open chart data as tab" puts the table in a tab.
 
-use crate::models::{MetricFormatType, MoneyScale};
 use crate::pivot_table::{key_text_expr, BLANK_LABEL};
 use crate::sort_lists::SortOrder;
 use anyhow::{bail, Context, Result};
 use polars::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
 /// The label of the categories (or series) that are not among the top ones.
 pub const OTHER_LABEL: &str = "Other";
 /// At most this many series are drawn (the rest are one series called "Other").
 pub const MAX_SERIES: usize = 8;
-/// The default number of categories before the rest are "Other".
-pub const DEFAULT_TOP_N: usize = 30;
-
-fn default_top_n() -> usize {
-    DEFAULT_TOP_N
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ChartAgg {
-    #[default]
-    Sum,
-    Count,
-    Average,
-    WeightedAvg,
-    Min,
-    Max,
-}
-
-impl ChartAgg {
-    pub fn all() -> &'static [ChartAgg] {
-        &[ChartAgg::Sum, ChartAgg::Count, ChartAgg::Average, ChartAgg::WeightedAvg, ChartAgg::Min, ChartAgg::Max]
-    }
-    pub fn label(&self) -> &'static str {
-        match self {
-            ChartAgg::Sum => "Sum",
-            ChartAgg::Count => "Count",
-            ChartAgg::Average => "Average",
-            ChartAgg::WeightedAvg => "W.Avg",
-            ChartAgg::Min => "Min",
-            ChartAgg::Max => "Max",
-        }
-    }
-    /// The word in the title: "Sum of Balance", "Weighted average of Rate".
-    pub fn title_word(&self) -> &'static str {
-        match self {
-            ChartAgg::Sum => "Sum",
-            ChartAgg::Count => "Count",
-            ChartAgg::Average => "Average",
-            ChartAgg::WeightedAvg => "Weighted average",
-            ChartAgg::Min => "Min",
-            ChartAgg::Max => "Max",
-        }
-    }
-    pub fn needs_value(&self) -> bool {
-        *self != ChartAgg::Count
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ChartKind {
-    #[default]
-    Bar,
-    Line,
-}
-
-/// How the amounts are shown: the value column's own format, or one scale for the chart.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ChartScale {
-    /// The value column's display format (Phase 3).
-    #[default]
-    Follow,
-    Plain,
-    Thousand,
-    Lakh,
-    Million,
-    Crore,
-}
-
-impl ChartScale {
-    pub fn all() -> &'static [ChartScale] {
-        &[ChartScale::Follow, ChartScale::Plain, ChartScale::Thousand, ChartScale::Lakh, ChartScale::Million, ChartScale::Crore]
-    }
-    pub fn label(&self) -> &'static str {
-        match self {
-            ChartScale::Follow => "As in View",
-            ChartScale::Plain => "Plain (BDT)",
-            ChartScale::Thousand => "Thousand",
-            ChartScale::Lakh => "Lakh",
-            ChartScale::Million => "Million",
-            ChartScale::Crore => "Crore",
-        }
-    }
-    /// The scale to divide by; `None` = no division. `Follow` is resolved by the caller.
-    pub fn fixed(&self) -> Option<Option<MoneyScale>> {
-        match self {
-            ChartScale::Follow => None,
-            ChartScale::Plain => Some(None),
-            ChartScale::Thousand => Some(MetricFormatType::BdtThousand.scale()),
-            ChartScale::Lakh => Some(MetricFormatType::BdtLakh.scale()),
-            ChartScale::Million => Some(MetricFormatType::BdtMillion.scale()),
-            ChartScale::Crore => Some(MetricFormatType::BdtCrore.scale()),
-        }
-        .map(|s| s)
-    }
-}
-
-/// What to draw.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(default)]
-pub struct ChartSpec {
-    pub category: String,
-    pub series: Option<String>,
-    pub value: Option<String>,
-    pub weight: Option<String>,
-    pub agg: ChartAgg,
-    pub kind: ChartKind,
-    /// Natural, a custom list or Tenor (U3).
-    pub order: SortOrder,
-    /// "By value": the categories largest first (instead of `order`).
-    pub by_value: bool,
-    pub top_n: usize,
-    pub scale: ChartScale,
-}
-
-impl Default for ChartSpec {
-    fn default() -> Self {
-        Self {
-            category: String::new(),
-            series: None,
-            value: None,
-            weight: None,
-            agg: ChartAgg::Sum,
-            kind: ChartKind::Bar,
-            order: SortOrder::Natural,
-            by_value: false,
-            top_n: default_top_n(),
-            scale: ChartScale::Follow,
-        }
-    }
-}
-
-impl ChartSpec {
-    /// The settings that change the numbers (not the look): when they change the worker recalculates.
-    pub fn calc_key(&self) -> String {
-        format!("{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}", self.category, self.series, self.value, self.weight, self.agg, self.order, self.by_value, self.top_n)
-    }
-}
-
-/// The calculated chart.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ChartData {
-    pub spec: ChartSpec,
-    /// In chart order; "Other" (when there is one) is last.
-    pub categories: Vec<String>,
-    /// One name per series ("" when there is no series), most important first, "Other" last.
-    pub series: Vec<String>,
-    /// `[series][category]`; `None` where the group has no value (no rows, or a rate with weights of both signs).
-    pub values: Vec<Vec<Option<f64>>>,
-    /// Rows behind each value, same shape.
-    pub rows: Vec<Vec<u64>>,
-    /// Every row of the tab (after its steps).
-    pub total_rows: u64,
-    /// Distinct categories in the data, and how many of them are inside "Other".
-    pub distinct_categories: usize,
-    pub folded_categories: usize,
-    pub notes: Vec<String>,
-}
-
-impl ChartData {
-    /// "Sum of Balance by Term Period: all 244,250 rows (Crore)".
-    pub fn title(&self, unit: Option<&str>) -> String {
-        let s = &self.spec;
-        let what = match (&s.value, s.agg) {
-            (_, ChartAgg::Count) | (None, _) => "Count of rows".to_string(),
-            (Some(v), a) => format!("{} of {}", a.title_word(), v),
-        };
-        let by = match &s.series {
-            Some(x) => format!("{} and {}", s.category, x),
-            None => s.category.clone(),
-        };
-        let mut t = format!("{} by {}: all {} rows", what, by, format_count(self.total_rows));
-        if self.folded_categories > 0 {
-            t.push_str(&format!(", top {} of {} categories", self.categories.len().saturating_sub(1), self.distinct_categories));
-        }
-        if let Some(u) = unit.filter(|u| !u.is_empty() && s.agg != ChartAgg::Count) {
-            t.push_str(&format!(" ({})", u));
-        }
-        t
-    }
-}
-
-fn format_count(n: u64) -> String {
-    crate::models::format_with_commas(n as f64, 0)
-}
+pub use crate::charts::data::ChartData;
+pub use crate::charts::spec::{ChartAgg, ChartKind, ChartScale, ChartSpec, DEFAULT_TOP_N};
 
 /// A column the chart can add up: integers, floats and decimals.
 fn is_number(dt: &DataType) -> bool {
@@ -310,8 +126,20 @@ fn numbers(df: &DataFrame, name: &str) -> Result<Vec<Option<f64>>> {
     Ok(df.column(name)?.cast(&DataType::Float64)?.f64()?.into_iter().collect())
 }
 
+/// The categories and series another measure of the same chart kept, so every measure folds the same ones into "Other".
+#[derive(Clone, Debug, Default)]
+pub struct FixedKept {
+    pub categories: Vec<String>,
+    pub series: Vec<String>,
+}
+
 /// Calculates the chart over all rows of `lf`.
 pub fn compute_chart(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    compute_chart_fixed(lf, spec, None)
+}
+
+/// `compute_chart` with the kept categories and series given (the second and later measures of a chart).
+pub fn compute_chart_fixed(lf: LazyFrame, spec: &ChartSpec, fixed: Option<&FixedKept>) -> Result<ChartData> {
     let mut lf = lf;
     let schema = lf.collect_schema().context("Chart: could not read the columns of the tab")?;
     validate_chart(&schema, spec)?;
@@ -340,12 +168,17 @@ pub fn compute_chart(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     }
     .then_with(|| cat_names[a].cmp(&cat_names[b])));
     let keep_n = spec.top_n.max(1);
-    let folded_categories = distinct_categories.saturating_sub(keep_n);
-    let kept: Vec<String> = ranked.iter().take(keep_n).map(|&i| cat_names[i].clone()).collect();
+    let kept: Vec<String> = match fixed {
+        Some(f) => f.categories.clone(),
+        None => ranked.iter().take(keep_n).map(|&i| cat_names[i].clone()).collect(),
+    };
+    let folded_categories = distinct_categories.saturating_sub(kept.len());
     let by_value_of: std::collections::HashMap<String, f64> = ranked.iter().filter_map(|&i| cat_values[i].map(|v| (cat_names[i].clone(), v))).collect();
     let other_cat = if kept.iter().any(|k| k == OTHER_LABEL) { "Other categories".to_string() } else { OTHER_LABEL.to_string() };
 
-    let series_kept: Vec<String> = if spec.series.is_some() {
+    let series_kept: Vec<String> = if let (Some(f), true) = (fixed, spec.series.is_some()) {
+        f.series.clone()
+    } else if spec.series.is_some() {
         let by_series = work
             .clone()
             .group_by([col("__s")])
@@ -430,7 +263,7 @@ pub fn compute_chart(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         values[si][ci] = aa[i];
         rows[si][ci] = nn[i];
     }
-    Ok(ChartData { spec: spec.clone(), categories, series, values, rows, total_rows, distinct_categories, folded_categories, notes })
+    Ok(ChartData { spec: spec.clone(), categories, series, values, rows, total_rows, distinct_categories, folded_categories, notes, kept_categories: kept, kept_series: series_kept, ..ChartData::default() })
 }
 
 /// The chart as a table, for "Open chart data as tab": one row per category and series.

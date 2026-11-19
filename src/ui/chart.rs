@@ -519,7 +519,8 @@ impl MicroParquetApp {
                             .collect();
                         plot_ui.bar_chart(egui_plot::BarChart::new(bars).name(name).element_formatter(Box::new(|bar, _| bar.name.clone())));
                     }
-                    ChartKind::Line => {
+                    // the Phase 6 drawer draws two forms; the other forms are drawn by the Phase 7 renderer (C1)
+                    _ => {
                         let pts: Vec<[f64; 2]> = (0..n).filter_map(|i| d.values[j][i].map(|v| [i as f64, v / divisor])).collect();
                         plot_ui.line(egui_plot::Line::new(egui_plot::PlotPoints::from(pts.clone())).name(name.clone()).width(theme::CHART_LINE_W));
                         plot_ui.points(egui_plot::Points::new(egui_plot::PlotPoints::from(pts)).name(name).radius(theme::CHART_POINT_R));

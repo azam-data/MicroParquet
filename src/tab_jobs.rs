@@ -420,7 +420,7 @@ pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult>
     ctx.check()?;
     let ChartRequest { tab_id, token, source, steps, spec, temp_dir } = req;
     let data = compile_tab_lazy(&source, &steps, &temp_dir)
-        .and_then(|lf| crate::chart::compute_chart(crate::pivot_table::without_total_rows(lf, &steps), &spec))
+        .and_then(|lf| crate::charts::calc::compute(crate::pivot_table::without_total_rows(lf, &steps), &spec))
         .map_err(|e| format!("{:#}", e));
     Ok(ChartResult { tab_id, token, data })
 }

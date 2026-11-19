@@ -96,3 +96,7 @@ mod k4;
 mod l2_pdf;
 #[path = "../phase6/guide.rs"]
 mod guide6;
+
+// Phase 7 tests (tests/phase7/) are compiled into this binary too.
+#[path = "../phase7/c0.rs"]
+mod p7_c0;

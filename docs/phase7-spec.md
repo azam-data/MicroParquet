@@ -331,5 +331,7 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 </report>
 
 <accepted_deviations>
-(none yet)
+- C0: the colour and size literals live in `src/charts/tokens.rs` (library), exposed to the UI as `CHART_*` tokens in `theme.rs`; the HTML and Excel renderers are in the library and cannot read the binary's theme. Both crates pin every hex value in a test.
+- C0: the Phase 6 chart types moved to `src/charts/` and are re-exported from `src/chart.rs`; `ChartKind::Bar` stays the vertical column form (horizontal is a flag).
+- C0: a percentage of a zero total is blank with a note; a waterfall that does not add up, and more than 12 facet values, are refused with a message.
 </accepted_deviations>
