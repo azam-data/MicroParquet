@@ -379,4 +379,6 @@ P1 (details in docs/phase6-progress.md D28–D31):
 P2 (details in docs/phase6-progress.md D32–D36):
 - Sheets are numbered by the exporter ("1_Cover", "2_Gap"); the Cover is one text table including the parameter files with sample flags.
 - A slot with unconvertible values or a missing column is refused; the pack cutoff replaces the cutoff of the tools that have one; Banking gets a last heading "Reports".
+P3 (details in docs/phase6-progress.md D37–D40):
+- Two tabs (variance and commentary); thresholds kept in the tab source and the saved run; rows with a balance but no rate, and blank keys, stop the run; New/Closed keys are always in the commentary.
 </accepted_deviations>

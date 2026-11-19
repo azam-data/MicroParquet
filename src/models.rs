@@ -2207,6 +2207,16 @@ pub enum TabSource {
         spec: Box<crate::irrbb::IrrbbSpec>,
         view: IrrbbView,
     },
+    /// Month-on-month variance (Phase 6 P3): the balances of two months by key, the interest
+    /// effects, and the commentary; `view` says which of the two tables this tab shows.
+    MomVariance {
+        prev_source: Box<TabSource>,
+        prev_steps: Vec<TransformStep>,
+        curr_source: Box<TabSource>,
+        curr_steps: Vec<TransformStep>,
+        spec: crate::mom::MomSpec,
+        view: MomView,
+    },
     /// The CL migration matrix of two months (Phase 4 V2).
     ClMigration {
         prev_source: Box<TabSource>,
@@ -2215,6 +2225,16 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// Which table of the month-on-month run a tab shows.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MomView {
+    /// "MoM variance": a row per key with the changes and the interest effects.
+    #[default]
+    Variance,
+    /// "MoM commentary": one sentence per row.
+    Commentary,
 }
 
 /// Which table of the LCR / NSFR run a tab shows.

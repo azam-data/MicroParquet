@@ -1687,7 +1687,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
             collect_masked_columns(left_source, out);
             collect_masked_columns(right_source, out);
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } | TabSource::MomVariance { prev_source, curr_source, .. } => {
             collect_masked_columns(prev_source, out);
             collect_masked_columns(curr_source, out);
         }
@@ -1707,7 +1707,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::JoinedTabs { left_source, right_source, .. } => {
             source_masks_pii(left_source) || source_masks_pii(right_source)
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } | TabSource::MomVariance { prev_source, curr_source, .. } => {
             source_masks_pii(prev_source) || source_masks_pii(curr_source)
         }
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
@@ -1840,6 +1840,11 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             ..
         }
         | TabSource::ClMigration {
+            prev_source,
+            curr_source,
+            ..
+        }
+        | TabSource::MomVariance {
             prev_source,
             curr_source,
             ..
@@ -2429,6 +2434,15 @@ pub fn compile_tab_lazy(
                 rate_col.as_deref(),
                 cl_status_col.as_deref(),
             )?
+        }
+        TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
+            let prev_lf = compile_tab_lazy(prev_source, prev_steps, temp_dir)?;
+            let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
+            let df = crate::mom::build_mom(prev_lf, curr_lf, spec)?;
+            match view {
+                crate::models::MomView::Variance => df.lazy(),
+                crate::models::MomView::Commentary => crate::mom::commentary_frame(&crate::mom::mom_commentary(&df, spec)?)?.lazy(),
+            }
         }
         TabSource::EclSummary { source, steps, spec } => {
             let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The IFRS 9 summary could not read the table")?;

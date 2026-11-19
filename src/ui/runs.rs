@@ -243,6 +243,22 @@ impl MicroParquetApp {
                 s.pct_of_row = r.spec.pct_of_row;
                 s.balance_basis = r.spec.balance_basis;
             }
+            ToolRun::MomVariance(r) => {
+                self.active_tab = idx[1];
+                self.open_mom();
+                let s = &mut self.mom;
+                s.prev_tab = idx[0];
+                s.curr_tab = idx[1];
+                s.spec = r.spec.clone();
+                s.key1 = r.spec.key_cols.first().cloned().unwrap_or_default();
+                s.key2 = r.spec.key_cols.get(1).cloned().unwrap_or_default();
+                s.bal = r.spec.bal_col.clone();
+                s.rate = r.spec.rate_col.clone().unwrap_or_default();
+                s.count = r.spec.count_col.clone().unwrap_or_default();
+                s.scale = r.spec.scale;
+                s.amount_text = format!("{}", r.spec.material_amount);
+                s.pct_text = format!("{}", r.spec.material_pct);
+            }
             ToolRun::Cl1Summary(r) => {
                 self.active_tab = idx[0];
                 self.open_cl1_summary();

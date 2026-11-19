@@ -1900,3 +1900,82 @@ fn p2_the_pack_builder_fits_builds_a_pack_by_clicks_saves_it_and_runs_it() {
         micro_parquet::rules::set_data_dir_override(None);
     }
 }
+
+// ---- P3: month-on-month variance
+
+fn mom_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    let root = app.paths.root_dir.clone();
+    let cr = 10_000_000.0f64;
+    let month = |rows: &[(&str, f64, f64)]| {
+        DataFrame::new(vec![
+            Series::new("Product".into(), rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+            Series::new("Balance".into(), rows.iter().map(|r| r.1 * cr).collect::<Vec<_>>()),
+            Series::new("Rate".into(), rows.iter().map(|r| r.2).collect::<Vec<_>>()),
+        ])
+        .expect("month")
+    };
+    for (title, df) in [("Sept", month(&[("TD", 1000.0, 8.0), ("SB", 500.0, 3.0)])), ("Oct", month(&[("TD", 1100.0, 8.5), ("SB", 450.0, 3.0)]))] {
+        let src = parquet_source(&root, &title.to_lowercase(), df);
+        app.create_tab_from_source(title.into(), src, vec![], HashMap::new());
+        settle(&mut app);
+    }
+    let (ctx, input) = screen(ppp, w, h);
+    let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+    rig.draw(4);
+    rig
+}
+
+fn mom_title() -> String {
+    format!("{}  MoM variance", theme::ph::CHART_LINE)
+}
+
+#[test]
+fn p3_the_mom_dialog_fits_builds_the_variance_and_the_commentary_tabs_by_clicks_and_shows_the_text_box() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = mom_rig("p6p3a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::MomVariance);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::MomVariance, "{what}: Banking > Treasury & ALM > MoM variance / Ctrl+K opens it");
+        rig.draw(8);
+        let r = assert_dialog_fits(&rig.ctx, &mom_title(), &what);
+        let m = &rig.app.mom;
+        assert_eq!((m.prev_tab, m.curr_tab, m.key1.as_str(), m.bal.as_str()), (0, 1, "Product", "Balance"), "{what}: the open tabs and the columns are chosen");
+        assert_eq!((m.amount_text.as_str(), m.pct_text.as_str()), ("50", "5"), "{what}: the defaults of the owner's spec");
+        for (n, rect) in m.rects.combos.iter().chain(m.rects.fields.iter()).chain(m.rects.buttons.iter()) {
+            assert!(inside(*rect, r.window), "{what}: '{n}' {rect:?} is inside the dialog {:?}", r.window);
+        }
+        // a bad amount disables Build and says why
+        rig.app.mom.amount_text = "lots".into();
+        rig.draw(6);
+        let build = rig.app.mom.rects.buttons.iter().find(|(n, _)| n == "Build MoM variance").map(|(_, r)| *r).expect("button");
+        rig.click_later(build.center());
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: nothing is built with a bad amount");
+        rig.app.mom.amount_text = "50".into();
+        rig.draw(6);
+        let build = rig.app.mom.rects.buttons.iter().find(|(n, _)| n == "Build MoM variance").map(|(_, r)| *r).expect("button");
+        pclick(&mut rig, build);
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 4, "{what}: two tabs: {}", rig.app.status_message);
+        assert_eq!(rig.app.active_tab, 3, "{what}: the variance table is the active one");
+        let t = &rig.app.tabs[3];
+        assert_eq!(t.title, "MoM variance");
+        assert_eq!(t.total_rows, 2, "{what}");
+        assert_eq!(rig.app.tabs[2].title, "MoM commentary");
+        // the commentary tab has the text box above its table, and Copy works by a click
+        rig.app.active_tab = 2;
+        rig.draw(8);
+        let (text, shown, total) = rig.app.mom_commentary_text_for_test().expect("a commentary tab");
+        assert_eq!((shown, total), (3, 3), "{what}");
+        assert!(text.starts_with("TD rose by 100.00 Cr (10.00%) to 1,100.00 Cr; rate up 50 bp to 8.50%.\nSB fell by 50.00 Cr (10.00%) to 450.00 Cr; rate unchanged at 3.00%."), "{what}: {text}");
+        let (bx, copy) = (rig.app.mom.rects.text_box.expect("box"), rig.app.mom.rects.copy.expect("copy"));
+        assert!(inside(bx, rig.ctx.screen_rect()) && inside(copy, rig.ctx.screen_rect()), "{what}");
+        assert!(bx.width() > 300.0, "{what}: the box is wide enough to read: {bx:?}");
+        pclick(&mut rig, copy);
+        assert_eq!(rig.app.status_message, "Copied the commentary.", "{what}");
+        // the variance tab has no box
+        rig.app.active_tab = 3;
+        rig.draw(4);
+        assert!(rig.app.mom_commentary_text_for_test().is_none(), "{what}");
+    }
+}

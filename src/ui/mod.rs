@@ -21,6 +21,7 @@ pub mod irrbb;
 pub mod jobs;
 pub mod join;
 pub mod limits;
+pub mod mom;
 pub mod clean_breaks;
 pub mod classify_overdue;
 pub mod cl1_summary;
@@ -113,6 +114,7 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),
             ActiveToolModal::Packs => self.render_packs_modal(ctx, cols),
             ActiveToolModal::SaveRun => self.render_save_run_modal(ctx, cols),
             ActiveToolModal::SavedRuns => self.render_saved_runs_modal(ctx, cols),

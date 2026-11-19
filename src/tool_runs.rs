@@ -128,6 +128,16 @@ pub struct ClMigrationRun {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
+pub struct MomVarianceRun {
+    pub prev: String,
+    pub curr: String,
+    pub spec: crate::mom::MomSpec,
+    /// Which of the run's two tables this tab shows.
+    pub view: MomView,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
 pub struct Cl1SummaryRun {
     pub source: String,
     pub spec: Cl1Spec,
@@ -215,6 +225,7 @@ pub enum ToolRun {
     IrrbbLadder(IrrbbLadderRun),
     IrrbbSix(IrrbbSixRun),
     ClMigration(ClMigrationRun),
+    MomVariance(MomVarianceRun),
     Cl1Summary(Cl1SummaryRun),
     Liquidity(LiquidityRun),
     EclSummary(EclSummaryRun),
@@ -266,6 +277,7 @@ impl ToolRun {
             ToolRun::IrrbbLadder(_) => "IRRBB cash-flow ladder",
             ToolRun::IrrbbSix(_) => "IRRBB (six scenarios)",
             ToolRun::ClMigration(_) => "CL migration",
+            ToolRun::MomVariance(_) => "MoM variance",
             ToolRun::Cl1Summary(_) => "CL-1 summary",
             ToolRun::Liquidity(_) => "LCR/NSFR",
             ToolRun::EclSummary(_) => "IFRS 9 ECL summary",
@@ -292,6 +304,10 @@ impl ToolRun {
             ToolRun::IrrbbLadder(r) => r.inputs.iter_mut().for_each(|i| f(&mut i.source)),
             ToolRun::IrrbbSix(r) => r.inputs.iter_mut().for_each(|i| f(&mut i.source)),
             ToolRun::ClMigration(r) => {
+                f(&mut r.prev);
+                f(&mut r.curr);
+            }
+            ToolRun::MomVariance(r) => {
                 f(&mut r.prev);
                 f(&mut r.curr);
             }
@@ -382,6 +398,10 @@ impl ToolRun {
             TabSource::ClMigration { prev_source, prev_steps, curr_source, curr_steps, spec } => {
                 no_extra_steps(tab_steps)?;
                 Ok(ToolRun::ClMigration(ClMigrationRun { prev: name(prev_source, prev_steps)?, curr: name(curr_source, curr_steps)?, spec: spec.clone() }))
+            }
+            TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
+                no_extra_steps(tab_steps)?;
+                Ok(ToolRun::MomVariance(MomVarianceRun { prev: name(prev_source, prev_steps)?, curr: name(curr_source, curr_steps)?, spec: spec.clone(), view: *view }))
             }
             TabSource::Cl1Summary { source, steps, spec, .. } => {
                 no_extra_steps(tab_steps)?;
@@ -502,6 +522,18 @@ impl ToolRun {
                     format!("CL migration ({} to {})", r.prev, r.curr),
                     TabSource::ClMigration { prev_source: Box::new(p.source), prev_steps: p.steps, curr_source: Box::new(c.source), curr_steps: c.steps, spec: r.spec.clone() },
                 )])
+            }
+            ToolRun::MomVariance(r) => {
+                if r.prev == r.curr {
+                    bail!("The saved MoM variance names the same tab for both months ('{}'). Choose two different tabs.", r.prev);
+                }
+                let (p, c) = (tab(&r.prev)?, tab(&r.curr)?);
+                r.spec.check()?;
+                let title = match r.view {
+                    MomView::Variance => "MoM variance",
+                    MomView::Commentary => "MoM commentary",
+                };
+                Ok(vec![(title.to_string(), TabSource::MomVariance { prev_source: Box::new(p.source), prev_steps: p.steps, curr_source: Box::new(c.source), curr_steps: c.steps, spec: r.spec.clone(), view: r.view })])
             }
             ToolRun::Cl1Summary(r) => {
                 let t = tab(&r.source)?;

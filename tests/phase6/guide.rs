@@ -9,7 +9,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 5] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs"];
+pub const P6_GUIDE_TOOLS: [&str; 6] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs", "mom-variance"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -159,4 +159,45 @@ fn guide_report_packs() {
     let sheet = &r.sheets[0].df;
     assert_eq!(strings(sheet, "PROD"), vec![Some("SB".to_string()), Some("TD".to_string()), Some("Grand total".to_string())]);
     check_guide("report-packs", "guide_report_packs", &[md(&deposits, &["ACNO", "BAL:2", "PROD"]), md(&input_rows, &["Name", "Detail", "Rows"]), md(sheet, &["PROD", "Sum of BAL:2"])]);
+}
+
+#[test]
+fn guide_mom_variance() {
+    use micro_parquet::mom::*;
+    const CR: f64 = 10_000_000.0;
+    let month = |rows: &[(&str, f64, f64)]| {
+        DataFrame::new(vec![
+            Series::new("Product".into(), rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+            Series::new("Balance".into(), rows.iter().map(|r| r.1 * CR).collect::<Vec<_>>()),
+            Series::new("Rate".into(), rows.iter().map(|r| r.2).collect::<Vec<_>>()),
+        ])
+        .expect("month")
+    };
+    let (prev, curr) = (month(&[("TD", 1000.0, 8.0), ("SB", 500.0, 3.0)]), month(&[("TD", 1100.0, 8.5), ("SB", 450.0, 3.0)]));
+    let spec = MomSpec { key_cols: vec!["Product".into()], bal_col: "Balance".into(), rate_col: Some("Rate".into()), ..Default::default() };
+    let var = build_mom(prev.clone().lazy(), curr.clone().lazy(), &spec).expect("variance");
+    // the guide shows the money in Crore, as the sheet does
+    let mut in_cr = var.clone();
+    for c in ["Change", "Annual interest change", "Volume effect", "Rate effect", "Mix effect"] {
+        let v: Vec<Option<f64>> = floats(&var, c).into_iter().map(|x| x.map(|y| y / CR)).collect();
+        in_cr.with_column(Series::new(c.into(), v)).expect("scaled");
+    }
+    let lines = mom_commentary(&var, &spec).expect("commentary");
+    let text = commentary_frame(&lines).expect("text");
+    let cr = |df: &DataFrame| {
+        let mut d = df.clone();
+        let v: Vec<Option<f64>> = floats(df, "Balance").into_iter().map(|x| x.map(|y| y / CR)).collect();
+        d.with_column(Series::new("Balance".into(), v)).expect("scaled");
+        d
+    };
+    check_guide(
+        "mom-variance",
+        "guide_mom_variance",
+        &[
+            md(&cr(&prev), &["Product", "Balance:2", "Rate:2"]),
+            md(&cr(&curr), &["Product", "Balance:2", "Rate:2"]),
+            md(&in_cr, &["Product", "Change:2", "Change %:2", "Rate change (bp):2", "Annual interest change:2", "Volume effect:2", "Rate effect:2", "Mix effect:2"]),
+            md(&text, &["Commentary"]),
+        ],
+    );
 }

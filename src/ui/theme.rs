@@ -121,6 +121,8 @@ pub const TAB_SCROLL_FRAMES: u8 = 4;
 pub const HALF: f32 = 0.5;
 /// The most decimal places a report can show.
 pub const MAX_DECIMALS: usize = 6;
+/// The most lines the commentary box shows before it scrolls.
+pub const MOM_BOX_ROWS: usize = 8;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
 /// The right panel can be dragged as wide as this share of the window, and its left edge reacts
@@ -291,7 +293,7 @@ pub const BEHAVIOUR_SOURCE_W: f32 = 320.0;
 pub const MIGRATION_COMBO_W: f32 = 200.0;
 pub const PIVOT_CHIP_MENU_W: f32 = 24.0;
 /// The height of a row of the Banking and Export menus (compact, so the Banking menu fits a 686 pt window).
-pub const MENU_ROW_H: f32 = 26.0;
+pub const MENU_ROW_H: f32 = 24.0;
 /// The combo boxes of the LCR / NSFR dialog: the map file and the balance sign.
 pub const LIQ_MAP_COMBO_W: f32 = 225.0;
 pub const LIQ_SIGN_COMBO_W: f32 = 270.0;

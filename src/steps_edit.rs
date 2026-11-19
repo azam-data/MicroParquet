@@ -190,7 +190,7 @@ pub fn source_files(source: &TabSource) -> Vec<&Path> {
             v.extend(source_files(right_source));
             v
         }
-        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } => {
+        TabSource::PeriodReconcile { prev_source, curr_source, .. } | TabSource::ClMigration { prev_source, curr_source, .. } | TabSource::MomVariance { prev_source, curr_source, .. } => {
             let mut v = source_files(prev_source);
             v.extend(source_files(curr_source));
             v
