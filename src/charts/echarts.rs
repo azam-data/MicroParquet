@@ -10,7 +10,7 @@
 //! The HTML never loads anything: ECharts itself is compiled in (`assets/vendor/echarts/`), and the page
 //! has no `http`/`https` address of its own.
 
-use super::axis::{nice_ticks, value_text, ValueKind};
+use super::axis::{padded_floor, diverging_text, nice_ticks, value_text, ValueKind};
 use super::colours::ColourMap;
 use super::data::{heatmap, sequential_step, waterfall_from_data, waterfall_stack, ChartData, StepKind};
 use super::layout::{base_word, chart_title, scaled, value_kind, LayoutOpts, DONUT_REFUSAL};
@@ -71,7 +71,7 @@ fn hx(c: u32) -> String {
 
 /// Text for a literal ECharts label: the template syntax `{...}` is not meant here.
 fn lit(s: &str) -> String {
-    t::delta(s).replace('{', "(").replace('}', ")")
+    t::tidy(s).replace('{', "(").replace('}', ")")
 }
 
 fn fmt_tok(vk: ValueKind, opts: &LayoutOpts) -> String {
@@ -123,7 +123,7 @@ impl<'a> Env<'a> {
             }
         };
         match &self.data.spec.highlight {
-            Some(h) if !h.is_empty() && n > 1 && name != h => self.ink.deemph,
+            Some(h) if !h.is_empty() && n > 1 && name != h => self.cm.dimmed(name, self.dark),
             _ => base,
         }
     }
@@ -171,7 +171,7 @@ impl<'a> Env<'a> {
 }
 
 fn lit_tip(s: &str) -> String {
-    t::delta(s)
+    t::tidy(s)
 }
 
 fn plans<'a>(env: &Env<'a>) -> Vec<Plan<'a>> {
@@ -251,7 +251,7 @@ fn foot_lines(data: &ChartData) -> Vec<String> {
     if parts.is_empty() {
         return Vec::new();
     }
-    let text = t::delta(&parts.join(" \u{b7} "));
+    let text = t::tidy(&parts.join(" \u{b7} "));
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
     for w in text.split_whitespace() {
@@ -352,6 +352,9 @@ fn value_axis(env: &Env, grid: usize, lo: f64, hi: f64, vk: ValueKind, horizonta
     if include_zero {
         a = a.min(0.0);
         b = b.max(0.0);
+    }
+    if env.data.spec.pad_axis_below && !include_zero {
+        a = padded_floor(a, b, 6);
     }
     let (ticks, step) = nice_ticks(a, b, 6);
     json!({
@@ -462,6 +465,8 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
     }
     let totals: Vec<f64> = (0..n_cat).map(|c| p.series.iter().filter_map(|s| s.vals.get(c).copied().flatten()).sum()).collect();
     let label_all = p.series.len() == 1 && n_cat <= LABEL_MAX_BARS;
+    // one series with negative values is a diverging bar: its labels always carry a sign
+    let diverging = p.series.len() == 1 && p.series[0].vals.iter().flatten().any(|v| *v < 0.0);
     let mut out = Vec::new();
     for (si, s) in p.series.iter().enumerate() {
         let data: Vec<Value> = (0..n_cat)
@@ -476,6 +481,10 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 } else {
                     item["itemStyle"] = json!({"borderRadius": 0});
                 }
+                let status = spec.bar_status.iter().find(|x| p.series.len() == 1 && x.category == p.cats.get(c).cloned().unwrap_or_default());
+                if let Some(st) = status {
+                    item["itemStyle"]["color"] = json!(hx(st.status.hex()));
+                }
                 if label_all {
                     let pos = match (horizontal, raw >= 0.0) {
                         (false, true) => "top",
@@ -483,7 +492,12 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                         (true, true) => "right",
                         (true, false) => "left",
                     };
-                    item["label"] = label_style(env, &env.txt(p.vk, raw, false), pos);
+                    let mut text = if diverging { diverging_text(scaled(raw, p.vk, env.opts), p.vk, env.opts.decimals) } else { env.txt(p.vk, raw, false) };
+                    if let Some(st) = status {
+                        // the status in words with an icon, after the value: the colour is never alone
+                        text = format!("{}  \u{25b2} {}", text, st.label);
+                    }
+                    item["label"] = label_style(env, &text, pos);
                 }
                 item
             })
@@ -533,12 +547,15 @@ fn line_series(env: &Env, p: &Plan, grid: usize) -> Vec<Value> {
     let percent = spec.stack == Stack::Percent && p.series.len() > 1;
     let n_cat = p.cats.len();
     let markers = n_cat <= MARKERS_MAX_POINTS;
-    let direct = p.series.len() <= 4 && !stacked;
+    let highlighted = spec.highlight.as_ref().filter(|h| !h.is_empty()).cloned();
+    let direct = (p.series.len() <= 4 || (highlighted.is_some() && p.series.len() > 1)) && !stacked;
     let surface = hx(env.ink.surface);
     let totals: Vec<f64> = (0..n_cat).map(|c| p.series.iter().filter_map(|s| s.vals.get(c).copied().flatten()).sum()).collect();
     let mut out = Vec::new();
     for (si, s) in p.series.iter().enumerate() {
         let last = (0..n_cat).rev().find(|c| s.vals.get(*c).copied().flatten().is_some());
+        // with a highlighted series only that one carries markers (older curves are plain lines)
+        let markers = markers && highlighted.as_ref().map_or(true, |h| *h == s.name);
         let data: Vec<Value> = (0..n_cat)
             .map(|c| {
                 let v = s.vals.get(c).copied().flatten();
@@ -567,11 +584,17 @@ fn line_series(env: &Env, p: &Plan, grid: usize) -> Vec<Value> {
         if spec.stepped {
             ser["step"] = json!("end");
         }
+        if direct && p.series.len() > 1 {
+            // end labels of nearby curves are nudged apart vertically
+            ser["labelLayout"] = json!({"moveOverlap": "shiftY"});
+        }
         if area {
             ser["areaStyle"] = json!({"color": hx(s.colour), "opacity": num(if stacked { t::STACKED_AREA_OPACITY } else { t::AREA_OPACITY } as f64)});
         }
         if stacked {
             ser["stack"] = json!(format!("total{}", grid));
+            // no point markers on the layers of a stacked area: a point shows on hover only
+            ser["showSymbol"] = json!(false);
         }
         if si == 0 {
             let (ml, ma) = mark_lines(env, p, false);
@@ -837,20 +860,38 @@ fn waterfall_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
         })
         .collect();
     let part = |vals: &[f64], name: &str, tip: bool| -> Value {
+        let is_pos = name == "Increase";
         let items: Vec<Value> = steps
             .iter()
             .enumerate()
-            .map(|(i, s)| json!({"value": sc(vals[i]), "tip": tips[i], "itemStyle": {"color": hx(colour_of(s.kind, s.value)), "borderRadius": 0, "borderColor": surface, "borderWidth": 1}}))
+            .map(|(i, s)| {
+                // a part with nothing in it is left out, so the 2 px minimum height never draws a stub for a zero
+                let empty = vals[i] == 0.0 && !(is_pos && stack.neg[i] == 0.0);
+                if empty {
+                    return Value::Null;
+                }
+                json!({"value": sc(vals[i]), "tip": tips[i], "itemStyle": {"color": hx(colour_of(s.kind, s.value)), "borderRadius": 0, "borderColor": surface, "borderWidth": 1}})
+            })
             .collect();
-        let mut o = json!({"name": name, "type": "bar", "stack": "wf", "data": items, "barMaxWidth": t::BAR_MAX_PX});
+        let mut o = json!({"name": name, "type": "bar", "stack": "wf", "data": items, "barMaxWidth": t::BAR_MAX_PX, "barMinHeight": t::MIN_BAR_PX, "z": 2});
         if !tip {
             o["tooltip"] = json!({"show": false});
         }
         o
     };
     let base_items: Vec<Value> = stack.base.iter().map(|v| json!({"value": sc(*v)})).collect();
-    let base = json!({"name": "Base", "type": "bar", "stack": "wf", "data": base_items, "barMaxWidth": t::BAR_MAX_PX, "silent": true,
+    let mut base = json!({"name": "Base", "type": "bar", "stack": "wf", "data": base_items, "barMaxWidth": t::BAR_MAX_PX, "silent": true, "z": 1,
                       "itemStyle": {"color": "transparent", "borderColor": "transparent", "borderWidth": 0}, "tooltip": {"show": false}});
+    // connectors, as in the app: a 1 px line at each step's level to the next bar (drawn under the bars)
+    let connectors: Vec<Value> = steps
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| json!([{"coord": [i, sc(w[0].level)]}, {"coord": [i + 1, sc(w[0].level)]}]))
+        .collect();
+    if !connectors.is_empty() {
+        base["markLine"] = json!({"silent": true, "symbol": "none", "animation": false, "z": 1, "label": {"show": false},
+                                  "lineStyle": {"color": hx(env.ink.baseline), "width": t::GRID_PX, "type": "solid"}, "data": connectors});
+    }
     // every step is labelled: a hidden line at the bar's tip carries the text
     let label_items: Vec<Value> = steps
         .iter()
@@ -888,7 +929,7 @@ fn heat_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
             let n = h.counts.get(ri).and_then(|x| x.get(ci)).copied().unwrap_or(0);
             let step = if n == 0 { 0 } else { sequential_step(v, lo, hi) };
             let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, 1) } else { value_text(scaled(v, vk, env.opts), vk, env.opts.decimals, false) };
-            let white = step >= t::SEQUENTIAL_WHITE_TEXT_FROM;
+            let white = t::sequential_text_white(step, env.dark);
             let mut tip = if data.spec.series.is_some() { format!("{}: {}\n{}: {}", data.spec.series.clone().unwrap_or_default(), r, data.spec.category, c) } else { format!("{}: {}", data.spec.category, c) };
             tip.push_str(&format!("\n{}: {}\n{} rows", data.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string()), if vk == ValueKind::Percent { format!("{}%", crate::models::format_with_commas(v, 2)) } else { value_text(scaled(v, vk, env.opts), vk, env.opts.decimals, false) }, crate::models::format_with_commas(n as f64, 0)));
             if vk == ValueKind::Percent {
@@ -896,7 +937,7 @@ fn heat_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
             }
             items.push(json!({
                 "value": [ci, ri, num(v)], "tip": lit_tip(&tip),
-                "itemStyle": {"color": hx(t::SEQUENTIAL[step]), "borderColor": hx(ink.surface), "borderWidth": 1, "borderRadius": t::HEAT_RADIUS_PX},
+                "itemStyle": {"color": hx(t::sequential_colour(step, env.dark)), "borderColor": hx(ink.surface), "borderWidth": 1, "borderRadius": t::HEAT_RADIUS_PX},
                 "label": {"show": true, "formatter": lit(&text), "color": if white { "#ffffff".to_string() } else { hx(t::INK_LIGHT.ink) }, "fontFamily": t::FONT_HTML, "fontSize": t::DATA_LABEL_PT}
             }));
         }
@@ -1164,8 +1205,24 @@ fn build_one(data: &ChartData, opts: &LayoutOpts, dark: bool) -> Result<(Value, 
     finish(o, spec, height)
 }
 
+/// Every text in the option gets the true minus sign (a hyphen before a number is a minus); the
+/// "@..." names of the page's formatter functions are left as they are.
+fn tidy_strings(v: &mut Value) {
+    match v {
+        Value::String(s) => {
+            if !s.starts_with('@') {
+                *s = t::minus(s);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(tidy_strings),
+        Value::Object(m) => m.values_mut().for_each(tidy_strings),
+        _ => {}
+    }
+}
+
 fn finish(o: Map<String, Value>, spec: &ChartSpec, height: f64) -> Result<(Value, f64)> {
     let mut option = Value::Object(o);
+    tidy_strings(&mut option);
     if let Some(adv) = validate_advanced(&spec.advanced_json)? {
         deep_merge(&mut option, &adv);
     }
@@ -1177,7 +1234,7 @@ fn finish(o: Map<String, Value>, spec: &ChartSpec, height: f64) -> Result<(Value
 pub fn chart_pair(data: &ChartData, opts: &LayoutOpts) -> Result<ChartOut> {
     let (light, h) = build_one(data, opts, false)?;
     let (dark, _) = build_one(data, opts, true)?;
-    Ok(ChartOut { title: t::delta(&chart_title(data)), light, dark, height: h.ceil() as u32, table: table_html(data, opts) })
+    Ok(ChartOut { title: t::tidy(&chart_title(data)), light, dark, height: h.ceil() as u32, table: table_html(data, opts) })
 }
 
 // -------------------------------------------------------------------------------- advanced options
@@ -1234,7 +1291,7 @@ pub fn table_html(data: &ChartData, opts: &LayoutOpts) -> String {
     let fmt = |v: Option<f64>, vk: ValueKind| v.map(|x| value_text(scaled(x, vk, opts), vk, opts.decimals, false)).unwrap_or_default();
     match spec.kind {
         ChartKind::Scatter | ChartKind::Bubble => {
-            s.push_str(&format!("<thead><tr><th>{}</th><th>{}</th>{}{}</tr></thead><tbody>", esc(&t::delta(&spec.category)), esc(&t::delta(&data.measure_names.first().cloned().unwrap_or_default())), if spec.kind == ChartKind::Bubble { "<th>Size</th>" } else { "" }, if spec.series.is_some() { "<th>Series</th>" } else { "" }));
+            s.push_str(&format!("<thead><tr><th>{}</th><th>{}</th>{}{}</tr></thead><tbody>", esc(&t::tidy(&spec.category)), esc(&t::tidy(&data.measure_names.first().cloned().unwrap_or_default())), if spec.kind == ChartKind::Bubble { "<th>Size</th>" } else { "" }, if spec.series.is_some() { "<th>Series</th>" } else { "" }));
             for p in data.points.iter().take(2000) {
                 s.push_str(&format!("<tr><td>{}</td><td>{}</td>", value_text(p.x, ValueKind::Plain, opts.decimals, false), value_text(p.y, ValueKind::Plain, opts.decimals, false)));
                 if spec.kind == ChartKind::Bubble {
@@ -1248,7 +1305,7 @@ pub fn table_html(data: &ChartData, opts: &LayoutOpts) -> String {
             s.push_str("</tbody>");
         }
         ChartKind::BoxPlot => {
-            s.push_str(&format!("<thead><tr><th>{}</th><th>Rows</th><th>Min</th><th>Q1</th><th>Median</th><th>Q3</th><th>Max</th></tr></thead><tbody>", esc(&t::delta(&spec.category))));
+            s.push_str(&format!("<thead><tr><th>{}</th><th>Rows</th><th>Min</th><th>Q1</th><th>Median</th><th>Q3</th><th>Max</th></tr></thead><tbody>", esc(&t::tidy(&spec.category))));
             for b in &data.boxes {
                 s.push_str(&format!("<tr><td>{}</td><td>{}</td>", esc(&b.category), crate::models::format_with_commas(b.n as f64, 0)));
                 for v in [b.min, b.q1, b.median, b.q3, b.max] {
@@ -1265,11 +1322,11 @@ pub fn table_html(data: &ChartData, opts: &LayoutOpts) -> String {
                     heads.push((m, si));
                 }
             }
-            s.push_str(&format!("<thead><tr><th>{}</th>", esc(&t::delta(if spec.category.is_empty() { "Category" } else { &spec.category }))));
+            s.push_str(&format!("<thead><tr><th>{}</th>", esc(&t::tidy(if spec.category.is_empty() { "Category" } else { &spec.category }))));
             for (m, si) in &heads {
                 let name = data.measure_names.get(*m).cloned().unwrap_or_default();
                 let ser = data.series.get(*si).cloned().unwrap_or_default();
-                s.push_str(&format!("<th>{}</th>", esc(&t::delta(&if ser.is_empty() { name } else { format!("{} \u{b7} {}", ser, name) }))));
+                s.push_str(&format!("<th>{}</th>", esc(&t::tidy(&if ser.is_empty() { name } else { format!("{} \u{b7} {}", ser, name) }))));
             }
             s.push_str("<th>Rows</th></tr></thead><tbody>");
             for (i, c) in data.categories.iter().enumerate() {
@@ -1362,7 +1419,10 @@ const PAGE_JS: &str = r#"
     '@fmt:axis:percent': function(v){ return trimmed(v, 4) + '%'; },
     '@tip': function(p){ var d = p.data && p.data.tip; return d ? esc(d).replace(/\n/g,'<br>') : esc(p.name || ''); },
     '@axistip': function(ps){ if (!ps || !ps.length) return ''; var out = '<b>' + esc(ps[0].axisValueLabel || ps[0].name || '') + '</b>';
-      ps.forEach(function(p){ if (p.data && p.data.tip) out += '<br>' + p.marker + esc(p.data.tip).replace(/\n/g,'<br>'); }); return out; }
+      var head = String(ps[0].axisValueLabel || ps[0].name || '');
+      ps.forEach(function(p){ if (p.data && p.data.tip) { var lines = String(p.data.tip).split('\n');
+        if (lines.length > 1 && lines[0].slice(-(head.length + 2)) === ': ' + head) lines.shift();
+        out += '<br>' + p.marker + esc(lines.join('\n')).replace(/\n/g,'<br>'); } }); return out; }
   };
   function fn(tok){
     if (FN[tok]) return FN[tok];
@@ -1483,7 +1543,7 @@ pub fn chart_book_html(title: &str, date: &str, items: &[BookItem]) -> Result<St
     }
     let mut charts = Vec::new();
     for (i, it) in items.iter().enumerate() {
-        let out = chart_pair(it.data, &it.opts).map_err(|e| anyhow::anyhow!("Chart {} of the book ({}): {}", i + 1, t::delta(&chart_title(it.data)), e))?;
+        let out = chart_pair(it.data, &it.opts).map_err(|e| anyhow::anyhow!("Chart {} of the book ({}): {}", i + 1, t::tidy(&chart_title(it.data)), e))?;
         let name = file_stem(&out.title);
         charts.push(PageChart { out, name });
     }

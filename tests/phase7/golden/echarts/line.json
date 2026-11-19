@@ -65,23 +65,23 @@
       "connectNulls": false,
       "data": [
         {
-          "tip": "Term deposits: 600.00 (1 rows)",
+          "tip": "Term deposits: 600.00 (1 row)",
           "value": 600.0
         },
         {
-          "tip": "Term deposits: 617.00 (1 rows)",
+          "tip": "Term deposits: 617.00 (1 row)",
           "value": 617.0
         },
         {
-          "tip": "Term deposits: 634.00 (1 rows)",
+          "tip": "Term deposits: 634.00 (1 row)",
           "value": 634.0
         },
         {
-          "tip": "Term deposits: 651.00 (1 rows)",
+          "tip": "Term deposits: 651.00 (1 row)",
           "value": 651.0
         },
         {
-          "tip": "Term deposits: 668.00 (1 rows)",
+          "tip": "Term deposits: 668.00 (1 row)",
           "value": 668.0
         },
         {
@@ -93,7 +93,7 @@
             "position": "right",
             "show": true
           },
-          "tip": "Term deposits: 685.00 (1 rows)",
+          "tip": "Term deposits: 685.00 (1 row)",
           "value": 685.0
         }
       ],
@@ -104,6 +104,9 @@
         "borderColor": "#fcfcfb",
         "borderWidth": 2.0,
         "color": "#2a78d6"
+      },
+      "labelLayout": {
+        "moveOverlap": "shiftY"
       },
       "lineStyle": {
         "cap": "round",
@@ -123,23 +126,23 @@
       "connectNulls": false,
       "data": [
         {
-          "tip": "Savings: 300.00 (1 rows)",
+          "tip": "Savings: 300.00 (1 row)",
           "value": 300.0
         },
         {
-          "tip": "Savings: 317.00 (1 rows)",
+          "tip": "Savings: 317.00 (1 row)",
           "value": 317.0
         },
         {
-          "tip": "Savings: 334.00 (1 rows)",
+          "tip": "Savings: 334.00 (1 row)",
           "value": 334.0
         },
         {
-          "tip": "Savings: 351.00 (1 rows)",
+          "tip": "Savings: 351.00 (1 row)",
           "value": 351.0
         },
         {
-          "tip": "Savings: 368.00 (1 rows)",
+          "tip": "Savings: 368.00 (1 row)",
           "value": 368.0
         },
         {
@@ -151,7 +154,7 @@
             "position": "right",
             "show": true
           },
-          "tip": "Savings: 385.00 (1 rows)",
+          "tip": "Savings: 385.00 (1 row)",
           "value": 385.0
         }
       ],
@@ -162,6 +165,9 @@
         "borderColor": "#fcfcfb",
         "borderWidth": 2.0,
         "color": "#eb6834"
+      },
+      "labelLayout": {
+        "moveOverlap": "shiftY"
       },
       "lineStyle": {
         "cap": "round",
@@ -181,23 +187,23 @@
       "connectNulls": false,
       "data": [
         {
-          "tip": "Current: 200.00 (1 rows)",
+          "tip": "Current: 200.00 (1 row)",
           "value": 200.0
         },
         {
-          "tip": "Current: 217.00 (1 rows)",
+          "tip": "Current: 217.00 (1 row)",
           "value": 217.0
         },
         {
-          "tip": "Current: 234.00 (1 rows)",
+          "tip": "Current: 234.00 (1 row)",
           "value": 234.0
         },
         {
-          "tip": "Current: 251.00 (1 rows)",
+          "tip": "Current: 251.00 (1 row)",
           "value": 251.0
         },
         {
-          "tip": "Current: 268.00 (1 rows)",
+          "tip": "Current: 268.00 (1 row)",
           "value": 268.0
         },
         {
@@ -209,7 +215,7 @@
             "position": "right",
             "show": true
           },
-          "tip": "Current: 285.00 (1 rows)",
+          "tip": "Current: 285.00 (1 row)",
           "value": 285.0
         }
       ],
@@ -220,6 +226,9 @@
         "borderColor": "#fcfcfb",
         "borderWidth": 2.0,
         "color": "#1baf7a"
+      },
+      "labelLayout": {
+        "moveOverlap": "shiftY"
       },
       "lineStyle": {
         "cap": "round",
@@ -239,23 +248,23 @@
       "connectNulls": false,
       "data": [
         {
-          "tip": "Foreign: 150.00 (1 rows)",
+          "tip": "Foreign: 150.00 (1 row)",
           "value": 150.0
         },
         {
-          "tip": "Foreign: 167.00 (1 rows)",
+          "tip": "Foreign: 167.00 (1 row)",
           "value": 167.0
         },
         {
-          "tip": "Foreign: 184.00 (1 rows)",
+          "tip": "Foreign: 184.00 (1 row)",
           "value": 184.0
         },
         {
-          "tip": "Foreign: 201.00 (1 rows)",
+          "tip": "Foreign: 201.00 (1 row)",
           "value": 201.0
         },
         {
-          "tip": "Foreign: 218.00 (1 rows)",
+          "tip": "Foreign: 218.00 (1 row)",
           "value": 218.0
         },
         {
@@ -267,7 +276,7 @@
             "position": "right",
             "show": true
           },
-          "tip": "Foreign: 235.00 (1 rows)",
+          "tip": "Foreign: 235.00 (1 row)",
           "value": 235.0
         }
       ],
@@ -278,6 +287,9 @@
         "borderColor": "#fcfcfb",
         "borderWidth": 2.0,
         "color": "#eda100"
+      },
+      "labelLayout": {
+        "moveOverlap": "shiftY"
       },
       "lineStyle": {
         "cap": "round",

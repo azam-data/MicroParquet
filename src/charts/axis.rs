@@ -66,6 +66,12 @@ pub fn nice_ticks(lo: f64, hi: f64, max_ticks: usize) -> (Vec<f64>, f64) {
 }
 
 /// Removes floating noise: 0.30000000000000004 -> 0.3.
+/// The lowest value of an axis that starts one tick below the data's minimum.
+pub fn padded_floor(lo: f64, hi: f64, max_ticks: usize) -> f64 {
+    let (_, step) = nice_ticks(lo, hi, max_ticks);
+    lo - step
+}
+
 fn clean(v: f64, step: f64) -> f64 {
     let d = decimals_for_step(step) + 2;
     let f = 10f64.powi(d as i32);
@@ -111,23 +117,43 @@ pub fn tick_text(v: f64, step: f64, kind: ValueKind) -> String {
     with_minus(s, MINUS)
 }
 
-/// A data label: `decimals` for amounts, one for percentages, none for counts; a plain hyphen for a
-/// negative (as in the reference renderings). `signed` writes a "+" before a positive (waterfall steps).
+/// A data label: `decimals` for amounts, one for percentages, none for counts, with the true minus
+/// sign for a negative. `signed` writes a "+" before a positive (waterfall steps).
 pub fn value_text(v: f64, kind: ValueKind, decimals: usize, signed: bool) -> String {
     let d = match kind {
         ValueKind::Amount | ValueKind::Plain => decimals,
         ValueKind::Percent => 1,
         ValueKind::Count => 0,
     };
+    signed_body(v, kind, d, signed)
+}
+
+/// The label on a diverging bar: always a sign, and two decimals for a percentage ("+4.82%",
+/// "−10.50%"); an amount keeps the chart's decimals.
+pub fn diverging_text(v: f64, kind: ValueKind, decimals: usize) -> String {
+    let d = match kind {
+        ValueKind::Percent => 2,
+        ValueKind::Count => 0,
+        _ => decimals,
+    };
+    signed_body(v, kind, d, true)
+}
+
+fn signed_body(v: f64, kind: ValueKind, d: usize, signed: bool) -> String {
     let v = if v == 0.0 { 0.0 } else { v };
     let mut s = format_with_commas(v, d);
+    // a negative that rounds to nothing is a plain zero, not "−0.00"
+    if s.starts_with('-') && !s.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        s.remove(0);
+    }
+    let positive = !s.starts_with('-') && s.chars().any(|c| c.is_ascii_digit() && c != '0');
     if kind == ValueKind::Percent {
         s.push('%');
     }
-    if signed && v > 0.0 {
+    if signed && positive {
         s.insert(0, '+');
     }
-    s
+    with_minus(s, MINUS)
 }
 
 /// Text cut to `max_w` (as measured by `width`) with an ellipsis; the whole text when it fits.

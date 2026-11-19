@@ -10,7 +10,7 @@
 //! panel, stacked) and the heatmap (the data range under a 3-colour conditional format). Sankey and
 //! treemap are not written as charts; their data is, with a note on the sheet.
 
-use super::axis::ValueKind;
+use super::axis::{decimals_for_step, nice_ticks, ValueKind};
 use super::colours::ColourMap;
 use super::data::{heatmap, waterfall_from_data, waterfall_stack, ChartData, StepKind};
 use super::layout::{chart_title, scaled, value_kind, LayoutOpts, DONUT_REFUSAL};
@@ -18,7 +18,7 @@ use super::spec::{ChartKind, ChartSpec, Stack, Transform};
 use super::tokens as t;
 use anyhow::{bail, Result};
 use rust_xlsxwriter::{
-    Chart, ChartAxisLabelPosition, ChartAxisTickType, ChartErrorBars, ChartErrorBarsType, ChartFont, ChartFormat, ChartLegendPosition, ChartLine, ChartMarker, ChartMarkerType, ChartPoint, ChartRange, ChartSolidFill, ChartType,
+    Chart, ChartAxisLabelPosition, ChartDataLabel, ChartAxisTickType, ChartErrorBars, ChartErrorBarsType, ChartFont, ChartFormat, ChartLegendPosition, ChartLine, ChartMarker, ChartMarkerType, ChartPoint, ChartRange, ChartSolidFill, ChartType,
     Color, ConditionalFormat3ColorScale, ConditionalFormatCell, ConditionalFormatCellRule, Format, Workbook, Worksheet,
 };
 use std::path::Path;
@@ -117,7 +117,7 @@ impl<'a> Cx<'a> {
             },
         };
         match &self.data.spec.highlight {
-            Some(h) if !h.is_empty() && n > 1 && name != h => self.ink.deemph,
+            Some(h) if !h.is_empty() && n > 1 && name != h => self.cm.dimmed(name, false),
             _ => base,
         }
     }
@@ -130,18 +130,18 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn axis_num_format(vk: ValueKind) -> &'static str {
+    fn axis_num_format(vk: ValueKind) -> String {
         match vk {
-            ValueKind::Percent => "0\"%\"",
-            ValueKind::Count => "#,##0",
-            _ => "#,##0.##",
+            ValueKind::Percent => num_code(0, true, false),
+            ValueKind::Count => num_code(0, false, true),
+            _ => num_code(0, false, true),
         }
     }
 
     /// The shared look of every chart: Segoe UI, the title, no border, light solid gridlines.
     fn style(&self, chart: &mut Chart, title: &str, vk: ValueKind, horizontal: bool, legend: bool) {
         let ink = self.ink;
-        chart.title().set_name(&t::delta(title)).set_font(&font(t::TITLE_PT as f64 - 1.0, true, ink.ink));
+        chart.title().set_name(&t::tidy(title)).set_font(&font(t::TITLE_PT as f64 - 1.0, true, ink.ink));
         chart.chart_area().set_format(ChartFormat::new().set_no_border().set_solid_fill(&ChartSolidFill::new().set_color(rgb(ink.surface))));
         chart.plot_area().set_format(ChartFormat::new().set_no_border().set_no_fill());
         let tick_font = font(t::TICK_PT as f64, false, ink.ink2);
@@ -159,7 +159,7 @@ impl<'a> Cx<'a> {
         {
             let ax = if horizontal { chart.x_axis() } else { chart.y_axis() };
             ax.set_font(&font(t::TICK_PT as f64, false, ink.muted)).set_major_gridlines(true).set_major_gridlines_line(&grid).set_major_tick_type(ChartAxisTickType::None);
-            ax.set_num_format(Self::axis_num_format(vk));
+            ax.set_num_format(&Self::axis_num_format(vk));
             ax.set_format(ChartFormat::new().set_no_line());
         }
         if legend {
@@ -172,10 +172,10 @@ impl<'a> Cx<'a> {
     fn write_title_block(&self, ws: &mut Worksheet, title: &str) -> Result<u32> {
         let sub = subtitle_of(self.data, self.opts);
         let mut row = 0u32;
-        ws.write_string_with_format(row, 0, t::delta(title), &Format::new().set_bold().set_font_name(t::FONT_EXCEL).set_font_size(t::TITLE_PT as f64)).map_err(x)?;
+        ws.write_string_with_format(row, 0, t::tidy(title), &Format::new().set_bold().set_font_name(t::FONT_EXCEL).set_font_size(t::TITLE_PT as f64)).map_err(x)?;
         row += 1;
         if !sub.is_empty() {
-            ws.write_string_with_format(row, 0, t::delta(&sub), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::SUBTITLE_PT as f64).set_font_color(rgb(self.ink.ink2))).map_err(x)?;
+            ws.write_string_with_format(row, 0, t::tidy(&sub), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::SUBTITLE_PT as f64).set_font_color(rgb(self.ink.ink2))).map_err(x)?;
             row += 1;
         }
         let mut foot: Vec<String> = Vec::new();
@@ -184,7 +184,7 @@ impl<'a> Cx<'a> {
         }
         foot.extend(self.data.notes.iter().cloned());
         if !foot.is_empty() {
-            ws.write_string_with_format(row, 0, t::delta(&foot.join(" \u{b7} ")), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::FOOTNOTE_PT as f64).set_font_color(rgb(self.ink.muted))).map_err(x)?;
+            ws.write_string_with_format(row, 0, t::tidy(&foot.join(" \u{b7} ")), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::FOOTNOTE_PT as f64).set_font_color(rgb(self.ink.muted))).map_err(x)?;
             row += 1;
         }
         Ok(row + 1)
@@ -225,9 +225,9 @@ pub fn add_chart_sheet(wb: &mut Workbook, sheet_name: &str, data: &ChartData, op
         ink,
         cm,
         sheet: name.clone(),
-        num: Format::new().set_num_format(format!("#,##0.{}", "0".repeat(opts.decimals))).set_font_name(t::FONT_EXCEL),
-        num_pct: Format::new().set_num_format("0.0\"%\"").set_font_name(t::FONT_EXCEL),
-        int: Format::new().set_num_format("#,##0").set_font_name(t::FONT_EXCEL),
+        num: Format::new().set_num_format(num_code(opts.decimals, false, true)).set_font_name(t::FONT_EXCEL),
+        num_pct: Format::new().set_num_format(num_code(1, true, false)).set_font_name(t::FONT_EXCEL),
+        int: Format::new().set_num_format(num_code(0, false, true)).set_font_name(t::FONT_EXCEL),
         head: Format::new().set_bold().set_font_name(t::FONT_EXCEL).set_border_bottom(rust_xlsxwriter::FormatBorder::Thin),
         text: Format::new().set_font_name(t::FONT_EXCEL),
     };
@@ -294,7 +294,7 @@ fn write_grid_table(cx: &Cx, ws: &mut Worksheet, top: u32, d: &ChartData, label:
     let mut cols = Vec::new();
     let header = top;
     let cat_head = if spec.category.is_empty() { "Category".to_string() } else { spec.category.clone() };
-    ws.write_string_with_format(header, 0, t::delta(&cat_head), &cx.head).map_err(x)?;
+    ws.write_string_with_format(header, 0, t::tidy(&cat_head), &cx.head).map_err(x)?;
     let mut c: u16 = 1;
     for m in 0..d.measure_count() {
         for s in 0..d.series.len().max(1) {
@@ -305,7 +305,7 @@ fn write_grid_table(cx: &Cx, ws: &mut Worksheet, top: u32, d: &ChartData, label:
                 (false, true, _) => format!("{} \u{b7} {}", ser, mname),
                 (false, false, _) => ser.clone(),
             };
-            ws.write_string_with_format(header, c, t::delta(&head), &cx.head).map_err(x)?;
+            ws.write_string_with_format(header, c, t::tidy(&head), &cx.head).map_err(x)?;
             cols.push((m, s, c));
             c += 1;
         }
@@ -314,7 +314,7 @@ fn write_grid_table(cx: &Cx, ws: &mut Worksheet, top: u32, d: &ChartData, label:
     let first = header + 1;
     for (i, cat) in d.categories.iter().enumerate() {
         let r = first + i as u32;
-        ws.write_string_with_format(r, 0, t::delta(cat), &cx.text).map_err(x)?;
+        ws.write_string_with_format(r, 0, t::tidy(cat), &cx.text).map_err(x)?;
         for (m, s, col) in &cols {
             let vk = value_kind(spec, *m);
             let v = d.measure(*m).and_then(|md| md.values.get(*s).and_then(|row| row.get(i)).copied().flatten());
@@ -360,6 +360,21 @@ fn chart_type_for(kind: ChartKind, stack: Stack, horizontal: bool, many: bool) -
     }
 }
 
+/// An Excel number format with the true minus sign for negatives: `#,##0.00;"−"#,##0.00`.
+/// `commas` writes thousands separators; `pct` appends a literal "%" (the value is already a percentage).
+fn num_code(decimals: usize, pct: bool, commas: bool) -> String {
+    let body = format!("{}{}", if commas { "#,##0" } else { "0" }, if decimals > 0 { format!(".{}", "0".repeat(decimals)) } else { String::new() });
+    let tail = if pct { "\"%\"" } else { "" };
+    format!("{body}{tail};\"\u{2212}\"{body}{tail}")
+}
+
+/// A diverging bar's data-label format: always signed ("+4.82%", "−10.50%").
+fn signed_code(decimals: usize, pct: bool) -> String {
+    let body = format!("#,##0{}", if decimals > 0 { format!(".{}", "0".repeat(decimals)) } else { String::new() });
+    let tail = if pct { "\"%\"" } else { "" };
+    format!("\"+\"{body}{tail};\"\u{2212}\"{body}{tail};{body}{tail}")
+}
+
 fn series_format(kind: ChartKind, colour: u32, surface: u32) -> (ChartFormat, Option<ChartMarker>) {
     match kind {
         ChartKind::Line => {
@@ -403,9 +418,34 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
         let series = chart.add_series();
         series.set_categories(&range(sheet, g.first_row, 0, g.last_row, 0)).set_values(&range(sheet, g.first_row, *col, g.last_row, *col));
         let series_name = if name.is_empty() { d.measure_names.get(measure).cloned().unwrap_or_default() } else { name };
-        series.set_name(&t::delta(&series_name)).set_format(&mut fmt);
+        series.set_name(&t::tidy(&series_name)).set_format(&mut fmt);
+        let older_curve = spec.highlight.as_ref().map_or(false, |h| !h.is_empty() && n_series > 1 && *h != d.series.get(*s).cloned().unwrap_or_default());
         if let Some(mk) = marker {
-            series.set_marker(&mk);
+            if older_curve {
+                // only the highlighted curve carries markers
+                let mut none = ChartMarker::new();
+                none.set_none();
+                series.set_marker(&none);
+            } else {
+                series.set_marker(&mk);
+            }
+        }
+        if kind == ChartKind::Bar && n_series == 1 && !spec.bar_status.is_empty() {
+            // a status bar is filled in its status colour (the words are in the "Status" column)
+            let points: Vec<ChartPoint> = d
+                .categories
+                .iter()
+                .map(|cat| {
+                    match spec.bar_status.iter().find(|b| b.category == *cat) {
+                        Some(st) => ChartPoint::new().set_format(&mut fill(st.status.hex())),
+                        None => ChartPoint::new(),
+                    }
+                })
+                .collect();
+            series.set_points(&points);
+        }
+        if let Some(dl) = diverging_labels(cx, d, measure, kind) {
+            series.set_data_label(&dl);
         }
         if matches!(ct, ChartType::Column | ChartType::Bar) {
             series.set_gap(80);
@@ -418,6 +458,80 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
     Ok(chart)
 }
 
+/// The value axis the app draws: the same round ticks over the same range (a line is not forced to
+/// start at zero; a bar or area is), written as the chart's fixed minimum, maximum and step.
+fn set_value_axis(cx: &Cx, chart: &mut Chart, g: &GridCols, kind: ChartKind, measure: usize, d: &ChartData, extras: &[f64]) {
+    let spec = &d.spec;
+    let vk = value_kind(spec, measure);
+    let stacked = matches!(kind, ChartKind::Bar | ChartKind::Area) && d.series.len() > 1 && matches!(spec.stack, Stack::Stacked | Stack::Percent);
+    let horizontal = spec.horizontal && kind == ChartKind::Bar;
+    let cols: Vec<usize> = g.cols.iter().filter(|(m, _, _)| *m == measure).map(|(_, s, _)| *s).collect();
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    if stacked && spec.stack == Stack::Percent {
+        lo = 0.0;
+        hi = 100.0;
+    } else if stacked {
+        for i in 0..d.categories.len() {
+            let (mut pos, mut neg) = (0.0, 0.0);
+            for s in &cols {
+                if let Some(v) = d.measure(measure).and_then(|md| md.values.get(*s).and_then(|r| r.get(i)).copied().flatten()) {
+                    let v = scaled(v, vk, cx.opts);
+                    if v >= 0.0 { pos += v } else { neg += v }
+                }
+            }
+            hi = hi.max(pos);
+            lo = lo.min(neg);
+        }
+    } else {
+        for s in &cols {
+            for i in 0..d.categories.len() {
+                if let Some(v) = d.measure(measure).and_then(|md| md.values.get(*s).and_then(|r| r.get(i)).copied().flatten()) {
+                    let v = scaled(v, vk, cx.opts);
+                    lo = lo.min(v);
+                    hi = hi.max(v);
+                }
+            }
+        }
+    }
+    for e in extras {
+        let e = scaled(*e, vk, cx.opts);
+        lo = lo.min(e);
+        hi = hi.max(e);
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return;
+    }
+    if matches!(kind, ChartKind::Bar | ChartKind::Area | ChartKind::Histogram) {
+        lo = lo.min(0.0);
+        hi = hi.max(0.0);
+    }
+    if spec.pad_axis_below && kind == ChartKind::Line {
+        lo = super::axis::padded_floor(lo, hi, 6);
+    }
+    let (ticks, step) = nice_ticks(lo, hi, 6);
+    let (Some(first), Some(last)) = (ticks.first(), ticks.last()) else { return };
+    let ax = if horizontal { chart.x_axis() } else { chart.y_axis() };
+    ax.set_min(*first).set_max(*last).set_major_unit(step);
+    ax.set_num_format(&num_code(decimals_for_step(step), vk == ValueKind::Percent, true));
+}
+
+/// Data labels on a diverging bar (one series with negative values, 12 bars or fewer): always signed.
+fn diverging_labels(cx: &Cx, d: &ChartData, measure: usize, kind: ChartKind) -> Option<ChartDataLabel> {
+    let spec = &d.spec;
+    if kind != ChartKind::Bar || d.series.len() > 1 {
+        return None;
+    }
+    let has_neg = d.measure(measure).map_or(false, |md| md.values.iter().flatten().flatten().any(|v| *v < 0.0));
+    if !has_neg || d.categories.len() > 12 {
+        return None;
+    }
+    let vk = value_kind(spec, measure);
+    let code = signed_code(if vk == ValueKind::Percent { 2 } else { cx.opts.decimals }, vk == ValueKind::Percent);
+    let mut label = ChartDataLabel::new();
+    label.show_value().set_num_format(&code).set_font(&font(t::DATA_LABEL_PT as f64, false, cx.ink.ink));
+    Some(label)
+}
+
 fn grid_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usize> {
     let d = cx.data;
     let spec = &d.spec;
@@ -426,9 +540,10 @@ fn grid_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usiz
         // small multiples: the table and the chart of each facet, one under the other
         let mut row = top;
         for f in &d.facets {
-            ws.write_string_with_format(row, 0, t::delta(&f.name), &cx.head).map_err(x)?;
+            ws.write_string_with_format(row, 0, t::tidy(&f.name), &cx.head).map_err(x)?;
             let (g, end) = write_grid_table(cx, ws, row + 1, &f.data, "facet")?;
             let mut chart = cartesian_chart(cx, &g, spec.kind, 0, &format!("{}: {}", title, f.name), &f.data)?;
+            set_value_axis(cx, &mut chart, &g, spec.kind, 0, &f.data, &[]);
             ws.insert_chart(row, end.next_col + 1, &chart).map_err(x)?;
             let _ = &mut chart;
             charts += 1;
@@ -460,7 +575,11 @@ fn grid_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usiz
         let mut chart = cartesian_chart(cx, &g, *kind, *mi, &heading, d)?;
         add_reference_lines(cx, ws, &g, &end, &mut chart, *mi, *kind)?;
         let free = end.next_col + spec.ref_lines.len() as u16;
-        add_limit_ticks(cx, ws, &g, &end, &mut chart, panel_no, *mi, *kind, free)?;
+        let free = add_limit_ticks(cx, ws, &g, &end, &mut chart, panel_no, *mi, *kind, free)?;
+        add_bar_status(cx, ws, &g, panel_no, *kind, free)?;
+        let mut extras: Vec<f64> = spec.ref_lines.iter().filter(|r| r.panel == (*mi).min(spec.measures.len().saturating_sub(1)).min(*mi)).map(|r| r.value).collect();
+        extras.extend(spec.limit_ticks.iter().filter(|l| l.panel == panel_no).map(|l| l.value));
+        set_value_axis(cx, &mut chart, &g, *kind, *mi, d, &extras);
         panel_no += 1;
         ws.insert_chart(row, end.next_col + 1, &chart).map_err(x)?;
         charts += 1;
@@ -481,18 +600,36 @@ fn add_reference_lines(cx: &Cx, ws: &mut Worksheet, g: &GridCols, end: &GridEnd,
     for (k, r) in lines.iter().enumerate() {
         let col = end.next_col + k as u16;
         let label = if r.label.is_empty() { r.status.label().to_string() } else { r.label.clone() };
-        ws.write_string_with_format(g.header_row, col, t::delta(&label), &cx.head).map_err(x)?;
+        ws.write_string_with_format(g.header_row, col, t::tidy(&label), &cx.head).map_err(x)?;
         for i in g.first_row..=g.last_row {
             ws.write_number_with_format(i, col, scaled(r.value, vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
         }
         let s = line_chart.add_series();
-        s.set_categories(&range(&cx.sheet, g.first_row, 0, g.last_row, 0)).set_values(&range(&cx.sheet, g.first_row, col, g.last_row, col)).set_name(&t::delta(&label));
+        s.set_categories(&range(&cx.sheet, g.first_row, 0, g.last_row, 0)).set_values(&range(&cx.sheet, g.first_row, col, g.last_row, col)).set_name(&t::tidy(&label));
         s.set_format(&mut line_fmt(r.status.hex(), t::REFERENCE_LINE_PX as f64));
         let mut mk = ChartMarker::new();
         mk.set_none();
         s.set_marker(&mk);
     }
     chart.combine(&line_chart);
+    Ok(())
+}
+
+/// Bars in a status colour: the bar is filled in the status colour and a "Status" column says it in words
+/// (the colour is never alone).
+fn add_bar_status(cx: &Cx, ws: &mut Worksheet, g: &GridCols, panel: usize, kind: ChartKind, col: u16) -> Result<()> {
+    let d = cx.data;
+    let spec = &d.spec;
+    if spec.bar_status.is_empty() || kind != ChartKind::Bar || panel != 0 || d.series.len() > 1 {
+        return Ok(());
+    }
+    ws.write_string_with_format(g.header_row, col, "Status", &cx.head).map_err(x)?;
+    ws.set_column_width(col, 16).map_err(x)?;
+    for (i, cat) in d.categories.iter().enumerate() {
+        if let Some(st) = spec.bar_status.iter().find(|b| b.category == *cat) {
+            ws.write_string_with_format(g.first_row + i as u32, col, t::tidy(&st.label), &cx.text).map_err(x)?;
+        }
+    }
     Ok(())
 }
 
@@ -513,7 +650,7 @@ fn add_limit_ticks(cx: &Cx, ws: &mut Worksheet, g: &GridCols, end: &GridEnd, cha
             let r = g.first_row + i as u32;
             ws.write_number_with_format(r, col, scaled(lt.value, vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
             if !lt.breach.is_empty() {
-                ws.write_string_with_format(r, col + 1, t::delta(&lt.breach), &cx.text).map_err(x)?;
+                ws.write_string_with_format(r, col + 1, t::tidy(&lt.breach), &cx.text).map_err(x)?;
             }
         }
     }
@@ -542,12 +679,12 @@ fn waterfall_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result
     let st = waterfall_stack(&steps);
     let heads = [&d.spec.category as &str, "Value", "Base (no fill)", "Above zero", "Below zero"];
     for (c, h) in heads.iter().enumerate() {
-        ws.write_string_with_format(top, c as u16, t::delta(if h.is_empty() { "Step" } else { h }), &cx.head).map_err(x)?;
+        ws.write_string_with_format(top, c as u16, t::tidy(if h.is_empty() { "Step" } else { h }), &cx.head).map_err(x)?;
     }
     let first = top + 1;
     for (i, s) in steps.iter().enumerate() {
         let r = first + i as u32;
-        ws.write_string_with_format(r, 0, t::delta(&s.label), &cx.text).map_err(x)?;
+        ws.write_string_with_format(r, 0, t::tidy(&s.label), &cx.text).map_err(x)?;
         ws.write_number_with_format(r, 1, scaled(s.value, vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
         ws.write_number_with_format(r, 2, scaled(st.base[i], vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
         ws.write_number_with_format(r, 3, scaled(st.pos[i], vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
@@ -591,12 +728,12 @@ fn heat_sheet(cx: &Cx, ws: &mut Worksheet, top: u32) -> Result<()> {
     let d = cx.data;
     let h = heatmap(d, Transform::None);
     let vk = value_kind(&d.spec, 0);
-    ws.write_string_with_format(top, 0, t::delta(if d.spec.series.is_some() { d.spec.series.as_deref().unwrap_or("") } else { "" }), &cx.head).map_err(x)?;
+    ws.write_string_with_format(top, 0, t::tidy(if d.spec.series.is_some() { d.spec.series.as_deref().unwrap_or("") } else { "" }), &cx.head).map_err(x)?;
     for (c, name) in h.cols.iter().enumerate() {
-        ws.write_string_with_format(top, 1 + c as u16, t::delta(name), &cx.head).map_err(x)?;
+        ws.write_string_with_format(top, 1 + c as u16, t::tidy(name), &cx.head).map_err(x)?;
     }
     for (r, name) in h.rows.iter().enumerate() {
-        ws.write_string_with_format(top + 1 + r as u32, 0, t::delta(name), &cx.text).map_err(x)?;
+        ws.write_string_with_format(top + 1 + r as u32, 0, t::tidy(name), &cx.text).map_err(x)?;
         for c in 0..h.cols.len() {
             // every row × column pair is a cell; a pair with no data is 0
             let v = h.cells.get(r).and_then(|row| row.get(c)).copied().flatten().unwrap_or(0.0);
@@ -636,16 +773,16 @@ fn scatter_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<(
     }
     heads.push("Series".to_string());
     for (c, h) in heads.iter().enumerate() {
-        ws.write_string_with_format(top, c as u16, t::delta(h), &cx.head).map_err(x)?;
+        ws.write_string_with_format(top, c as u16, t::tidy(h), &cx.head).map_err(x)?;
     }
     let n_series = d.series.len().max(1);
     let mut chart = Chart::new(ChartType::Scatter);
     cx.style(&mut chart, title, ValueKind::Plain, false, n_series > 1);
     {
         let xax = chart.x_axis();
-        xax.set_major_gridlines(false).set_name(&t::delta(&spec.category));
+        xax.set_major_gridlines(false).set_name(&t::tidy(&spec.category));
         let yax = chart.y_axis();
-        yax.set_name(&t::delta(&ycol));
+        yax.set_name(&t::tidy(&ycol));
     }
     let mut row = top + 1;
     for si in 0..n_series {
@@ -664,7 +801,7 @@ fn scatter_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<(
                 }
                 c = 3;
             }
-            ws.write_string_with_format(row, c, t::delta(d.series.get(si).map(String::as_str).unwrap_or("")), &cx.text).map_err(x)?;
+            ws.write_string_with_format(row, c, t::tidy(d.series.get(si).map(String::as_str).unwrap_or("")), &cx.text).map_err(x)?;
             row += 1;
         }
         let name = d.series.get(si).cloned().unwrap_or_default();
@@ -676,7 +813,7 @@ fn scatter_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<(
         let s = chart.add_series();
         s.set_categories(&range(&cx.sheet, start, 0, row - 1, 0)).set_values(&range(&cx.sheet, start, 1, row - 1, 1)).set_marker(&mk).set_format(ChartFormat::new().set_no_line());
         if !name.is_empty() {
-            s.set_name(&t::delta(&name));
+            s.set_name(&t::tidy(&name));
         }
     }
     ws.set_column_width(0, 18).map_err(x)?;
@@ -711,12 +848,12 @@ fn box_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usize
     let d = cx.data;
     let heads = [&d.spec.category as &str, "Rows", "Min", "Q1", "Median", "Q3", "Max", "Lower whisker", "Upper whisker", "Base (no fill)", "Q1 to median", "Median to Q3", "Down to lower whisker", "Up to upper whisker"];
     for (c, h) in heads.iter().enumerate() {
-        ws.write_string_with_format(top, c as u16, t::delta(if h.is_empty() { "Category" } else { h }), &cx.head).map_err(x)?;
+        ws.write_string_with_format(top, c as u16, t::tidy(if h.is_empty() { "Category" } else { h }), &cx.head).map_err(x)?;
     }
     let first = top + 1;
     for (i, b) in d.boxes.iter().enumerate() {
         let r = first + i as u32;
-        ws.write_string_with_format(r, 0, t::delta(&b.category), &cx.text).map_err(x)?;
+        ws.write_string_with_format(r, 0, t::tidy(&b.category), &cx.text).map_err(x)?;
         ws.write_number_with_format(r, 1, b.n as f64, &cx.int).map_err(x)?;
         let vals = [b.min, b.q1, b.median, b.q3, b.max, b.low_whisker, b.high_whisker, b.q1, b.median - b.q1, b.q3 - b.median, b.q1 - b.low_whisker, b.high_whisker - b.q3];
         for (k, v) in vals.iter().enumerate() {
@@ -768,18 +905,18 @@ fn donut_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usi
     if parts.iter().any(|(_, v)| *v < 0.0) {
         bail!("A donut cannot show negative values. Use a bar chart.");
     }
-    ws.write_string_with_format(top, 0, t::delta(if d.spec.category.is_empty() { "Category" } else { &d.spec.category }), &cx.head).map_err(x)?;
-    ws.write_string_with_format(top, 1, t::delta(&d.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string())), &cx.head).map_err(x)?;
+    ws.write_string_with_format(top, 0, t::tidy(if d.spec.category.is_empty() { "Category" } else { &d.spec.category }), &cx.head).map_err(x)?;
+    ws.write_string_with_format(top, 1, t::tidy(&d.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string())), &cx.head).map_err(x)?;
     let first = top + 1;
     for (i, (c, v)) in parts.iter().enumerate() {
-        ws.write_string_with_format(first + i as u32, 0, t::delta(c), &cx.text).map_err(x)?;
+        ws.write_string_with_format(first + i as u32, 0, t::tidy(c), &cx.text).map_err(x)?;
         ws.write_number_with_format(first + i as u32, 1, scaled(*v, vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
     }
     let last = first + parts.len() as u32 - 1;
     ws.set_column_width(0, 24).map_err(x)?;
     ws.set_column_width(1, 16).map_err(x)?;
     let mut chart = Chart::new(ChartType::Doughnut);
-    chart.title().set_name(&t::delta(title)).set_font(&font(t::TITLE_PT as f64 - 1.0, true, cx.ink.ink));
+    chart.title().set_name(&t::tidy(title)).set_font(&font(t::TITLE_PT as f64 - 1.0, true, cx.ink.ink));
     chart.chart_area().set_format(ChartFormat::new().set_no_border().set_solid_fill(&ChartSolidFill::new().set_color(rgb(cx.ink.surface))));
     chart.plot_area().set_format(ChartFormat::new().set_no_border().set_no_fill());
     chart.legend().set_position(ChartLegendPosition::Right).set_font(&font(t::LABEL_PT as f64, false, cx.ink.ink2));

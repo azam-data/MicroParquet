@@ -53,6 +53,29 @@ pub const SEQUENTIAL: [u32; 13] =
 /// Heatmap cell text is white from this step (0-based: step 7 is `#3987e5`) and darker, ink below.
 pub const SEQUENTIAL_WHITE_TEXT_FROM: usize = 6;
 
+/// The sequential step for a value's rank (0 = the lowest value, 12 = the highest) in each theme.
+/// Light: low is the lightest step, high the darkest. Dark: low is the darkest step (nearest the
+/// surface), high the lightest, so the eye still goes to the large values.
+pub fn sequential_index(rank: usize, dark: bool) -> usize {
+    let top = SEQUENTIAL.len() - 1;
+    let r = rank.min(top);
+    if dark {
+        top - r
+    } else {
+        r
+    }
+}
+
+/// The fill colour of a rank in a theme.
+pub fn sequential_colour(rank: usize, dark: bool) -> u32 {
+    SEQUENTIAL[sequential_index(rank, dark)]
+}
+
+/// Whether the cell text on that fill is white (the fill's step is 7 or darker), in either theme.
+pub fn sequential_text_white(rank: usize, dark: bool) -> bool {
+    sequential_index(rank, dark) >= SEQUENTIAL_WHITE_TEXT_FROM
+}
+
 /// Diverging: positive is blue, negative is red; the zero or midpoint is grey, never a hue.
 pub const DIVERGING_POSITIVE: u32 = 0x2a78d6;
 pub const DIVERGING_NEGATIVE: u32 = 0xe34948;
@@ -98,6 +121,8 @@ pub const AREA_OPACITY: f32 = 0.10;
 /// The fill of a stacked area layer (a 2 px line of the full colour runs along its top).
 pub const STACKED_AREA_OPACITY: f32 = 0.35;
 pub const GRID_PX: f32 = 1.0;
+/// Every bar and waterfall step is at least this tall, so a small value is still a visible mark.
+pub const MIN_BAR_PX: f32 = 2.0;
 pub const REFERENCE_LINE_PX: f32 = 1.5;
 /// Heatmap cell corner radius and the surface gap between cells (owner decision, Session A review).
 pub const HEAT_RADIUS_PX: f32 = 2.0;
@@ -139,6 +164,64 @@ pub fn delta(text: &str) -> String {
             out.push('\u{394}');
             out.push_str(&rest[1..]);
             i += 4;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The true minus sign (U+2212) for a hyphen written before a number: "-10.5%" becomes "−10.5%".
+/// A hyphen inside a word or between digits ("Mar-24", "2024-01-31") is left alone.
+pub fn minus(text: &str) -> String {
+    if !text.contains('-') {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 2);
+    for (i, &c) in chars.iter().enumerate() {
+        let next_digit = chars.get(i + 1).map_or(false, |n| n.is_ascii_digit() || (*n == '.' && chars.get(i + 2).map_or(false, |d| d.is_ascii_digit())));
+        let prev_word = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+        if c == '-' && next_digit && !prev_word {
+            out.push('\u{2212}');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The first hyphen written before a digit that should be a true minus, if any (for tests).
+pub fn find_hyphen_minus(text: &str) -> Option<String> {
+    let m = minus(text);
+    if m == text {
+        return None;
+    }
+    let pos = text.chars().zip(m.chars()).position(|(a, b)| a != b)?;
+    let lo = pos.saturating_sub(12);
+    Some(text.chars().skip(lo).take(30).collect())
+}
+
+/// Every chart string goes through this: the delta sign for "dEVE"/"dNII" and the true minus sign.
+pub fn tidy(text: &str) -> String {
+    singular_row(&minus(&delta(text)))
+}
+
+/// "1 rows" is "1 row"; every other count keeps "rows".
+fn singular_row(text: &str) -> String {
+    if !text.contains("1 rows") {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let pat: Vec<char> = "1 rows".chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let hit = chars[i..].starts_with(&pat) && (i == 0 || !(chars[i - 1].is_ascii_digit() || chars[i - 1] == ',' || chars[i - 1] == '.'));
+        if hit {
+            out.push_str("1 row");
+            i += pat.len();
         } else {
             out.push(chars[i]);
             i += 1;

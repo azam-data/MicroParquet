@@ -182,9 +182,9 @@ fn c1_a_negative_bar_grows_down_from_zero_and_the_gap_ladder_is_diverging() {
         let blues = l.prims.iter().filter(|p| matches!(p, micro_parquet::charts::layout::Prim::Rect { fill, .. } if *fill == egui::Color32::from_rgb(0x2a, 0x78, 0xd6))).count();
         assert_eq!((reds, blues), (2, 2), "{w}");
         // a label at every tip: below the negative bars, above the positive
-        let neg_label = l.texts.iter().find(|x| x.role == Role::Label && x.text == "-1,850.00").expect("label");
+        let neg_label = l.texts.iter().find(|x| x.role == Role::Label && x.text == "\u{2212}1,850.00").expect("label");
         assert!(neg_label.rect.top() >= bars[0].rect.bottom(), "the label of a negative bar is below it");
-        let pos_label = l.texts.iter().find(|x| x.role == Role::Label && x.text == "410.00").expect("label");
+        let pos_label = l.texts.iter().find(|x| x.role == Role::Label && x.text == "+410.00").expect("label");
         assert!(pos_label.rect.bottom() <= bars[2].rect.top());
     }
 }
@@ -208,7 +208,7 @@ fn c1_hovering_a_bar_gives_its_tooltip_with_category_series_value_and_rows() {
     let l = lay(&d, 900.0, 560.0, false);
     let m = l.marks.iter().find(|m| m.category == 2 && m.series == 1).expect("a mark");
     let h = hit_test(&l, m.rect.center()).expect("a hover");
-    assert!(h.tip.contains("Month: Jul") && h.tip.contains("Product: Savings") && h.tip.contains("Sum of Balance:") && h.tip.contains("rows"), "{}", h.tip);
+    assert!(h.tip.contains("Month: Jul") && h.tip.contains("Product: Savings") && h.tip.contains("Sum of Balance:") && h.tip.contains("row"), "{}", h.tip);
     assert_eq!(h.rect, Some(m.rect));
     // the hit target is larger than the mark
     let near = pos2(m.rect.right() + 3.0, m.rect.center().y);
@@ -480,17 +480,19 @@ fn c1_a_heatmap_has_rounded_cells_a_two_pixel_gap_and_white_text_on_dark_cells()
             let sum: f64 = cells.iter().filter(|m| m.series == r).filter_map(|m| m.value).sum();
             assert!((sum - 100.0).abs() < 0.01, "row {r}: {sum}");
         }
-        // the cell text of the darkest cell is white, of the lightest is ink
+        // the cell text follows the fill: white on the darkest step, ink on the lightest. The highest value is the
+        // darkest in the light theme and the lightest in the dark theme (low values are nearest the surface there).
         let dark_cell = cells.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap()).unwrap();
         let t_dark = l.texts.iter().find(|x| x.role == Role::Cell && dark_cell.rect.contains_rect(x.rect));
         if let Some(tx) = t_dark {
-            assert_eq!(tx.colour, egui::Color32::WHITE);
+            let want = if l.dark { egui::Color32::from_rgb(0x0b, 0x0b, 0x0b) } else { egui::Color32::WHITE };
+            assert_eq!(tx.colour, want, "dark={}", l.dark);
         }
         // rounded: 2 px corners
         let radius = l.prims.iter().find_map(|p| if let micro_parquet::charts::layout::Prim::Rect { rect, round, .. } = p { if *rect == dark_cell.rect { Some(round[0]) } else { None } } else { None }).unwrap();
         assert!((radius - t::HEAT_RADIUS_PX).abs() < 0.01);
         let h = hit_test(&l, dark_cell.rect.center()).unwrap();
-        assert!(h.tip.contains("Percent of the row total") && h.tip.contains("rows"), "{}", h.tip);
+        assert!(h.tip.contains("Percent of the row total") && h.tip.contains("row"), "{}", h.tip);
     }
 }
 
@@ -578,7 +580,7 @@ fn c1_a_reference_line_is_solid_in_its_status_colour_with_a_label_and_a_zero_bas
         // the line: 1.5 px, status colour, vertical at -15
         let x = p.coord(-15.0);
         assert!(l.prims.iter().any(|q| matches!(q, micro_parquet::charts::layout::Prim::Line { a, b, w, col } if (a.x - x).abs() < 0.01 && (b.x - x).abs() < 0.01 && (*w - 1.5).abs() < 0.01 && *col == egui::Color32::from_rgb(0xd0, 0x3b, 0x3b))));
-        assert!(l.texts.iter().any(|t| t.role == Role::Reference && t.text.contains("Outlier -15%") && t.text.contains("Critical")), "the reference line is labelled in words");
+        assert!(l.texts.iter().any(|t| t.role == Role::Reference && t.text.contains("Outlier \u{2212}15%") && t.text.contains("Critical")), "the reference line is labelled in words");
         // every grid line is vertical and 1 px; bars: negatives grow left of zero
         let neg = l.marks.iter().find(|m| m.category == 0).unwrap();
         assert!((neg.rect.right() - p.coord(0.0)).abs() < 0.01 && neg.rect.left() < p.coord(0.0));

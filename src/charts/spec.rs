@@ -256,6 +256,15 @@ pub struct LimitTick {
     pub breach: String,
 }
 
+/// One bar drawn in a status colour with an icon and a text ("Below Amber"): the colour is never alone.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct BarStatus {
+    pub category: String,
+    pub status: Status,
+    pub label: String,
+}
+
 /// How the amounts are shown: the value column's own format, or one scale for the chart.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ChartScale {
@@ -341,6 +350,10 @@ pub struct ChartSpec {
     pub ref_bands: Vec<RefBand>,
     /// Per-category limits (ticks, and rings for breaches).
     pub limit_ticks: Vec<LimitTick>,
+    /// A line chart whose value axis starts one tick below the lowest value (yield curves).
+    pub pad_axis_below: bool,
+    /// Bars drawn in a status colour with an icon and a text (data quality: "Below Amber").
+    pub bar_status: Vec<BarStatus>,
     /// What the ticks mean, written once under the plot ("red ticks: minimum cumulative gap").
     pub limit_note: String,
     /// One category or series that is emphasised; the rest are de-emphasised.
@@ -381,6 +394,8 @@ impl Default for ChartSpec {
             ref_lines: Vec::new(),
             ref_bands: Vec::new(),
             limit_ticks: Vec::new(),
+            bar_status: Vec::new(),
+            pad_axis_below: false,
             limit_note: String::new(),
             highlight: None,
             colour_map: ColourMap::default(),

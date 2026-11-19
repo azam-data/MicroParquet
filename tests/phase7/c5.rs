@@ -3,7 +3,7 @@
 //! it gives, the exact finding title, and the chart drawn by the three renderers.
 //!
 //! The finding titles follow the reference images in `docs/design/charts/` (one decimal and a true minus
-//! sign: "−10.5% of Tier 1"; "Breach: -16.7% vs −10% limit"); the spec's printed examples had two decimals.
+//! sign: "−10.5% of Tier 1"; "Breach: −16.7% vs −10% limit"); the spec's printed examples had two decimals.
 
 use crate::p7_c1::{all_sizes, check, lay};
 use micro_parquet::banking::*;
@@ -28,7 +28,7 @@ fn opts() -> LayoutOpts {
 // ------------------------------------------------------------------------------------ the inputs
 
 /// The Phase 4 V3 example: assets 100 and 200, liabilities 150 and 50, a limit of −10% on the first bucket.
-fn v3_ladder(limit: Option<f64>) -> DataFrame {
+pub(crate) fn v3_ladder(limit: Option<f64>) -> DataFrame {
     let amounts = |amt: &[f64], mat: &[&str]| DataFrame::new(vec![Series::new("Balance".into(), amt), dates("Matdat", mat)]).unwrap();
     let a = amounts(&[100.0, 200.0], &["2026-11-15", "2026-12-31"]);
     let l = amounts(&[150.0, 50.0], &["2026-11-20", "2026-12-15"]);
@@ -62,14 +62,14 @@ fn ctx() -> Ctx {
 }
 
 /// What a template makes, calculated: the derived table, or the tab itself, through the chart engine.
-fn chart_of(t: Template, df: &DataFrame) -> (micro_parquet::charts::templates::Prepared, ChartData) {
+pub(crate) fn chart_of(t: Template, df: &DataFrame) -> (micro_parquet::charts::templates::Prepared, ChartData) {
     let p = prepare(t, df, &ctx()).unwrap_or_else(|e| panic!("{}: {e:#}", t.name()));
     let src = p.table.clone().unwrap_or_else(|| df.clone());
     let data = compute(src.lazy(), &p.spec).unwrap_or_else(|e| panic!("{}: {e:#}", t.name()));
     (p, data)
 }
 
-fn all_cases() -> Vec<(Template, DataFrame)> {
+pub(crate) fn all_cases() -> Vec<(Template, DataFrame)> {
     vec![
         (Template::GapLadder, v3_ladder(Some(-10.0))),
         (Template::RepricingGap, repricing()),
@@ -104,7 +104,7 @@ fn c5_the_gap_ladder_of_the_v3_example_rings_the_breach_and_titles_the_turn() {
     assert_eq!(p.spec.limit_ticks.len(), 1);
     let tick = &p.spec.limit_ticks[0];
     assert_eq!((tick.category.as_str(), tick.value, tick.panel), (format!("0{EN}1 month").as_str(), -10.0, 1));
-    assert_eq!(tick.breach, "Breach: -16.7% vs \u{2212}10% limit");
+    assert_eq!(tick.breach, "Breach: \u{2212}16.7% vs \u{2212}10% limit");
     assert!(p.spec.limit_note.contains("minimum"));
     for l in all_sizes(&d, "gap ladder") {
         assert!(l.message.is_none(), "{:?}", l.message);
@@ -117,7 +117,7 @@ fn c5_the_gap_ladder_of_the_v3_example_rings_the_breach_and_titles_the_turn() {
         let want = egui::pos2(line.plot.left() + band * 0.5, line.coord(-16.666_666_666_666_668));
         assert!((rings[0].0.x - want.x).abs() < 1.0 && (rings[0].0.y - want.y).abs() < 1.0, "{:?} vs {:?}", rings[0].0, want);
         assert_eq!(rings[0].2, egui::Color32::from_rgb(0xd0, 0x3b, 0x3b), "the status colour");
-        assert!(l.texts.iter().any(|x| x.role == Role::Reference && x.text == "Breach: -16.7% vs \u{2212}10% limit"), "the breach is labelled");
+        assert!(l.texts.iter().any(|x| x.role == Role::Reference && x.text == "Breach: \u{2212}16.7% vs \u{2212}10% limit"), "the breach is labelled");
         // a tick at the limit, across bucket 1's band
         let tick_y = line.coord(-10.0);
         assert!(l.prims.iter().any(|p| matches!(p, Prim::Line { a, b, w, col } if (a.y - tick_y).abs() < 0.6 && (b.y - tick_y).abs() < 0.6 && *w == t::REFERENCE_LINE_PX && *col == egui::Color32::from_rgb(0xd0, 0x3b, 0x3b))), "the limit tick");
@@ -242,7 +242,7 @@ fn c5_the_other_templates_give_their_form_and_their_finding() {
     assert_eq!(p.finding, "NPL ratio rose to 7.0%");
     assert_eq!((p.spec.kind, p.spec.stack, p.spec.panels.len()), (ChartKind::Bar, micro_parquet::charts::spec::Stack::Stacked, 2));
     assert_eq!(d.categories, ["Aug 2026", "Sep 2026", "Oct 2026"]);
-    assert_eq!(d.series.len(), 5);
+    assert_eq!(d.series.len(), 4, "SMA, SS, DF and BL: Standard is not stacked");
     // yield curves: lines by curve date, the latest highlighted
     let y = yield_curves(&curves()).unwrap();
     assert_eq!(y.finding, "The curve rose by 80 bp at 5Y since 30 Jun 2026");
@@ -257,7 +257,7 @@ fn c5_the_other_templates_give_their_form_and_their_finding() {
     assert_eq!((d.categories.clone(), p.spec.limit_ticks.len()), (vec!["LCR".to_string(), "NSFR".to_string()], 2));
     assert!(p.spec.limit_ticks.iter().all(|t| t.breach.is_empty()));
     let mut low = lcr_summary();
-    low.with_column(Series::new("Value".into(), [Some(5_000.0), Some(92.0), Some(100.0), None, Some(108.2), Some(100.0), None])).unwrap();
+    low.with_column(Series::new("Value".into(), [Some(3_500.0), Some(1_000.0), Some(500.0), Some(0.0), Some(0.0), Some(5_000.0), Some(92.0), Some(100.0), None, Some(108.2), Some(100.0), None])).unwrap();
     assert_eq!(prepare(Template::LcrNsfr, &low, &ctx()).unwrap().spec.limit_ticks[0].breach, "Breach: 92.0% vs 100% minimum");
     // ECL by stage
     let (p, d) = chart_of(Template::EclByStage, &ecl_summary());
@@ -349,7 +349,7 @@ fn c5_limit_ticks_reach_the_html_and_the_excel_charts() {
     assert_eq!(limit["data"][0]["value"][1].as_f64(), Some(-10.0));
     assert_eq!(limit["data"][0]["itemStyle"]["color"], "#d03b3b");
     let ring = series.iter().find(|s| s["name"] == "Breach").expect("the ring");
-    assert_eq!(ring["data"][0]["label"]["formatter"], "Breach: -16.7% vs \u{2212}10% limit");
+    assert_eq!(ring["data"][0]["label"]["formatter"], "Breach: \u{2212}16.7% vs \u{2212}10% limit");
     assert!(out.light["graphic"].to_string().contains("minimum (ALCO limit)"), "the note is under the chart");
     // Excel: a Limit and a Breach column in the table, and a series of dash markers
     let path = std::env::temp_dir().join(format!("mp-c5-{}.xlsx", std::process::id()));

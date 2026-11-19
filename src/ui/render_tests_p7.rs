@@ -832,7 +832,7 @@ fn c5_the_gallery_lists_the_banking_templates_and_a_click_on_the_gap_ladder_char
         let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
         assert!(shown.layout.message.is_none(), "{what}: {:?} {:?}", shown.layout.message, rig.app.chart.error);
         assert!(shown.layout.texts.iter().any(|t| t.role == Role::Title && t.text.starts_with("Cumulative gap turns positive")), "{what}: the finding is drawn as the title");
-        assert!(shown.layout.texts.iter().any(|t| t.role == Role::Reference && t.text == "Breach: -16.7% vs \u{2212}10% limit"), "{what}: the breach is labelled");
+        assert!(shown.layout.texts.iter().any(|t| t.role == Role::Reference && t.text == "Breach: \u{2212}16.7% vs \u{2212}10% limit"), "{what}: the breach is labelled");
         assert_eq!(shown.layout.prims.iter().filter(|p| matches!(p, Prim::Outline { .. })).count(), 1, "{what}: and ringed");
         // (the side panel's right edge can round up by a pixel at a fractional scale)
         assert_rules(&shown, rig.ctx.screen_rect().expand(2.0), &what);

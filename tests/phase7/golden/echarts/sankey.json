@@ -124,25 +124,25 @@
         {
           "source": "From STD",
           "target": "To Closed/Repaid",
-          "tip": "STD → Closed/Repaid\nSum of Balance: 30.00\n1 rows",
+          "tip": "STD → Closed/Repaid\nSum of Balance: 30.00\n1 row",
           "value": 30.0
         },
         {
           "source": "From STD",
           "target": "To SMA",
-          "tip": "STD → SMA\nSum of Balance: 100.00\n1 rows",
+          "tip": "STD → SMA\nSum of Balance: 100.00\n1 row",
           "value": 100.0
         },
         {
           "source": "From SS",
           "target": "To DF",
-          "tip": "SS → DF\nSum of Balance: 50.00\n1 rows",
+          "tip": "SS → DF\nSum of Balance: 50.00\n1 row",
           "value": 50.0
         },
         {
           "source": "From New",
           "target": "To STD",
-          "tip": "New → STD\nSum of Balance: 20.00\n1 rows",
+          "tip": "New → STD\nSum of Balance: 20.00\n1 row",
           "value": 20.0
         }
       ],

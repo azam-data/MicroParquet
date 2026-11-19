@@ -100,10 +100,26 @@ pub fn mom_table() -> DataFrame {
 
 pub fn lcr_summary() -> DataFrame {
     DataFrame::new(vec![
-        Series::new("Item".into(), ["HQLA after caps", "LCR", "LCR minimum", "LCR status", "NSFR", "NSFR minimum", "NSFR status"]),
-        Series::new("Value".into(), [Some(5_000.0), Some(133.68), Some(100.0), None, Some(108.2), Some(100.0), None]),
-        Series::new("Unit".into(), ["BDT", "%", "%", "", "%", "%", ""]),
-        Series::new("Note".into(), ["", "", "at least", "Meets", "", "at least", "Meets"]),
+        Series::new(
+            "Item".into(),
+            [
+                "Level 1 assets (after factors)",
+                "Level 2A assets (after factors)",
+                "Level 2B assets (after factors)",
+                "Adjustment for the Level 2B cap",
+                "Adjustment for the Level 2 cap",
+                "HQLA after caps",
+                "LCR",
+                "LCR minimum",
+                "LCR status",
+                "NSFR",
+                "NSFR minimum",
+                "NSFR status",
+            ],
+        ),
+        Series::new("Value".into(), [Some(3_500.0), Some(1_000.0), Some(500.0), Some(0.0), Some(0.0), Some(5_000.0), Some(133.68), Some(100.0), None, Some(108.2), Some(100.0), None]),
+        Series::new("Unit".into(), ["BDT", "BDT", "BDT", "BDT", "BDT", "BDT", "%", "%", "", "%", "%", ""]),
+        Series::new("Note".into(), ["", "", "", "", "", "", "", "at least", "Meets", "", "at least", "Meets"]),
     ])
     .unwrap()
 }

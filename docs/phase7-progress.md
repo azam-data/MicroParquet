@@ -1,6 +1,6 @@
 # Phase 7 progress (chart studio)
 
-Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisions 1–5, then C3, C4, C5. Resume from this file.
+Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C (this one): owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -65,3 +65,19 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B (this one): owner decisio
 - C5-4: not done: the LCR/NSFR "HQLA composition" tall segmented bar (the ratios are drawn against their minimums); the NII bridge is for the total, not per key (filter the tab, then chart); older yield curves are de-emphasised and the latest highlighted but not labelled at their start; the behaviour-profile band is the core balance (volatility method) as a band from zero.
 - C5-5: Classified trend and Behaviour profile read the rows in the tab's view, so a tab with more rows than the view holds is refused with the pivot to make first.
 - C5-6: bar labels of a percentage use one decimal and no plus sign ("-10.5%", "4.8%"); the reference image shows two decimals and "+4.82%".
+
+## Owner decisions on Session B (also in the spec `<accepted_deviations>`)
+
+- Q1: one decimal in finding titles (spec strings updated). Q2: diverging bar labels always signed with two decimals in all renderers (replaces C5-6).
+- F1 dark sequential: low = darkest step, high = lightest, pinned in tokens.rs. F2 U+2212 everywhere, scan test. F3 classified trend top panel SMA/SS/DF/BL, "Standard (STD) not shown". F4 yield curves labelled at the right end (replaces start labels), latest blue with markers, older two greys, y padded one tick. F5 data quality statuses "Below Amber"/"Below Green". F6 gap-ladder breach label away from the line. F7 waterfall min 2 px, HTML connectors. F8 HTML tooltips row/rows, no repeated category. F9 Excel line axis like the app; no markers on stacked areas. F10 HQLA composition, per-key NII bridge.
+
+## Session C: deviations (fixes 1-10)
+
+- F4-1: "lighter for older" is read as fainter: the older curves use the muted ink, then the de-emphasised grey, so the oldest is nearest the surface in both themes (in the dark theme that is the darker grey). Stored in the colour map as grey steps (`Colour::Grey`).
+- F5-1: on a status bar (data quality) the icon and the words sit inside the start of the bar (white or ink, by the fill's contrast) when the bar is long enough, else after the value. The icon is the text colour, not the status colour, because the bar already is the status colour. A horizontal bar whose value does not fit beyond its tip (it ends at the edge of the plot) carries the value inside its end.
+- F5-2: of several vertical threshold lines the highest has its label to its right, the others to their left; a label is never put where a line of 1.5 px or more runs; if no place is free the labels stagger in rows above the plot.
+- F6-1: a panel with a breach gets 25% room on both sides of its axis so the label can stand on the side away from the line; the label is tried below the ring first when the line rises, above when it falls, and always clear of lines, rings and marks.
+- F7-1: the HTML waterfall puts the connectors in a markLine under the bars (z 1) and sets `barMinHeight` 2; a part with no value is null, so no stub is drawn for a zero.
+- F9-1: "no point markers on stacked areas" is applied in the app and the HTML (a point shows on hover only); Excel area charts have no markers. Excel line axes use the nice-tick range for six ticks (the app's tick count depends on the window height), so the ranges agree in kind but not always in step.
+- F10-1: the NII bridge "per key": the tab's bridge is the total of its rows (as the reference image, "total interest"; filter the tab to one key for that key's bridge), and with two or more keys a second chart, "Chart: NII effects by key", opens (volume, rate and mix per key, the largest change first, at most 12 keys). The LCR/NSFR HQLA composition is a second chart too ("Chart: HQLA composition": Level 1, 2A, 2B and, when caps leave some out, "Not counted (caps)"), shown only when the summary has the level rows.
+- F-misc: `1 rows` is written `1 row` in every renderer; the sample LCR summary now has the level rows (guide numbers unchanged).

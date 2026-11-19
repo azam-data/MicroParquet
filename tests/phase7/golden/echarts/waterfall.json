@@ -45,16 +45,90 @@
         "borderWidth": 0,
         "color": "transparent"
       },
+      "markLine": {
+        "animation": false,
+        "data": [
+          [
+            {
+              "coord": [
+                0,
+                80.0
+              ]
+            },
+            {
+              "coord": [
+                1,
+                80.0
+              ]
+            }
+          ],
+          [
+            {
+              "coord": [
+                1,
+                88.0
+              ]
+            },
+            {
+              "coord": [
+                2,
+                88.0
+              ]
+            }
+          ],
+          [
+            {
+              "coord": [
+                2,
+                93.0
+              ]
+            },
+            {
+              "coord": [
+                3,
+                93.0
+              ]
+            }
+          ],
+          [
+            {
+              "coord": [
+                3,
+                93.5
+              ]
+            },
+            {
+              "coord": [
+                4,
+                93.5
+              ]
+            }
+          ]
+        ],
+        "label": {
+          "show": false
+        },
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "type": "solid",
+          "width": 1.0
+        },
+        "silent": true,
+        "symbol": "none",
+        "z": 1
+      },
       "name": "Base",
       "silent": true,
       "stack": "wf",
       "tooltip": {
         "show": false
       },
-      "type": "bar"
+      "type": "bar",
+      "z": 1
     },
     {
       "barMaxWidth": 24.0,
+      "barMinHeight": 2.0,
       "data": [
         {
           "itemStyle": {
@@ -109,65 +183,23 @@
       ],
       "name": "Increase",
       "stack": "wf",
-      "type": "bar"
+      "type": "bar",
+      "z": 2
     },
     {
       "barMaxWidth": 24.0,
+      "barMinHeight": 2.0,
       "data": [
-        {
-          "itemStyle": {
-            "borderColor": "#fcfcfb",
-            "borderRadius": 0,
-            "borderWidth": 1,
-            "color": "#52514e"
-          },
-          "tip": "Step: Sep interest\nStart: 80.00\nLevel after: 80.00",
-          "value": 0.0
-        },
-        {
-          "itemStyle": {
-            "borderColor": "#fcfcfb",
-            "borderRadius": 0,
-            "borderWidth": 1,
-            "color": "#2a78d6"
-          },
-          "tip": "Step: Volume\nChange: +8.00\nLevel after: 88.00",
-          "value": 0.0
-        },
-        {
-          "itemStyle": {
-            "borderColor": "#fcfcfb",
-            "borderRadius": 0,
-            "borderWidth": 1,
-            "color": "#2a78d6"
-          },
-          "tip": "Step: Rate\nChange: +5.00\nLevel after: 93.00",
-          "value": 0.0
-        },
-        {
-          "itemStyle": {
-            "borderColor": "#fcfcfb",
-            "borderRadius": 0,
-            "borderWidth": 1,
-            "color": "#2a78d6"
-          },
-          "tip": "Step: Mix\nChange: +0.50\nLevel after: 93.50",
-          "value": 0.0
-        },
-        {
-          "itemStyle": {
-            "borderColor": "#fcfcfb",
-            "borderRadius": 0,
-            "borderWidth": 1,
-            "color": "#0d366b"
-          },
-          "tip": "Step: Oct interest\nEnd: 93.50\nLevel after: 93.50",
-          "value": 0.0
-        }
+        null,
+        null,
+        null,
+        null,
+        null
       ],
       "name": "Decrease",
       "stack": "wf",
-      "type": "bar"
+      "type": "bar",
+      "z": 2
     },
     {
       "data": [

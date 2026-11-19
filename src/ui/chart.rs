@@ -839,6 +839,18 @@ impl MicroParquetApp {
         .map_err(|e| format!("{:#}", e))?;
         self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
         let message = format!("Chart this \u{2014} {}: {}.", t.name(), prepared.finding);
+        // a second chart of the same result (HQLA composition, NII effects by key) opens first, so the main chart is the one in front
+        if let Some(c) = prepared.companion.clone() {
+            self.chart_open_prepared(*c)?;
+        }
+        self.chart_open_prepared(prepared)?;
+        self.status_message = message.clone();
+        Ok(message)
+    }
+
+    /// Opens one prepared template chart: its table as a tab (when the chart needs numbers the tab does
+    /// not have as columns) with the spec applied when the tab has loaded, or the spec on the active tab.
+    fn chart_open_prepared(&mut self, prepared: micro_parquet::charts::templates::Prepared) -> Result<(), String> {
         match prepared.table {
             Some(mut df) => {
                 std::fs::create_dir_all(&self.paths.temp_dir).map_err(|e| format!("The chart table could not be written: {}", e))?;
@@ -856,8 +868,7 @@ impl MicroParquetApp {
                 self.chart_set_spec(prepared.spec);
             }
         }
-        self.status_message = message.clone();
-        Ok(message)
+        Ok(())
     }
 
     /// The tooltip of one bar or point: the category (whole), the series, the value in the chart's

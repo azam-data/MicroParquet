@@ -37,7 +37,7 @@
             "formatter": "96.7",
             "show": true
           },
-          "tip": "Previous: STD\nCurrent: STD\nSum of Balance: 96.67%\n1 rows\nPercent of the row total",
+          "tip": "Previous: STD\nCurrent: STD\nSum of Balance: 96.67%\n1 row\nPercent of the row total",
           "value": [
             0,
             0,
@@ -58,7 +58,7 @@
             "formatter": "3.3",
             "show": true
           },
-          "tip": "Previous: STD\nCurrent: SMA\nSum of Balance: 3.33%\n1 rows\nPercent of the row total",
+          "tip": "Previous: STD\nCurrent: SMA\nSum of Balance: 3.33%\n1 row\nPercent of the row total",
           "value": [
             1,
             0,
@@ -142,7 +142,7 @@
             "formatter": "81.1",
             "show": true
           },
-          "tip": "Previous: SMA\nCurrent: SMA\nSum of Balance: 81.13%\n1 rows\nPercent of the row total",
+          "tip": "Previous: SMA\nCurrent: SMA\nSum of Balance: 81.13%\n1 row\nPercent of the row total",
           "value": [
             1,
             1,
@@ -163,7 +163,7 @@
             "formatter": "18.9",
             "show": true
           },
-          "tip": "Previous: SMA\nCurrent: SS\nSum of Balance: 18.87%\n1 rows\nPercent of the row total",
+          "tip": "Previous: SMA\nCurrent: SS\nSum of Balance: 18.87%\n1 row\nPercent of the row total",
           "value": [
             2,
             1,
@@ -247,7 +247,7 @@
             "formatter": "80.7",
             "show": true
           },
-          "tip": "Previous: SS\nCurrent: SS\nSum of Balance: 80.73%\n1 rows\nPercent of the row total",
+          "tip": "Previous: SS\nCurrent: SS\nSum of Balance: 80.73%\n1 row\nPercent of the row total",
           "value": [
             2,
             2,
@@ -268,7 +268,7 @@
             "formatter": "19.3",
             "show": true
           },
-          "tip": "Previous: SS\nCurrent: DF\nSum of Balance: 19.27%\n1 rows\nPercent of the row total",
+          "tip": "Previous: SS\nCurrent: DF\nSum of Balance: 19.27%\n1 row\nPercent of the row total",
           "value": [
             3,
             2,
@@ -352,7 +352,7 @@
             "formatter": "100.0",
             "show": true
           },
-          "tip": "Previous: DF\nCurrent: DF\nSum of Balance: 100.00%\n1 rows\nPercent of the row total",
+          "tip": "Previous: DF\nCurrent: DF\nSum of Balance: 100.00%\n1 row\nPercent of the row total",
           "value": [
             3,
             3,

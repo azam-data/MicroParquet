@@ -5,7 +5,7 @@
 //! (docs/phase7-spec.md) is applied here: bars at most 24 px, 4 px rounded data-ends, 2 px gaps,
 //! one zero baseline, horizontal-only grids, selective labels with collision checks, the legend rules.
 
-use super::axis::{fit_text, nice_ticks, tick_text, value_text, wrap_text, ValueKind, MINUS};
+use super::axis::{padded_floor, diverging_text, fit_text, nice_ticks, tick_text, value_text, wrap_text, ValueKind, MINUS};
 use super::colours::{Colour, ColourMap};
 use super::data::{heatmap, sequential_step, waterfall_from_data, ChartData, StepKind, WaterfallStep};
 use super::spec::{ChartAgg, ChartKind, ChartSpec, Stack, Status, Transform};
@@ -280,12 +280,12 @@ struct Builder<'a> {
 
 impl<'a> Builder<'a> {
     fn size(&self, s: &str, pt: f32, face: Face) -> Vec2 {
-        self.m.size(&t::delta(s), pt, face == Face::Semibold)
+        self.m.size(&t::tidy(s), pt, face == Face::Semibold)
     }
 
     fn width_fn(&self, pt: f32, face: Face) -> impl Fn(&str) -> f32 + 'a {
         let m = self.m;
-        move |s: &str| m.size(&t::delta(s), pt, face == Face::Semibold).x
+        move |s: &str| m.size(&t::tidy(s), pt, face == Face::Semibold).x
     }
 
     fn rect_for(&self, s: &str, pt: f32, face: Face, anchor: Anchor, at: Pos2) -> Rect {
@@ -307,7 +307,7 @@ impl<'a> Builder<'a> {
     /// Writes a text without any check.
     fn put(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
         let rect = self.rect_for(s, pt, face, anchor, at);
-        self.out.texts.push(LText { text: t::delta(s), rect, pt, face, colour, role });
+        self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role });
         rect
     }
 
@@ -331,6 +331,31 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// True when `r` touches no drawn line of the data (data lines, ticks, reference lines: 1.5 px or
+    /// wider) and no ring. Gridlines are thinner and a label may sit on them.
+    fn clear_of_lines(&self, r: Rect) -> bool {
+        let pad = inflate(r, 1.5);
+        !self.out.prims.iter().any(|p| match p {
+            Prim::Line { a, b, w, .. } if *w >= t::REFERENCE_LINE_PX => segment_hits_rect(*a, *b, pad),
+            Prim::Outline { c, r: rad, .. } => {
+                let cx = c.x.clamp(pad.left(), pad.right());
+                let cy = c.y.clamp(pad.top(), pad.bottom());
+                ((c.x - cx).powi(2) + (c.y - cy).powi(2)).sqrt() <= *rad + 1.5
+            }
+            _ => false,
+        })
+    }
+
+    /// Like `try_put`, and also clear of every drawn line and ring.
+    fn try_put_clear(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Option<Rect> {
+        let r = self.rect_for(s, pt, face, anchor, at);
+        if self.free(r) && self.clear_of_lines(r) {
+            Some(self.put(role, s, anchor, at, pt, face, colour))
+        } else {
+            None
+        }
+    }
+
     fn line(&mut self, a: Pos2, b: Pos2, w: f32, col: Color32) {
         self.out.prims.push(Prim::Line { a, b, w, col });
     }
@@ -338,6 +363,30 @@ impl<'a> Builder<'a> {
     fn rect(&mut self, rect: Rect, fill: Color32, round: [f32; 4]) {
         self.out.prims.push(Prim::Rect { rect, fill, round });
     }
+}
+
+/// Whether the segment a-b crosses or lies inside the rectangle (Liang-Barsky clipping).
+pub fn segment_hits_rect(a: Pos2, b: Pos2, r: Rect) -> bool {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-dx, a.x - r.left()), (dx, r.right() - a.x), (-dy, a.y - r.top()), (dy, r.bottom() - a.y)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let k = q / p;
+            if p < 0.0 {
+                t0 = t0.max(k);
+            } else {
+                t1 = t1.min(k);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 // --------------------------------------------------------------------------------------- panel plan
@@ -455,10 +504,10 @@ impl ChartLayout {
 pub fn layout_chart(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
     let mut out = layout_chart_inner(data, rect, opts, m);
     for mk in out.marks.iter_mut() {
-        mk.tip = t::delta(&mk.tip);
+        mk.tip = t::tidy(&mk.tip);
     }
     for c in out.crosshairs.iter_mut() {
-        c.tip = t::delta(&c.tip);
+        c.tip = t::tidy(&c.tip);
     }
     out
 }
@@ -578,7 +627,7 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
         };
         let c = rgb(base.hex(opts.dark));
         match &highlight {
-            Some(h) if n > 1 && name != h => rgb(ink.deemph),
+            Some(h) if n > 1 && name != h => rgb(cm.dimmed(name, opts.dark)),
             _ => c,
         }
     };
@@ -770,7 +819,7 @@ fn panels_form(b: &mut Builder, data: &ChartData, plans: &[Plan], body: Rect, op
             .map(|(i, n)| {
                 let c = cm.get(n).map(|c| c.hex(opts.dark)).map(rgb).unwrap_or_else(|| rgb(t::series_colour(i.min(t::SLOTS - 1), opts.dark).unwrap_or(0)));
                 (n.clone(), match &spec.highlight {
-                    Some(h) if !h.is_empty() && h != n => rgb(b.ink.deemph),
+                    Some(h) if !h.is_empty() && h != n => rgb(cm.dimmed(n, opts.dark)),
                     _ => c,
                 })
             })
@@ -830,6 +879,11 @@ fn panels_form(b: &mut Builder, data: &ChartData, plans: &[Plan], body: Rect, op
         let hi2 = vals.iter().chain(extra.iter()).cloned().fold(f64::NEG_INFINITY, f64::max);
         let max_ticks = ((cell_h / 46.0).floor() as usize).clamp(3, 7);
         let (lo2, hi2) = (scale_v(lo2, p.vk, opts), scale_v(hi2, p.vk, opts));
+        // a breach is ringed and written beside its mark: the axis gets room for the text on either side
+        let has_breach = spec.limit_ticks.iter().any(|l| l.panel == p.index.min(if multi { 0 } else { usize::MAX }) && !l.breach.is_empty());
+        let (lo2, hi2) = if has_breach { ((lo2 - (hi2 - lo2) * 0.25), (hi2 + (hi2 - lo2) * 0.25)) } else { (lo2, hi2) };
+        // a line chart that asks for it starts one tick below its lowest value
+        let lo2 = if spec.pad_axis_below && p.kind == ChartKind::Line { padded_floor(lo2, hi2, max_ticks) } else { lo2 };
         axes.push(make_axis(lo2, hi2, includes_zero(p.kind), p.vk, max_ticks));
     }
     let label_w = |ax: &Axis, b: &Builder| -> f32 { tick_labels(ax).iter().map(|s| b.size(s, t::TICK_PT, Face::Regular).x).fold(0.0, f32::max) };
@@ -995,7 +1049,9 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
                 b.try_put(Role::Reference, &band_spec.label, Anchor::TopLeft, pos2(plot.left() + 4.0, r.intersect(plot).top() + 2.0), t::LABEL_PT, Face::Regular, ink2_c);
             }
         }
-        for rl in spec.ref_lines.iter().filter(|r| r.panel == if multi_index(data) { 0 } else { panel_idx }) {
+        // the lines first, so no label is put where a line runs
+        let lines: Vec<_> = spec.ref_lines.iter().filter(|r| r.panel == if multi_index(data) { 0 } else { panel_idx }).collect();
+        for rl in &lines {
             let c = v_of(scaled(rl.value, vk, opts));
             let col = rgb(rl.status.hex());
             if horizontal {
@@ -1003,11 +1059,19 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
             } else {
                 b.line(pos2(plot.left(), c), pos2(plot.right(), c), t::REFERENCE_LINE_PX, col);
             }
+        }
+        let highest = lines.iter().map(|r| r.value).fold(f64::NEG_INFINITY, f64::max);
+        for rl in &lines {
+            let c = v_of(scaled(rl.value, vk, opts));
+            let col = rgb(rl.status.hex());
             let text = if rl.label.is_empty() { format!("{}: {}", rl.status.label(), fmt(rl.value, false)) } else { format!("{} ({})", rl.label, rl.status.label()) };
-            // the label goes beside the line where there is room: along the line, above or below it
+            // the label goes beside the line where there is room: along the line, above or below it. Of several
+            // vertical lines, the highest stands to the right of its line and the others to the left of theirs, so
+            // neighbouring labels never meet and none is crossed by another line.
             let size = b.size(&text, t::LABEL_PT, Face::Regular);
             let mut placed = false;
-            'scan: for side in if horizontal { [1.0f32, -1.0] } else { [-1.0f32, 1.0] } {
+            let sides: [f32; 2] = if horizontal { if rl.value >= highest { [1.0, -1.0] } else { [-1.0, 1.0] } } else { [-1.0, 1.0] };
+            'scan: for side in sides {
                 for k in 0..=8usize {
                     let f = if k % 2 == 0 { 1.0 - k as f32 / 16.0 } else { k as f32 / 16.0 };
                     let (anchor, at) = if horizontal {
@@ -1018,7 +1082,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
                         let x = plot.left() + 4.0 + (plot.width() - size.x - 8.0).max(0.0) * f;
                         if side < 0.0 { (Anchor::BottomLeft, pos2(x, c - 3.0)) } else { (Anchor::TopLeft, pos2(x, c + 3.0)) }
                     };
-                    if b.try_put(Role::Reference, &text, anchor, at, t::LABEL_PT, Face::Regular, ink_c).is_some() {
+                    if b.try_put_clear(Role::Reference, &text, anchor, at, t::LABEL_PT, Face::Regular, ink_c).is_some() {
                         placed = true;
                         break 'scan;
                     }
@@ -1026,11 +1090,21 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
             }
             if !placed {
                 // no room beside the line (it crosses the bars): the label stands above the plot, after a short
-                // piece of the line in its colour, so it is still tied to the line
+                // piece of the line in its colour, so it is still tied to the line. Labels of nearby lines are
+                // staggered in rows above the plot, so two thresholds never overlap.
                 let sw = 14.0;
-                let y = plot.top() - size.y / 2.0 - 2.0;
                 let x = if horizontal { c } else { plot.right() - size.x - sw - 6.0 };
                 let x = x.clamp(plot.left(), (plot.right() - size.x - sw - 6.0).max(plot.left()));
+                let mut chosen = None;
+                for k in 0..4usize {
+                    let y = plot.top() - size.y / 2.0 - 2.0 - k as f32 * (size.y + 3.0);
+                    let r = Rect::from_min_max(pos2(x, y - size.y / 2.0), pos2(x + sw + 4.0 + size.x, y + size.y / 2.0));
+                    if b.free(r) {
+                        chosen = Some(y);
+                        break;
+                    }
+                }
+                let y = chosen.unwrap_or(plot.top() - size.y / 2.0 - 2.0);
                 b.line(pos2(x, y), pos2(x + sw, y), t::REFERENCE_LINE_PX, col);
                 b.put(Role::Reference, &text, Anchor::MidLeft, pos2(x + sw + 4.0, y), t::LABEL_PT, Face::Regular, ink_c);
             }
@@ -1054,7 +1128,7 @@ fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, ban
         return;
     }
     let half = (band * 0.35).clamp(8.0, 30.0);
-    let mut breaches: Vec<(Pos2, String, Color32, f32)> = Vec::new();
+    let mut breaches: Vec<(Pos2, String, Color32, f32, bool)> = Vec::new();
     for lt in &ticks {
         let Some(ci) = p.categories.iter().position(|c| *c == lt.category) else { continue };
         let col = rgb(lt.status.hex());
@@ -1071,25 +1145,49 @@ fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, ban
                 let m = g.coord(scaled(val, p.vk, opts));
                 let at = if g.horizontal { pos2(m, c) } else { pos2(c, m) };
                 b.out.prims.push(Prim::Outline { c: at, r: t::MARKER_PX / 2.0 + 5.0, w: t::REFERENCE_LINE_PX, col });
-                breaches.push((at, lt.breach.clone(), col, v));
+                // the line leaves the ring toward its neighbours: which side of the ring are they on?
+                let mut below = 0.0f32;
+                for nci in [ci.wrapping_sub(1), ci + 1] {
+                    if let Some(Some(nv)) = p.series.first().and_then(|s| s.vals.get(nci)) {
+                        let ny = g.coord(scaled(*nv, p.vk, opts));
+                        below += if g.horizontal { 0.0 } else { ny - at.y };
+                    }
+                }
+                breaches.push((at, lt.breach.clone(), col, v, below > 0.0));
             }
         }
     }
-    for (at, text, _col, tick_v) in breaches {
+    for (at, text, _col, tick_v, line_below) in breaches {
         let r = t::MARKER_PX / 2.0 + 5.0 + 3.0;
         let size = b.size(&text, t::LABEL_PT, Face::Regular);
-        // above the ring and its limit tick, then right of it, then below it: where the text touches nothing
-        let above = if g.horizontal { at.y - r } else { (at.y - r).min(tick_v - 4.0) };
-        let tries = [
-            (Anchor::BottomLeft, pos2(at.x - r, above)),
-            (Anchor::BottomLeft, pos2(at.x - size.x / 2.0, above)),
-            (Anchor::MidLeft, pos2(at.x + r, at.y)),
-            (Anchor::TopLeft, pos2(at.x - r, at.y + r)),
-            (Anchor::BottomRight, pos2(at.x + r, at.y - r)),
-        ];
+        let mut tries: Vec<(Anchor, Pos2)> = Vec::new();
+        if g.horizontal {
+            let above = at.y - r;
+            tries.push((Anchor::BottomLeft, pos2(at.x - r, above)));
+            tries.push((Anchor::BottomLeft, pos2(at.x - size.x / 2.0, above)));
+            tries.push((Anchor::MidLeft, pos2(at.x + r, at.y)));
+            tries.push((Anchor::TopLeft, pos2(at.x - r, at.y + r)));
+        } else {
+            // on the side away from the line (the line leaves the ring toward its neighbours), then the
+            // other side; the text is centred on the ring, then pushed to either side of it
+            let sides: [f32; 2] = if line_below { [-1.0, 1.0] } else { [1.0, -1.0] };
+            for dir in sides {
+                // above the ring and its limit tick, or below the ring
+                let y = if dir < 0.0 { (at.y - r).min(tick_v - 4.0) } else { (at.y + r).max(tick_v + 4.0) };
+                let (a_c, a_l, a_r) = if dir < 0.0 { (Anchor::BottomCentre, Anchor::BottomLeft, Anchor::BottomRight) } else { (Anchor::TopCentre, Anchor::TopLeft, Anchor::TopRight) };
+                tries.push((a_c, pos2(at.x, y)));
+                tries.push((a_l, pos2(at.x - r, y)));
+                tries.push((a_r, pos2(at.x + r, y)));
+                // the same without clearing the tick's own side: just off the ring
+                let y2 = if dir < 0.0 { at.y - r } else { at.y + r };
+                tries.push((a_c, pos2(at.x, y2)));
+                tries.push((a_l, pos2(at.x + r, y2)));
+                tries.push((a_r, pos2(at.x - r, y2)));
+            }
+        }
         let mut done = false;
         for (anchor, pos) in tries {
-            if b.try_put(Role::Reference, &text, anchor, pos, t::LABEL_PT, Face::Regular, ink_c).is_some() {
+            if b.try_put_clear(Role::Reference, &text, anchor, pos, t::LABEL_PT, Face::Regular, ink_c).is_some() {
                 done = true;
                 break;
             }
@@ -1103,12 +1201,22 @@ fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, ban
     if !spec.limit_note.trim().is_empty() {
         let note = fit_text(&format!("\u{2014} {}", spec.limit_note.trim()), (plot.width() - 6.0).max(40.0), &b.width_fn(t::LABEL_PT, Face::Regular));
         let size = b.size(&note, t::LABEL_PT, Face::Regular);
-        let cands = [pos2(plot.right() - 2.0, plot.bottom() - 3.0), pos2(plot.right() - 2.0, plot.top() + size.y + 3.0), pos2(plot.left() + size.x + 2.0, plot.top() + size.y + 3.0)];
-        for (k, at) in cands.iter().enumerate() {
-            let anchor = if k < 2 { Anchor::BottomRight } else { Anchor::BottomRight };
-            if b.try_put(Role::Reference, &note, anchor, *at, t::LABEL_PT, Face::Regular, muted_c).is_some() {
+        let cands = [
+            pos2(plot.right() - 2.0, plot.bottom() - 3.0),
+            pos2(plot.right() - 2.0, plot.top() + size.y + 3.0),
+            pos2(plot.left() + size.x + 2.0, plot.top() + size.y + 3.0),
+            pos2(plot.left() + size.x + 2.0, plot.bottom() - 3.0),
+        ];
+        let mut done = false;
+        for at in cands.iter() {
+            if b.try_put(Role::Reference, &note, Anchor::BottomRight, *at, t::LABEL_PT, Face::Regular, muted_c).is_some() {
+                done = true;
                 break;
             }
+        }
+        if !done {
+            // no free place in the plot: the note stands above it, never dropped
+            b.put(Role::Reference, &note, Anchor::BottomRight, pos2(plot.right() - 2.0, plot.top() - 3.0), t::LABEL_PT, Face::Regular, muted_c);
         }
     }
 }
@@ -1127,7 +1235,7 @@ fn line_end_reserve(b: &Builder, p: &Plan, spec: &ChartSpec, opts: &LayoutOpts) 
         if let Some(Some(v)) = s.vals.last() {
             w = w.max(b.size(&value_text(scaled(*v, p.vk, opts), p.vk, opts.decimals, false), t::DATA_LABEL_PT, Face::Regular).x);
         }
-        if p.series.len() <= 4 {
+        if p.series.len() <= 4 || (spec.highlight.is_some() && p.series.len() > 1) {
             w = w.max(b.size(&s.name, t::LABEL_PT, Face::Regular).x);
         }
     }
@@ -1290,8 +1398,11 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             let (cf, ct) = (g.coord(sf), g.coord(st));
             // offset of this bar across the band
             let off = if stacked || one || touching { 0.0 } else { (si as f32 - (n_ser as f32 - 1.0) / 2.0) * (thick + gap) };
+            let status_of = spec.bar_status.iter().find(|x| one && p.categories.get(c).map_or(false, |n| *n == x.category));
             let colour = {
-                let base = if diverging {
+                let base = if let Some(st) = status_of {
+                    rgb(st.status.hex())
+                } else if diverging {
                     if v < 0.0 { rgb(t::DIVERGING_NEGATIVE) } else { rgb(t::DIVERGING_POSITIVE) }
                 } else {
                     s.colour
@@ -1306,11 +1417,11 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             } else {
                 Rect::from_min_max(pos2(mid + off - thick / 2.0, ct.min(cf)), pos2(mid + off + thick / 2.0, ct.max(cf)))
             };
-            // at least one pixel, so a small value is still seen
-            if horizontal && r.width() < 1.0 {
-                r = Rect::from_min_max(r.min, pos2(r.min.x + 1.0, r.max.y));
-            } else if !horizontal && r.height() < 1.0 {
-                r = Rect::from_min_max(pos2(r.min.x, r.max.y - 1.0), r.max);
+            // at least 2 px, so a small value is still seen
+            if horizontal && r.width() < t::MIN_BAR_PX {
+                r = Rect::from_min_max(r.min, pos2(r.min.x + t::MIN_BAR_PX, r.max.y));
+            } else if !horizontal && r.height() < t::MIN_BAR_PX {
+                r = Rect::from_min_max(pos2(r.min.x, r.max.y - t::MIN_BAR_PX), r.max);
             }
             // the 2 px gap between stacked segments, in the surface colour (taken from the segment itself)
             let is_outer;
@@ -1366,7 +1477,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
         } else {
             continue;
         };
-        let text = fmt(value, false);
+        let text = if diverging { diverging_text(scaled(value, p.vk, opts), p.vk, opts.decimals) } else { fmt(value, false) };
         let at = g.coord(scaled(tip_v, p.vk, opts));
         let gapl = 4.0;
         let (anchor, pos) = if horizontal {
@@ -1376,8 +1487,65 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
         } else {
             (Anchor::TopCentre, pos2(mid, at + gapl))
         };
-        b.try_put(Role::Label, &text, anchor, pos, label_pt, Face::Regular, ink_c);
+        let bar = if one && horizontal {
+            b.out.marks.iter().find(|m| m.panel == pidx && m.category == c && m.kind == MarkKind::Bar).map(|m| m.rect)
+        } else {
+            None
+        };
+        let fill = bar.and_then(|r| b.out.prims.iter().rev().find_map(|p| if let Prim::Rect { rect, fill, .. } = p { (*rect == r).then_some(*fill) } else { None }));
+        let placed = b.try_put(Role::Label, &text, anchor, pos, label_pt, Face::Regular, ink_c);
+        // a long bar whose value does not fit beyond its tip (it ends at the edge of the plot) carries the value inside its end
+        if placed.is_none() {
+            if let (Some(r), Some(f)) = (bar, fill) {
+                let sz = b.size(&text, label_pt, Face::Regular);
+                if r.width() >= sz.x + 14.0 {
+                    let (anchor, x) = if positive { (Anchor::MidRight, r.right() - 6.0) } else { (Anchor::MidLeft, r.left() + 6.0) };
+                    b.put(Role::Cell, &text, anchor, pos2(x, mid), label_pt, Face::Regular, contrast_text(f));
+                }
+            }
+        }
+        // a status bar: an icon and the status in words (the colour is never alone), inside the start of
+        // a long bar, else after the value
+        if let Some(st) = spec.bar_status.iter().find(|x| one && p.categories.get(c).map_or(false, |n| *n == x.category)) {
+            let col = rgb(st.status.hex());
+            let icon = 10.0;
+            let size = b.size(&st.label, label_pt, Face::Regular);
+            let value_w = b.size(&text, label_pt, Face::Regular).x;
+            if let (Some(r), Some(f)) = (bar, fill) {
+                if r.width() >= icon + 5.0 + size.x + value_w + 36.0 {
+                    let ix = r.left() + 8.0 + icon / 2.0;
+                    let tc = contrast_text(f);
+                    let tri = [pos2(ix, mid - icon / 2.0), pos2(ix + icon / 2.0, mid + icon / 2.0), pos2(ix - icon / 2.0, mid + icon / 2.0)];
+                    b.out.prims.push(Prim::Tris { tris: vec![tri], fill: tc });
+                    b.put(Role::Cell, &st.label, Anchor::MidLeft, pos2(ix + icon / 2.0 + 5.0, mid), label_pt, Face::Regular, tc);
+                    continue;
+                }
+            }
+            let (ix, iy) = match placed {
+                Some(r) if horizontal => (r.right() + 8.0 + icon / 2.0, r.center().y),
+                Some(r) => (r.center().x, r.top() - 6.0 - icon / 2.0),
+                None if horizontal => (at + 8.0 + icon / 2.0, mid),
+                None => (mid, at - 6.0 - icon / 2.0),
+            };
+            let tri = [pos2(ix, iy - icon / 2.0), pos2(ix + icon / 2.0, iy + icon / 2.0), pos2(ix - icon / 2.0, iy + icon / 2.0)];
+            let tx = ix + icon / 2.0 + 5.0;
+            let rect = Rect::from_min_max(pos2(ix - icon / 2.0, iy - icon / 2.0), pos2(tx + size.x, iy + icon / 2.0)).union(Rect::from_center_size(pos2(tx + size.x / 2.0, iy), size));
+            if b.free(rect) {
+                b.out.prims.push(Prim::Tris { tris: vec![tri], fill: col });
+                b.put(Role::Label, &st.label, Anchor::MidLeft, pos2(tx, iy), label_pt, Face::Regular, ink_c);
+            }
+        }
     }
+}
+
+/// White text on a dark fill, the light theme's ink on a pale one.
+fn contrast_text(fill: Color32) -> Color32 {
+    let lin = |c: u8| {
+        let v = c as f32 / 255.0;
+        if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = 0.2126 * lin(fill.r()) + 0.7152 * lin(fill.g()) + 0.0722 * lin(fill.b());
+    if l > 0.30 { rgb(t::INK_LIGHT.ink) } else { Color32::WHITE }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1391,8 +1559,8 @@ fn waterfall(b: &mut Builder, data: &ChartData, p: &Plan, steps: &[WaterfallStep
         let mid = centre(i);
         let (cb, ct) = (g.coord(scaled(s.base, p.vk, opts)), g.coord(scaled(s.top, p.vk, opts)));
         let mut r = Rect::from_min_max(pos2(mid - thick / 2.0, ct.min(cb)), pos2(mid + thick / 2.0, ct.max(cb)));
-        if r.height() < 1.0 {
-            r = Rect::from_min_max(pos2(r.left(), r.bottom() - 1.0), r.max);
+        if r.height() < t::MIN_BAR_PX {
+            r = Rect::from_min_max(pos2(r.left(), r.bottom() - t::MIN_BAR_PX), r.max);
         }
         let (colour, positive) = match s.kind {
             StepKind::Start => (rgb(t::WATERFALL_START), s.value >= 0.0),
@@ -1502,7 +1670,10 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
         if markers && emphasised {
             for (c, q) in pts.iter().enumerate() {
                 if let Some(q) = q {
-                    b.out.prims.push(Prim::Circle { c: *q, r: t::MARKER_PX / 2.0, fill: colour, ring: Some((t::MARKER_RING_PX, surface)) });
+                    // the layers of a stacked area carry no point markers: the point is there on hover only
+                    if !stacked_area {
+                        b.out.prims.push(Prim::Circle { c: *q, r: t::MARKER_PX / 2.0, fill: colour, ring: Some((t::MARKER_RING_PX, surface)) });
+                    }
                     let r = Rect::from_center_size(*q, vec2(t::MARKER_PX, t::MARKER_PX));
                     let v = p.series[si].vals.get(c).copied().flatten();
                     let tip = tip_text(data, p, si, c, v, p.vk, opts);
@@ -1525,26 +1696,53 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
         b.out.crosshairs.push(Crosshair { x: centre(c), y0: plot.top(), y1: plot.bottom(), panel: pidx, category: c, tip: lines_txt.join("\n") });
     }
 
-    // labels at the line ends: the value for one series; the name for 2 to 4 (a collision drops it to the legend)
+    // labels at the line ends: the value for one series; the name for 2 to 4 (a collision drops it to the legend);
+    // with a highlighted series (curves by date) every curve is named at its right end, nudged apart vertically
     if p.kind == ChartKind::Line && n_cat > 0 {
+        let all_named = highlight.is_some() && n_ser > 1;
+        let mut ends: Vec<(f32, f32, String, Color32, bool)> = Vec::new(); // (y, x, text, colour, emphasised)
         for si in 0..n_ser {
             let s = &p.series[si];
             let last = (0..n_cat).rev().find(|c| pts_at(p, si, *c).is_some());
-            let first = (0..n_cat).find(|c| pts_at(p, si, *c).is_some());
-            let (Some(lc), Some(fc)) = (last, first) else { continue };
-            let (Some(lp), Some(fp)) = (point(si, lc), point(si, fc)) else { continue };
+            let Some(lc) = last else { continue };
+            let Some(lp) = point(si, lc) else { continue };
             let emphasised = highlight.as_ref().map(|h| *h == s.name).unwrap_or(true);
             if n_ser == 1 {
                 if let Some(v) = s.vals[lc] {
                     b.try_put(Role::Label, &fmt(v, false), Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::DATA_LABEL_PT, Face::Regular, ink_c);
                 }
-            } else if n_ser <= 4 {
-                if emphasised {
-                    b.try_put(Role::Direct, &s.name, Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::LABEL_PT, Face::Regular, ink_c);
-                } else {
-                    // a de-emphasised curve is named at its start
-                    b.try_put(Role::Direct, &s.name, Anchor::BottomLeft, pos2(fp.x + 2.0, fp.y - 6.0), t::LABEL_PT, Face::Regular, ink2_c);
+            } else if n_ser <= 4 || all_named {
+                ends.push((lp.y, lp.x + t::MARKER_PX, s.name.clone(), if emphasised { ink_c } else { ink2_c }, emphasised));
+            }
+        }
+        if !ends.is_empty() {
+            let lh = b.size("Ag", t::LABEL_PT, Face::Regular).y;
+            let gap = lh + 3.0;
+            let (top, bottom) = (g.plot.top() + lh / 2.0, g.plot.bottom() - lh / 2.0);
+            ends.sort_by(|a, c| a.0.partial_cmp(&c.0).unwrap_or(std::cmp::Ordering::Equal));
+            let mut ys: Vec<f32> = ends.iter().map(|e| e.0.clamp(top, bottom)).collect();
+            // collisions are resolved by nudging the labels apart vertically: down, then back up from the bottom
+            for i in 1..ys.len() {
+                if ys[i] < ys[i - 1] + gap {
+                    ys[i] = ys[i - 1] + gap;
                 }
+            }
+            if let Some(last) = ys.last().copied() {
+                if last > bottom {
+                    let shift = last - bottom;
+                    for y in ys.iter_mut() {
+                        *y -= shift;
+                    }
+                    for i in (0..ys.len().saturating_sub(1)).rev() {
+                        if ys[i] > ys[i + 1] - gap {
+                            ys[i] = ys[i + 1] - gap;
+                        }
+                    }
+                }
+            }
+            for (e, y) in ends.iter().zip(ys.iter()) {
+                let face = Face::Regular;
+                b.try_put(Role::Direct, &e.2, Anchor::MidLeft, pos2(e.1, *y), t::LABEL_PT, face, e.3);
             }
         }
     }
@@ -1609,7 +1807,7 @@ fn scatter_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
         let base = if name.is_empty() { Colour::Slot(0) } else { cm.get(name).unwrap_or(Colour::Slot(si.min(t::SLOTS - 1))) };
         let c = rgb(base.hex(opts.dark));
         match &spec.highlight {
-            Some(h) if !h.is_empty() && name != h && n_ser > 1 => rgb(ink.deemph),
+            Some(h) if !h.is_empty() && name != h && n_ser > 1 => rgb(cm.dimmed(name, opts.dark)),
             _ => c,
         }
     };
@@ -1712,12 +1910,12 @@ fn heatmap_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
             let cell = Rect::from_min_size(pos2(grid.left() + cw * ci as f32 + gap / 2.0, grid.top() + ch * ri as f32 + gap / 2.0), vec2((cw - gap).max(1.0), (ch - gap).max(1.0)));
             // a missing pair is a 0.0 cell in the lightest step
             let step = if missing { 0 } else { sequential_step(v, lo, hi) };
-            let fill = rgb(t::SEQUENTIAL[step]);
+            let fill = rgb(t::sequential_colour(step, b.dark));
             let radius = t::HEAT_RADIUS_PX.min(cell.width().min(cell.height()) / 2.0);
             b.rect(cell, fill, [radius; 4]);
             let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, 1) } else { value_text(scaled(v, vk, opts), vk, opts.decimals, false) };
-            // the pale steps are pale in the dark theme too, so their text is the light theme's dark ink
-            let tc = if step >= t::SEQUENTIAL_WHITE_TEXT_FROM { Color32::WHITE } else { rgb(t::INK_LIGHT.ink) };
+            // the text follows the fill actually drawn: white on step 7 and darker, the light ink on the paler steps
+            let tc = if t::sequential_text_white(step, b.dark) { Color32::WHITE } else { rgb(t::INK_LIGHT.ink) };
             let tr = b.rect_for(&text, t::DATA_LABEL_PT, Face::Regular, Anchor::Centre, cell.center());
             if cell.contains_rect(tr) {
                 b.put(Role::Cell, &text, Anchor::Centre, cell.center(), t::DATA_LABEL_PT, Face::Regular, tc);

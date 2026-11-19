@@ -266,8 +266,8 @@ A result tab of each tool gets a **"Chart this"** button (and the Charts menu en
 
 - **Finding titles** are computed from the data by fixed rules (no AI). The user's takeaway replaces them.
 - **Acceptance:**
-  - each template on its tool's guide example gives the stated form and the exact auto-title, e.g. "Parallel up is the worst case at −10.50% of Tier 1"
-  - on the Phase 4 V3 gap-ladder example (limit −10% on the first bucket), the breach is ringed on bucket 1 and labelled "Breach: −16.67% vs −10% limit", and the auto-title is "Cumulative gap turns positive after 1–3 months"
+  - each template on its tool's guide example gives the stated form and the exact auto-title, e.g. "Parallel up is the worst case at −10.5% of Tier 1"
+  - on the Phase 4 V3 gap-ladder example (limit −10% on the first bucket), the breach is ringed on bucket 1 and labelled "Breach: −16.7% vs −10% limit", and the auto-title is "Cumulative gap turns positive after 1–3 months"
   - the NII bridge has the C0 bases
   - the CL migration title is "100.0% of SS moved to DF" on the V2 example
 </task>
@@ -346,4 +346,18 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 - C3: the vendored ECharts file holds six `http(s)://` strings (XML namespace names and licence comments, never fetched); the page around it has none, and the test pins both. Title, subtitle and footnote are inside the chart so PNG/SVG carry them. Stacked segments use a 1 px surface-colour border (ECharts has no gap setting). Function-valued options are names ("@fmt:amount:2") that the page's script replaces.
 - C4: subtitle and footnote are cells above the table, not part of the Excel chart title; a bubble chart is written as a scatter and a stepped line as an ordinary line, each with a note on the sheet; the .xlsx checks read the zip with `python3` (no new crate) and are skipped where it is absent.
 - C5: finding titles follow the reference images (one decimal, true minus: "−10.5% of Tier 1", "Breach: -16.7% vs −10% limit"), not the two-decimal examples in the C5 acceptance; the LCR/NSFR HQLA composition, a per-key NII bridge and start-of-line labels on older yield curves are not done; percentage bar labels have one decimal and no plus sign.
+- Owner decisions on Session B (19 Nov 2026), these replace the C5 line above where they contradict it:
+  - Q1: finding titles use one decimal for percentages, as the reference images ("−10.5% of Tier 1", "Breach: −16.7% vs −10% limit"); the C5 acceptance strings above are updated.
+  - Q2: data labels on diverging bars always carry a sign and two decimals ("+4.82%", "−10.50%"), in all three renderers (replaces C5-6).
+  - Dark-mode sequential fills (in-app and HTML heatmaps, any sequential fill): low values use the darkest step (nearest the surface), high values the lightest; both directions pinned in `tokens.rs` and tested.
+  - Negative numbers use U+2212 (−) everywhere (titles, data labels, axis ticks, tooltips, breach labels, HTML, Excel number formats); a test scans every rendered string and the xlsx XML for "-" before a digit.
+  - Classified trend: the top panel stacks SMA, SS, DF and BL only, subtitle "Standard (STD) not shown"; the NPL % panel is unchanged.
+  - Yield curves: every curve is labelled at its right end, collisions nudged vertically; latest curve blue with markers, older curves two grey steps (lighter for older); y-axis padded one tick below the minimum. This replaces the start-of-line labels of the C5 table.
+  - Data quality: a rule below Amber is drawn in the critical status colour with an icon and "Below Amber"; between Amber and Green the warning colour and "Below Green"; other bars default; threshold labels never overlap.
+  - Gap ladder: the breach label sits on the side away from the line, overlapping no mark (layout test).
+  - Waterfall: every step is at least 2 px tall; the HTML waterfall draws the connector lines the app draws.
+  - HTML tooltips: "row"/"rows" singular/plural, no repeated category line.
+  - Excel line panels use the app's nice axis range (not forced to 0); stacked areas show no point markers.
+  - C5 completed: LCR/NSFR HQLA composition as a tall segmented bar, NII bridge per key.
+- Session C details: older yield curves are fainter (muted, then de-emphasised grey) in both themes; status bars carry their icon and words inside the bar when it is long enough; of several vertical threshold lines the highest is labelled to its right and the others to their left; a panel with a breach gets 25% axis room; the NII bridge per key is a second chart ("effects by key"), the HQLA composition a second chart; "stacked areas show no markers" applies to the app and HTML (Excel areas have none). See `docs/phase7-progress.md`.
 </accepted_deviations>

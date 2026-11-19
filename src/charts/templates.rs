@@ -8,7 +8,7 @@
 //! tab, so the numbers behind the chart can be seen and exported.
 
 use super::axis::{value_text, ValueKind, MINUS};
-use super::spec::{ChartAgg, ChartKind, ChartScale, ChartSpec, LimitTick, MeasureSpec, PanelSpec, RefLine, Stack, Status, WaterfallMode};
+use super::spec::{BarStatus, ChartAgg, ChartKind, ChartScale, ChartSpec, LimitTick, MeasureSpec, PanelSpec, RefLine, Stack, Status, WaterfallMode};
 use crate::models::format_with_commas;
 use crate::sort_lists::SortOrder;
 use anyhow::{anyhow, bail, Result};
@@ -198,6 +198,9 @@ pub struct Prepared {
     pub finding: String,
     /// The name of the derived tab.
     pub tab_title: String,
+    /// A second chart of the same result (the HQLA composition beside the LCR bars, the effects of
+    /// each key beside the NII bridge); it opens as a tab of its own.
+    pub companion: Option<Box<Prepared>>,
 }
 
 // ---------------------------------------------------------------------------------------- helpers
@@ -453,7 +456,7 @@ fn gap_ladder(df: &DataFrame) -> Result<Prepared> {
         None => format!("Cumulative gap stays negative to {}", b[b.len() - 1]),
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: gap ladder".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: gap ladder".to_string(), companion: None })
 }
 
 // --------------------------------------------------------------------------------- repricing gap
@@ -492,7 +495,7 @@ fn repricing_gap(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
     }
     let finding = if best == 0.0 { "The repricing gap is zero in every bucket".to_string() } else { format!("Largest repricing gap in {}", b[at]) };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: repricing gap".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: repricing gap".to_string(), companion: None })
 }
 
 // ------------------------------------------------------------------------------------- NII bridge
@@ -508,6 +511,17 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         let v = nums(t, df, col)?;
         Ok(v.iter().enumerate().filter(|(i, _)| keys.get(*i).and_then(|k| k.as_deref()) != Some("Total")).filter_map(|(_, x)| *x).sum())
     };
+    // the bridge adds up the keys of the tab (filter the tab to one key for that key's bridge)
+    let distinct: Vec<String> = {
+        let mut v: Vec<String> = Vec::new();
+        for k in keys.iter().flatten() {
+            if k != "Total" && !v.contains(k) {
+                v.push(k.clone());
+            }
+        }
+        v
+    };
+    let whose = "total interest";
     let (prev, curr) = (sum("Prev annual interest")?, sum("Curr annual interest")?);
     let (vol, rate, mix) = (sum("Volume effect")?, sum("Rate effect")?, sum("Mix effect")?);
     let table = frame(vec![
@@ -537,13 +551,69 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
             _ => ("The product mix", "explains"),
         };
         if share >= 0.5 {
-            format!("{} {} most of the {} {} in total interest", phrase, verb, amount_signed(change, ctx), what)
+            format!("{} {} most of the {} {} in {}", phrase, verb, amount_signed(change, ctx), what, whose)
         } else {
-            format!("{} is the largest effect behind the {} {} in total interest", name, amount_signed(change, ctx), what)
+            format!("{} is the largest effect behind the {} {} in {}", name, amount_signed(change, ctx), what, whose)
         }
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: NII bridge".to_string() })
+    // several keys: a second chart with each key's three effects (they add up to that key's change)
+    let companion = if distinct.len() >= 2 { nii_by_key(df, &key.unwrap_or_default(), &keys, ctx)?.map(Box::new) } else { None };
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: NII bridge".to_string(), companion })
+}
+
+/// The effects of each key (volume, rate, mix) as stacked columns, the keys with the largest change first.
+fn nii_by_key(df: &DataFrame, key_col: &str, keys: &[Option<String>], ctx: &Ctx) -> Result<Option<Prepared>> {
+    let t = Template::NiiBridge;
+    let (vol, rate, mix) = (nums(t, df, "Volume effect")?, nums(t, df, "Rate effect")?, nums(t, df, "Mix effect")?);
+    let mut rows: Vec<(String, f64, f64, f64)> = Vec::new();
+    for i in 0..df.height() {
+        let Some(k) = keys.get(i).cloned().flatten() else { continue };
+        if k == "Total" {
+            continue;
+        }
+        let (v, r, m) = (vol[i].unwrap_or(0.0), rate[i].unwrap_or(0.0), mix[i].unwrap_or(0.0));
+        match rows.iter_mut().find(|x| x.0 == k) {
+            Some(x) => {
+                x.1 += v;
+                x.2 += r;
+                x.3 += m;
+            }
+            None => rows.push((k, v, r, m)),
+        }
+    }
+    if rows.len() < 2 {
+        return Ok(None);
+    }
+    rows.sort_by(|a, b| (b.1 + b.2 + b.3).abs().partial_cmp(&(a.1 + a.2 + a.3).abs()).unwrap_or(std::cmp::Ordering::Equal));
+    let total_keys = rows.len();
+    rows.truncate(crate::charts::tokens::MAX_FACETS);
+    let (mut k, mut e, mut v): (Vec<String>, Vec<String>, Vec<f64>) = Default::default();
+    for (name, vo, ra, mi) in &rows {
+        for (label, x) in [("Volume", vo), ("Rate", ra), ("Mix", mi)] {
+            k.push(name.clone());
+            e.push(label.to_string());
+            v.push(*x);
+        }
+    }
+    let order: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
+    let head = if key_col.is_empty() { "Key".to_string() } else { key_col.to_string() };
+    let table = frame(vec![Series::new(head.as_str().into(), k), Series::new("Effect".into(), e), Series::new("Change in interest (BDT)".into(), v)])?;
+    let mut spec = base_spec(&head, ChartKind::Bar);
+    spec.series = Some("Effect".into());
+    spec.value = Some("Change in interest (BDT)".into());
+    spec.stack = Stack::Stacked;
+    spec.order = order_of(&order);
+    spec.colour_map.assign_all(&["Volume", "Rate", "Mix"]);
+    spec.subtitle = "Change in annualised interest by effect".to_string();
+    if total_keys > rows.len() {
+        spec.footnote = format!("The {} keys with the largest change, of {}", rows.len(), total_keys);
+    }
+    let top = &rows[0];
+    let change = top.1 + top.2 + top.3;
+    let finding = format!("{} has the largest change: {}", top.0, amount_signed(change, ctx));
+    spec.title = finding.clone();
+    Ok(Some(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: NII effects by key".to_string(), companion: None }))
 }
 
 // ---------------------------------------------------------------------------------- CL migration
@@ -619,7 +689,7 @@ fn cl_migration(df: &DataFrame) -> Result<Prepared> {
         None => "No loan moved to a worse grade".to_string(),
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: CL migration".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: CL migration".to_string(), companion: None })
 }
 
 // ------------------------------------------------------------------------------ classified trend
@@ -656,7 +726,8 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
         let npl = if total != 0.0 { (v[2] + v[3] + v[4]) / total * 100.0 } else { 0.0 };
         ratios.push((label.clone(), npl));
         for (r, g) in GRADES.iter().enumerate() {
-            if v[r] != 0.0 || r < 2 {
+            // Standard (STD) is not stacked: only SMA, SS, DF and BL, SMA always (so every month has a row)
+            if r >= 1 && (v[r] != 0.0 || r == 1) {
                 mm.push(label.clone());
                 gg.push(g.to_string());
                 bb.push(v[r]);
@@ -672,9 +743,9 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
     spec.stack = Stack::Stacked;
     spec.order = order_of(&labels);
     spec.measures = vec![measure("Balance", "Balance", false), MeasureSpec { column: Some("NPL %".into()), agg: ChartAgg::Average, label: "NPL %".into(), pct: true, ..Default::default() }];
-    spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Balance by grade".into() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "NPL % (SS, DF and BL)".into() }];
+    spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Balance by grade (SMA, SS, DF, BL)".into() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "NPL % (SS, DF and BL)".into() }];
     spec.colour_map.assign_all(&GRADES);
-    spec.subtitle = "Classified loans by grade, by month".to_string();
+    spec.subtitle = "Standard (STD) not shown \u{b7} classified loans by grade, by month".to_string();
     let (first, last) = (ratios.first().map(|r| r.1).unwrap_or(0.0), ratios.last().map(|r| r.1).unwrap_or(0.0));
     let finding = if ratios.len() < 2 || (last - first).abs() < 0.05 {
         format!("NPL ratio is {}%", format_with_commas(last, 1))
@@ -684,7 +755,7 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
         format!("NPL ratio fell to {}%", format_with_commas(last, 1))
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: classified trend".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: classified trend".to_string(), companion: None })
 }
 
 // --------------------------------------------------------------------------------------- IRRBB
@@ -739,7 +810,7 @@ fn irrbb(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         format!("No scenario loses value: the smallest gain is {} of Tier 1 ({})", pct_title(worst), worst_name)
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: \u{394}EVE by scenario".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: \u{394}EVE by scenario".to_string(), companion: None })
 }
 
 // ------------------------------------------------------------------------------------ LCR / NSFR
@@ -776,7 +847,40 @@ fn lcr_nsfr(df: &DataFrame) -> Result<Prepared> {
     }
     let finding = format!("{} {}% against a {}% minimum", cats[0], format_with_commas(vals[0], 1), format_with_commas(mins[0], 0));
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: LCR and NSFR".to_string() })
+    let companion = hqla_composition(&item, &value, t)?.map(Box::new);
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: LCR and NSFR".to_string(), companion })
+}
+
+/// What the HQLA is made of: one tall stacked column of Level 1, 2A and 2B (after their factors), and
+/// the part the caps leave out. Needs the Level 1/2A/2B rows of the LCR summary; without them (an older
+/// summary) there is nothing to compose and no second chart.
+fn hqla_composition(item: &[Option<String>], value: &[Option<f64>], t: Template) -> Result<Option<Prepared>> {
+    let get = |name: &str| item.iter().position(|s| s.as_deref() == Some(name)).and_then(|i| value.get(i).copied().flatten());
+    let (Some(l1), Some(l2a), Some(l2b)) = (get("Level 1 assets (after factors)"), get("Level 2A assets (after factors)"), get("Level 2B assets (after factors)")) else {
+        return Ok(None);
+    };
+    let capped = get("Adjustment for the Level 2B cap").unwrap_or(0.0) + get("Adjustment for the Level 2 cap").unwrap_or(0.0);
+    let gross = l1 + l2a + l2b;
+    if gross <= 0.0 {
+        return Ok(None);
+    }
+    let mut levels: Vec<String> = vec!["Level 1".into(), "Level 2A".into(), "Level 2B".into()];
+    let mut amounts = vec![l1, l2a, l2b];
+    if capped > 0.0 {
+        levels.push("Not counted (caps)".into());
+        amounts.push(capped);
+    }
+    let table = frame(vec![Series::new("Stock".into(), vec!["HQLA"; levels.len()]), Series::new("Level".into(), levels.clone()), Series::new("Amount (BDT)".into(), amounts)])?;
+    let mut spec = base_spec("Stock", ChartKind::Bar);
+    spec.series = Some("Level".into());
+    spec.value = Some("Amount (BDT)".into());
+    spec.stack = Stack::Stacked;
+    spec.order = order_of(&["HQLA".to_string()]);
+    spec.colour_map.assign_all(&["Level 1", "Level 2A", "Level 2B"]);
+    spec.subtitle = "HQLA by level, after the factors".to_string();
+    let finding = format!("{}% of the HQLA is Level 1", format_with_commas(l1 / gross * 100.0, 1));
+    spec.title = finding.clone();
+    Ok(Some(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: HQLA composition".to_string(), companion: None }))
 }
 
 // -------------------------------------------------------------------------------------- ECL by stage
@@ -815,7 +919,7 @@ fn ecl_by_stage(df: &DataFrame) -> Result<Prepared> {
     let (top_i, top) = l.iter().enumerate().fold((0usize, f64::MIN), |a, (i, v)| if *v > a.1 { (i, *v) } else { a });
     let finding = if total <= 0.0 { "No expected credit loss is held in any stage".to_string() } else { format!("{} holds {}% of ECL", st[top_i], format_with_commas(top / total * 100.0, 1)) };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: ECL by stage".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: ECL by stage".to_string(), companion: None })
 }
 
 // ------------------------------------------------------------------------- tabs charted as they are
@@ -857,7 +961,7 @@ fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
         }
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: None, spec, finding, tab_title: String::new() })
+    Ok(Prepared { template: t, table: None, spec, finding, tab_title: String::new(), companion: None })
 }
 
 fn rate_profile(df: &DataFrame) -> Result<Prepared> {
@@ -889,7 +993,7 @@ fn rate_profile(df: &DataFrame) -> Result<Prepared> {
         _ => "No balance sits in any rate band".to_string(),
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: None, spec, finding, tab_title: String::new() })
+    Ok(Prepared { template: t, table: None, spec, finding, tab_title: String::new(), companion: None })
 }
 
 fn behaviour(df: &DataFrame) -> Result<Prepared> {
@@ -925,7 +1029,7 @@ fn behaviour(df: &DataFrame) -> Result<Prepared> {
     spec.subtitle = "Balance history and core level (volatility method)".to_string();
     let finding = format!("Core balance {}% of the latest", format_with_commas(core_pct, 0));
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: balance history".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: balance history".to_string(), companion: None })
 }
 
 fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
@@ -955,6 +1059,15 @@ fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         RefLine { value: ctx.dq_amber, label: format!("Amber {}%", format_with_commas(ctx.dq_amber, 0)), status: Status::Warning, panel: 0 },
     ];
     spec.subtitle = "Data-quality scorecard, pass % by rule".to_string();
+    // below Amber: the critical colour, an icon and "Below Amber"; between Amber and Green: the warning colour
+    // and "Below Green"; the other bars keep the default colour
+    for (n, v) in names.iter().zip(vals.iter()) {
+        if *v < ctx.dq_amber {
+            spec.bar_status.push(BarStatus { category: n.clone(), status: Status::Critical, label: "Below Amber".to_string() });
+        } else if *v < ctx.dq_green {
+            spec.bar_status.push(BarStatus { category: n.clone(), status: Status::Warning, label: "Below Green".to_string() });
+        }
+    }
     let below = vals.iter().filter(|v| **v < ctx.dq_amber).count();
     let finding = match below {
         0 => "No rule is below Amber".to_string(),
@@ -962,7 +1075,7 @@ fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         n => format!("{} rules below Amber", n),
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: data quality".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: data quality".to_string(), companion: None })
 }
 
 // ----------------------------------------------------------------------------------- yield curves
@@ -1015,7 +1128,17 @@ pub fn yield_curves(curves: &[CurveInput]) -> Result<Prepared> {
     spec.agg = ChartAgg::Average;
     spec.order = order_of(&tenors);
     spec.measures = vec![MeasureSpec { column: Some("Rate %".into()), agg: ChartAgg::Average, label: "Rate %".into(), pct: true, ..Default::default() }];
+    // the latest curve is blue with markers; the older ones are two greys, the older the fainter
     spec.highlight = curves.last().map(|c| date_text(c));
+    spec.pad_axis_below = true;
+    if let Some(latest) = curves.last() {
+        spec.colour_map.assign(&date_text(latest));
+    }
+    let older: Vec<String> = curves.iter().take(curves.len().saturating_sub(1)).map(|c| date_text(c)).collect();
+    let faint = older.len() / 2; // the oldest half takes the fainter grey, the more recent older curves the darker one
+    for (i, name) in older.iter().enumerate() {
+        spec.colour_map.set_grey(name, if i < faint { 1 } else { 0 });
+    }
     spec.subtitle = "Yield curves by curve date".to_string();
     spec.scale = ChartScale::Plain;
     // the finding: the tenor that moved most between the oldest and the latest curve
@@ -1038,5 +1161,5 @@ pub fn yield_curves(curves: &[CurveInput]) -> Result<Prepared> {
         }
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: yield curves".to_string() })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: yield curves".to_string(), companion: None })
 }

@@ -14,7 +14,12 @@ pub enum Colour {
     Slot(usize),
     /// The de-emphasised colour.
     Other,
+    /// One of the two greys of older curves: 0 is the darker (more recent), 1 the fainter (older).
+    Grey(u8),
 }
+
+/// The stored slot numbers of the two greys (a slot of `SLOTS` to 99 is "Other", as before).
+const GREY_BASE: usize = 100;
 
 impl Colour {
     /// `0xRRGGBB` in the light or the dark set.
@@ -22,6 +27,9 @@ impl Colour {
         match self {
             Colour::Slot(i) => tokens::series_colour(*i, dark).unwrap_or_else(|| tokens::ink(dark).deemph),
             Colour::Other => tokens::ink(dark).deemph,
+            // the older curves: muted ink, then the de-emphasised grey (nearest the surface in each theme)
+            Colour::Grey(0) => tokens::ink(dark).muted,
+            Colour::Grey(_) => tokens::ink(dark).deemph,
         }
     }
 }
@@ -39,7 +47,34 @@ impl ColourMap {
         if name == OTHER_LABEL {
             return Some(Colour::Other);
         }
-        self.slots.iter().find(|(n, _)| n == name).map(|(_, s)| if *s < SLOTS { Colour::Slot(*s) } else { Colour::Other })
+        self.slots.iter().find(|(n, _)| n == name).map(|(_, s)| {
+            if *s < SLOTS {
+                Colour::Slot(*s)
+            } else if *s >= GREY_BASE {
+                Colour::Grey((*s - GREY_BASE).min(1) as u8)
+            } else {
+                Colour::Other
+            }
+        })
+    }
+
+    /// Stores a grey for a name (step 0 or 1); an existing entry is replaced.
+    pub fn set_grey(&mut self, name: &str, step: u8) {
+        self.slots.retain(|(n, _)| n != name);
+        self.slots.push((name.to_string(), GREY_BASE + step.min(1) as usize));
+    }
+
+    /// The colour of a name that is not the highlighted one: its grey when it has one, else the common de-emphasised colour.
+    pub fn dimmed(&self, name: &str, dark: bool) -> u32 {
+        match self.get(name) {
+            Some(c @ Colour::Grey(_)) => c.hex(dark),
+            _ => tokens::ink(dark).deemph,
+        }
+    }
+
+    /// Whether the name has one of the greys (an older curve: no markers).
+    pub fn is_grey(&self, name: &str) -> bool {
+        matches!(self.get(name), Some(Colour::Grey(_)))
     }
 
     /// The colour of a name; a new name takes the next free slot (and is stored), or "Other" once the eight are taken.

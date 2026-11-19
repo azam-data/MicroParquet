@@ -68,42 +68,42 @@
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: May\nProduct: Term deposits\nSum of Balance: 600.00\n1 rows",
+          "tip": "Month: May\nProduct: Term deposits\nSum of Balance: 600.00\n1 row",
           "value": 600.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Jun\nProduct: Term deposits\nSum of Balance: 617.00\n1 rows",
+          "tip": "Month: Jun\nProduct: Term deposits\nSum of Balance: 617.00\n1 row",
           "value": 617.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Jul\nProduct: Term deposits\nSum of Balance: 634.00\n1 rows",
+          "tip": "Month: Jul\nProduct: Term deposits\nSum of Balance: 634.00\n1 row",
           "value": 634.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Aug\nProduct: Term deposits\nSum of Balance: 651.00\n1 rows",
+          "tip": "Month: Aug\nProduct: Term deposits\nSum of Balance: 651.00\n1 row",
           "value": 651.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Sep\nProduct: Term deposits\nSum of Balance: 668.00\n1 rows",
+          "tip": "Month: Sep\nProduct: Term deposits\nSum of Balance: 668.00\n1 row",
           "value": 668.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Oct\nProduct: Term deposits\nSum of Balance: 685.00\n1 rows",
+          "tip": "Month: Oct\nProduct: Term deposits\nSum of Balance: 685.00\n1 row",
           "value": 685.0
         }
       ],
@@ -132,42 +132,42 @@
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: May\nProduct: Savings\nSum of Balance: 300.00\n1 rows",
+          "tip": "Month: May\nProduct: Savings\nSum of Balance: 300.00\n1 row",
           "value": 300.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Jun\nProduct: Savings\nSum of Balance: 317.00\n1 rows",
+          "tip": "Month: Jun\nProduct: Savings\nSum of Balance: 317.00\n1 row",
           "value": 317.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Jul\nProduct: Savings\nSum of Balance: 334.00\n1 rows",
+          "tip": "Month: Jul\nProduct: Savings\nSum of Balance: 334.00\n1 row",
           "value": 334.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Aug\nProduct: Savings\nSum of Balance: 351.00\n1 rows",
+          "tip": "Month: Aug\nProduct: Savings\nSum of Balance: 351.00\n1 row",
           "value": 351.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Sep\nProduct: Savings\nSum of Balance: 368.00\n1 rows",
+          "tip": "Month: Sep\nProduct: Savings\nSum of Balance: 368.00\n1 row",
           "value": 368.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Oct\nProduct: Savings\nSum of Balance: 385.00\n1 rows",
+          "tip": "Month: Oct\nProduct: Savings\nSum of Balance: 385.00\n1 row",
           "value": 385.0
         }
       ],
@@ -196,42 +196,42 @@
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: May\nProduct: Current\nSum of Balance: 200.00\n1 rows",
+          "tip": "Month: May\nProduct: Current\nSum of Balance: 200.00\n1 row",
           "value": 200.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Jun\nProduct: Current\nSum of Balance: 217.00\n1 rows",
+          "tip": "Month: Jun\nProduct: Current\nSum of Balance: 217.00\n1 row",
           "value": 217.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Jul\nProduct: Current\nSum of Balance: 234.00\n1 rows",
+          "tip": "Month: Jul\nProduct: Current\nSum of Balance: 234.00\n1 row",
           "value": 234.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Aug\nProduct: Current\nSum of Balance: 251.00\n1 rows",
+          "tip": "Month: Aug\nProduct: Current\nSum of Balance: 251.00\n1 row",
           "value": 251.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Sep\nProduct: Current\nSum of Balance: 268.00\n1 rows",
+          "tip": "Month: Sep\nProduct: Current\nSum of Balance: 268.00\n1 row",
           "value": 268.0
         },
         {
           "itemStyle": {
             "borderRadius": 0
           },
-          "tip": "Month: Oct\nProduct: Current\nSum of Balance: 285.00\n1 rows",
+          "tip": "Month: Oct\nProduct: Current\nSum of Balance: 285.00\n1 row",
           "value": 285.0
         }
       ],
@@ -265,7 +265,7 @@
               0
             ]
           },
-          "tip": "Month: May\nProduct: Foreign\nSum of Balance: 150.00\n1 rows",
+          "tip": "Month: May\nProduct: Foreign\nSum of Balance: 150.00\n1 row",
           "value": 150.0
         },
         {
@@ -277,7 +277,7 @@
               0
             ]
           },
-          "tip": "Month: Jun\nProduct: Foreign\nSum of Balance: 167.00\n1 rows",
+          "tip": "Month: Jun\nProduct: Foreign\nSum of Balance: 167.00\n1 row",
           "value": 167.0
         },
         {
@@ -289,7 +289,7 @@
               0
             ]
           },
-          "tip": "Month: Jul\nProduct: Foreign\nSum of Balance: 184.00\n1 rows",
+          "tip": "Month: Jul\nProduct: Foreign\nSum of Balance: 184.00\n1 row",
           "value": 184.0
         },
         {
@@ -301,7 +301,7 @@
               0
             ]
           },
-          "tip": "Month: Aug\nProduct: Foreign\nSum of Balance: 201.00\n1 rows",
+          "tip": "Month: Aug\nProduct: Foreign\nSum of Balance: 201.00\n1 row",
           "value": 201.0
         },
         {
@@ -313,7 +313,7 @@
               0
             ]
           },
-          "tip": "Month: Sep\nProduct: Foreign\nSum of Balance: 218.00\n1 rows",
+          "tip": "Month: Sep\nProduct: Foreign\nSum of Balance: 218.00\n1 row",
           "value": 218.0
         },
         {
@@ -325,7 +325,7 @@
               0
             ]
           },
-          "tip": "Month: Oct\nProduct: Foreign\nSum of Balance: 235.00\n1 rows",
+          "tip": "Month: Oct\nProduct: Foreign\nSum of Balance: 235.00\n1 row",
           "value": 235.0
         }
       ],
