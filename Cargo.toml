@@ -3,6 +3,7 @@ name = "micro_parquet"
 version = "1.6.0"
 edition = "2021"
 description = "Ultra-Low-RAM Portable CSV/Parquet Workstation & Banking Analytics Engine"
+license = "MIT"
 
 [[bin]]
 name = "MicroParquet"
