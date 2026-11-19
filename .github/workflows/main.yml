@@ -110,6 +110,7 @@ jobs:
 
           cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "${APP_DIR}/Contents/MacOS/MicroParquet"
           chmod +x "${APP_DIR}/Contents/MacOS/MicroParquet"
+          cp assets/icon/microparquet.icns "${APP_DIR}/Contents/Resources/MicroParquet.icns"
 
           cat > "${APP_DIR}/Contents/Info.plist" << EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -123,6 +124,8 @@ jobs:
               <key>CFBundleName</key>
               <string>MicroParquet</string>
               <key>CFBundleDisplayName</key>
+              <string>MicroParquet</string>
+              <key>CFBundleIconFile</key>
               <string>MicroParquet</string>
               <key>CFBundleVersion</key>
               <string>${VERSION}</string>
