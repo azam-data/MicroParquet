@@ -40,6 +40,7 @@ pub enum JobOutput {
     SqlChecked(Box<SqlChecked>),
     Chart(Box<ChartResult>),
     Picker(Box<PickerResult>),
+    Dq(Box<DqJobResult>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
 }
@@ -422,6 +423,52 @@ pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult>
         .and_then(|lf| crate::chart::compute_chart(lf, &spec))
         .map_err(|e| format!("{:#}", e));
     Ok(ChartResult { tab_id, token, data })
+}
+
+// --------------------------------------------------------------------------- data-quality scorecard
+
+pub struct DqRequest {
+    pub tab_id: u64,
+    pub token: u64,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub rules: crate::dq::DqRuleSet,
+    pub temp_dir: PathBuf,
+}
+
+/// The checks of a tab, with the first failing rows of each rule that has some.
+#[derive(Clone)]
+pub struct DqShown {
+    pub result: crate::dq::DqResult,
+    /// (rule number, its first failing rows).
+    pub previews: Vec<(usize, DataFrame)>,
+}
+
+pub struct DqJobResult {
+    pub tab_id: u64,
+    pub token: u64,
+    pub shown: std::result::Result<DqShown, String>,
+}
+
+pub fn compute_dq_job(req: DqRequest, ctx: &JobCtx) -> Result<DqJobResult> {
+    ctx.set_progress("Checking the data quality\u{2026}", None);
+    ctx.check()?;
+    let DqRequest { tab_id, token, source, steps, rules, temp_dir } = req;
+    let shown = (|| -> anyhow::Result<DqShown> {
+        let df = compile_tab_lazy(&source, &steps, &temp_dir)?.collect()?;
+        let types = crate::engine::dq_type_stats(&source, &rules, &temp_dir)?;
+        let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
+        let result = crate::dq::run_scorecard(&df, &types, &rules, &cl_map)?;
+        let mut previews = Vec::new();
+        for (i, r) in result.rules.iter().enumerate() {
+            if !r.failing_rows.is_empty() {
+                previews.push((i, crate::dq::failing_frame(&df, &result, i, Some(crate::dq::FAILING_PREVIEW))?));
+            }
+        }
+        Ok(DqShown { result, previews })
+    })()
+    .map_err(|e| format!("{:#}", e));
+    Ok(DqJobResult { tab_id, token, shown })
 }
 
 // ------------------------------------------------------------------------------------ SQL tab

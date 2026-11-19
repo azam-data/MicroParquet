@@ -10,6 +10,7 @@ pub mod columns;
 pub mod commands;
 pub mod conditional;
 pub mod curves;
+pub mod dq;
 pub mod duration;
 pub mod export;
 pub mod filter;
@@ -114,6 +115,7 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::DqScorecard => self.render_dq_modal(ctx, cols),
             ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),
             ActiveToolModal::Packs => self.render_packs_modal(ctx, cols),
             ActiveToolModal::SaveRun => self.render_save_run_modal(ctx, cols),

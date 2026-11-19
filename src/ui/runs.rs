@@ -259,6 +259,11 @@ impl MicroParquetApp {
                 s.amount_text = format!("{}", r.spec.material_amount);
                 s.pct_text = format!("{}", r.spec.material_pct);
             }
+            ToolRun::DqScorecard(r) => {
+                self.active_tab = idx[0];
+                self.open_dq();
+                self.dq.set = r.rules.clone();
+            }
             ToolRun::Cl1Summary(r) => {
                 self.active_tab = idx[0];
                 self.open_cl1_summary();

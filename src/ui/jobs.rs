@@ -121,6 +121,7 @@ impl MicroParquetApp {
                     }
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
+                    JobKind::Dq => self.dq_failed(msg.clone()),
                     JobKind::Chart => {
                         self.chart.busy = false;
                         self.chart.error = Some(msg.clone());
@@ -285,6 +286,7 @@ impl MicroParquetApp {
             JobOutput::SqlChecked(r) => self.apply_sql_checked(*r),
             JobOutput::Chart(r) => self.apply_chart_result(*r),
             JobOutput::Picker(r) => self.apply_picker_result(*r),
+            JobOutput::Dq(r) => self.apply_dq_result(*r),
             JobOutput::TextCheck(r) => self.apply_text_check(*r),
             JobOutput::Exported(o) => {
                 self.status_message = o.message;

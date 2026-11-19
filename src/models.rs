@@ -2207,6 +2207,13 @@ pub enum TabSource {
         spec: Box<crate::irrbb::IrrbbSpec>,
         view: IrrbbView,
     },
+    /// The data-quality scorecard (Phase 6 P4): the rules run over the tab's rows (its source and steps).
+    DqScorecard {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        rules: Box<crate::dq::DqRuleSet>,
+        view: DqView,
+    },
     /// Month-on-month variance (Phase 6 P3): the balances of two months by key, the interest
     /// effects, and the commentary; `view` says which of the two tables this tab shows.
     MomVariance {
@@ -2225,6 +2232,16 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+}
+
+/// Which table of the data-quality run a tab shows.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DqView {
+    /// The scorecard: a row per rule and the overall score.
+    #[default]
+    Scorecard,
+    /// Every failing row of rule number `n` (counting from 0).
+    Failing(usize),
 }
 
 /// Which table of the month-on-month run a tab shows.

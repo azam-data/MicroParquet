@@ -1694,7 +1694,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => collect_masked_columns(source, out),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1713,7 +1713,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => source_masks_pii(source),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1862,7 +1862,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2341,6 +2341,16 @@ fn join_inflates_left(kind: SqlJoinKind) -> bool {
     !matches!(kind, SqlJoinKind::Semi | SqlJoinKind::Anti)
 }
 
+/// The schema statistics the type rules of a rule set read: the source before any step, typed, with its parse failures.
+pub fn dq_type_stats(source: &TabSource, rules: &crate::dq::DqRuleSet, temp_dir: &Path) -> Result<std::collections::HashMap<String, crate::dq::TypeStats>> {
+    if !rules.rules.iter().any(|r| matches!(r.kind, crate::dq::DqKind::TypeValidity { .. })) {
+        return Ok(std::collections::HashMap::new());
+    }
+    let df = compile_tab_lazy(source, &[], temp_dir)?.collect().context("The scorecard could not read the source to check the types")?;
+    let failures = source_parse_failures(source, temp_dir)?;
+    Ok(crate::dq::TypeStats::from_source(&df, &failures))
+}
+
 pub fn compile_tab_lazy(
     source: &TabSource,
     steps: &[TransformStep],
@@ -2434,6 +2444,17 @@ pub fn compile_tab_lazy(
                 rate_col.as_deref(),
                 cl_status_col.as_deref(),
             )?
+        }
+        TabSource::DqScorecard { source, steps, rules, view } => {
+            let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The scorecard could not read the table")?;
+            let types = dq_type_stats(source, rules, temp_dir)?;
+            let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
+            let res = crate::dq::run_scorecard(&df, &types, rules, &cl_map)?;
+            crate::rules::note_used_file("Data-quality rules", &format!("{}/{}.json", crate::dq::DQ_FOLDER, rules.name), &rules.as_of, &rules.source, rules.sample);
+            match view {
+                crate::models::DqView::Scorecard => crate::dq::scorecard_frame(&res)?.lazy(),
+                crate::models::DqView::Failing(i) => crate::dq::failing_frame(&df, &res, *i, None)?.lazy(),
+            }
         }
         TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
             let prev_lf = compile_tab_lazy(prev_source, prev_steps, temp_dir)?;

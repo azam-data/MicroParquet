@@ -68,6 +68,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
         CommandId::Packs => ph::TABLE,
+        CommandId::DqScorecard => ph::SCALES,
         CommandId::MomVariance => ph::CHART_LINE,
         CommandId::About => ph::INFO,
     }
@@ -252,6 +253,7 @@ impl MicroParquetApp {
             CommandId::SortLists => self.open_sort_lists(),
             CommandId::SavedRuns => self.open_saved_runs(),
             CommandId::Packs => self.open_packs(),
+            CommandId::DqScorecard => self.open_dq(),
             CommandId::MomVariance => self.open_mom(),
             CommandId::About => self.show_about = true,
         }

@@ -23,6 +23,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Column inspector](column-inspector.md): facts about one column.
 - [SQL editor](sql-editor.md): a query on the tab's table, with history and the last error.
 - [Chart](chart.md): bars or a line of one number by a category (and a series), over the whole tab.
+- [Data-quality scorecard](data-quality-scorecard.md): pass percentages by rule, an overall Green/Amber/Red score, failing rows and a control total.
 - [MoM variance](mom-variance.md): two months by product, the interest change split into volume, rate and mix, and commentary.
 - [Report packs](report-packs.md): a monthly workbook (Cover plus one sheet per item) made from this month's files.
 - [Saved tool runs](saved-tool-runs.md): keep the inputs of a result tab in a file and re-run the tool with other inputs.

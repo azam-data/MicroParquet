@@ -138,6 +138,15 @@ pub struct MomVarianceRun {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
+pub struct DqScorecardRun {
+    pub source: String,
+    /// The rules as they were run (a rule set typed in the dialog may not be saved as a file).
+    pub rules: crate::dq::DqRuleSet,
+    pub view: DqView,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
 pub struct Cl1SummaryRun {
     pub source: String,
     pub spec: Cl1Spec,
@@ -226,6 +235,7 @@ pub enum ToolRun {
     IrrbbSix(IrrbbSixRun),
     ClMigration(ClMigrationRun),
     MomVariance(MomVarianceRun),
+    DqScorecard(DqScorecardRun),
     Cl1Summary(Cl1SummaryRun),
     Liquidity(LiquidityRun),
     EclSummary(EclSummaryRun),
@@ -278,6 +288,7 @@ impl ToolRun {
             ToolRun::IrrbbSix(_) => "IRRBB (six scenarios)",
             ToolRun::ClMigration(_) => "CL migration",
             ToolRun::MomVariance(_) => "MoM variance",
+            ToolRun::DqScorecard(_) => "Data-quality scorecard",
             ToolRun::Cl1Summary(_) => "CL-1 summary",
             ToolRun::Liquidity(_) => "LCR/NSFR",
             ToolRun::EclSummary(_) => "IFRS 9 ECL summary",
@@ -311,6 +322,7 @@ impl ToolRun {
                 f(&mut r.prev);
                 f(&mut r.curr);
             }
+            ToolRun::DqScorecard(r) => f(&mut r.source),
             ToolRun::Cl1Summary(r) => f(&mut r.source),
             ToolRun::Liquidity(r) => f(&mut r.source),
             ToolRun::EclSummary(r) => f(&mut r.source),
@@ -402,6 +414,10 @@ impl ToolRun {
             TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
                 no_extra_steps(tab_steps)?;
                 Ok(ToolRun::MomVariance(MomVarianceRun { prev: name(prev_source, prev_steps)?, curr: name(curr_source, curr_steps)?, spec: spec.clone(), view: *view }))
+            }
+            TabSource::DqScorecard { source, steps, rules, view } => {
+                no_extra_steps(tab_steps)?;
+                Ok(ToolRun::DqScorecard(DqScorecardRun { source: name(source, steps)?, rules: (**rules).clone(), view: *view }))
             }
             TabSource::Cl1Summary { source, steps, spec, .. } => {
                 no_extra_steps(tab_steps)?;
@@ -534,6 +550,15 @@ impl ToolRun {
                     MomView::Commentary => "MoM commentary",
                 };
                 Ok(vec![(title.to_string(), TabSource::MomVariance { prev_source: Box::new(p.source), prev_steps: p.steps, curr_source: Box::new(c.source), curr_steps: c.steps, spec: r.spec.clone(), view: r.view })])
+            }
+            ToolRun::DqScorecard(r) => {
+                let t = tab(&r.source)?;
+                r.rules.check()?;
+                let title = match r.view {
+                    DqView::Scorecard => "Data-quality scorecard".to_string(),
+                    DqView::Failing(i) => format!("Failing rows of rule {}", i + 1),
+                };
+                Ok(vec![(title, TabSource::DqScorecard { source: Box::new(t.source), steps: t.steps, rules: Box::new(r.rules.clone()), view: r.view })])
             }
             ToolRun::Cl1Summary(r) => {
                 let t = tab(&r.source)?;

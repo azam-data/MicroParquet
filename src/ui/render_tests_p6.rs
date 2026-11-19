@@ -1520,6 +1520,7 @@ fn u1_a_parquet_file_with_apply_without_asking_opens_at_once_with_a_message_nami
 
 use micro_parquet::banking::{GapInputSpec, GapRole as P1GapRole, RateShockSpec};
 use micro_parquet::tool_runs::*;
+use micro_parquet::dq::{dq_dir, list_rulesets, load_ruleset};
 
 fn p1_book() -> DataFrame {
     DataFrame::new(vec![
@@ -1977,5 +1978,137 @@ fn p3_the_mom_dialog_fits_builds_the_variance_and_the_commentary_tabs_by_clicks_
         rig.app.active_tab = 3;
         rig.draw(4);
         assert!(rig.app.mom_commentary_text_for_test().is_none(), "{what}");
+    }
+}
+
+// ---- P4: the data-quality scorecard
+
+const DQ_BOOK: &str = "Account_No,Rate,Open_Date,Maturity,Balance\nA01,9.5,2020-01-01,2025-01-01,100\nA02,8.0,2020-01-01,2025-01-01,100\nA03,abc,2020-01-01,2025-01-01,100\nA04,xyz,2020-01-01,2025-01-01,100\nA05,45,2020-01-01,2025-01-01,100\nA06,7.0,2020-01-01,2019-12-31,100\nA07,6.0,2020-01-01,2025-01-01,100\nA07,6.5,2020-01-01,2025-01-01,100\n,5.5,2020-01-01,2025-01-01,100\nA10,4.0,2020-01-01,2025-01-01,100\n";
+
+fn dq_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let p = app.paths.root_dir.join("book.csv");
+    std::fs::write(&p, DQ_BOOK).expect("book");
+    let mut cfg = micro_parquet::engine::auto_detect_smart_schema(&p).expect("schema");
+    for c in cfg.columns.iter_mut() {
+        c.dtype = match c.name.as_str() {
+            "Account_No" => micro_parquet::models::ColDataType::Utf8,
+            "Rate" | "Balance" => micro_parquet::models::ColDataType::Float64,
+            _ => micro_parquet::models::ColDataType::DateISO,
+        };
+    }
+    app.create_tab_from_source("Book".into(), TabSource::SingleFile { path: p, is_parquet: false, config: cfg }, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+    rig.draw(4);
+    rig
+}
+
+fn dq_btn(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.dq.rects.buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the button '{name}' was drawn", rig.what))
+}
+
+
+/// Scrolls the dialog's body with the mouse wheel until the button is inside the window, then clicks it.
+fn dq_scroll_click(rig: &mut Rig, name: &str) {
+    let screen = rig.ctx.screen_rect();
+    let title = format!("{}  Data-quality scorecard", theme::ph::SCALES);
+    for _ in 0..40 {
+        let b = dq_btn(rig, name);
+        let body = theme::dialog_report(&rig.ctx, &title).expect("the dialog").body;
+        if b.top() > body.top() + 4.0 && b.bottom() < body.bottom() - 4.0 {
+            return pclick(rig, b);
+        }
+        let at = body.center();
+        let dy = if b.top() <= body.top() + 4.0 { 60.0 } else { -60.0 };
+        // scrolling is smoothed over time: let the clock run
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.3);
+        rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, dy), modifiers: egui::Modifiers::NONE }]);
+        for _ in 0..3 {
+            rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+            rig.draw(1);
+        }
+    }
+    panic!("{}: could not bring '{name}' into the window", rig.what);
+}
+
+#[test]
+fn p4_the_scorecard_dialog_fits_runs_the_sample_rules_and_opens_the_tabs_by_clicks() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = dq_rig("p6p4a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::DqScorecard);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::DqScorecard, "{what}: Ctrl+K opens it");
+        rig.draw(8);
+        let title = format!("{}  Data-quality scorecard", theme::ph::SCALES);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        assert_eq!(rig.app.dq.set.rules.len(), 5, "{what}: it starts from the sample rule set");
+        assert!(rig.app.dq.rects.banner.is_some_and(|b| inside(b, r.window)), "{what}: the sample banner is shown");
+        assert_eq!((rig.app.dq.green_text.as_str(), rig.app.dq.amber_text.as_str()), ("98", "95"), "{what}");
+        // run: the five percentages and the average of the acceptance book, Red
+        let b = dq_btn(&rig, "Run checks");
+        pclick(&mut rig, b);
+        settle(&mut rig.app);
+        rig.draw(8);
+        let r_after = assert_dialog_fits(&rig.ctx, &title, &what);
+        assert!(r_after.window.height() <= rig.ctx.screen_rect().height(), "{what}: the dialog is not taller than the window");
+        let (_, shown) = rig.app.dq.shown.clone().map(|(a, b)| (a, b)).unwrap_or_else(|| panic!("{what}: {:?}", rig.app.dq.message));
+        let p: Vec<String> = shown.result.rules.iter().map(|r| format!("{:.2}", r.pass_pct.expect("pct"))).collect();
+        assert_eq!(p, vec!["90.00", "77.78", "80.00", "87.50", "90.00"], "{what}");
+        assert_eq!((format!("{:.2}", shown.result.overall.expect("overall")), shown.result.rating.as_str()), ("85.06".to_string(), "Red"), "{what}");
+        assert_eq!(shown.previews.len(), 4, "{what}: the four rules with failing rows list them (the type rule has examples)");
+        // everything of the result is inside the dialog; the failing rows lists have a button each
+        let rr = rig.app.dq.rects.result.expect("the result card");
+        assert!(rr.left() >= r.window.left() && rr.right() <= r.window.right() + 1.0, "{what}: the result {rr:?} is inside {:?}", r.window);
+        // open the scorecard as a tab by a click
+        dq_scroll_click(&mut rig, "Open scorecard as tab");
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: {}", rig.app.status_message);
+        assert_eq!(rig.app.tabs[1].title, "Data-quality scorecard");
+        assert_eq!(rig.app.tabs[1].total_rows, 6, "{what}: five rules and the overall row");
+        // ... and the failing rows of the uniqueness rule (rule 2)
+        rig.app.active_tab = 0;
+        rig.draw(6);
+        dq_scroll_click(&mut rig, "Open failing rows 2");
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 3, "{what}");
+        assert_eq!(rig.app.tabs[2].total_rows, 2, "{what}: the two rows of the duplicate pair");
+        // a control total typed in the dialog and added by a click: Fail with the difference
+        rig.app.dq.draft.kind = 6;
+        rig.app.dq.draft.col = "Balance".into();
+        rig.app.dq.draft.gl = "1005".into();
+        rig.app.dq.draft.tol = "0.1".into();
+        rig.draw(6);
+        dq_scroll_click(&mut rig, "Add rule");
+        assert_eq!(rig.app.dq.set.rules.len(), 6, "{what}: {:?}", rig.app.dq.message);
+        // the checks read the active tab: the book again
+        rig.app.active_tab = 0;
+        rig.draw(4);
+        let b = dq_btn(&rig, "Run checks");
+        pclick(&mut rig, b);
+        settle(&mut rig.app);
+        rig.draw(6);
+        let (_, shown) = rig.app.dq.shown.clone().unwrap_or_else(|| panic!("{what}: {:?}", rig.app.dq.message));
+        let c = shown.result.rules[5].control.clone().expect("control");
+        assert_eq!((c.sum, c.difference, c.pass), (1000.0, -5.0, false), "{what}");
+        assert_eq!(format!("{:.2}", shown.result.overall.expect("overall")), "85.06", "{what}: the control stays out of the average");
+        // a bad rule is refused with the reason; a saved rule set comes back
+        rig.app.dq.draft.kind = 3;
+        rig.app.dq.draft.col = "Rate".into();
+        rig.app.dq.draft.min = "x".into();
+        rig.draw(4);
+        dq_scroll_click(&mut rig, "Add rule");
+        assert!(rig.app.dq.message.as_ref().is_some_and(|m| m.0 && m.1.contains("minimum")), "{what}: {:?}", rig.app.dq.message);
+        rig.app.dq.set.name = "bank".into();
+        rig.app.dq.set.sample = false;
+        rig.draw(4);
+        let b = dq_btn(&rig, "Save rule set");
+        pclick(&mut rig, b);
+        assert!(list_rulesets(&dq_dir()).contains(&"bank".to_string()), "{what}: {:?}", rig.app.dq.message);
+        let bank = load_ruleset(&dq_dir(), "bank").expect("loads");
+        assert_eq!(bank.rules.len(), 6, "{what}");
+        micro_parquet::rules::set_data_dir_override(None);
     }
 }

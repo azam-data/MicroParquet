@@ -122,6 +122,8 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// The data-quality scorecard (Phase 6 P4).
+    DqScorecard,
     /// Month-on-month variance (Phase 6 P3).
     MomVariance,
     /// Report packs (Phase 6 P2).
@@ -260,6 +262,7 @@ pub struct MicroParquetApp {
     pub runs: RunsState,
     pub packs: PacksState,
     pub mom: MomState,
+    pub dq: DqState,
     /// The value picker of the filter or conditional-column dialog that is open, and the number
     /// of distinct values last listed for each column (for "3 of 42 selected").
     pub picker: PickerPanel,
@@ -382,6 +385,7 @@ impl MicroParquetApp {
             runs: RunsState::default(),
             packs: PacksState::default(),
             mom: MomState::default(),
+            dq: DqState::default(),
             picker: PickerPanel::default(),
             picker_totals: HashMap::new(),
             picker_tool: ActiveToolModal::None,

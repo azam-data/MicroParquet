@@ -381,4 +381,6 @@ P2 (details in docs/phase6-progress.md D32–D36):
 - A slot with unconvertible values or a missing column is refused; the pack cutoff replaces the cutoff of the tools that have one; Banking gets a last heading "Reports".
 P3 (details in docs/phase6-progress.md D37–D40):
 - Two tabs (variance and commentary); thresholds kept in the tab source and the saved run; rows with a balance but no rate, and blank keys, stop the run; New/Closed keys are always in the commentary.
+P4 (details in docs/phase6-progress.md D41–D44):
+- The tool is in the Transform menu (there is no Data menu); the type rule shows examples, not rows; rule sets are `dq_rules/<name>.json` with a sample written on first use.
 </accepted_deviations>

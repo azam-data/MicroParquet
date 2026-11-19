@@ -9,7 +9,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 6] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs", "mom-variance"];
+pub const P6_GUIDE_TOOLS: [&str; 7] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs", "mom-variance", "data-quality-scorecard"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -200,4 +200,40 @@ fn guide_mom_variance() {
             md(&text, &["Commentary"]),
         ],
     );
+}
+
+#[test]
+fn guide_data_quality_scorecard() {
+    use micro_parquet::dq::*;
+    use micro_parquet::engine::*;
+    let d = dir("g_dq");
+    let p = d.join("book.csv");
+    std::fs::write(&p, "Account_No,Rate,Open_Date,Maturity,Balance\nA01,9.5,2020-01-01,2025-01-01,100\nA02,8.0,2020-01-01,2025-01-01,100\nA03,abc,2020-01-01,2025-01-01,100\nA04,xyz,2020-01-01,2025-01-01,100\nA05,45,2020-01-01,2025-01-01,100\nA06,7.0,2020-01-01,2019-12-31,100\nA07,6.0,2020-01-01,2025-01-01,100\nA07,6.5,2020-01-01,2025-01-01,100\n,5.5,2020-01-01,2025-01-01,100\nA10,4.0,2020-01-01,2025-01-01,100\n").expect("csv");
+    let mut cfg = auto_detect_smart_schema(&p).expect("schema");
+    for c in cfg.columns.iter_mut() {
+        c.dtype = match c.name.as_str() {
+            "Account_No" => ColDataType::Utf8,
+            "Rate" | "Balance" => ColDataType::Float64,
+            _ => ColDataType::DateISO,
+        };
+    }
+    let src = TabSource::SingleFile { path: p, is_parquet: false, config: cfg };
+    let df = compile_tab_lazy(&src, &[], &d).expect("compiles").collect().expect("collects");
+    let r = |name: &str, kind: DqKind| DqRule { name: name.into(), kind };
+    let set = DqRuleSet {
+        name: "guide".into(),
+        rules: vec![
+            r("Completeness", DqKind::Completeness { column: "Account_No".into() }),
+            r("Uniqueness", DqKind::Uniqueness { columns: vec!["Account_No".into()] }),
+            r("Type", DqKind::TypeValidity { column: "Rate".into() }),
+            r("Range", DqKind::Range { column: "Rate".into(), min: Some(0.0), max: Some(30.0) }),
+            r("Consistency", DqKind::Consistency { left: "Maturity".into(), op: DqCompare::Ge, right: "Open_Date".into() }),
+            r("GL control", DqKind::ControlTotal { column: "Balance".into(), gl_total: 1005.0, tolerance_pct: 0.1 }),
+        ],
+        ..Default::default()
+    };
+    let types = dq_type_stats(&src, &set, &d).expect("types");
+    let res = run_scorecard(&df, &types, &set, &[]).expect("scorecard");
+    let table = scorecard_frame(&res).expect("table");
+    check_guide("data-quality-scorecard", "guide_data_quality_scorecard", &[md(&df, &["Account_No", "Rate:2", "Open_Date", "Maturity", "Balance:2"]), md(&table, &["Rule", "Rows checked", "Rows failing", "Pass %:2", "Result"])]);
 }

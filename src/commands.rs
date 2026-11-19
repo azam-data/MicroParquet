@@ -53,6 +53,7 @@ pub enum CommandId {
     Audit,
     Packs,
     MomVariance,
+    DqScorecard,
     // Export
     ExportParquet,
     ExportCsv,
@@ -153,6 +154,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::LoadMacro, "Load and replay a macro on this tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::LoadMacroNewTab, "Load and replay a macro into a new tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::PythonExport, "Export the steps as a Python script\u{2026}", G::File, "py polars code", N::Tab),
+    c(I::DqScorecard, "Data-quality scorecard\u{2026}", G::Transform, "dq completeness unique duplicate blank range consistency control total gl rag green amber red score hygiene", N::Tab),
     c(I::SavedRuns, "Saved tool runs: re-run one\u{2026}", G::File, "repeat again rerun result tab gap ladder irrbb reconcile json inputs", N::Nothing),
     c(I::Quit, "Quit", G::File, "exit close", N::Nothing),
     c(I::Undo, "Undo the last change to the steps", G::Edit, "ctrl z back", N::Undo),
