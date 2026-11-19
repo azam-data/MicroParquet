@@ -354,3 +354,269 @@ fn c1_the_table_toggle_and_open_as_chart_tab_work_when_their_real_rects_are_clic
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ================================================================================ C2: menu, gallery, studio
+
+use crate::ui::layout_tests::Painted;
+use crate::ActiveToolModal;
+use crate::ui::render_tests::{assert_dialog_fits, inside};
+use micro_parquet::commands::CommandId;
+
+/// Moves the clock on from where egui's own is (the rig's first frames run without a clock).
+fn bump(rig: &mut Rig, dt: f64) {
+    let now = rig.ctx.input(|i| i.time);
+    rig.input.time = Some(now + dt);
+}
+
+fn pclick(rig: &mut Rig, r: egui::Rect) {
+    rig.step(vec![egui::Event::PointerMoved(r.center())]);
+    bump(rig, 1.0);
+    rig.click(r.center());
+    bump(rig, 1.0);
+}
+
+/// Scrolls with the wheel over `at` until `rect_of` is inside the window (no animation: one step at a time).
+fn scroll_into_view(rig: &mut Rig, at: egui::Pos2, rect_of: &dyn Fn(&Rig) -> Option<egui::Rect>, what: &str) -> egui::Rect {
+    rig.ctx.style_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
+    let screen = rig.ctx.screen_rect();
+    for _ in 0..60 {
+        rig.draw(2);
+        if let Some(r) = rect_of(rig) {
+            let visible = egui::Rect::from_min_max(egui::pos2(screen.left(), theme::TOP_BAR_H + theme::TAB_STRIP_H), egui::pos2(screen.right(), screen.bottom() - theme::STATUS_BAR_H));
+            if inside(r, visible) && r.is_positive() {
+                return r;
+            }
+        }
+        bump(rig, 0.2);
+        rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), modifiers: egui::Modifiers::NONE }]);
+    }
+    panic!("{}: {what} could not be scrolled into view", rig.what);
+}
+
+fn bar_box(p: &Painted, text: &str) -> Option<egui::Rect> {
+    let in_bar = |b: &egui::Rect| b.top() < theme::TOP_BAR_H;
+    p.boxes.iter().find(|(t, b)| t.trim() == text && in_bar(b)).or_else(|| p.boxes.iter().find(|(t, b)| t.contains(text) && in_bar(b))).map(|(_, b)| *b)
+}
+
+#[test]
+fn c2_the_charts_menu_sits_between_banking_and_export_is_clickable_and_its_items_work() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig("p7c2menu", ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        let order = ["File", "Edit", "View", "Banking", "Charts", "Export", "Help"];
+        let boxes: Vec<egui::Rect> = order.iter().map(|n| bar_box(&p, n).unwrap_or_else(|| panic!("{what}: the menu '{n}' is in the bar"))).collect();
+        for pair in boxes.windows(2) {
+            assert!(pair[0].right() <= pair[1].left() + 0.5, "{what}: the menus follow File, Edit, View, Banking, Charts, Export, Help without overlap: {boxes:?}");
+        }
+        assert!(boxes.iter().all(|b| inside(*b, screen)), "{what}: no menu folds out of the window: {boxes:?}");
+        // click Charts by its real rect: its four items
+        pclick(&mut rig, boxes[4]);
+        let p = rig.draw(3);
+        let item = |p: &Painted, t: &str| p.boxes.iter().find(|(x, b)| x.contains(t) && b.top() > theme::TOP_BAR_H - 1.0).map(|(_, b)| *b);
+        for t in ["New chart\u{2026}", "Chart this result", "Open saved chart\u{2026}", "Chart book (HTML)\u{2026}"] {
+            let r = item(&p, t).unwrap_or_else(|| panic!("{what}: the Charts menu lists '{t}'"));
+            assert!(inside(r, screen), "{what}: '{t}' is inside the window");
+        }
+        // on a file tab "Chart this result" and the chart book say why they are greyed
+        assert!(rig.app.command_unavailable(CommandId::ChartThis).is_some() && rig.app.command_unavailable(CommandId::ChartBook).is_some(), "{what}");
+        assert!(rig.app.command_unavailable(CommandId::ChartNew).is_none() && rig.app.command_unavailable(CommandId::ChartOpenSaved).is_none(), "{what}");
+        // New chart… opens the gallery
+        let r = item(&p, "New chart\u{2026}").expect("New chart");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartGallery, "{what}: Charts > New chart opens the gallery");
+        // Open saved chart… (second menu pass)
+        rig.app.active_tool = ActiveToolModal::None;
+        let p = rig.draw(3);
+        let b = bar_box(&p, "Charts").expect("Charts");
+        pclick(&mut rig, b);
+        let p = rig.draw(3);
+        let r = item(&p, "Open saved chart\u{2026}").expect("Open saved chart");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartOpen, "{what}: Charts > Open saved chart opens the list");
+        // Ctrl+K finds the commands
+        assert!(micro_parquet::commands::command(CommandId::ChartNew).is_some());
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+fn gallery_title() -> String {
+    format!("{}  New chart", theme::ph::CHART_BAR)
+}
+
+#[test]
+fn c2_the_gallery_shows_every_card_with_its_use_and_avoid_lines_and_a_click_takes_the_card() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig("p7c2gal", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(6);
+        rig.app.run_command(&rig.ctx, CommandId::ChartNew);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartGallery, "{what}");
+        let p = rig.draw(6);
+        let dlg = assert_dialog_fits(&rig.ctx, &gallery_title(), &what);
+        let g = rig.app.chart_gallery.rects.clone();
+        assert_eq!(g.cards.len(), 17, "{what}: every card is drawn");
+        for (i, (a, ra)) in g.cards.iter().enumerate() {
+            for (b, rb) in g.cards.iter().skip(i + 1) {
+                assert!(!overlap(*ra, *rb), "{what}: the cards '{a}' and '{b}' overlap");
+            }
+        }
+        // the headings and the guide lines
+        for t in ["Compare", "Suggest a chart", "Bar", "Use it when you rank"] {
+            assert!(p.boxes.iter().any(|(x, _)| x.contains(t)), "{what}: '{t}' is in the gallery");
+        }
+        assert!(inside(g.suggest.expect("Suggest"), dlg.window) && inside(g.close.expect("Close"), dlg.window), "{what}: Suggest and Close are in the dialog");
+        // "Suggest": nothing picked says so
+        pclick(&mut rig, g.suggest.expect("Suggest"));
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("at least one column")), "{what}: the reason is shown");
+        // pick the text and the number column, then Suggest: a sorted bar
+        let g = rig.app.chart_gallery.rects.clone();
+        for name in ["Risk", "Balance"] {
+            let r = g.columns.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: chip {name}"));
+            pclick(&mut rig, r);
+            rig.draw(2);
+        }
+        assert_eq!(rig.app.chart_gallery.picked, vec!["Risk".to_string(), "Balance".to_string()], "{what}");
+        let g = rig.app.chart_gallery.rects.clone();
+        pclick(&mut rig, g.suggest.expect("Suggest"));
+        rig.draw(3);
+        match &rig.app.chart_gallery.suggestion {
+            Some(Ok(s)) => assert_eq!((s.kind, s.horizontal, s.by_value), (ChartKind::Bar, true, true), "{what}: text + number is a sorted bar"),
+            other => panic!("{what}: {other:?}"),
+        }
+        let g = rig.app.chart_gallery.rects.clone();
+        pclick(&mut rig, g.use_suggestion.expect("Use this chart"));
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: taking a suggestion closes the gallery");
+        assert_eq!((rig.app.chart.spec.kind, rig.app.chart.spec.horizontal, rig.app.chart.spec.by_value), (ChartKind::Bar, true, true), "{what}");
+        // take cards by their real rects, scrolling the dialog to them
+        for (id, check) in [("bar", ChartKind::Bar), ("line", ChartKind::Line), ("donut", ChartKind::Donut), ("waterfall", ChartKind::Waterfall), ("treemap", ChartKind::Treemap)] {
+            rig.app.run_command(&rig.ctx, CommandId::ChartNew);
+            rig.draw(4);
+            let dlg = theme::dialog_report(&rig.ctx, &gallery_title()).expect("the dialog");
+            let at = dlg.body.center();
+            let r = scroll_into_view(&mut rig, at, &|rig: &Rig| rig.app.chart_gallery.rects.cards.iter().find(|(n, _)| n == id).map(|(_, r)| *r), &format!("the card {id}"));
+            assert!(inside(r, dlg.window), "{what}: the card {id} {r:?} is in the dialog {:?}", dlg.window);
+            pclick(&mut rig, r);
+            rig.draw(4);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: {id}");
+            assert_eq!(rig.app.chart.spec.kind, check, "{what}: the card {id} sets the form");
+        }
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn c2_the_studio_controls_work_by_real_clicks_titles_reference_lines_and_measures() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig("p7c2studio", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(10);
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field_rect = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        // Titles and look: open the section, type a takeaway
+        let r = scroll_into_view(&mut rig, at, &field_rect("Titles and look"), "Titles and look");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        let r = scroll_into_view(&mut rig, at, &field_rect("Takeaway"), "Takeaway");
+        pclick(&mut rig, r);
+        rig.step(vec![egui::Event::Text("Term deposits drove growth".into())]);
+        rig.draw(6);
+        assert_eq!(rig.app.chart.spec.takeaway, "Term deposits drove growth", "{what}: typed into the Takeaway field");
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert!(shown.layout.texts.iter().any(|t| t.role == Role::Title && t.text == "Term deposits drove growth"), "{what}: the takeaway is the title of the chart");
+        let r = scroll_into_view(&mut rig, at, &field_rect("Footnote"), "Footnote");
+        pclick(&mut rig, r);
+        rig.step(vec![egui::Event::Text("Synthetic data".into())]);
+        rig.draw(4);
+        assert_eq!(rig.app.chart.spec.footnote, "Synthetic data", "{what}");
+        // Type: Bar (Column / bar) stays; choose Stacked in the Stack combo by clicking
+        // Reference lines: open, add one, it is drawn with its status written out
+        let r = scroll_into_view(&mut rig, at, &field_rect("Reference lines"), "Reference lines");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        let r = scroll_into_view(&mut rig, at, &field_rect("Add reference line"), "Add reference line");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.chart.spec.ref_lines.len(), 1, "{what}: a reference line was added");
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert!(shown.layout.texts.iter().any(|t| t.role == Role::Reference && t.text.contains("Critical")), "{what}: the line is labelled with its status");
+        let r = scroll_into_view(&mut rig, at, &field_rect("Line 0 remove"), "Remove");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        assert!(rig.app.chart.spec.ref_lines.is_empty(), "{what}: removed");
+        // Measures and panels: a second measure gives linked panels
+        let r = scroll_into_view(&mut rig, at, &field_rect("Measures and panels"), "Measures and panels");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        let r = scroll_into_view(&mut rig, at, &field_rect("Add measure"), "Add measure");
+        pclick(&mut rig, r);
+        rig.draw(12);
+        assert_eq!(rig.app.chart.spec.measures.len(), 2, "{what}: a measure was added");
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert_eq!(shown.layout.panels.len(), 2, "{what}: two measures are two linked panels, never a second axis: {:?} {:?} {:?}", shown.layout.message, rig.app.chart.error, rig.app.chart.data.as_ref().map(|d| (d.measure_count(), d.categories.len())));
+        assert_eq!(rig.app.chart.data.as_ref().map(|d| d.measure_count()), Some(2), "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn c2_a_chart_is_saved_by_name_and_opened_again_identically_by_real_clicks() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig("p7c2save", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(10);
+        rig.app.chart.spec.takeaway = "Saved takeaway".into();
+        rig.app.chart.spec.horizontal = true;
+        rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field_rect = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let r = scroll_into_view(&mut rig, at, &field_rect("Save chart"), "Save chart");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartSave, "{what}: Save chart opens the dialog");
+        let title = format!("{}  Save chart", theme::ph::FLOPPY_DISK);
+        assert_dialog_fits(&rig.ctx, &title, &what);
+        assert!(!rig.app.chart_save.name.is_empty(), "{what}: the name is filled in from the title");
+        rig.app.chart_save.name = "Deposit mix".into();
+        let saved = rig.app.chart.spec.clone();
+        rig.draw(3);
+        let save = rig.app.chart_save.rects.iter().find(|(n, _)| n == "Save").map(|(_, r)| *r).expect("Save button");
+        pclick(&mut rig, save);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: saved and closed");
+        let file = rig.app.paths.root_dir.join("charts").join("Deposit mix.json");
+        assert!(file.exists(), "{what}: portable_data/charts/Deposit mix.json was written");
+        // change the chart, then open the saved one
+        rig.app.chart.spec.takeaway = "Changed".into();
+        rig.app.chart.spec.horizontal = false;
+        rig.draw(4);
+        let r = scroll_into_view(&mut rig, at, &field_rect("Open saved chart"), "Open saved chart");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartOpen, "{what}");
+        let open = rig.app.chart_open.rects.iter().find(|(n, _)| n == "Open Deposit mix").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the saved chart is listed"));
+        pclick(&mut rig, open);
+        rig.draw(6);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        assert_eq!(rig.app.chart.spec, saved, "{what}: a saved chart reloads identically");
+        // a chart that names a column this tab does not have is refused, naming it
+        let mut other = saved.clone();
+        other.value = Some("Nonexistent".into());
+        micro_parquet::charts::library::save_chart(&rig.app.paths.root_dir.join("charts"), "Other tab", &other).expect("save");
+        rig.app.open_chart_open();
+        rig.draw(4);
+        let open = rig.app.chart_open.rects.iter().find(|(n, _)| n == "Open Other tab").map(|(_, r)| *r).expect("listed");
+        pclick(&mut rig, open);
+        let p = rig.draw(4);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ChartOpen, "{what}: the dialog stays open on a refusal");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("does not have: Nonexistent")), "{what}: the refusal names the column");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}

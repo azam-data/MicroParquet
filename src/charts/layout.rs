@@ -30,6 +30,7 @@ const STACKED_AREA_ALPHA: f32 = 0.55;
 const DONUT_HOLE: f32 = 0.62;
 const SMALL_PANEL_W: f32 = 190.0;
 const SMALL_PANEL_H: f32 = 140.0;
+const LINKED_PANEL_H: f32 = 130.0;
 const TOOLTIP_PAD: f32 = 6.0;
 const MAX_CAT_LABEL_W_SHARE: f32 = 0.34;
 const MIN_BODY_H: f32 = 70.0;
@@ -791,8 +792,9 @@ fn panels_form(b: &mut Builder, data: &ChartData, plans: &[Plan], body: Rect, op
     };
     let gap = if multi { SECTION_GAP * 2.0 } else { PANEL_GAP };
     let cell_h_avail = (area.height() - gap * (rows as f32 - 1.0)) / rows as f32;
-    let cell_h = if multi { cell_h_avail.max(SMALL_PANEL_H) } else { cell_h_avail };
-    if multi {
+    // small multiples and linked panels never get squeezed below a readable height: the chart grows instead
+    let cell_h = if multi { cell_h_avail.max(SMALL_PANEL_H) } else if n > 1 { cell_h_avail.max(LINKED_PANEL_H) } else { cell_h_avail };
+    if cell_h > cell_h_avail {
         b.out.needed_height = (area.top() - b.out.rect.top()) + cell_h * rows as f32 + gap * (rows as f32 - 1.0) + (b.out.rect.bottom() - body.bottom()) + 1.0;
         b.out.needed_height = b.out.needed_height.max(b.out.rect.height());
         if b.out.needed_height > b.out.rect.height() {
@@ -900,7 +902,8 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
     // room for the value labels above the tallest mark
     let tick_h = b.size("0", t::TICK_PT, Face::Regular).y;
     let label_h = b.size("0", t::DATA_LABEL_PT, Face::Regular).y;
-    let top_inset = if horizontal { tick_h / 2.0 } else { (label_h + t::MIN_SPACE_PX).max(tick_h / 2.0) };
+    let ref_room = if spec.ref_lines.is_empty() { 0.0 } else { label_h + t::MIN_SPACE_PX };
+    let top_inset = (if horizontal { tick_h / 2.0 } else { (label_h + t::MIN_SPACE_PX).max(tick_h / 2.0) }) + ref_room;
     let cat_h = if show_cats && !horizontal { tick_h + t::MIN_SPACE_PX } else { 0.0 };
     let bottom_axis_h = if horizontal { tick_h + t::MIN_SPACE_PX } else { cat_h };
     let left = outer.left() + if show_ticks || horizontal { left_margin } else { t::MIN_SPACE_PX };
@@ -988,13 +991,35 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
                 b.line(pos2(plot.left(), c), pos2(plot.right(), c), t::REFERENCE_LINE_PX, col);
             }
             let text = if rl.label.is_empty() { format!("{}: {}", rl.status.label(), fmt(rl.value, false)) } else { format!("{} ({})", rl.label, rl.status.label()) };
-            let at = if horizontal { pos2(c + 4.0, plot.top() + 2.0) } else { pos2(plot.right() - 4.0, c - 3.0) };
-            let anchor = if horizontal { Anchor::TopLeft } else { Anchor::BottomRight };
-            if b.try_put(Role::Reference, &text, anchor, at, t::LABEL_PT, Face::Regular, ink_c).is_none() {
-                // below the line instead
-                let at2 = if horizontal { pos2(c - 4.0, plot.top() + 2.0) } else { pos2(plot.right() - 4.0, c + 3.0) };
-                let anchor2 = if horizontal { Anchor::TopRight } else { Anchor::TopRight };
-                let _ = b.try_put(Role::Reference, &text, anchor2, at2, t::LABEL_PT, Face::Regular, ink_c);
+            // the label goes beside the line where there is room: along the line, above or below it
+            let size = b.size(&text, t::LABEL_PT, Face::Regular);
+            let mut placed = false;
+            'scan: for side in [-1.0f32, 1.0] {
+                for k in 0..=8usize {
+                    let f = if k % 2 == 0 { 1.0 - k as f32 / 16.0 } else { k as f32 / 16.0 };
+                    let (anchor, at) = if horizontal {
+                        // a vertical line: the label to its right (side 1) or left (side -1), near the top
+                        let y = plot.top() + 2.0 + size.y * (k as f32 / 2.0);
+                        if side > 0.0 { (Anchor::TopLeft, pos2(c + 4.0, y)) } else { (Anchor::TopRight, pos2(c - 4.0, y)) }
+                    } else {
+                        let x = plot.left() + 4.0 + (plot.width() - size.x - 8.0).max(0.0) * f;
+                        if side < 0.0 { (Anchor::BottomLeft, pos2(x, c - 3.0)) } else { (Anchor::TopLeft, pos2(x, c + 3.0)) }
+                    };
+                    if b.try_put(Role::Reference, &text, anchor, at, t::LABEL_PT, Face::Regular, ink_c).is_some() {
+                        placed = true;
+                        break 'scan;
+                    }
+                }
+            }
+            if !placed {
+                // no room beside the line (it crosses the bars): the label stands above the plot, after a short
+                // piece of the line in its colour, so it is still tied to the line
+                let sw = 14.0;
+                let y = plot.top() - size.y / 2.0 - 2.0;
+                let x = if horizontal { c } else { plot.right() - size.x - sw - 6.0 };
+                let x = x.clamp(plot.left(), (plot.right() - size.x - sw - 6.0).max(plot.left()));
+                b.line(pos2(x, y), pos2(x + sw, y), t::REFERENCE_LINE_PX, col);
+                b.put(Role::Reference, &text, Anchor::MidLeft, pos2(x + sw + 4.0, y), t::LABEL_PT, Face::Regular, ink_c);
             }
         }
     }

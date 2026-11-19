@@ -139,9 +139,9 @@ fn t6_every_toolbar_action_is_in_the_command_list() {
 
 #[test]
 fn t6_unavailable_commands_say_why() {
-    let none = CommandState { tabs: 0, can_undo: false, can_redo: false };
-    let one = CommandState { tabs: 1, can_undo: false, can_redo: false };
-    let two = CommandState { tabs: 2, can_undo: true, can_redo: true };
+    let none = CommandState { tabs: 0, can_undo: false, can_redo: false, ..Default::default() };
+    let one = CommandState { tabs: 1, can_undo: false, can_redo: false, ..Default::default() };
+    let two = CommandState { tabs: 2, can_undo: true, can_redo: true, ..Default::default() };
     let reason = |id: CommandId, s: CommandState| unavailable_reason(command(id).unwrap(), s);
     assert_eq!(reason(CommandId::OpenFile, none), None, "opening a file always works");
     assert_eq!(reason(CommandId::ToggleTheme, none), None);

@@ -102,3 +102,5 @@ mod guide6;
 mod p7_c0;
 #[path = "../phase7/c1.rs"]
 mod p7_c1;
+#[path = "../phase7/c2.rs"]
+mod p7_c2;

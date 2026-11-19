@@ -37,6 +37,14 @@ pub struct ChartState {
     pub show_table: bool,
 }
 
+/// What the studio's buttons asked for this frame.
+#[derive(Default)]
+pub(crate) struct StudioActions {
+    pub open_tab: bool,
+    pub open_chart_tab: bool,
+    pub save: bool,
+}
+
 /// A chart that is a tab of its own ("Open as tab"): what it shows and in what scale.
 #[derive(Clone, Debug)]
 pub struct ChartTabInfo {
@@ -342,32 +350,72 @@ impl MicroParquetApp {
     /// What fills the chart's own window (tests draw it in a headless window of its size).
     pub(crate) fn chart_popout_ui(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                self.render_chart_body(ui);
-            });
+            self.render_chart_studio(ui, true);
         });
     }
 
     fn render_chart_body(&mut self, ui: &mut egui::Ui) {
+        self.render_chart_studio(ui, false);
+    }
+
+    /// The chart studio: the controls and the chart. `wide` puts the controls in a column beside the
+    /// chart (the pop-out window); otherwise the chart is under the controls (the side panel).
+    pub(crate) fn render_chart_studio(&mut self, ui: &mut egui::Ui, wide: bool) {
         if self.tabs.is_empty() {
             return;
         }
         self.chart_attach_tab();
         self.chart_tick();
-        let tk = *theme::tokens(self.dark_mode);
+        let pop_button = self.chart.rects.pop_button;
+        let mut rects = ChartRects::default();
+        let mut acts = StudioActions::default();
+        if wide {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(egui::vec2(theme::CHART_CONTROLS_W, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::ScrollArea::vertical().id_salt("studio_controls").auto_shrink([false, false]).show(ui, |ui| {
+                        self.chart_controls(ui, &mut rects, &mut acts);
+                        self.chart_sections(ui, &mut rects);
+                    });
+                });
+                ui.vertical(|ui| {
+                    self.chart_plot_area(ui, &mut rects);
+                });
+            });
+        } else {
+            self.chart_controls(ui, &mut rects, &mut acts);
+            self.chart_plot_area(ui, &mut rects);
+            // under the chart: shape, titles, reference lines, measures (the chart stays where it was)
+            ui.add_space(theme::SPACE_S);
+            self.chart_sections(ui, &mut rects);
+        }
+        rects.pop_button = pop_button;
+        let old = std::mem::take(&mut self.chart.rects);
+        // the controls and the plot each fill their own part of the rectangles
+        self.chart.rects = ChartRects { title: rects.title.or(old.title), plot: rects.plot, notes: rects.notes, ..rects };
+        if acts.open_tab {
+            self.chart_open_as_tab();
+        }
+        if acts.open_chart_tab {
+            self.chart_open_as_chart_tab();
+        }
+        if acts.save {
+            self.open_chart_save();
+        }
+    }
+
+    /// The controls: the Phase 6 grid (category, series, aggregation, value, type, order, Top N, scale),
+    /// the buttons, and the studio sections.
+    fn chart_controls(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects, acts: &mut StudioActions) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
         let avail = tab.available_columns();
+        let numeric: Vec<String> = tab.cached_slice.get_columns().iter().filter(|c| is_number_type(c.dtype())).map(|c| c.name().to_string()).collect();
         let order_lists = self.sort_lists.lists.clone();
-        let mut rects = ChartRects::default();
-        let mut open_tab = false;
-        let mut open_chart_tab = false;
         let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
-        let pop_button = self.chart.rects.pop_button;
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
-            let mut add = |ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
+            let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
             ui.label("Category (X)");
             let r = egui::ComboBox::from_id_salt("chart_category").width(combo_w).selected_text(&spec.category).show_ui(ui, |ui| {
@@ -375,7 +423,7 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.category, c.clone(), c);
                 }
             });
-            add(ui, "Category", &mut rects, r.response.rect);
+            add(ui, "Category", rects, r.response.rect);
             ui.end_row();
             ui.label("Series");
             let shown = spec.series.clone().unwrap_or_else(|| "(none)".to_string());
@@ -385,7 +433,7 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.series, Some(c.clone()), c);
                 }
             });
-            add(ui, "Series", &mut rects, r.response.rect);
+            add(ui, "Series", rects, r.response.rect);
             ui.end_row();
             ui.label("Aggregation");
             let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.agg.label()).show_ui(ui, |ui| {
@@ -393,7 +441,7 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.agg, *a, a.label());
                 }
             });
-            add(ui, "Aggregation", &mut rects, r.response.rect);
+            add(ui, "Aggregation", rects, r.response.rect);
             ui.end_row();
             if spec.agg.needs_value() {
                 ui.label("Value");
@@ -403,7 +451,7 @@ impl MicroParquetApp {
                         ui.selectable_value(&mut spec.value, Some(c.clone()), c);
                     }
                 });
-                add(ui, "Value", &mut rects, r.response.rect);
+                add(ui, "Value", rects, r.response.rect);
                 ui.end_row();
             }
             if spec.agg == ChartAgg::WeightedAvg {
@@ -414,15 +462,16 @@ impl MicroParquetApp {
                         ui.selectable_value(&mut spec.weight, Some(c.clone()), c);
                     }
                 });
-                add(ui, "Weight", &mut rects, r.response.rect);
+                add(ui, "Weight", rects, r.response.rect);
                 ui.end_row();
             }
             ui.label("Type");
-            let r = egui::ComboBox::from_id_salt("chart_kind").width(theme::CHART_COMBO_NARROW_W).selected_text(if spec.kind == ChartKind::Bar { "Bar" } else { "Line" }).show_ui(ui, |ui| {
-                ui.selectable_value(&mut spec.kind, ChartKind::Bar, "Bar");
-                ui.selectable_value(&mut spec.kind, ChartKind::Line, "Line");
+            let r = egui::ComboBox::from_id_salt("chart_kind").width(combo_w).selected_text(spec.kind.label()).show_ui(ui, |ui| {
+                for k in ChartKind::all() {
+                    ui.selectable_value(&mut spec.kind, *k, k.label());
+                }
             });
-            add(ui, "Type", &mut rects, r.response.rect);
+            add(ui, "Type", rects, r.response.rect);
             ui.end_row();
             ui.label("Order");
             let order_text = if spec.by_value { "By value".to_string() } else { spec.order.label() };
@@ -446,11 +495,11 @@ impl MicroParquetApp {
                     spec.by_value = true;
                 }
             });
-            add(ui, "Order", &mut rects, r.response.rect);
+            add(ui, "Order", rects, r.response.rect);
             ui.end_row();
             ui.label("Top N");
             let r = ui.add(egui::DragValue::new(&mut spec.top_n).range(1..=500).speed(0.2)); // not a size: a drag speed
-            add(ui, "Top N", &mut rects, r.rect);
+            add(ui, "Top N", rects, r.rect);
             ui.end_row();
             ui.label("Scale");
             let r = egui::ComboBox::from_id_salt("chart_scale").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.scale.label()).show_ui(ui, |ui| {
@@ -458,26 +507,26 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.scale, *s, s.label());
                 }
             });
-            add(ui, "Scale", &mut rects, r.response.rect);
+            add(ui, "Scale", rects, r.response.rect);
             ui.end_row();
             ui.label("");
             let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Open chart data as tab"));
-            add(ui, "Open chart data as tab", &mut rects, b.rect);
+            add(ui, "Open chart data as tab", rects, b.rect);
             ui.end_row();
             if b.clicked() {
-                open_tab = true;
+                acts.open_tab = true;
             }
             ui.label("View");
             ui.horizontal(|ui| {
                 let b = ui.selectable_label(show_table, "Table");
-                add(ui, "Table", &mut rects, b.rect);
+                add(ui, "Table", rects, b.rect);
                 if b.clicked() {
                     show_table = !show_table;
                 }
                 let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Chart tab"));
-                add(ui, "Open as chart tab", &mut rects, b.rect);
+                add(ui, "Open as chart tab", rects, b.rect);
                 if b.clicked() {
-                    open_chart_tab = true;
+                    acts.open_chart_tab = true;
                 }
             });
             ui.end_row();
@@ -485,11 +534,39 @@ impl MicroParquetApp {
         rects.controls = Some(controls.response.rect);
         self.chart.show_table = show_table;
         if spec != self.chart.spec {
-            self.chart.spec = spec;
-            self.chart_save_choices();
-            self.chart_tick();
+            self.chart_set_spec(spec);
         }
-        // the title, then the plot (or why there is none)
+    }
+
+    /// The studio sections (shape, titles and look, reference lines, measures and panels).
+    fn chart_sections(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let avail = tab.available_columns();
+        let numeric: Vec<String> = tab.cached_slice.get_columns().iter().filter(|c| is_number_type(c.dtype())).map(|c| c.name().to_string()).collect();
+        let mut spec = self.chart.spec.clone();
+        ui.horizontal(|ui| {
+            let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Save chart\u{2026}"));
+            rects.fields.push(("Save chart".to_string(), b.rect));
+            if b.clicked() {
+                self.open_chart_save();
+            }
+            let b = ui.button("Open saved chart\u{2026}");
+            rects.fields.push(("Open saved chart".to_string(), b.rect));
+            if b.clicked() {
+                self.open_chart_open();
+            }
+        });
+        self.studio_sections(ui, &mut spec, &avail, &numeric, rects);
+        if spec != self.chart.spec {
+            self.chart_set_spec(spec);
+        }
+    }
+
+    /// The title line (what was calculated), then the chart or its table (or why there is none).
+    fn chart_plot_area(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects) {
+        let tk = *theme::tokens(self.dark_mode);
         let mut new_map: Option<micro_parquet::charts::colours::ColourMap> = None;
         let scale = self.chart_scale(&self.chart.spec);
         let unit = scale.as_ref().map(scale_word).filter(|u| !u.is_empty()).map(str::to_string);
@@ -502,10 +579,7 @@ impl MicroParquetApp {
                 if self.chart.busy {
                     title.push_str("  \u{2014} calculating\u{2026}");
                 }
-                rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap()).rect);
-                if !d.notes.is_empty() {
-                    rects.notes = Some(ui.add(egui::Label::new(egui::RichText::new(d.notes.join(" ")).color(tk.muted).size(theme::TEXT_LABEL)).wrap()).rect);
-                }
+                rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(title).color(tk.ink2).size(theme::TEXT_LABEL)).wrap()).rect);
                 if self.chart.show_table {
                     let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: String::new(), bare: true, colours: None };
                     crate::ui::chart_render::show_table(ui, d, &opts);
@@ -519,8 +593,6 @@ impl MicroParquetApp {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
             }
         }
-        rects.pop_button = pop_button;
-        self.chart.rects = rects;
         if let Some(m) = new_map.filter(|m| *m != self.chart.spec.colour_map) {
             self.chart.spec.colour_map = m.clone();
             if let Some(d) = self.chart.data.as_mut() {
@@ -528,12 +600,25 @@ impl MicroParquetApp {
             }
             self.chart_save_choices();
         }
-        if open_tab {
-            self.chart_open_as_tab();
-        }
-        if open_chart_tab {
-            self.chart_open_as_chart_tab();
-        }
+    }
+
+    /// Makes `spec` the chart's settings: saved for the tab, and the numbers recalculated when they changed.
+    pub(crate) fn chart_set_spec(&mut self, spec: ChartSpec) {
+        self.chart.spec = spec;
+        self.chart_save_choices();
+        self.chart_tick();
+    }
+
+    pub(crate) fn chart_attach_tab_pub(&mut self) {
+        self.chart_attach_tab();
+    }
+
+    /// Charts ▸ "Chart this result": the studio on the result tab (the banking templates of Phase 7 C5
+    /// are applied here; until then the studio opens with the first sensible choices for the tab).
+    pub(crate) fn chart_this_result(&mut self) {
+        self.chart_attach_tab();
+        self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+        self.status_message = "Chart: the studio is open on this result tab.".to_string();
     }
 
     /// The tooltip of one bar or point: the category (whole), the series, the value in the chart's
@@ -561,7 +646,7 @@ impl MicroParquetApp {
             divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
             decimals: self.global_decimals,
             unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
-            bare: true,
+            bare: false,
             colours: Some(self.chart.spec.colour_map.clone()),
         };
         // what is drawn follows the live choices; the numbers are the calculated ones

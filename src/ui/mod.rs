@@ -6,6 +6,7 @@ pub mod buckets;
 pub mod calc_column;
 pub mod chart;
 pub mod chart_render;
+pub mod chart_studio;
 pub mod cl_migration;
 pub mod columns;
 pub mod commands;
@@ -122,6 +123,9 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
+            ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),
+            ActiveToolModal::ChartOpen => self.render_chart_open_modal(ctx, cols),
             ActiveToolModal::Mudaraba => self.render_mudaraba_modal(ctx, cols),
             ActiveToolModal::DqScorecard => self.render_dq_modal(ctx, cols),
             ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),

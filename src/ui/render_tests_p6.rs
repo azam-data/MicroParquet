@@ -1088,11 +1088,15 @@ fn u5_the_chart_shows_the_whole_tab_with_category_names_on_the_x_axis_and_the_ti
         // (the side panel is narrow: a name is left out where two would touch, never reordered)
         assert!(is_subsequence(&labels, &["1m", "1y", "3m", "6m", "100D"]) && labels.len() >= 3, "{what}: the x-axis names the categories: {:?}", p.boxes.iter().filter(|(_, b)| b.top() >= plot.bottom() - 40.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
         // the title, with the unit of the column's format (Crore is the default scale)
-        let title = p.boxes.iter().find(|(t, _)| t.starts_with("Sum of Balance by Term Period")).map(|(t, b)| (t.clone(), *b)).unwrap_or_else(|| panic!("{what}: the title"));
+        let title = p.boxes.iter().find(|(t, _)| t.starts_with("Sum of Balance by Term Period: all")).map(|(t, b)| (t.clone(), *b)).unwrap_or_else(|| panic!("{what}: the title"));
         assert_eq!(title.0, "Sum of Balance by Term Period: all 250 rows (Crore)", "{what}");
         // the controls and the title are inside the window and the central area
         let screen_rect = rig.ctx.screen_rect();
         for (n, f) in &r.fields {
+            // (the studio sections of Phase 7 are under the chart, reached by scrolling the panel)
+            if f.top() > plot.bottom() {
+                continue;
+            }
             assert!(inside(*f, screen_rect), "{what}: '{n}' {f:?} is in the window");
             assert!(f.left() >= screen_rect.right() - rig.app.right_panel_w - 1.0, "{what}: '{n}' {f:?} is in the side panel (F2)");
         }
@@ -2526,11 +2530,12 @@ fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_th
         let mut rig = term_rig("p6f3a", ppp, w, h);
         let what = rig.what.clone();
         let p = rig.draw(4);
-        // left to right: File, Edit, View, Banking, Export, Help, then the toolbar buttons
+        // left to right: File, Edit, View, Banking, Charts, Export, Help, then the toolbar buttons
         let xs: Vec<f32> = ["File", "Edit", "View", "Help"].iter().map(|n| bar_box(&p, n).unwrap_or_else(|| panic!("{what}: {n}")).left()).collect();
         let banking = p.boxes.iter().find(|(t, b)| t.contains("Banking") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Banking");
         let export = p.boxes.iter().find(|(t, b)| t.contains("Export") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Export");
-        assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < banking && banking < export && export < xs[3], "{what}: the order of the menus: {xs:?} {banking} {export}");
+        let charts = p.boxes.iter().find(|(t, b)| t.contains("Charts") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Charts");
+        assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < banking && banking < charts && charts < export && export < xs[3], "{what}: the order of the menus: {xs:?} {banking} {charts} {export}");
         assert!(bar_box(&p, "More").is_none(), "{what}: no More menu any more");
         // Edit: Undo, Redo, the transforms, Data checks
         let p = click_menu(&mut rig, "Edit");
@@ -2602,7 +2607,7 @@ fn f3_view_toolbar_buttons_switch_each_button_off_and_on_and_are_saved() {
         // close the menu and look at the bar
         rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
         let p = rig.draw(4);
-        let has_icon = |id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.contains(crate::ui::commands::toolbar_label(id))));
+        let has_icon = |id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.trim().ends_with(&format!("  {}", crate::ui::commands::toolbar_label(id))) || t.trim() == crate::ui::commands::toolbar_label(id)));
         assert!(!has_icon(CommandId::Pivot) && !has_icon(CommandId::ToggleChart), "{what}: Pivot and Chart are off the bar");
         assert!(has_icon(CommandId::Filter) && has_icon(CommandId::ToggleSql) && has_icon(CommandId::RateProfile), "{what}: the others stay");
         let (again, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);

@@ -123,6 +123,12 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// New chart: the chart gallery (Phase 7 C2).
+    ChartGallery,
+    /// Charts ▸ Save chart (Phase 7 C2).
+    ChartSave,
+    /// Charts ▸ Open saved chart (Phase 7 C2).
+    ChartOpen,
     /// The Mudaraba profit distribution (Phase 6 P5).
     Mudaraba,
     /// The data-quality scorecard (Phase 6 P4).
@@ -267,6 +273,9 @@ pub struct MicroParquetApp {
     pub filter: FilterState,
     pub sort: SortState,
     pub sort_lists: SortListsState,
+    pub chart_gallery: crate::ui::chart_studio::ChartGalleryState,
+    pub chart_save: crate::ui::chart_studio::ChartSaveState,
+    pub chart_open: crate::ui::chart_studio::ChartOpenState,
     pub runs: RunsState,
     pub packs: PacksState,
     pub mom: MomState,
@@ -393,6 +402,9 @@ impl MicroParquetApp {
             filter: FilterState::default(),
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
+            chart_gallery: Default::default(),
+            chart_save: Default::default(),
+            chart_open: Default::default(),
             runs: RunsState::default(),
             packs: PacksState::default(),
             mom: MomState::default(),

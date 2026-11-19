@@ -334,6 +334,7 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 - C0: the colour and size literals live in `src/charts/tokens.rs` (library), exposed to the UI as `CHART_*` tokens in `theme.rs`; the HTML and Excel renderers are in the library and cannot read the binary's theme. Both crates pin every hex value in a test.
 - C0: the Phase 6 chart types moved to `src/charts/` and are re-exported from `src/chart.rs`; `ChartKind::Bar` stays the vertical column form (horizontal is a flag).
 - C1: layout geometry lives in `src/charts/layout.rs` (library), painter in `src/ui/chart_render.rs`; histogram bars fill their band (2 px gaps); stacked areas 55% opacity; axis names are horizontal above the plot; more than 3 scatter series fold into 2 + Other; heatmap rows follow series size.
+- C2: "Chart this result" opens the studio (templates are C5); "Chart book" is disabled until C3; the studio's extra sections are under the chart in the side panel and beside it in the pop-out; the right panel no longer drag-scrolls; Phase 6 tests adjusted for the Charts menu and the chart's own title.
 - C1: a chart tab is a normal tab (the chart's data table) drawn as a chart in the main area; tabs are not restored at start-up, so "saved with the session" is `settings.json` `chart_tabs`.
 - C0: a percentage of a zero total is blank with a note; a waterfall that does not add up, and more than 12 facet values, are refused with a message.
 </accepted_deviations>

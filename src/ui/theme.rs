@@ -464,6 +464,14 @@ pub const SQL_HISTORY_POPUP_H: f32 = 420.0;
 // chart
 pub const CHART_H: f32 = 175.0;
 pub const CHART_TOOLTIP_W: f32 = 260.0;
+pub const CHART_GALLERY_W: f32 = 1040.0;
+pub const CHART_CARD_W: f32 = 232.0;
+pub const CHART_CARD_H: f32 = 196.0;
+pub const CHART_THUMB_H: f32 = 70.0;
+pub const CHART_TEXT_FIELD_W: f32 = 150.0;
+pub const CHART_REF_LABEL_W: f32 = 90.0;
+pub const CHART_CONTROLS_W: f32 = 330.0;
+pub const CHART_WIDE_MIN_W: f32 = 720.0;
 pub const CHART_MIN_W: f32 = 200.0;
 pub const CHART_MIN_H: f32 = 175.0;
 pub const CHART_MAX_H: f32 = 520.0;

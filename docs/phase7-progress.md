@@ -6,7 +6,7 @@ Branch `phase7`. Tasks done in this session: C0, C1, C2 (in that order). Resume 
 | --- | --- | --- | --- |
 | C0 | DONE | (see git log: "Phase 7 C0") | tests/phase7/c0.rs ×20; render_tests_p7 ×1 (theme tokens) |
 | C1 | DONE | (see git log: "Phase 7 C1") | tests/phase7/c1.rs ×22 (layout rules, all forms); render_tests_p7 ×4 (every form × light/dark × 3 sizes with real fonts, hover by real rect, Table toggle and Chart tab by real clicks, screenshots) |
-| C2 | pending | | |
+| C2 | DONE | (see git log: "Phase 7 C2") | tests/phase7/c2.rs ×9 (suggestion rules, gallery catalogue, card to columns, saved charts round trip and plain errors, Charts commands and Ctrl+K); render_tests_p7 ×4 (Charts menu order and clicks, gallery cards/suggest by real rects at 3 sizes, studio sections typed and clicked, save and open by real clicks) |
 
 ## Deviations (also in `docs/phase7-spec.md` `<accepted_deviations>`)
 
@@ -20,3 +20,8 @@ Branch `phase7`. Tasks done in this session: C0, C1, C2 (in that order). Resume 
 - C1-4: a "Chart tab" is a normal tab (the chart's data table, so it exports like any tab) whose main area draws the chart (`chart_tabs`, by tab id). Tabs are not restored when the app restarts, so "saved with the session" is `settings.json` `chart_tabs` (title, source key, chart); Charts ▸ "Open saved chart…" (C2) reopens it.
 - C1-5: heatmap rows follow the series' size, not the order list (columns follow the order list).
 - C1-6: the Phase 6 quick chart keeps its own title and notes above the plot (the renderer runs in `bare` mode there); the studio of C2 uses the full title block. Screenshots are made by `tools/chart_layout_png.py` (Pillow) from the layout the render tests produced; they are skipped with a note when python3/Pillow is absent. PNGs are in `docs/guide/img/charts/`.
+- C2-1: "Chart this result" is enabled on tool result tabs and opens the studio on that tab; the banking templates it applies are task C5. "Chart book (HTML)…" is in the menu and Ctrl+K but disabled with its reason until the HTML export (C3). The gallery's "Banking templates" group is a line of text for the same reason.
+- C2-2: the Phase 6 Chart tab is the studio. Its Phase 6 controls keep their places; the new sections (shape, Titles and look, Reference lines, Measures and panels, Save / Open saved chart) are under the chart in the side panel and beside it in the pop-out window (controls in a left column). The right panel no longer scrolls by dragging with the mouse (a click on a control scrolled it once the panel was taller than the window); the wheel and the bar still scroll.
+- C2-3: Phase 6 tests adjusted for the intended changes: the menu order has Charts; the "Chart" toolbar button test matches the label exactly (the Charts menu contains the word); the quick chart's status line ("… all 250 rows (Crore)") is found by its text now that the chart has its own title; fields under the chart are not required to be inside the window (they scroll).
+- C2-4: a reference line's label goes beside the line where there is room; when the line crosses the bars it stands above the plot after a short piece of the line in the status colour. The extra measures are panels (never a second axis); a facet and several measures at once are allowed.
+- C2-5: `Needs::ResultTab` / `Needs::Later` were added to the command list (a tool's result tab is any tab that is not a file, a stack or a join).
