@@ -12,6 +12,8 @@ use micro_parquet::commands::CommandId;
 use polars::prelude::{NamedFrom, Series};
 
 pub(crate) const SCREENS: [(f32, f32, f32); 2] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)];
+/// The two usual screens and the owner's real window at 105% (1291×700 pt).
+pub(crate) const SCREENS3: [(f32, f32, f32); 3] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0), (1.05, 1291.0, 700.0)];
 const EN: &str = "\u{2013}";
 
 /// Bucket, Bank, Balance, Rate and `extra` more columns, one with a very long name.
@@ -1327,19 +1329,25 @@ fn csv_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
 
 #[test]
 fn f1_the_details_button_beside_the_line_break_note_opens_the_list_and_its_replace_action() {
-    // the two usual screens, and narrower windows where the bar is crowded by the last message
-    for (ppp, w, h) in [SCREENS[0], SCREENS[1], (1.0, 1000.0, 600.0), (1.0, 900.0, 600.0)] {
+    // K1: three sizes (the owner's is 1291 pt) and narrower windows where the bar is crowded by the last message
+    for (ppp, w, h) in [SCREENS3[0], SCREENS3[1], SCREENS3[2], (1.0, 1000.0, 600.0), (1.0, 900.0, 600.0)] {
         let mut rig = csv_rig("pr6f1", ppp, w, h);
         let what = rig.what.clone();
-        // a real file has a control total, which fills the bar before the note
+        // a real file has a control total and a long load message, which fill the bar before the chip
         rig.app.tabs[0].control_col = Some("Qty".to_string());
         rig.app.tabs[0].control_sum = Some(1500.0);
         rig.app.tabs[0].baseline_control_sum = Some(1500.0);
+        rig.app.status_message = "Loaded multi.csv: 5 rows from 12 lines, 3 records contain line breaks inside quotes, read in 0.4 s from the local disk drive".to_string();
         let p = rig.draw(6);
-        // the message the load left in the bar says it too; the button must be there whatever the room
-        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Details button is on the bar: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("records") || t.contains("Rows")).collect::<Vec<_>>()));
-        if let Some((_, note)) = p.boxes.iter().find(|(t, _)| t.starts_with("5 rows from")) {
-            assert!(details.left() >= note.right() - 1.0 && (details.center().y - note.center().y).abs() < 6.0, "{what}: beside the note: {details:?} vs {note:?}");
+        let report = crate::ui::status::status_report(&rig.ctx).expect("status bar");
+        let chip = p.boxes.iter().find(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the chip is on the bar: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("break") || t.contains("Rows")).collect::<Vec<_>>()));
+        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Details button is on the bar"));
+        // never cut: the chip's text is whole, the button beside it, both inside the bar
+        assert!(details.left() >= chip.right() - 1.0 && (details.center().y - chip.center().y).abs() < 6.0, "{what}: beside the chip: {details:?} vs {chip:?}");
+        assert!(details.right() <= report.left.right() + 1.0, "{what}: inside the bar: {details:?} vs {:?}", report.left);
+        // the long message gives way after it (it may be cut), never before
+        if let Some((_, msg)) = p.boxes.iter().find(|(t, _)| t.starts_with("Loaded multi.csv")) {
+            assert!(msg.left() >= details.right() - 1.0, "{what}: the message is after the chip: {msg:?} vs {details:?}");
         }
         rig.step(vec![egui::Event::PointerMoved(details.center())]);
         rig.click_later(details.center());
@@ -1352,24 +1360,34 @@ fn f1_the_details_button_beside_the_line_break_note_opens_the_list_and_its_repla
         rig.click_later(b.center());
         assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: the Replace action adds the step");
         assert!(!rig.app.row_details_open, "{what}");
+        // once the tab cleans them the chip is neutral and says which step, and Details is still there
+        let p = rig.draw(6);
+        let cleaned = p.boxes.iter().find(|(t, _)| t == "3 line breaks cleaned (step 1)").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the cleaned chip: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("break")).collect::<Vec<_>>()));
+        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Details after cleaning: {:?} {:?}", p.boxes.iter().filter(|(_, b)| b.center().y > h - 40.0).collect::<Vec<_>>(), crate::ui::status::status_report(&rig.ctx)));
+        assert!(details.left() >= cleaned.right() - 1.0, "{what}");
+        assert!(!p.boxes.iter().any(|(t, _)| t == "Replace with spaces"), "{what}: no Replace once cleaned");
+        rig.step(vec![egui::Event::PointerMoved(details.center())]);
+        rig.click_later(details.center());
+        assert!(rig.app.row_details_open, "{what}: Details opens the list after cleaning too");
     }
 }
 
 #[test]
 fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears_the_warning() {
-    for (ppp, w, h) in SCREENS {
+    for (ppp, w, h) in SCREENS3 {
         let mut rig = csv_rig("pr6i15", ppp, w, h);
         let what = rig.what.clone();
         let p = rig.draw(6);
         assert!(rig.app.tabs[0].steps.is_empty(), "{what}: nothing is applied automatically");
-        let note = p.boxes.iter().find(|(t, _)| t.contains("3 records contain line breaks inside quotes")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the grey note is shown"));
+        let note = p.boxes.iter().find(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the chip is shown"));
         let button = p.boxes.iter().find(|(t, _)| t == "Replace with spaces").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the button"));
         assert!(button.left() >= note.left() && button.top() >= note.top() - 4.0 && button.bottom() <= note.bottom() + 4.0, "{what}: the button is on the note's line: {button:?} vs {note:?}");
         rig.click(button.center());
         let p = rig.draw(6);
         assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}");
         assert!(matches!(&rig.app.tabs[0].steps[0], TransformStep::CleanLineBreaks { columns, .. } if columns.is_empty()), "{what}: {:?}", rig.app.tabs[0].steps);
-        assert!(!p.boxes.iter().any(|(t, _)| t.contains("records contain line breaks inside quotes")), "{what}: the warning is gone");
+        assert!(!p.boxes.iter().any(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))), "{what}: the warning is gone");
+        assert!(p.boxes.iter().any(|(t, _)| t == "3 line breaks cleaned (step 1)"), "{what}: the neutral chip says which step");
         assert!(!p.boxes.iter().any(|(t, _)| t == "Replace with spaces"), "{what}: and so is the button");
         // the value in the table is clean: the second row's remark is on one line
         let remarks = rig.app.tabs[0].cached_slice.column("Remarks").expect("col").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect::<Vec<_>>();
@@ -1377,7 +1395,7 @@ fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears
         // undo brings the note back
         rig.app.undo_steps();
         let p = rig.draw(6);
-        assert!(p.boxes.iter().any(|(t, _)| t.contains("3 records contain line breaks inside quotes")), "{what}: undo restores the note");
+        assert!(p.boxes.iter().any(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))), "{what}: undo restores the chip");
         // the Details dialog has the button too (the bar may have no room for it)
         rig.app.row_details_open = true;
         let p = rig.draw(6);

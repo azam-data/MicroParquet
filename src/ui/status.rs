@@ -41,6 +41,38 @@ pub fn format_bytes(n: u64) -> String {
     }
 }
 
+/// The line-break chip of the status bar (K1).
+#[derive(Clone, Debug)]
+pub(crate) struct LineChip {
+    pub text: String,
+    /// A warning (colour) or the quiet grey of a note that is dealt with.
+    pub warn: bool,
+    pub hover: String,
+    /// The "Replace with spaces" button may follow.
+    pub can_clean: bool,
+}
+
+impl MicroParquetApp {
+    /// "⚠ 34 line breaks" before the tab cleans them, "34 line breaks cleaned (step 1)" after, and the
+    /// row-count warning when the counts differ for another reason. `None` when there is nothing to say.
+    pub(crate) fn line_break_chip(tab: &TabState) -> Option<LineChip> {
+        let rc = tab.row_check.as_ref()?;
+        let step = tab.steps.iter().position(|s| matches!(s, TransformStep::CleanLineBreaks { .. }));
+        let n = rc.multiline_records;
+        let breaks = format!("{} line break{}", format_with_commas(n as f64, 0), if n == 1 { "" } else { "s" });
+        let long = rc.status_text().unwrap_or_default();
+        if !rc.is_explained() {
+            // the counts differ and line breaks do not explain it: the warning stays in words
+            let text = theme::icons_in_text(&rc.status_text()?);
+            return Some(LineChip { text, warn: true, hover: rc.warning().unwrap_or(long), can_clean: n > 0 && step.is_none() });
+        }
+        match step {
+            Some(i) => Some(LineChip { text: format!("{} cleaned (step {})", breaks, i + 1), warn: false, hover: format!("{long}\nThe step \"Clean line breaks\" replaces them with spaces."), can_clean: false }),
+            None => Some(LineChip { text: theme::icons_in_text(&format!("\u{26A0} {}", breaks)), warn: true, hover: long, can_clean: n > 0 }),
+        }
+    }
+}
+
 impl MicroParquetApp {
     /// Status bar (32 px): rows, control total, change against the source file, parse failures,
     /// scale, and the job progress or last message.
@@ -83,18 +115,28 @@ impl MicroParquetApp {
                     // an optional item is drawn only when the last message keeps some room
                     // (a running job keeps the room its bar, time and Cancel button need)
                     let job_reserve = if self.jobs.active_long().is_some() { theme::STATUS_JOB_RESERVE } else { 0.0 };
-                    let room_for = |ui: &egui::Ui, w: f32| ui.available_width() - w - theme::STATUS_ITEM_GAP - job_reserve >= theme::STATUS_MESSAGE_ROOM;
+                    let line_chip = self.tabs.get(self.active_tab).and_then(Self::line_break_chip);
+                    // the chip is never dropped: the optional items before it leave its room
+                    let chip_reserve = line_chip.as_ref().map_or(0.0, |c| {
+                        theme::text_width(ui, &c.text, theme::TEXT_SMALL) + theme::status_button_width(ui, "Details") + 2.0 * theme::SPACE_M + 2.0 * theme::STATUS_ITEM_GAP + theme::SPACE_M
+                    });
+                    let room_for = |ui: &egui::Ui, w: f32| ui.available_width() - w - theme::STATUS_ITEM_GAP - job_reserve - chip_reserve >= theme::STATUS_MESSAGE_ROOM;
                     if let Some(tab) = self.tabs.get(self.active_tab) {
                         let count = |n: Option<usize>| {
                             n.map(|r| format_with_commas(r as f64, 0)).unwrap_or_else(|| "\u{2014}".to_string())
                         };
                         ui.label(egui::RichText::new("Rows").color(tk.muted));
                         ui.label(theme::mono_semibold(count(tab.totals.rows)));
+                        // (the warnings are cut with "…" before they take the line-break chip's room)
+                        let warn_w = |ui: &egui::Ui| (ui.available_width() - chip_reserve - job_reserve - theme::STATUS_MESSAGE_ROOM).max(theme::STATUS_MIN_MESSAGE_W);
                         if let (Some(col_name), None) = (&tab.control_col, tab.control_sum) {
-                            theme::warning_label(ui, &format!("Control [{}]: \u{2014}", col_name));
+                            let w = warn_w(ui);
+                            let msg = format!("Control [{}]: \u{2014}", col_name);
+                            theme::clipped_label(ui, egui::RichText::new(format!("{}  {}", theme::ph::WARNING, msg)).color(tk.warning), w).on_hover_text(msg);
                         }
                         if let Some(note) = &tab.totals.note {
-                            theme::warning_label(ui, note);
+                            let w = warn_w(ui);
+                            theme::clipped_label(ui, egui::RichText::new(format!("{}  {}", theme::ph::WARNING, note)).color(tk.warning), w).on_hover_text(note.clone());
                         }
                         if let (Some(col_name), Some(sum_val)) = (&tab.control_col, tab.control_sum) {
                             theme::clipped_label(ui, egui::RichText::new(format!("Control [{}]", col_name)).color(tk.muted), bar_w * theme::STATUS_LABEL_SHARE)
@@ -137,42 +179,33 @@ impl MicroParquetApp {
                                 }
                             }
                         }
-                        // The line-break note goes once the tab cleans them (the step is recorded in the Steps list).
-                        let cleaned = Self::tab_cleans_line_breaks(tab);
-                        if let Some(rc) = tab.row_check.as_ref().filter(|rc| !(cleaned && rc.is_explained())) {
-                            // rows read against the file's lines: grey when line breaks inside
-                            // quotes explain every missing line, a warning otherwise
-                            let note = rc.status_text().map(|t| theme::icons_in_text(&t));
-                            let can_clean = rc.multiline_records > 0 && !cleaned;
-                            // (its width: the text up to its cap, and the Details button; the Replace button
-                            // needs room of its own and is always in the Details dialog)
-                            let note_w = note.as_ref().map(|t| theme::text_width(ui, t, theme::TEXT_SMALL).min(bar_w * theme::STATUS_LABEL_SHARE) + theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
-                            let replace_w = theme::status_button_width(ui, "Replace with spaces") + theme::STATUS_ITEM_GAP;
-                            // too little room for the note and the button: the button alone (the load message
-                            // carries the same words), so the list is always one click away
-                            let button_only = note.is_some() && !note_w.is_some_and(|w| room_for(ui, w)) && room_for(ui, theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
-                            if button_only {
-                                let hover = note.clone().unwrap_or_default();
-                                if ui.small_button("Details").on_hover_text(format!("{hover}\nWhich lines differ")).clicked() {
-                                    open_row_details = true;
-                                }
-                            }
-                            if let Some(text) = note.filter(|_| note_w.is_some_and(|w| room_for(ui, w))) {
-                                let color = if rc.is_explained() { tk.muted } else { tk.warning };
-                                theme::clipped_label(ui, egui::RichText::new(text).color(color), bar_w * theme::STATUS_LABEL_SHARE)
-                                    .on_hover_text(rc.warning().unwrap_or_default());
-                                if ui.small_button("Details").on_hover_text("Which lines differ").clicked() {
-                                    open_row_details = true;
-                                }
-                                if can_clean
-                                    && room_for(ui, replace_w)
-                                    && ui
-                                        .small_button("Replace with spaces")
-                                        .on_hover_text("Adds the step \"Clean line breaks\": every run of line breaks inside a text value becomes one space. Nothing changes until you click.")
-                                        .clicked()
-                                {
-                                    replace_breaks = true;
-                                }
+                        // K1: the line-break note is a compact chip that is never cut, with the Details button
+                        // inside it. It is drawn after the optional items (which left its room) and before
+                        // the last message, which is the only thing that gives way.
+                        if let Some(chip) = &line_chip {
+                            egui::Frame::none()
+                                .fill(if chip.warn { tk.warning.gamma_multiply(theme::SHADE_AMBER_STRENGTH) } else { tk.surface })
+                                .rounding(egui::Rounding::same(theme::RADIUS_PILL))
+                                .inner_margin(theme::MARGIN_CHIP_PILL)
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+                                    let color = if chip.warn { tk.warning } else { tk.muted };
+                                    ui.add(egui::Label::new(theme::semibold(chip.text.clone()).color(color)).wrap_mode(egui::TextWrapMode::Extend))
+                                        .on_hover_text(chip.hover.clone());
+                                    ui.label(egui::RichText::new("\u{b7}").color(tk.muted));
+                                    if ui.small_button("Details").on_hover_text("Which lines differ").clicked() {
+                                        open_row_details = true;
+                                    }
+                                });
+                            let room_after = |ui: &egui::Ui, w: f32| ui.available_width() - w - theme::STATUS_ITEM_GAP - job_reserve >= theme::STATUS_MESSAGE_ROOM;
+                            if chip.can_clean
+                                && room_after(ui, theme::status_button_width(ui, "Replace with spaces"))
+                                && ui
+                                    .small_button("Replace with spaces")
+                                    .on_hover_text("Adds the step \"Clean line breaks\": every run of line breaks inside a text value becomes one space. Nothing changes until you click.")
+                                    .clicked()
+                            {
+                                replace_breaks = true;
                             }
                         }
                         // Stays while the page is stale, whatever message came after it.
@@ -271,7 +304,9 @@ impl MicroParquetApp {
                             });
                             ui.label(theme::semibold(now)).on_hover_text(labels.join("  \u{b7}  "));
                         }
-                        if let Some(f) = job.progress.fraction {
+                        // the bar goes first when the line-break chip and the control total leave too little room
+                        let bar_fits = ui.available_width() >= tail_w;
+                        if let Some(f) = job.progress.fraction.filter(|_| bar_fits) {
                             let mut bar = egui::ProgressBar::new(f.clamp(0.0, 1.0)).desired_width(theme::PROGRESS_BAR_W);
                             // a number is written only for bytes really read
                             if let (Some(pct), Some((read, total))) = (job.percent(), job.progress.bytes) {
