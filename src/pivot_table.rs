@@ -599,6 +599,134 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     Ok(PivotBuild { df, label_columns: label_names.len() })
 }
 
+/// What the steps after a pivot did to its total rows (K5).
+struct PivotTracking {
+    /// The last pivot that has total rows, and the current names of its Rows columns.
+    pivot: Option<(PivotSpec, Vec<String>)>,
+    /// A step after it reshaped or rewrote the rows: its total rows can no longer be told apart.
+    lost: bool,
+}
+
+/// The column a step writes (it replaces a column of that name).
+fn written_column(step: &TransformStep) -> Option<&str> {
+    match step {
+        TransformStep::ConditionalColumn { new_col, .. }
+        | TransformStep::MathFormula { new_col, .. }
+        | TransformStep::NormalizeEntity { new_col, .. }
+        | TransformStep::MaturityBucket { new_col, .. }
+        | TransformStep::RateBand { new_col, .. } => Some(new_col.as_str()),
+        _ => None,
+    }
+}
+
+/// Follows the pivot's Rows columns through the steps. A step that keeps the rows and the label
+/// columns (sort, filter, a new column, a rename of another column, a type change of another
+/// column, a column selection that keeps the labels) keeps the total rows recognised; one that
+/// reshapes the rows (another pivot or group, SQL, the banking tools) or rewrites a label column
+/// loses them.
+fn track_pivot_totals(steps: &[TransformStep]) -> PivotTracking {
+    let mut t = PivotTracking { pivot: None, lost: false };
+    for s in steps {
+        if s.is_skipped() {
+            continue;
+        }
+        if t.lost {
+            // lost for good, unless a new pivot starts afresh
+            if let TransformStep::PivotTable { .. } = s {
+                t = pivot_tracking_of(s);
+            }
+            continue;
+        }
+        let Some((_, labels)) = t.pivot.as_mut() else {
+            // (a pivot without total rows has nothing to lose; any other step before one changes nothing)
+            if let TransformStep::PivotTable { .. } = s {
+                t = pivot_tracking_of(s);
+            }
+            continue;
+        };
+        match s {
+            TransformStep::PivotTable { .. } => t = pivot_tracking_of(s),
+            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } | TransformStep::CleanLineBreaks { .. } => {}
+            TransformStep::ConditionalColumn { .. }
+            | TransformStep::MathFormula { .. }
+            | TransformStep::NormalizeEntity { .. }
+            | TransformStep::MaturityBucket { .. }
+            | TransformStep::RateBand { .. } => {
+                if written_column(s).is_some_and(|c| labels.iter().any(|l| l == c)) {
+                    t.lost = true;
+                }
+            }
+            TransformStep::RenameColumn { old_name, new_name } => {
+                if let Some(l) = labels.iter_mut().find(|l| *l == old_name) {
+                    *l = new_name.clone();
+                }
+            }
+            TransformStep::ConvertToNumber { columns } => {
+                if columns.iter().any(|c| labels.contains(c)) {
+                    t.lost = true;
+                }
+            }
+            TransformStep::SelectAndReorderColumns { cols } => {
+                if labels.iter().any(|l| !cols.contains(l)) {
+                    t.lost = true;
+                }
+            }
+            _ => t.lost = true,
+        }
+    }
+    t
+}
+
+fn pivot_tracking_of(step: &TransformStep) -> PivotTracking {
+    match step.as_pivot_spec() {
+        // only a pivot with Rows has total rows (without Rows its one row, "All rows", is data)
+        Some(spec) if !spec.rows.is_empty() && (spec.column_totals || (spec.subtotals && spec.rows.len() >= 2)) => {
+            let labels = spec.rows.clone();
+            PivotTracking { pivot: Some((spec, labels)), lost: false }
+        }
+        _ => PivotTracking { pivot: None, lost: false },
+    }
+}
+
+/// The note shown with the summary row and in the status bar when the total rows of a pivot can no
+/// longer be recognised (a later step reshaped the table).
+pub const PIVOT_TOTALS_WARNING: &str = "Pivot totals may be included in these totals";
+
+/// True when the tab has a pivot with total rows and a later step lost track of them.
+pub fn pivot_totals_lost(steps: &[TransformStep]) -> bool {
+    let t = track_pivot_totals(steps);
+    t.lost && t.pivot.is_some()
+}
+
+/// A boolean expression that is true on the rows of a pivot that are totals (a subtotal or the
+/// Grand total), for a tab whose last pivot is followed only by steps that keep its Rows columns
+/// and its rows (`track_pivot_totals`). `None` when the tab has no such pivot, or the pivot has no
+/// total rows, or a later step lost them (`pivot_totals_lost`).
+///
+/// The rows are told apart by their labels: a detail row has a label in every Rows column (a blank
+/// is written "(blank)"), a subtotal or the Grand total leaves the last Rows column empty; with a
+/// single Rows field the Grand total row is the label "Grand total".
+pub fn total_rows_expr(steps: &[TransformStep]) -> Option<Expr> {
+    let t = track_pivot_totals(steps);
+    if t.lost {
+        return None;
+    }
+    let (spec, labels) = t.pivot?;
+    let nr = labels.len();
+    if nr == 1 {
+        return spec.column_totals.then(|| col(labels[0].as_str()).cast(DataType::String).eq(lit(GRAND_TOTAL_LABEL)).fill_null(false));
+    }
+    (spec.subtotals || spec.column_totals).then(|| col(labels[nr - 1].as_str()).cast(DataType::String).eq(lit("")).fill_null(false))
+}
+
+/// The pivot's rows without its totals (all rows when the tab has no pivot totals).
+pub fn without_total_rows(lf: LazyFrame, steps: &[TransformStep]) -> LazyFrame {
+    match total_rows_expr(steps) {
+        Some(t) => lf.filter(t.not()),
+        None => lf,
+    }
+}
+
 /// The pivot as a step of a pipeline: the table, then lazy again.
 pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
     Ok(build_pivot(lf, spec)?.df.lazy())

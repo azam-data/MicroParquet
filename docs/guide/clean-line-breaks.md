@@ -2,17 +2,17 @@
 
 ## 1. What it does
 
-Replaces every line break inside a text value (a Remarks or address cell that the core banking system exported over two or three lines) with one space, and trims the spaces at the ends of the values that had a break. An option, "Trim spaces on all text values", trims the ends of every value, break or not. Without it a value like "Paid in full / by cheque" stays on two lines in the grid, in Excel and in a PDF, and a CSV that has such values reports "N records contain line breaks inside quotes". It supports clean, one-line-per-account exports for ALCO packs and Bangladesh Bank returns.
+Replaces every line break inside a text value (a Remarks or address cell that the core banking system exported over two or three lines) with one space, and trims the spaces at the ends of the values that had a break. An option, "Trim spaces on all text values", trims the ends of every value, break or not. Without it a value like "Paid in full / by cheque" stays on two lines in the grid, in Excel and in a PDF, and a CSV that has such values shows "⚠ N line breaks" in the status bar. It supports clean, one-line-per-account exports for ALCO packs and Bangladesh Bank returns.
 
 ## 2. When to use it
 
-- After opening a CBS extract whose status bar says "N records contain line breaks inside quotes".
+- After opening a CBS extract whose status bar shows "⚠ N line breaks".
 - Before exporting to Excel or PDF, so each account is one row of one line.
 - Before a Join or Pivot on a text column that has stray line breaks.
 
 ## 3. Before you start
 
-- Open the file and look at the status bar: "5 rows from 8 lines: 3 records contain line breaks inside quotes" means the row count is right and some values hold line breaks. Nothing is changed when you open the file; the step runs only when you ask.
+- Open the file and look at the status bar: "⚠ 3 line breaks · Details" (hover for "5 rows from 8 lines: 3 records contain line breaks inside quotes") means the row count is right and some values hold line breaks. Nothing is changed when you open the file; the step runs only when you ask.
 - The Schema & Ingestion dialog's "Clean line breaks" box does the same thing: ticking it (it is ticked by default for a CSV) puts this step first in the Steps list, for all text columns and with "Trim spaces on all text values" ticked, so it is recorded and replays in macros and the values are the ones the box always gave (spaces at the ends of every text value trimmed). A step made from Transform ▾ has that option off unless you tick it. Unticking the box (Apply to tab) takes that first step out again. This tool works on any text column of the table, at any point of the steps.
 
 ## 4. Columns you need
@@ -23,7 +23,7 @@ Replaces every line break inside a text value (a Remarks or address cell that th
 
 ## 5. Step by step
 
-1. Open the tab. If the status bar shows "N records contain line breaks inside quotes", click "Replace with spaces" beside it (or open "Details" and click it there). In a narrow window, or with many other items on the bar, the note itself is left out and only the "Details" button stays, so the list and the "Replace with spaces" action are always one click away. The step "Clean line breaks" is added for all text columns and the note goes away.
+1. Open the tab. If the status bar shows the chip "⚠ N line breaks · Details", click "Replace with spaces" beside it (or open "Details" and click it there). The chip is never cut or left out, whatever the window size or the length of the last message; it is the last message that is cut (hover for the full text), so the list and the "Replace with spaces" action are always one click away. The step "Clean line breaks" is added for all text columns; the chip then turns grey and reads "N line breaks cleaned (step 1) · Details".
 2. To choose columns, use Edit ▸ "Clean line breaks…" (or Ctrl+K and type "line breaks"). In "Clean line breaks" choose "All text columns" or "Only these columns:" and tick them. Tick "Trim spaces on all text values" if the spaces at the ends of values without a line break should go too (it is off here by default). Then click "Clean line breaks".
 3. To change it later, click the step in the Steps panel: its buttons appear in one row (Edit, Move up, Move down, Turn off, Duplicate, and Delete at the right end, which asks first; each has a tooltip). Click Edit. Undo (Ctrl+Z) takes the step away and the note comes back.
 4. Export as usual. The step is recorded, so a saved macro and a batch run repeat it.
@@ -36,7 +36,7 @@ The same table with the same number of rows. In each cleaned column every value 
 
 - The row count in the status bar is the same before and after (the step never adds or removes rows).
 - The control total is unchanged (the step only touches text).
-- The "N records contain line breaks inside quotes" note is gone for a tab that has the step; filter the column on "contains" and a line break to see that none is left.
+- The chip for a tab that has the step reads "N line breaks cleaned (step 1)" in grey, not as a warning; filter the column on "contains" and a line break to see that none is left.
 
 ## 8. Worked example
 
@@ -66,7 +66,7 @@ Test: `guide_clean_line_breaks`
 
 ## 9. Common messages and fixes
 
-- "N records contain line breaks inside quotes" (grey note, status bar): the file is fine; click "Replace with spaces" if you want one line per value.
+- "⚠ N line breaks" (chip, status bar): the file is fine; click "Replace with spaces" if you want one line per value.
 - "Clean line breaks: the column 'X' was not found. Choose the columns again." A step before it dropped or renamed the column.
 - "Clean line breaks: the column 'X' is Float64, not text. Choose text columns only." Untick it.
 - "Tick at least one column, or choose All text columns." in the dialog.

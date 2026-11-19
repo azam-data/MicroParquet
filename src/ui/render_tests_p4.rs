@@ -12,6 +12,8 @@ use micro_parquet::commands::CommandId;
 use polars::prelude::{NamedFrom, Series};
 
 pub(crate) const SCREENS: [(f32, f32, f32); 2] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0)];
+/// The two usual screens and the owner's real window at 105% (1291×700 pt).
+pub(crate) const SCREENS3: [(f32, f32, f32); 3] = [(1.05, 1219.05, 685.71), (0.8, 1600.0, 900.0), (1.05, 1291.0, 700.0)];
 const EN: &str = "\u{2013}";
 
 /// Bucket, Bank, Balance, Rate and `extra` more columns, one with a very long name.
@@ -1327,19 +1329,25 @@ fn csv_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
 
 #[test]
 fn f1_the_details_button_beside_the_line_break_note_opens_the_list_and_its_replace_action() {
-    // the two usual screens, and narrower windows where the bar is crowded by the last message
-    for (ppp, w, h) in [SCREENS[0], SCREENS[1], (1.0, 1000.0, 600.0), (1.0, 900.0, 600.0)] {
+    // K1: three sizes (the owner's is 1291 pt) and narrower windows where the bar is crowded by the last message
+    for (ppp, w, h) in [SCREENS3[0], SCREENS3[1], SCREENS3[2], (1.0, 1000.0, 600.0), (1.0, 900.0, 600.0)] {
         let mut rig = csv_rig("pr6f1", ppp, w, h);
         let what = rig.what.clone();
-        // a real file has a control total, which fills the bar before the note
+        // a real file has a control total and a long load message, which fill the bar before the chip
         rig.app.tabs[0].control_col = Some("Qty".to_string());
         rig.app.tabs[0].control_sum = Some(1500.0);
         rig.app.tabs[0].baseline_control_sum = Some(1500.0);
+        rig.app.status_message = "Loaded multi.csv: 5 rows from 12 lines, 3 records contain line breaks inside quotes, read in 0.4 s from the local disk drive".to_string();
         let p = rig.draw(6);
-        // the message the load left in the bar says it too; the button must be there whatever the room
-        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Details button is on the bar: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("records") || t.contains("Rows")).collect::<Vec<_>>()));
-        if let Some((_, note)) = p.boxes.iter().find(|(t, _)| t.starts_with("5 rows from")) {
-            assert!(details.left() >= note.right() - 1.0 && (details.center().y - note.center().y).abs() < 6.0, "{what}: beside the note: {details:?} vs {note:?}");
+        let report = crate::ui::status::status_report(&rig.ctx).expect("status bar");
+        let chip = p.boxes.iter().find(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the chip is on the bar: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("break") || t.contains("Rows")).collect::<Vec<_>>()));
+        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Details button is on the bar"));
+        // never cut: the chip's text is whole, the button beside it, both inside the bar
+        assert!(details.left() >= chip.right() - 1.0 && (details.center().y - chip.center().y).abs() < 6.0, "{what}: beside the chip: {details:?} vs {chip:?}");
+        assert!(details.right() <= report.left.right() + 1.0, "{what}: inside the bar: {details:?} vs {:?}", report.left);
+        // the long message gives way after it (it may be cut), never before
+        if let Some((_, msg)) = p.boxes.iter().find(|(t, _)| t.starts_with("Loaded multi.csv")) {
+            assert!(msg.left() >= details.right() - 1.0, "{what}: the message is after the chip: {msg:?} vs {details:?}");
         }
         rig.step(vec![egui::Event::PointerMoved(details.center())]);
         rig.click_later(details.center());
@@ -1352,24 +1360,34 @@ fn f1_the_details_button_beside_the_line_break_note_opens_the_list_and_its_repla
         rig.click_later(b.center());
         assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: the Replace action adds the step");
         assert!(!rig.app.row_details_open, "{what}");
+        // once the tab cleans them the chip is neutral and says which step, and Details is still there
+        let p = rig.draw(6);
+        let cleaned = p.boxes.iter().find(|(t, _)| t == "3 line breaks cleaned (step 1)").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the cleaned chip: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("break")).collect::<Vec<_>>()));
+        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Details after cleaning: {:?} {:?}", p.boxes.iter().filter(|(_, b)| b.center().y > h - 40.0).collect::<Vec<_>>(), crate::ui::status::status_report(&rig.ctx)));
+        assert!(details.left() >= cleaned.right() - 1.0, "{what}");
+        assert!(!p.boxes.iter().any(|(t, _)| t == "Replace with spaces"), "{what}: no Replace once cleaned");
+        rig.step(vec![egui::Event::PointerMoved(details.center())]);
+        rig.click_later(details.center());
+        assert!(rig.app.row_details_open, "{what}: Details opens the list after cleaning too");
     }
 }
 
 #[test]
 fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears_the_warning() {
-    for (ppp, w, h) in SCREENS {
+    for (ppp, w, h) in SCREENS3 {
         let mut rig = csv_rig("pr6i15", ppp, w, h);
         let what = rig.what.clone();
         let p = rig.draw(6);
         assert!(rig.app.tabs[0].steps.is_empty(), "{what}: nothing is applied automatically");
-        let note = p.boxes.iter().find(|(t, _)| t.contains("3 records contain line breaks inside quotes")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the grey note is shown"));
+        let note = p.boxes.iter().find(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the chip is shown"));
         let button = p.boxes.iter().find(|(t, _)| t == "Replace with spaces").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the button"));
         assert!(button.left() >= note.left() && button.top() >= note.top() - 4.0 && button.bottom() <= note.bottom() + 4.0, "{what}: the button is on the note's line: {button:?} vs {note:?}");
         rig.click(button.center());
         let p = rig.draw(6);
         assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}");
         assert!(matches!(&rig.app.tabs[0].steps[0], TransformStep::CleanLineBreaks { columns, .. } if columns.is_empty()), "{what}: {:?}", rig.app.tabs[0].steps);
-        assert!(!p.boxes.iter().any(|(t, _)| t.contains("records contain line breaks inside quotes")), "{what}: the warning is gone");
+        assert!(!p.boxes.iter().any(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))), "{what}: the warning is gone");
+        assert!(p.boxes.iter().any(|(t, _)| t == "3 line breaks cleaned (step 1)"), "{what}: the neutral chip says which step");
         assert!(!p.boxes.iter().any(|(t, _)| t == "Replace with spaces"), "{what}: and so is the button");
         // the value in the table is clean: the second row's remark is on one line
         let remarks = rig.app.tabs[0].cached_slice.column("Remarks").expect("col").str().expect("text").into_iter().map(|v| v.unwrap_or("").to_string()).collect::<Vec<_>>();
@@ -1377,7 +1395,7 @@ fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears
         // undo brings the note back
         rig.app.undo_steps();
         let p = rig.draw(6);
-        assert!(p.boxes.iter().any(|(t, _)| t.contains("3 records contain line breaks inside quotes")), "{what}: undo restores the note");
+        assert!(p.boxes.iter().any(|(t, _)| (t.ends_with(" 3 line breaks") && !t.contains("cleaned"))), "{what}: undo restores the chip");
         // the Details dialog has the button too (the bar may have no room for it)
         rig.app.row_details_open = true;
         let p = rig.draw(6);
@@ -1797,5 +1815,193 @@ fn i20_the_empty_filters_box_says_what_to_drop_in_it() {
         rig.app.pivot_builder.spec.filters = vec![PivotFilter { field: "Bank".into(), values: vec![] }];
         let p = rig.draw(4);
         assert!(!p.boxes.iter().any(|(t, _)| t.starts_with("Drop a field here")), "{what}");
+    }
+}
+
+#[test]
+fn k2_the_status_bar_control_total_has_thousands_separators_in_the_columns_display_format() {
+    for (ppp, w, h) in SCREENS3 {
+        let mut rig = csv_rig("pr6k2", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.tabs[0].control_col = Some("Qty".to_string());
+        rig.app.tabs[0].control_sum = Some(449_406_400_000.0);
+        rig.app.tabs[0].baseline_control_sum = Some(449_406_400_000.0);
+        let p = rig.draw(6);
+        assert!(p.boxes.iter().any(|(t, _)| t == "44,940.64 Cr"), "{what}: Crore with separators: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Cr")).collect::<Vec<_>>());
+        // a Million column is shown in its own unit
+        rig.app.tabs[0].col_formats.insert("Qty".to_string(), ColumnFormatSpec { fmt_type: MetricFormatType::BdtMillion, decimals: 2 });
+        let p = rig.draw(6);
+        assert!(p.boxes.iter().any(|(t, _)| t == "449,406.40 M"), "{what}: Million: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains(" M") || t.contains("Cr")).collect::<Vec<_>>());
+    }
+}
+
+/// One frame with these events; what the frame put on the clipboard.
+fn copied_in(rig: &mut Rig, events: Vec<egui::Event>) -> Option<String> {
+    let mut i = rig.input.clone();
+    i.events = events;
+    settle(&mut rig.app);
+    let out = rig.ctx.run(i, |c| rig.app.frame_ui(c));
+    let t = out.platform_output.copied_text;
+    if t.is_empty() { None } else { Some(t) }
+}
+
+#[test]
+fn k4_ctrl_c_and_the_right_click_menu_copy_the_table_in_three_ways_at_three_sizes() {
+    for (ppp, w, h) in SCREENS3 {
+        let mut rig = Rig::new("pr6k4", ppp, w, h, 0);
+        let what = rig.what.clone();
+        // Balance in Million, Rate as a percentage by its name
+        rig.app.tabs[0].col_formats.insert("Balance".to_string(), ColumnFormatSpec { fmt_type: MetricFormatType::BdtMillion, decimals: 2 });
+        let p = rig.draw(8);
+        // Ctrl+C: plain numbers, the unit in the header
+        let txt = copied_in(&mut rig, vec![egui::Event::Copy]).unwrap_or_else(|| panic!("{what}: Ctrl+C copied nothing"));
+        let lines: Vec<&str> = txt.lines().collect();
+        let head: Vec<&str> = lines[0].split('\t').collect();
+        assert!(head.contains(&"Balance (BDT M)") && head.contains(&"Rate (%)"), "{what}: {head:?}");
+        let bal = head.iter().position(|c| *c == "Balance (BDT M)").expect("balance");
+        assert_eq!(lines[1].split('\t').nth(bal), Some("0.0001"), "{what}: 100 BDT in Million, plain: {:?}", lines[1]);
+        assert!(!txt.contains(" M\t") && !txt.contains(','), "{what}: no suffix, no separators: {txt}");
+        assert_eq!(rig.app.status_message.starts_with("Copied 7 rows"), true, "{what}: {}", rig.app.status_message);
+
+        // a right-click on a cell: three copy entries
+        let cell = p.boxes.iter().find(|(t, _)| t == "Conventional").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: a Bank cell"));
+        let right = |pressed: bool| egui::Event::PointerButton { pos: cell.center(), button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+        rig.step(vec![egui::Event::PointerMoved(cell.center())]);
+        rig.step(vec![right(true)]);
+        rig.step(vec![right(false)]);
+        let p = rig.draw(4);
+        for t in ["Copy", "Copy as shown", "Copy raw (BDT)"] {
+            assert!(p.boxes.iter().any(|(x, _)| x == t), "{what}: the menu has '{t}': {:?}", p.boxes.iter().map(|(x, _)| x.clone()).filter(|x| x.contains("Copy")).collect::<Vec<_>>());
+        }
+        for (label, check) in [
+            ("Copy as shown", Box::new(|t: &str| t.contains("0.00 M") && t.lines().next().is_some_and(|l| l.contains("Balance\t"))) as Box<dyn Fn(&str) -> bool>),
+            ("Copy raw (BDT)", Box::new(|t: &str| t.contains("Balance (BDT)") && t.lines().nth(1).is_some_and(|l| l.contains("\t100\t")))),
+            ("Copy", Box::new(|t: &str| t.contains("Balance (BDT M)"))),
+        ] {
+            let p = rig.draw(2);
+            let b = match p.boxes.iter().find(|(x, _)| x == label).map(|(_, b)| *b) {
+                Some(b) => b,
+                None => {
+                    // the menu closed after the last click: open it again
+                    rig.step(vec![egui::Event::PointerMoved(cell.center())]);
+                    rig.step(vec![right(true)]);
+                    rig.step(vec![right(false)]);
+                    rig.draw(4).boxes.iter().find(|(x, _)| x == label).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{label}' in the reopened menu"))
+                }
+            };
+            rig.step(vec![egui::Event::PointerMoved(b.center())]);
+            copied_in(&mut rig, vec![egui::Event::PointerButton { pos: b.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+            let txt = copied_in(&mut rig, vec![egui::Event::PointerButton { pos: b.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }])
+                .or_else(|| copied_in(&mut rig, vec![]))
+                .unwrap_or_else(|| panic!("{what}: '{label}' copied nothing"));
+            assert!(check(&txt), "{what}: '{label}': {txt}");
+        }
+    }
+}
+
+#[test]
+fn k5_the_summary_row_and_the_status_bar_warn_when_a_step_hides_a_pivots_total_rows() {
+    let warn = micro_parquet::pivot_table::PIVOT_TOTALS_WARNING;
+    for (ppp, w, h) in SCREENS3 {
+        let pivot = TransformStep::from_pivot_spec(micro_parquet::models::PivotSpec {
+            rows: vec!["Bucket".into()],
+            values: vec![sum_balance()],
+            column_totals: true,
+            ..Default::default()
+        });
+        let make = |name: &str, extra: TransformStep| {
+            let mut app = test_app(name);
+            let src = parquet_source(&app.paths.root_dir.clone(), "book", book(0));
+            open_tab(&mut app, src, vec![pivot.clone(), extra]);
+            let (ctx, input) = screen(ppp, w, h);
+            Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+        };
+        // SQL after the pivot: the warning in the status bar and above the summary row
+        let mut rig = make("pr6k5a", TransformStep::SqlQuery { query: "SELECT * FROM self".into() });
+        let what = rig.what.clone();
+        rig.app.show_summary_row = true;
+        let p = rig.draw(8);
+        let bar_top = crate::ui::status::status_report(&rig.ctx).expect("status bar").bar.top();
+        let hits: Vec<_> = p.boxes.iter().filter(|(t, _)| t.contains(warn)).map(|(_, b)| *b).collect();
+        assert!(hits.iter().any(|b| b.top() >= bar_top - 1.0), "{what}: the status bar warns: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Pivot")).collect::<Vec<_>>());
+        assert!(hits.iter().any(|b| b.bottom() < bar_top && b.width() > 100.0), "{what}: the summary row warns: {hits:?}");
+        // Calc column after the pivot: the totals are still recognised, no warning
+        let mut rig = make("pr6k5b", TransformStep::MathFormula { new_col: "Half".into(), left_col: "Sum of Balance".into(), op: micro_parquet::models::MathOp::Mul, right_is_col: false, right_val_or_col: "0.5".into() });
+        rig.app.show_summary_row = true;
+        let p = rig.draw(8);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains(warn)), "{what}: no warning after a Calc column");
+    }
+}
+
+fn pdf_page_and_first_text(bytes: &[u8]) -> ((f32, f32), String) {
+    let s = String::from_utf8_lossy(bytes);
+    let mb: Vec<f32> = s.split("/MediaBox[").nth(1).and_then(|p| p.split(']').next()).unwrap_or("").split_whitespace().filter_map(|n| n.parse().ok()).collect();
+    let first = s
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix('<').and_then(|r| r.strip_suffix("> Tj")).map(str::to_string))
+        .next()
+        .map(|hex| (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()).map(|b| b as char).collect::<String>())
+        .unwrap_or_default();
+    ((mb.get(2).copied().unwrap_or(0.0), mb.get(3).copied().unwrap_or(0.0)), first)
+}
+
+#[test]
+fn l2_the_pdf_options_dialog_fits_takes_the_choices_remembers_them_and_writes_the_pdf() {
+    use crate::ui::save_dialog::{set_save_hook, SaveSpec};
+    for (ppp, w, h) in SCREENS3 {
+        let mut rig = Rig::new("pr6l2", ppp, w, h, 0);
+        let what = rig.what.clone();
+        let out = rig.app.paths.root_dir.join("out");
+        std::fs::create_dir_all(&out).expect("out");
+        let asked: std::rc::Rc<std::cell::RefCell<Vec<SaveSpec>>> = Default::default();
+        let (log, dir) = (asked.clone(), out.clone());
+        set_save_hook(Some(Box::new(move |spec: &SaveSpec| {
+            log.borrow_mut().push(spec.clone());
+            Some(dir.join(std::path::Path::new(&spec.default_name).file_stem().expect("stem")))
+        })));
+        rig.app.export.multi_checks = vec![true];
+        rig.app.run_guarded_export(crate::ui::export::GuardedExport::MultiPdf);
+        let p = rig.draw(8);
+        let r = assert_dialog_fits(&rig.ctx, "\u{E702}  PDF export options", &what);
+        for t in ["Title", "Orientation", "Page size", "Portrait", "Landscape", "A4", "Legal", "Choose file\u{2026}", "Cancel"] {
+            assert!(p.boxes.iter().any(|(x, b)| x == t && inside(*b, r.window)), "{what}: '{t}' is in the dialog: {:?}", p.boxes.iter().map(|(x, _)| x.clone()).collect::<Vec<_>>());
+        }
+        assert!(asked.borrow().is_empty(), "{what}: no save dialog before the options");
+        let find = |p: &Painted, t: &str| p.boxes.iter().filter(|(x, _)| x == t).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: '{t}'"));
+        // the defaults: no title, landscape, A4
+        let o = rig.app.export.pdf_options.clone().expect("open");
+        assert!(o.title.is_empty() && !o.portrait && !o.legal, "{what}: {o:?}");
+        // portrait, Legal, and a title typed into the box
+        rig.click(find(&p, "Portrait").center());
+        let p2 = rig.draw(2);
+        rig.click(find(&p2, "Legal").center());
+        let hint = rig.draw(2).boxes.iter().find(|(t, _)| t.contains("blank = no heading line")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the title box"));
+        rig.click(hint.center());
+        rig.step(vec![egui::Event::Text("Q3 pack".to_string())]);
+        let p = rig.draw(3);
+        let o = rig.app.export.pdf_options.clone().expect("still open");
+        assert!(o.portrait && o.legal && o.title == "Q3 pack", "{what}: {o:?}");
+        rig.click(find(&p, "Choose file\u{2026}").center());
+        assert!(rig.app.export.pdf_options.is_none(), "{what}: the dialog closed");
+        settle(&mut rig.app);
+        set_save_hook(None);
+        assert_eq!(asked.borrow().last().map(|s| s.default_name.clone()).as_deref(), Some("Q3 pack.pdf"), "{what}: the suggested name is the title");
+        let file = out.join("Q3 pack.pdf");
+        let bytes = std::fs::read(&file).unwrap_or_else(|e| panic!("{what}: {file:?}: {e}"));
+        assert!(bytes.starts_with(b"%PDF"));
+        let ((pw, ph), first) = pdf_page_and_first_text(&bytes);
+        assert!((pw - 612.0).abs() < 1.0 && (ph - 1008.0).abs() < 1.0, "{what}: Legal portrait: {pw} x {ph}");
+        assert_eq!(first, "Q3 pack", "{what}");
+        // remembered in settings.json and offered again
+        let (saved, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);
+        assert!(saved.pdf_title == "Q3 pack" && saved.pdf_portrait && saved.pdf_legal, "{what}: {saved:?}");
+        rig.app.run_guarded_export(crate::ui::export::GuardedExport::MultiPdf);
+        rig.draw(6);
+        let o = rig.app.export.pdf_options.clone().expect("open again");
+        assert!(o.title == "Q3 pack" && o.portrait && o.legal, "{what}: the last choices come back: {o:?}");
+        // Cancel closes it and writes nothing more
+        let p = rig.draw(2);
+        rig.click(find(&p, "Cancel").center());
+        assert!(rig.app.export.pdf_options.is_none(), "{what}");
     }
 }

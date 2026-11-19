@@ -25,6 +25,10 @@ pub struct Settings {
     pub side_panel_hidden: Vec<String>,
     /// The toolbar buttons the owner switched off in View ▸ Toolbar buttons (their names as the bar shows them).
     pub toolbar_hidden: Vec<String>,
+    /// The PDF export dialog's last choices (L2): the heading ("" = none), upright pages, Legal paper.
+    pub pdf_title: String,
+    pub pdf_portrait: bool,
+    pub pdf_legal: bool,
     /// Chart choices by tab key (the file name of the tab's first file, or its title).
     pub chart: HashMap<String, serde_json::Value>,
 }

@@ -129,7 +129,7 @@ impl MicroParquetApp {
         if self.liq.unmapped.is_empty() {
             return;
         }
-        let Some(path) = rfd::FileDialog::new().set_file_name("unmapped_gl_codes.csv").save_file() else {
+        let Some(path) = crate::ui::save_dialog::choose_save_path(&crate::ui::save_dialog::SaveSpec::new("CSV (*.csv)", "csv", "unmapped_gl_codes.csv")) else {
             return;
         };
         self.export_unmapped_to(path);

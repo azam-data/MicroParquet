@@ -4,6 +4,8 @@ One short note per tool, in plain English for a bank ALM or treasury officer. Ev
 
 The menus are File, Edit, View, Banking, Export and Help, then the toolbar buttons (Open, Stack, Batch, Filter, Sort, Columns, Calc column, Pivot, Rate profile, Chart, SQL) and the search box (Ctrl+K). The menus never fold, and the buttons always keep their labels; in a narrow window the rightmost buttons fold into the » menu, where they are listed with the same labels. View ▸ Toolbar buttons switches each button off or on, and View ▸ Side panel switches the Steps, Column, SQL and Chart tabs of the right panel; both are kept in settings.json. Edit has Undo and Redo, the transforms (conditional column, name normaliser, clean line breaks, join, copy table) and Data checks (the hygiene audit and the data-quality scorecard).
 
+Copying the table: Ctrl+C or Edit ▸ Copy table puts the rows on the page on the clipboard, tab-separated, with each decimal number as a plain number in the unit the grid shows it in (no thousands separators, no unit suffix, at most 15 significant digits) and the unit in the header ("Sum of Balance (BDT Cr)", "Rate (%)"), so Excel pastes numbers it can add up. A right-click on a cell or a column header also offers "Copy as shown" (the text of the cells, "44,940.64 Cr") and "Copy raw (BDT)" (the stored, unscaled numbers, header "Sum of Balance (BDT)"). A blank is an empty cell in all three; a tab or line break inside a text becomes a space. Only the rows on the page are copied (the status bar says "Copied 100 of the table's 4,200 rows"); to copy all rows, export a CSV.
+
 Window settings: View ▸ Zoom (or Ctrl+= / Ctrl+- / Ctrl+0, or a click on the percentage at the right end of the status bar) changes the size of everything; "Set current zoom as default" keeps it for the next start (`portable_data/settings.json`). The right panel is dragged wider by its left edge; the width is kept too.
 
 Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scale). Rates are in percent (9.5 means 9.5%). Shocks are in basis points. CBS dates are normally D/M/Y.
@@ -60,3 +62,12 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 
 - [Split export](split-export.md): one file per branch or other value, with a manifest.
 - [Batch](batch.md): convert a whole folder tree.
+
+
+## Exports: file names, file types and the PDF options
+
+Every "save as" box offers only the file type it writes (CSV, Parquet, Excel workbook, PDF, macro, Python script), and a name typed without the extension gets it before anything is written, so an export is never a file without an extension. The box suggests a name from the tab: the tab's title, cleaned of characters Windows does not allow ("Pivot: Segment" is suggested as "Pivot_ Segment.csv"). For an Excel workbook or PDF of several tabs it is "<first ticked tab> and N more.xlsx".
+
+PDF: "Export Selected Tabs to a .pdf…" first asks for a Title (blank = no heading line; whatever you type is printed at the top of every page, wrapped if it is longer than the page), the Orientation (Portrait or Landscape) and the Page size (A4 or Legal), then opens the save box, which suggests the title as the file name (or the tab's title when there is none). The last choices are remembered in settings.json. Columns that do not fit the page width continue on the following pages with the row labels repeated; a narrow page (Portrait) therefore needs more pages than a wide one.
+
+Parquet, CSV, Excel, PDF and the split export all write through a temporary name and rename it when finished, so a failed export leaves no half file. The file signatures are PAR1 (Parquet), PK (Excel, a zip file) and %PDF (PDF); a CSV is plain text. If a file you exported opens as unreadable characters, look at its first characters in Notepad: PAR1 means it is a Parquet file, PK an Excel workbook, %PDF a PDF; then it was saved with the wrong export command or a wrong extension.

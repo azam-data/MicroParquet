@@ -14,7 +14,7 @@ pub use micro_parquet::engine::{
     weighted_mixed_sign_notes,
 };
 pub use micro_parquet::exporters::{
-    export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard,
+    copy_table_text, PdfOptions, export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, CopyKind,
 };
 pub use micro_parquet::macros::{
     generate_python_polars_code, load_macro_from_file, python_pii_refusal,
@@ -33,7 +33,7 @@ pub use micro_parquet::sort_lists::SortOrder;
 pub use micro_parquet::jobs::{JobKey, JobKind, JobQueue, Outcome};
 pub use micro_parquet::tab_jobs::{
     check_schema_for_tab, check_text_columns, compute_step_counts, compute_tab_column_stats,
-    compute_tab_summary, ColumnStatsRequest, stats_key, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
+    compute_tab_summary, export_tabs_pdf_with, ColumnStatsRequest, stats_key, convert_csv_to_parquet, export_split, export_tab_csv, export_tab_parquet,
     export_tabs_pdf, export_tabs_xlsx, load_tab, refresh_tab, ExportTab, JobOutput, LoadRequest,
     LoadedTab, RefreshRequest, SchemaApplied, SchemaRequest, TabTextFindings, TextCheckRequest,
     TextCheckResult, StepCountsRequest, SummaryRequest, compute_pivot_preview, compute_pivot_values, FieldKind,

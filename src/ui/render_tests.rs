@@ -361,7 +361,7 @@ fn csv_body(rows: usize, multiline_at: &[usize], malformed_at: &[usize]) -> Stri
 fn the_row_count_note_is_grey_when_quotes_explain_it_and_a_warning_when_not_with_a_details_button() {
     use crate::ui::layout_tests::collect_painted;
     let tk = theme::LIGHT;
-    for (ppp, w, h) in SCREENS {
+    for (ppp, w, h) in SCREENS.iter().copied().chain([(1.05, 1291.0, 700.0)]) {
         let (ctx, input) = screen(ppp, w, h);
         let paint = |app: &mut MicroParquetApp| {
             let mut p = None;
@@ -371,13 +371,13 @@ fn the_row_count_note_is_grey_when_quotes_explain_it_and_a_warning_when_not_with
             }
             p.expect("frames")
         };
-        // only line breaks inside quotes: grey, no warning sign
+        // only line breaks inside quotes: the line-break chip, and no row-count warning
         let mut app = test_app("r4grey");
         open_csv_tab(&mut app, "grey.csv", &csv_body(1300, &[10, 500, 1200], &[]));
         let p = paint(&mut app);
-        let note = "1,300 rows from 1,303 lines: 3 records contain line breaks inside quotes";
-        let c = p.colors.iter().find(|(t, _)| t == note).unwrap_or_else(|| panic!("ppp {ppp}: '{note}' not painted: {:?}", p.texts.iter().map(|(t, _, _)| t.clone()).filter(|t| t.contains("rows")).collect::<Vec<_>>()));
-        assert_eq!(c.1, tk.muted, "ppp {ppp}: the note is grey");
+        // (K1: the note is the chip "⚠ 3 line breaks · Details"; the long words are on its hover and in the load message)
+        let c = p.colors.iter().find(|(t, _)| t.ends_with(" 3 line breaks")).unwrap_or_else(|| panic!("ppp {ppp}: the chip is not painted: {:?}", p.texts.iter().map(|(t, _, _)| t.clone()).filter(|t| t.contains("break")).collect::<Vec<_>>()));
+        assert_eq!(c.1, tk.warning, "ppp {ppp}: the chip is a warning until the tab cleans the breaks");
         assert!(p.texts.iter().any(|(t, _, _)| t == "Details"), "ppp {ppp}: a Details button");
         // a malformed line as well: a warning in the warning colour
         let mut app = test_app("r4warn");
@@ -405,6 +405,8 @@ fn the_row_count_note_is_grey_when_quotes_explain_it_and_a_warning_when_not_with
 fn status_screens() -> Vec<(f32, f32, f32)> {
     let mut v = SCREENS.to_vec();
     v.push((1.05, 800.0 / 1.05, 560.0 / 1.05));
+    // the owner's real window at 105%
+    v.push((1.05, 1291.0, 700.0));
     v
 }
 
@@ -442,7 +444,7 @@ fn the_status_bar_never_passes_the_window_width_and_cuts_a_long_message_with_dot
         let screen_rect = ctx.screen_rect();
         assert!(inside(rep.bar, screen_rect), "{what}: bar {:?} in window {screen_rect:?}", rep.bar);
         assert!(inside(rep.messages, rep.bar) && rep.messages.left() >= rep.left.right() - 0.5, "{what}: the Messages button {:?} sits right of {:?}", rep.messages, rep.left);
-        assert!(rep.content.right() <= rep.left.right() + 0.5, "{what}: the items {:?} stay left of the button, inside {:?}", rep.content, rep.left);
+        assert!(rep.content.right() <= rep.left.right() + 0.5, "{what}: the items {:?} stay left of the button, inside {:?}: {:?}", rep.content, rep.left, p.texts.iter().filter(|(_, pos, _)| pos.y >= rep.bar.top()).map(|(t, pos, _)| (t.clone(), pos.x)).collect::<Vec<_>>());
         // every text painted in the bar ends inside the window
         let bar_top = rep.bar.top();
         for (t, pos, _) in p.texts.iter().filter(|(_, pos, _)| pos.y >= bar_top - 1.0) {
@@ -450,6 +452,14 @@ fn the_status_bar_never_passes_the_window_width_and_cuts_a_long_message_with_dot
         }
         // the long message is cut with "…" and ends before the Messages button
         let cut = p.shown.iter().find(|(t, pos)| pos.y >= bar_top - 1.0 && t.ends_with('\u{2026}') && t.starts_with("Exported"));
+        // in the smallest window the line-break chip, the control total and the running job leave no room
+        // for the message (it gives way first); the chip and Cancel are still whole
+        if w * ppp < 900.0 {
+            let shown: Vec<&str> = p.texts.iter().filter(|(_, pos, _)| pos.y >= bar_top - 1.0).map(|(t, _, _)| t.as_str()).collect();
+            assert!(shown.contains(&"Details") && shown.contains(&"Cancel"), "{what}: the chip's Details and Cancel stay: {shown:?}");
+            let _ = go_tx.send(());
+            continue;
+        }
         assert!(cut.is_some(), "{what}: the long message ends in '…': {:?}", p.shown.iter().filter(|(_, pos)| pos.y >= bar_top).map(|(t, _)| t.clone()).collect::<Vec<_>>());
         let _ = go_tx.send(());
     }

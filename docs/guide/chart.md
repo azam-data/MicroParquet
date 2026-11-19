@@ -88,4 +88,5 @@ Test: `guide_chart`
 - Top N ranks categories by the aggregated value, largest first; "Other" is calculated again from its own rows (an average of the rest is the average of its rows, not of averages).
 - A category called "Other" in the data is kept apart from the rest ("Other categories").
 - Count counts rows; the value column is not used.
+- On a pivot table the subtotal and Grand total rows are not charted.
 - The first chart of a tab picks the first text column and the first number column; change them as needed.

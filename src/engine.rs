@@ -3920,6 +3920,12 @@ pub fn weighted_mixed_sign_notes(
 /// Rows and control sum for the status bar, or "—" with the reason. The pipeline result is
 /// passed in so a failed step also shows "—" instead of the previous step's totals.
 pub fn control_totals_state(lf: Result<LazyFrame>, control_col: Option<&str>) -> ControlTotals {
+    control_totals_state_for(lf, control_col, &[])
+}
+
+/// `control_totals_state` for a tab with these steps: the rows are all the table's rows, but the
+/// control sum leaves out the pivot's subtotal and Grand total rows (K2), so nothing is added twice.
+pub fn control_totals_state_for(lf: Result<LazyFrame>, control_col: Option<&str>, steps: &[TransformStep]) -> ControlTotals {
     let unavailable = |why: String| ControlTotals {
         rows: None,
         sum: None,
@@ -3953,7 +3959,7 @@ pub fn control_totals_state(lf: Result<LazyFrame>, control_col: Option<&str>) ->
             Some(_) => (Some(c), None),
         },
     };
-    match compute_control_totals(lf, sum_col) {
+    match compute_control_totals_for(lf, sum_col, steps) {
         Ok((rows, sum)) => ControlTotals {
             rows: Some(rows),
             sum,
@@ -3967,9 +3973,22 @@ pub fn compute_control_totals(
     lf: LazyFrame,
     control_col: Option<&str>,
 ) -> Result<(usize, Option<f64>)> {
+    compute_control_totals_for(lf, control_col, &[])
+}
+
+pub fn compute_control_totals_for(
+    lf: LazyFrame,
+    control_col: Option<&str>,
+    steps: &[TransformStep],
+) -> Result<(usize, Option<f64>)> {
     let mut aggs = vec![len().alias("__row_count")];
     if let Some(c) = control_col {
-        aggs.push(col(c).cast(DataType::Float64).sum().alias("__control_sum"));
+        let values = col(c).cast(DataType::Float64);
+        let values = match crate::pivot_table::total_rows_expr(steps) {
+            Some(t) => values.filter(t.not()),
+            None => values,
+        };
+        aggs.push(values.sum().alias("__control_sum"));
     }
 
     let res = lf.with_streaming(true).select(aggs).collect()?;
@@ -4086,12 +4105,52 @@ pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> 
     export_to_csv(lf, out_path, mdy_dates, ExportMode::Auto).map(|_| ())
 }
 
+/// A decimal number as a CSV text (K3): at most 15 significant digits, trailing zeros trimmed, never
+/// in scientific notation, so Excel reads every value as a number and a sum that came out as
+/// 3478848.7299999995 is written 3478848.73. A value that is not finite is written as Polars does.
+pub fn csv_float_text(x: f64) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf" } else { "-inf" }.to_string();
+    }
+    // 15 significant digits: one before the point and 14 after in scientific form
+    let rounded = format!("{:.14e}", x).parse::<f64>().unwrap_or(x);
+    if rounded == 0.0 {
+        return "0".to_string();
+    }
+    format!("{}", rounded)
+}
+
+/// The Float64 columns of the table as their CSV text (`csv_float_text`); other columns are unchanged.
+fn float_columns_as_text(lf: LazyFrame) -> Result<LazyFrame> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for the CSV export")?;
+    let floats: Vec<Expr> = schema
+        .iter()
+        .filter(|(_, dt)| matches!(dt, DataType::Float64))
+        .map(|(name, _)| {
+            col(name.as_str()).map(
+                |s| {
+                    let ca = s.f64()?;
+                    let out: StringChunked = ca.into_iter().map(|v| v.map(csv_float_text)).collect();
+                    Ok(Some(out.with_name(s.name().clone()).into_series()))
+                },
+                GetOutput::from_type(DataType::String),
+            )
+        })
+        .collect();
+    Ok(if floats.is_empty() { lf } else { lf.with_columns(floats) })
+}
+
 pub fn export_to_csv(
     lf: LazyFrame,
     out_path: &Path,
     mdy_dates: bool,
     mode: ExportMode,
 ) -> Result<ExportPath> {
+    let lf = float_columns_as_text(lf)?;
     let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
 
     if mode == ExportMode::Auto {

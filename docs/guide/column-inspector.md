@@ -67,5 +67,6 @@ Test: `guide_column_inspector`
 ## 10. Limits and assumptions
 
 - Statistics cover the result up to the last valid step; a broken step stops them there.
+- On a pivot table the subtotal and Grand total rows are left out of the statistics (Rows, Sum, Max).
 - Blank text is never counted as a value, so a column of only blanks shows no distinct values.
 - The bar range is the 1st to the 99th percentile (the nearest actual value), so with 100 values or more the smallest and largest 1% fall outside the bars and are counted in the line under them; with fewer values every value is in the bars.

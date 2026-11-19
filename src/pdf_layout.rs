@@ -21,6 +21,70 @@ pub const PAGE_W_MM: f32 = 297.0;
 pub const PAGE_H_MM: f32 = 210.0;
 pub const LEFT_MM: f32 = 12.0;
 pub const USABLE_W_MM: f32 = 273.0;
+/// The space above the first line of a page.
+pub const TOP_MARGIN_MM: f32 = 16.0;
+
+/// The paper of a PDF export (L2): A4 (210 × 297 mm) or Legal (8.5 × 14 in), upright or on its side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PdfPage {
+    pub landscape: bool,
+    pub legal: bool,
+}
+
+impl Default for PdfPage {
+    /// A4 on its side: what the report always used.
+    fn default() -> Self {
+        Self { landscape: true, legal: false }
+    }
+}
+
+impl PdfPage {
+    fn short_long(&self) -> (f32, f32) {
+        if self.legal { (215.9, 355.6) } else { (210.0, 297.0) }
+    }
+
+    pub fn width_mm(&self) -> f32 {
+        let (s, l) = self.short_long();
+        if self.landscape { l } else { s }
+    }
+
+    pub fn height_mm(&self) -> f32 {
+        let (s, l) = self.short_long();
+        if self.landscape { s } else { l }
+    }
+
+    /// The width the table may use (the same margin on both sides).
+    pub fn usable_w_mm(&self) -> f32 {
+        self.width_mm() - 2.0 * LEFT_MM
+    }
+
+    /// Where the first line of a page is written.
+    pub fn top_mm(&self) -> f32 {
+        self.height_mm() - TOP_MARGIN_MM
+    }
+}
+
+/// `text` cut into lines no wider than `max_mm` at the given size, at spaces (a single word wider
+/// than a line stays whole).
+pub fn wrap_text_mm(text: &str, max_mm: f32, size_pt: f32, font: FontKind) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for para in text.split(['\n', '\r']).filter(|p| !p.trim().is_empty()) {
+        let mut cur = String::new();
+        for word in para.split_whitespace() {
+            let next = if cur.is_empty() { word.to_string() } else { format!("{} {}", cur, word) };
+            if !cur.is_empty() && text_width_mm(&next, size_pt, font) > max_mm {
+                lines.push(std::mem::take(&mut cur));
+                cur = word.to_string();
+            } else {
+                cur = next;
+            }
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+    }
+    lines
+}
 /// Space between a column's edge and its text, on each side.
 pub const PAD_MM: f32 = 1.5;
 pub const MIN_COL_MM: f32 = 10.0;
@@ -293,6 +357,22 @@ pub fn layout_pdf_tab(
     summary: &[SummaryCell],
     max_rows: usize,
 ) -> PdfTabLayout {
+    layout_pdf_tab_on(&PdfPage::default(), title, df, col_formats, num_format, global_decimals, summary, max_rows)
+}
+
+/// `layout_pdf_tab` for a chosen paper: the columns that do not fit its width go to further parts.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_pdf_tab_on(
+    page: &PdfPage,
+    title: &str,
+    df: &DataFrame,
+    col_formats: &HashMap<String, ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    summary: &[SummaryCell],
+    max_rows: usize,
+) -> PdfTabLayout {
+    let usable_w = page.usable_w_mm();
     let cols = df.get_columns();
     let n_rows = df.height().min(max_rows);
     let inner_cap = MAX_COL_MM - 2.0 * PAD_MM;
@@ -387,7 +467,7 @@ pub fn layout_pdf_tab(
     let mut n_label = 0;
     let mut label_w = 0.0;
     for c in &infos {
-        if c.numeric || (n_label > 0 && label_w + c.w > USABLE_W_MM * LABEL_SHARE) {
+        if c.numeric || (n_label > 0 && label_w + c.w > usable_w * LABEL_SHARE) {
             break;
         }
         label_w += c.w;
@@ -409,7 +489,7 @@ pub fn layout_pdf_tab(
             _ => groups_of_cols.push(vec![i]),
         }
     }
-    let capacity = (USABLE_W_MM - label_w).max(MIN_COL_MM);
+    let capacity = (usable_w - label_w).max(MIN_COL_MM);
     let mut part_cols: Vec<Vec<usize>> = Vec::new();
     let mut cur: Vec<usize> = Vec::new();
     let mut used = 0.0;

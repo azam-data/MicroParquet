@@ -2,8 +2,8 @@ use crate::engine::{
     compile_tab_lazy, compute_control_totals, export_to_csv_stream, export_to_parquet_stream,
 };
 use crate::models::{
-    format_metric_value, resolved_scale, ColumnFormatSpec, MoneyScale, NumberDisplayFormat,
-    ParquetDialect, SplitExportFormat, SummarySpec, TabSource, TransformStep,
+    classify_column_auto_format, format_metric_value, format_with_commas, resolved_scale, ColumnFormatSpec, MetricFormatType,
+    MoneyScale, NumberDisplayFormat, ParquetDialect, SplitExportFormat, SummarySpec, TabSource, TabState, TransformStep,
 };
 use crate::jobs::{Cancelled, JobCtx, TempOutput};
 use crate::summary::{date_text, SummaryCell, SummaryValue};
@@ -204,7 +204,9 @@ pub fn export_scaled_tabs_with(
         match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
             Ok(df) => {
                 // The summary is computed from the same collected data the sheet holds.
-                let summary = match summarize(&df, t.summary, t.control_col) {
+                // (a pivot keeps its own Grand total and gets no extra totals row)
+                let own_totals = crate::pivot_table::total_rows_expr(t.steps).is_some();
+                let summary = match if own_totals { Ok(Vec::new()) } else { summarize(&df, t.summary, t.control_col) } {
                     Ok(cells) => cells,
                     Err(e) => {
                         totals_errors.push((t.title.clone(), format!("{:#}", e)));
@@ -606,14 +608,36 @@ pub struct PdfTab {
     pub summary: Vec<SummaryCell>,
 }
 
+/// What the PDF export dialog asks (L2).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PdfOptions {
+    /// The heading of every page; blank = no heading line.
+    pub title: String,
+    pub page: crate::pdf_layout::PdfPage,
+}
+
 pub fn export_pdf_tabs(
     tabs: Vec<PdfTab>,
     out_path: &Path,
     num_format: NumberDisplayFormat,
     global_decimals: usize,
 ) -> Result<PdfExportReport> {
+    export_pdf_tabs_with(tabs, out_path, num_format, global_decimals, &PdfOptions::default())
+}
+
+/// `export_pdf_tabs` with the title and the paper chosen in the export dialog.
+pub fn export_pdf_tabs_with(
+    tabs: Vec<PdfTab>,
+    out_path: &Path,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    opts: &PdfOptions,
+) -> Result<PdfExportReport> {
     use crate::pdf_layout::*;
-    let (doc, page1, layer1) = PdfDocument::new("MicroParquet Banking & ALCO Report", Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer 1");
+    let (page_w, page_h) = (opts.page.width_mm(), opts.page.height_mm());
+    let heading: Vec<String> = wrap_text_mm(opts.title.trim(), opts.page.usable_w_mm(), TITLE_PT, FontKind::Bold);
+    let doc_title = if heading.is_empty() { "Report".to_string() } else { heading.join(" ") };
+    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(page_w), Mm(page_h), "Layer 1");
 
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_reg = doc.add_builtin_font(BuiltinFont::Helvetica)?;
@@ -638,13 +662,13 @@ pub fn export_pdf_tabs(
         if truncated {
             report.truncated_tabs.push(title.clone());
         }
-        let layout = layout_pdf_tab(&title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB);
+        let layout = layout_pdf_tab_on(&opts.page, &title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB);
         let n_parts = layout.parts.len();
         let total_height = df.height();
 
         for (pi, part) in layout.parts.iter().enumerate() {
             if !first_page {
-                let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
                 current_page = p;
                 current_layer = l;
             }
@@ -654,9 +678,12 @@ pub fn export_pdf_tabs(
 
             // Title, unit, notes and the column headers at the top of every page of the part.
             let page_header = |layer: &PdfLayerReference| -> f32 {
-                let mut y = 194.0f32;
-                layer.use_text(format!("MicroParquet Report — {}", title), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
-                y -= 5.5;
+                let mut y = opts.page.top_mm();
+                // the heading is what was typed in the export dialog; with none there is no heading line
+                for line in &heading {
+                    layer.use_text(line.clone(), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
+                    y -= 5.5;
+                }
                 if let Some(u) = &layout.unit_line {
                     layer.use_text(u.clone(), NOTE_PT, Mm(LEFT_MM), Mm(y), &font_reg);
                     y -= 4.5;
@@ -708,7 +735,7 @@ pub fn export_pdf_tabs(
 
             for row in &part.rows {
                 if y_mm < 15.0 {
-                    let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                    let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
                     current_page = p;
                     current_layer = l;
                     y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
@@ -729,7 +756,7 @@ pub fn export_pdf_tabs(
             // The summary of the whole result as a band in the summary colour under the rows.
             if part.summary.iter().any(|c| c.is_some()) {
                 if y_mm < 26.0 {
-                    let (p, l) = doc.add_page(Mm(PAGE_W_MM), Mm(PAGE_H_MM), "Layer");
+                    let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
                     current_page = p;
                     current_layer = l;
                     y_mm = page_header(&doc.get_page(current_page).get_layer(current_layer));
@@ -1003,6 +1030,112 @@ pub fn format_df_for_clipboard(
     out
 }
 
+
+/// What the clipboard gets (K4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyKind {
+    /// Ctrl+C and "Copy": numbers in the unit the grid shows them in, as plain numbers (no thousands
+    /// separators, no unit suffix, at most 15 significant digits), the unit in the header.
+    Plain,
+    /// "Copy as shown": the text of the grid's cells.
+    AsShown,
+    /// "Copy raw (BDT)": the stored numbers, unscaled.
+    Raw,
+}
+
+/// How a decimal column is shown: in a money scale, as a percentage, or as it is.
+enum ShownIn {
+    Scale(MoneyScale),
+    Percent { times_100: bool },
+    Plain,
+}
+
+fn shown_in(col_name: &str, spec: Option<&ColumnFormatSpec>, global: NumberDisplayFormat) -> ShownIn {
+    let t = spec.map(|s| s.fmt_type).unwrap_or(MetricFormatType::Auto);
+    let resolved = if t == MetricFormatType::Auto { classify_column_auto_format(col_name) } else { t };
+    match resolved {
+        MetricFormatType::PercentAsIs => ShownIn::Percent { times_100: false },
+        MetricFormatType::PercentDiv100 => ShownIn::Percent { times_100: true },
+        MetricFormatType::Auto => global.scale().map(ShownIn::Scale).unwrap_or(ShownIn::Plain),
+        other => other.scale().map(ShownIn::Scale).unwrap_or(ShownIn::Plain),
+    }
+}
+
+/// A tab or line break inside a text would move the cells of a pasted table: it becomes a space.
+fn clip_text(s: &str) -> String {
+    s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect()
+}
+
+/// The table as tab-separated text for the clipboard (the first 2,000 rows). A blank cell is an
+/// empty cell in all three kinds. Decimal columns only are scaled; whole numbers, dates and text
+/// are written as they are.
+pub fn copy_table_text(
+    df: &DataFrame,
+    col_formats: &HashMap<String, ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    kind: CopyKind,
+) -> String {
+    use crate::engine::csv_float_text;
+    let cols = df.get_columns();
+    let rows = df.height().min(2000);
+    let is_decimal = |c: &Series| matches!(c.dtype(), DataType::Float64 | DataType::Float32);
+    // the header: the column's name, and for Plain the unit its numbers are in
+    let header: Vec<String> = cols
+        .iter()
+        .map(|c| {
+            let name = c.name().as_str();
+            if !is_decimal(c) {
+                return clip_text(name);
+            }
+            let unit = match (kind, shown_in(name, col_formats.get(name), num_format)) {
+                (CopyKind::Plain, ShownIn::Scale(sc)) => Some(sc.unit),
+                (CopyKind::Plain, ShownIn::Percent { .. }) => Some("%"),
+                (CopyKind::Raw, ShownIn::Scale(_)) => Some("BDT"),
+                _ => None,
+            };
+            match unit {
+                Some(u) => clip_text(&format!("{} ({})", name, u)),
+                None => clip_text(name),
+            }
+        })
+        .collect();
+    let mut out = header.join("\t");
+    out.push('\n');
+    for r in 0..rows {
+        let cells: Vec<String> = cols
+            .iter()
+            .map(|c| {
+                let name = c.name().as_str();
+                let spec = col_formats.get(name);
+                let v = c.get(r).unwrap_or(AnyValue::Null);
+                let number = match &v {
+                    AnyValue::Float64(x) => Some(*x),
+                    AnyValue::Float32(x) => format!("{}", x).parse::<f64>().ok(),
+                    _ => None,
+                };
+                match (&v, number) {
+                    (AnyValue::Null, _) => String::new(),
+                    (_, Some(x)) => match kind {
+                        CopyKind::AsShown => format_metric_value(x, name, spec, num_format, global_decimals),
+                        CopyKind::Raw => csv_float_text(x),
+                        CopyKind::Plain => csv_float_text(match shown_in(name, spec, num_format) {
+                            ShownIn::Scale(sc) => x / sc.divisor,
+                            ShownIn::Percent { times_100: true } => x * 100.0,
+                            _ => x,
+                        }),
+                    },
+                    (AnyValue::Int64(x), _) if kind == CopyKind::AsShown && !TabState::is_likely_id_column(name) => format_with_commas(*x as f64, 0),
+                    (AnyValue::String(t), _) => clip_text(t),
+                    (other, _) => clip_text(&format!("{}", other)),
+                }
+            })
+            .collect();
+        out.push_str(&cells.join("\t"));
+        out.push('\n');
+    }
+    out
+}
 
 fn format_cell_val(
     val: Option<AnyValue>,
