@@ -387,4 +387,9 @@ P5 (details in docs/phase6-progress.md D45–D47):
 - CRR, PSR and weightages come only from the parameter file (shown, not typed); the footer is rows of the same table; Banking gets the heading "Islamic window".
 P6 (details in docs/phase6-progress.md D48–D50):
 - The stress needs a behaviour profile with a term deposit that has a TDRR (else refused); a `plan` job makes the build matrix from the "platforms" input.
+Session B (owner answers E1-E3, build findings F1-F3, review fixes G1-G11, decisions H1-H4; details in docs/phase6-progress.md, "Session B"):
+- E1: the Mudaraba dialog has "Edit parameters..." that saves a NEW psr file dated today (never overwrites). E2: a pack stops only for parse failures in columns its items or the slot's steps use; the others are a Cover warning. E3: the scorecard is in Edit > Data checks (see F3).
+- F1: the status-bar Details button stays alone when the bar has no room for the note. F2: the chart is the fourth side-panel tab with Pop out; View > Side panel has Steps, Column, SQL, Chart. F3: File, Edit, View, Banking, Export, Help, then 11 toolbar buttons with a "»" overflow; View > Toolbar buttons; Hygiene audit and Data-quality scorecard under Edit > Data checks. At 1280 px all 11 buttons are icon-only.
+- G1-G11 done as written. Notable choices: a picked "is not" keeps the old unknown-blank rule (only "not in list" keeps blanks); Mudaraba daily balances need a date column (new field, old runs must choose it); MoM/CL migration/reconcile refuse the same file only when the steps are also the same; the G1-G7 and G8-G11 groups are one commit each because they touch the same files.
+- H1: a month is 365/12 days in the Tenor order. H2: every scorecard rule is measured before the tab's steps. H3: New and Closed keys follow materiality (one summary line). H4: saved runs keep rule-file hashes and warn when one changed.
 </accepted_deviations>
