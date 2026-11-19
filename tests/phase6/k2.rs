@@ -138,3 +138,85 @@ fn k2_a_pivot_sheet_keeps_its_grand_total_and_gets_no_extra_totals_row_in_excel(
     assert!(!sheet.contains("<row r=\"16\""), "no extra totals row");
     let _ = df;
 }
+
+// ---------------------------------------------------------------------------------------- K5
+
+use micro_parquet::pivot_table::{pivot_totals_lost, total_rows_expr};
+
+fn calc(new_col: &str, left: &str) -> TransformStep {
+    TransformStep::MathFormula { new_col: new_col.into(), left_col: left.into(), op: MathOp::Mul, right_is_col: false, right_val_or_col: "0.5".into() }
+}
+
+#[test]
+fn k5_pivot_then_calc_column_still_counts_13_and_sums_to_the_grand_total() {
+    let pv = pivot_step(&["Term Period"], false, true);
+    let (_, _, df0, v) = compiled("k5a0", &[pv.clone()]);
+    let g = grand(&df0, &v);
+    let steps = vec![pv, calc("Half", &v)];
+    let (src, d, df, _) = compiled("k5a", &steps);
+    assert_eq!(df.height(), N + 1);
+    assert!(!pivot_totals_lost(&steps));
+    let mut over: HashMap<String, SummarySpec> = HashMap::new();
+    over.insert("Term Period".into(), SummarySpec { agg: SummaryAgg::Count, weight_col: None });
+    over.insert(v.clone(), SummarySpec { agg: SummaryAgg::Sum, weight_col: None });
+    let r = compute_tab_summary(SummaryRequest { tab_id: 1, source: src.clone(), steps: steps.clone(), overrides: over, control_col: None, temp_dir: d.clone() }, &JobCtx::inert()).expect("summary");
+    let cell = |c: &str| r.cells.iter().find(|x| x.column == c).unwrap_or_else(|| panic!("cell {c}")).value.clone();
+    assert_eq!(cell("Term Period"), Some(SummaryValue::Count(N as u64)));
+    match cell(&v) {
+        Some(SummaryValue::Number(x)) => assert!((x - g).abs() < 0.01, "Sum {x} equals the Grand total {g}"),
+        other => panic!("{other:?}"),
+    }
+    let t = micro_parquet::engine::control_totals_state_for(Ok(compile_tab_lazy(&src, &steps, &d).expect("lf")), Some(&v), &steps);
+    assert!((t.sum.expect("a sum") - g).abs() < 0.01);
+}
+
+#[test]
+fn k5_steps_that_keep_the_label_column_and_the_rows_keep_the_total_rows_recognised() {
+    let pv = pivot_step(&["Risk", "Term Period"], true, true);
+    let (_, _, df, v) = compiled("k5b", &[pv.clone()]);
+    let labels = df.get_column_names().iter().take(2).map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(labels, vec!["Risk", "Term Period"]);
+    let sort = TransformStep::SortRows { levels: vec![SortLevel { column: v.clone(), descending: true, ..Default::default() }] };
+    let filter = TransformStep::FilterRows { column: "Risk".into(), operator: FilterOp::Eq, value: "Low".into(), keep_matching: true };
+    let cond = TransformStep::ConditionalColumn {
+        new_col: "Big".into(),
+        rules: vec![],
+        fallback: "x".into(),
+        output_as_float: false,
+        blank_result: BlankRule::FallThrough,
+    };
+    let rename_other = TransformStep::RenameColumn { old_name: v.clone(), new_name: "Total balance".into() };
+    let convert_other = TransformStep::ConvertToNumber { columns: vec![v.clone()] };
+    let select_keep = TransformStep::SelectAndReorderColumns { cols: vec!["Term Period".into(), "Risk".into(), v.clone()] };
+    let clean = TransformStep::CleanLineBreaks { columns: vec![], trim_all: false };
+    for (what, step) in [("sort", sort), ("filter", filter), ("conditional column", cond), ("rename of another column", rename_other), ("type change of another column", convert_other), ("column selection that keeps the labels", select_keep), ("clean line breaks", clean), ("calc column", calc("Half", &v))] {
+        let steps = vec![pv.clone(), step];
+        assert!(!pivot_totals_lost(&steps), "{what}");
+        assert!(total_rows_expr(&steps).is_some(), "{what}: the total rows are still recognised");
+    }
+    // a rename of the label column is followed
+    let steps = vec![pv.clone(), TransformStep::RenameColumn { old_name: "Term Period".into(), new_name: "Tenor".into() }];
+    assert!(total_rows_expr(&steps).is_some() && !pivot_totals_lost(&steps));
+}
+
+#[test]
+fn k5_steps_that_reshape_the_rows_stop_the_recognition_and_say_so() {
+    let pv = pivot_step(&["Term Period"], false, true);
+    let sql = TransformStep::SqlQuery { query: "SELECT * FROM self".into() };
+    let group = TransformStep::GroupByPivot { group_cols: vec!["Term Period".into()], pivot_col: None, aggs: vec![], sort_by_col: None, top_n: None };
+    let to_number_label = TransformStep::ConvertToNumber { columns: vec!["Term Period".into()] };
+    let drop_label = TransformStep::SelectAndReorderColumns { cols: vec!["Sum of Balance".into()] };
+    let overwrite_label = TransformStep::MathFormula { new_col: "Term Period".into(), left_col: "Sum of Balance".into(), op: MathOp::Mul, right_is_col: false, right_val_or_col: "1".into() };
+    for (what, step) in [("SQL", sql), ("Group", group), ("number conversion of the label column", to_number_label), ("selection without the label column", drop_label), ("a column that overwrites the label column", overwrite_label)] {
+        let steps = vec![pv.clone(), step.clone()];
+        assert!(pivot_totals_lost(&steps), "{what}: the warning is raised");
+        assert!(total_rows_expr(&steps).is_none(), "{what}: no guess");
+    }
+    // a skipped step does nothing; a later pivot starts afresh
+    let skipped = TransformStep::Skipped { step: Box::new(TransformStep::SqlQuery { query: "SELECT * FROM self".into() }) };
+    assert!(!pivot_totals_lost(&[pv.clone(), skipped]));
+    let again = vec![pv.clone(), TransformStep::SqlQuery { query: "SELECT * FROM self".into() }, pivot_step(&["Term Period"], false, true)];
+    assert!(!pivot_totals_lost(&again) && total_rows_expr(&again).is_some());
+    // a table that never had a pivot has nothing to warn about
+    assert!(!pivot_totals_lost(&[TransformStep::SqlQuery { query: "SELECT * FROM self".into() }]));
+}

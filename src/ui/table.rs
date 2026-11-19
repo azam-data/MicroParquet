@@ -644,6 +644,10 @@ impl MicroParquetApp {
                 error: tab.summary_error.as_deref(),
                 control_col: tab.control_col.as_deref(),
             };
+            // the summary row cannot leave a pivot's total rows out any more: say so, above it
+            if self.show_summary_row && micro_parquet::pivot_table::pivot_totals_lost(&tab.steps) {
+                theme::warning_label(ui, micro_parquet::pivot_table::PIVOT_TOTALS_WARNING);
+            }
             // A page that could not be read: the last one stays, dimmed and marked.
             if let Some(e) = &tab.page_error {
                 ui.horizontal(|ui| {

@@ -1898,3 +1898,37 @@ fn k4_ctrl_c_and_the_right_click_menu_copy_the_table_in_three_ways_at_three_size
         }
     }
 }
+
+#[test]
+fn k5_the_summary_row_and_the_status_bar_warn_when_a_step_hides_a_pivots_total_rows() {
+    let warn = micro_parquet::pivot_table::PIVOT_TOTALS_WARNING;
+    for (ppp, w, h) in SCREENS3 {
+        let pivot = TransformStep::from_pivot_spec(micro_parquet::models::PivotSpec {
+            rows: vec!["Bucket".into()],
+            values: vec![sum_balance()],
+            column_totals: true,
+            ..Default::default()
+        });
+        let make = |name: &str, extra: TransformStep| {
+            let mut app = test_app(name);
+            let src = parquet_source(&app.paths.root_dir.clone(), "book", book(0));
+            open_tab(&mut app, src, vec![pivot.clone(), extra]);
+            let (ctx, input) = screen(ppp, w, h);
+            Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+        };
+        // SQL after the pivot: the warning in the status bar and above the summary row
+        let mut rig = make("pr6k5a", TransformStep::SqlQuery { query: "SELECT * FROM self".into() });
+        let what = rig.what.clone();
+        rig.app.show_summary_row = true;
+        let p = rig.draw(8);
+        let bar_top = crate::ui::status::status_report(&rig.ctx).expect("status bar").bar.top();
+        let hits: Vec<_> = p.boxes.iter().filter(|(t, _)| t.contains(warn)).map(|(_, b)| *b).collect();
+        assert!(hits.iter().any(|b| b.top() >= bar_top - 1.0), "{what}: the status bar warns: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Pivot")).collect::<Vec<_>>());
+        assert!(hits.iter().any(|b| b.bottom() < bar_top && b.width() > 100.0), "{what}: the summary row warns: {hits:?}");
+        // Calc column after the pivot: the totals are still recognised, no warning
+        let mut rig = make("pr6k5b", TransformStep::MathFormula { new_col: "Half".into(), left_col: "Sum of Balance".into(), op: micro_parquet::models::MathOp::Mul, right_is_col: false, right_val_or_col: "0.5".into() });
+        rig.app.show_summary_row = true;
+        let p = rig.draw(8);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains(warn)), "{what}: no warning after a Calc column");
+    }
+}

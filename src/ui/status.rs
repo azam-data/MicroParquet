@@ -129,6 +129,12 @@ impl MicroParquetApp {
                         ui.label(theme::mono_semibold(count(tab.totals.rows)));
                         // (the warnings are cut with "…" before they take the line-break chip's room)
                         let warn_w = |ui: &egui::Ui| (ui.available_width() - chip_reserve - job_reserve - theme::STATUS_MESSAGE_ROOM).max(theme::STATUS_MIN_MESSAGE_W);
+                        if micro_parquet::pivot_table::pivot_totals_lost(&tab.steps) {
+                            let w = warn_w(ui);
+                            let msg = micro_parquet::pivot_table::PIVOT_TOTALS_WARNING;
+                            theme::clipped_label(ui, egui::RichText::new(format!("{}  {}", theme::ph::WARNING, msg)).color(tk.warning), w)
+                                .on_hover_text(format!("{msg}: a step after the pivot (SQL, another group or pivot, a banking tool) changed its rows, so the pivot's subtotal and Grand total rows can no longer be told apart. The Rows count, the control total and the summary row may count them twice."));
+                        }
                         if let (Some(col_name), None) = (&tab.control_col, tab.control_sum) {
                             let w = warn_w(ui);
                             let msg = format!("Control [{}]: \u{2014}", col_name);
