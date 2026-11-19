@@ -4105,12 +4105,52 @@ pub fn export_to_csv_stream(lf: LazyFrame, out_path: &Path, mdy_dates: bool) -> 
     export_to_csv(lf, out_path, mdy_dates, ExportMode::Auto).map(|_| ())
 }
 
+/// A decimal number as a CSV text (K3): at most 15 significant digits, trailing zeros trimmed, never
+/// in scientific notation, so Excel reads every value as a number and a sum that came out as
+/// 3478848.7299999995 is written 3478848.73. A value that is not finite is written as Polars does.
+pub fn csv_float_text(x: f64) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf" } else { "-inf" }.to_string();
+    }
+    // 15 significant digits: one before the point and 14 after in scientific form
+    let rounded = format!("{:.14e}", x).parse::<f64>().unwrap_or(x);
+    if rounded == 0.0 {
+        return "0".to_string();
+    }
+    format!("{}", rounded)
+}
+
+/// The Float64 columns of the table as their CSV text (`csv_float_text`); other columns are unchanged.
+fn float_columns_as_text(lf: LazyFrame) -> Result<LazyFrame> {
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the columns for the CSV export")?;
+    let floats: Vec<Expr> = schema
+        .iter()
+        .filter(|(_, dt)| matches!(dt, DataType::Float64))
+        .map(|(name, _)| {
+            col(name.as_str()).map(
+                |s| {
+                    let ca = s.f64()?;
+                    let out: StringChunked = ca.into_iter().map(|v| v.map(csv_float_text)).collect();
+                    Ok(Some(out.with_name(s.name().clone()).into_series()))
+                },
+                GetOutput::from_type(DataType::String),
+            )
+        })
+        .collect();
+    Ok(if floats.is_empty() { lf } else { lf.with_columns(floats) })
+}
+
 pub fn export_to_csv(
     lf: LazyFrame,
     out_path: &Path,
     mdy_dates: bool,
     mode: ExportMode,
 ) -> Result<ExportPath> {
+    let lf = float_columns_as_text(lf)?;
     let date_fmt = if mdy_dates { "%m/%d/%Y" } else { "%Y-%m-%d" };
 
     if mode == ExportMode::Auto {

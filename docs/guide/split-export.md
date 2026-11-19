@@ -20,7 +20,7 @@ Writes one file per value of a column (for example one Excel or CSV file per bra
 | Column role | Required? | Type the app needs | Example values | Notes |
 | --- | --- | --- | --- | --- |
 | Split column | Yes | Any column | Branch | A blank value (nothing, or only spaces) goes to BLANK_KEY. |
-| Format | Yes | Parquet, CSV or Excel | CSV | Same options as the normal exports. |
+| Format | Yes | Parquet, CSV or Excel | CSV | Same options as the normal exports. A CSV writes decimal numbers with at most 15 significant digits, trailing zeros trimmed (3478848.7299999995 becomes 3478848.73); Parquet keeps the exact value. |
 | Output folder | Yes | Folder | branch_files | Use an empty folder. |
 
 ## 5. Step by step
