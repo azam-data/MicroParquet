@@ -14,6 +14,8 @@ pub struct ChartRects {
     pub title: Option<egui::Rect>,
     pub plot: Option<egui::Rect>,
     pub notes: Option<egui::Rect>,
+    /// The "Pop out" (or "Dock back") button of the side panel's Chart tab.
+    pub pop_button: Option<egui::Rect>,
 }
 
 /// State of this screen.
@@ -210,8 +212,67 @@ impl MicroParquetApp {
         }
     }
 
-    pub(crate) fn render_chart_drawer(&mut self, ui: &mut egui::Ui) {
-        if !self.show_chart_drawer || self.tabs.is_empty() {
+    /// The Chart tab of the side panel: the chart with a "Pop out" button (only where native windows
+    /// work), or, while it is in its own window, a note with "Dock back".
+    pub(crate) fn render_chart_tab(&mut self, ui: &mut egui::Ui) {
+        let can_pop = !ui.ctx().embed_viewports();
+        let tk = *theme::tokens(self.dark_mode);
+        let mut toggle = false;
+        if self.chart_popped {
+            ui.add(egui::Label::new(egui::RichText::new("The chart is in its own window.").color(tk.muted)).wrap());
+            let b = ui.button("Dock back");
+            self.chart.rects.pop_button = Some(b.rect);
+            toggle = b.clicked();
+        } else {
+            if can_pop {
+                let b = ui.button(format!("{}  Pop out", egui_phosphor::regular::ARROW_SQUARE_OUT)).on_hover_text("Show the chart in its own window");
+                self.chart.rects.pop_button = Some(b.rect);
+                toggle = b.clicked();
+            } else {
+                self.chart.rects.pop_button = None;
+            }
+            self.render_chart_body(ui);
+        }
+        if toggle {
+            self.chart_popped = !self.chart_popped;
+            if self.chart_popped {
+                self.chart_pop_requests += 1;
+            }
+        }
+    }
+
+    /// The chart in its own native window; closing the window (or a backend without windows) docks it back.
+    pub(crate) fn render_chart_popout(&mut self, ctx: &egui::Context) {
+        if !self.chart_popped || self.tabs.is_empty() {
+            return;
+        }
+        let builder = egui::ViewportBuilder::default()
+            .with_title("MicroParquet \u{2014} Chart")
+            .with_inner_size(theme::CHART_POPOUT_SIZE)
+            .with_min_inner_size(theme::CHART_POPOUT_MIN_SIZE)
+            .with_resizable(true)
+            .with_maximize_button(true)
+            .with_minimize_button(true);
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("chart_popout"), builder, |ctx, class| {
+            if class == egui::ViewportClass::Embedded || ctx.input(|i| i.viewport().close_requested()) {
+                self.chart_popped = false;
+                return;
+            }
+            self.chart_popout_ui(ctx);
+        });
+    }
+
+    /// What fills the chart's own window (tests draw it in a headless window of its size).
+    pub(crate) fn chart_popout_ui(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                self.render_chart_body(ui);
+            });
+        });
+    }
+
+    fn render_chart_body(&mut self, ui: &mut egui::Ui) {
+        if self.tabs.is_empty() {
             return;
         }
         self.chart_attach_tab();
@@ -225,8 +286,8 @@ impl MicroParquetApp {
         let mut rects = ChartRects::default();
         let mut open_tab = false;
         let mut spec = self.chart.spec.clone();
-        ui.separator();
-        let controls = ui.horizontal_wrapped(|ui| {
+        let pop_button = self.chart.rects.pop_button;
+        let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
             ui.label("Category (X)");
@@ -236,6 +297,7 @@ impl MicroParquetApp {
                 }
             });
             add(ui, "Category", &mut rects, r.response.rect);
+            ui.end_row();
             ui.label("Series");
             let shown = spec.series.clone().unwrap_or_else(|| "(none)".to_string());
             let r = egui::ComboBox::from_id_salt("chart_series").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
@@ -245,6 +307,7 @@ impl MicroParquetApp {
                 }
             });
             add(ui, "Series", &mut rects, r.response.rect);
+            ui.end_row();
             ui.label("Aggregation");
             let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.agg.label()).show_ui(ui, |ui| {
                 for a in ChartAgg::all() {
@@ -252,6 +315,7 @@ impl MicroParquetApp {
                 }
             });
             add(ui, "Aggregation", &mut rects, r.response.rect);
+            ui.end_row();
             if spec.agg.needs_value() {
                 ui.label("Value");
                 let shown = spec.value.clone().unwrap_or_else(|| "(choose)".to_string());
@@ -261,6 +325,7 @@ impl MicroParquetApp {
                     }
                 });
                 add(ui, "Value", &mut rects, r.response.rect);
+                ui.end_row();
             }
             if spec.agg == ChartAgg::WeightedAvg {
                 ui.label("by");
@@ -271,6 +336,7 @@ impl MicroParquetApp {
                     }
                 });
                 add(ui, "Weight", &mut rects, r.response.rect);
+                ui.end_row();
             }
             ui.label("Type");
             let r = egui::ComboBox::from_id_salt("chart_kind").width(theme::CHART_COMBO_NARROW_W).selected_text(if spec.kind == ChartKind::Bar { "Bar" } else { "Line" }).show_ui(ui, |ui| {
@@ -278,6 +344,7 @@ impl MicroParquetApp {
                 ui.selectable_value(&mut spec.kind, ChartKind::Line, "Line");
             });
             add(ui, "Type", &mut rects, r.response.rect);
+            ui.end_row();
             ui.label("Order");
             let order_text = if spec.by_value { "By value".to_string() } else { spec.order.label() };
             let r = egui::ComboBox::from_id_salt("chart_order").width(theme::CHART_COMBO_NARROW_W).selected_text(order_text).show_ui(ui, |ui| {
@@ -301,9 +368,11 @@ impl MicroParquetApp {
                 }
             });
             add(ui, "Order", &mut rects, r.response.rect);
+            ui.end_row();
             ui.label("Top N");
             let r = ui.add(egui::DragValue::new(&mut spec.top_n).range(1..=500).speed(0.2)); // not a size: a drag speed
             add(ui, "Top N", &mut rects, r.rect);
+            ui.end_row();
             ui.label("Scale");
             let r = egui::ComboBox::from_id_salt("chart_scale").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.scale.label()).show_ui(ui, |ui| {
                 for s in ChartScale::all() {
@@ -311,8 +380,11 @@ impl MicroParquetApp {
                 }
             });
             add(ui, "Scale", &mut rects, r.response.rect);
+            ui.end_row();
+            ui.label("");
             let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Open chart data as tab"));
             add(ui, "Open chart data as tab", &mut rects, b.rect);
+            ui.end_row();
             if b.clicked() {
                 open_tab = true;
             }
@@ -345,6 +417,7 @@ impl MicroParquetApp {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
             }
         }
+        rects.pop_button = pop_button;
         self.chart.rects = rects;
         if open_tab {
             self.chart_open_as_tab();

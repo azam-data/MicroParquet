@@ -750,15 +750,20 @@ fn u2_view_sql_and_ctrl_k_sql_editor_open_the_panel_on_the_sql_tab() {
     for (ppp, w, h) in SCREENS {
         let mut rig = term_rig("p6u2h", ppp, w, h);
         let what = rig.what.clone();
+        // SQL is switched off in View ▸ Side panel, and the panel is off
+        rig.app.settings.side_panel_hidden = vec!["SQL".to_string()];
         rig.app.show_steps_sidebar = false;
         rig.draw(4);
-        // View menu: click "View", then "SQL"
+        // View menu: click "View", then "Side panel", then the SQL box
         let p = rig.draw(2);
         let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the View menu"));
         rig.click(view.center());
         let p = rig.draw(3);
         assert!(p.boxes.iter().any(|(t, _)| t.contains("Custom sort lists")), "{what}: View lists Custom sort lists");
-        let item = p.boxes.iter().find(|(t, _)| t.ends_with("SQL") && t.chars().count() <= 6).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View lists SQL: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+        let side = p.boxes.iter().find(|(t, _)| t == "Side panel").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View lists Side panel"));
+        rig.click(side.center());
+        let p = rig.draw(3);
+        let item = p.boxes.iter().find(|(t, _)| t == "SQL").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Side panel lists SQL: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
         rig.click(item.center());
         assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: View > SQL opened the panel on the SQL tab");
     }
@@ -1045,9 +1050,15 @@ fn chart_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
     let src = parquet_source(&root, "book", df);
     app.create_tab_from_source("book".into(), src, vec![], HashMap::new());
     settle(&mut app);
-    app.show_chart_drawer = true;
+    app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
     let (ctx, input) = screen(ppp, w, h);
     Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+/// `shown` is `all` with some names left out, in the same order.
+fn is_subsequence(shown: &[String], all: &[&str]) -> bool {
+    let mut it = all.iter();
+    shown.iter().all(|s| it.any(|a| a == s))
 }
 
 fn x_labels(p: &Painted, plot: egui::Rect, names: &[&str]) -> Vec<String> {
@@ -1074,7 +1085,8 @@ fn u5_the_chart_shows_the_whole_tab_with_category_names_on_the_x_axis_and_the_ti
         assert!((sum - want).abs() < 1.0, "{what}: {sum} vs {want}");
         // the x-axis labels are the category names (natural order)
         let labels = x_labels(&p, plot, &["1m", "1y", "3m", "6m", "100D"]);
-        assert_eq!(labels, vec!["1m", "1y", "3m", "6m", "100D"], "{what}: the x-axis names the categories: {:?}", p.boxes.iter().filter(|(_, b)| b.top() >= plot.bottom() - 40.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        // (the side panel is narrow: a name is left out where two would touch, never reordered)
+        assert!(is_subsequence(&labels, &["1m", "1y", "3m", "6m", "100D"]) && labels.len() >= 3, "{what}: the x-axis names the categories: {:?}", p.boxes.iter().filter(|(_, b)| b.top() >= plot.bottom() - 40.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
         // the title, with the unit of the column's format (Crore is the default scale)
         let title = p.boxes.iter().find(|(t, _)| t.starts_with("Sum of Balance by Term Period")).map(|(t, b)| (t.clone(), *b)).unwrap_or_else(|| panic!("{what}: the title"));
         assert_eq!(title.0, "Sum of Balance by Term Period: all 250 rows (Crore)", "{what}");
@@ -1082,9 +1094,9 @@ fn u5_the_chart_shows_the_whole_tab_with_category_names_on_the_x_axis_and_the_ti
         let screen_rect = rig.ctx.screen_rect();
         for (n, f) in &r.fields {
             assert!(inside(*f, screen_rect), "{what}: '{n}' {f:?} is in the window");
-            assert!(f.right() <= screen_rect.right() - rig.app.right_panel_w + 1.0, "{what}: '{n}' {f:?} is clear of the right panel");
+            assert!(f.left() >= screen_rect.right() - rig.app.right_panel_w - 1.0, "{what}: '{n}' {f:?} is in the side panel (F2)");
         }
-        assert!(title.1.right() <= screen_rect.right() - rig.app.right_panel_w + 1.0, "{what}");
+        assert!(title.1.left() >= screen_rect.right() - rig.app.right_panel_w - 1.0, "{what}: the title is in the side panel");
         for (i, (a, ra)) in r.fields.iter().enumerate() {
             for (b, rb) in r.fields.iter().skip(i + 1) {
                 assert!(!overlaps(*ra, *rb), "{what}: '{a}' {ra:?} overlaps '{b}' {rb:?}");
@@ -1112,7 +1124,8 @@ fn u5_tenor_order_aggregation_series_and_top_n_work_by_real_clicks_and_are_remem
         rig.draw(10);
         let p = rig.draw(2);
         let plot = rig.app.chart.rects.plot.expect("plot");
-        assert_eq!(x_labels(&p, plot, &["1m", "1y", "3m", "6m", "100D"]), vec!["1m", "3m", "100D", "6m", "1y"], "{what}: Tenor order: 1m, 3m, 100D, 6m, 1y");
+        let shown = x_labels(&p, plot, &["1m", "1y", "3m", "6m", "100D"]);
+        assert!(is_subsequence(&shown, &["1m", "3m", "100D", "6m", "1y"]) && shown.len() >= 3, "{what}: Tenor order 1m, 3m, 100D, 6m, 1y (names that do not fit are left out): {shown:?}");
         // Aggregation > Count by clicks: no Value control, the title says so
         let agg = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Aggregation").map(|(_, r)| *r).expect("Aggregation");
         rig.click(agg.center());
@@ -1135,7 +1148,7 @@ fn u5_tenor_order_aggregation_series_and_top_n_work_by_real_clicks_and_are_remem
         rig.app.chart.spec.kind = ChartKind::Line;
         let p = rig.draw(4);
         assert!(rig.app.chart.rects.plot.is_some(), "{what}: a line chart is drawn");
-        assert!(p.boxes.iter().any(|(t, _)| t == "Other"), "{what}: the Other category is named on the x-axis");
+        assert!(d.categories.iter().any(|c| p.boxes.iter().any(|(t, _)| t == c)), "{what}: category names are on the x-axis (every k-th one in the narrow panel)");
         // the choices are saved in settings.json under the tab's file name, and a restarted app takes them back
         rig.app.chart_save_choices_for_test();
         let (saved, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);
@@ -1147,7 +1160,7 @@ fn u5_tenor_order_aggregation_series_and_top_n_work_by_real_clicks_and_are_remem
         let src = parquet_source(&again.paths.root_dir.clone(), "book", DataFrame::new(vec![Series::new("Term Period".into(), &["1m"]), Series::new("Risk".into(), &["High"]), Series::new("Balance".into(), &[1.0])]).expect("frame"));
         again.create_tab_from_source("book".into(), src, vec![], HashMap::new());
         settle(&mut again);
-        again.show_chart_drawer = true;
+        again.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
         let (ctx, input) = screen(ppp, w, h);
         let mut rig2 = Rig { app: again, ctx, input, what: what.clone() };
         rig2.draw(8);
@@ -2356,5 +2369,139 @@ fn e1_edit_parameters_saves_a_new_file_dated_today_and_never_overwrites() {
         assert!(rig.app.mud.edit.as_ref().and_then(|d| d.message.clone()).is_some_and(|(bad, m)| bad && m.contains("never overwritten")), "{what}: {:?}", rig.app.mud.edit.as_ref().map(|d| d.message.clone()));
         assert_eq!(std::fs::read(&new_file).expect("read"), before, "{what}: never overwritten");
         micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+// ------------------------------------------------------------------------------------------ F2
+
+fn tab_label_boxes(p: &Painted) -> Vec<(String, egui::Rect)> {
+    ["Column", "SQL", "Chart"].iter().filter_map(|n| p.boxes.iter().find(|(t, b)| t == n && b.height() < 24.0 && b.top() < 120.0).map(|(t, b)| (t.clone(), *b))).chain(p.boxes.iter().filter(|(t, b)| t.starts_with("Steps \u{b7} ") && b.top() < 120.0).map(|(t, b)| (t.clone(), *b))).collect()
+}
+
+#[test]
+fn f2_four_tab_labels_fit_one_row_at_the_panels_minimum_width_at_both_scales() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = chart_rig("p6f2a", ppp, w, h);
+        let what = rig.what.clone();
+        // many steps: "Steps · 99" is the widest label
+        rig.app.right_tab = RightTab::Steps;
+        let p = rig.draw(6);
+        assert_eq!(rig.app.right_panel_w, theme::RIGHT_PANEL_W, "{what}: the minimum width");
+        let screen = rig.ctx.screen_rect();
+        let mut labels = tab_label_boxes(&p);
+        assert_eq!(labels.len(), 4, "{what}: all four tab labels are drawn: {labels:?}");
+        labels.sort_by(|a, b| a.1.left().partial_cmp(&b.1.left()).unwrap_or(std::cmp::Ordering::Equal));
+        let names: Vec<&str> = labels.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(&names[1..], &["Column", "SQL", "Chart"], "{what}");
+        assert!(names[0].starts_with("Steps"), "{what}");
+        let top = labels[0].1.top();
+        for (n, b) in &labels {
+            assert!((b.top() - top).abs() < 3.0, "{what}: '{n}' is in the same row: {b:?}");
+            assert!(b.left() >= screen.right() - theme::RIGHT_PANEL_W && b.right() <= screen.right(), "{what}: '{n}' {b:?} is inside the panel");
+            assert!(b.height() < 24.0, "{what}: '{n}' is on one line, not wrapped or cut: {b:?}");
+        }
+        for pair in labels.windows(2) {
+            assert!(pair[0].1.right() <= pair[1].1.left() + 0.5, "{what}: {:?} and {:?} do not overlap", pair[0], pair[1]);
+        }
+        // the widest label: a tab of 99 steps
+        let step = TransformStep::FilterRows { column: "Term Period".into(), operator: FilterOp::IsNotNull, value: String::new(), keep_matching: true };
+        rig.app.tabs[0].steps = vec![step; 99];
+        let p = rig.draw(4);
+        let b = p.boxes.iter().find(|(t, _)| t == "Steps \u{b7} 99").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the label with 99 steps"));
+        assert!(b.height() < 24.0 && b.right() <= screen.right(), "{what}: {b:?}");
+    }
+}
+
+#[test]
+fn f2_view_side_panel_switches_tabs_on_and_off_saves_them_and_hiding_all_hides_the_panel() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = chart_rig("p6f2b", ppp, w, h);
+        let what = rig.what.clone();
+        let open_side_panel_menu = |rig: &mut Rig| -> Painted {
+            let p = rig.draw(3);
+            let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View"));
+            pclick(rig, view);
+            let p = rig.draw(3);
+            let side = p.boxes.iter().find(|(t, _)| t == "Side panel").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Side panel"));
+            pclick(rig, side);
+            rig.draw(3)
+        };
+        // the submenu has the four boxes, all ticked
+        let p = open_side_panel_menu(&mut rig);
+        for n in ["Steps", "Column", "SQL", "Chart"] {
+            assert!(p.boxes.iter().any(|(t, _)| t == n), "{what}: the submenu lists {n}");
+        }
+        // switch Column off: it leaves the panel and settings.json
+        let item = p.boxes.iter().filter(|(t, _)| t == "Column").map(|(_, b)| *b).last().expect("Column box");
+        pclick(&mut rig, item);
+        let p = rig.draw(4);
+        assert_eq!(rig.app.settings.side_panel_hidden, vec!["Column".to_string()], "{what}");
+        assert!(!tab_label_boxes(&p).iter().any(|(n, _)| n == "Column"), "{what}: the Column tab is gone");
+        assert!(tab_label_boxes(&p).len() == 3, "{what}: three tabs left: {:?}", tab_label_boxes(&p));
+        let text = std::fs::read_to_string(micro_parquet::settings::settings_path(&rig.app.paths.root_dir)).expect("settings.json");
+        assert!(text.contains("\"Column\""), "{what}: saved: {text}");
+        // a restarted app takes it back from the file
+        let (again, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);
+        assert_eq!(again.side_panel_hidden, vec!["Column".to_string()], "{what}");
+        // hiding all four hides the panel
+        for t in [RightTab::Steps, RightTab::Sql, RightTab::Chart] {
+            rig.app.set_side_tab_visible(t, false);
+        }
+        rig.draw(4);
+        assert!(!rig.app.side_panel_shown(), "{what}: with every tab off the panel is not drawn");
+        let p = rig.draw(2);
+        assert!(tab_label_boxes(&p).is_empty(), "{what}");
+        // switching one on brings the panel back on that tab
+        rig.app.set_side_tab_visible(RightTab::Chart, true);
+        let p = rig.draw(4);
+        assert!(rig.app.side_panel_shown() && rig.app.right_tab == RightTab::Chart, "{what}");
+        assert!(tab_label_boxes(&p).iter().any(|(n, _)| n == "Chart"), "{what}");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn f2_the_chart_tab_has_a_pop_out_button_only_where_windows_work_and_the_window_has_the_chart() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = chart_rig("p6f2c", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.right_tab = RightTab::Chart;
+        let p = rig.draw(8);
+        // headless: no native windows, so no Pop out; the chart is in the tab, the controls inside the panel
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("Pop out")), "{what}: no Pop out without native windows");
+        assert!(rig.app.chart.rects.plot.is_some(), "{what}: the chart is in the tab");
+        // a native backend: the button is there and a click puts the chart in its own window
+        rig.ctx.set_embed_viewports(false);
+        let p = rig.draw(4);
+        let pop = p.boxes.iter().find(|(t, _)| t.contains("Pop out")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Pop out"));
+        assert!(pop.left() >= rig.ctx.screen_rect().right() - theme::RIGHT_PANEL_W, "{what}: in the panel");
+        pclick(&mut rig, pop);
+        // this backend has no second window: the chart is told "embedded" and docks back at once; a real one keeps it out
+        assert_eq!(rig.app.chart_pop_requests, 1, "{what}: the click asked for the chart's own window");
+        rig.draw(4);
+        assert!(!rig.app.chart_popped, "{what}: docked back where there is no second window");
+        // while it is out, the tab says so and has Dock back
+        rig.app.chart_popped = true;
+        rig.ctx.set_embed_viewports(true);
+        let p = rig.draw(1);
+        assert!(p.boxes.iter().any(|(t, _)| t == "Dock back") && p.boxes.iter().any(|(t, _)| t.contains("own window")), "{what}: the tab says the chart is out and has Dock back");
+        // the window's own content: the same chart, drawn in a window of its size, inside it
+        rig.app.chart_popped = false;
+        let size = theme::CHART_POPOUT_SIZE;
+        let (ctx2, input2) = screen(1.0, size[0], size[1]);
+        let mut last = None;
+        for _ in 0..6 {
+            settle(&mut rig.app);
+            let out = ctx2.run(input2.clone(), |c| rig.app.chart_popout_ui(c));
+            last = Some(crate::ui::layout_tests::collect_painted(&out.shapes));
+        }
+        let q = last.expect("frames");
+        let screen2 = ctx2.screen_rect();
+        let plot = rig.app.chart.rects.plot.unwrap_or_else(|| panic!("{what}: the chart in its window"));
+        assert!(inside(plot, screen2), "{what}: the plot {plot:?} is inside the window {screen2:?}");
+        for (n, f) in &rig.app.chart.rects.fields {
+            assert!(inside(*f, screen2), "{what}: '{n}' {f:?} is in the window");
+        }
+        assert!(q.boxes.iter().any(|(t, _)| t.starts_with("Sum of Balance by Term Period")), "{what}: the title");
     }
 }

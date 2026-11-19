@@ -25,7 +25,7 @@ A tab of the right panel ("SQL", next to "Steps" and "Column") where you write a
 
 ## 5. Step by step
 
-1. View ▸ "SQL" (or Ctrl+K: "SQL editor"). The right panel opens on the "SQL" tab. The editor starts with the tab's last query; "Table name: self" is the reminder.
+1. Click the "SQL" tab of the side panel (or the SQL button of the toolbar, or Ctrl+K: "SQL editor"; if the tab is off, tick View ▸ Side panel ▸ "SQL"). The right panel opens on the "SQL" tab. The editor starts with the tab's last query; "Table name: self" is the reminder.
 2. Type or paste the query. It can have many lines.
 3. Click "Apply here" (Ctrl+Enter in the editor) to add it as the next step of this tab, or "New tab" (Ctrl+Shift+Enter) to open the result in a new tab.
 4. If the query is wrong, the box under the editor shows the message and no step is added.

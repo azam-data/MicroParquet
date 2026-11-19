@@ -154,6 +154,12 @@ pub const SCHEMA_DIALOG_MIN_W: f32 = 640.0;
 /// The size of the schema dialog's own native window, and the smallest it can be made.
 pub const SCHEMA_POPOUT_SIZE: [f32; 2] = [1100.0, 800.0];
 pub const SCHEMA_POPOUT_MIN_SIZE: [f32; 2] = [640.0, 480.0];
+/// The chart's own window: its size when it opens and the least it can be made.
+/// The product and weight fields of the Mudaraba parameter editor.
+pub const MUD_PRODUCT_FIELD_W: f32 = 110.0;
+pub const MUD_WEIGHT_FIELD_W: f32 = 60.0;
+pub const CHART_POPOUT_SIZE: [f32; 2] = [900.0, 560.0];
+pub const CHART_POPOUT_MIN_SIZE: [f32; 2] = [520.0, 360.0];
 /// Space between the items of the two option rows.
 pub const SCHEMA_ROW_GAP: f32 = 6.0;
 /// The Columns card is never shorter than this: the dialog scrolls instead.

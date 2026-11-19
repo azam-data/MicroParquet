@@ -245,11 +245,17 @@ impl MicroParquetApp {
             CommandId::DecimalsDown => self.global_decimals = self.global_decimals.saturating_sub(1),
             CommandId::TogglePanel => self.show_steps_sidebar = !self.show_steps_sidebar,
             CommandId::ToggleSql => {
-                // the SQL tab of the right panel (Phase 6 U2)
-                self.show_steps_sidebar = true;
-                self.right_tab = crate::ui::steps::RightTab::Sql;
+                // the SQL tab of the right panel (Phase 6 U2); switched on again if View ▸ Side panel had it off
+                self.set_side_tab_visible(crate::ui::steps::RightTab::Sql, true);
             }
-            CommandId::ToggleChart => self.show_chart_drawer = !self.show_chart_drawer,
+            CommandId::ToggleChart => {
+                // the Chart tab of the right panel (Phase 6 F2): shown, or hidden when it is the tab in view
+                if self.side_panel_shown() && self.right_tab == crate::ui::steps::RightTab::Chart {
+                    self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, false);
+                } else {
+                    self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+                }
+            }
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::SortLists => self.open_sort_lists(),
             CommandId::SavedRuns => self.open_saved_runs(),

@@ -232,8 +232,8 @@ impl MicroParquetApp {
                         let mut remove: Option<usize> = None;
                         for (i, (p, w)) in draft.weightages.iter_mut().enumerate() {
                             ui.horizontal(|ui| {
-                                let a = ui.add(egui::TextEdit::singleline(p).desired_width(theme::MIGRATION_COMBO_W * 0.6));
-                                let b = ui.add(egui::TextEdit::singleline(w).desired_width(theme::MIGRATION_COMBO_W * 0.3));
+                                let a = ui.add(egui::TextEdit::singleline(p).desired_width(theme::MUD_PRODUCT_FIELD_W));
+                                let b = ui.add(egui::TextEdit::singleline(w).desired_width(theme::MUD_WEIGHT_FIELD_W));
                                 rects.fields.push((format!("Product {}", i + 1), a.rect));
                                 rects.fields.push((format!("Weight {}", i + 1), b.rect));
                                 let x = ui.small_button("\u{d7}").on_hover_text("Remove this product");

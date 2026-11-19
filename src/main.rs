@@ -189,7 +189,10 @@ pub struct MicroParquetApp {
     parquet_dialect: ParquetDialect,
     export_csv_mdy: bool,
     show_steps_sidebar: bool,
-    show_chart_drawer: bool,
+    /// The chart is shown in its own native window (View ▸ Side panel ▸ Chart ▸ Pop out).
+    chart_popped: bool,
+    /// How many times the chart was popped out (the render tests read it: a backend without windows docks it back at once).
+    chart_pop_requests: u32,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -336,7 +339,8 @@ impl MicroParquetApp {
             parquet_dialect: ParquetDialect::ArchiveZstd,
             export_csv_mdy: false,
             show_steps_sidebar: true,
-            show_chart_drawer: false,
+            chart_popped: false,
+            chart_pop_requests: 0,
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -489,7 +493,6 @@ impl MicroParquetApp {
                 }
                 self.render_pivot_bar(ui);
                 self.render_filter_bar(ui);
-                self.render_chart_drawer(ui);
                 self.render_mom_commentary(ui);
                 self.render_table_area(ui);
             });
@@ -507,6 +510,7 @@ impl MicroParquetApp {
         self.render_messages(ctx);
         self.render_command_palette(ctx);
         self.render_quit_guard(ctx);
+        self.render_chart_popout(ctx);
     }
 }
 
@@ -550,10 +554,15 @@ impl MicroParquetApp {
                 }
             });
             ui.separator();
-            ui.checkbox(&mut self.show_steps_sidebar, "Right panel (Steps / Column)");
-            self.command_menu_item_titled(ui, ctx, micro_parquet::commands::CommandId::ToggleSql, "SQL");
+            ui.menu_button("Side panel", |ui| {
+                for t in ui::steps::RightTab::ALL {
+                    let mut on = !self.settings.side_panel_hidden.iter().any(|n| n == t.name());
+                    if ui.checkbox(&mut on, t.name()).changed() {
+                        self.set_side_tab_visible(t, on);
+                    }
+                }
+            });
             self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
-            ui.checkbox(&mut self.show_chart_drawer, "Chart");
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response

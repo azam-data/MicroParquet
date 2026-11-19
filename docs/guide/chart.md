@@ -27,7 +27,7 @@ Draws bars or a line of one number by one category, calculated over the whole ta
 
 ## 5. Step by step
 
-1. View ▸ "Chart" (or Ctrl+K: "chart") opens the drawer above the table.
+1. Click the "Chart" tab of the side panel on the right (or the Chart button of the toolbar, or Ctrl+K: "chart"). If the tab is not there, tick View ▸ Side panel ▸ "Chart". "Pop out" (where the app can open a second window) shows the chart in its own window, which you can move to another monitor; "Dock back" or closing that window returns it to the panel. The controls are in two columns in the narrow panel; in a narrow chart the x-axis names every second (or third…) category, and the tooltip has every name whole.
 2. Choose "Category (X)". Optionally choose a "Series".
 3. Choose "Aggregation" and, except for Count, the "Value" (for W.Avg also "by": the weight).
 4. "Type" is Bar or Line.

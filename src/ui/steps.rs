@@ -399,8 +399,13 @@ impl MicroParquetApp {
     /// to (from today's width up to half the window), and each tab scrolls when its content is
     /// taller than the panel (Phase 6 U2).
     pub(crate) fn render_right_panel(&mut self, ctx: &egui::Context) {
-        if self.tabs.is_empty() || !self.show_steps_sidebar {
+        if self.tabs.is_empty() || !self.side_panel_shown() {
             return;
+        }
+        // a tab switched off in View ▸ Side panel is not the one shown
+        let visible = self.visible_side_tabs();
+        if !visible.contains(&self.right_tab) {
+            self.right_tab = visible[0];
         }
         let tk = *theme::tokens(self.dark_mode);
         let n_steps = self.tabs.get(self.active_tab).map(|t| t.steps.len()).unwrap_or(0);
@@ -423,12 +428,8 @@ impl MicroParquetApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-                            let w = (ui.available_width() - 2.0 * theme::SPACE_XS) / 3.0; // not a size: three tabs
-                            for (tab, label) in [
-                                (RightTab::Steps, format!("Steps \u{b7} {}", n_steps)),
-                                (RightTab::Column, "Column".to_string()),
-                                (RightTab::Sql, "SQL".to_string()),
-                            ] {
+                            let w = (ui.available_width() - (visible.len() as f32 - 1.0) * theme::SPACE_XS) / visible.len() as f32;
+                            for (tab, label) in visible.iter().map(|t| (*t, if *t == RightTab::Steps { format!("Steps \u{b7} {}", n_steps) } else { t.name().to_string() })) {
                                 let on = self.right_tab == tab;
                                 let text = theme::semibold(label).color(if on { tk.ink } else { tk.muted });
                                 let btn = egui::Button::new(text)
@@ -455,6 +456,7 @@ impl MicroParquetApp {
                         RightTab::Steps => self.render_steps_tab(ui, panel_h),
                         RightTab::Column => self.render_column_tab(ui),
                         RightTab::Sql => self.render_sql_tab(ui, panel_h),
+                        RightTab::Chart => self.render_chart_tab(ui),
                     });
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("right_panel_report"), RightPanelReport { scroll: area.inner_rect, content: area.content_size, offset: area.state.offset.y, tab }));
                 // the left edge: drag to resize, double-click for today's width (added last, so it is on top)
@@ -491,6 +493,31 @@ impl MicroParquetApp {
                 }
             }
         }
+    }
+
+    /// The side-panel tabs that are switched on, in order.
+    pub(crate) fn visible_side_tabs(&self) -> Vec<RightTab> {
+        RightTab::ALL.iter().copied().filter(|t| !self.settings.side_panel_hidden.iter().any(|n| n == t.name())).collect()
+    }
+
+    /// The panel is drawn when it is on and at least one of its tabs is switched on.
+    pub(crate) fn side_panel_shown(&self) -> bool {
+        self.show_steps_sidebar && !self.visible_side_tabs().is_empty()
+    }
+
+    /// View ▸ Side panel ▸ the tab: saved in settings.json. Switching a tab on shows the panel and that tab.
+    pub(crate) fn set_side_tab_visible(&mut self, tab: RightTab, on: bool) {
+        self.settings.side_panel_hidden.retain(|n| n != tab.name());
+        if !on {
+            self.settings.side_panel_hidden.push(tab.name().to_string());
+            if tab == RightTab::Chart {
+                self.chart_popped = false;
+            }
+        } else {
+            self.show_steps_sidebar = true;
+            self.right_tab = tab;
+        }
+        self.save_settings();
     }
 
     /// Sets the width of the right panel (clamped to today's width and half the window); `None` is
@@ -1193,10 +1220,25 @@ impl MicroParquetApp {
     }
 }
 
-/// The two tabs of the right panel.
+/// The tabs of the right panel.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RightTab {
     Steps,
     Column,
     Sql,
+    Chart,
+}
+
+impl RightTab {
+    pub const ALL: [RightTab; 4] = [RightTab::Steps, RightTab::Column, RightTab::Sql, RightTab::Chart];
+
+    /// The name the View menu and settings.json use.
+    pub fn name(self) -> &'static str {
+        match self {
+            RightTab::Steps => "Steps",
+            RightTab::Column => "Column",
+            RightTab::Sql => "SQL",
+            RightTab::Chart => "Chart",
+        }
+    }
 }

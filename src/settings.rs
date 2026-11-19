@@ -21,6 +21,10 @@ pub struct Settings {
     pub right_panel_width: Option<f32>,
     /// The zoom the app starts at (1.0 = 100%); none = 105%.
     pub default_zoom: Option<f32>,
+    /// The tabs of the side panel the owner switched off in View ▸ Side panel (their names: Steps, Column, SQL, Chart).
+    pub side_panel_hidden: Vec<String>,
+    /// The toolbar buttons the owner switched off in View ▸ Toolbar buttons (their names as the bar shows them).
+    pub toolbar_hidden: Vec<String>,
     /// Chart choices by tab key (the file name of the tab's first file, or its title).
     pub chart: HashMap<String, serde_json::Value>,
 }
@@ -126,7 +130,7 @@ mod tests {
     #[test]
     fn settings_round_trip_and_the_zoom_is_clamped_with_a_message() {
         let d = tmp("save");
-        let s = Settings { right_panel_width: Some(480.0), default_zoom: Some(0.9), chart: HashMap::new() };
+        let s = Settings { right_panel_width: Some(480.0), default_zoom: Some(0.9), chart: HashMap::new(), ..Settings::default() };
         s.save(&d).expect("saved");
         assert_eq!(Settings::load(&d).0, s);
         assert_eq!(s.start_zoom(1.05), (0.9, None));
