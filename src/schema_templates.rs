@@ -28,21 +28,47 @@ pub fn template_name(path: &Path) -> String {
 /// Every template of the folder that has columns, by name. Files that are not schema files are
 /// skipped (the Schema dialog's Load button reports those).
 pub fn load_templates(dir: &Path) -> Vec<SchemaTemplate> {
+    load_templates_checked(dir).0
+}
+
+/// The templates, and a warning for each `*.schema.json` that could not be read or is not a schema
+/// (it is left out of the matching, so the owner must be told, not left wondering why nothing matched).
+pub fn load_templates_checked(dir: &Path) -> (Vec<SchemaTemplate>, Vec<String>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
+    let mut damaged: Vec<String> = Vec::new();
     let mut out: Vec<SchemaTemplate> = rd
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("json")))
         .filter_map(|p| {
-            let text = std::fs::read_to_string(&p).ok()?;
-            let config: IngestionConfig = serde_json::from_str(&text).ok()?;
+            let is_schema = p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(".schema.json"));
+            let fname = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let text = match std::fs::read_to_string(&p) {
+                Ok(t) => t,
+                Err(e) => {
+                    if is_schema {
+                        damaged.push(format!("{} could not be read ({})", fname, e));
+                    }
+                    return None;
+                }
+            };
+            let config: IngestionConfig = match serde_json::from_str(&text) {
+                Ok(c) => c,
+                Err(e) => {
+                    if is_schema {
+                        damaged.push(format!("{} is damaged ({})", fname, e));
+                    }
+                    return None;
+                }
+            };
             (!config.columns.is_empty()).then(|| SchemaTemplate { name: template_name(&p), path: p, config })
         })
         .collect();
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
-    out
+    damaged.sort();
+    (out, damaged)
 }
 
 /// A header name as it is compared: trimmed, case-insensitive.

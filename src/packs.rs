@@ -463,16 +463,28 @@ pub fn write_pack(result: &PackResult, xlsx: &Path, pdf: Option<&Path>, ctx: &Jo
     let mut tabs: Vec<XlsxTab> = vec![XlsxTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new() }];
     tabs.extend(result.sheets.iter().map(|s| XlsxTab { title: s.sheet.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new() }));
     let scale = XlsxScale { num_format: result.output.scale, decimals: result.output.decimals };
-    let rep = crate::jobs::write_atomic(xlsx, ctx, |tmp| write_xlsx_tabs_noted(tabs, Vec::new(), Vec::new(), tmp, EXCEL_MAX_DATA_ROWS, Some(scale)))?;
+    // both files are written to temporary names first and renamed only when both are finished: a
+    // PDF that fails leaves no workbook behind either
+    ctx.check()?;
+    let xlsx_tmp = crate::jobs::TempOutput::new(xlsx);
+    let rep = write_xlsx_tabs_noted(tabs, Vec::new(), Vec::new(), xlsx_tmp.path(), EXCEL_MAX_DATA_ROWS, Some(scale))?;
     let mut msg = format!("Wrote {} ({})", xlsx.display(), rep.summary());
+    let mut pdf_tmp = None;
     if let Some(p) = pdf {
         let mut ptabs: Vec<PdfTab> = vec![PdfTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new() }];
         ptabs.extend(result.sheets.iter().map(|s| PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new() }));
-        let prep = crate::jobs::write_atomic(p, ctx, |tmp| crate::exporters::export_pdf_tabs(ptabs, tmp, result.output.scale, result.output.decimals))?;
+        let tmp = crate::jobs::TempOutput::new(p);
+        let prep = crate::exporters::export_pdf_tabs(ptabs, tmp.path(), result.output.scale, result.output.decimals)?;
         msg.push_str(&format!("; wrote {}", p.display()));
         if !prep.truncated_tabs.is_empty() {
             msg.push_str(&format!(" (long tabs cut in the PDF: {})", prep.truncated_tabs.join(", ")));
         }
+        pdf_tmp = Some(tmp);
+    }
+    ctx.check()?;
+    xlsx_tmp.commit()?;
+    if let Some(t) = pdf_tmp {
+        t.commit()?;
     }
     Ok(msg)
 }

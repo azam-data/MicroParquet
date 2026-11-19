@@ -108,37 +108,38 @@ fn workflow() -> String {
 }
 
 #[test]
-fn p6_the_build_workflow_has_no_test_step_and_a_platforms_choice_and_it_is_valid_yaml_text() {
+fn p6_the_build_workflow_chooses_its_platforms_and_a_release_needs_a_tag_push_after_the_tests() {
     let text = workflow();
-    // actionlint, when it is installed
-    if let Ok(out) = std::process::Command::new("actionlint").arg(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".github").join("workflows").join("main.yml")).output() {
-        assert!(out.status.success(), "actionlint: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    }
-    // the structure of a workflow: no tabs, steps are a list under a job, the keys are there
-    assert!(!text.contains('\t'), "YAML must not be indented with tabs");
-    assert!(text.lines().all(|l| l.trim_end().len() == l.trim_end_matches(' ').len() || !l.trim().is_empty()), "no line is only trailing blanks");
-    for key in ["name:", "on:", "jobs:", "  plan:", "  build:", "    steps:", "    strategy:", "      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}"] {
+    // (the workflow files are checked by actionlint in the Tests workflow; this test reads what they must say)
+    let tests = std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".github").join("workflows").join("test.yml")).expect("test.yml");
+    assert!(tests.contains("actionlint") && tests.contains("cargo test"), "the Tests workflow runs cargo test and actionlint");
+    for key in ["  plan:", "  test:", "  build:", "    strategy:", "      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}"] {
         assert!(text.contains(key), "main.yml has '{key}'");
     }
-    assert_eq!(text.matches("${{").count(), text.matches("}}").count(), "every ${{ is closed");
-    // the Tests workflow runs the tests: the build no longer does
-    assert!(!text.contains("3b. Run Calculation Tests") && !text.contains("cargo test"), "the build workflow does not run the tests");
-    let tests = std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".github").join("workflows").join("test.yml")).expect("test.yml");
-    assert!(tests.contains("cargo test"), "the Tests workflow does");
+    assert!(!text.contains("3b. Run Calculation Tests"), "the old test step inside the build is gone");
     // the manual build chooses its platforms: windows by default
     let dispatch = text.split("workflow_dispatch:").nth(1).and_then(|t| t.split("  push:").next()).expect("the dispatch block");
     for needle in ["platforms:", "type: choice", "- windows", "- macos", "- both", "default: windows"] {
         assert!(dispatch.contains(needle), "the dispatch input has '{needle}': {dispatch}");
     }
-    // a tag push still builds both
+    // a tag push still builds both, after the tests passed
     assert!(text.contains("tags:") && text.contains("- 'v*'") && text.contains("|| 'both'"));
+    let test_job = text.split("  test:").nth(1).and_then(|t| t.split("  build:").next()).expect("the test job");
+    assert!(test_job.contains("if: github.event_name == 'push'") && test_job.contains("run: cargo test"), "{test_job}");
+    assert!(text.contains("needs: [plan, test]") && text.contains("needs.test.result == 'success'"), "the build waits for the tests");
+    // a release is published by a tag push only: a manual run (even on a tag) never publishes
+    let publish = text.split("7. Publish to GitHub Releases").nth(1).expect("the publish step");
+    assert!(publish.contains("if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"), "{publish}");
+    // the manual run has artifacts only: the upload step has no condition
+    let upload = text.split("6. Upload Build Artifact").nth(1).and_then(|t| t.split("7. Publish").next()).expect("the upload step");
+    assert!(!upload.contains("if:"), "{upload}");
 }
 
 /// Runs the plan step's script for each choice and reads the matrix it writes.
 #[test]
 fn p6_the_plan_step_makes_the_matrix_for_windows_macos_both_and_a_tag() {
     let text = workflow();
-    let script = text.split("        run: |\n").nth(1).and_then(|t| t.split("\n  build:").next()).expect("the plan script");
+    let script = text.split("        run: |\n").nth(1).and_then(|t| t.split("\n  # A tag push runs the tests").next()).expect("the plan script");
     let script: String = script.lines().map(|l| l.strip_prefix("          ").unwrap_or(l)).collect::<Vec<_>>().join("\n");
     let d = dir("p6_plan");
     let run = |platforms: &str| -> Result<Vec<String>, String> {

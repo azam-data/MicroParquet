@@ -191,12 +191,37 @@ mod tests {
         micro_parquet::rules::set_data_dir_override(Some(root.clone()));
         let paths = PortablePaths { root_dir: root.clone(), macros_dir: root.join("m"), schemas_dir: root.join("s"), curves_dir: root.join("c"), buckets_file: root.join("b.json"), temp_dir: root.join("temp") };
         let deposits = root.join("deposits.csv");
-        std::fs::write(&deposits, "ACNO,BAL,PROD\nD1,100,SB\nD2,50,TD\nD3,25,TD\n").expect("csv");
+        std::fs::write(&deposits, "ACNO,BAL,MAT,PROD\nD1,100,2026-12-31,SB\nD2,50,2027-06-30,TD\nD3,25,2026-11-30,TD\n").expect("csv");
+        let loans = root.join("loans.csv");
+        std::fs::write(&loans, "ACNO,BAL,MAT,CAT,GRADE,BASE,PROV\nL1,1000000,2027-03-31,Continuous,STD-0,1000000,10000\nL2,2000000,2028-10-31,Demand,SS,1500000,300000\n").expect("loans");
+        // tool-run items too (G11): the gap ladder (a tool run over two slots) and the CL-1 summary
+        let gap = micro_parquet::tool_runs::ToolRun::GapLadder(micro_parquet::tool_runs::GapLadderRun {
+            inputs: vec![
+                micro_parquet::tool_runs::GapInputRun { source: "Loans".into(), spec: micro_parquet::banking::GapInputSpec { role: micro_parquet::banking::GapRole::Asset, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() },
+                micro_parquet::tool_runs::GapInputRun { source: "Deposits".into(), spec: micro_parquet::banking::GapInputSpec { role: micro_parquet::banking::GapRole::Liability, amount_col: "BAL".into(), maturity_col: "MAT".into() }, product_col: String::new() },
+            ],
+            preset: CustomBucketDef::default_presets()[0].name.clone(),
+            preset_def: None,
+            cutoff: "2020-01-31".into(),
+            null_as_sight: true,
+            behaviour_file: String::new(),
+            stress_tdrr: false,
+        });
+        let cl1 = micro_parquet::tool_runs::ToolRun::Cl1Summary(micro_parquet::tool_runs::Cl1SummaryRun {
+            source: "Loans".into(),
+            spec: micro_parquet::cl1::Cl1Spec { category_col: Some("CAT".into()), fixed_category: String::new(), grade_col: "GRADE".into(), measure_cols: vec![("outstanding".into(), "BAL".into()), ("base".into(), "BASE".into()), ("provision".into(), "PROV".into())] },
+            template_file: String::new(),
+        });
         let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() });
         let pack = ReportPack {
             name: "mini".into(),
-            inputs: vec![PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "PROD".into()], ..Default::default() }],
+            inputs: vec![
+                PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "MAT".into(), "PROD".into()], ..Default::default() },
+                PackInput { slot: "Loans".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "MAT".into(), "GRADE".into()], ..Default::default() },
+            ],
             items: vec![
+                PackItem { title: "Gap".into(), sheet: "Gap".into(), source: PackItemKind::Run { run: gap }, col_formats: Default::default() },
+                PackItem { title: "CL-1".into(), sheet: "CL1".into(), source: PackItemKind::Run { run: cl1 }, col_formats: Default::default() },
                 PackItem { title: "Table".into(), sheet: "Table".into(), source: PackItemKind::Steps { slot: "Deposits".into() }, col_formats: Default::default() },
                 PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default() },
             ],
@@ -204,15 +229,41 @@ mod tests {
         };
         save_pack(&packs_dir(), &pack).expect("saves");
         // the library path (what the dialog's worker does)
-        let spec = PackRunSpec { files: std::collections::BTreeMap::from([("Deposits".to_string(), deposits.clone())]), cutoff: "2026-10-31".into() };
+        let spec = PackRunSpec { files: std::collections::BTreeMap::from([("Deposits".to_string(), deposits.clone()), ("Loans".to_string(), loans.clone())]), cutoff: "2026-10-31".into() };
         let r = micro_parquet::jobs::run_inline(|ctx| run_pack(&pack, &spec, &paths, "ui", ctx)).expect("runs");
         let ui_xlsx = root.join("ui.xlsx");
         micro_parquet::jobs::run_inline(|ctx| write_pack(&r, &ui_xlsx, None, ctx)).expect("writes");
         // the command line
         let cli_xlsx = root.join("cli.xlsx");
-        let args = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", &format!("Deposits={}", deposits.display()), "--cutoff", "2026-10-31", "--export-xlsx", &cli_xlsx.display().to_string()]);
+        let args = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", &format!("Deposits={}", deposits.display()), "--slot", &format!("Loans={}", loans.display()), "--cutoff", "2026-10-31", "--export-xlsx", &cli_xlsx.display().to_string()]);
         run_headless_cli(&args, &paths).expect("headless runs");
-        for n in 2..=3 {
+        // the Cover (sheet 1) is the same too, except the run time; then every item sheet, tool runs included
+        let mask = |t: String| -> String {
+            // "2026-11-19 14:03:07" -> "T"
+            let b: Vec<char> = t.chars().collect();
+            let mut out = String::new();
+            let mut i = 0;
+            while i < b.len() {
+                let is_time = i + 19 <= b.len() && b[i..i + 19].iter().enumerate().all(|(k, c)| match k {
+                    4 | 7 => *c == '-',
+                    10 => *c == ' ',
+                    13 | 16 => *c == ':',
+                    _ => c.is_ascii_digit(),
+                });
+                if is_time {
+                    out.push('T');
+                    i += 19;
+                } else {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+            out
+        };
+        let strings = |p: &Path| mask(unzip(p, "xl/sharedStrings.xml"));
+        let (sa, sb) = (strings(&ui_xlsx), strings(&cli_xlsx));
+        assert!(!sa.is_empty() && sa.replace(">ui<", ">T<") == sb, "the Cover's text is the same from the command line (run time aside)");
+        for n in 1..=5 {
             let e = format!("xl/worksheets/sheet{n}.xml");
             let (a, b) = (unzip(&ui_xlsx, &e), unzip(&cli_xlsx, &e));
             assert!(!a.is_empty() && a == b, "sheet {n} is the same from the command line");

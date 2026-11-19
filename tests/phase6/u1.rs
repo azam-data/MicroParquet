@@ -131,6 +131,24 @@ fn u1_two_columns_with_the_same_final_name_are_refused_in_words() {
     let mut cfg = auto_detect_smart_schema(&a).expect("d");
     cfg.columns[0].rename_to = Some("CRIRTE".into());
     assert_eq!(cfg.rename_problems().len(), 2);
+    // G9: the check is not case-sensitive: "balance" and "Balance" are one name for Excel and SQL
+    let mut cfg = renamed_schema(&a);
+    cfg.columns[0].rename_to = Some("  BALANCE ".into());
+    assert_eq!(cfg.rename_problems().len(), 2, "{:?}", cfg.rename_problems());
+}
+
+#[test]
+fn g9_a_damaged_schema_file_is_named_in_a_warning_and_the_good_ones_still_match() {
+    let d = dir("g9_schemas");
+    let a = csv(&d, "a.csv", FILE_A);
+    let cfg = renamed_schema(&a);
+    std::fs::write(d.join("good.schema.json"), serde_json::to_string_pretty(&cfg).expect("json")).expect("good");
+    std::fs::write(d.join("broken.schema.json"), "{ not json").expect("broken");
+    std::fs::write(d.join("notes.json"), "{ not a schema either").expect("other json");
+    let (templates, damaged) = micro_parquet::schema_templates::load_templates_checked(&d);
+    assert_eq!(templates.len(), 1);
+    assert_eq!(damaged.len(), 1, "only a *.schema.json is reported: {damaged:?}");
+    assert!(damaged[0].contains("broken.schema.json") && damaged[0].contains("damaged"), "{damaged:?}");
 }
 
 #[test]

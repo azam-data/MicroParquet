@@ -13,7 +13,7 @@ on:
         default: windows
   push:
     tags:
-      - 'v*'         # Automatically publishes a GitHub Release when you push a tag like v1.1.0
+      - 'v*'         # Publishes a GitHub Release when you push a tag like v1.1.0 (a manual run never does)
 
 permissions:
   contents: write
@@ -40,9 +40,27 @@ jobs:
           esac
           echo "matrix={\"include\":[$LIST]}" >> "$GITHUB_OUTPUT"
 
+  # A tag push runs the tests first: nothing is built or released from a tag whose tests fail.
+  test:
+    name: cargo test (before a release)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test
+
   build:
     name: Build (${{ matrix.os_name }})
-    needs: plan
+    needs: [plan, test]
+    # a manual run skips the test job and still builds; a tag push builds only when the tests passed
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -132,8 +150,8 @@ jobs:
           name: ${{ matrix.os_name }}
           path: ${{ matrix.archive_name }}
 
-      - name: 7. Publish to GitHub Releases (When triggered by a v* tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 7. Publish to GitHub Releases (only when a v* tag is pushed; a manual run never publishes)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.archive_name }}

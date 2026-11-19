@@ -289,6 +289,12 @@ fn p2_a_slot_with_a_saved_schema_reads_the_file_with_it_and_a_pdf_can_be_asked_f
     let (x, p) = (rig.root.join("s.xlsx"), rig.root.join("s.pdf"));
     write_pack(&r, &x, Some(&p), &JobCtx::inert()).expect("writes both");
     assert!(x.exists() && std::fs::metadata(&p).map(|m| m.len() > 100).unwrap_or(false), "the PDF is written next to the workbook");
+    // G8: a PDF that cannot be written leaves no workbook (and no temporary file) behind
+    let (x2, p2) = (rig.root.join("g8.xlsx"), rig.root.join("no_such_folder").join("g8.pdf"));
+    assert!(write_pack(&r, &x2, Some(&p2), &JobCtx::inert()).is_err(), "the PDF fails");
+    assert!(!x2.exists(), "so there is no workbook either");
+    let parts = std::fs::read_dir(&rig.root).expect("dir").flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".part")).count();
+    assert_eq!(parts, 0, "and no temporary file");
     // a template that is not saved is named
     let mut bad = pack.clone();
     bad.inputs[0].schema_template = Some("gone".into());

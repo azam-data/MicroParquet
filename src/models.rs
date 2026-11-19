@@ -273,7 +273,9 @@ impl IngestionConfig {
                 out.push((i, "This column has no name. Type a name in \"Rename to\".".to_string()));
                 continue;
             }
-            let same: Vec<usize> = finals.iter().enumerate().filter(|(_, g)| *g == f).map(|(j, _)| j).collect();
+            // names are the same when they differ only in capitals or spaces at the ends (Excel and SQL see them so)
+            let same_name = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
+            let same: Vec<usize> = finals.iter().enumerate().filter(|(_, g)| same_name(g, f)).map(|(j, _)| j).collect();
             if same.len() > 1 {
                 let others: Vec<String> = same.iter().filter(|j| **j != i).map(|j| format!("\"{}\"", self.columns[*j].name)).collect();
                 out.push((i, format!("\"{}\" is also the name of {}. Every column needs its own name: change one \"Rename to\".", f, others.join(", "))));

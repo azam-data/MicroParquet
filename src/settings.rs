@@ -32,7 +32,7 @@ pub fn settings_path(root: &Path) -> PathBuf {
 impl Settings {
     /// Reads `settings.json` from the data folder. A missing file gives the defaults and no
     /// message; a damaged one gives the defaults and a message (the damaged file is kept next to
-    /// it as `settings.json.damaged`).
+    /// it as `settings.json.bad`).
     pub fn load(root: &Path) -> (Settings, Option<String>) {
         let path = settings_path(root);
         let text = match std::fs::read_to_string(&path) {
@@ -43,8 +43,9 @@ impl Settings {
         match serde_json::from_str::<Settings>(&text) {
             Ok(s) => (s, None),
             Err(e) => {
-                let _ = std::fs::copy(&path, root.join(format!("{}.damaged", SETTINGS_FILE)));
-                (Settings::default(), Some(format!("settings.json is damaged ({}). The defaults are used; the damaged file was kept as settings.json.damaged.", e)))
+                let kept = std::fs::copy(&path, root.join(format!("{}.bad", SETTINGS_FILE))).is_ok();
+                let kept_note = if kept { "the damaged file was kept as settings.json.bad" } else { "the damaged file could not be copied to settings.json.bad" };
+                (Settings::default(), Some(format!("settings.json is damaged ({}). The defaults are used; {}.", e, kept_note)))
             }
         }
     }
@@ -55,7 +56,13 @@ impl Settings {
         std::fs::create_dir_all(root).with_context(|| format!("Could not create the folder {}", root.display()))?;
         let text = serde_json::to_string_pretty(self).context("Could not write the settings")?;
         let path = settings_path(root);
-        std::fs::write(&path, text).with_context(|| format!("Could not save {}", path.display()))
+        // through a temporary file, so a crash or a full disk never leaves half a settings file
+        let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+        std::fs::write(&tmp, text).with_context(|| format!("Could not save {}", path.display()))?;
+        std::fs::rename(&tmp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::anyhow!("Could not save {}: {}", path.display(), e)
+        })
     }
 
     /// The zoom to start at and a message when the file's value had to be changed: a value
@@ -84,6 +91,21 @@ mod tests {
         d
     }
 
+    fn msg_text_has_bad(m: &Option<String>) -> bool {
+        m.as_ref().is_some_and(|t| t.contains("settings.json.bad"))
+    }
+
+    #[test]
+    fn saving_goes_through_a_temporary_file_and_leaves_none_behind() {
+        let d = tmp("atomic");
+        let s = Settings { right_panel_width: Some(480.0), ..Settings::default() };
+        s.save(&d).expect("saves");
+        s.save(&d).expect("saves again over the file");
+        assert_eq!(Settings::load(&d).0.right_panel_width, Some(480.0));
+        let left: Vec<String> = std::fs::read_dir(&d).expect("dir").flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(left, vec!["settings.json".to_string()], "no temporary file is left: {left:?}");
+    }
+
     #[test]
     fn a_missing_file_gives_the_defaults_and_a_damaged_one_says_so() {
         let d = tmp("load");
@@ -92,7 +114,8 @@ mod tests {
         let (s, msg) = Settings::load(&d);
         assert_eq!(s, Settings::default());
         assert!(msg.expect("a message").contains("damaged"));
-        assert!(d.join("settings.json.damaged").exists());
+        assert!(d.join("settings.json.bad").exists());
+        assert!(msg_text_has_bad(&Settings::load(&d).1));
         // fields that are missing take their defaults; unknown ones are ignored
         std::fs::write(settings_path(&d), r#"{"right_panel_width": 500.0, "future": 1}"#).expect("write");
         let (s, msg) = Settings::load(&d);

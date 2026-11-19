@@ -328,11 +328,20 @@ pub fn mom_commentary(df: &DataFrame, spec: &MomSpec) -> Result<Vec<String>> {
     let rchg = f64s(df, "Rate change (bp)");
     let threshold = spec.material_amount * spec.divisor();
     let mut lines: Vec<(f64, String, String)> = Vec::new();
+    // New and Closed keys follow the same materiality as the rest; the ones below it are only counted
+    let (mut small_new, mut small_closed) = (0usize, 0usize);
     for i in 0..df.height() {
         let (ch, st) = (change[i].unwrap_or(0.0), status[i].clone().unwrap_or_default());
         let label = key_label(df, spec, i);
         let material = ch.abs() >= threshold && ch != 0.0 || pct[i].is_some_and(|p| p.abs() >= spec.material_pct && ch != 0.0);
-        let text = if st == STATUS_NEW {
+        let text = if (st == STATUS_NEW || st == STATUS_CLOSED) && !material {
+            if st == STATUS_NEW {
+                small_new += 1;
+            } else {
+                small_closed += 1;
+            }
+            continue;
+        } else if st == STATUS_NEW {
             let rate = crate_.as_ref().and_then(|r| r[i]).map(|r| format!(" at {:.2}%", r)).unwrap_or_default();
             format!("{} is new: {}{}.", label, spec.money(curr[i].unwrap_or(0.0)), rate)
         } else if st == STATUS_CLOSED {
@@ -359,6 +368,11 @@ pub fn mom_commentary(df: &DataFrame, spec: &MomSpec) -> Result<Vec<String>> {
     }
     lines.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
     let mut out: Vec<String> = lines.into_iter().map(|l| l.2).collect();
+    if small_new + small_closed > 0 {
+        let part = |n: usize, what: &str| (n > 0).then(|| format!("{} {}", n, what));
+        let both: Vec<String> = [part(small_new, "new"), part(small_closed, "closed")].into_iter().flatten().collect();
+        out.push(format!("Not listed, below the materiality limit: {} key(s).", both.join(" and ")));
+    }
     let (tp, tc): (f64, f64) = (prev.iter().flatten().sum(), curr.iter().flatten().sum());
     let tch = tc - tp;
     let total = if tch == 0.0 {

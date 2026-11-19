@@ -208,11 +208,16 @@ fn u3_the_python_export_orders_by_the_list_and_the_tenor() {
 
 #[test]
 fn u3_tenor_units_and_spellings() {
-    for (t, d) in [("1M", 30.0), ("1 m", 30.0), ("12 Months", 360.0), ("1Y", 365.0), ("2 yrs", 730.0), ("5d", 5.0), ("2 wk", 14.0), ("ON", 1.0), ("o/n", 1.0), ("Overnight", 1.0)] {
+    for (t, d) in [("1M", 365.0 / 12.0), ("1 m", 365.0 / 12.0), ("12 Months", 365.0), ("12M", 365.0), ("3 mo", 91.25), ("6 mos", 182.5), ("1Y", 365.0), ("2 yrs", 730.0), ("5d", 5.0), ("2 wk", 14.0), ("ON", 1.0), ("o/n", 1.0), ("Overnight", 1.0)] {
         assert_eq!(parse_tenor_days(t), Some(d), "{t}");
     }
     for t in ["", "abc", "10", "M", "1x"] {
         assert_eq!(parse_tenor_days(t), None, "{t}");
     }
+    // H1: 12M is exactly 1Y, and a tie falls back to the natural order of the text
+    assert_eq!(parse_tenor_days("12M"), parse_tenor_days("1Y"));
+    let mut v = vec!["1Y".to_string(), "12M".to_string(), "6M".to_string(), "13M".to_string()];
+    v.sort_by(|a, b| SortOrder::Tenor.compare(&Some(a.clone()), &Some(b.clone())));
+    assert_eq!(v, ["6M", "1Y", "12M", "13M"], "12M and 1Y tie, then the natural order: {v:?}");
 }
 

@@ -13,7 +13,7 @@ Puts text values in the order a bank reads them, not the order of the alphabet. 
 ## 3. Before you start
 
 - A list is a file in `portable_data/sort_lists/`, one per list. A sort or pivot that uses a list keeps its own copy of the values, so a saved macro gives the same order later even if you edit the list.
-- Tenor needs no setup: a number and a unit, with or without a space, any case. D, day, days = 1 day; W, wk, week = 7; M, mon, month = 30; Y, yr, year = 365. O/N, ON and Overnight = 1 day.
+- Tenor needs no setup: a number and a unit, with or without a space, any case. D, day, days = 1 day; W, wk, week = 7; M, mo, mos, mon, month = 365/12 days (30.42); Y, yr, year = 365. O/N, ON and Overnight = 1 day.
 
 ## 4. Columns you need
 
@@ -92,7 +92,7 @@ Test: `guide_custom_sort_lists`
 
 ## 10. Limits and assumptions
 
-- Tenor uses 30 days for a month and 365 for a year, so "12m" (360 days) comes before "1y" (365).
+- Tenor uses 365/12 days for a month and 365 for a year, so "12m" and "1y" are the same length; when two tenors tie they stay in natural order of their text.
 - A number without a unit ("5") is not a tenor.
 - In the pivot, "By value" orders the rows by the first value field, high to low, and applies to Rows only.
 - A list matches whole values after trimming spaces; it does not match parts of a value.

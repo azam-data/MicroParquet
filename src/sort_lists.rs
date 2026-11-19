@@ -97,7 +97,7 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// The length in days of a tenor such as "3y", "6 M", "100D", "2 weeks" or "O/N": a number and a
-/// unit (D, day, days = 1; W, wk, week = 7; M, mon, month = 30; Y, yr, year = 365; any case,
+/// unit (D, day, days = 1; W, wk, week = 7; M, mo, mos, mon, month = 365/12 days; Y, yr, year = 365; any case,
 /// with or without a space), or O/N, ON, Overnight = 1 day. `None` when the text is not a tenor.
 pub fn parse_tenor_days(text: &str) -> Option<f64> {
     let t = text.trim().to_lowercase();
@@ -116,14 +116,15 @@ pub fn parse_tenor_days(text: &str) -> Option<f64> {
     if !n.is_finite() {
         return None;
     }
-    let per = match unit.trim() {
-        "d" | "day" | "days" => 1.0,
-        "w" | "wk" | "wks" | "week" | "weeks" => 7.0,
-        "m" | "mon" | "mons" | "month" | "months" => 30.0,
-        "y" | "yr" | "yrs" | "year" | "years" => 365.0,
+    // a month is 365/12 days, so 12M is exactly 1Y (the two then sort in natural order)
+    let days = match unit.trim() {
+        "d" | "day" | "days" => n,
+        "w" | "wk" | "wks" | "week" | "weeks" => n * 7.0,
+        "m" | "mo" | "mos" | "mon" | "mons" | "month" | "months" => n * 365.0 / 12.0,
+        "y" | "yr" | "yrs" | "year" | "years" => n * 365.0,
         _ => return None,
     };
-    Some(n * per)
+    Some(days)
 }
 
 /// How many of the distinct values do not parse as a tenor (blanks are not counted).
@@ -331,7 +332,7 @@ mod tests {
 
     #[test]
     fn tenor_parses_numbers_and_units() {
-        for (t, d) in [("1m", 30.0), ("3 Y", 1095.0), ("400D", 400.0), ("2 weeks", 14.0), ("1wk", 7.0), ("O/N", 1.0), ("overnight", 1.0), ("ON", 1.0), ("6 months", 180.0), ("1.5y", 547.5)] {
+        for (t, d) in [("1m", 365.0 / 12.0), ("3 Y", 1095.0), ("400D", 400.0), ("2 weeks", 14.0), ("1wk", 7.0), ("O/N", 1.0), ("overnight", 1.0), ("ON", 1.0), ("6 months", 182.5), ("1.5y", 547.5), ("3 mo", 91.25), ("2 mos", 365.0 / 6.0)] {
             assert_eq!(parse_tenor_days(t), Some(d), "{t}");
         }
         for t in ["abc", "", "5", "m", "-3m", "3x"] {

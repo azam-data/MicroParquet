@@ -68,7 +68,10 @@ impl MicroParquetApp {
             .to_lowercase();
 
         // the saved schemas whose original column names are this file's header names
-        let templates = micro_parquet::schema_templates::load_templates(&self.paths.schemas_dir);
+        let (templates, damaged) = micro_parquet::schema_templates::load_templates_checked(&self.paths.schemas_dir);
+        if !damaged.is_empty() {
+            self.status_message = format!("\u{26A0} Saved schema(s) skipped when matching this file: {}. Fix or delete the file in portable_data/schemas.", damaged.join("; "));
+        }
         if !templates.is_empty() {
             if let Ok(detected) = detect_file_schema(&path) {
                 let headers: Vec<String> = detected.columns.iter().map(|c| c.name.clone()).collect();

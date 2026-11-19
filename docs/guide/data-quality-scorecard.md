@@ -13,7 +13,7 @@ Checks a tab against a set of rules and gives each rule a pass percentage (rows 
 ## 3. Before you start
 
 - Open the file in a tab and set its schema (Schema & Ingestion), so that dates are dates and amounts are numbers. The type rule reads the schema's own failures.
-- The tab's steps count: the rules are run on the rows the tab shows, so filters and renames apply.
+- Every rule, the type rule included, is measured on the tab's data as loaded from its file (with the schema's renames and types), before any step of the tab. Filters and other steps of the tab do not apply; the dialog says so. To check filtered rows, save them to a file and open that.
 - The first time, the app writes a sample rule set (`portable_data/dq_rules/sample.json`, marked sample). Change the rules and the thresholds to the bank's own and save them under a new name; untick "sample" by editing the file only when you are sure.
 
 ## 4. Columns you need
@@ -23,7 +23,7 @@ Checks a tab against a set of rules and gives each rule a pass percentage (rows 
 | Completeness, Uniqueness, Allowed values | As the rule says | Any | Account_No, Product | Blank means empty text or no value. |
 | Range, Control total | As the rule says | Number | Rate, Balance | A Text column is refused with its type. |
 | Consistency | As the rule says | Two numbers, two dates or two date-times | Maturity, Open_Date | Both columns must be the same kind. |
-| Type validity | As the rule says | A column of the file | Rate | Looks at the source before any step: values the schema could not read. |
+| Type validity | As the rule says | A column of the file | Rate | Looks at the source as loaded: values the schema could not read. |
 
 ## 5. Step by step
 
@@ -88,7 +88,7 @@ Test: `guide_data_quality_scorecard`
 
 ## 10. Limits and assumptions
 
-- The type rule counts the source's rows and its unreadable values, before any step of the tab; it cannot list the failing rows, only examples.
+- The type rule counts the source's rows and its unreadable values; it cannot list the failing rows, only examples. (Like every other rule, it is measured before any step of the tab.)
 - A rule with no rows to check has no percentage and is left out of the average.
 - A blank is an empty value or empty text; only completeness counts blanks as failures.
 - Uniqueness fails every row of a repeated key (not just the second one); rows with a blank part of the key are not checked.

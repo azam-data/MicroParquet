@@ -98,7 +98,7 @@ fn p3_the_two_commentary_lines_appear_exactly_td_first_and_a_high_threshold_leav
 }
 
 #[test]
-fn p3_a_key_in_one_month_only_is_new_or_closed_with_no_effects_and_is_always_noted() {
+fn p3_a_key_in_one_month_only_is_new_or_closed_with_no_effects_and_follows_materiality() {
     let p = month(&[("TD", 1000.0, 8.0), ("OLD", 20.0, 6.0)]);
     let c = month(&[("TD", 1000.0, 8.0), ("FD", 10.0, 9.0)]);
     let df = run(&p, &c, &spec()).expect("variance");
@@ -109,8 +109,17 @@ fn p3_a_key_in_one_month_only_is_new_or_closed_with_no_effects_and_is_always_not
     near(at(&df, "FD", "Annual interest change"), 0.9 * CR, "new interest");
     // the effects of the unchanged key are 0
     near(at(&df, "TD", "Volume effect"), 0.0, "TD volume");
+    // H3: below the materiality limit they are only counted, in one line
     let lines = mom_commentary(&df, &MomSpec { material_amount: 1000.0, material_pct: 1000.0, ..spec() }).expect("commentary");
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0], "Not listed, below the materiality limit: 1 new and 1 closed key(s).");
+    assert!(lines[1].starts_with("Total:"));
+    // at or above it they are named
+    let lines = mom_commentary(&df, &MomSpec { material_amount: 15.0, material_pct: 1000.0, ..spec() }).expect("commentary");
     assert_eq!(lines[0], "OLD has closed: it had 20.00 Cr last month.", "{lines:?}");
+    assert_eq!(lines[1], "Not listed, below the materiality limit: 1 new key(s).", "FD (10 Cr) is below 15 Cr");
+    let lines = mom_commentary(&df, &MomSpec { material_amount: 5.0, material_pct: 1000.0, ..spec() }).expect("commentary");
+    assert_eq!(lines[0], "OLD has closed: it had 20.00 Cr last month.");
     assert_eq!(lines[1], "FD is new: 10.00 Cr at 9.00%.");
     assert!(lines[2].starts_with("Total:"));
 }

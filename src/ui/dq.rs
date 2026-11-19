@@ -135,10 +135,9 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return self.dq_msg(true, "Open the tab to check first.");
         };
-        let exec = tab.exec_steps.min(tab.steps.len());
         self.dq.token += 1;
         self.dq.waiting = true;
-        let req = DqRequest { tab_id: tab.id, token: self.dq.token, source: tab.source.clone(), steps: tab.steps[..exec].to_vec(), rules: set, temp_dir: self.paths.temp_dir.clone() };
+        let req = DqRequest { tab_id: tab.id, token: self.dq.token, source: tab.source.clone(), steps: Vec::new(), rules: set, temp_dir: self.paths.temp_dir.clone() };
         self.jobs.submit(JobKey::tab(JobKind::Dq, tab.id), "Checking the data quality", false, move |ctx| micro_parquet::tab_jobs::compute_dq_job(req, ctx).map(|r| JobOutput::Dq(Box::new(r))));
         self.dq_msg(false, "Checking\u{2026}");
     }
@@ -181,8 +180,7 @@ impl MicroParquetApp {
             Ok(s) => s,
             Err(e) => return self.dq_msg(true, e),
         };
-        let exec = tab.exec_steps.min(tab.steps.len());
-        let source = TabSource::DqScorecard { source: Box::new(tab.source.clone()), steps: tab.steps[..exec].to_vec(), rules: Box::new(set.clone()), view };
+        let source = TabSource::DqScorecard { source: Box::new(tab.source.clone()), steps: Vec::new(), rules: Box::new(set.clone()), view };
         let (title, formats) = match view {
             DqView::Scorecard => ("Data-quality scorecard".to_string(), [("Pass %".to_string(), ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 })].into_iter().collect()),
             DqView::Failing(i) => (format!("Failing: {}", set.rules.get(i).map(|r| r.title()).unwrap_or_default()), HashMap::new()),
@@ -230,6 +228,7 @@ impl MicroParquetApp {
                     let r = ui.scope(|ui| theme::warning_label(ui, "Sample parameters: this rule set is marked sample. Confirm its rules and thresholds before the score goes into a paper."));
                     rects.banner = Some(r.response.rect);
                 }
+                ui.add(egui::Label::new(egui::RichText::new("Every rule, the type rule too, is measured on the tab's data as loaded from its file, before the tab's steps.").color(tk.muted).size(theme::TEXT_LABEL)).wrap());
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Rule set:");
                     let r = ui.add(egui::TextEdit::singleline(&mut self.dq.set.name).desired_width(theme::FIELD_W_SORT_LIST * theme::HALF * 2.0));

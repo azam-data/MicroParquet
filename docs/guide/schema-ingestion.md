@@ -95,3 +95,4 @@ Test: `guide_schema_ingestion`
 - Masks are one-way tokens made with this PC's secret key. Another PC needs the same key to get the same tokens.
 - The type is chosen per column for the whole file; mixed formats in one column are not detected.
 - Excel files are not read directly; save them as CSV first.
+- A saved schema (`*.schema.json`) that is damaged is skipped when a file is matched; the status bar names it ("Saved schema(s) skipped when matching this file: broken.schema.json is damaged …"). Two columns whose final names differ only in capitals (or spaces at the ends) are the same name and are refused.

@@ -95,7 +95,7 @@ Test: `guide_mom_variance`
 
 ## 10. Limits and assumptions
 
-- A key in only one month is marked New or Closed, is always named in the commentary, and has no effects (there is no rate to compare).
+- A key in only one month is marked New or Closed and has no effects (there is no rate to compare). In the commentary it follows the same materiality as every key: a New or Closed key whose balance is at or above the amount limit is named; the ones below it are counted in one line ("Not listed, below the materiality limit: 2 new and 1 closed key(s)."). The variance table lists all of them. The amounts are typed and shown in the dialog's scale (Crore by default).
 - Change % uses the size of last month's balance, so a negative balance does not turn the sign round. A key whose last balance was 0 has no Change %.
 - The commentary uses the amount format you chose (Crore, Lakh, Million, Thousand or plain). The thresholds are typed in the same unit and are saved with the tabs.
 - The effects use the weighted rate of each month; a key with a mix of positive and negative balances has no rate, so its effects are blank.
