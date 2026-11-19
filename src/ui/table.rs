@@ -114,6 +114,23 @@ pub enum GridAction {
     /// Chose a sort from the header menu: (column, highest first, add as a further level).
     Sort(String, bool, bool),
     ClearSort,
+    /// Right-click menu: copy the page's rows (K4).
+    Copy(micro_parquet::exporters::CopyKind),
+}
+
+/// The copy entries of the grid's right-click menus (header and cells).
+fn copy_menu_items(ui: &mut egui::Ui, action: &mut Option<GridAction>) {
+    use micro_parquet::exporters::CopyKind;
+    for (label, kind, tip) in [
+        ("Copy", CopyKind::Plain, "Plain numbers in the unit shown, the unit in the header, tab-separated (Ctrl+C)"),
+        ("Copy as shown", CopyKind::AsShown, "The text of the cells, with thousands separators and units"),
+        ("Copy raw (BDT)", CopyKind::Raw, "The stored numbers, unscaled"),
+    ] {
+        if ui.button(label).on_hover_text(tip).clicked() {
+            *action = Some(GridAction::Copy(kind));
+            ui.close_menu();
+        }
+    }
 }
 
 /// How a column's cells are drawn.
@@ -429,6 +446,8 @@ impl MicroParquetApp {
                                             action = Some(GridAction::ClearSort);
                                             ui.close_menu();
                                         }
+                                        ui.separator();
+                                        copy_menu_items(ui, &mut action);
                                     });
 
                                     if let Some(sv) = summary {
@@ -475,7 +494,8 @@ impl MicroParquetApp {
                                             egui::Layout::left_to_right(egui::Align::Center)
                                         };
                                         ui.with_layout(layout, |ui| {
-                                            let r = ui.add(egui::Label::new(rich).truncate());
+                                            let r = ui.add(egui::Label::new(rich).truncate().sense(egui::Sense::click()));
+                                            r.context_menu(|ui| copy_menu_items(ui, &mut action));
                                             // A cut cell shows its full text on hover.
                                             let cut = text.chars().count() > 6
                                                 && r.rect.width() >= ui.max_rect().width() - 0.5;
@@ -659,6 +679,7 @@ impl MicroParquetApp {
             Some(GridAction::Select(c)) => self.select_column(&c),
             Some(GridAction::Sort(c, desc, add)) => self.sort_from_header(&c, desc, add),
             Some(GridAction::ClearSort) => self.clear_sort(),
+            Some(GridAction::Copy(kind)) => self.copy_table_as(ui.ctx(), kind),
             Some(GridAction::SetSummary(col, spec)) => self.set_summary(&col, spec),
             None => {}
         }

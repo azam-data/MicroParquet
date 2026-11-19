@@ -1834,3 +1834,67 @@ fn k2_the_status_bar_control_total_has_thousands_separators_in_the_columns_displ
         assert!(p.boxes.iter().any(|(t, _)| t == "449,406.40 M"), "{what}: Million: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains(" M") || t.contains("Cr")).collect::<Vec<_>>());
     }
 }
+
+/// One frame with these events; what the frame put on the clipboard.
+fn copied_in(rig: &mut Rig, events: Vec<egui::Event>) -> Option<String> {
+    let mut i = rig.input.clone();
+    i.events = events;
+    settle(&mut rig.app);
+    let out = rig.ctx.run(i, |c| rig.app.frame_ui(c));
+    let t = out.platform_output.copied_text;
+    if t.is_empty() { None } else { Some(t) }
+}
+
+#[test]
+fn k4_ctrl_c_and_the_right_click_menu_copy_the_table_in_three_ways_at_three_sizes() {
+    for (ppp, w, h) in SCREENS3 {
+        let mut rig = Rig::new("pr6k4", ppp, w, h, 0);
+        let what = rig.what.clone();
+        // Balance in Million, Rate as a percentage by its name
+        rig.app.tabs[0].col_formats.insert("Balance".to_string(), ColumnFormatSpec { fmt_type: MetricFormatType::BdtMillion, decimals: 2 });
+        let p = rig.draw(8);
+        // Ctrl+C: plain numbers, the unit in the header
+        let txt = copied_in(&mut rig, vec![egui::Event::Copy]).unwrap_or_else(|| panic!("{what}: Ctrl+C copied nothing"));
+        let lines: Vec<&str> = txt.lines().collect();
+        let head: Vec<&str> = lines[0].split('\t').collect();
+        assert!(head.contains(&"Balance (BDT M)") && head.contains(&"Rate (%)"), "{what}: {head:?}");
+        let bal = head.iter().position(|c| *c == "Balance (BDT M)").expect("balance");
+        assert_eq!(lines[1].split('\t').nth(bal), Some("0.0001"), "{what}: 100 BDT in Million, plain: {:?}", lines[1]);
+        assert!(!txt.contains(" M\t") && !txt.contains(','), "{what}: no suffix, no separators: {txt}");
+        assert_eq!(rig.app.status_message.starts_with("Copied 7 rows"), true, "{what}: {}", rig.app.status_message);
+
+        // a right-click on a cell: three copy entries
+        let cell = p.boxes.iter().find(|(t, _)| t == "Conventional").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: a Bank cell"));
+        let right = |pressed: bool| egui::Event::PointerButton { pos: cell.center(), button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+        rig.step(vec![egui::Event::PointerMoved(cell.center())]);
+        rig.step(vec![right(true)]);
+        rig.step(vec![right(false)]);
+        let p = rig.draw(4);
+        for t in ["Copy", "Copy as shown", "Copy raw (BDT)"] {
+            assert!(p.boxes.iter().any(|(x, _)| x == t), "{what}: the menu has '{t}': {:?}", p.boxes.iter().map(|(x, _)| x.clone()).filter(|x| x.contains("Copy")).collect::<Vec<_>>());
+        }
+        for (label, check) in [
+            ("Copy as shown", Box::new(|t: &str| t.contains("0.00 M") && t.lines().next().is_some_and(|l| l.contains("Balance\t"))) as Box<dyn Fn(&str) -> bool>),
+            ("Copy raw (BDT)", Box::new(|t: &str| t.contains("Balance (BDT)") && t.lines().nth(1).is_some_and(|l| l.contains("\t100\t")))),
+            ("Copy", Box::new(|t: &str| t.contains("Balance (BDT M)"))),
+        ] {
+            let p = rig.draw(2);
+            let b = match p.boxes.iter().find(|(x, _)| x == label).map(|(_, b)| *b) {
+                Some(b) => b,
+                None => {
+                    // the menu closed after the last click: open it again
+                    rig.step(vec![egui::Event::PointerMoved(cell.center())]);
+                    rig.step(vec![right(true)]);
+                    rig.step(vec![right(false)]);
+                    rig.draw(4).boxes.iter().find(|(x, _)| x == label).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{label}' in the reopened menu"))
+                }
+            };
+            rig.step(vec![egui::Event::PointerMoved(b.center())]);
+            copied_in(&mut rig, vec![egui::Event::PointerButton { pos: b.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+            let txt = copied_in(&mut rig, vec![egui::Event::PointerButton { pos: b.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }])
+                .or_else(|| copied_in(&mut rig, vec![]))
+                .unwrap_or_else(|| panic!("{what}: '{label}' copied nothing"));
+            assert!(check(&txt), "{what}: '{label}': {txt}");
+        }
+    }
+}

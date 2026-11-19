@@ -90,5 +90,7 @@ mod p6_stress;
 mod k2;
 #[path = "../phase6/k3.rs"]
 mod k3;
+#[path = "../phase6/k4.rs"]
+mod k4;
 #[path = "../phase6/guide.rs"]
 mod guide6;

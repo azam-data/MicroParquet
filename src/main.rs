@@ -468,6 +468,7 @@ impl MicroParquetApp {
             }
         }
         self.handle_palette_shortcut(ctx);
+        self.handle_copy_shortcut(ctx);
         self.handle_zoom_keys(ctx);
         self.update_window_title(ctx);
         self.handle_step_shortcuts(ctx);
@@ -600,21 +601,38 @@ impl MicroParquetApp {
         .response
     }
 
-    fn copy_table_to_clipboard(&mut self, ctx: &egui::Context) {
+    /// Copies the rows on the page to the clipboard, tab-separated (K4).
+    pub(crate) fn copy_table_as(&mut self, ctx: &egui::Context, kind: CopyKind) {
         if let Some(tab) = self.tabs.get(self.active_tab) {
-            let txt = format_df_for_clipboard(
-                &tab.cached_slice,
-                &tab.col_formats,
-                self.num_format,
-                self.global_decimals,
-                false,
-            );
+            let txt = copy_table_text(&tab.cached_slice, &tab.col_formats, self.num_format, self.global_decimals, kind);
             ctx.copy_text(txt);
-            self.status_message = "Copied formatted table to clipboard.".to_string();
+            let n = tab.cached_slice.height().min(2000);
+            let what = match kind {
+                CopyKind::Plain => "plain numbers in the shown unit, the unit in the header",
+                CopyKind::AsShown => "as shown",
+                CopyKind::Raw => "raw BDT numbers",
+            };
+            self.status_message = if (n as usize) < tab.total_rows {
+                format!("Copied {} of the table's {} rows (the rows on this page; {}).", n, format_with_commas(tab.total_rows as f64, 0), what)
+            } else {
+                format!("Copied {} rows to the clipboard ({}).", n, what)
+            };
         }
     }
 
+    fn copy_table_to_clipboard(&mut self, ctx: &egui::Context) {
+        self.copy_table_as(ctx, CopyKind::Plain);
+    }
 
+    /// Ctrl+C copies the table, unless a text box (or a dialog's text) has the keyboard.
+    pub(crate) fn handle_copy_shortcut(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() || self.tabs.is_empty() || self.active_tool != ActiveToolModal::None || self.command_open {
+            return;
+        }
+        if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+            self.copy_table_as(ctx, CopyKind::Plain);
+        }
+    }
 
     /// A flat toolbar button for a command, always with its label; greyed with the reason when it cannot run.
     fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, id: micro_parquet::commands::CommandId) -> egui::Response {

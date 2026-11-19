@@ -2,8 +2,8 @@ use crate::engine::{
     compile_tab_lazy, compute_control_totals, export_to_csv_stream, export_to_parquet_stream,
 };
 use crate::models::{
-    format_metric_value, resolved_scale, ColumnFormatSpec, MoneyScale, NumberDisplayFormat,
-    ParquetDialect, SplitExportFormat, SummarySpec, TabSource, TransformStep,
+    classify_column_auto_format, format_metric_value, format_with_commas, resolved_scale, ColumnFormatSpec, MetricFormatType,
+    MoneyScale, NumberDisplayFormat, ParquetDialect, SplitExportFormat, SummarySpec, TabSource, TabState, TransformStep,
 };
 use crate::jobs::{Cancelled, JobCtx, TempOutput};
 use crate::summary::{date_text, SummaryCell, SummaryValue};
@@ -1005,6 +1005,112 @@ pub fn format_df_for_clipboard(
     out
 }
 
+
+/// What the clipboard gets (K4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyKind {
+    /// Ctrl+C and "Copy": numbers in the unit the grid shows them in, as plain numbers (no thousands
+    /// separators, no unit suffix, at most 15 significant digits), the unit in the header.
+    Plain,
+    /// "Copy as shown": the text of the grid's cells.
+    AsShown,
+    /// "Copy raw (BDT)": the stored numbers, unscaled.
+    Raw,
+}
+
+/// How a decimal column is shown: in a money scale, as a percentage, or as it is.
+enum ShownIn {
+    Scale(MoneyScale),
+    Percent { times_100: bool },
+    Plain,
+}
+
+fn shown_in(col_name: &str, spec: Option<&ColumnFormatSpec>, global: NumberDisplayFormat) -> ShownIn {
+    let t = spec.map(|s| s.fmt_type).unwrap_or(MetricFormatType::Auto);
+    let resolved = if t == MetricFormatType::Auto { classify_column_auto_format(col_name) } else { t };
+    match resolved {
+        MetricFormatType::PercentAsIs => ShownIn::Percent { times_100: false },
+        MetricFormatType::PercentDiv100 => ShownIn::Percent { times_100: true },
+        MetricFormatType::Auto => global.scale().map(ShownIn::Scale).unwrap_or(ShownIn::Plain),
+        other => other.scale().map(ShownIn::Scale).unwrap_or(ShownIn::Plain),
+    }
+}
+
+/// A tab or line break inside a text would move the cells of a pasted table: it becomes a space.
+fn clip_text(s: &str) -> String {
+    s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect()
+}
+
+/// The table as tab-separated text for the clipboard (the first 2,000 rows). A blank cell is an
+/// empty cell in all three kinds. Decimal columns only are scaled; whole numbers, dates and text
+/// are written as they are.
+pub fn copy_table_text(
+    df: &DataFrame,
+    col_formats: &HashMap<String, ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    kind: CopyKind,
+) -> String {
+    use crate::engine::csv_float_text;
+    let cols = df.get_columns();
+    let rows = df.height().min(2000);
+    let is_decimal = |c: &Series| matches!(c.dtype(), DataType::Float64 | DataType::Float32);
+    // the header: the column's name, and for Plain the unit its numbers are in
+    let header: Vec<String> = cols
+        .iter()
+        .map(|c| {
+            let name = c.name().as_str();
+            if !is_decimal(c) {
+                return clip_text(name);
+            }
+            let unit = match (kind, shown_in(name, col_formats.get(name), num_format)) {
+                (CopyKind::Plain, ShownIn::Scale(sc)) => Some(sc.unit),
+                (CopyKind::Plain, ShownIn::Percent { .. }) => Some("%"),
+                (CopyKind::Raw, ShownIn::Scale(_)) => Some("BDT"),
+                _ => None,
+            };
+            match unit {
+                Some(u) => clip_text(&format!("{} ({})", name, u)),
+                None => clip_text(name),
+            }
+        })
+        .collect();
+    let mut out = header.join("\t");
+    out.push('\n');
+    for r in 0..rows {
+        let cells: Vec<String> = cols
+            .iter()
+            .map(|c| {
+                let name = c.name().as_str();
+                let spec = col_formats.get(name);
+                let v = c.get(r).unwrap_or(AnyValue::Null);
+                let number = match &v {
+                    AnyValue::Float64(x) => Some(*x),
+                    AnyValue::Float32(x) => format!("{}", x).parse::<f64>().ok(),
+                    _ => None,
+                };
+                match (&v, number) {
+                    (AnyValue::Null, _) => String::new(),
+                    (_, Some(x)) => match kind {
+                        CopyKind::AsShown => format_metric_value(x, name, spec, num_format, global_decimals),
+                        CopyKind::Raw => csv_float_text(x),
+                        CopyKind::Plain => csv_float_text(match shown_in(name, spec, num_format) {
+                            ShownIn::Scale(sc) => x / sc.divisor,
+                            ShownIn::Percent { times_100: true } => x * 100.0,
+                            _ => x,
+                        }),
+                    },
+                    (AnyValue::Int64(x), _) if kind == CopyKind::AsShown && !TabState::is_likely_id_column(name) => format_with_commas(*x as f64, 0),
+                    (AnyValue::String(t), _) => clip_text(t),
+                    (other, _) => clip_text(&format!("{}", other)),
+                }
+            })
+            .collect();
+        out.push_str(&cells.join("\t"));
+        out.push('\n');
+    }
+    out
+}
 
 fn format_cell_val(
     val: Option<AnyValue>,

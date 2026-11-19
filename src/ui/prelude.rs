@@ -14,7 +14,7 @@ pub use micro_parquet::engine::{
     weighted_mixed_sign_notes,
 };
 pub use micro_parquet::exporters::{
-    export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard,
+    copy_table_text, export_tabs_to_pdf, export_tabs_to_xlsx, format_df_for_clipboard, CopyKind,
 };
 pub use micro_parquet::macros::{
     generate_python_polars_code, load_macro_from_file, python_pii_refusal,
