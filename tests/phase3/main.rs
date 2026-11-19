@@ -82,5 +82,7 @@ mod p2;
 mod p3;
 #[path = "../phase6/p4.rs"]
 mod p4_dq;
+#[path = "../phase6/p5.rs"]
+mod p5_islamic;
 #[path = "../phase6/guide.rs"]
 mod guide6;

@@ -53,6 +53,7 @@ pub enum CommandId {
     Audit,
     Packs,
     MomVariance,
+    Mudaraba,
     DqScorecard,
     // Export
     ExportParquet,
@@ -189,6 +190,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Reconcile, "Two-period variance and CL migration\u{2026}", G::Banking, "compare previous current movement", N::TwoTabs),
     c(I::ClMigration, "CL migration matrix\u{2026}", G::Banking, "classified loans grade upgrade downgrade npl roll rate movement transition", N::TwoTabs),
     c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Banking, "hygiene ghost exceptions quality", N::Tab),
+    c(I::Mudaraba, "Mudaraba profit distribution\u{2026}", G::Banking, "islamic window psr weightage profit sharing ratio mudarib depositors pool crr investable shariah", N::Tab),
     c(I::Packs, "Report packs: build and run\u{2026}", G::Banking, "monthly workbook cover slots items alco return pack headless", N::Nothing),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
@@ -225,6 +227,7 @@ pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
         CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves | CommandId::MomVariance => Some("Treasury & ALM"),
         CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration | CommandId::Audit => Some("Loans & credit"),
+        CommandId::Mudaraba => Some("Islamic window"),
         CommandId::Packs => Some("Reports"),
         _ => None,
     }

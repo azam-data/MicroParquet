@@ -14,6 +14,7 @@ pub mod dq;
 pub mod ecl;
 pub mod engine;
 pub mod irrbb;
+pub mod islamic;
 pub mod exporters;
 pub mod jobs;
 pub mod liquidity;

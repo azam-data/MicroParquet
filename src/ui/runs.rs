@@ -259,6 +259,18 @@ impl MicroParquetApp {
                 s.amount_text = format!("{}", r.spec.material_amount);
                 s.pct_text = format!("{}", r.spec.material_pct);
             }
+            ToolRun::Mudaraba(r) => {
+                self.active_tab = idx[0];
+                self.open_mudaraba();
+                let s = &mut self.mud;
+                s.product_col = r.spec.product_col.clone();
+                s.balance_col = r.spec.balance_col.clone();
+                s.daily = r.spec.daily;
+                s.start = r.spec.start.clone();
+                s.end = r.spec.end.clone();
+                s.income = format!("{}", r.spec.income);
+                s.other = format!("{}", r.spec.other_investable);
+            }
             ToolRun::DqScorecard(r) => {
                 self.active_tab = idx[0];
                 self.open_dq();

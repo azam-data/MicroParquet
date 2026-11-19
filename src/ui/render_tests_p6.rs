@@ -2112,3 +2112,84 @@ fn p4_the_scorecard_dialog_fits_runs_the_sample_rules_and_opens_the_tabs_by_clic
         micro_parquet::rules::set_data_dir_override(None);
     }
 }
+
+// ---- P5: Mudaraba profit distribution
+
+fn mud_rig(name: &str, ppp: f32, w: f32, h: f32, extra: bool) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let root = app.paths.root_dir.clone();
+    let mut products = vec!["MSND", "MSB", "MTDR-1Y"];
+    let mut avg = vec![200.0, 300.0, 500.0];
+    if extra {
+        products.push("MFD-X");
+        avg.push(40.0);
+    }
+    let df = DataFrame::new(vec![Series::new("Product".into(), products), Series::new("Avg_Balance".into(), avg)]).expect("deposits");
+    let src = parquet_source(&root, "deposits", df);
+    app.create_tab_from_source("Deposits".into(), src, vec![], HashMap::new());
+    settle(&mut app);
+    let (ctx, input) = screen(ppp, w, h);
+    let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+    rig.draw(4);
+    rig
+}
+
+fn mud_btn(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.mud.rects.buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the button '{name}' was drawn", rig.what))
+}
+
+#[test]
+fn p5_the_mudaraba_dialog_shows_the_sample_banner_and_parameters_and_builds_the_acceptance_table() {
+    for (ppp, w, h) in SCREENS {
+        let mut rig = mud_rig("p6p5a", ppp, w, h, false);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Mudaraba);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::Mudaraba, "{what}: Banking > Islamic window / Ctrl+K opens it");
+        rig.draw(8);
+        let title = format!("{}  Mudaraba profit distribution", theme::ph::SCALES);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        let m = &rig.app.mud;
+        assert_eq!((m.product_col.as_str(), m.balance_col.as_str()), ("Product", "Avg_Balance"), "{what}");
+        assert!(m.rects.banner.is_some_and(|b| inside(b, r.window)), "{what}: the sample banner is shown while the shipped file is in use");
+        assert!(m.rects.params.is_some_and(|b| inside(b, r.window)), "{what}");
+        // the period and the amounts of the acceptance example; Build is disabled until they are typed
+        rig.app.mud.start = "2026-11-01".into();
+        rig.app.mud.end = "2026-11-30".into();
+        rig.app.mud.other = "240".into();
+        rig.draw(6);
+        { let b = mud_btn(&rig, "Build distribution"); pclick(&mut rig, b); }
+        assert_eq!(rig.app.tabs.len(), 1, "{what}: no income typed, nothing built");
+        rig.app.mud.income = "12".into();
+        rig.draw(6);
+        { let b = mud_btn(&rig, "Build distribution"); pclick(&mut rig, b); }
+        settle(&mut rig.app);
+        assert_eq!(rig.app.tabs.len(), 2, "{what}: {}", rig.app.status_message);
+        let t = &rig.app.tabs[1];
+        assert_eq!(t.title, "Mudaraba profit distribution");
+        let df = &t.cached_slice;
+        let names = micro_parquet::islamic::MUDARABA_COLUMNS;
+        assert_eq!(df.get_column_names().iter().map(|n| n.to_string()).collect::<Vec<_>>(), names.to_vec(), "{what}");
+        let products: Vec<String> = df.column("Product").expect("c").str().expect("s").into_iter().flatten().map(str::to_string).collect();
+        assert!(products.contains(&"Sample parameters".to_string()) && products.contains(&"Parameter file".to_string()), "{what}: {products:?}");
+        let profit = df.column("Profit").expect("profit").f64().expect("f64").get(0).expect("first profit");
+        assert!((profit - 0.707368).abs() < 5e-7, "{what}: MSND profit {profit}");
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn p5_a_product_without_a_weightage_stops_the_build_and_is_named() {
+    let mut rig = mud_rig("p6p5b", 1.05, 1219.05, 685.71, true);
+    rig.app.run_command(&rig.ctx, CommandId::Mudaraba);
+    rig.app.mud.start = "2026-11-01".into();
+    rig.app.mud.end = "2026-11-30".into();
+    rig.app.mud.income = "12".into();
+    rig.app.mud.other = "240".into();
+    rig.draw(8);
+    { let b = mud_btn(&rig, "Build distribution"); pclick(&mut rig, b); }
+    settle(&mut rig.app);
+    assert_eq!(rig.app.tabs.len(), 1, "no tab is made");
+    assert!(rig.app.status_message.contains("MFD-X") && rig.app.status_message.contains("no weightage"), "{}", rig.app.status_message);
+    micro_parquet::rules::set_data_dir_override(None);
+}

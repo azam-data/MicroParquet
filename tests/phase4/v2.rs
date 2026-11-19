@@ -220,7 +220,7 @@ fn v2_the_tool_is_a_two_tab_banking_command_under_loans_and_credit_and_the_searc
         }
     }
     // Phase 6 added a last heading, "Reports" (report packs)
-    assert_eq!(changes, 2, "Treasury & ALM first, then Loans & credit, then Reports: {sections:?}");
+    assert_eq!(changes, 3, "Treasury & ALM first, then Loans & credit, then the Islamic window, then Reports: {sections:?}");
     assert_eq!((sections.first().copied(), sections.last().copied()), (Some("Treasury & ALM"), Some("Reports")));
     // searching for what bankers call it finds it first
     let entries: Vec<Entry> = COMMANDS.iter().map(|c| Entry { label: c.title, words: c.words, recent: None }).collect();

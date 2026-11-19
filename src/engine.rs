@@ -1694,7 +1694,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } => collect_masked_columns(source, out),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => collect_masked_columns(source, out),
     }
 }
 
@@ -1713,7 +1713,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } => source_masks_pii(source),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => source_masks_pii(source),
     }
 }
 
@@ -1862,7 +1862,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2444,6 +2444,12 @@ pub fn compile_tab_lazy(
                 rate_col.as_deref(),
                 cl_status_col.as_deref(),
             )?
+        }
+        TabSource::MudarabaPool { source, steps, spec } => {
+            let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The Mudaraba distribution could not read the deposit table")?;
+            let params = crate::islamic::load_psr(spec.dates()?.1)?;
+            crate::rules::note_used_file("Mudaraba parameters (PSR)", &params.meta.file, &params.meta.as_of.format("%Y-%m-%d").to_string(), &params.meta.source, params.meta.sample);
+            crate::islamic::build_mudaraba(&df, spec, &params)?.lazy()
         }
         TabSource::DqScorecard { source, steps, rules, view } => {
             let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The scorecard could not read the table")?;

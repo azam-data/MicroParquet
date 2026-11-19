@@ -23,6 +23,7 @@ pub mod jobs;
 pub mod join;
 pub mod limits;
 pub mod mom;
+pub mod mudaraba;
 pub mod clean_breaks;
 pub mod classify_overdue;
 pub mod cl1_summary;
@@ -115,6 +116,7 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::Mudaraba => self.render_mudaraba_modal(ctx, cols),
             ActiveToolModal::DqScorecard => self.render_dq_modal(ctx, cols),
             ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),
             ActiveToolModal::Packs => self.render_packs_modal(ctx, cols),

@@ -1,0 +1,14 @@
+{
+  "as_of": "2026-01-01",
+  "source": "SAMPLE: illustrative numbers written by the app. The method, the weightages and the profit-sharing ratio must be those approved by the bank's Shariah Supervisory Committee: replace this file with the bank's own and set \"sample\" to false.",
+  "sample": true,
+  "crr_pct": 4.0,
+  "psr_pct": 70.0,
+  "weightages": [
+    { "product": "MSND", "weight": 0.4 },
+    { "product": "MSB", "weight": 0.6 },
+    { "product": "MTDR-3M", "weight": 0.8 },
+    { "product": "MTDR-6M", "weight": 0.9 },
+    { "product": "MTDR-1Y", "weight": 1.0 }
+  ]
+}

@@ -9,7 +9,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 7] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs", "mom-variance", "data-quality-scorecard"];
+pub const P6_GUIDE_TOOLS: [&str; 8] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs", "mom-variance", "data-quality-scorecard", "mudaraba-profit-distribution"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -236,4 +236,27 @@ fn guide_data_quality_scorecard() {
     let res = run_scorecard(&df, &types, &set, &[]).expect("scorecard");
     let table = scorecard_frame(&res).expect("table");
     check_guide("data-quality-scorecard", "guide_data_quality_scorecard", &[md(&df, &["Account_No", "Rate:2", "Open_Date", "Maturity", "Balance:2"]), md(&table, &["Rule", "Rows checked", "Rows failing", "Pass %:2", "Result"])]);
+}
+
+#[test]
+fn guide_mudaraba_profit_distribution() {
+    use micro_parquet::islamic::*;
+    let d = dir("g_mud");
+    micro_parquet::rules::set_data_dir_override(Some(d.clone()));
+    let deposits = DataFrame::new(vec![Series::new("Product".into(), &["MSND", "MSB", "MTDR-1Y"]), Series::new("Avg_Balance".into(), &[200.0, 300.0, 500.0])]).expect("deposits");
+    let spec = MudarabaSpec { product_col: "Product".into(), balance_col: "Avg_Balance".into(), daily: false, start: "2026-11-01".into(), end: "2026-11-30".into(), income: 12.0, other_investable: 240.0 };
+    // the sample file is written and read: its numbers are the example's
+    let params = load_psr(spec.dates().expect("dates").1).expect("the sample parameters");
+    assert!(params.meta.sample);
+    let out = build_mudaraba(&deposits, &spec, &params).expect("distribution");
+    micro_parquet::rules::set_data_dir_override(None);
+    let names: Vec<String> = strings(&out, "Product").into_iter().flatten().collect();
+    let keep: Vec<bool> = names.iter().map(|n| ["MSND", "MSB", "MTDR-1Y"].contains(&n.as_str())).collect();
+    let mask = BooleanChunked::from_slice("m".into(), &keep);
+    let products = out.filter(&mask).expect("filter");
+    check_guide(
+        "mudaraba-profit-distribution",
+        "guide_mudaraba_profit_distribution",
+        &[md(&deposits, &["Product", "Avg_Balance:2"]), md(&products, &["Product", "Weighted balance:2", "Profit:~6", "Indicative rate % p.a.:~4"])],
+    );
 }

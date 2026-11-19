@@ -2207,6 +2207,13 @@ pub enum TabSource {
         spec: Box<crate::irrbb::IrrbbSpec>,
         view: IrrbbView,
     },
+    /// The Mudaraba profit distribution of the Islamic window (Phase 6 P5): the deposit tab's rows
+    /// (its source and steps), shared by the parameters of `portable_data/islamic`.
+    MudarabaPool {
+        source: Box<TabSource>,
+        steps: Vec<TransformStep>,
+        spec: crate::islamic::MudarabaSpec,
+    },
     /// The data-quality scorecard (Phase 6 P4): the rules run over the tab's rows (its source and steps).
     DqScorecard {
         source: Box<TabSource>,

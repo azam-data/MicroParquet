@@ -138,6 +138,13 @@ pub struct MomVarianceRun {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
+pub struct MudarabaRun {
+    pub source: String,
+    pub spec: crate::islamic::MudarabaSpec,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
 pub struct DqScorecardRun {
     pub source: String,
     /// The rules as they were run (a rule set typed in the dialog may not be saved as a file).
@@ -236,6 +243,7 @@ pub enum ToolRun {
     ClMigration(ClMigrationRun),
     MomVariance(MomVarianceRun),
     DqScorecard(DqScorecardRun),
+    Mudaraba(MudarabaRun),
     Cl1Summary(Cl1SummaryRun),
     Liquidity(LiquidityRun),
     EclSummary(EclSummaryRun),
@@ -289,6 +297,7 @@ impl ToolRun {
             ToolRun::ClMigration(_) => "CL migration",
             ToolRun::MomVariance(_) => "MoM variance",
             ToolRun::DqScorecard(_) => "Data-quality scorecard",
+            ToolRun::Mudaraba(_) => "Mudaraba profit distribution",
             ToolRun::Cl1Summary(_) => "CL-1 summary",
             ToolRun::Liquidity(_) => "LCR/NSFR",
             ToolRun::EclSummary(_) => "IFRS 9 ECL summary",
@@ -323,6 +332,7 @@ impl ToolRun {
                 f(&mut r.curr);
             }
             ToolRun::DqScorecard(r) => f(&mut r.source),
+            ToolRun::Mudaraba(r) => f(&mut r.source),
             ToolRun::Cl1Summary(r) => f(&mut r.source),
             ToolRun::Liquidity(r) => f(&mut r.source),
             ToolRun::EclSummary(r) => f(&mut r.source),
@@ -414,6 +424,10 @@ impl ToolRun {
             TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
                 no_extra_steps(tab_steps)?;
                 Ok(ToolRun::MomVariance(MomVarianceRun { prev: name(prev_source, prev_steps)?, curr: name(curr_source, curr_steps)?, spec: spec.clone(), view: *view }))
+            }
+            TabSource::MudarabaPool { source, steps, spec } => {
+                no_extra_steps(tab_steps)?;
+                Ok(ToolRun::Mudaraba(MudarabaRun { source: name(source, steps)?, spec: spec.clone() }))
             }
             TabSource::DqScorecard { source, steps, rules, view } => {
                 no_extra_steps(tab_steps)?;
@@ -550,6 +564,11 @@ impl ToolRun {
                     MomView::Commentary => "MoM commentary",
                 };
                 Ok(vec![(title.to_string(), TabSource::MomVariance { prev_source: Box::new(p.source), prev_steps: p.steps, curr_source: Box::new(c.source), curr_steps: c.steps, spec: r.spec.clone(), view: r.view })])
+            }
+            ToolRun::Mudaraba(r) => {
+                let t = tab(&r.source)?;
+                r.spec.dates()?;
+                Ok(vec![("Mudaraba profit distribution".to_string(), TabSource::MudarabaPool { source: Box::new(t.source), steps: t.steps, spec: r.spec.clone() })])
             }
             ToolRun::DqScorecard(r) => {
                 let t = tab(&r.source)?;
