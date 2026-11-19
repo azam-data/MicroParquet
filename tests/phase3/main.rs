@@ -86,5 +86,7 @@ mod p4_dq;
 mod p5_islamic;
 #[path = "../phase6/p6.rs"]
 mod p6_stress;
+#[path = "../phase6/k2.rs"]
+mod k2;
 #[path = "../phase6/guide.rs"]
 mod guide6;

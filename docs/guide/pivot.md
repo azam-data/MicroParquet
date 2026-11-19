@@ -53,6 +53,7 @@ A table with the Rows fields as label columns (one column per field), then one v
 - The row totals add up to the Total column's grand total; the column totals add up to it too.
 - With "% of row total" each row's cells add up to 100.00 (rounding ±0.01).
 - A filtered pivot's grand total is the sum of the rows kept: compare with a Filter on the same values.
+- The Grand total and subtotal rows are marked as total rows. The summary row, the status-bar control total (shown in the control column's own unit with thousands separators, for example "44,940.64 Cr"), the Chart tab and the column inspector count only the other rows, so nothing is added twice: with 13 Term Period rows and a Grand total the summary Count is 13 and the Sum and the control total equal the Grand total. The "Rows" count in the status bar is still every row of the table, totals included. An Excel or PDF export keeps the pivot's own Grand total row and adds no extra totals row. The total rows are recognised by their labels (a subtotal or the Grand total leaves the last Rows label empty; with one Rows field the Grand total is the label "Grand total"), and only while the steps after the pivot are Sort or Filter; any other step after it makes the table ordinary data.
 
 ## 8. Worked example
 

@@ -141,8 +141,16 @@ impl MicroParquetApp {
                         if let (Some(col_name), Some(sum_val)) = (&tab.control_col, tab.control_sum) {
                             theme::clipped_label(ui, egui::RichText::new(format!("Control [{}]", col_name)).color(tk.muted), bar_w * theme::STATUS_LABEL_SHARE)
                                 .on_hover_text(col_name.clone());
-                            ui.label(theme::mono_semibold(format!("{:.2} Cr", sum_val / 10_000_000.0))) // not a size: Crore
+                            // in the column's own display format, with thousands separators ("44,940.64 Cr")
+                            let spec = tab.col_formats.get(col_name.as_str());
+                            let scale = micro_parquet::models::resolved_scale(col_name, spec, self.num_format);
+                            ui.label(theme::mono_semibold(micro_parquet::models::format_metric_value(sum_val, col_name, spec, self.num_format, 2)))
                                 .on_hover_text(format!("Raw: {}", format_with_commas(sum_val, 2)));
+                            // the change against the source is in the same unit
+                            let delta_text = |d: f64| match scale {
+                                Some(sc) => format!("{}{}", if d >= 0.0 { "+" } else { "" }, sc.format(d, 2)),
+                                None => format!("{}{}", if d >= 0.0 { "+" } else { "" }, format_with_commas(d, 2)),
+                            };
                             // With a filter the total is expected to differ from the source's: say so,
                             // in grey. Only an unfiltered pipeline whose total moved is a warning.
                             let filtered = tab.has_active_filter();
@@ -152,14 +160,12 @@ impl MicroParquetApp {
                                 ui.label(egui::RichText::new(delta_label).color(tk.muted));
                                 if filtered {
                                     ui.label(
-                                        theme::mono_semibold(format!("{:+.2} Cr", diff / 10_000_000.0)) // not a size: Crore
-                                            .color(tk.muted),
+                                        theme::mono_semibold(delta_text(diff)).color(tk.muted),
                                     )
                                     .on_hover_text("The filters remove rows, so the total is expected to differ from the source file's.");
                                 } else if diff.abs() > 0.01 { // not a size: a difference below a paisa is none
                                     ui.label(
-                                        theme::mono_semibold(format!("{:+.2} Cr", diff / 10_000_000.0)) // not a size: Crore
-                                            .color(tk.warning),
+                                        theme::mono_semibold(delta_text(diff)).color(tk.warning),
                                     );
                                     if ui
                                         .small_button(theme::ph::ARROWS_CLOCKWISE)
@@ -174,7 +180,7 @@ impl MicroParquetApp {
                                         .rounding(egui::Rounding::same(theme::RADIUS_SMALL))
                                         .inner_margin(theme::MARGIN_CHIP_ZERO)
                                         .show(ui, |ui| {
-                                            ui.label(theme::mono_semibold("0.00 Cr").color(tk.success)); // not a size: text
+                                            ui.label(theme::mono_semibold(delta_text(0.0).trim_start_matches('+').to_string()).color(tk.success));
                                         });
                                 }
                             }

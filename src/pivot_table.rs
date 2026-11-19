@@ -599,6 +599,44 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     Ok(PivotBuild { df, label_columns: label_names.len() })
 }
 
+/// A boolean expression that is true on the rows of a pivot that are totals (a subtotal or the
+/// Grand total), for a tab whose last pivot is followed only by steps that keep its columns and rows
+/// (sort, filter). `None` when the tab has no such pivot, or the pivot has no total rows.
+///
+/// The rows are told apart by their labels: a detail row has a label in every Rows column (a blank
+/// is written "(blank)"), a subtotal or the Grand total leaves the last Rows column empty; with a
+/// single Rows field the Grand total row is the label "Grand total".
+pub fn total_rows_expr(steps: &[TransformStep]) -> Option<Expr> {
+    let mut spec: Option<PivotSpec> = None;
+    for s in steps {
+        if s.is_skipped() {
+            continue;
+        }
+        match s {
+            TransformStep::PivotTable { .. } => spec = s.as_pivot_spec(),
+            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } => {}
+            _ => spec = None,
+        }
+    }
+    let spec = spec?;
+    let nr = spec.rows.len();
+    if nr == 0 {
+        return None;
+    }
+    if nr == 1 {
+        return spec.column_totals.then(|| col(spec.rows[0].as_str()).cast(DataType::String).eq(lit(GRAND_TOTAL_LABEL)).fill_null(false));
+    }
+    (spec.subtotals || spec.column_totals).then(|| col(spec.rows[nr - 1].as_str()).cast(DataType::String).eq(lit("")).fill_null(false))
+}
+
+/// The pivot's rows without its totals (all rows when the tab has no pivot totals).
+pub fn without_total_rows(lf: LazyFrame, steps: &[TransformStep]) -> LazyFrame {
+    match total_rows_expr(steps) {
+        Some(t) => lf.filter(t.not()),
+        None => lf,
+    }
+}
+
 /// The pivot as a step of a pipeline: the table, then lazy again.
 pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
     Ok(build_pivot(lf, spec)?.df.lazy())

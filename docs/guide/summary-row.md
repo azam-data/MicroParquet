@@ -70,4 +70,5 @@ Test: `guide_summary_row`
 ## 10. Limits and assumptions
 
 - One summary per column, computed over the whole result up to the last valid step.
+- On a pivot table the subtotal and Grand total rows are left out (Count 13 for 13 rows and a Grand total); an export of a pivot adds no extra totals row, because the pivot has its own Grand total.
 - The summary is not a step and is not replayed by macros, but it is saved with them.

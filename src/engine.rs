@@ -3920,6 +3920,12 @@ pub fn weighted_mixed_sign_notes(
 /// Rows and control sum for the status bar, or "—" with the reason. The pipeline result is
 /// passed in so a failed step also shows "—" instead of the previous step's totals.
 pub fn control_totals_state(lf: Result<LazyFrame>, control_col: Option<&str>) -> ControlTotals {
+    control_totals_state_for(lf, control_col, &[])
+}
+
+/// `control_totals_state` for a tab with these steps: the rows are all the table's rows, but the
+/// control sum leaves out the pivot's subtotal and Grand total rows (K2), so nothing is added twice.
+pub fn control_totals_state_for(lf: Result<LazyFrame>, control_col: Option<&str>, steps: &[TransformStep]) -> ControlTotals {
     let unavailable = |why: String| ControlTotals {
         rows: None,
         sum: None,
@@ -3953,7 +3959,7 @@ pub fn control_totals_state(lf: Result<LazyFrame>, control_col: Option<&str>) ->
             Some(_) => (Some(c), None),
         },
     };
-    match compute_control_totals(lf, sum_col) {
+    match compute_control_totals_for(lf, sum_col, steps) {
         Ok((rows, sum)) => ControlTotals {
             rows: Some(rows),
             sum,
@@ -3967,9 +3973,22 @@ pub fn compute_control_totals(
     lf: LazyFrame,
     control_col: Option<&str>,
 ) -> Result<(usize, Option<f64>)> {
+    compute_control_totals_for(lf, control_col, &[])
+}
+
+pub fn compute_control_totals_for(
+    lf: LazyFrame,
+    control_col: Option<&str>,
+    steps: &[TransformStep],
+) -> Result<(usize, Option<f64>)> {
     let mut aggs = vec![len().alias("__row_count")];
     if let Some(c) = control_col {
-        aggs.push(col(c).cast(DataType::Float64).sum().alias("__control_sum"));
+        let values = col(c).cast(DataType::Float64);
+        let values = match crate::pivot_table::total_rows_expr(steps) {
+            Some(t) => values.filter(t.not()),
+            None => values,
+        };
+        aggs.push(values.sum().alias("__control_sum"));
     }
 
     let res = lf.with_streaming(true).select(aggs).collect()?;

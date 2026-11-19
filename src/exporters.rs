@@ -204,7 +204,9 @@ pub fn export_scaled_tabs_with(
         match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
             Ok(df) => {
                 // The summary is computed from the same collected data the sheet holds.
-                let summary = match summarize(&df, t.summary, t.control_col) {
+                // (a pivot keeps its own Grand total and gets no extra totals row)
+                let own_totals = crate::pivot_table::total_rows_expr(t.steps).is_some();
+                let summary = match if own_totals { Ok(Vec::new()) } else { summarize(&df, t.summary, t.control_col) } {
                     Ok(cells) => cells,
                     Err(e) => {
                         totals_errors.push((t.title.clone(), format!("{:#}", e)));

@@ -4,7 +4,7 @@
 
 use crate::batch::BatchReport;
 use crate::engine::{
-    blank_balance_notes, compile_tab_lazy, control_totals_state, remember_baseline,
+    blank_balance_notes, compile_tab_lazy, control_totals_state, control_totals_state_for, remember_baseline,
     source_baseline_sum,
     ensure_pii_key_for, export_to_csv, export_to_parquet, fetch_viewport_slice, validate_steps, ExportMode,
     ExportPath, StepIssue,
@@ -124,7 +124,7 @@ fn load_tab_staged(req: LoadRequest, ctx: &JobCtx) -> Result<LoadedTab> {
     };
     let default_ctrl = guess_balance_column(&slice);
     ctx.check()?;
-    let totals = control_totals_state(Ok(lf.clone()), default_ctrl.as_deref());
+    let totals = control_totals_state_for(Ok(lf.clone()), default_ctrl.as_deref(), &steps[..exec_steps]);
     let (total_rows, control_sum) = (totals.rows.unwrap_or(0), totals.sum);
     ctx.check()?;
 
@@ -315,7 +315,7 @@ pub fn refresh_tab(req: RefreshRequest, ctx: &JobCtx) -> Result<Refreshed> {
                 Err(e) => (None, Some(format!("{:#}", e))),
             };
             ctx.check()?;
-            let totals = control_totals_state(Ok(lf), ctrl);
+            let totals = control_totals_state_for(Ok(lf), ctrl, steps);
             ctx.check()?;
             let baseline = if req.recalculate_baseline {
                 // Baseline of the raw source (0 steps) for the newly selected control column
@@ -420,7 +420,7 @@ pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult>
     ctx.check()?;
     let ChartRequest { tab_id, token, source, steps, spec, temp_dir } = req;
     let data = compile_tab_lazy(&source, &steps, &temp_dir)
-        .and_then(|lf| crate::chart::compute_chart(lf, &spec))
+        .and_then(|lf| crate::chart::compute_chart(crate::pivot_table::without_total_rows(lf, &steps), &spec))
         .map_err(|e| format!("{:#}", e));
     Ok(ChartResult { tab_id, token, data })
 }
@@ -714,7 +714,8 @@ pub fn export_tabs_pdf(
         // The summary is of the whole result; the page shows only the first rows (one past the
         // limit, so the export can say the tab was cut).
         match compile_tab_lazy(&tab.source, &tab.steps, temp_dir).and_then(|lf| {
-            let summary = if totals_row {
+            // a pivot keeps its own Grand total and gets no extra totals row
+            let summary = if totals_row && crate::pivot_table::total_rows_expr(&tab.steps).is_none() {
                 summary_of_lazy(lf.clone(), &tab.summary, tab.control_col.as_deref())?
             } else {
                 Vec::new()
@@ -876,7 +877,8 @@ pub struct SummaryResult {
 /// The summary row of the whole result after all steps, in one aggregation pass.
 pub fn compute_tab_summary(req: SummaryRequest, ctx: &JobCtx) -> Result<SummaryResult> {
     ctx.check()?;
-    let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
+    // a pivot's subtotal and Grand total rows are not data: counting them would add twice
+    let lf = crate::pivot_table::without_total_rows(compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?, &req.steps);
     let cells = summary_of_lazy(lf, &req.overrides, req.control_col.as_deref())?;
     ctx.check()?;
     let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
@@ -951,7 +953,7 @@ pub fn compute_tab_column_stats(req: ColumnStatsRequest, ctx: &JobCtx) -> Result
     ctx.check()?;
     ctx.set_progress(format!("Statistics of {}…", req.column), None);
     let key = stats_key(&req.source, &req.steps);
-    let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
+    let lf = crate::pivot_table::without_total_rows(compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?, &req.steps);
     let stats = crate::column_stats::compute_column_stats(lf, &req.column, key)?;
     Ok(ColumnStatsResult { tab_id: req.tab_id, stats })
 }

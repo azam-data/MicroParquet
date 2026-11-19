@@ -1817,3 +1817,20 @@ fn i20_the_empty_filters_box_says_what_to_drop_in_it() {
         assert!(!p.boxes.iter().any(|(t, _)| t.starts_with("Drop a field here")), "{what}");
     }
 }
+
+#[test]
+fn k2_the_status_bar_control_total_has_thousands_separators_in_the_columns_display_format() {
+    for (ppp, w, h) in SCREENS3 {
+        let mut rig = csv_rig("pr6k2", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.tabs[0].control_col = Some("Qty".to_string());
+        rig.app.tabs[0].control_sum = Some(449_406_400_000.0);
+        rig.app.tabs[0].baseline_control_sum = Some(449_406_400_000.0);
+        let p = rig.draw(6);
+        assert!(p.boxes.iter().any(|(t, _)| t == "44,940.64 Cr"), "{what}: Crore with separators: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Cr")).collect::<Vec<_>>());
+        // a Million column is shown in its own unit
+        rig.app.tabs[0].col_formats.insert("Qty".to_string(), ColumnFormatSpec { fmt_type: MetricFormatType::BdtMillion, decimals: 2 });
+        let p = rig.draw(6);
+        assert!(p.boxes.iter().any(|(t, _)| t == "449,406.40 M"), "{what}: Million: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains(" M") || t.contains("Cr")).collect::<Vec<_>>());
+    }
+}
