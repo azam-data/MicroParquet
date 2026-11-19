@@ -148,6 +148,15 @@ impl MicroParquetApp {
                             // needs room of its own and is always in the Details dialog)
                             let note_w = note.as_ref().map(|t| theme::text_width(ui, t, theme::TEXT_SMALL).min(bar_w * theme::STATUS_LABEL_SHARE) + theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
                             let replace_w = theme::status_button_width(ui, "Replace with spaces") + theme::STATUS_ITEM_GAP;
+                            // too little room for the note and the button: the button alone (the load message
+                            // carries the same words), so the list is always one click away
+                            let button_only = note.is_some() && !note_w.is_some_and(|w| room_for(ui, w)) && room_for(ui, theme::status_button_width(ui, "Details") + theme::STATUS_ITEM_GAP);
+                            if button_only {
+                                let hover = note.clone().unwrap_or_default();
+                                if ui.small_button("Details").on_hover_text(format!("{hover}\nWhich lines differ")).clicked() {
+                                    open_row_details = true;
+                                }
+                            }
                             if let Some(text) = note.filter(|_| note_w.is_some_and(|w| room_for(ui, w))) {
                                 let color = if rc.is_explained() { tk.muted } else { tk.warning };
                                 theme::clipped_label(ui, egui::RichText::new(text).color(color), bar_w * theme::STATUS_LABEL_SHARE)

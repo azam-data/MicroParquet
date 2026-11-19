@@ -1326,6 +1326,36 @@ fn csv_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
 }
 
 #[test]
+fn f1_the_details_button_beside_the_line_break_note_opens_the_list_and_its_replace_action() {
+    // the two usual screens, and narrower windows where the bar is crowded by the last message
+    for (ppp, w, h) in [SCREENS[0], SCREENS[1], (1.0, 1000.0, 600.0), (1.0, 900.0, 600.0)] {
+        let mut rig = csv_rig("pr6f1", ppp, w, h);
+        let what = rig.what.clone();
+        // a real file has a control total, which fills the bar before the note
+        rig.app.tabs[0].control_col = Some("Qty".to_string());
+        rig.app.tabs[0].control_sum = Some(1500.0);
+        rig.app.tabs[0].baseline_control_sum = Some(1500.0);
+        let p = rig.draw(6);
+        // the message the load left in the bar says it too; the button must be there whatever the room
+        let details = p.boxes.iter().find(|(t, _)| t == "Details").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Details button is on the bar: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("records") || t.contains("Rows")).collect::<Vec<_>>()));
+        if let Some((_, note)) = p.boxes.iter().find(|(t, _)| t.starts_with("5 rows from")) {
+            assert!(details.left() >= note.right() - 1.0 && (details.center().y - note.center().y).abs() < 6.0, "{what}: beside the note: {details:?} vs {note:?}");
+        }
+        rig.step(vec![egui::Event::PointerMoved(details.center())]);
+        rig.click_later(details.center());
+        assert!(rig.app.row_details_open, "{what}: clicking Details opens the list");
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, "Row count details", &what);
+        let b = p.boxes.iter().filter(|(t, _)| t == "Replace with spaces").map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: the Replace action is in the dialog"));
+        assert!(inside(b, r.window), "{what}");
+        rig.step(vec![egui::Event::PointerMoved(b.center())]);
+        rig.click_later(b.center());
+        assert_eq!(rig.app.tabs[0].steps.len(), 1, "{what}: the Replace action adds the step");
+        assert!(!rig.app.row_details_open, "{what}");
+    }
+}
+
+#[test]
 fn i15_the_line_break_warning_has_a_replace_button_that_adds_the_step_and_clears_the_warning() {
     for (ppp, w, h) in SCREENS {
         let mut rig = csv_rig("pr6i15", ppp, w, h);
