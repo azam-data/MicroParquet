@@ -82,6 +82,7 @@ pub fn load_policy() -> Result<PolicyFile> {
     if data.rating_downgrade_notches < 1 {
         bail!("The policy file {}: rating_downgrade_notches must be at least 1.", POLICY_FILE);
     }
+    crate::rules::note_used_file("Policy file", POLICY_FILE, "", &source, sample);
     Ok(PolicyFile { data, file: POLICY_FILE.to_string(), source, sample })
 }
 

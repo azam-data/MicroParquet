@@ -152,7 +152,9 @@ pub fn load_template() -> Result<Cl1Template> {
     let path = crate::rules::data_dir().join("report_templates").join(TEMPLATE_FILE);
     crate::rules::write_text_if_missing(&path, CL1_TEMPLATE);
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the template {}", path.display()))?;
-    Cl1Template::parse(&text, &format!("report_templates/{}", TEMPLATE_FILE))
+    let t = Cl1Template::parse(&text, &format!("report_templates/{}", TEMPLATE_FILE))?;
+    crate::rules::note_used_file("Report template", &format!("report_templates/{}", TEMPLATE_FILE), "", &t.source, t.sample);
+    Ok(t)
 }
 
 /// The columns of the input tab.

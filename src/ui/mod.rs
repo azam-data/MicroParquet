@@ -35,6 +35,7 @@ pub mod prelude;
 pub mod provision;
 pub mod rate_band;
 pub mod rate_shock;
+pub mod packs;
 pub mod runs;
 pub mod reconcile;
 pub mod schema;
@@ -112,6 +113,7 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::Packs => self.render_packs_modal(ctx, cols),
             ActiveToolModal::SaveRun => self.render_save_run_modal(ctx, cols),
             ActiveToolModal::SavedRuns => self.render_saved_runs_modal(ctx, cols),
             ActiveToolModal::ManageColumns => self.render_columns_modal(ctx, cols),

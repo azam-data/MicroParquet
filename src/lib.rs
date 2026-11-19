@@ -19,6 +19,7 @@ pub mod liquidity;
 pub mod macros;
 pub mod models;
 pub mod overdue;
+pub mod packs;
 pub mod problems;
 pub mod paths;
 pub mod pdf_layout;

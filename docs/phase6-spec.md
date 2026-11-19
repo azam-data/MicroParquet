@@ -376,4 +376,7 @@ P1 (details in docs/phase6-progress.md D28–D31):
 - A run keeps file names and typed inputs, not file contents; source tabs by tab title (or file name); a result tab with steps of its own is refused.
 - "Re-run with changes" opens the tool's dialog pre-filled; File ▸ "Saved tool runs" (Ctrl+K) lists `portable_data/runs`.
 - The period reconcile table is sorted by key so a re-run is identical (row order only).
+P2 (details in docs/phase6-progress.md D32–D36):
+- Sheets are numbered by the exporter ("1_Cover", "2_Gap"); the Cover is one text table including the parameter files with sample flags.
+- A slot with unconvertible values or a missing column is refused; the pack cutoff replaces the cutoff of the tools that have one; Banking gets a last heading "Reports".
 </accepted_deviations>

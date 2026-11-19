@@ -2,7 +2,39 @@
 
 use crate::ui::prelude::*;
 
+/// `--pack <name> --slot <slot>=<file> ... --cutoff YYYY-MM-DD --export-xlsx <file>`: the same
+/// run and the same workbook as the Report packs dialog (Phase 6 P2).
+pub(crate) fn run_pack_cli(args: &crate::CliArgs, paths: &PortablePaths) -> anyhow::Result<()> {
+    use micro_parquet::packs::*;
+    let name = args.pack.as_deref().ok_or_else(|| anyhow::anyhow!("--pack <name> is required"))?;
+    let pack = load_pack(&packs_dir(), name)?;
+    let mut files = std::collections::BTreeMap::new();
+    for s in &args.slot {
+        let (slot, file) = s.split_once('=').ok_or_else(|| anyhow::anyhow!("--slot needs the form <slot>=<file>, for example --slot Loans=loans.csv (got '{}')", s))?;
+        if files.insert(slot.trim().to_string(), PathBuf::from(file.trim())).is_some() {
+            anyhow::bail!("--slot {} is given twice.", slot.trim());
+        }
+    }
+    let cutoff = args.cutoff.clone().ok_or_else(|| anyhow::anyhow!("--cutoff YYYY-MM-DD is required with --pack"))?;
+    let xlsx = args.export_xlsx.clone().ok_or_else(|| anyhow::anyhow!("--export-xlsx <file> is required with --pack"))?;
+    let pdf = match (&args.export_pdf, pack.output.pdf) {
+        (Some(p), _) => Some(p.clone()),
+        (None, true) => Some(xlsx.with_extension("pdf")),
+        (None, false) => None,
+    };
+    let spec = PackRunSpec { files, cutoff };
+    let msg = micro_parquet::jobs::run_inline(|ctx| {
+        let r = run_pack(&pack, &spec, paths, &run_time_now(), ctx)?;
+        write_pack(&r, &xlsx, pdf.as_deref(), ctx)
+    })?;
+    println!("{}", msg);
+    Ok(())
+}
+
 pub(crate) fn run_headless_cli(args: &crate::CliArgs, paths: &PortablePaths) -> anyhow::Result<()> {
+    if args.pack.is_some() {
+        return run_pack_cli(args, paths);
+    }
     let input_path = args
         .input
         .as_ref()
@@ -138,4 +170,65 @@ pub(crate) fn run_headless_cli(args: &crate::CliArgs, paths: &PortablePaths) -> 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use micro_parquet::packs::*;
+
+    fn unzip(zip: &Path, entry: &str) -> String {
+        let out = std::process::Command::new("unzip").arg("-p").arg(zip).arg(entry).output().expect("unzip must be installed");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    #[test]
+    fn p2_headless_pack_gives_the_same_workbook_as_the_dialog_path() {
+        let root = std::env::temp_dir().join(format!("mp_p6_headless_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("temp")).expect("folder");
+        micro_parquet::rules::set_data_dir_override(Some(root.clone()));
+        let paths = PortablePaths { root_dir: root.clone(), macros_dir: root.join("m"), schemas_dir: root.join("s"), curves_dir: root.join("c"), buckets_file: root.join("b.json"), temp_dir: root.join("temp") };
+        let deposits = root.join("deposits.csv");
+        std::fs::write(&deposits, "ACNO,BAL,PROD\nD1,100,SB\nD2,50,TD\nD3,25,TD\n").expect("csv");
+        let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() });
+        let pack = ReportPack {
+            name: "mini".into(),
+            inputs: vec![PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "PROD".into()], ..Default::default() }],
+            items: vec![
+                PackItem { title: "Table".into(), sheet: "Table".into(), source: PackItemKind::Steps { slot: "Deposits".into() }, col_formats: Default::default() },
+                PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default() },
+            ],
+            output: PackOutput::default(),
+        };
+        save_pack(&packs_dir(), &pack).expect("saves");
+        // the library path (what the dialog's worker does)
+        let spec = PackRunSpec { files: std::collections::BTreeMap::from([("Deposits".to_string(), deposits.clone())]), cutoff: "2026-10-31".into() };
+        let r = micro_parquet::jobs::run_inline(|ctx| run_pack(&pack, &spec, &paths, "ui", ctx)).expect("runs");
+        let ui_xlsx = root.join("ui.xlsx");
+        micro_parquet::jobs::run_inline(|ctx| write_pack(&r, &ui_xlsx, None, ctx)).expect("writes");
+        // the command line
+        let cli_xlsx = root.join("cli.xlsx");
+        let args = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", &format!("Deposits={}", deposits.display()), "--cutoff", "2026-10-31", "--export-xlsx", &cli_xlsx.display().to_string()]);
+        run_headless_cli(&args, &paths).expect("headless runs");
+        for n in 2..=3 {
+            let e = format!("xl/worksheets/sheet{n}.xml");
+            let (a, b) = (unzip(&ui_xlsx, &e), unzip(&cli_xlsx, &e));
+            assert!(!a.is_empty() && a == b, "sheet {n} is the same from the command line");
+        }
+        let wb = |p: &Path| unzip(p, "xl/workbook.xml");
+        assert_eq!(wb(&ui_xlsx), wb(&cli_xlsx), "the same sheets");
+        // refusals: a missing slot, a bad --slot, no cutoff
+        let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--cutoff", "2026-10-31", "--export-xlsx", &root.join("x.xlsx").display().to_string()]);
+        let e = format!("{:#}", run_headless_cli(&bad, &paths).expect_err("no slot file"));
+        assert!(e.contains("'Deposits'"), "{e}");
+        let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", "Deposits", "--cutoff", "2026-10-31", "--export-xlsx", "x.xlsx"]);
+        assert!(format!("{:#}", run_headless_cli(&bad, &paths).expect_err("bad slot")).contains("<slot>=<file>"));
+        let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", &format!("Deposits={}", deposits.display()), "--export-xlsx", "x.xlsx"]);
+        assert!(format!("{:#}", run_headless_cli(&bad, &paths).expect_err("no cutoff")).contains("--cutoff"));
+        assert!(!root.join("x.xlsx").exists());
+        micro_parquet::rules::set_data_dir_override(None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

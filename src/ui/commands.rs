@@ -67,6 +67,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ToggleSummary => ph::SIGMA,
         CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
+        CommandId::Packs => ph::TABLE,
         CommandId::About => ph::INFO,
     }
 }
@@ -249,6 +250,7 @@ impl MicroParquetApp {
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::SortLists => self.open_sort_lists(),
             CommandId::SavedRuns => self.open_saved_runs(),
+            CommandId::Packs => self.open_packs(),
             CommandId::About => self.show_about = true,
         }
     }

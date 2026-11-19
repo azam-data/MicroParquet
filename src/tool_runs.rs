@@ -311,6 +311,24 @@ impl ToolRun {
         }
     }
 
+    /// Sets the cutoff date of a tool that has one (a report pack runs everything at its cutoff).
+    /// Returns false for a tool without a cutoff date.
+    pub fn set_cutoff(&mut self, cutoff: &str) -> bool {
+        let c = cutoff.trim().to_string();
+        match self {
+            ToolRun::RepricingGap(r) => r.spec.cutoff_date = c,
+            ToolRun::GapLadder(r) => r.cutoff = c,
+            ToolRun::IrrbbLadder(r) => r.cutoff = c,
+            ToolRun::IrrbbSix(r) => r.cutoff = c,
+            ToolRun::EclSummary(r) => match &mut r.ecl_step {
+                Some(TransformStep::IfrsEcl { cutoff_date, .. }) => *cutoff_date = c,
+                _ => return false,
+            },
+            _ => return false,
+        }
+        true
+    }
+
     /// The run behind a result tab: its source and the steps the tab itself has.
     pub fn from_source(source: &TabSource, tab_steps: &[TransformStep], env: &dyn RunEnv) -> Result<ToolRun> {
         // a pivot made into a new tab: the tab it was made from, then the pivot step

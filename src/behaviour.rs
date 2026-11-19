@@ -119,6 +119,7 @@ pub fn load_behaviour(dir: &Path, name: &str) -> Result<RuleFile<BehaviourFile>>
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the behaviour file {}", path.display()))?;
     let f: RuleFile<BehaviourFile> = parse_rule_text(&format!("behaviour/{stem}.json"), date, &text)?;
     f.data.validate(&f.meta.file)?;
+    crate::rules::note_used_file("Behaviour profile", &f.meta.file, &f.data.as_of, &f.data.source, f.meta.sample);
     // a file can be edited by hand: check it against the Bangladesh Bank caps again, as the dialog did
     let raw: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("The behaviour file {} is not valid JSON.", f.meta.file))?;
     let raw_products = raw.get("products").and_then(|p| p.as_array()).cloned().unwrap_or_default();

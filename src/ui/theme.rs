@@ -119,6 +119,8 @@ pub const TAB_RENAME_W: f32 = 160.0;
 pub const TAB_SCROLL_FRAMES: u8 = 4;
 /// One half, for centring.
 pub const HALF: f32 = 0.5;
+/// The most decimal places a report can show.
+pub const MAX_DECIMALS: usize = 6;
 pub const STATUS_BAR_H: f32 = 32.0;
 pub const RIGHT_PANEL_W: f32 = 316.0;
 /// The right panel can be dragged as wide as this share of the window, and its left edge reacts

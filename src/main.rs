@@ -29,6 +29,15 @@ pub(crate) struct CliArgs {
     /// Export even when the control column has values that could not be converted.
     #[arg(long)]
     allow_parse_failures: bool,
+    /// Run the report pack called this (`portable_data/packs/<name>.json`), with --slot, --cutoff and --export-xlsx.
+    #[arg(long)]
+    pack: Option<String>,
+    /// A file for a slot of the pack: `Loans=loans.csv`. Repeat it for each slot.
+    #[arg(long = "slot")]
+    slot: Vec<String>,
+    /// The cutoff date of the pack run, YYYY-MM-DD.
+    #[arg(long)]
+    cutoff: Option<String>,
 }
 
 fn main() -> eframe::Result<()> {
@@ -113,6 +122,8 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// Report packs (Phase 6 P2).
+    Packs,
     /// "Save run" of a result tab (Phase 6 P1).
     SaveRun,
     /// File ▸ "Saved tool runs" (Phase 6 P1).
@@ -245,6 +256,7 @@ pub struct MicroParquetApp {
     pub sort: SortState,
     pub sort_lists: SortListsState,
     pub runs: RunsState,
+    pub packs: PacksState,
     /// The value picker of the filter or conditional-column dialog that is open, and the number
     /// of distinct values last listed for each column (for "3 of 42 selected").
     pub picker: PickerPanel,
@@ -365,6 +377,7 @@ impl MicroParquetApp {
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
             runs: RunsState::default(),
+            packs: PacksState::default(),
             picker: PickerPanel::default(),
             picker_totals: HashMap::new(),
             picker_tool: ActiveToolModal::None,

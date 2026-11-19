@@ -1748,3 +1748,155 @@ fn p1_every_tool_dialog_takes_its_inputs_from_a_saved_run() {
     assert_eq!((rig.app.active_tab, rig.app.pivot_builder.spec.rows.clone(), rig.app.pivot_builder.new_tab), (sept, vec!["SIDE".to_string()], true));
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+// ---- P2: report packs
+
+fn packs_title() -> String {
+    format!("{}  Report packs", theme::ph::TABLE)
+}
+
+fn pack_btn(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.packs.rects.buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the button '{name}' was drawn", rig.what))
+}
+
+fn pack_field(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.packs.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the field '{name}' was drawn", rig.what))
+}
+
+/// Loans and Deposits opened from CSV files, a gap ladder made from them, and a data folder of the test's own.
+fn packs_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut app = test_app(name);
+    micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
+    let root = app.paths.root_dir.clone();
+    let loans = root.join("loans_oct.csv");
+    let deposits = root.join("deposits_oct.csv");
+    std::fs::write(&loans, "ACNO,BAL,MAT\nL1,1000000,2027-03-31\nL2,2000000,2028-10-31\n").expect("loans");
+    std::fs::write(&deposits, "ACNO,BAL,MAT,PROD\nD1,3000000,2026-12-31,SB\nD2,1500000,2027-06-30,TD\n").expect("deposits");
+    for (title, p) in [("Loans", &loans), ("Deposits", &deposits)] {
+        let cfg = micro_parquet::engine::auto_detect_smart_schema(p).expect("schema");
+        app.create_tab_from_source(title.into(), TabSource::SingleFile { path: p.clone(), is_parquet: false, config: cfg }, vec![], HashMap::new());
+        settle(&mut app);
+    }
+    let src_of = |app: &MicroParquetApp, t: usize| app.tabs[t].source.clone();
+    let gi = |src: TabSource, role| micro_parquet::models::GapTabInput { source: src, steps: vec![], spec: micro_parquet::banking::GapInputSpec { role, amount_col: "BAL".into(), maturity_col: "MAT".into() } };
+    let source = TabSource::GapLadder {
+        inputs: vec![gi(src_of(&app, 0), micro_parquet::banking::GapRole::Asset), gi(src_of(&app, 1), micro_parquet::banking::GapRole::Liability)],
+        preset: CustomBucketDef::default_presets()[0].clone(),
+        cutoff_date: "2026-10-31".into(),
+        null_as_sight: true,
+        limits: None,
+        behaviour: None,
+    };
+    app.create_tab_from_source_with("Gap ladder".into(), source, vec![], HashMap::new(), None);
+    settle(&mut app);
+    assert_eq!(app.tabs.len(), 3, "{}", app.status_message);
+    let (ctx, input) = screen(ppp, w, h);
+    let mut rig = Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") };
+    rig.draw(4);
+    rig
+}
+
+/// Moves the pointer onto the control first (as a mouse does), then clicks it a second after the last click.
+fn pclick_btn(rig: &mut Rig, name: &str) {
+    let r = pack_btn(rig, name);
+    pclick(rig, r);
+}
+
+fn pclick(rig: &mut Rig, r: egui::Rect) {
+    rig.step(vec![egui::Event::PointerMoved(r.center())]);
+    rig.click_later(r.center());
+}
+
+#[test]
+fn p2_the_pack_builder_fits_builds_a_pack_by_clicks_saves_it_and_runs_it() {
+    use micro_parquet::packs::*;
+    for (ppp, w, h) in SCREENS {
+        let mut rig = packs_rig("p6p2a", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Packs);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::Packs, "{what}: Banking > Report packs / Ctrl+K opens it");
+        rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &packs_title(), &what);
+        // an item before a slot: refused with the reason
+        rig.app.active_tab = 2;
+        rig.draw(8);
+        pclick_btn(&mut rig, "Add item from result tab");
+        assert!(rig.app.packs.pack.items.is_empty() && rig.app.packs.message.as_ref().is_some_and(|m| m.0 && m.1.contains("Add the input slot")), "{what}: {:?}", rig.app.packs.message);
+        // slots from the two file tabs
+        for tab in [0usize, 1] {
+            rig.app.active_tab = tab;
+            rig.draw(8);
+            let b = pack_btn(&rig, "Add input slot from open tab");
+            pclick(&mut rig, b);
+        }
+        let slots: Vec<String> = rig.app.packs.pack.inputs.iter().map(|i| i.slot.clone()).collect();
+        assert_eq!(slots, vec!["Loans", "Deposits"], "{what}: {:?} active {}", rig.app.packs.message, rig.app.active_tab);
+        assert_eq!(rig.app.packs.pack.inputs[0].required_columns, vec!["ACNO", "BAL", "MAT"], "{what}: the file's columns are kept");
+        // the gap ladder as an item: its sources are the slots
+        rig.app.active_tab = 2;
+        rig.draw(8);
+        pclick_btn(&mut rig, "Add item from result tab");
+        assert_eq!(rig.app.packs.pack.items.len(), 1, "{what}: {:?}", rig.app.packs.message);
+        assert_eq!(item_slots(&rig.app.packs.pack.items[0]), vec!["Loans", "Deposits"], "{what}");
+        // the table of a slot as a second item, then the order changes by the arrows
+        pclick_btn(&mut rig, "Add table of slot 2");
+        assert_eq!(rig.app.packs.pack.items.len(), 2, "{what}");
+        pclick_btn(&mut rig, "Up 2");
+        assert_eq!(rig.app.packs.pack.items[0].title, "Deposits table", "{what}: moved up");
+        pclick_btn(&mut rig, "Down 1");
+        assert_eq!(rig.app.packs.pack.items[1].title, "Deposits table", "{what}: moved down again");
+        // the dialog still fits with its rows, and every row and control is inside it
+        let p = rig.draw(4);
+        let r2 = assert_dialog_fits(&rig.ctx, &packs_title(), &what);
+        let _ = (r, p);
+        for (n, rect) in rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()) {
+            if rect.is_positive() && rect.top() < r2.body.bottom() && rect.bottom() > r2.body.top() {
+                assert!(rect.left() >= r2.window.left() - 1.0 && rect.right() <= r2.window.right() + 1.0, "{what}: '{n}' {rect:?} is inside the dialog {:?}", r2.window);
+            }
+        }
+        // a slot that an item reads cannot be removed
+        pclick_btn(&mut rig, "Remove slot 2");
+        assert_eq!(rig.app.packs.pack.inputs.len(), 2, "{what}");
+        assert!(rig.app.packs.message.as_ref().is_some_and(|m| m.1.contains("Remove the item first")), "{what}");
+        // name, save; saving again under the same loaded name is fine; another pack with that name asks
+        rig.app.packs.pack.name = "monthly".into();
+        rig.draw(8);
+        let sb = pack_btn(&rig, "Save pack");
+        pclick(&mut rig, sb);
+        assert_eq!(list_packs(&packs_dir()), vec!["monthly".to_string()], "{what}: {:?} button {sb:?} window {:?}", rig.app.packs.message, rig.ctx.screen_rect());
+        pclick_btn(&mut rig, "New pack");
+        assert!(rig.app.packs.pack.inputs.is_empty(), "{what}");
+        rig.app.packs.pack.name = "monthly".into();
+        rig.app.packs.pack.items.push(PackItem { title: "x".into(), sheet: "x".into(), source: PackItemKind::Steps { slot: "A".into() }, col_formats: Default::default() });
+        rig.app.packs.pack.inputs.push(PackInput { slot: "A".into(), ..Default::default() });
+        rig.draw(8);
+        pclick_btn(&mut rig, "Save pack");
+        assert!(rig.app.packs.confirm_replace && rig.app.packs.message.as_ref().is_some_and(|m| m.1.contains("exists")), "{what}");
+        rig.draw(8);
+        let _ = pack_btn(&rig, "Replace");
+        // open the saved one again
+        rig.app.pack_open_for_test("monthly");
+        assert_eq!(rig.app.packs.pack.inputs.len(), 2, "{what}: opened from the file");
+        // run it: files, cutoff and the workbook typed; Run by a click
+        let root = rig.app.paths.root_dir.clone();
+        rig.app.packs.files.insert("Loans".into(), root.join("loans_oct.csv").display().to_string());
+        rig.app.packs.files.insert("Deposits".into(), root.join("deposits_oct.csv").display().to_string());
+        rig.app.packs.cutoff = "2026-10-31".into();
+        rig.app.packs.out_path = root.join("out.xlsx").display().to_string();
+        rig.draw(8);
+        assert!(pack_field(&rig, "File of Loans").width() > 100.0, "{what}");
+        pclick_btn(&mut rig, "Run pack");
+        settle(&mut rig.app);
+        assert!(root.join("out.xlsx").exists(), "{what}: {}", rig.app.status_message);
+        assert!(rig.app.status_message.contains("Wrote"), "{what}: {}", rig.app.status_message);
+        // a slot without a file stops the run and writes nothing
+        std::fs::remove_file(root.join("out.xlsx")).expect("remove");
+        rig.app.packs.files.insert("Deposits".into(), String::new());
+        rig.draw(8);
+        pclick_btn(&mut rig, "Run pack");
+        settle(&mut rig.app);
+        assert!(!root.join("out.xlsx").exists(), "{what}: nothing written");
+        assert!(rig.app.status_message.contains("failed") && rig.app.status_message.contains("'Deposits'"), "{what}: {}", rig.app.status_message);
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}

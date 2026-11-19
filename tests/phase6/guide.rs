@@ -9,7 +9,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 /// The tool ids of Phase 6 (file names in docs/guide/), added as each task is done.
-pub const P6_GUIDE_TOOLS: [&str; 4] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs"];
+pub const P6_GUIDE_TOOLS: [&str; 5] = ["custom-sort-lists", "sql-editor", "chart", "saved-tool-runs", "report-packs"];
 
 fn all_test_sources() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -128,4 +128,35 @@ fn guide_saved_tool_runs() {
     let again = compile_tab_lazy(&again_src, &again_steps, &d).expect("compiles").collect().expect("collects");
     assert!(first.equals_missing(&again), "the made-again tab is the same");
     check_guide("saved-tool-runs", "guide_saved_tool_runs", &[md(&left, &["ACNO", "BAL:2"]), md(&right, &["ACNO", "Grade"]), md(&again, &["ACNO", "BAL:2", "Grade"])]);
+}
+
+#[test]
+fn guide_report_packs() {
+    use micro_parquet::jobs::JobCtx;
+    use micro_parquet::packs::*;
+    let d = dir("g_packs");
+    micro_parquet::rules::set_data_dir_override(Some(d.clone()));
+    let paths = PortablePaths { root_dir: d.clone(), macros_dir: d.join("m"), schemas_dir: d.join("s"), curves_dir: d.join("c"), buckets_file: d.join("b.json"), temp_dir: d.join("t") };
+    std::fs::create_dir_all(&paths.temp_dir).expect("temp");
+    let file = d.join("deposits.csv");
+    std::fs::write(&file, "ACNO,BAL,PROD\nD1,100,SB\nD2,50,TD\nD3,25,TD\n").expect("csv");
+    let deposits = DataFrame::new(vec![Series::new("ACNO".into(), &["D1", "D2", "D3"]), Series::new("BAL".into(), &[100.0, 50.0, 25.0]), Series::new("PROD".into(), &["SB", "TD", "TD"])]).expect("frame");
+    let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() });
+    let pack = ReportPack {
+        name: "mini".into(),
+        inputs: vec![PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "PROD".into()], ..Default::default() }],
+        items: vec![PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default() }],
+        output: PackOutput::default(),
+    };
+    let spec = PackRunSpec { files: std::collections::BTreeMap::from([("Deposits".to_string(), file)]), cutoff: "2026-10-31".into() };
+    let r = run_pack(&pack, &spec, &paths, "guide", &JobCtx::inert()).expect("the pack runs");
+    micro_parquet::rules::set_data_dir_override(None);
+    // the Cover's input line (the hash is the file's blake3 and is not copied into the guide)
+    let section = strings(&r.cover, "Section");
+    let keep: Vec<bool> = section.iter().map(|s| s.as_deref() == Some("Input")).collect();
+    let mask = BooleanChunked::from_slice("m".into(), &keep);
+    let input_rows = r.cover.filter(&mask).expect("filter");
+    let sheet = &r.sheets[0].df;
+    assert_eq!(strings(sheet, "PROD"), vec![Some("SB".to_string()), Some("TD".to_string()), Some("Grand total".to_string())]);
+    check_guide("report-packs", "guide_report_packs", &[md(&deposits, &["ACNO", "BAL:2", "PROD"]), md(&input_rows, &["Name", "Detail", "Rows"]), md(sheet, &["PROD", "Sum of BAL:2"])]);
 }

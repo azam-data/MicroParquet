@@ -2286,6 +2286,7 @@ pub fn load_gap_limits(dir: &Path, def: &crate::models::CustomBucketDef) -> Resu
     let txt = std::fs::read_to_string(&path).with_context(|| format!("Could not read the gap limits file {}", path.display()))?;
     let file: GapLimitsFile = serde_json::from_str(&txt).map_err(|e| anyhow!("The gap limits file {} is not valid: {}. Expected {{\"limits\": [{{\"bucket\": \"...\", \"min_cumulative_gap_pct\": -10}}]}}.", path.display(), e))?;
     validate_gap_limits(&file, def, &path.display().to_string())?;
+    crate::rules::note_used_file("Gap limits", &format!("{}/{}", GAP_LIMITS_DIR, path.file_name().and_then(|n| n.to_str()).unwrap_or("")), &file.effective_from, &file.source, false);
     Ok(Some(file))
 }
 
