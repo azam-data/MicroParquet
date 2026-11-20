@@ -40,6 +40,8 @@ pub struct ChartState {
     /// Tests: write here instead of asking for a file, and never start the browser.
     pub export_path_override: Option<std::path::PathBuf>,
     pub no_browser: bool,
+    /// The last script "Copy as Python" put on the clipboard (tests read it; the clipboard itself is not readable).
+    pub copied_python: Option<String>,
 }
 
 /// What the studio's buttons asked for this frame.
@@ -62,7 +64,7 @@ pub struct ChartTabInfo {
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
     }
 }
 
@@ -584,6 +586,11 @@ impl MicroParquetApp {
                 let open = !self.chart.no_browser;
                 self.chart_preview_in_browser(open);
             }
+            let b = ui.add_enabled(ready, egui::Button::new("Copy as Python"));
+            rects.fields.push(("Copy as Python".to_string(), b.rect));
+            if b.clicked() {
+                self.chart_copy_as_python(ui.ctx());
+            }
         });
         if let Some((bad, m)) = self.chart.export_message.clone() {
             let tk = *theme::tokens(self.dark_mode);
@@ -767,6 +774,27 @@ impl MicroParquetApp {
         self.chart.export_message = Some((false, m.clone()));
         self.status_message = m;
         Some(path)
+    }
+
+    /// "Copy as Python": a self-contained script (the chart's data as a pandas DataFrame, the drawing in
+    /// matplotlib, or plotly for a Sankey and a treemap) goes to the clipboard.
+    pub(crate) fn chart_copy_as_python(&mut self, ctx: &egui::Context) {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::python::chart_to_python(&d, &o).map_err(|e| format!("{:#}", e)));
+        match r {
+            Ok(script) => {
+                let lines = script.lines().count();
+                let plotly = script.contains("import plotly");
+                self.chart.copied_python = Some(script.clone());
+                ctx.copy_text(script);
+                let m = format!("Copied a Python script of {} lines ({}). Paste it into a .py file or a notebook.", lines, if plotly { "plotly: pip install plotly pandas" } else { "matplotlib: pip install pandas matplotlib" });
+                self.chart.export_message = Some((false, m.clone()));
+                self.status_message = m;
+            }
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+            }
+        }
     }
 
     pub(crate) fn chart_attach_tab_pub(&mut self) {

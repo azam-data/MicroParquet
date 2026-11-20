@@ -11,6 +11,7 @@ pub mod gallery;
 pub mod layout;
 pub mod library;
 pub mod pack;
+pub mod python;
 pub mod samples;
 pub mod spec;
 pub mod suggest;

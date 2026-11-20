@@ -43,7 +43,7 @@ fn json_strings(v: &Value, out: &mut Vec<String>) {
 }
 
 /// Every chart the checks run on: the 20 forms, every template's chart, and a signed chart of the owner's example.
-fn every_chart() -> Vec<(String, ChartData)> {
+pub(crate) fn every_chart() -> Vec<(String, ChartData)> {
     let mut v: Vec<(String, ChartData)> = forms().into_iter().map(|(n, d)| (n.to_string(), d)).collect();
     for (tpl, df) in all_cases() {
         let (_, d) = chart_of(tpl, &df);

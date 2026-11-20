@@ -715,6 +715,14 @@ fn c3_export_preview_advanced_options_and_the_chart_book_work_by_real_clicks() {
         rig.draw(4);
         let msg = rig.app.chart.export_message.clone().expect("a message");
         assert!(!msg.0 && msg.1.contains("Preview opened"), "{what}: {msg:?}");
+        // Copy as Python: a script on the clipboard, with the chart's numbers and the install line
+        let r = scroll_clear_of_header(&mut rig, at, &field_rect("Copy as Python"), "Copy as Python", 190.0);
+        pclick(&mut rig, r);
+        rig.draw(4);
+        let msg = rig.app.chart.export_message.clone().expect("a message");
+        assert!(!msg.0 && msg.1.contains("Copied a Python script"), "{what}: {msg:?}");
+        let script = rig.app.chart.copied_python.clone().expect("the script");
+        assert!(script.contains("import matplotlib.pyplot as plt") && script.contains("pd.DataFrame"), "{what}");
         // Advanced options: open, type invalid JSON, the line and column are shown and the export is refused
         let r = scroll_clear_of_header(&mut rig, at, &field_rect("Advanced options header"), "Advanced options", 190.0);
         pclick(&mut rig, r);
