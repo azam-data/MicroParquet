@@ -82,7 +82,21 @@ pub fn paint_layout(painter: &egui::Painter, l: &ChartLayout) {
         }
     }
     for t in &l.texts {
-        painter.text(t.rect.left_top(), egui::Align2::LEFT_TOP, &t.text, chart_font(t.pt, t.face), t.colour);
+        let font = chart_font(t.pt, t.face);
+        if t.angle != 0.0 {
+            // an angled category label: turned about its start, the end of it at the tick
+            let galley = painter.layout_no_wrap(t.text.clone(), font, t.colour);
+            let pos = egui::pos2(t.rect.left(), t.rect.top() + galley.size().x * (-t.angle).sin());
+            painter.add(egui::epaint::TextShape::new(pos, galley, t.colour).with_angle(t.angle));
+        } else if t.text.contains('\n') {
+            // a label on two lines: each line centred
+            let mut job = egui::text::LayoutJob::single_section(t.text.clone(), egui::TextFormat::simple(font, t.colour));
+            job.halign = egui::Align::Center;
+            let galley = painter.layout_job(job);
+            painter.galley(egui::pos2(t.rect.center().x, t.rect.top()), galley, t.colour);
+        } else {
+            painter.text(t.rect.left_top(), egui::Align2::LEFT_TOP, &t.text, font, t.colour);
+        }
     }
 }
 

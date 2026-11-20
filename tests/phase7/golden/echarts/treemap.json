@@ -58,7 +58,7 @@
       },
       "label": {
         "color": "#ffffff",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "show": true
       },
@@ -71,7 +71,7 @@
       "type": "treemap",
       "upperLabel": {
         "color": "#ffffff",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 11.0,
         "height": 22,
         "show": false
@@ -80,7 +80,7 @@
   ],
   "textStyle": {
     "color": "#52514e",
-    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
   },
   "title": [
     {
@@ -89,14 +89,14 @@
       "subtext": "Sum of Balance · BDT",
       "subtextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 11.0,
         "fontWeight": "400"
       },
       "text": "Sum of Balance by Product",
       "textStyle": {
         "color": "#0b0b0b",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 15.0,
         "fontWeight": "600"
       },
@@ -156,7 +156,7 @@
     ],
     "textStyle": {
       "color": "#0b0b0b",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },

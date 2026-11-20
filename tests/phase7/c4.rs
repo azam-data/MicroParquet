@@ -337,10 +337,10 @@ fn c4_scatter_bubble_histogram_box_and_donut() {
     let pts: Vec<&str> = p["series"][0]["points"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
     assert_eq!(pts.len(), 4);
     assert_eq!(pts[0], "2A78D6");
-    // six parts are refused with the message
+    // six parts are written (the 5-part refusal is gone)
     let df = DataFrame::new(vec![Series::new("P".into(), ["a", "b", "c", "d", "e", "f"]).into(), Series::new("V".into(), [6.0, 5.0, 4.0, 3.0, 2.0, 1.0]).into()]).unwrap();
     let bad = compute(df.lazy(), &ChartSpec { category: "P".into(), value: Some("V".into()), kind: ChartKind::Donut, ..Default::default() }).unwrap();
-    assert_eq!(write_chart_xlsx(&tmp("bad2.xlsx"), &bad, &opts()).unwrap_err().to_string(), "Use a bar chart: more than 5 parts are hard to compare as slices");
+    assert!(write_chart_xlsx(&tmp("bad2.xlsx"), &bad, &opts()).is_ok());
 }
 
 #[test]

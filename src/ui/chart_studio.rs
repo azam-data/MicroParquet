@@ -821,6 +821,24 @@ impl MicroParquetApp {
                 });
                 rects.fields.push(("Highlight".to_string(), r.response.rect));
                 ui.end_row();
+                // ---- text size: labels, ticks, axis names and legend (titles keep their size)
+                ui.label("Text size");
+                let r = egui::ComboBox::from_id_salt("chart_text_size").width(combo_w).selected_text(spec.text_size.label()).show_ui(ui, |ui| {
+                    for z in micro_parquet::charts::spec::TextSize::all() {
+                        ui.selectable_value(&mut spec.text_size, *z, z.label());
+                    }
+                });
+                rects.fields.push(("Text size".to_string(), r.response.rect));
+                ui.end_row();
+                // ---- colours: clear the stored colour map and give the names the slots in their current order
+                ui.label("Colours");
+                let r = ui.button("Reset colours").on_hover_text("Clears the stored colours and gives the names the colours 1, 2, 3\u{2026} in their current order");
+                rects.fields.push(("Reset colours".to_string(), r.rect));
+                if r.clicked() {
+                    spec.colour_map = micro_parquet::charts::colours::ColourMap::default();
+                    spec.colour_map.assign_all(&names);
+                }
+                ui.end_row();
                 // ---- data labels: which, how many decimals, which unit, and the % of share views
                 ui.label("Data labels");
                 let r = egui::ComboBox::from_id_salt("chart_labels_mode").width(combo_w).selected_text(spec.labels.mode.label()).show_ui(ui, |ui| {

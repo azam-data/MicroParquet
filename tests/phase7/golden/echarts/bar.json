@@ -35,7 +35,7 @@
           },
           "label": {
             "color": "#0b0b0b",
-            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
             "fontSize": 9.5,
             "formatter": "1,250.00",
             "position": "right",
@@ -55,7 +55,7 @@
           },
           "label": {
             "color": "#0b0b0b",
-            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
             "fontSize": 9.5,
             "formatter": "1,318.00",
             "position": "right",
@@ -75,7 +75,7 @@
           },
           "label": {
             "color": "#0b0b0b",
-            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
             "fontSize": 9.5,
             "formatter": "1,386.00",
             "position": "right",
@@ -95,7 +95,7 @@
           },
           "label": {
             "color": "#0b0b0b",
-            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
             "fontSize": 9.5,
             "formatter": "1,454.00",
             "position": "right",
@@ -115,7 +115,7 @@
           },
           "label": {
             "color": "#0b0b0b",
-            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
             "fontSize": 9.5,
             "formatter": "1,522.00",
             "position": "right",
@@ -135,7 +135,7 @@
           },
           "label": {
             "color": "#0b0b0b",
-            "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
             "fontSize": 9.5,
             "formatter": "1,590.00",
             "position": "right",
@@ -162,7 +162,7 @@
           {
             "label": {
               "color": "#0b0b0b",
-              "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+              "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
               "fontSize": 10.0,
               "formatter": "Limit",
               "position": "insideEndTop",
@@ -187,7 +187,7 @@
   ],
   "textStyle": {
     "color": "#52514e",
-    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
   },
   "title": [
     {
@@ -196,14 +196,14 @@
       "subtext": "Sum of Balance · BDT",
       "subtextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 11.0,
         "fontWeight": "400"
       },
       "text": "Sum of Balance by Month",
       "textStyle": {
         "color": "#0b0b0b",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 15.0,
         "fontWeight": "600"
       },
@@ -263,7 +263,7 @@
     ],
     "textStyle": {
       "color": "#0b0b0b",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },
@@ -273,7 +273,7 @@
     {
       "axisLabel": {
         "color": "#898781",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "formatter": "@fmt:axis:plain",
         "margin": 8,
@@ -305,11 +305,14 @@
     {
       "axisLabel": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
-        "hideOverlap": true,
+        "hideOverlap": false,
+        "interval": 0,
         "margin": 8,
-        "show": true
+        "overflow": "break",
+        "show": true,
+        "width": 360.0
       },
       "axisLine": {
         "lineStyle": {

@@ -17,7 +17,7 @@
       "silent": true,
       "style": {
         "fill": "#898781",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 9.0,
         "fontWeight": "400",
         "text": "5 series are shown as the 2 largest and \"Other\": scatter charts show at most 3 colours."
@@ -63,7 +63,7 @@
     "left": 20.0,
     "textStyle": {
       "color": "#52514e",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },
@@ -472,7 +472,7 @@
   ],
   "textStyle": {
     "color": "#52514e",
-    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
   },
   "title": [
     {
@@ -481,14 +481,14 @@
       "subtext": "Sum of Rate · BDT",
       "subtextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 11.0,
         "fontWeight": "400"
       },
       "text": "Rate against Tenor",
       "textStyle": {
         "color": "#0b0b0b",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 15.0,
         "fontWeight": "600"
       },
@@ -548,7 +548,7 @@
     ],
     "textStyle": {
       "color": "#0b0b0b",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },
@@ -558,7 +558,7 @@
     {
       "axisLabel": {
         "color": "#898781",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "formatter": "@fmt:axis:plain"
       },
@@ -580,7 +580,7 @@
       "nameLocation": "middle",
       "nameTextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "fontWeight": "400"
       },
@@ -600,7 +600,7 @@
     {
       "axisLabel": {
         "color": "#898781",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "formatter": "@fmt:axis:plain"
       },
@@ -622,7 +622,7 @@
       "nameLocation": "middle",
       "nameTextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "fontWeight": "400"
       },

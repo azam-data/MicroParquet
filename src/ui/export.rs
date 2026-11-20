@@ -32,6 +32,9 @@ pub struct PdfOptionsDialog {
     pub title: String,
     pub portrait: bool,
     pub legal: bool,
+    /// A chart tab is ticked: the dialog offers "Add the data table on the next page".
+    pub has_chart: bool,
+    pub chart_tables: bool,
 }
 
 /// An export that starts when its Text-column check finds nothing (or the user decides).
@@ -410,8 +413,12 @@ impl MicroParquetApp {
         }
     }
 
-    fn export_tab_of(t: &TabState) -> ExportTab {
+    fn export_tab_of(t: &TabState, chart: Option<&crate::ui::chart::ChartTabInfo>) -> ExportTab {
         ExportTab {
+            chart: chart.map(|info| {
+                let opts = micro_parquet::charts::layout::LayoutOpts { dark: false, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: Some(info.data.spec.colour_map.clone()) };
+                (info.data.clone(), opts)
+            }),
             title: t.title.clone(),
             source: t.source.clone(),
             steps: t.steps.clone(),
@@ -464,12 +471,17 @@ impl MicroParquetApp {
         });
     }
 
+    #[cfg(test)]
+    pub(crate) fn ticked_export_tabs_for_test(&self) -> Vec<ExportTab> {
+        self.ticked_export_tabs()
+    }
+
     fn ticked_export_tabs(&self) -> Vec<ExportTab> {
         self.tabs
             .iter()
             .enumerate()
             .filter(|(i, _)| self.export.multi_checks.get(*i).copied().unwrap_or(false))
-            .map(|(_, t)| Self::export_tab_of(t))
+            .map(|(_, t)| Self::export_tab_of(t, self.chart_tabs.get(&t.id)))
             .collect()
     }
 
@@ -523,6 +535,8 @@ impl MicroParquetApp {
             title: self.settings.pdf_title.clone(),
             portrait: self.settings.pdf_portrait,
             legal: self.settings.pdf_legal,
+            has_chart: self.ticked_export_tabs().iter().any(|t| t.chart.is_some()),
+            chart_tables: self.settings.pdf_chart_tables,
         });
     }
 
@@ -534,11 +548,12 @@ impl MicroParquetApp {
         self.settings.pdf_title = o.title.clone();
         self.settings.pdf_portrait = o.portrait;
         self.settings.pdf_legal = o.legal;
+        self.settings.pdf_chart_tables = o.chart_tables;
         self.save_settings();
         let Some(out_path) = choose_save_path(&SaveSpec::new("PDF (*.pdf)", "pdf", self.default_pdf_name())) else {
             return;
         };
-        let opts = PdfOptions { title: o.title, page: micro_parquet::pdf_layout::PdfPage { landscape: !o.portrait, legal: o.legal } };
+        let opts = PdfOptions { title: o.title, page: micro_parquet::pdf_layout::PdfPage { landscape: !o.portrait, legal: o.legal }, chart_tables: o.chart_tables };
         let sidecar = o.sidecar;
         let tabs = self.ticked_export_tabs();
         let temp = self.paths.temp_dir.clone();
@@ -575,6 +590,11 @@ impl MicroParquetApp {
                         ui.radio_value(&mut o.legal, true, "Legal");
                     });
                     ui.end_row();
+                    if o.has_chart {
+                        ui.label("Chart tabs");
+                        ui.checkbox(&mut o.chart_tables, "Add the data table on the next page");
+                        ui.end_row();
+                    }
                 });
                 ui.add_space(theme::SPACE_S);
                 ui.add(egui::Label::new("The title is printed at the top of every page. Columns that do not fit the page width continue on the following pages with the row labels repeated.").wrap());

@@ -24,7 +24,11 @@
             "color": "#2a78d6"
           },
           "label": {
-            "formatter": "Current  17.1%"
+            "formatter": "Current  17%",
+            "show": true
+          },
+          "labelLine": {
+            "show": true
           },
           "name": "Current",
           "tip": "Product: Current\nSum of Balance: 1,455.00\nShare: 17.1%\n6 rows",
@@ -35,7 +39,11 @@
             "color": "#eb6834"
           },
           "label": {
-            "formatter": "Foreign  13.6%"
+            "formatter": "Foreign  14%",
+            "show": true
+          },
+          "labelLine": {
+            "show": true
           },
           "name": "Foreign",
           "tip": "Product: Foreign\nSum of Balance: 1,155.00\nShare: 13.6%\n6 rows",
@@ -46,7 +54,11 @@
             "color": "#1baf7a"
           },
           "label": {
-            "formatter": "Savings  24.1%"
+            "formatter": "Savings  24%",
+            "show": true
+          },
+          "labelLine": {
+            "show": true
           },
           "name": "Savings",
           "tip": "Product: Savings\nSum of Balance: 2,055.00\nShare: 24.1%\n6 rows",
@@ -57,7 +69,11 @@
             "color": "#eda100"
           },
           "label": {
-            "formatter": "Term deposits  45.2%"
+            "formatter": "Term deposits  45%",
+            "show": true
+          },
+          "labelLine": {
+            "show": true
           },
           "name": "Term deposits",
           "tip": "Product: Term deposits\nSum of Balance: 3,855.00\nShare: 45.2%\n6 rows",
@@ -70,25 +86,34 @@
       },
       "label": {
         "color": "#0b0b0b",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
+        "position": "outside",
         "show": true
       },
-      "labelLine": {
-        "lineStyle": {
-          "color": "#c3c2b7"
-        }
+      "labelLayout": {
+        "hideOverlap": true
       },
+      "labelLine": {
+        "length": 14,
+        "length2": 10,
+        "lineStyle": {
+          "color": "#898781",
+          "width": 1
+        },
+        "show": true
+      },
+      "minShowLabelAngle": 3.6,
       "radius": [
-        "54%",
-        "76%"
+        "46%",
+        "64%"
       ],
       "type": "pie"
     }
   ],
   "textStyle": {
     "color": "#52514e",
-    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
   },
   "title": [
     {
@@ -97,14 +122,14 @@
       "subtext": "Sum of Balance · BDT",
       "subtextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 11.0,
         "fontWeight": "400"
       },
       "text": "Sum of Balance by Product",
       "textStyle": {
         "color": "#0b0b0b",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 15.0,
         "fontWeight": "600"
       },
@@ -164,7 +189,7 @@
     ],
     "textStyle": {
       "color": "#0b0b0b",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },

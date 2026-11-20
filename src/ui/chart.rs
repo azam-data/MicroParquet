@@ -539,10 +539,29 @@ impl MicroParquetApp {
             });
             add(ui, "Order", rects, r.response.rect);
             ui.end_row();
-            ui.label("Top N");
-            let r = ui.add(egui::DragValue::new(&mut spec.top_n).range(1..=500).speed(0.2)); // not a size: a drag speed
-            add(ui, "Top N", rects, r.rect);
-            ui.end_row();
+            if spec.kind == ChartKind::Donut {
+                // a donut draws every part; "Group small parts" keeps the N largest and puts the rest in "Other"
+                ui.label("Group small parts");
+                ui.horizontal(|ui| {
+                    let r = egui::ComboBox::from_id_salt("chart_donut_group").width(theme::CHART_COMBO_NARROW_W).selected_text(if spec.donut_top.is_some() { "Top N + Other" } else { "Off" }).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut spec.donut_top, None, "Off");
+                        if ui.selectable_label(spec.donut_top.is_some(), "Top N + Other").clicked() && spec.donut_top.is_none() {
+                            spec.donut_top = Some(4);
+                        }
+                    });
+                    add(ui, "Group small parts", rects, r.response.rect);
+                    if let Some(n) = spec.donut_top.as_mut() {
+                        let r = ui.add(egui::DragValue::new(n).range(2..=12).speed(0.2)); // not a size: a drag speed
+                        add(ui, "Group N", rects, r.rect);
+                    }
+                });
+                ui.end_row();
+            } else {
+                ui.label("Top N");
+                let r = ui.add(egui::DragValue::new(&mut spec.top_n).range(1..=500).speed(0.2)); // not a size: a drag speed
+                add(ui, "Top N", rects, r.rect);
+                ui.end_row();
+            }
             ui.label("Scale");
             let r = egui::ComboBox::from_id_salt("chart_scale").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.scale.label()).show_ui(ui, |ui| {
                 for s in ChartScale::all() {
@@ -638,6 +657,8 @@ impl MicroParquetApp {
     fn chart_plot_area(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects) {
         let tk = *theme::tokens(self.dark_mode);
         let mut new_map: Option<micro_parquet::charts::colours::ColourMap> = None;
+        let mut labels_dont_fit = false;
+        let mut switch_horizontal: Option<ChartSpec> = None;
         let scale = self.chart_scale(&self.chart.spec);
         let unit = scale.as_ref().map(scale_word).filter(|u| !u.is_empty()).map(str::to_string);
         match (&self.chart.data, &self.chart.error) {
@@ -654,14 +675,44 @@ impl MicroParquetApp {
                     let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: String::new(), bare: true, colours: None };
                     crate::ui::chart_render::show_table(ui, d, &opts);
                 } else {
-                    let (plot, map) = self.draw_chart_plot(ui, d, scale);
+                    let (plot, map, dont_fit) = self.draw_chart_plot(ui, d, scale);
                     rects.plot = Some(plot);
                     new_map = Some(map);
+                    labels_dont_fit = dont_fit;
                 }
             }
             (None, None) => {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
             }
+        }
+        // a donut of many parts: one line of advice
+        if let (ChartKind::Donut, Some(d)) = (self.chart.spec.kind, self.chart.data.as_ref()) {
+            let parts = d.categories.len();
+            if parts > 6 {
+                let l = ui.add(egui::Label::new(egui::RichText::new("Many parts are hard to compare; a sorted bar may read better").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+                rects.fields.push(("Many parts".to_string(), l.rect));
+            }
+        }
+        // the category names run into each other even angled: say so, and offer horizontal bars in one click
+        if labels_dont_fit {
+            let vertical_bars = self.chart.spec.kind == ChartKind::Bar && !self.chart.spec.horizontal;
+            let text = if vertical_bars { "Labels don't fit; try horizontal bars." } else { "Labels don't fit; use Top N or a filter to show fewer." };
+            ui.horizontal(|ui| {
+                let l = ui.add(egui::Label::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                rects.fields.push(("Labels don't fit".to_string(), l.rect));
+                if vertical_bars {
+                    let b = ui.button("Horizontal bars");
+                    rects.fields.push(("Switch to horizontal bars".to_string(), b.rect));
+                    if b.clicked() {
+                        let mut spec = self.chart.spec.clone();
+                        spec.horizontal = true;
+                        switch_horizontal = Some(spec);
+                    }
+                }
+            });
+        }
+        if let Some(spec) = switch_horizontal {
+            self.chart_set_spec(spec);
         }
         if let Some(m) = new_map.filter(|m| *m != self.chart.spec.colour_map) {
             self.chart.spec.colour_map = m.clone();
@@ -955,7 +1006,7 @@ impl MicroParquetApp {
     /// The chart: drawn by the Phase 7 renderer (`chart_render`) in the quick-chart layout (plot and
     /// legend; the title line and notes above are the Phase 6 ones). Returns the chart's rectangle and
     /// the colour map with every series in it, which the caller stores in the spec.
-    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap) {
+    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap, bool) {
         let opts = micro_parquet::charts::layout::LayoutOpts {
             dark: self.dark_mode,
             divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
@@ -977,6 +1028,6 @@ impl MicroParquetApp {
         };
         let out = crate::ui::chart_render::show_chart(ui, egui::Id::new("chart_plot"), data, &opts, None);
         let plot = out.layout.panels.first().map(|p| p.plot).unwrap_or(out.rect);
-        (plot, out.layout.colour_map)
+        (plot, out.layout.colour_map, out.layout.labels_dont_fit)
     }
 }

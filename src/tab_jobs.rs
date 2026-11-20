@@ -674,6 +674,8 @@ pub struct ExportTab {
     pub summary: HashMap<String, SummarySpec>,
     /// The tab's pinned control column (weight of rate-like columns by default).
     pub control_col: Option<String>,
+    /// A chart tab: its chart (with how its numbers are written); the PDF export draws it instead of the table.
+    pub chart: Option<(crate::chart::ChartData, crate::charts::layout::LayoutOpts)>,
 }
 
 /// Excel workbook of the ticked tabs. Money columns are written in the chosen scale with the
@@ -774,7 +776,7 @@ pub fn export_tabs_pdf_with(
             let df = lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?;
             Ok((df, summary))
         }) {
-            Ok((df, summary)) => collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary }),
+            Ok((df, summary)) => collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary, chart: tab.chart.clone() }),
             Err(e) => failed.push(format!("'{}' ({:#})", tab.title, e)),
         }
     }

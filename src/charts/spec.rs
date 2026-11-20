@@ -308,6 +308,39 @@ impl ChartScale {
     }
 }
 
+/// The size of the chart's text: value labels, axis ticks, axis names and the legend (titles keep their size).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextSize {
+    Small,
+    #[default]
+    Normal,
+    Large,
+    Larger,
+}
+
+impl TextSize {
+    pub fn all() -> &'static [TextSize] {
+        &[TextSize::Small, TextSize::Normal, TextSize::Large, TextSize::Larger]
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            TextSize::Small => "Small",
+            TextSize::Normal => "Normal",
+            TextSize::Large => "Large",
+            TextSize::Larger => "Larger",
+        }
+    }
+    /// 0.9, 1.0, 1.15 and 1.3 times the design system's sizes.
+    pub fn factor(&self) -> f32 {
+        match self {
+            TextSize::Small => 0.9,
+            TextSize::Normal => 1.0,
+            TextSize::Large => 1.15,
+            TextSize::Larger => 1.3,
+        }
+    }
+}
+
 /// Which data labels a chart prints.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LabelMode {
@@ -471,6 +504,10 @@ pub struct ChartSpec {
     pub template: String,
     /// Data labels: which, how many decimals, which unit, and the % of share views.
     pub labels: LabelSpec,
+    /// The size of labels, ticks, axis names and legend.
+    pub text_size: TextSize,
+    /// Donut: "Group small parts": `None` = every part is drawn; `Some(n)` = the n largest and the rest as "Other" (2 to 12).
+    pub donut_top: Option<usize>,
 }
 
 impl Default for ChartSpec {
@@ -512,6 +549,8 @@ impl Default for ChartSpec {
             advanced_json: String::new(),
             template: String::new(),
             labels: LabelSpec::default(),
+            text_size: TextSize::Normal,
+            donut_top: None,
         }
     }
 }

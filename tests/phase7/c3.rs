@@ -345,11 +345,13 @@ fn c3_a_waterfall_has_an_invisible_base_and_the_c0_bases() {
 }
 
 #[test]
-fn c3_a_donut_of_six_parts_is_refused_with_the_message() {
+fn c3_a_donut_of_six_parts_is_drawn_and_one_part_is_refused() {
     let df = DataFrame::new(vec![Series::new("P".into(), ["a", "b", "c", "d", "e", "f"]).into(), Series::new("V".into(), [6.0, 5.0, 4.0, 3.0, 2.0, 1.0]).into()]).unwrap();
     let s = ChartSpec { category: "P".into(), value: Some("V".into()), kind: ChartKind::Donut, ..Default::default() };
-    let err = chart_pair(&compute(df.lazy(), &s).unwrap(), &opts()).unwrap_err().to_string();
-    assert_eq!(err, "Use a bar chart: more than 5 parts are hard to compare as slices");
+    assert!(chart_pair(&compute(df.lazy(), &s).unwrap(), &opts()).is_ok(), "six parts are drawn");
+    let one = DataFrame::new(vec![Series::new("P".into(), ["a"]).into(), Series::new("V".into(), [6.0]).into()]).unwrap();
+    let err = chart_pair(&compute(one.lazy(), &s).unwrap(), &opts()).unwrap_err().to_string();
+    assert!(err.contains("at least 2 parts"), "{err}");
 }
 
 #[test]
@@ -411,7 +413,7 @@ fn c3_the_theme_is_built_from_the_tokens() {
     let dark = micro_parquet::charts::echarts::theme_json(true);
     assert_eq!(dark["backgroundColor"], "#1a1a19");
     assert_eq!(dark["color"][0], "#3987e5");
-    assert!(th["textStyle"]["fontFamily"].as_str().unwrap().starts_with("\"Source Sans 3\""));
+    assert!(th["textStyle"]["fontFamily"].as_str().unwrap().starts_with("'Source Sans 3'"));
 }
 
 #[test]
@@ -465,13 +467,13 @@ fn c3_a_chart_book_of_three_charts_has_three_containers_and_writes_nothing_when_
     let path = dir.join("book.html");
     write_chart_book(&path, "ALCO charts", "today", &items).unwrap();
     assert!(path.exists());
-    // a refused chart (the donut with six parts) stops the book, and no file is written
-    let df = DataFrame::new(vec![Series::new("P".into(), ["a", "b", "c", "d", "e", "f"]).into(), Series::new("V".into(), [6.0, 5.0, 4.0, 3.0, 2.0, 1.0]).into()]).unwrap();
+    // a refused chart (a donut of one part) stops the book, and no file is written
+    let df = DataFrame::new(vec![Series::new("P".into(), ["a"]).into(), Series::new("V".into(), [6.0]).into()]).unwrap();
     let bad = compute(df.lazy(), &ChartSpec { category: "P".into(), value: Some("V".into()), kind: ChartKind::Donut, ..Default::default() }).unwrap();
     let items = vec![BookItem { data: &a, opts: opts() }, BookItem { data: &bad, opts: opts() }];
     let path2 = dir.join("bad.html");
     let err = write_chart_book(&path2, "x", "y", &items).unwrap_err().to_string();
-    assert!(err.contains("Chart 2 of the book") && err.contains("more than 5 parts"), "{err}");
+    assert!(err.contains("Chart 2 of the book") && err.contains("at least 2 parts"), "{err}");
     assert!(!path2.exists());
     assert!(chart_book_html("x", "y", &[]).unwrap_err().to_string().contains("no charts"));
     std::fs::remove_dir_all(&dir).ok();

@@ -15,7 +15,7 @@ use super::labels::LabelPlan;
 use super::spec::LabelMode;
 use super::colours::ColourMap;
 use super::data::{collapse_series, heatmap, waterfall_from_data, waterfall_stack, ChartData, HeatFill, StepKind};
-use super::layout::{base_word, chart_title, scaled, value_kind, LayoutOpts, DONUT_REFUSAL};
+use super::layout::{base_word, chart_title, scaled, value_kind, LayoutOpts};
 use super::spec::{ChartKind, ChartSpec, Stack, Transform};
 use super::tokens as t;
 use anyhow::{bail, Result};
@@ -307,7 +307,7 @@ fn base_option(env: &Env, title: &str, legend: Option<Vec<(String, u32)>>, foot:
             json!({
                 "data": items.iter().map(|(n, c)| json!({"name": lit(n), "itemStyle": {"color": hx(*c)}})).collect::<Vec<_>>(),
                 "left": PAD, "top": HEAD_H, "icon": "roundRect", "itemWidth": 10, "itemHeight": 10, "itemGap": 18,
-                "textStyle": font_style(t::LABEL_PT as f64, "400", ink.ink2)
+                "textStyle": font_style(t::label_pt() as f64, "400", ink.ink2)
             }),
         );
     }
@@ -328,7 +328,7 @@ fn base_option(env: &Env, title: &str, legend: Option<Vec<(String, u32)>>, foot:
         json!({
             "trigger": "item", "formatter": "@tip", "confine": true, "padding": [6, 8],
             "backgroundColor": hx(ink.surface), "borderColor": hx(ink.baseline), "borderWidth": 1,
-            "textStyle": font_style(t::LABEL_PT as f64, "400", ink.ink), "extraCssText": "box-shadow:none;border-radius:4px;"
+            "textStyle": font_style(t::label_pt() as f64, "400", ink.ink), "extraCssText": "box-shadow:none;border-radius:4px;"
         }),
     );
     o.insert(
@@ -349,13 +349,39 @@ fn base_option(env: &Env, title: &str, legend: Option<Vec<(String, u32)>>, foot:
 
 fn category_axis(env: &Env, grid: usize, cats: &[String], horizontal: bool, show_labels: bool, gap: bool) -> Value {
     let ink = env.ink;
+    let mut label = json!({"show": show_labels, "color": hx(ink.ink2), "fontFamily": t::FONT_HTML, "fontSize": t::tick_pt(), "margin": 8,
+                           // every category keeps its label: none is skipped (interval 0), none is overlapped away
+                           "interval": 0, "hideOverlap": false});
+    if show_labels && !cats.is_empty() {
+        if horizontal {
+            label["overflow"] = json!("break");
+            label["width"] = json!((PAGE_CHART_W * 0.34).round());
+        } else {
+            // the same decision as the app, at the width of a page chart: full, else two lines, else angled 35 degrees
+            let measure = super::layout::ApproxMeasure;
+            let wf = |s: &str| -> f32 { <super::layout::ApproxMeasure as super::layout::Measure>::size(&measure, s, t::tick_pt(), false).x };
+            let band = (PAGE_CHART_W - 120.0) / cats.len() as f32;
+            let pl = super::catlabels::plan(cats, band, &wf, t::tick_pt() * 1.3);
+            match pl.fit {
+                super::catlabels::CatFit::Full => {}
+                super::catlabels::CatFit::Wrapped => {
+                    label["overflow"] = json!("break");
+                    label["width"] = json!((band - 4.0).max(10.0).round());
+                    label["lineHeight"] = json!((t::tick_pt() * 1.3).round());
+                }
+                super::catlabels::CatFit::Angled => {
+                    label["rotate"] = json!(super::catlabels::ANGLE_DEG);
+                }
+            }
+        }
+    }
     json!({
         "type": "category", "gridIndex": grid, "data": cats.iter().map(|c| lit(c)).collect::<Vec<_>>(),
         "inverse": horizontal, "position": if horizontal { "left" } else { "bottom" },
         "boundaryGap": gap,
         "axisLine": {"show": true, "lineStyle": {"color": hx(ink.baseline), "width": 1}},
         "axisTick": {"show": false}, "splitLine": {"show": false},
-        "axisLabel": {"show": show_labels, "color": hx(ink.ink2), "fontFamily": t::FONT_HTML, "fontSize": t::TICK_PT, "hideOverlap": true, "margin": 8}
+        "axisLabel": label
     })
 }
 
@@ -376,7 +402,7 @@ fn value_axis(env: &Env, grid: usize, lo: f64, hi: f64, vk: ValueKind, horizonta
         "position": if horizontal { "bottom" } else { "left" },
         "axisLine": {"show": false}, "axisTick": {"show": false},
         "splitLine": {"show": grid_lines, "lineStyle": {"color": hx(ink.grid), "width": 1, "type": "solid"}},
-        "axisLabel": {"show": show_labels, "color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::TICK_PT, "margin": 8,
+        "axisLabel": {"show": show_labels, "color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::tick_pt(), "margin": 8,
                       "formatter": if vk == ValueKind::Percent { "@fmt:axis:percent" } else { "@fmt:axis:plain" }}
     })
 }
@@ -425,7 +451,7 @@ fn mark_lines(env: &Env, p: &Plan, horizontal: bool) -> (Option<Value>, Option<V
         .iter()
         .filter(|r| r.panel == p.idx.min(if env.data.facets.is_empty() { usize::MAX } else { 0 }))
         .map(|r| {
-            json!({key: num(scaled(r.value, p.vk, env.opts)), "label": {"show": true, "formatter": lit(&r.label), "position": "insideEndTop", "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT},
+            json!({key: num(scaled(r.value, p.vk, env.opts)), "label": {"show": true, "formatter": lit(&r.label), "position": "insideEndTop", "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::label_pt()},
                    "lineStyle": {"color": hx(r.status.hex()), "width": t::REFERENCE_LINE_PX, "type": "solid"}})
         })
         .collect();
@@ -466,7 +492,7 @@ fn text_on(fill: u32) -> String {
 }
 
 fn label_style(env: &Env, text: &str, position: &str) -> Value {
-    json!({"show": true, "formatter": lit(text), "position": position, "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::DATA_LABEL_PT})
+    json!({"show": true, "formatter": lit(text), "position": position, "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::data_label_pt()})
 }
 
 fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> {
@@ -827,7 +853,7 @@ fn cartesian(env: &Env, plans: &[Plan], legend_h: f64, foot_h: f64) -> Grids {
         }
         if n > 1 || multi {
             g.titles.push(json!({"text": lit(&p.title), "left": if multi { json!(format!("{:.2}%", 2.0 + c as f64 * ((100.0 - 4.0) / cols as f64))) } else { json!(PAD) }, "top": top - 22.0,
-                                "textStyle": font_style(t::LABEL_PT as f64 + 1.0, "600", env.ink.ink2)}));
+                                "textStyle": font_style(t::label_pt() as f64 + 1.0, "600", env.ink.ink2)}));
         }
         let series = match p.kind {
             ChartKind::Line | ChartKind::Area => line_series(env, p, i),
@@ -891,9 +917,9 @@ fn scatter_parts(env: &Env, bubble: bool) -> Result<(Vec<Value>, Vec<Value>, Vec
         json!({"type": "value", "gridIndex": 0, "min": num(*ticks.first().unwrap_or(&0.0)), "max": num(*ticks.last().unwrap_or(&1.0)), "interval": num(step), "scale": true,
                "axisLine": {"show": !vertical, "lineStyle": {"color": hx(ink.baseline)}}, "axisTick": {"show": false},
                "splitLine": {"show": vertical, "lineStyle": {"color": hx(ink.grid), "width": 1, "type": "solid"}},
-               "axisLabel": {"color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::TICK_PT, "formatter": "@fmt:axis:plain"},
+               "axisLabel": {"color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::tick_pt(), "formatter": "@fmt:axis:plain"},
                "name": if vertical { ycol.clone() } else { spec.category.clone() }, "nameLocation": "middle", "nameGap": if vertical { 44 } else { 28 },
-               "nameTextStyle": font_style(t::LABEL_PT as f64, "400", ink.ink2)})
+               "nameTextStyle": font_style(t::label_pt() as f64, "400", ink.ink2)})
     };
     Ok((vec![axis(xlo, xhi, false)], vec![axis(ylo, yhi, true)], series))
 }
@@ -929,7 +955,7 @@ fn box_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
     let x = category_axis(env, 0, &cats, false, true, true);
     let y = json!({"type": "value", "gridIndex": 0, "min": num(*ticks.first().unwrap_or(&0.0)), "max": num(*ticks.last().unwrap_or(&1.0)), "interval": num(step), "axisLine": {"show": false}, "axisTick": {"show": false},
                    "splitLine": {"show": true, "lineStyle": {"color": hx(ink.grid), "width": 1, "type": "solid"}},
-                   "axisLabel": {"color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::TICK_PT, "formatter": "@fmt:axis:plain"}});
+                   "axisLabel": {"color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::tick_pt(), "formatter": "@fmt:axis:plain"}});
     let mut series = vec![json!({"name": "Box", "type": "boxplot", "data": items, "boxWidth": [8, t::BAR_MAX_PX],
                                  "itemStyle": {"color": format!("{}33", hx(colour)), "borderColor": hx(colour), "borderWidth": 2}})];
     if !out_pts.is_empty() {
@@ -1052,7 +1078,7 @@ fn heat_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
             items.push(json!({
                 "value": [ci, ri, num(v)], "tip": lit_tip(&tip),
                 "itemStyle": {"color": fill_hex, "borderColor": hx(ink.surface), "borderWidth": 1, "borderRadius": t::HEAT_RADIUS_PX},
-                "label": {"show": env.lp.kind_on(vk), "formatter": lit(&text), "color": text_hex, "fontFamily": t::FONT_HTML, "fontSize": t::DATA_LABEL_PT}
+                "label": {"show": env.lp.kind_on(vk), "formatter": lit(&text), "color": text_hex, "fontFamily": t::FONT_HTML, "fontSize": t::data_label_pt()}
             }));
         }
     }
@@ -1075,9 +1101,6 @@ fn donut_series(env: &Env) -> Result<Vec<Value>> {
         .enumerate()
         .filter_map(|(i, c)| data.values.first().and_then(|r| r.get(i)).copied().flatten().map(|v| (c.clone(), v, data.rows.first().and_then(|r| r.get(i)).copied().unwrap_or(0))))
         .collect();
-    if parts.len() > t::DONUT_MAX_SLICES {
-        bail!("{}", DONUT_REFUSAL);
-    }
     if parts.len() < 2 {
         bail!("A donut needs at least 2 parts, but this chart has {}. Choose another form.", parts.len());
     }
@@ -1085,22 +1108,29 @@ fn donut_series(env: &Env) -> Result<Vec<Value>> {
         bail!("A donut cannot show negative values. Use a bar chart.");
     }
     let total: f64 = parts.iter().map(|p| p.1).sum();
+    // colours by name in the order of the parts; past the eighth the de-emphasised grey (and every part keeps its own label)
+    let mut cm = env.cm.clone();
+    cm.assign_all(&parts.iter().map(|p| p.0.clone()).collect::<Vec<_>>());
     let items: Vec<Value> = parts
         .iter()
         .enumerate()
         .map(|(i, (name, v, n))| {
-            let colour = env.colour_of(name, i, parts.len());
+            let colour = cm.get(name).map(|c| c.hex(env.dark)).unwrap_or_else(|| env.colour_of(name, i, parts.len()));
             let share = if total > 0.0 { v / total * 100.0 } else { 0.0 };
             let tip = format!("{}: {}\n{}: {}\nShare: {}%\n{} rows", data.spec.category, name, data.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string()), value_text(scaled(*v, vk, env.opts), vk, env.opts.decimals, false), crate::models::format_with_commas(share, 1), crate::models::format_with_commas(*n as f64, 0));
+            // a part under 1% has no label on the ring (it stays in the legend and the tooltip)
+            let text = if env.lp.mode != LabelMode::None && env.lp.percent { format!("{}  {}%", name, crate::models::format_with_commas(share, 0)) } else { name.to_string() };
             json!({"name": lit(name), "value": num(scaled(*v, vk, env.opts)), "tip": lit_tip(&tip), "itemStyle": {"color": hx(colour)},
-                   "label": {"formatter": lit(&if env.lp.mode != LabelMode::None && env.lp.percent { format!("{}  {}%", name, crate::models::format_with_commas(share, 1)) } else { name.to_string() })}})
+                   "label": {"show": share >= 1.0, "formatter": lit(&text)}, "labelLine": {"show": share >= 1.0}})
         })
         .collect();
     Ok(vec![json!({
-        "type": "pie", "radius": ["54%", "76%"], "center": ["50%", "55%"], "data": items, "avoidLabelOverlap": true,
+        "type": "pie", "radius": ["46%", "64%"], "center": ["50%", "55%"], "data": items, "avoidLabelOverlap": true, "minShowLabelAngle": 3.6,
         "itemStyle": {"borderColor": hx(env.ink.surface), "borderWidth": 2},
-        "label": {"show": true, "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT},
-        "labelLine": {"lineStyle": {"color": hx(env.ink.baseline)}}
+        // outside the ring with leader lines; labels that would overlap are hidden (they are in the tooltip)
+        "label": {"show": true, "position": "outside", "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::label_pt()},
+        "labelLine": {"show": true, "length": 14, "length2": 10, "lineStyle": {"color": hx(env.ink.muted), "width": 1}},
+        "labelLayout": {"hideOverlap": true}
     })])
 }
 
@@ -1164,7 +1194,7 @@ fn sankey_series(env: &Env) -> Result<Vec<Value>> {
         "nodeWidth": 14, "nodeGap": 12, "nodeAlign": "justify", "draggable": false, "layoutIterations": 0,
         "emphasis": {"focus": "adjacency"},
         "lineStyle": {"color": "source", "opacity": 0.35, "curveness": 0.5},
-        "label": {"color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT},
+        "label": {"color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::label_pt()},
         "itemStyle": {"borderColor": hx(env.ink.surface), "borderWidth": 1}
     })])
 }
@@ -1214,8 +1244,8 @@ fn treemap_series(env: &Env) -> Result<Vec<Value>> {
     Ok(vec![json!({
         "type": "treemap", "data": tree, "left": PAD - 8.0, "right": PAD - 8.0, "top": HEAD_H + 10.0, "bottom": 30, "roam": false, "nodeClick": false,
         "breadcrumb": {"show": false}, "squareRatio": 1.2,
-        "label": {"show": true, "color": "#ffffff", "fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT},
-        "upperLabel": {"show": has_series, "height": 22, "color": "#ffffff", "fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT + 1.0},
+        "label": {"show": true, "color": "#ffffff", "fontFamily": t::FONT_HTML, "fontSize": t::label_pt()},
+        "upperLabel": {"show": has_series, "height": 22, "color": "#ffffff", "fontFamily": t::FONT_HTML, "fontSize": t::label_pt() + 1.0},
         "itemStyle": {"borderColor": hx(env.ink.surface), "borderWidth": 2, "gapWidth": 2}
     })])
 }
@@ -1349,6 +1379,10 @@ fn finish(o: Map<String, Value>, spec: &ChartSpec, height: f64) -> Result<(Value
 /// The chart's option in both themes, with its height and table. Refusals (a donut with 6 parts, a
 /// waterfall that does not add up, bad advanced JSON) come back as errors with plain messages.
 pub fn chart_pair(data: &ChartData, opts: &LayoutOpts) -> Result<ChartOut> {
+    t::with_text_scale(data.spec.text_size.factor(), || chart_pair_scaled(data, opts))
+}
+
+fn chart_pair_scaled(data: &ChartData, opts: &LayoutOpts) -> Result<ChartOut> {
     if let Some(m) = data.non_finite() {
         bail!("Chart: {}. Fix those rows or filter them out, then chart again.", m);
     }
@@ -1476,7 +1510,7 @@ pub fn theme_json(dark: bool) -> Value {
         json!({
             "axisLine": {"show": show_line, "lineStyle": {"color": hx(ink.baseline), "width": 1}},
             "axisTick": {"show": false},
-            "axisLabel": {"show": true, "color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::TICK_PT},
+            "axisLabel": {"show": true, "color": hx(ink.muted), "fontFamily": t::FONT_HTML, "fontSize": t::tick_pt()},
             "splitLine": {"show": grid, "lineStyle": {"color": hx(ink.grid), "width": 1, "type": "solid"}},
             "splitArea": {"show": false}
         })
@@ -1486,14 +1520,14 @@ pub fn theme_json(dark: bool) -> Value {
         "backgroundColor": hx(ink.surface),
         "textStyle": {"fontFamily": t::FONT_HTML, "color": hx(ink.ink2)},
         "title": {"textStyle": {"fontFamily": t::FONT_HTML, "fontSize": t::TITLE_PT, "fontWeight": "600", "color": hx(ink.ink)}, "subtextStyle": {"fontFamily": t::FONT_HTML, "fontSize": t::SUBTITLE_PT, "color": hx(ink.ink2)}},
-        "legend": {"textStyle": {"fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT, "color": hx(ink.ink2)}},
+        "legend": {"textStyle": {"fontFamily": t::FONT_HTML, "fontSize": t::label_pt(), "color": hx(ink.ink2)}},
         "categoryAxis": axis(true, false),
         "valueAxis": axis(false, true),
         "logAxis": axis(false, true),
         "timeAxis": axis(true, false),
         "bar": {"itemStyle": {"borderRadius": [t::BAR_RADIUS_PX, t::BAR_RADIUS_PX, 0, 0], "borderWidth": 0}},
         "line": {"lineStyle": {"width": t::LINE_PX}, "symbolSize": t::MARKER_PX, "symbol": "circle", "smooth": false},
-        "tooltip": {"backgroundColor": hx(ink.surface), "borderColor": hx(ink.baseline), "borderWidth": 1, "textStyle": {"fontFamily": t::FONT_HTML, "fontSize": t::LABEL_PT, "color": hx(ink.ink)}},
+        "tooltip": {"backgroundColor": hx(ink.surface), "borderColor": hx(ink.baseline), "borderWidth": 1, "textStyle": {"fontFamily": t::FONT_HTML, "fontSize": t::label_pt(), "color": hx(ink.ink)}},
         "toolbox": {"iconStyle": {"borderColor": hx(ink.muted)}}
     })
 }

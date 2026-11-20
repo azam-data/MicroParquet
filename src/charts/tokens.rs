@@ -124,7 +124,8 @@ pub fn hex_text(rgb: u32) -> String {
 }
 
 // ---- typeface and sizes (pt) ----
-pub const FONT_HTML: &str = "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif";
+/// Single quotes: ECharts writes this into `style="..."` attributes of an SVG, where double quotes break the XML.
+pub const FONT_HTML: &str = "'Source Sans 3', 'Segoe UI', system-ui, sans-serif";
 pub const FONT_EXCEL: &str = "Segoe UI";
 pub const TITLE_PT: f32 = 15.0;
 pub const SUBTITLE_PT: f32 = 11.0;
@@ -164,13 +165,11 @@ pub const HIT_SLOP_PX: f32 = 6.0;
 // ---- data limits (conventions) ----
 /// At most this many points per series; above it a scatter shows a sample and a line asks for an aggregation.
 pub const MAX_POINTS: usize = 5_000;
-/// A donut has 2 to this many slices.
-pub const DONUT_MAX_SLICES: usize = 5;
-/// Small multiples: at most this many panels.
 /// More bars or columns than this cannot be read side by side: the chart asks for Top N or a filter instead.
 pub const MAX_BARS: usize = 60;
 /// The same for the columns of a heatmap.
 pub const MAX_HEAT_COLUMNS: usize = 40;
+/// Small multiples: at most this many panels.
 pub const MAX_FACETS: usize = 12;
 /// Linked panels: at most this many.
 pub const MAX_PANELS: usize = 3;
@@ -259,4 +258,40 @@ fn singular_row(text: &str) -> String {
         }
     }
     out
+}
+
+// ----------------------------------------------------------------------------------------------- text size
+
+thread_local! {
+    static TEXT_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// The factor of the chart being drawn on this thread (the Text size setting): 1.0 unless inside `with_text_scale`.
+pub fn text_scale() -> f32 {
+    TEXT_SCALE.with(|c| c.get())
+}
+
+/// Runs `f` with the chart text size scaled: value labels, axis ticks, axis names and the legend (titles keep their size).
+pub fn with_text_scale<R>(scale: f32, f: impl FnOnce() -> R) -> R {
+    struct Restore(f32);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEXT_SCALE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(TEXT_SCALE.with(|c| c.replace(scale)));
+    f()
+}
+
+/// Axis tick text, scaled by the Text size setting.
+pub fn tick_pt() -> f32 {
+    TICK_PT * text_scale()
+}
+/// Value labels, scaled.
+pub fn data_label_pt() -> f32 {
+    DATA_LABEL_PT * text_scale()
+}
+/// Axis names, the legend, direct labels and reference-line text, scaled.
+pub fn label_pt() -> f32 {
+    LABEL_PT * text_scale()
 }

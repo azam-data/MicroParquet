@@ -43,7 +43,9 @@ pub trait Measure {
 pub struct ApproxMeasure;
 impl Measure for ApproxMeasure {
     fn size(&self, text: &str, pt: f32, _semibold: bool) -> Vec2 {
-        vec2(text.chars().count() as f32 * pt * 0.5, pt * 1.3)
+        let lines = text.lines().count().max(1);
+        let w = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        vec2(w as f32 * pt * 0.5, pt * 1.3 * lines as f32)
     }
 }
 
@@ -84,6 +86,9 @@ pub struct LText {
     pub face: Face,
     pub colour: Color32,
     pub role: Role,
+    /// Radians, 0 = level; angled category labels run up to the right (negative, counter-clockwise).
+    /// `rect` is then the box around the turned text.
+    pub angle: f32,
 }
 
 /// Something to paint, in screen coordinates.
@@ -196,6 +201,9 @@ pub struct ChartLayout {
     pub colour_map: ColourMap,
     /// Labels of "All" that were left out because they would overlap (panel, series, category).
     pub dropped: Vec<super::labels::LabelKey>,
+    /// Category labels that run into each other even angled, or bars too thin for their names: the studio offers
+    /// horizontal bars.
+    pub labels_dont_fit: bool,
     /// The size the chart needs (small multiples can need more height than they were given).
     pub needed_height: f32,
     pub surface: Color32,
@@ -218,6 +226,7 @@ impl ChartLayout {
             message: None,
             colour_map: ColourMap::default(),
             dropped: Vec::new(),
+            labels_dont_fit: false,
             needed_height: rect.height(),
             surface,
             dark,
@@ -364,7 +373,17 @@ impl<'a> Builder<'a> {
     /// Writes a text without any check.
     fn put(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
         let rect = self.rect_for(s, pt, face, anchor, at);
-        self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role });
+        self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role, angle: 0.0 });
+        rect
+    }
+
+    /// A label turned 35° up to the right whose end (its top-right corner before turning) is at `end`: written without any check.
+    fn put_angled(&mut self, role: Role, s: &str, end: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
+        let sz = self.size(s, pt, face);
+        let (sn, cs) = (super::catlabels::ANGLE_DEG.to_radians().sin(), super::catlabels::ANGLE_DEG.to_radians().cos());
+        let left = end.x - sz.x * cs;
+        let rect = Rect::from_min_max(pos2(left, end.y), pos2(end.x + sz.y * sn, end.y + sz.x * sn + sz.y * cs));
+        self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role, angle: -super::catlabels::ANGLE_DEG.to_radians() });
         rect
     }
 
@@ -569,6 +588,10 @@ impl ChartLayout {
 
 /// Lays the chart out in `rect`.
 pub fn layout_chart(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
+    t::with_text_scale(data.spec.text_size.factor(), || layout_chart_scaled(data, rect, opts, m))
+}
+
+fn layout_chart_scaled(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
     let plan = super::labels::LabelPlan::new(&data.spec, opts);
     let mut notes: Vec<String> = Vec::new();
     if plan.kind_on(ValueKind::Amount) {
@@ -827,16 +850,16 @@ fn legend_row(b: &mut Builder, names: &[(String, Color32)], area: Rect) -> f32 {
     let sw = t::MARKER_PX + 2.0;
     let mut x = area.left();
     let mut y = area.top();
-    let lh = b.size("Ag", t::LABEL_PT, Face::Regular).y.max(sw);
+    let lh = b.size("Ag", t::label_pt(), Face::Regular).y.max(sw);
     for (name, colour) in names {
-        let w = b.size(name, t::LABEL_PT, Face::Regular).x;
+        let w = b.size(name, t::label_pt(), Face::Regular).x;
         if x + sw + 6.0 + w > area.right() && x > area.left() {
             x = area.left();
             y += lh + 4.0;
         }
         let swatch = Rect::from_min_size(pos2(x, y + (lh - sw) / 2.0), vec2(sw, sw));
         b.rect(swatch, *colour, [2.0; 4]);
-        let tr = b.put(Role::Legend, name, Anchor::MidLeft, pos2(x + sw + 6.0, y + lh / 2.0), t::LABEL_PT, Face::Regular, ink2);
+        let tr = b.put(Role::Legend, name, Anchor::MidLeft, pos2(x + sw + 6.0, y + lh / 2.0), t::label_pt(), Face::Regular, ink2);
         b.out.legend.push(LegendItem { name: name.clone(), swatch, text: tr, colour: *colour });
         x += sw + 6.0 + w + t::MIN_SPACE_PX * 2.0;
     }
@@ -971,11 +994,11 @@ fn panels_form(b: &mut Builder, data: &ChartData, plans: &[Plan], body: Rect, op
         let lo2 = if spec.pad_axis_below && p.kind == ChartKind::Line { padded_floor(lo2, hi2, max_ticks) } else { lo2 };
         axes.push(make_axis(lo2, hi2, includes_zero(p.kind), p.vk, max_ticks));
     }
-    let label_w = |ax: &Axis, b: &Builder| -> f32 { tick_labels(ax).iter().map(|s| b.size(s, t::TICK_PT, Face::Regular).x).fold(0.0, f32::max) };
+    let label_w = |ax: &Axis, b: &Builder| -> f32 { tick_labels(ax).iter().map(|s| b.size(s, t::tick_pt(), Face::Regular).x).fold(0.0, f32::max) };
     let horizontal = spec.horizontal && matches!(spec.kind, ChartKind::Bar);
     let left_margin = if horizontal {
         // horizontal bars: the category names stand on the left
-        let w = plans.first().map(|p| p.categories.iter().map(|c| b.size(c, t::TICK_PT, Face::Regular).x).fold(0.0, f32::max)).unwrap_or(0.0);
+        let w = plans.first().map(|p| p.categories.iter().map(|c| b.size(c, t::tick_pt(), Face::Regular).x).fold(0.0, f32::max)).unwrap_or(0.0);
         w.min(cell_w * MAX_CAT_LABEL_W_SHARE) + t::MIN_SPACE_PX
     } else {
         axes.iter().map(|a| label_w(a, b)).fold(0.0, f32::max) + t::MIN_SPACE_PX
@@ -1045,24 +1068,63 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
     // header
     let mut top = outer.top();
     if titled && !p.title.is_empty() {
-        let w = b.width_fn(t::LABEL_PT, Face::Semibold);
+        let w = b.width_fn(t::label_pt(), Face::Semibold);
         let shown = fit_text(&p.title, outer.width(), &w);
-        b.put(Role::Panel, &shown, Anchor::TopLeft, pos2(outer.left(), top), t::LABEL_PT, Face::Semibold, ink2_c);
+        b.put(Role::Panel, &shown, Anchor::TopLeft, pos2(outer.left(), top), t::label_pt(), Face::Semibold, ink2_c);
         top += PANEL_HEADER_H;
     }
 
     // room for the value labels above the tallest mark
-    let tick_h = b.size("0", t::TICK_PT, Face::Regular).y;
-    let label_h = b.size("0", t::DATA_LABEL_PT, Face::Regular).y;
+    let tick_h = b.size("0", t::tick_pt(), Face::Regular).y;
+    let label_h = b.size("0", t::data_label_pt(), Face::Regular).y;
     let ref_room = if spec.ref_lines.is_empty() { 0.0 } else { label_h + t::MIN_SPACE_PX };
     let top_inset = (if horizontal { tick_h / 2.0 } else { (label_h + t::MIN_SPACE_PX).max(tick_h / 2.0) }) + ref_room;
-    let cat_h = if show_cats && !horizontal { tick_h + t::MIN_SPACE_PX } else { 0.0 };
-    let bottom_axis_h = if horizontal { tick_h + t::MIN_SPACE_PX } else { cat_h };
-    let left = outer.left() + if show_ticks || horizontal { left_margin } else { t::MIN_SPACE_PX };
+    let mut left = outer.left() + if show_ticks || horizontal { left_margin } else { t::MIN_SPACE_PX };
     // a horizontal bar chart's last tick label is centred on the plot's right edge: leave room for half of it
-    let right_pad = if horizontal { tick_labels(axis).iter().map(|s| b.size(s, t::TICK_PT, Face::Regular).x).fold(0.0, f32::max) / 2.0 + 1.0 } else { end_reserve };
+    let right_pad = if horizontal { tick_labels(axis).iter().map(|s| b.size(s, t::tick_pt(), Face::Regular).x).fold(0.0, f32::max) / 2.0 + 1.0 } else { end_reserve };
+    // category names under the columns: every one is kept (full, else on two lines, else angled)
+    let mut cat_plan: Option<super::catlabels::CatPlan> = None;
+    if show_cats && !horizontal && n_cat > 0 {
+        let wf = b.width_fn(t::tick_pt(), Face::Regular);
+        let band_est = |l: f32| (outer.right() - right_pad - l) / n_cat as f32;
+        let mut pl = super::catlabels::plan(&p.categories, band_est(left), &wf, tick_h);
+        if pl.fit == super::catlabels::CatFit::Angled {
+            // the first angled label reaches left of its tick: make room so it stays inside the chart
+            let w0 = p.categories.first().map(|c| wf(c)).unwrap_or(0.0);
+            let reach = w0 * super::catlabels::ANGLE_DEG.to_radians().cos() + t::MIN_SPACE_PX;
+            let have = left + band_est(left) / 2.0 - b.bounds.left();
+            if reach > have {
+                left += reach - have;
+                pl = super::catlabels::plan(&p.categories, band_est(left), &wf, tick_h);
+            }
+        }
+        if !pl.fits {
+            b.out.labels_dont_fit = true;
+        }
+        cat_plan = Some(pl);
+    }
+    let cat_h = match &cat_plan {
+        // angled labels start a little lower, clear of the bottom tick label of the value axis
+        Some(pl) if pl.fit == super::catlabels::CatFit::Angled => pl.height + t::MIN_SPACE_PX + tick_h / 2.0 + 2.0,
+        Some(pl) => pl.height + t::MIN_SPACE_PX,
+        None => 0.0,
+    };
+    let bottom_axis_h = if horizontal { tick_h + t::MIN_SPACE_PX } else { cat_h };
     let plot = Rect::from_min_max(pos2(left, top + top_inset), pos2(outer.right() - right_pad, outer.bottom() - bottom_axis_h));
     if plot.width() < 20.0 || plot.height() < 20.0 {
+        // the labels (every one is kept) leave no room for the plot: say so instead of drawing nothing
+        if show_cats && cat_plan.is_some() && b.out.message.is_none() {
+            let msg = "The chart is too small for its category labels. Make the panel larger, open the chart in its own window, or use fewer categories.";
+            let w = b.width_fn(t::SUBTITLE_PT, Face::Regular);
+            let lines = wrap_text(msg, outer.width().min(520.0), &w);
+            let lh = b.size("Ag", t::SUBTITLE_PT, Face::Regular).y;
+            let top = outer.center().y - lh * lines.len() as f32 / 2.0;
+            for (i, l) in lines.iter().enumerate() {
+                b.put(Role::Message, l, Anchor::TopCentre, pos2(outer.center().x, top + lh * i as f32), t::SUBTITLE_PT, Face::Regular, ink2_c);
+            }
+            b.out.message = Some(msg.to_string());
+            b.out.labels_dont_fit = true;
+        }
         return;
     }
     b.out.panels.push(PanelLayout { kind: p.kind, title: p.title.clone(), plot, lo: axis.lo, hi: axis.hi, horizontal, ticks: Vec::new() });
@@ -1087,11 +1149,11 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
         let is_zero = *v == 0.0;
         if horizontal {
             b.line(pos2(c, plot.top()), pos2(c, plot.bottom()), t::GRID_PX, grid_c);
-            b.put(Role::Tick, s, Anchor::TopCentre, pos2(c, plot.bottom() + t::MIN_SPACE_PX / 2.0), t::TICK_PT, Face::Regular, muted_c);
+            b.put(Role::Tick, s, Anchor::TopCentre, pos2(c, plot.bottom() + t::MIN_SPACE_PX / 2.0), t::tick_pt(), Face::Regular, muted_c);
         } else {
             b.line(pos2(plot.left(), c), pos2(plot.right(), c), t::GRID_PX, if is_zero && includes_zero(p.kind) { base_c } else { grid_c });
             if show_ticks {
-                b.put(Role::Tick, s, Anchor::MidRight, pos2(plot.left() - t::MIN_SPACE_PX, c), t::TICK_PT, Face::Regular, muted_c);
+                b.put(Role::Tick, s, Anchor::MidRight, pos2(plot.left() - t::MIN_SPACE_PX, c), t::tick_pt(), Face::Regular, muted_c);
             }
         }
     }
@@ -1109,7 +1171,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
     }
 
     // category names
-    category_labels(b, p, plot, band, horizontal, show_cats);
+    category_labels(b, p, plot, band, horizontal, show_cats, cat_plan.as_ref());
 
     // marks
     let vk = p.vk;
@@ -1131,7 +1193,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
             let r = if horizontal { Rect::from_x_y_ranges(a.min(c)..=a.max(c), plot.y_range()) } else { Rect::from_x_y_ranges(plot.x_range(), a.min(c)..=a.max(c)) };
             b.rect(r.intersect(plot), alpha(rgb(ink.deemph), 0.45), [0.0; 4]);
             if !band_spec.label.is_empty() {
-                b.try_put(Role::Reference, &band_spec.label, Anchor::TopLeft, pos2(plot.left() + 4.0, r.intersect(plot).top() + 2.0), t::LABEL_PT, Face::Regular, ink2_c);
+                b.try_put(Role::Reference, &band_spec.label, Anchor::TopLeft, pos2(plot.left() + 4.0, r.intersect(plot).top() + 2.0), t::label_pt(), Face::Regular, ink2_c);
             }
         }
         // the lines first, so no label is put where a line runs
@@ -1153,7 +1215,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
             // the label goes beside the line where there is room: along the line, above or below it. Of several
             // vertical lines, the highest stands to the right of its line and the others to the left of theirs, so
             // neighbouring labels never meet and none is crossed by another line.
-            let size = b.size(&text, t::LABEL_PT, Face::Regular);
+            let size = b.size(&text, t::label_pt(), Face::Regular);
             let mut placed = false;
             let sides: [f32; 2] = if horizontal { if rl.value >= highest { [1.0, -1.0] } else { [-1.0, 1.0] } } else { [-1.0, 1.0] };
             'scan: for side in sides {
@@ -1167,7 +1229,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
                         let x = plot.left() + 4.0 + (plot.width() - size.x - 8.0).max(0.0) * f;
                         if side < 0.0 { (Anchor::BottomLeft, pos2(x, c - 3.0)) } else { (Anchor::TopLeft, pos2(x, c + 3.0)) }
                     };
-                    if b.try_put_clear(Role::Reference, &text, anchor, at, t::LABEL_PT, Face::Regular, ink_c).is_some() {
+                    if b.try_put_clear(Role::Reference, &text, anchor, at, t::label_pt(), Face::Regular, ink_c).is_some() {
                         placed = true;
                         break 'scan;
                     }
@@ -1191,7 +1253,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
                 }
                 let y = chosen.unwrap_or(plot.top() - size.y / 2.0 - 2.0);
                 b.line(pos2(x, y), pos2(x + sw, y), t::REFERENCE_LINE_PX, col);
-                b.put(Role::Reference, &text, Anchor::MidLeft, pos2(x + sw + 4.0, y), t::LABEL_PT, Face::Regular, ink_c);
+                b.put(Role::Reference, &text, Anchor::MidLeft, pos2(x + sw + 4.0, y), t::label_pt(), Face::Regular, ink_c);
             }
         }
     }
@@ -1244,7 +1306,7 @@ fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, ban
     }
     for (at, text, _col, tick_v, line_below) in breaches {
         let r = t::MARKER_PX / 2.0 + 5.0 + 3.0;
-        let size = b.size(&text, t::LABEL_PT, Face::Regular);
+        let size = b.size(&text, t::label_pt(), Face::Regular);
         let mut tries: Vec<(Anchor, Pos2)> = Vec::new();
         if g.horizontal {
             let above = at.y - r;
@@ -1272,20 +1334,20 @@ fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, ban
         }
         let mut done = false;
         for (anchor, pos) in tries {
-            if b.try_put_clear(Role::Reference, &text, anchor, pos, t::LABEL_PT, Face::Regular, ink_c).is_some() {
+            if b.try_put_clear(Role::Reference, &text, anchor, pos, t::label_pt(), Face::Regular, ink_c).is_some() {
                 done = true;
                 break;
             }
         }
         if !done {
-            // no free place: the text goes above the plot, never clipped
+            // no free place: the text goes above the plot; where even that is taken it stays in the tooltip (the ring is drawn), never clipped
             let y = plot.top() - size.y / 2.0 - 2.0;
-            b.put(Role::Reference, &text, Anchor::MidLeft, pos2(plot.left() + 4.0, y), t::LABEL_PT, Face::Regular, ink_c);
+            b.try_put(Role::Reference, &text, Anchor::MidLeft, pos2(plot.left() + 4.0, y), t::label_pt(), Face::Regular, ink_c);
         }
     }
     if !spec.limit_note.trim().is_empty() {
-        let note = fit_text(&format!("\u{2014} {}", spec.limit_note.trim()), (plot.width() - 6.0).max(40.0), &b.width_fn(t::LABEL_PT, Face::Regular));
-        let size = b.size(&note, t::LABEL_PT, Face::Regular);
+        let note = fit_text(&format!("\u{2014} {}", spec.limit_note.trim()), (plot.width() - 6.0).max(40.0), &b.width_fn(t::label_pt(), Face::Regular));
+        let size = b.size(&note, t::label_pt(), Face::Regular);
         let cands = [
             pos2(plot.right() - 2.0, plot.bottom() - 3.0),
             pos2(plot.right() - 2.0, plot.top() + size.y + 3.0),
@@ -1294,14 +1356,30 @@ fn limit_ticks(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, ban
         ];
         let mut done = false;
         for at in cands.iter() {
-            if b.try_put(Role::Reference, &note, Anchor::BottomRight, *at, t::LABEL_PT, Face::Regular, muted_c).is_some() {
+            if b.try_put(Role::Reference, &note, Anchor::BottomRight, *at, t::label_pt(), Face::Regular, muted_c).is_some() {
                 done = true;
                 break;
             }
         }
         if !done {
-            // no free place in the plot: the note stands above it, never dropped
-            b.put(Role::Reference, &note, Anchor::BottomRight, pos2(plot.right() - 2.0, plot.top() - 3.0), t::LABEL_PT, Face::Regular, muted_c);
+            // no free place in the plot: the note stands above it (one line higher if another text is there), never dropped
+            let mut placed = false;
+            for k in 0..3 {
+                let y = plot.top() - 3.0 - k as f32 * (size.y + 2.0);
+                if b.try_put(Role::Reference, &note, Anchor::BottomRight, pos2(plot.right() - 2.0, y), t::label_pt(), Face::Regular, muted_c).is_some() {
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                // still no room (a small chart with large text): a shorter note, else none (the ticks keep their tooltip)
+                let short = fit_text(&format!("\u{2014} {}", spec.limit_note.trim()), (plot.width() * 0.5).max(40.0), &b.width_fn(t::label_pt(), Face::Regular));
+                for at in cands.iter().chain(std::iter::once(&pos2(plot.right() - 2.0, plot.top() - 3.0))) {
+                    if b.try_put(Role::Reference, &short, Anchor::BottomRight, *at, t::label_pt(), Face::Regular, muted_c).is_some() {
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -1318,10 +1396,10 @@ fn line_end_reserve(b: &Builder, p: &Plan, spec: &ChartSpec, opts: &LayoutOpts) 
     let mut w: f32 = 0.0;
     for s in &p.series {
         if let Some(Some(v)) = s.vals.last() {
-            w = w.max(b.size(&value_text(scaled(*v, p.vk, opts), p.vk, opts.decimals, false), t::DATA_LABEL_PT, Face::Regular).x);
+            w = w.max(b.size(&value_text(scaled(*v, p.vk, opts), p.vk, opts.decimals, false), t::data_label_pt(), Face::Regular).x);
         }
         if p.series.len() <= 4 || (spec.highlight.is_some() && p.series.len() > 1) {
-            w = w.max(b.size(&s.name, t::LABEL_PT, Face::Regular).x);
+            w = w.max(b.size(&s.name, t::label_pt(), Face::Regular).x);
         }
     }
     let _ = spec;
@@ -1332,53 +1410,49 @@ fn line_end_reserve(b: &Builder, p: &Plan, spec: &ChartSpec, opts: &LayoutOpts) 
     }
 }
 
-/// Category names under the columns (or left of the bars): every name when they fit, a cut name when
-/// that fits, else every k-th name; the whole name is always in the tooltip.
-fn category_labels(b: &mut Builder, p: &Plan, plot: Rect, band: f32, horizontal: bool, show: bool) {
+/// Category names under the columns (or left of the bars): every name is written, in full when it fits, else on two
+/// lines, else angled 35°; the whole name is also in the tooltip. A label is never cut and never left out.
+fn category_labels(b: &mut Builder, p: &Plan, plot: Rect, band: f32, horizontal: bool, show: bool, cat_plan: Option<&super::catlabels::CatPlan>) {
     if !show || p.categories.is_empty() {
         return;
     }
     let ink_c = rgb(b.ink.ink);
-    let tick_h = b.size("0", t::TICK_PT, Face::Regular).y;
+    let tick_h = b.size("0", t::tick_pt(), Face::Regular).y;
     if horizontal {
         let max_w = (plot.left() - b.bounds.left()).max(20.0) - t::MIN_SPACE_PX;
-        let every = ((tick_h + 4.0) / band).ceil().max(1.0) as usize;
-        for (i, c) in p.categories.iter().enumerate().step_by(every) {
-            let shown = fit_text(c, max_w, &b.width_fn(t::TICK_PT, Face::Regular));
+        if band < tick_h {
+            // bars thinner than their names are tall: nothing is left out, the studio says to use fewer
+            b.out.labels_dont_fit = true;
+        }
+        for (i, c) in p.categories.iter().enumerate() {
+            let wf = b.width_fn(t::tick_pt(), Face::Regular);
+            // the full name; a long one on two lines; only as a last resort cut (and the chart says so)
+            let shown = if wf(c) <= max_w {
+                c.clone()
+            } else {
+                match super::catlabels::wrap_two(c, &wf) {
+                    Some((x, y)) if wf(&x).max(wf(&y)) <= max_w => format!("{}\n{}", x, y),
+                    _ => {
+                        b.out.labels_dont_fit = true;
+                        fit_text(c, max_w, &wf)
+                    }
+                }
+            };
             let y = plot.top() + band * (i as f32 + 0.5);
-            b.put(Role::Category, &shown, Anchor::MidRight, pos2(plot.left() - t::MIN_SPACE_PX, y), t::TICK_PT, Face::Regular, ink_c);
+            b.put(Role::Category, &shown, Anchor::MidRight, pos2(plot.left() - t::MIN_SPACE_PX, y), t::tick_pt(), Face::Regular, ink_c);
         }
         return;
     }
-    let widths: Vec<f32> = p.categories.iter().map(|c| b.size(c, t::TICK_PT, Face::Regular).x).collect();
-    let max_w = widths.iter().cloned().fold(0.0, f32::max);
-    let slot = band - 4.0;
-    let (every, cut) = if max_w <= slot {
-        (1usize, None)
-    } else {
-        // cut every name to the slot, if that leaves at least a few characters; else show every k-th whole
-        let fits = (slot / (t::TICK_PT * 0.5)).floor() as usize;
-        if fits >= 5 {
-            (1, Some(slot))
-        } else {
-            let k = ((max_w + t::MIN_SPACE_PX) / band).ceil().max(1.0) as usize;
-            (k, None)
-        }
-    };
+    let Some(pl) = cat_plan else { return };
     let y = plot.bottom() + t::MIN_SPACE_PX / 2.0 + 1.0;
-    let mut last_right = f32::NEG_INFINITY;
-    for (i, c) in p.categories.iter().enumerate().step_by(every) {
-        let shown = match cut {
-            Some(w) => fit_text(c, w, &b.width_fn(t::TICK_PT, Face::Regular)),
-            None => c.clone(),
-        };
+    let y_angled = plot.bottom() + tick_h / 2.0 + 2.0;
+    for (i, label) in pl.labels.iter().enumerate() {
         let x = plot.left() + band * (i as f32 + 0.5);
-        let r = b.rect_for(&shown, t::TICK_PT, Face::Regular, Anchor::TopCentre, pos2(x, y));
-        if r.left() < last_right + 4.0 || r.left() < b.bounds.left() || r.right() > b.bounds.right() || b.out.texts.iter().any(|x| x.rect.intersects(inflate(r, 1.0))) {
-            continue;
+        if pl.fit == super::catlabels::CatFit::Angled {
+            b.put_angled(Role::Category, label, pos2(x, y_angled), t::tick_pt(), Face::Regular, ink_c);
+        } else {
+            b.put(Role::Category, label, Anchor::TopCentre, pos2(x, y), t::tick_pt(), Face::Regular, ink_c);
         }
-        last_right = r.right();
-        b.put(Role::Category, &shown, Anchor::TopCentre, pos2(x, y), t::TICK_PT, Face::Regular, ink_c);
     }
 }
 
@@ -1547,7 +1621,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     // each segment labelled beside its stack with its value and its share of the stack, nudged apart vertically
     if spec.segment_labels && stacked && !horizontal && b.lp.kind_on(p.vk) {
         let ink_c = rgb(ink.ink);
-        let lh = b.size("Ag", t::DATA_LABEL_PT, Face::Regular).y;
+        let lh = b.size("Ag", t::data_label_pt(), Face::Regular).y;
         for c in 0..n_cat {
             let segs: Vec<(Rect, f64)> = b.out.marks.iter().filter(|m| m.panel == pidx && m.category == c && m.kind == MarkKind::Segment).filter_map(|m| m.value.map(|v| (m.rect, v))).collect();
             let total: f64 = segs.iter().map(|s| s.1.abs()).sum();
@@ -1583,7 +1657,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
                 }
             }
             for (it, y) in items.iter().zip(ys.iter()) {
-                b.try_put(Role::Label, &it.2, Anchor::MidLeft, pos2(it.1, *y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                b.try_put(Role::Label, &it.2, Anchor::MidLeft, pos2(it.1, *y), t::data_label_pt(), Face::Regular, ink_c);
             }
         }
     }
@@ -1601,7 +1675,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             b.line(pos2(mid - half, y), pos2(mid + half, y), t::LINE_PX, ink_c);
             if show_net && b.lp.shows(c, n_cat, true) {
                 let text = b.lp.diverging(net, p.vk);
-                b.try_put_clear(Role::Label, &text, Anchor::MidLeft, pos2(mid + half + 4.0, y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                b.try_put_clear(Role::Label, &text, Anchor::MidLeft, pos2(mid + half + 4.0, y), t::data_label_pt(), Face::Regular, ink_c);
             }
         }
         return;
@@ -1618,7 +1692,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
         return;
     }
     let ink_c = rgb(ink.ink);
-    let label_pt = t::DATA_LABEL_PT;
+    let label_pt = t::data_label_pt();
     if b.lp.mode == LabelMode::All && !one {
         bar_labels_every_mark(b, p, pidx, horizontal, stacked, n_cat);
     }
@@ -1702,7 +1776,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
 /// fit is left out (and counted).
 fn bar_labels_every_mark(b: &mut Builder, p: &Plan, pidx: usize, horizontal: bool, stacked: bool, n_cat: usize) {
     let ink_c = rgb(b.ink.ink);
-    let pt = t::DATA_LABEL_PT;
+    let pt = t::data_label_pt();
     let marks: Vec<(Rect, usize, usize, f64)> = b.out.marks.iter().filter(|m| m.panel == pidx && matches!(m.kind, MarkKind::Bar | MarkKind::Segment)).filter_map(|m| m.value.map(|v| (m.rect, m.series, m.category, v))).collect();
     for (r, si, c, v) in marks {
         let text = b.lp.text(v, p.vk, false);
@@ -1782,7 +1856,7 @@ fn waterfall(b: &mut Builder, data: &ChartData, p: &Plan, steps: &[WaterfallStep
         let mid = centre(i);
         let top = g.coord(scaled(s.top, p.vk, opts));
         let text = b.lp.text(s.value, p.vk, s.kind == StepKind::Delta);
-        b.try_label((pidx, 0, i), Role::Label, &text, Anchor::BottomCentre, pos2(mid, top - 4.0), t::DATA_LABEL_PT, Face::Regular, ink_c);
+        b.try_label((pidx, 0, i), Role::Label, &text, Anchor::BottomCentre, pos2(mid, top - 4.0), t::data_label_pt(), Face::Regular, ink_c);
     }
 }
 
@@ -1916,7 +1990,7 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
                         (true, false) => String::new(),
                     };
                     if !text.is_empty() {
-                        b.try_label((pidx, si, lc), Role::Label, &text, Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                        b.try_label((pidx, si, lc), Role::Label, &text, Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::data_label_pt(), Face::Regular, ink_c);
                     }
                 }
             } else if n_ser <= 4 || all_named {
@@ -1940,12 +2014,12 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
                     }
                     let Some(pt) = point(si, c) else { continue };
                     let text = b.lp.text(v, p.vk, false);
-                    b.try_label((pidx, si, c), Role::Label, &text, Anchor::BottomCentre, pos2(pt.x, pt.y - t::MARKER_PX - 2.0), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                    b.try_label((pidx, si, c), Role::Label, &text, Anchor::BottomCentre, pos2(pt.x, pt.y - t::MARKER_PX - 2.0), t::data_label_pt(), Face::Regular, ink_c);
                 }
             }
         }
         if !ends.is_empty() {
-            let lh = b.size("Ag", t::LABEL_PT, Face::Regular).y;
+            let lh = b.size("Ag", t::label_pt(), Face::Regular).y;
             let gap = lh + 3.0;
             let (top, bottom) = (g.plot.top() + lh / 2.0, g.plot.bottom() - lh / 2.0);
             ends.sort_by(|a, c| a.0.partial_cmp(&c.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -1971,7 +2045,7 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
             }
             for (e, y) in ends.iter().zip(ys.iter()) {
                 let face = Face::Regular;
-                b.try_put(Role::Direct, &e.2, Anchor::MidLeft, pos2(e.1, *y), t::LABEL_PT, face, e.3);
+                b.try_put(Role::Direct, &e.2, Anchor::MidLeft, pos2(e.1, *y), t::label_pt(), face, e.3);
             }
         }
     }
@@ -2047,11 +2121,11 @@ fn scatter_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
     }
     let (xs0, xs1) = data.points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, p| (a.0.min(p.x), a.1.max(p.x)));
     let (ys0, ys1) = data.points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, p| (a.0.min(scaled(p.y, ValueKind::Amount, opts)), a.1.max(scaled(p.y, ValueKind::Amount, opts))));
-    let tick_h = b.size("0", t::TICK_PT, Face::Regular).y;
+    let tick_h = b.size("0", t::tick_pt(), Face::Regular).y;
     let ax = make_axis(xs0, xs1, false, ValueKind::Plain, 7);
     let ay = make_axis(ys0, ys1, false, ValueKind::Plain, ((area.height() / 46.0).floor() as usize).clamp(3, 7));
     let ylab = tick_labels(&ay);
-    let left = ylab.iter().map(|s| b.size(s, t::TICK_PT, Face::Regular).x).fold(0.0, f32::max) + t::MIN_SPACE_PX;
+    let left = ylab.iter().map(|s| b.size(s, t::tick_pt(), Face::Regular).x).fold(0.0, f32::max) + t::MIN_SPACE_PX;
     let ml = spec.measure_list();
     let (xname, yname) = (spec.category.clone(), ml.first().and_then(|m| m.column.clone()).unwrap_or_default());
     let top = area.top() + tick_h + t::MIN_SPACE_PX; // the y axis name stands above the plot
@@ -2065,20 +2139,20 @@ fn scatter_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
     b.out.panels.push(PanelLayout { kind: spec.kind, title: String::new(), plot, lo: ay.lo, hi: ay.hi, horizontal: false, ticks: ay.ticks.iter().map(|v| (*v, py(*v))).collect() });
     for (v, s) in ay.ticks.iter().zip(ylab.iter()) {
         b.line(pos2(plot.left(), py(*v)), pos2(plot.right(), py(*v)), t::GRID_PX, grid_c);
-        b.put(Role::Tick, s, Anchor::MidRight, pos2(plot.left() - t::MIN_SPACE_PX, py(*v)), t::TICK_PT, Face::Regular, muted_c);
+        b.put(Role::Tick, s, Anchor::MidRight, pos2(plot.left() - t::MIN_SPACE_PX, py(*v)), t::tick_pt(), Face::Regular, muted_c);
     }
     b.line(pos2(plot.left(), plot.bottom()), pos2(plot.right(), plot.bottom()), t::GRID_PX, base_c);
     let xlab = tick_labels(&ax);
     let mut last_right = f32::NEG_INFINITY;
     for (v, s) in ax.ticks.iter().zip(xlab.iter()) {
-        let r = b.rect_for(s, t::TICK_PT, Face::Regular, Anchor::TopCentre, pos2(px(*v), plot.bottom() + t::MIN_SPACE_PX / 2.0));
+        let r = b.rect_for(s, t::tick_pt(), Face::Regular, Anchor::TopCentre, pos2(px(*v), plot.bottom() + t::MIN_SPACE_PX / 2.0));
         if r.left() > last_right + 6.0 && r.right() <= b.bounds.right() {
             last_right = r.right();
-            b.put(Role::Tick, s, Anchor::TopCentre, pos2(px(*v), plot.bottom() + t::MIN_SPACE_PX / 2.0), t::TICK_PT, Face::Regular, muted_c);
+            b.put(Role::Tick, s, Anchor::TopCentre, pos2(px(*v), plot.bottom() + t::MIN_SPACE_PX / 2.0), t::tick_pt(), Face::Regular, muted_c);
         }
     }
-    b.put(Role::Axis, &yname, Anchor::TopLeft, pos2(area.left(), area.top()), t::TICK_PT, Face::Regular, ink2_c);
-    b.put(Role::Axis, &xname, Anchor::TopRight, pos2(plot.right(), plot.bottom() + tick_h + t::MIN_SPACE_PX * 1.5), t::TICK_PT, Face::Regular, ink2_c);
+    b.put(Role::Axis, &yname, Anchor::TopLeft, pos2(area.left(), area.top()), t::tick_pt(), Face::Regular, ink2_c);
+    b.put(Role::Axis, &xname, Anchor::TopRight, pos2(plot.right(), plot.bottom() + tick_h + t::MIN_SPACE_PX * 1.5), t::tick_pt(), Face::Regular, ink2_c);
     let bubble = spec.kind == ChartKind::Bubble;
     let max_size = data.points.iter().filter_map(|p| p.size).fold(0.0f64, f64::max);
     let rings = data.points.len() <= RING_MAX_POINTS;
@@ -2118,18 +2192,18 @@ fn heatmap_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
     if rows == 0 || cols == 0 {
         return;
     }
-    let lh = b.size("Ag", t::TICK_PT, Face::Regular).y;
-    let row_w = h.rows.iter().map(|r| b.size(r, t::TICK_PT, Face::Regular).x).fold(0.0, f32::max).min(body.width() * MAX_CAT_LABEL_W_SHARE) + t::MIN_SPACE_PX;
+    let lh = b.size("Ag", t::tick_pt(), Face::Regular).y;
+    let row_w = h.rows.iter().map(|r| b.size(r, t::tick_pt(), Face::Regular).x).fold(0.0, f32::max).min(body.width() * MAX_CAT_LABEL_W_SHARE) + t::MIN_SPACE_PX;
     let grid = Rect::from_min_max(pos2(body.left() + row_w, body.top() + lh + t::MIN_SPACE_PX), body.max);
     let (cw, ch) = (grid.width() / cols as f32, grid.height() / rows as f32);
     let (lo, hi) = (h.min.unwrap_or(0.0), h.max.unwrap_or(1.0));
     for (ci, c) in h.cols.iter().enumerate() {
-        let shown = fit_text(c, cw - 2.0, &b.width_fn(t::TICK_PT, Face::Regular));
-        b.put(Role::Category, &shown, Anchor::TopCentre, pos2(grid.left() + cw * (ci as f32 + 0.5), body.top()), t::TICK_PT, Face::Regular, ink_c);
+        let shown = fit_text(c, cw - 2.0, &b.width_fn(t::tick_pt(), Face::Regular));
+        b.put(Role::Category, &shown, Anchor::TopCentre, pos2(grid.left() + cw * (ci as f32 + 0.5), body.top()), t::tick_pt(), Face::Regular, ink_c);
     }
     for (ri, r) in h.rows.iter().enumerate() {
-        let shown = fit_text(r, row_w - t::MIN_SPACE_PX, &b.width_fn(t::TICK_PT, Face::Regular));
-        b.put(Role::Category, &shown, Anchor::MidRight, pos2(grid.left() - t::MIN_SPACE_PX, grid.top() + ch * (ri as f32 + 0.5)), t::TICK_PT, Face::Regular, ink_c);
+        let shown = fit_text(r, row_w - t::MIN_SPACE_PX, &b.width_fn(t::tick_pt(), Face::Regular));
+        b.put(Role::Category, &shown, Anchor::MidRight, pos2(grid.left() - t::MIN_SPACE_PX, grid.top() + ch * (ri as f32 + 0.5)), t::tick_pt(), Face::Regular, ink_c);
     }
     let gap = t::HEAT_GAP_PX;
     for ri in 0..rows {
@@ -2152,9 +2226,9 @@ fn heatmap_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
                 HeatFill::Step(step) if t::sequential_text_white(step, b.dark) => Color32::WHITE,
                 HeatFill::Step(_) => rgb(t::INK_LIGHT.ink),
             };
-            let tr = b.rect_for(&text, t::DATA_LABEL_PT, Face::Regular, Anchor::Centre, cell.center());
+            let tr = b.rect_for(&text, t::data_label_pt(), Face::Regular, Anchor::Centre, cell.center());
             if cell.contains_rect(tr) && b.lp.kind_on(vk) {
-                b.put(Role::Cell, &text, Anchor::Centre, cell.center(), t::DATA_LABEL_PT, Face::Regular, tc);
+                b.put(Role::Cell, &text, Anchor::Centre, cell.center(), t::data_label_pt(), Face::Regular, tc);
             }
             let name = if data.spec.series.is_some() { format!("{}: {}\n{}: {}", data.spec.series.clone().unwrap_or_default(), h.rows[ri], data.spec.category, h.cols[ci]) } else { format!("{}: {}", data.spec.category, h.cols[ci]) };
             let rows_n = h.counts[ri][ci];
@@ -2197,9 +2271,8 @@ fn donut_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts, 
         }
         b.out.message = Some(msg.to_string());
     };
-    if parts.len() > t::DONUT_MAX_SLICES || parts.len() < 2 {
-        let msg = if parts.len() > t::DONUT_MAX_SLICES { DONUT_REFUSAL.to_string() } else { "A donut needs 2 to 5 parts. Use a bar chart for a single value.".to_string() };
-        refuse(b, &msg);
+    if parts.len() < 2 {
+        refuse(b, "A donut needs at least 2 parts. Use a bar chart for a single value.");
         return;
     }
     if parts.iter().any(|p| p.1 < 0.0) {
@@ -2213,9 +2286,26 @@ fn donut_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts, 
     }
     cm.assign_all(&parts.iter().map(|p| p.0.clone()).collect::<Vec<_>>());
     let value_labels = b.lp.kind_on(vk);
-    let legend_w = parts.iter().map(|p| b.size(&if value_labels { format!("{}  {}", p.0, b.lp.text(p.1, vk, false)) } else { p.0.clone() }, t::LABEL_PT, Face::Regular).x).fold(0.0, f32::max) + 40.0;
+    let legend_w = parts.iter().map(|p| b.size(&if value_labels { format!("{}  {} ({}%)", p.0, b.lp.text(p.1, vk, false), crate::models::format_with_commas(p.1 / total * 100.0, 0)) } else { p.0.clone() }, t::label_pt(), Face::Regular).x).fold(0.0, f32::max) + 40.0;
     let ring_area = Rect::from_min_max(body.min, pos2((body.right() - legend_w - t::MIN_SPACE_PX).max(body.left() + 60.0), body.bottom()));
-    let r_out = (ring_area.width().min(ring_area.height()) / 2.0 - t::MIN_SPACE_PX).max(10.0);
+    // labels outside the ring ("HC  64%"), with leader lines, when the ring area has room for them on both sides
+    let share_on = b.lp.mode != LabelMode::None && b.lp.percent;
+    let ring_texts: Vec<Option<String>> = parts
+        .iter()
+        .map(|(n, v, _)| {
+            let share = *v / total * 100.0;
+            // a part under 1% has no label on the ring (it is in the legend and the tooltip)
+            (share >= 1.0).then(|| if share_on { format!("{}  {}%", n, crate::models::format_with_commas(share, 0)) } else { n.clone() })
+        })
+        .collect();
+    let ring_label_w = ring_texts.iter().flatten().map(|x| b.size(x, t::label_pt(), Face::Regular).x).fold(0.0, f32::max);
+    let ring_lh = b.size("Ag", t::label_pt(), Face::Regular).y;
+    let with_labels = ring_texts.iter().any(|x| x.is_some()) && ring_area.width().min(ring_area.height() * 1.6) / 2.0 - ring_label_w - 3.0 * t::MIN_SPACE_PX >= 40.0;
+    let r_out = if with_labels {
+        (ring_area.width() / 2.0 - ring_label_w - 3.0 * t::MIN_SPACE_PX).min(ring_area.height() / 2.0 - ring_lh).max(10.0)
+    } else {
+        (ring_area.width().min(ring_area.height()) / 2.0 - t::MIN_SPACE_PX).max(10.0)
+    };
     let c = ring_area.center();
     let r_in = r_out * DONUT_HOLE;
     let gap_angle = t::SEGMENT_GAP_PX / ((r_out + r_in) / 2.0);
@@ -2240,27 +2330,91 @@ fn donut_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts, 
         let tip = format!("{}: {}\n{}: {}\n{}% of the total\n{} rows", data.spec.category, name, data.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string()), value_text(scaled(*v, vk, opts), vk, opts.decimals, false), crate::models::format_with_commas(*v / total * 100.0, 1), crate::models::format_with_commas(*rows as f64, 0));
         b.out.marks.push(Mark { rect, kind: MarkKind::Slice, panel: 0, series: 0, category: i, value: Some(*v), tip, slice: Some(SliceShape { centre: c, r_in, r_out, a0, a1 }) });
     }
+    if with_labels {
+        // each label on its side of the ring, nudged apart vertically so none overlaps another; a label that finds no room stays out
+        let top = ring_area.top() + ring_lh / 2.0;
+        let bottom = ring_area.bottom() - ring_lh / 2.0;
+        let mut acc = 0.0f32;
+        let mut placed: Vec<(usize, f32, bool, Pos2, Pos2)> = Vec::new(); // (part, label y, right side, ring point, elbow)
+        for (i, (_, v, _)) in parts.iter().enumerate() {
+            let frac = (*v / total) as f32 * std::f32::consts::TAU;
+            let mid = acc + frac / 2.0;
+            acc += frac;
+            if ring_texts[i].is_none() {
+                continue;
+            }
+            let pt = |r: f32| pos2(c.x + r * mid.sin(), c.y - r * mid.cos());
+            let (p0, p1) = (pt(r_out + 2.0), pt(r_out + 12.0));
+            placed.push((i, p1.y.clamp(top, bottom), mid.sin() >= 0.0, p0, p1));
+        }
+        for right in [true, false] {
+            let mut side: Vec<&mut (usize, f32, bool, Pos2, Pos2)> = placed.iter_mut().filter(|p| p.2 == right).collect();
+            side.sort_by(|a, c2| a.1.partial_cmp(&c2.1).unwrap_or(std::cmp::Ordering::Equal));
+            let gap = ring_lh + 2.0;
+            for k in 1..side.len() {
+                if side[k].1 < side[k - 1].1 + gap {
+                    side[k].1 = side[k - 1].1 + gap;
+                }
+            }
+            // the last ones pushed below the area are moved back up (and dropped if they still do not fit)
+            for k in (0..side.len()).rev() {
+                let limit = if k + 1 < side.len() { side[k + 1].1 - gap } else { bottom };
+                if side[k].1 > limit {
+                    side[k].1 = limit;
+                }
+            }
+        }
+        let leader = rgb(ink.muted);
+        let mut last_y: [f32; 2] = [f32::NEG_INFINITY; 2];
+        placed.sort_by(|a, c2| a.1.partial_cmp(&c2.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (i, y, right, p0, p1) in placed {
+            let side_ix = right as usize;
+            if y < top - 0.5 || y < last_y[side_ix] + ring_lh {
+                continue;
+            }
+            let x = if right { c.x + r_out + 26.0 } else { c.x - r_out - 26.0 };
+            let text = ring_texts[i].clone().unwrap_or_default();
+            let anchor = if right { Anchor::MidLeft } else { Anchor::MidRight };
+            let end = pos2(if right { x - 3.0 } else { x + 3.0 }, y);
+            if b.try_put(Role::Label, &text, anchor, pos2(x, y), t::label_pt(), Face::Regular, ink_c).is_some() {
+                last_y[side_ix] = y;
+                b.out.prims.push(Prim::Line { a: p0, b: p1, w: t::GRID_PX, col: leader });
+                b.out.prims.push(Prim::Line { a: p1, b: end, w: t::GRID_PX, col: leader });
+            }
+        }
+    }
     b.put(Role::Centre, &value_text(scaled(total, vk, opts), vk, opts.decimals, false), Anchor::Centre, pos2(c.x, c.y - 2.0), t::TITLE_PT, Face::Semibold, ink_c);
-    b.put(Role::Centre, "Total", Anchor::TopCentre, pos2(c.x, c.y + t::TITLE_PT * 0.6), t::LABEL_PT, Face::Regular, ink2_c);
+    b.put(Role::Centre, "Total", Anchor::TopCentre, pos2(c.x, c.y + t::TITLE_PT * 0.6), t::label_pt(), Face::Regular, ink2_c);
     // legend on the right with the values and shares
-    let lh = b.size("Ag", t::LABEL_PT, Face::Regular).y + 8.0;
-    let top = body.center().y - lh * parts.len() as f32 / 2.0;
+    let line_h = b.size("Ag", t::label_pt(), Face::Regular).y;
+    // many parts: the legend lines close up, and the ones that still do not fit are named "and N more" (all are on the ring and in the tooltip)
+    let mut lh = line_h + 8.0;
+    if lh * parts.len() as f32 > body.height() {
+        lh = (body.height() / parts.len() as f32).max(line_h + 1.0);
+    }
+    let shown_parts = ((body.height() / lh).floor() as usize).clamp(1, parts.len());
+    let more = parts.len() - shown_parts;
+    let shown_parts = if more > 0 { shown_parts.saturating_sub(1).max(1) } else { shown_parts };
+    let more = parts.len() - shown_parts;
+    let top = body.center().y - lh * (shown_parts + usize::from(more > 0)) as f32 / 2.0;
     let sw = t::MARKER_PX + 2.0;
-    for (i, (name, v, _)) in parts.iter().enumerate() {
+    if more > 0 {
+        let x = body.right() - legend_w;
+        b.put(Role::Legend, &format!("and {} more", more), Anchor::MidLeft, pos2(x + sw + 6.0, top + lh * shown_parts as f32 + lh / 2.0), t::label_pt(), Face::Regular, ink2_c);
+    }
+    for (i, (name, v, _)) in parts.iter().enumerate().take(shown_parts) {
         let y = top + lh * i as f32;
         let colour = rgb(cm.get(name).unwrap_or(Colour::Slot(i)).hex(opts.dark));
         let x = body.right() - legend_w;
         let swatch = Rect::from_min_size(pos2(x, y + (lh - sw) / 2.0), vec2(sw, sw));
         b.rect(swatch, colour, [2.0; 4]);
         let text = if value_labels { format!("{}  {} ({}%)", name, b.lp.text(*v, vk, false), crate::models::format_with_commas(*v / total * 100.0, 0)) } else { name.to_string() };
-        let tr = b.put(Role::Legend, &text, Anchor::MidLeft, pos2(x + sw + 6.0, y + lh / 2.0), t::LABEL_PT, Face::Regular, ink2_c);
+        let tr = b.put(Role::Legend, &text, Anchor::MidLeft, pos2(x + sw + 6.0, y + lh / 2.0), t::label_pt(), Face::Regular, ink2_c);
         b.out.legend.push(LegendItem { name: name.clone(), swatch, text: tr, colour });
     }
     b.out.panels.push(PanelLayout { kind: ChartKind::Donut, title: String::new(), plot: ring_area, lo: 0.0, hi: 1.0, horizontal: false, ticks: Vec::new() });
 }
 
-/// The message shown when a donut has more than 5 parts.
-pub const DONUT_REFUSAL: &str = "Use a bar chart: more than 5 parts are hard to compare as slices";
 
 // ------------------------------------------------------------------------------------------ hover
 

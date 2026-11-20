@@ -77,7 +77,11 @@ fn compute_grid(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let measures = spec.measure_list();
     let mut notes: Vec<String> = Vec::new();
     // the primary measure decides the categories, their order and what is folded into "Other"
-    let primary_spec = spec.for_measure(&measures[0]);
+    let mut primary_spec = spec.for_measure(&measures[0]);
+    if spec.kind == ChartKind::Donut {
+        // a donut draws every part unless "Group small parts" asks for the n largest and "Other"
+        primary_spec.top_n = spec.donut_top.map(|n| n.clamp(2, 12)).unwrap_or(500);
+    }
     let mut data = compute_chart_fixed(lf.clone(), &primary_spec, None)?;
     data.spec = spec.clone();
     data.measure_names = measures.iter().map(measure_name).collect();

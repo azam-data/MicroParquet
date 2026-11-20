@@ -128,7 +128,7 @@ def titles(fig, title, subtitle, footnote):
     if footnote:
         fig.text(0.015, 0.012, footnote, fontsize={foot_pt}, color=MUTED, ha="left", va="bottom")
 "#,
-            tick = t::TICK_PT,
+            tick = t::tick_pt(),
             dec = decimals,
             labels = labels,
             title_pt = t::TITLE_PT,
@@ -248,7 +248,7 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
             ax.invert_yaxis()
             ax.axvline(0, color=BASELINE, linewidth=1)
         else:
-            ax.set_xticks(pos, [str(i) for i in df.index])
+            cat_labels(ax, df.index)
             ax.axhline(0, color=BASELINE, linewidth=1)
         style_axes(ax, horizontal)
     elif kind in ("line", "area"):
@@ -284,7 +284,7 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
                     ax.annotate(end_text, (x[last], vals[last]), xytext=(8, 0), textcoords="offset points", va="center", fontsize=9.5)
             elif last is not None and len(names) <= 4 and kind == "line":
                 ax.annotate(n, (x[last], vals[last]), xytext=(8, 0), textcoords="offset points", va="center", fontsize=10, color=INK2)
-        ax.set_xticks(pos, [str(i) for i in df.index])
+        cat_labels(ax, df.index)
         ax.margins(y=0.12)  # room for the end labels and for a breach ring below the lowest point
         style_axes(ax)
     return names
@@ -316,7 +316,7 @@ fn ref_lines(data: &ChartData, panel: usize, horizontal: bool, opts: &LayoutOpts
 }
 
 /// The Data labels setting as Python: which labels, their unit and decimals, and the ones left out.
-fn label_helpers(plan: &super::labels::LabelPlan, opts: &LayoutOpts, dropped: &[super::labels::LabelKey]) -> String {
+fn label_helpers(plan: &super::labels::LabelPlan, opts: &LayoutOpts, dropped: &[super::labels::LabelKey], data: &ChartData) -> String {
     use super::spec::LabelMode;
     let mode = match plan.mode {
         LabelMode::Auto => "auto",
@@ -325,6 +325,23 @@ fn label_helpers(plan: &super::labels::LabelPlan, opts: &LayoutOpts, dropped: &[
         LabelMode::None => "none",
     };
     let scale = if plan.opts.divisor > 0.0 { opts.divisor / plan.opts.divisor } else { 1.0 };
+    let cats = &data.categories;
+    let (fit, slot_chars) = if cats.is_empty() {
+        ("full", 0)
+    } else {
+        let m = super::layout::ApproxMeasure;
+        let wf = |s: &str| -> f32 { <super::layout::ApproxMeasure as super::layout::Measure>::size(&m, s, t::tick_pt(), false).x };
+        let band = (720.0 - 90.0) / cats.len() as f32;
+        let pl = super::catlabels::plan(cats, band, &wf, t::tick_pt() * 1.3);
+        (
+            match pl.fit {
+                super::catlabels::CatFit::Full => "full",
+                super::catlabels::CatFit::Wrapped => "wrapped",
+                super::catlabels::CatFit::Angled => "angled",
+            },
+            ((band - 4.0) / (t::tick_pt() * 0.5)).floor().max(1.0) as usize,
+        )
+    };
     let mut cells: Vec<String> = dropped.iter().map(|(_, si, ci)| format!("({}, {})", si, ci)).collect();
     cells.sort();
     cells.dedup();
@@ -334,6 +351,46 @@ LABEL_SCALE = {scale}  # the labels' unit against the numbers in the tables belo
 LDEC = {ldec}  # decimals of the labels (None = the view's)
 LPCT = {lpct}  # labels on percentages
 DROPPED = {{{dropped}}}  # labels of "all" left out because they would overlap: (series, category)
+CAT_FIT = "{fit}"  # category labels: full, wrapped (two lines) or angled (35 degrees); none is cut or left out
+CAT_SLOT = {slot_chars}  # characters of a label that fit its slot
+
+def cat_labels(ax, names):
+    """Every category keeps its label: full, else on two lines, else angled 35 degrees (never cut, never left out)."""
+    names = [str(n) for n in names]
+    if CAT_FIT == "wrapped":
+        out = []
+        for n in names:
+            if len(n) <= CAT_SLOT or " " not in n:
+                out.append(n)
+                continue
+            cuts = [i for i, c in enumerate(n) if c == " "]
+            i = min(cuts, key=lambda k: max(k, len(n) - k - 1))
+            out.append(n[:i] + "\n" + n[i + 1:])
+        names = out
+    if CAT_FIT == "angled":
+        ax.set_xticks(range(len(names)), names, rotation=35, ha="right", rotation_mode="anchor")
+    else:
+        ax.set_xticks(range(len(names)), names)
+
+def ring_labels(ax, wedges, parts):
+    """Donut labels outside the ring with leader lines ("HC  64%"); a part under 1% has none; labels are nudged apart."""
+    import numpy as np
+    total = float(parts["Value"].sum())
+    items = []
+    for w, name, v in zip(wedges, parts["Part"], parts["Value"]):
+        share = v / total * 100 if total else 0
+        if share < 1:
+            continue
+        ang = np.deg2rad((w.theta2 + w.theta1) / 2)
+        items.append([np.cos(ang), np.sin(ang), str(name) + "  " + str(int(round(share))) + "%" if LABELS != "none" and LPCT else str(name)])
+    for side in (1, -1):
+        col = sorted((i for i in items if (1 if i[0] >= 0 else -1) == side), key=lambda i: i[1])
+        ys = [1.25 * i[1] for i in col]
+        for k in range(1, len(ys)):
+            ys[k] = max(ys[k], ys[k - 1] + 0.14)
+        for i, y in zip(col, ys):
+            ax.annotate(i[2], xy=(i[0] * 0.98, i[1] * 0.98), xytext=(side * 1.3, y), ha="left" if side == 1 else "right", va="center", fontsize=9.5, color=INK,
+                        arrowprops=dict(arrowstyle="-", color=MUTED, linewidth=1, connectionstyle="angle,angleA=0,angleB=90,rad=4"))
 
 def show(i, n, auto=True):
     """Whether the label at position i of n is printed."""
@@ -353,11 +410,17 @@ def lab(v, kind="amount", signed=False):
         ldec = plan.decimals.map(|d| d.to_string()).unwrap_or_else(|| "None".to_string()),
         lpct = if plan.percent { "True" } else { "False" },
         dropped = cells.join(", "),
+        fit = fit,
+        slot_chars = slot_chars,
     )
 }
 
 /// The script for a chart.
 pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
+    t::with_text_scale(data.spec.text_size.factor(), || chart_to_python_scaled(data, opts))
+}
+
+fn chart_to_python_scaled(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
     if let Some(m) = data.non_finite() {
         anyhow::bail!("Chart: {}. Fix those rows or filter them out, then chart again.", m);
     }
@@ -378,7 +441,7 @@ pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
     }
     let plan = super::labels::LabelPlan::new(spec, opts);
     let dropped = super::labels::dropped_labels(data, opts, 1000.0, 520.0);
-    let label_code = label_helpers(&plan, opts, &dropped);
+    let label_code = label_helpers(&plan, opts, &dropped, data);
     preamble(&mut w, opts.dark, plotly, opts.decimals, &label_code);
     let unit = if opts.unit.is_empty() { String::new() } else { opts.unit.clone() };
     let subtitle = super::layout::subtitle_text(data, opts);
@@ -622,12 +685,11 @@ plt.show()"##;
 
 fn donut(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap) -> Result<()> {
     let vals: Vec<Option<f64>> = shown(data, 0, opts).first().cloned().unwrap_or_default();
-    if vals.iter().flatten().count() > t::DONUT_MAX_SLICES {
-        bail!("Use a bar chart: more than 5 parts are hard to compare as slices");
-    }
     if vals.iter().flatten().count() < 2 {
         bail!("A donut needs at least 2 parts, but this chart has {}. Choose another form.", vals.iter().flatten().count());
     }
+    let mut cm = cm.clone();
+    cm.assign_all(&data.categories);
     let colours: Vec<String> = data.categories.iter().enumerate().map(|(i, c)| {
         let l = cm.get(c).map(|x| x.hex(false)).unwrap_or(t::SERIES_LIGHT[i.min(t::SLOTS - 1)]);
         let d = cm.get(c).map(|x| x.hex(true)).unwrap_or(t::SERIES_DARK[i.min(t::SLOTS - 1)]);
@@ -636,7 +698,7 @@ fn donut(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap) ->
     let _ = writeln!(w, "\nparts = pd.DataFrame({{\"Part\": {}, \"Value\": {}}})", list_s(&data.categories), list_f(&vals));
     let _ = writeln!(
         w,
-        "\nCOLOURS = [{}]\nfig, ax = plt.subplots(figsize=(8, 6))\nfig.subplots_adjust(top=0.80, right=0.66)\nax.pie(parts[\"Value\"], colors=COLOURS, startangle=90, counterclock=False, wedgeprops=dict(width=0.42, edgecolor=SURFACE, linewidth=2))\nax.text(0, 0, fmt(parts[\"Value\"].sum()), ha=\"center\", va=\"center\", fontsize=15, fontweight=\"semibold\")\nax.legend([f\"{{p}}  {{lab(v)}}\" if LABELS != \"none\" else p for p, v in zip(parts[\"Part\"], parts[\"Value\"])], loc=\"center left\", bbox_to_anchor=(1, 0.5))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
+        "\nCOLOURS = [{}]\nfig, ax = plt.subplots(figsize=(8, 6))\nfig.subplots_adjust(top=0.80, right=0.66)\nwedges, _ = ax.pie(parts[\"Value\"], colors=COLOURS, startangle=90, counterclock=False, wedgeprops=dict(width=0.42, edgecolor=SURFACE, linewidth=2))\nring_labels(ax, wedges, parts)\nax.text(0, 0, fmt(parts[\"Value\"].sum()), ha=\"center\", va=\"center\", fontsize=15, fontweight=\"semibold\")\nax.legend([f\"{{p}}  {{lab(v)}}\" if LABELS != \"none\" else p for p, v in zip(parts[\"Part\"], parts[\"Value\"])], loc=\"center left\", bbox_to_anchor=(1, 0.5))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
         colours.join(", ")
     );
     Ok(())

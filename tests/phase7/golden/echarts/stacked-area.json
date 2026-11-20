@@ -54,7 +54,7 @@
     "left": 20.0,
     "textStyle": {
       "color": "#52514e",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },
@@ -288,7 +288,7 @@
   ],
   "textStyle": {
     "color": "#52514e",
-    "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif"
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
   },
   "title": [
     {
@@ -297,14 +297,14 @@
       "subtext": "Sum of Balance · BDT",
       "subtextStyle": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 11.0,
         "fontWeight": "400"
       },
       "text": "Sum of Balance by Month and Product",
       "textStyle": {
         "color": "#0b0b0b",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 15.0,
         "fontWeight": "600"
       },
@@ -375,7 +375,7 @@
     ],
     "textStyle": {
       "color": "#0b0b0b",
-      "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
       "fontSize": 10.0,
       "fontWeight": "400"
     },
@@ -385,9 +385,10 @@
     {
       "axisLabel": {
         "color": "#52514e",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
-        "hideOverlap": true,
+        "hideOverlap": false,
+        "interval": 0,
         "margin": 8,
         "show": true
       },
@@ -423,7 +424,7 @@
     {
       "axisLabel": {
         "color": "#898781",
-        "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
         "fontSize": 10.0,
         "formatter": "@fmt:axis:plain",
         "margin": 8,

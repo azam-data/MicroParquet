@@ -6,7 +6,7 @@
 use micro_parquet::chart::{ChartAgg, ChartKind};
 use micro_parquet::charts::calc::compute;
 use micro_parquet::charts::data::ChartData;
-use micro_parquet::charts::layout::{hit_test, layout_chart, ApproxMeasure, ChartLayout, LayoutOpts, MarkKind, Role, DONUT_REFUSAL};
+use micro_parquet::charts::layout::{hit_test, layout_chart, ApproxMeasure, ChartLayout, LayoutOpts, MarkKind, Role};
 use micro_parquet::charts::spec::{ChartSpec, MeasureSpec, PanelSpec, RefLine, Stack, Status, Transform, WaterfallMode};
 use micro_parquet::charts::tokens as t;
 use micro_parquet::sort_lists::SortOrder;
@@ -30,6 +30,11 @@ pub(crate) fn check(l: &ChartLayout, what: &str) {
     for (i, a) in l.texts.iter().enumerate() {
         assert!(bounds.contains_rect(a.rect), "{what}: the text '{}' {:?} leaves the chart {:?}", a.text, a.rect, bounds);
         for b in l.texts.iter().skip(i + 1) {
+            // angled category labels (35 degrees) have a box around the turned text: neighbours are kept a line apart by the
+            // plan (checked in s.rs), their boxes may touch
+            if a.angle != 0.0 && b.angle != 0.0 {
+                continue;
+            }
             assert!(!overlap(a.rect, b.rect), "{what}: '{}' {:?} overlaps '{}' {:?}", a.text, a.rect, b.text, b.rect);
         }
         // a value label, direct label or reference text is never clipped by a mark
@@ -516,10 +521,9 @@ fn c1_a_donut_of_two_to_five_slices_is_drawn_and_six_is_refused_with_the_message
             assert!(h.tip.contains("% of the total"), "{}", h.tip);
         }
     }
+    // the 5-part refusal is gone: six parts are drawn (the donut tests of s.rs go up to 15); one part is refused
     let l = lay(&parts(6), 900.0, 560.0, false);
-    assert_eq!(l.message.as_deref(), Some(DONUT_REFUSAL));
-    assert_eq!(DONUT_REFUSAL, "Use a bar chart: more than 5 parts are hard to compare as slices");
-    assert!(l.marks.is_empty());
+    assert!(l.message.is_none() && l.marks.len() == 6);
     assert!(lay(&parts(1), 900.0, 560.0, false).message.is_some());
 }
 

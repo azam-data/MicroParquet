@@ -284,3 +284,138 @@ fn r25_the_data_labels_controls_work_by_real_clicks_at_the_three_sizes() {
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
+
+fn names_df(n: usize) -> DataFrame {
+    let names: Vec<String> = (0..n).map(|i| format!("Category number {i:02}")).collect();
+    DataFrame::new(vec![Series::new("Name".into(), names).into(), Series::new("Balance".into(), (0..n).map(|i| 1_000_000_000.0 + i as f64 * 70_000_000.0).collect::<Vec<_>>()).into()]).expect("names")
+}
+
+#[test]
+fn s7_labels_that_do_not_fit_offer_horizontal_bars_in_one_click_and_the_donut_gets_its_group_control() {
+    use crate::ui::chart_render::last_shown;
+    use crate::ui::render_tests_p7::{scroll_into_view, SIZES3};
+    use micro_parquet::charts::layout::Role;
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig_with("s7labels", names_df(40), ppp, w, h);
+        let what = rig.what.clone();
+        pump(&mut rig, "first chart", &chart_ready);
+        set_spec(&mut rig, &|s| {
+            s.category = "Name".into();
+            s.series = None;
+            s.value = Some("Balance".into());
+            s.kind = ChartKind::Bar;
+            s.top_n = 60;
+        });
+        rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert!(shown.layout.labels_dont_fit, "{what}: 40 long names in a side panel run into each other, and the chart knows it");
+        // either every name is written, or the chart says it is too small for them: never a blank plot
+        let cats = shown.layout.texts.iter().filter(|t| t.role == Role::Category).count();
+        assert!(cats == 40 || shown.layout.message.is_some(), "{what}: {cats} names and no message");
+        let r = scroll_into_view(&mut rig, at, &field("Labels don't fit"), "the message");
+        assert!(r.width() > 10.0, "{what}");
+        let r = scroll_into_view(&mut rig, at, &field("Switch to horizontal bars"), "the switch");
+        pclick(&mut rig, r);
+        rig.draw(8);
+        assert!(rig.app.chart.spec.horizontal, "{what}: one click made them horizontal bars");
+        assert!(rig.app.chart.rects.fields.iter().all(|(n, _)| n != "Switch to horizontal bars"), "{what}: the switch is not offered on bars already horizontal");
+    }
+    // the donut: every part is drawn; many parts get one line of advice; Group small parts is a control
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig_with("s7donut", names_df(9), ppp, w, h);
+        let what = rig.what.clone();
+        pump(&mut rig, "first chart", &chart_ready);
+        set_spec(&mut rig, &|s| {
+            s.category = "Name".into();
+            s.series = None;
+            s.value = Some("Balance".into());
+            s.kind = ChartKind::Donut;
+            s.by_value = true;
+        });
+        rig.draw(6);
+        assert_eq!(rig.app.chart.data.as_ref().map(|d| d.categories.len()), Some(9), "{what}: all 9 parts");
+        assert!(rig.app.chart.rects.fields.iter().any(|(n, _)| n == "Many parts"), "{what}: the advice line for more than 6 parts");
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let r = scroll_into_view(&mut rig, at, &field("Group small parts"), "Group small parts");
+        pclick(&mut rig, r);
+        let p = rig.draw(3);
+        let item = p.boxes.iter().find(|(t, _)| t == "Top N + Other").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the list offers Top N + Other"));
+        pclick(&mut rig, item);
+        pump(&mut rig, "grouped", &chart_ready);
+        rig.draw(4);
+        assert_eq!(rig.app.chart.spec.donut_top, Some(4), "{what}: the default N is 4");
+        assert_eq!(rig.app.chart.data.as_ref().map(|d| d.categories.len()), Some(5), "{what}: 4 parts and Other");
+        assert!(rig.app.chart.rects.fields.iter().all(|(n, _)| n != "Many parts"), "{what}: five parts need no advice");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
+
+#[test]
+fn s8_reset_colours_and_text_size_work_by_real_clicks_and_the_pdf_dialog_offers_the_table_for_chart_tabs() {
+    use crate::ui::chart_render::last_shown;
+    use crate::ui::render_tests_p7::{scroll_into_view, SIZES3};
+    use micro_parquet::charts::colours::{Colour, ColourMap};
+    use micro_parquet::charts::layout::Role;
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig_with("s8look", bdt(), ppp, w, h);
+        let what = rig.what.clone();
+        pump(&mut rig, "first chart", &chart_ready);
+        set_spec(&mut rig, &|s| {
+            s.category = "Product".into();
+            s.series = None;
+            s.value = Some("Balance".into());
+            s.kind = ChartKind::Donut;
+            s.by_value = true;
+        });
+        // a map the user (or an old chart) left in a different order
+        let mut cm = ColourMap::default();
+        cm.assign_all(&["Current", "Savings", "Term deposits"]);
+        rig.app.chart.spec.colour_map = cm;
+        rig.draw(4);
+        let names = rig.app.chart.data.as_ref().expect("data").categories.clone();
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let r = scroll_into_view(&mut rig, at, &field("Titles and look"), "Titles and look");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        let r = scroll_into_view(&mut rig, at, &field("Reset colours"), "Reset colours");
+        pclick(&mut rig, r);
+        rig.draw(6);
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(rig.app.chart.spec.colour_map.get(n), Some(Colour::Slot(i)), "{what}: '{n}' takes slot {} in the current order", i + 1);
+        }
+        // text size: choose Larger in the drop-down
+        let r = scroll_into_view(&mut rig, at, &field("Text size"), "Text size");
+        pclick(&mut rig, r);
+        let p = rig.draw(3);
+        let item = p.boxes.iter().find(|(t, _)| t == "Larger").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the list offers Larger"));
+        pclick(&mut rig, item);
+        rig.draw(6);
+        assert_eq!(rig.app.chart.spec.text_size, micro_parquet::charts::spec::TextSize::Larger, "{what}");
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        let legend_pt: Vec<f32> = shown.layout.texts.iter().filter(|t| t.role == Role::Legend).map(|t| t.pt).collect();
+        assert!(!legend_pt.is_empty() && legend_pt.iter().all(|p| (*p - micro_parquet::charts::tokens::LABEL_PT * 1.3).abs() < 1e-3), "{what}: the legend is 1.3 times larger: {legend_pt:?}");
+        let title_pt = shown.layout.texts.iter().filter(|t| t.role == Role::Title).map(|t| t.pt).next().expect("title");
+        assert!((title_pt - micro_parquet::charts::tokens::TITLE_PT).abs() < 1e-3, "{what}: titles keep their size");
+    }
+    // the PDF options dialog offers the data table only when a chart tab is ticked
+    let mut rig = chart_rig_with("s8pdf", bdt(), 1.0, 1291.0, 700.0);
+    pump(&mut rig, "first chart", &chart_ready);
+    rig.app.export.multi_checks = vec![true];
+    rig.app.export_multi_tab_pdf(None);
+    assert!(!rig.app.export.pdf_options.as_ref().expect("dialog").has_chart, "a plain tab: no choice");
+    rig.app.chart_open_as_chart_tab();
+    pump(&mut rig, "chart tab", &|r| r.app.chart_tabs.len() == 1);
+    rig.app.export.multi_checks = vec![true, true];
+    rig.app.export_multi_tab_pdf(None);
+    let d = rig.app.export.pdf_options.as_ref().expect("dialog");
+    assert!(d.has_chart && !d.chart_tables, "a chart tab: the tick box is offered, off by default");
+    let tabs = rig.app.ticked_export_tabs_for_test();
+    assert_eq!(tabs.iter().filter(|t| t.chart.is_some()).count(), 1, "the chart tab carries its chart into the PDF export");
+}

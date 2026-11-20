@@ -48,8 +48,8 @@ fn c0_the_sizes_of_the_design_system_are_pinned() {
     assert_eq!((t::BAR_MAX_PX, t::BAR_RADIUS_PX, t::SEGMENT_GAP_PX), (24.0, 4.0, 2.0));
     assert_eq!((t::LINE_PX, t::MARKER_PX, t::MARKER_RING_PX, t::REFERENCE_LINE_PX, t::GRID_PX), (2.0, 8.0, 2.0, 1.5, 1.0));
     assert_eq!((t::AREA_OPACITY, t::STACKED_AREA_OPACITY, t::HEAT_RADIUS_PX, t::HEAT_GAP_PX, t::PADDING_SHARE, t::MIN_SPACE_PX), (0.10, 0.35, 2.0, 2.0, 0.03, 8.0));
-    assert_eq!((t::MAX_POINTS, t::DONUT_MAX_SLICES, t::MAX_FACETS, t::MAX_PANELS, t::MAX_SCATTER_SERIES), (5000, 5, 12, 3, 3));
-    assert!(t::FONT_HTML.starts_with("\"Source Sans 3\"") && t::FONT_EXCEL == "Segoe UI");
+    assert_eq!((t::MAX_POINTS, t::MAX_FACETS, t::MAX_PANELS, t::MAX_SCATTER_SERIES), (5000, 12, 3, 3));
+    assert!(t::FONT_HTML.starts_with("'Source Sans 3'") && t::FONT_EXCEL == "Segoe UI");
 }
 
 // ---------------------------------------------------------------------------------- colour map

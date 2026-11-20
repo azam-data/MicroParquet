@@ -4,6 +4,7 @@
 
 pub mod axis;
 pub mod calc;
+pub mod catlabels;
 pub mod colours;
 pub mod data;
 pub mod echarts;
@@ -11,6 +12,7 @@ pub mod gallery;
 pub mod labels;
 pub mod layout;
 pub mod library;
+pub mod pdf;
 pub mod pack;
 pub mod python;
 pub mod samples;

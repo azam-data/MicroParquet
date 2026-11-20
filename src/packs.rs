@@ -612,8 +612,8 @@ pub fn write_pack_with_charts(result: &PackResult, xlsx: &Path, pdf: Option<&Pat
     let mut msg = format!("Wrote {} ({})", xlsx.display(), rep.summary());
     let mut pdf_tmp = None;
     if let Some(p) = pdf {
-        let mut ptabs: Vec<PdfTab> = vec![PdfTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new() }];
-        ptabs.extend(result.sheets.iter().map(|s| PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new() }));
+        let mut ptabs: Vec<PdfTab> = vec![PdfTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new(), chart: None }];
+        ptabs.extend(result.sheets.iter().map(|s| PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new(), chart: None }));
         let tmp = crate::jobs::TempOutput::new(p);
         let prep = crate::exporters::export_pdf_tabs(ptabs, tmp.path(), result.output.scale, result.output.decimals)?;
         msg.push_str(&format!("; wrote {}", p.display()));

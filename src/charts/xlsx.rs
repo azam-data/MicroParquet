@@ -13,7 +13,7 @@
 use super::axis::{decimals_for_step, nice_ticks, ValueKind};
 use super::colours::ColourMap;
 use super::data::{heatmap, waterfall_from_data, waterfall_stack, ChartData, StepKind};
-use super::layout::{chart_title, scaled, value_kind, LayoutOpts, DONUT_REFUSAL};
+use super::layout::{chart_title, scaled, value_kind, LayoutOpts};
 use super::spec::{ChartKind, ChartSpec, Stack, Transform};
 use super::tokens as t;
 use anyhow::{bail, Result};
@@ -148,12 +148,23 @@ impl<'a> Cx<'a> {
         chart.title().set_name(&t::tidy(title)).set_font(&font(t::TITLE_PT as f64 - 1.0, true, ink.ink));
         chart.chart_area().set_format(ChartFormat::new().set_no_border().set_solid_fill(&ChartSolidFill::new().set_color(rgb(ink.surface))));
         chart.plot_area().set_format(ChartFormat::new().set_no_border().set_no_fill());
-        let tick_font = font(t::TICK_PT as f64, false, ink.ink2);
+        let mut tick_font = font(t::tick_pt() as f64, false, ink.ink2);
+        // every category keeps its label (interval 1); angled 35 degrees when full and two-line labels do not fit
+        let mut angled = false;
+        if !horizontal && !self.data.categories.is_empty() {
+            let m = super::layout::ApproxMeasure;
+            let wf = |s: &str| -> f32 { <super::layout::ApproxMeasure as super::layout::Measure>::size(&m, s, t::tick_pt(), false).x };
+            let band = (720.0 - 90.0) / self.data.categories.len() as f32;
+            angled = super::catlabels::plan(&self.data.categories, band, &wf, t::tick_pt() * 1.3).fit == super::catlabels::CatFit::Angled;
+        }
+        if angled {
+            tick_font.set_rotation(super::catlabels::ANGLE_DEG as i16);
+        }
         let grid = ChartLine::new().set_color(rgb(ink.grid)).set_width(0.75).to_owned();
         // category axis: the baseline only
         {
             let ax = if horizontal { chart.y_axis() } else { chart.x_axis() };
-            ax.set_font(&tick_font).set_major_gridlines(false).set_major_tick_type(ChartAxisTickType::None).set_label_position(ChartAxisLabelPosition::Low);
+            ax.set_font(&tick_font).set_major_gridlines(false).set_major_tick_type(ChartAxisTickType::None).set_label_position(ChartAxisLabelPosition::Low).set_label_interval(1);
             ax.set_format(&mut line_fmt(ink.baseline, 1.0));
             if horizontal {
                 ax.set_reverse();
@@ -162,12 +173,12 @@ impl<'a> Cx<'a> {
         // value axis: light, solid gridlines, no axis line
         {
             let ax = if horizontal { chart.x_axis() } else { chart.y_axis() };
-            ax.set_font(&font(t::TICK_PT as f64, false, ink.muted)).set_major_gridlines(true).set_major_gridlines_line(&grid).set_major_tick_type(ChartAxisTickType::None);
+            ax.set_font(&font(t::tick_pt() as f64, false, ink.muted)).set_major_gridlines(true).set_major_gridlines_line(&grid).set_major_tick_type(ChartAxisTickType::None);
             ax.set_num_format(&Self::axis_num_format(vk));
             ax.set_format(ChartFormat::new().set_no_line());
         }
         if legend {
-            chart.legend().set_position(ChartLegendPosition::Top).set_font(&font(t::LABEL_PT as f64, false, ink.ink2));
+            chart.legend().set_position(ChartLegendPosition::Top).set_font(&font(t::label_pt() as f64, false, ink.ink2));
         } else {
             chart.legend().set_hidden();
         }
@@ -206,6 +217,10 @@ fn range(sheet: &str, r1: u32, c1: u16, r2: u32, c2: u16) -> ChartRange {
 
 /// Writes `data` to a new sheet of `wb`, with the chart(s) beside it.
 pub fn add_chart_sheet(wb: &mut Workbook, sheet_name: &str, data: &ChartData, opts: &LayoutOpts) -> Result<SheetInfo> {
+    t::with_text_scale(data.spec.text_size.factor(), || add_chart_sheet_scaled(wb, sheet_name, data, opts))
+}
+
+fn add_chart_sheet_scaled(wb: &mut Workbook, sheet_name: &str, data: &ChartData, opts: &LayoutOpts) -> Result<SheetInfo> {
     let spec = &data.spec;
     if let Some(r) = data.empty_reason() {
         bail!("No data to chart: {}.", r);
@@ -493,7 +508,7 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
                         Some(v) => {
                             let text = if diverging { cx.lp.diverging(v, vk) } else { cx.lp.text(v, vk, false) };
                             let mut l = ChartDataLabel::new();
-                            l.set_value(text.as_str()).set_font(&font(t::DATA_LABEL_PT as f64, false, cx.ink.ink));
+                            l.set_value(text.as_str()).set_font(&font(t::data_label_pt() as f64, false, cx.ink.ink));
                             if matches!(kind, ChartKind::Line) {
                                 l.set_position(rust_xlsxwriter::ChartDataLabelPosition::Above);
                             }
@@ -588,7 +603,7 @@ fn diverging_labels(cx: &Cx, d: &ChartData, measure: usize, kind: ChartKind) -> 
     let vk = value_kind(spec, measure);
     let code = signed_code(if vk == ValueKind::Percent { 2 } else { cx.opts.decimals }, vk == ValueKind::Percent);
     let mut label = ChartDataLabel::new();
-    label.show_value().set_num_format(&code).set_font(&font(t::DATA_LABEL_PT as f64, false, cx.ink.ink));
+    label.show_value().set_num_format(&code).set_font(&font(t::data_label_pt() as f64, false, cx.ink.ink));
     Some(label)
 }
 
@@ -700,7 +715,7 @@ fn add_net_marker(cx: &Cx, ws: &mut Worksheet, g: &GridCols, chart: &mut Chart, 
     s.set_format(&mut ChartFormat::new().set_no_line().clone());
     s.set_marker(&mk);
     let mut label = ChartDataLabel::new();
-    label.show_value().set_num_format(&signed_code(if vk == ValueKind::Percent { 2 } else { cx.opts.decimals }, vk == ValueKind::Percent)).set_font(&font(t::DATA_LABEL_PT as f64, false, cx.ink.ink));
+    label.show_value().set_num_format(&signed_code(if vk == ValueKind::Percent { 2 } else { cx.opts.decimals }, vk == ValueKind::Percent)).set_font(&font(t::data_label_pt() as f64, false, cx.ink.ink));
     s.set_data_label(&label);
     chart.combine(&line_chart);
     ws.set_column_width(col, 14).map_err(x)?;
@@ -1000,9 +1015,6 @@ fn donut_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usi
     let d = cx.data;
     let vk = value_kind(&d.spec, 0);
     let parts: Vec<(String, f64)> = d.categories.iter().enumerate().filter_map(|(i, c)| d.values.first().and_then(|r| r.get(i)).copied().flatten().map(|v| (c.clone(), v))).collect();
-    if parts.len() > t::DONUT_MAX_SLICES {
-        bail!("{}", DONUT_REFUSAL);
-    }
     if parts.len() < 2 {
         bail!("A donut needs at least 2 parts, but this chart has {}. Choose another form.", parts.len());
     }
@@ -1023,18 +1035,39 @@ fn donut_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usi
     chart.title().set_name(&t::tidy(title)).set_font(&font(t::TITLE_PT as f64 - 1.0, true, cx.ink.ink));
     chart.chart_area().set_format(ChartFormat::new().set_no_border().set_solid_fill(&ChartSolidFill::new().set_color(rgb(cx.ink.surface))));
     chart.plot_area().set_format(ChartFormat::new().set_no_border().set_no_fill());
-    chart.legend().set_position(ChartLegendPosition::Right).set_font(&font(t::LABEL_PT as f64, false, cx.ink.ink2));
+    chart.legend().set_position(ChartLegendPosition::Right).set_font(&font(t::label_pt() as f64, false, cx.ink.ink2));
+    let mut dcm = cx.cm.clone();
+    dcm.assign_all(&parts.iter().map(|p| p.0.clone()).collect::<Vec<_>>());
+    let total: f64 = parts.iter().map(|p| p.1).sum();
     let points: Vec<ChartPoint> = parts
         .iter()
         .enumerate()
         .map(|(i, (c, _))| {
-            let mut f = fill(cx.colour(c, i, parts.len()));
+            let mut f = fill(dcm.get(c).map(|k| k.hex(false)).unwrap_or_else(|| cx.colour(c, i, parts.len())));
             f.set_border(&ChartLine::new().set_color(rgb(cx.ink.surface)).set_width(2.0));
             ChartPoint::new().set_format(&mut f)
         })
         .collect();
     let s = chart.add_series();
     s.set_categories(&range(&cx.sheet, first, 0, last, 0)).set_values(&range(&cx.sheet, first, 1, last, 1)).set_points(&points);
+    // Excel's doughnut cannot put labels outside: each slice says its name and share inside it, a part under 1% says nothing
+    if cx.lp.mode != super::spec::LabelMode::None {
+        let labels: Vec<ChartDataLabel> = parts
+            .iter()
+            .map(|(c, v)| {
+                let share = if total > 0.0 { v / total * 100.0 } else { 0.0 };
+                if share < 1.0 {
+                    ChartDataLabel::new().set_hidden().to_custom()
+                } else {
+                    let text = if cx.lp.percent { format!("{} {}%", c, crate::models::format_with_commas(share, 0)) } else { c.clone() };
+                    let mut l = ChartDataLabel::new();
+                    l.set_value(text.as_str()).set_font(&font(t::data_label_pt() as f64, false, cx.ink.ink));
+                    l.to_custom()
+                }
+            })
+            .collect();
+        s.set_custom_data_labels(&labels);
+    }
     chart.set_hole_size(60).set_width(560).set_height(360);
     ws.insert_chart(top, 3, &chart).map_err(x)?;
     Ok(1)

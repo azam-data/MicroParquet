@@ -341,6 +341,7 @@ fn loans_tab(d: &Path) -> ExportTab {
         col_formats: Default::default(),
         summary: Default::default(),
         control_col: Some("Balance".into()),
+        chart: None,
     }
 }
 
