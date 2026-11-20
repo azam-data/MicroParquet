@@ -218,12 +218,41 @@ impl MicroParquetApp {
         self.chart_save_choices();
     }
 
+    /// How the value column of a chart's table is shown in its own tab: the scale the chart showed it in. The numbers
+    /// in the table are always absolute (BDT); only this format divides them, once, on display, so a chart of that
+    /// tab (or of its Sum column) never divides a second time.
+    pub(crate) fn chart_data_formats(&self, data: &ChartData) -> HashMap<String, ColumnFormatSpec> {
+        use micro_parquet::models::MetricFormatType as F;
+        let mut m = HashMap::new();
+        if data.spec.agg == ChartAgg::Count {
+            return m;
+        }
+        let fmt_type = match self.chart_scale(&data.spec) {
+            Some(s) => match s.suffix {
+                "Cr" => Some(F::BdtCrore),
+                "L" => Some(F::BdtLakh),
+                "M" => Some(F::BdtMillion),
+                "K" => Some(F::BdtThousand),
+                _ => None,
+            },
+            // "Plain (BDT)" chosen on the chart: the table shows the numbers as they are
+            None if data.spec.scale == ChartScale::Plain => Some(F::StandardCommas),
+            None => None,
+        };
+        if let Some(fmt_type) = fmt_type {
+            m.insert(micro_parquet::chart::chart_value_name(data), ColumnFormatSpec { fmt_type, decimals: self.global_decimals });
+        }
+        m
+    }
+
     /// "Open chart data as tab": the table behind the chart, in a new tab that can be exported.
     pub(crate) fn chart_open_as_tab(&mut self) {
-        let Some(data) = self.chart.data.clone() else {
+        let Some(mut data) = self.chart.data.clone() else {
             self.status_message = "There is no chart data yet.".to_string();
             return;
         };
+        // the look settings (scale, title, colours) are the live ones: the numbers were calculated before they changed
+        data.spec = self.chart.spec.clone();
         let result = (|| -> anyhow::Result<TabSource> {
             let mut df = chart_table(&data)?;
             std::fs::create_dir_all(&self.paths.temp_dir)?;
@@ -236,7 +265,8 @@ impl MicroParquetApp {
             Ok(src) => {
                 let what = data.title(None);
                 let title = format!("Chart: {}", what.split(':').next().unwrap_or("data"));
-                self.create_tab_from_source(title, src, Vec::new(), HashMap::new());
+                let formats = self.chart_data_formats(&data);
+                self.create_tab_from_source(title, src, Vec::new(), formats);
             }
             Err(e) => self.status_message = format!("The chart data could not be opened as a tab: {:#}", e),
         }
@@ -245,10 +275,11 @@ impl MicroParquetApp {
     /// "Open as tab": the chart in a tab of its own that fills the main area. The tab is the chart's data
     /// table (so it can be exported like any tab); the main area draws the chart, with a Table toggle.
     pub(crate) fn chart_open_as_chart_tab(&mut self) {
-        let Some(data) = self.chart.data.clone() else {
+        let Some(mut data) = self.chart.data.clone() else {
             self.status_message = "There is no chart data yet.".to_string();
             return;
         };
+        data.spec = self.chart.spec.clone();
         let scale = self.chart_scale(&self.chart.spec);
         let info = ChartTabInfo {
             data: data.clone(),
@@ -268,7 +299,8 @@ impl MicroParquetApp {
         match result {
             Ok(src) => {
                 let title = format!("Chart: {}", micro_parquet::charts::layout::chart_title(&data));
-                let id = self.create_tab_from_source_with(title.clone(), src, Vec::new(), HashMap::new(), None);
+                let formats = self.chart_data_formats(&data);
+                let id = self.create_tab_from_source_with(title.clone(), src, Vec::new(), formats, None);
                 self.chart_tabs.insert(id, info);
                 // kept with the session: the chart's own settings, by the title of the tab it charts
                 if let Ok(spec) = serde_json::to_value(&data.spec) {
@@ -641,7 +673,12 @@ impl MicroParquetApp {
     }
 
     /// Makes `spec` the chart's settings: saved for the tab, and the numbers recalculated when they changed.
-    pub(crate) fn chart_set_spec(&mut self, spec: ChartSpec) {
+    pub(crate) fn chart_set_spec(&mut self, mut spec: ChartSpec) {
+        // the colours belong to the category and series columns: new columns, new names, slots 1, 2, 3 again
+        // (a chart that brings its own colour map, a saved chart or a template, keeps it)
+        if spec.colour_map == self.chart.spec.colour_map {
+            spec.reset_colours_if_columns_changed(&self.chart.spec);
+        }
         self.chart.spec = spec;
         self.chart_save_choices();
         self.chart_tick();

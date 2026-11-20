@@ -16,7 +16,7 @@ Shows the two liquidity ratios against their minimums (horizontal bars with a re
 
 | Column | Required? | Notes |
 | --- | --- | --- |
-| Item, Value, Unit | Yes | The summary's rows: "LCR", "LCR minimum", "NSFR", "NSFR minimum" (a missing minimum is taken as 100). |
+| Item, Value, Unit | Yes | The summary's rows: "LCR", "LCR minimum", "LCR status", "NSFR", "NSFR minimum", "NSFR status". The minimum and the breach come from these rows (the tool's own answer); a summary without them is refused, never completed with a 100. |
 | Level 1 / 2A / 2B assets (after factors), the two cap adjustments | For the HQLA chart | Without them only the ratio chart is made. |
 
 ## 5. Step by step

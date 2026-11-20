@@ -72,6 +72,8 @@ mod render_tests_p6;
 #[cfg(test)]
 mod render_tests_p7;
 #[cfg(test)]
+mod render_tests_r;
+#[cfg(test)]
 mod tests;
 pub mod theme;
 

@@ -1,6 +1,6 @@
 # Phase 7 progress (chart studio)
 
-Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C: owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8 (all done). Session D (this one): owner decisions Q1–Q3 and fixes 1–5 (screenshots, classified NPL, NII effects, HQLA labels, C7 run with matplotlib). Resume from this file.
+Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C: owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8 (all done). Session D: owner decisions Q1–Q3 and fixes 1–5 (screenshots, classified NPL, NII effects, HQLA labels, C7 run with matplotlib). Session E (this one): the review of PR #13, part A (correctness, items 1–11) then part B (items 12–20). Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -116,3 +116,25 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C
 - D-5 (fix 3): `ChartSpec.net_marker`: the net of a stack is a dark tick with a signed two-decimal label (app), a "Net" series of rect markers (HTML), a "Net" column and dash markers (Excel); stack edges have no labels.
 - D-6 (fix 4): `ChartSpec.segment_labels`: each segment of a stacked column is labelled beside the stack ("3,500 · 70.0%", whole numbers without decimals), nudged apart; HTML uses `shiftY`, Excel puts the same text in the segment.
 - D-7 (fix 5): matplotlib 3.11 and plotly 7.1 installed in the session; every script runs headless and was saved to a PNG and looked at. Fixed: horizontal limit ticks, reference-line labels (staggered above the plot), the donut legend cut off, the legend over a panel title, reference bands, status bars (the data-quality chart), room below a line.
+
+## Session E: review fixes, part A (correctness)
+
+Tests: `tests/phase7/r.rs` (library) and `src/ui/render_tests_r.rs` (by real clicks on the app). Decisions are in the spec's `<accepted_deviations>`.
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 1 | Chart book = snapshots of open chart tabs and the studio chart (own `ChartData`, scale, decimals, colours, light), ticked, up/down, title; saved charts are a second unticked section; the job writes snapshots as they are | `r1_a_chart_book_of_two_chart_tabs…` |
+| 2 | "Open chart data as tab" keeps absolute BDT and gives the value column the chart's scale as its display format; the studio's live look settings (not the stale ones from the calculation) are used | `r2_a_chart_made_on_a_chart_data_tab…` |
+| 3 | `ChartSpec::reset_colours_if_columns_changed`, called when the studio changes the category or series column | `r3_…` (UI and library) |
+| 4 | `layout::subtitle_text` is the one subtitle for the app, HTML, Excel and Python | `r4_the_subtitle_says_what_was_done…` |
+| 5 | The SVG copy of the option drops the toolbox; `tools/html_svg_click.js` clicks the real buttons | `r5_the_save_as_svg_button…` |
+| 6 | NII bridge step and series "New / closed"; blanks are never zeros | `r6_a_new_key_is_its_own_step…` |
+| 7 | Months as dates in the classified trend and the deposit mix; a month without STD is refused | `r7_months_are_sorted_as_dates…` |
+| 8 | `ChartData::non_finite`, `finite_or_stop` in the calculation; every renderer refuses | `r8_a_value_that_is_not_a_number…` |
+| 9 | LCR/NSFR minimum and breach from the result's rows; guide line fixed; the sample summary says "Meets the minimum" as the tool does | `r9_the_lcr_minimum…` |
+| 10 | `ChartSpec.template` is now set; a template subtitle ends with the unit for amounts | `r10_a_template_subtitle…` |
+| 11 | "Sample parameters" text copied into the footnote (IRRBB, LCR/NSFR, ECL) | `r11_irrbb_lcr_and_ecl…` |
+
+Part A deviations: E-1 the IFRS 9 summary has no "Sample parameters" row today, so the ECL chart can only copy one that is there (changing the summary tool was outside the review). E-2 a typed subtitle on a chart that is not from a template is never altered; a template chart's typed subtitle gets the unit appended.
+
+Also found while looking at the Excel screenshots: the 100% stacked chart wrote its value axis as 0 to 100, but Excel's 100% axis is 0 to 1 (written as percent), so the bars were invisible. Fixed (`r12_the_excel_100_percent_chart…`); `xlsx-percent.png` re-rendered.

@@ -37,6 +37,27 @@ fn align(primary: &ChartData, other: &ChartData, name: String) -> MeasureData {
     MeasureData { name, values, rows }
 }
 
+/// A chart never draws a number that is not a number: an added-up value that is NaN or infinite stops the chart,
+/// naming the column and the category (and series) it is in.
+fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[String], column: &str) -> Result<()> {
+    for (s, row) in values.iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            if let Some(x) = v.filter(|x| !x.is_finite()) {
+                let cat = categories.get(c).map(String::as_str).unwrap_or("?");
+                let ser = series.get(s).filter(|n| !n.is_empty()).map(|n| format!(" and series '{}'", n)).unwrap_or_default();
+                bail!(
+                    "Chart: '{}' adds up to {} for the category '{}'{}. The column holds a value that is not a number (NaN) or is infinite, perhaps from a division by zero. Fix those rows or filter them out, then chart again.",
+                    column,
+                    if x.is_nan() { "NaN".to_string() } else if x > 0.0 { "infinity".to_string() } else { "minus infinity".to_string() },
+                    cat,
+                    ser
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let mut data = match spec.kind {
@@ -60,15 +81,18 @@ fn compute_grid(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let mut data = compute_chart_fixed(lf.clone(), &primary_spec, None)?;
     data.spec = spec.clone();
     data.measure_names = measures.iter().map(measure_name).collect();
+    finite_or_stop(&data.values, &data.categories, &data.series, measures[0].column.as_deref().unwrap_or("Count of rows"))?;
     let fixed = FixedKept { categories: data.kept_categories.clone(), series: data.kept_series.clone() };
 
     for (k, m) in measures.iter().enumerate().skip(1) {
         let other = compute_chart_fixed(lf.clone(), &spec.for_measure(m), Some(&fixed)).with_context(|| format!("Chart: measure {} ({})", k + 1, measure_name(m)))?;
         notes.extend(other.notes.iter().filter(|n| !data.notes.contains(n)).cloned());
+        finite_or_stop(&other.values, &other.categories, &other.series, m.column.as_deref().unwrap_or("Count of rows"))?;
         data.extra.push(align(&data, &other, measure_name(m)));
     }
     if let Some(size) = &spec.size {
         let other = compute_chart_fixed(lf.clone(), &spec.for_measure(size), Some(&fixed)).context("Chart: the size measure")?;
+        finite_or_stop(&other.values, &other.categories, &other.series, size.column.as_deref().unwrap_or("Count of rows"))?;
         data.size = Some(align(&data, &other, measure_name(size)));
     }
 
@@ -139,7 +163,13 @@ fn number_column(lf: &LazyFrame, schema: &Schema, name: &str, what: &str) -> Res
         bail!("Chart: the {} column '{}' is {}, not a number. Set it to a number in Schema & Ingestion, or choose another column.", what, name, crate::chart::type_word(dt));
     }
     let df = lf.clone().select([col(name).cast(DataType::Float64).alias("__x")]).collect().with_context(|| format!("Chart: could not read '{}'", name))?;
-    Ok(df.column("__x")?.f64()?.into_iter().collect())
+    let v: Vec<Option<f64>> = df.column("__x")?.f64()?.into_iter().collect();
+    let bad = v.iter().filter(|x| x.is_some_and(|x| !x.is_finite())).count();
+    if bad > 0 {
+        let first = v.iter().position(|x| x.is_some_and(|x| !x.is_finite())).unwrap_or(0) + 1;
+        bail!("Chart: the {} column '{}' has {} value(s) that are not numbers (NaN) or are infinite, the first at row {}. Fix those rows or filter them out, then chart again.", what, name, bad, first);
+    }
+    Ok(v)
 }
 
 fn text_column(lf: &LazyFrame, schema: &Schema, name: &str) -> Result<Vec<String>> {

@@ -7,6 +7,7 @@
 use crate::ui::chart::ChartRects;
 use crate::ui::prelude::*;
 use micro_parquet::charts::gallery::{apply_card, card_by_id, cards_for, fit_columns, Card, Question};
+use micro_parquet::charts::data::ChartData;
 use micro_parquet::charts::library;
 use micro_parquet::charts::spec::{ChartAgg, ChartKind, ChartSpec, MeasureSpec, RefLine, Stack, Status, Transform};
 use micro_parquet::charts::templates::Template;
@@ -67,9 +68,22 @@ pub struct BookEntry {
     pub checked: bool,
 }
 
+/// A chart that is already calculated (a chart tab or the studio chart): the book writes it as it is.
+#[derive(Clone)]
+pub struct BookSnap {
+    pub name: String,
+    pub data: ChartData,
+    /// How its numbers are written (its own scale and decimals; the book is always light).
+    pub opts: micro_parquet::charts::layout::LayoutOpts,
+    pub checked: bool,
+}
+
 /// State of the "Chart book (HTML)…" dialog.
 #[derive(Default)]
 pub struct ChartBookState {
+    /// Every open chart tab and the studio chart, already calculated, in the order of the book.
+    pub snaps: Vec<BookSnap>,
+    /// Saved charts that fit the active tab (calculated again on it; unticked at first).
     pub entries: Vec<BookEntry>,
     pub title: String,
     pub message: Option<(bool, String)>,
@@ -516,8 +530,23 @@ impl MicroParquetApp {
 
     // ------------------------------------------------------------------------------- chart book
 
-    /// Charts ▸ "Chart book (HTML)…": the saved charts that fit the active tab, ticked, then one page.
+    /// Charts ▸ "Chart book (HTML)…": every open chart tab and the studio chart, ticked, as they are on screen;
+    /// then the saved charts that fit the active tab, unticked.
     pub(crate) fn open_chart_book(&mut self) {
+        let mut snaps: Vec<BookSnap> = Vec::new();
+        for t in &self.tabs {
+            if let Some(info) = self.chart_tabs.get(&t.id) {
+                let data = info.data.clone();
+                let opts = micro_parquet::charts::layout::LayoutOpts { dark: false, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: Some(info.data.spec.colour_map.clone()) };
+                snaps.push(BookSnap { name: t.title.clone(), data, opts, checked: true });
+            }
+        }
+        if !self.chart.busy {
+            if let Ok((data, opts)) = self.chart_export_parts() {
+                let name = format!("Studio chart: {}", micro_parquet::charts::layout::chart_title(&data));
+                snaps.push(BookSnap { name, data, opts, checked: true });
+            }
+        }
         let avail = self.tabs.get(self.active_tab).map(|t| t.available_columns()).unwrap_or_default();
         let entries = library::list_charts(&self.charts_dir())
             .into_iter()
@@ -525,16 +554,16 @@ impl MicroParquetApp {
                 Ok((_, spec)) => {
                     let missing = library::missing_columns(&spec, &avail);
                     let problem = (!missing.is_empty()).then(|| format!("this tab has no column {}", missing.join(", ")));
-                    BookEntry { name, checked: problem.is_none(), spec: Some(spec), problem }
+                    BookEntry { name, checked: false, spec: Some(spec), problem }
                 }
                 Err(e) => BookEntry { name, spec: None, problem: Some(format!("{:#}", e)), checked: false },
             })
             .collect();
-        self.chart_book = ChartBookState { entries, title: "Charts".to_string(), ..Default::default() };
+        self.chart_book = ChartBookState { snaps, entries, title: "Charts".to_string(), ..Default::default() };
         self.active_tool = ActiveToolModal::ChartBook;
     }
 
-    /// The charts ticked in the book dialog, each with how its numbers are written on the active tab.
+    /// The saved charts ticked in the book dialog, each with how its numbers are written on the active tab.
     pub(crate) fn chart_book_selection(&self) -> Vec<(String, ChartSpec, micro_parquet::charts::layout::LayoutOpts)> {
         self.chart_book
             .entries
@@ -556,21 +585,31 @@ impl MicroParquetApp {
             .collect()
     }
 
-    /// Sends the book to the worker: it calculates every ticked chart over the whole tab and writes the page.
+    /// The ticked snapshots, in the book's order: written as they are.
+    pub(crate) fn chart_book_snapshots(&self) -> Vec<(String, ChartData, micro_parquet::charts::layout::LayoutOpts)> {
+        self.chart_book.snaps.iter().filter(|s| s.checked).map(|s| (s.name.clone(), s.data.clone(), s.opts.clone())).collect()
+    }
+
+    /// Sends the book to the worker: the snapshots as they are, and each ticked saved chart calculated over the whole tab.
     pub(crate) fn chart_book_write_to(&mut self, path: std::path::PathBuf) -> Result<(), String> {
         let charts = self.chart_book_selection();
-        if charts.is_empty() {
+        let snapshots = self.chart_book_snapshots();
+        if charts.is_empty() && snapshots.is_empty() {
             return Err("Tick at least one chart for the book.".to_string());
         }
-        let Some(tab) = self.tabs.get(self.active_tab) else {
-            return Err("Open the tab the charts are made for first.".to_string());
+        let (source, steps) = match self.tabs.get(self.active_tab) {
+            Some(tab) => {
+                let exec = tab.exec_steps.min(tab.steps.len());
+                (tab.source.clone(), tab.steps[..exec].to_vec())
+            }
+            None => return Err("Open a tab first: the book is written from the charts of the open tabs.".to_string()),
         };
-        let exec = tab.exec_steps.min(tab.steps.len());
         let req = micro_parquet::tab_jobs::ChartBookRequest {
-            source: tab.source.clone(),
-            steps: tab.steps[..exec].to_vec(),
+            source,
+            steps,
             temp_dir: self.paths.temp_dir.clone(),
             charts,
+            snapshots,
             title: if self.chart_book.title.trim().is_empty() { "Charts".to_string() } else { self.chart_book.title.trim().to_string() },
             date: chrono::Local::now().format("%-d %B %Y").to_string(),
             path,
@@ -585,22 +624,48 @@ impl MicroParquetApp {
         let mut write = false;
         let mut rects: Vec<(String, egui::Rect)> = Vec::new();
         let mut entries = self.chart_book.entries.clone();
+        let mut snaps = self.chart_book.snaps.clone();
         let mut title = self.chart_book.title.clone();
+        let mut swap: Option<(usize, usize)> = None;
         let message = self.chart_book.message.clone();
         let dir = self.charts_dir();
-        let any = entries.iter().any(|e| e.checked && e.problem.is_none());
+        let any = snaps.iter().any(|e| e.checked) || entries.iter().any(|e| e.checked && e.problem.is_none());
         let heading = format!("{}  Chart book (HTML)", theme::ph::FILES);
         theme::modal(&heading).default_width(theme::DIALOG_W_SORT).show(ctx, |d| {
             d.body(|ui| {
-                ui.label(egui::RichText::new("One web page with several of your saved charts, calculated on the active tab. Saved charts are in the charts folder:").color(tk.muted));
-                ui.label(egui::RichText::new(dir.display().to_string()).color(tk.muted));
+                ui.label(egui::RichText::new("One web page with the charts you have open, written exactly as they are on screen (their own scale, decimals and colours, in the light theme).").color(tk.muted));
                 ui.horizontal(|ui| {
                     ui.label("Title");
                     let r = ui.add(egui::TextEdit::singleline(&mut title).desired_width(theme::CHART_REF_LABEL_W * 2.0));
                     rects.push(("Title".to_string(), r.rect));
                 });
+                ui.add_space(theme::SPACE_XS);
+                ui.label(theme::semibold("Open charts"));
+                if snaps.is_empty() {
+                    ui.label(egui::RichText::new("No chart is open. Make one in the Chart tab, or choose \"Open as tab\", then come back.").color(tk.muted));
+                }
+                let last = snaps.len().saturating_sub(1);
+                for (i, e) in snaps.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::Checkbox::new(&mut e.checked, &e.name));
+                        rects.push((format!("Snapshot {i}"), r.rect));
+                        let b = ui.add_enabled(i > 0, egui::Button::new("\u{2191}")).on_hover_text("Move up");
+                        rects.push((format!("Up {i}"), b.rect));
+                        if b.clicked() {
+                            swap = Some((i, i - 1));
+                        }
+                        let b = ui.add_enabled(i < last, egui::Button::new("\u{2193}")).on_hover_text("Move down");
+                        rects.push((format!("Down {i}"), b.rect));
+                        if b.clicked() {
+                            swap = Some((i, i + 1));
+                        }
+                    });
+                }
+                ui.add_space(theme::SPACE_XS);
+                ui.label(theme::semibold("Saved charts on the active tab"));
+                ui.label(egui::RichText::new(format!("Calculated again on the active tab, so tick them only for the tab they were made for. Saved charts are in {}", dir.display())).size(theme::TEXT_LABEL).color(tk.muted));
                 if entries.is_empty() {
-                    ui.label("No saved chart yet. Make one in the Chart tab and choose \"Save chart\u{2026}\".");
+                    ui.label(egui::RichText::new("No saved chart yet.").color(tk.muted));
                 }
                 for (i, e) in entries.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
@@ -628,6 +693,10 @@ impl MicroParquetApp {
                 }
             });
         });
+        if let Some((a, b)) = swap {
+            snaps.swap(a, b);
+        }
+        self.chart_book.snaps = snaps;
         self.chart_book.entries = entries;
         self.chart_book.title = title;
         if write {

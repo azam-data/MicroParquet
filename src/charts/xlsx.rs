@@ -192,16 +192,7 @@ impl<'a> Cx<'a> {
 }
 
 fn subtitle_of(data: &ChartData, opts: &LayoutOpts) -> String {
-    if !data.spec.subtitle.trim().is_empty() {
-        return data.spec.subtitle.trim().to_string();
-    }
-    let names = data.measure_names.join(", ");
-    match (names.is_empty(), opts.unit.is_empty()) {
-        (false, false) => format!("{} \u{b7} {}", names, opts.unit),
-        (false, true) => names,
-        (true, false) => opts.unit.clone(),
-        (true, true) => String::new(),
-    }
+    super::layout::subtitle_text(data, opts)
 }
 
 fn range(sheet: &str, r1: u32, c1: u16, r2: u32, c2: u16) -> ChartRange {
@@ -213,6 +204,9 @@ pub fn add_chart_sheet(wb: &mut Workbook, sheet_name: &str, data: &ChartData, op
     let spec = &data.spec;
     if let Some(r) = data.empty_reason() {
         bail!("No data to chart: {}.", r);
+    }
+    if let Some(m) = data.non_finite() {
+        bail!("Chart: {}. Fix those rows or filter them out, then chart again.", m);
     }
     let name = safe_sheet_name(sheet_name);
     let ink = t::ink(false);
@@ -483,8 +477,10 @@ fn set_value_axis(cx: &Cx, chart: &mut Chart, g: &GridCols, kind: ChartKind, mea
     let cols: Vec<usize> = g.cols.iter().filter(|(m, _, _)| *m == measure).map(|(_, s, _)| *s).collect();
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     if stacked && spec.stack == Stack::Percent {
-        lo = 0.0;
-        hi = 100.0;
+        // Excel's 100% charts have their axis in fractions (0 to 1, written as 0% to 100%)
+        let ax = if horizontal { chart.x_axis() } else { chart.y_axis() };
+        ax.set_min(0.0).set_max(1.0).set_major_unit(0.2).set_num_format("0%");
+        return;
     } else if stacked {
         for i in 0..d.categories.len() {
             let (mut pos, mut neg) = (0.0, 0.0);

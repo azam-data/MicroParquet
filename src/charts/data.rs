@@ -148,6 +148,49 @@ impl ChartData {
         1 + self.extra.len()
     }
 
+    /// The first number in the chart that is not finite (NaN or infinity), as a plain sentence; every renderer
+    /// refuses such a chart, so nothing that is not a number is ever drawn or written to a file.
+    pub fn non_finite(&self) -> Option<String> {
+        let grid = |m: &[Vec<Option<f64>>], what: &str| -> Option<String> {
+            for (s, row) in m.iter().enumerate() {
+                for (c, v) in row.iter().enumerate() {
+                    if v.is_some_and(|x| !x.is_finite()) {
+                        let cat = self.categories.get(c).map(String::as_str).unwrap_or("?");
+                        let ser = self.series.get(s).filter(|n| !n.is_empty()).map(|n| format!(" and series '{}'", n)).unwrap_or_default();
+                        return Some(format!("'{}' is not a finite number for the category '{}'{}", what, cat, ser));
+                    }
+                }
+            }
+            None
+        };
+        let name0 = self.measure_names.first().cloned().unwrap_or_default();
+        if let Some(m) = grid(&self.values, &name0) {
+            return Some(m);
+        }
+        for e in &self.extra {
+            if let Some(m) = grid(&e.values, &e.name) {
+                return Some(m);
+            }
+        }
+        if let Some(z) = &self.size {
+            if let Some(m) = grid(&z.values, &z.name) {
+                return Some(m);
+            }
+        }
+        if let Some(p) = self.points.iter().find(|p| !p.x.is_finite() || !p.y.is_finite() || p.size.is_some_and(|z| !z.is_finite())) {
+            return Some(format!("a point of '{}' is not a finite number (x {}, y {})", self.spec.category, p.x, p.y));
+        }
+        if let Some(b) = self.boxes.iter().find(|b| ![b.min, b.q1, b.median, b.q3, b.max, b.low_whisker, b.high_whisker].iter().all(|x| x.is_finite())) {
+            return Some(format!("the box of '{}' is not a finite number", b.category));
+        }
+        if let Some(h) = &self.hist {
+            if !h.edges.iter().all(|x| x.is_finite()) {
+                return Some("a bin of the histogram is not a finite number".to_string());
+            }
+        }
+        self.facets.iter().find_map(|f| f.data.non_finite().map(|m| format!("panel '{}': {}", f.name, m)))
+    }
+
     /// True when there is nothing to draw.
     pub fn is_empty(&self) -> bool {
         self.empty_reason().is_some()

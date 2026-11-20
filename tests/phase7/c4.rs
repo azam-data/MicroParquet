@@ -93,13 +93,13 @@ fn python() -> bool {
     std::process::Command::new("python3").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-fn tmp(name: &str) -> PathBuf {
+pub(crate) fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("mp-c4-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d.join(name)
 }
 
-fn inspect(path: &PathBuf) -> Value {
+pub(crate) fn inspect(path: &PathBuf) -> Value {
     let o = std::process::Command::new("python3").arg("-I").arg("-c").arg(INSPECT).arg(path).output().expect("python3 runs");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     serde_json::from_slice(&o.stdout).expect("the inspector's JSON")

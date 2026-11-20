@@ -335,7 +335,7 @@ fn chart_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
     chart_rig_with(name, df, ppp, w, h)
 }
 
-fn chart_rig_with(name: &str, df: DataFrame, ppp: f32, w: f32, h: f32) -> Rig {
+pub(crate) fn chart_rig_with(name: &str, df: DataFrame, ppp: f32, w: f32, h: f32) -> Rig {
     let mut app = test_app(name);
     micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
     let root = app.paths.root_dir.clone();
@@ -408,7 +408,7 @@ fn bump(rig: &mut Rig, dt: f64) {
     rig.input.time = Some(now + dt);
 }
 
-fn pclick(rig: &mut Rig, r: egui::Rect) {
+pub(crate) fn pclick(rig: &mut Rig, r: egui::Rect) {
     rig.step(vec![egui::Event::PointerMoved(r.center())]);
     bump(rig, 1.0);
     rig.click(r.center());
@@ -773,7 +773,14 @@ fn c3_export_preview_advanced_options_and_the_chart_book_work_by_real_clicks() {
         rig.draw(4);
         assert_eq!(rig.app.active_tool, ActiveToolModal::ChartBook, "{what}: Charts > Chart book opens the dialog");
         assert_dialog_fits(&rig.ctx, &format!("{}  Chart book (HTML)", theme::ph::FILES), &what);
-        assert!(rig.app.chart_book.entries.iter().any(|e| e.name == "Term mix" && e.checked && e.problem.is_none()), "{what}");
+        // the saved charts are a second section, unticked: the open charts (here the studio chart) come first, ticked
+        assert!(rig.app.chart_book.entries.iter().any(|e| e.name == "Term mix" && !e.checked && e.problem.is_none()), "{what}");
+        assert_eq!(rig.app.chart_book.snaps.len(), 1, "{what}: the studio chart is listed");
+        assert!(rig.app.chart_book.snaps[0].checked, "{what}: and ticked");
+        rig.draw(3);
+        let tick = rig.app.chart_book.rects.iter().find(|(n, _)| n == "Chart 0").map(|(_, r)| *r).expect("Chart 0");
+        pclick(&mut rig, tick);
+        assert!(rig.app.chart_book.entries[0].checked, "{what}: the saved chart is ticked by a click");
         let book = dir.join("book.html");
         rig.app.chart_book.path_override = Some(book.clone());
         rig.app.chart_book.title = "ALCO charts".into();
@@ -788,7 +795,7 @@ fn c3_export_preview_advanced_options_and_the_chart_book_work_by_real_clicks() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let b = std::fs::read_to_string(&book).unwrap_or_else(|e| panic!("{what}: the chart book was written by the worker: {e}"));
-        assert_eq!(b.matches("class=\"mp-chart\"").count(), 1, "{what}");
+        assert_eq!(b.matches("class=\"mp-chart\"").count(), 2, "{what}: the studio chart and the saved chart");
         assert!(b.contains("<h1>ALCO charts</h1>"), "{what}");
         assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: the dialog closed");
     }

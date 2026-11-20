@@ -417,6 +417,14 @@ impl Default for ChartSpec {
 }
 
 impl ChartSpec {
+    /// The colour map is tied to the category and series columns: when either differs from `before`'s the map is
+    /// emptied, so the new names take slots 1, 2, 3 …. With the same columns (a filter, Top N) it stays.
+    pub fn reset_colours_if_columns_changed(&mut self, before: &ChartSpec) {
+        if self.category != before.category || self.series != before.series {
+            self.colour_map = ColourMap::default();
+        }
+    }
+
     /// The measures to calculate: `measures`, or the Phase 6 value/agg/weight as the only one.
     pub fn measure_list(&self) -> Vec<MeasureSpec> {
         if self.measures.is_empty() {

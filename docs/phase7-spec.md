@@ -369,4 +369,15 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
   - NII effects by key: each key's net change is a dark tick across its stack with a signed two-decimal label; stack edges carry no labels.
   - HQLA composition: each segment is labelled beside the bar with its value and share ("3,500 · 70.0%"), never overlapping.
   - C7: the scripts are run with matplotlib (Agg) and plotly installed in the session, saved to PNG and looked at; the test still skips when they are absent.
+- Owner decisions on the review of PR #13 (Session E, 20 Nov 2026), part A:
+  - Chart book: it lists every open chart tab and the studio chart with their own `ChartData` and look (scale, decimals, colours; always the light theme), ticked, reorderable, with a title; it writes those snapshots, never recalculating and never scaling twice. "Saved charts on the active tab" is a second, unticked section (recalculated, with the missing-column check). `--export-html` and packs are unchanged.
+  - "Open chart data as tab": the tab stores absolute BDT; the value column carries the format that matches the chart's scale, so the scale is applied once, on display. A chart of that tab gives the original chart's numbers.
+  - The colour map belongs to the category and series columns: changing either empties it (new names take slots 1, 2, 3 …); a filter or Top N keeps it. A saved chart or a template that brings its own map keeps it.
+  - The subtitle says what was done to the numbers ("as % of row", "as % of column", "as % of total", "running sum") and never a money unit beside a percentage; a template's own subtitle ends with " · <unit>" when the chart has an amount measure. One function (`subtitle_text`) feeds the four renderers.
+  - HTML "Save as SVG": the copy of the option used for the SVG keeps no toolbox (its function-valued button made ECharts throw); tested by clicking the real button in headless Chromium (`tools/html_svg_click.js`).
+  - NII bridge: a key in one month only (blank effects) is the step "New / closed" between Mix and Current interest, and the fourth series by key; a blank is never read as 0, and a key with only some effects blank is refused.
+  - Classified trend and deposit mix sort months as dates (a Date column, or text day/month/year, year-month-day or year-month); anything else, and a month without its STD row, is refused.
+  - A value that adds up to NaN or infinity, or a scatter point that is one, stops the chart naming the column and the category, in every renderer; no workbook holds `inf`.
+  - LCR/NSFR: the minimum and the breach are the result's rows ("LCR minimum", "LCR status"); a summary without them is refused; no default 100.
+  - IRRBB, LCR/NSFR and ECL charts copy the result's "Sample parameters" text into the footnote. The IFRS 9 summary does not carry such a row today, so the ECL footnote shows it only for a summary that has one (the summary tool itself is unchanged).
 </accepted_deviations>

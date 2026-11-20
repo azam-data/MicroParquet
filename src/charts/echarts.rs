@@ -233,18 +233,8 @@ fn font_style(size: f64, weight: &str, colour: u32) -> Value {
     json!({"fontFamily": t::FONT_HTML, "fontSize": size, "fontWeight": weight, "color": hx(colour)})
 }
 
-/// The subtitle: the typed one, else the measure names and the unit.
 fn subtitle_of(data: &ChartData, opts: &LayoutOpts) -> String {
-    if !data.spec.subtitle.trim().is_empty() {
-        return data.spec.subtitle.trim().to_string();
-    }
-    let names = data.measure_names.join(", ");
-    match (names.is_empty(), opts.unit.is_empty()) {
-        (false, false) => format!("{} \u{b7} {}", names, opts.unit),
-        (false, true) => names,
-        (true, false) => opts.unit.clone(),
-        (true, true) => String::new(),
-    }
+    super::layout::subtitle_text(data, opts)
 }
 
 fn foot_lines(data: &ChartData) -> Vec<String> {
@@ -1263,6 +1253,9 @@ fn finish(o: Map<String, Value>, spec: &ChartSpec, height: f64) -> Result<(Value
 /// The chart's option in both themes, with its height and table. Refusals (a donut with 6 parts, a
 /// waterfall that does not add up, bad advanced JSON) come back as errors with plain messages.
 pub fn chart_pair(data: &ChartData, opts: &LayoutOpts) -> Result<ChartOut> {
+    if let Some(m) = data.non_finite() {
+        bail!("Chart: {}. Fix those rows or filter them out, then chart again.", m);
+    }
     let (light, h) = build_one(data, opts, false)?;
     let (dark, _) = build_one(data, opts, true)?;
     Ok(ChartOut { title: t::tidy(&chart_title(data)), light, dark, height: h.ceil() as u32, table: table_html(data, opts) })
@@ -1480,7 +1473,8 @@ const PAGE_JS: &str = r#"
       o.toolbox.feature.mySvg.onclick = function(){
         var el = document.getElementById(c.id);
         var s = echarts.init(null, themeName(), {renderer: 'svg', ssr: true, width: el.clientWidth, height: c.height});
-        s.setOption(revive(dark ? c.dark : c.light)); var svg = s.renderToSVGString(); s.dispose();
+        var so = revive(dark ? c.dark : c.light); delete so.toolbox; delete so.animation;
+        s.setOption(so); var svg = s.renderToSVGString(); s.dispose();
         download((c.name || 'chart') + '.svg', 'image/svg+xml', svg);
       };
     }
@@ -1522,7 +1516,7 @@ pub struct PageChart {
 
 /// JSON for a `<script type="application/json">`: no "</" can end the element early.
 fn script_json(v: &Value) -> String {
-    v.to_string().replace("</", "<\\/").replace("<!--", "<\\!--")
+    v.to_string().replace("</", "<\\/").replace("<!--", "\\u003c!--")
 }
 
 fn page(title: &str, intro: Option<(&str, &str)>, charts: &[PageChart], grid: bool) -> String {

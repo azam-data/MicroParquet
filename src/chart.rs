@@ -266,13 +266,19 @@ pub fn compute_chart_fixed(lf: LazyFrame, spec: &ChartSpec, fixed: Option<&Fixed
     Ok(ChartData { spec: spec.clone(), categories, series, values, rows, total_rows, distinct_categories, folded_categories, notes, kept_categories: kept, kept_series: series_kept, ..ChartData::default() })
 }
 
+/// The name of the value column of the chart's table: "Sum of Balance", "Count of rows".
+pub fn chart_value_name(data: &ChartData) -> String {
+    let s = &data.spec;
+    match (&s.value, s.agg) {
+        (_, ChartAgg::Count) | (None, _) => "Count of rows".to_string(),
+        (Some(v), a) => format!("{} of {}", a.title_word(), v),
+    }
+}
+
 /// The chart as a table, for "Open chart data as tab": one row per category and series.
 pub fn chart_table(data: &ChartData) -> Result<DataFrame> {
     let s = &data.spec;
-    let value_name = match (&s.value, s.agg) {
-        (_, ChartAgg::Count) | (None, _) => "Count of rows".to_string(),
-        (Some(v), a) => format!("{} of {}", a.title_word(), v),
-    };
+    let value_name = chart_value_name(data);
     let mut cats: Vec<String> = Vec::new();
     let mut sers: Vec<String> = Vec::new();
     let mut vals: Vec<Option<f64>> = Vec::new();

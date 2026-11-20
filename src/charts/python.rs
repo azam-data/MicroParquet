@@ -299,6 +299,9 @@ fn ref_lines(data: &ChartData, panel: usize, horizontal: bool, opts: &LayoutOpts
 
 /// The script for a chart.
 pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
+    if let Some(m) = data.non_finite() {
+        anyhow::bail!("Chart: {}. Fix those rows or filter them out, then chart again.", m);
+    }
     if let Some(r) = data.empty_reason() {
         bail!("No data to chart: {}.", r);
     }
@@ -307,7 +310,7 @@ pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
     let mut w = String::new();
     let title = chart_title(data);
     let _ = writeln!(w, "# {}", title.replace('\n', " "));
-    let _ = writeln!(w, "# Made by MicroParquet, Charts > Copy as Python. The numbers below are the chart's own table, in the chart's scale{}.", if opts.unit.is_empty() { String::new() } else { format!(" ({})", opts.unit) });
+    let _ = writeln!(w, "# Made by MicroParquet, Charts > Copy as Python. The numbers below are the chart's own table, in the chart's scale{}.", if super::layout::shows_unit(data, opts) { format!(" ({})", opts.unit) } else { String::new() });
     let plotly = matches!(kind, ChartKind::Sankey | ChartKind::Treemap);
     if plotly {
         let _ = writeln!(w, "# A Sankey and a treemap have no matplotlib form: this script uses plotly (pip install plotly pandas).");
@@ -316,12 +319,7 @@ pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
     }
     preamble(&mut w, opts.dark, plotly);
     let unit = if opts.unit.is_empty() { String::new() } else { opts.unit.clone() };
-    let subtitle = if !spec.subtitle.trim().is_empty() {
-        spec.subtitle.trim().to_string()
-    } else {
-        let names = data.measure_names.join(", ");
-        if unit.is_empty() { names } else if names.is_empty() { unit.clone() } else { format!("{} \u{b7} {}", names, unit) }
-    };
+    let subtitle = super::layout::subtitle_text(data, opts);
     let _ = writeln!(w, "\nTITLE = {}\nSUBTITLE = {}\nFOOTNOTE = {}", s(&super::tokens::tidy(&title)), s(&super::tokens::tidy(&subtitle)), s(&super::tokens::tidy(spec.footnote.trim())));
     let (cm, _) = colours_of(data, opts);
     let vk0 = value_kind(spec, 0);

@@ -122,3 +122,5 @@ mod p7_c7;
 mod p7_c8;
 #[path = "../phase7/g.rs"]
 mod p7_g;
+#[path = "../phase7/r.rs"]
+mod p7_r;

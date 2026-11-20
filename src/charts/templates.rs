@@ -226,6 +226,24 @@ fn nums(t: Template, df: &DataFrame, col: &str) -> Result<Vec<Option<f64>>> {
     Ok(c.cast(&DataType::Float64)?.f64()?.into_iter().collect())
 }
 
+/// The text of the result's "Sample parameters" row (a parameter file marked sample fed the tool): it goes into the
+/// footnote, so a chart made from sample numbers says so wherever it is shown. `None` when the result has no such row.
+fn sample_text(df: &DataFrame, key_col: &str, text_col: &str) -> Option<String> {
+    let key = df.column(key_col).ok()?.cast(&DataType::String).ok()?;
+    let text = df.column(text_col).ok()?.cast(&DataType::String).ok()?;
+    let i = key.str().ok()?.into_iter().position(|k| k == Some("Sample parameters"))?;
+    text.str().ok()?.get(i).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// `footnote` with the sample warning after it (the warning comes first so it is not cut off).
+fn with_sample(footnote: &str, sample: Option<String>) -> String {
+    match sample {
+        Some(s) if footnote.trim().is_empty() => s,
+        Some(s) => format!("{} \u{b7} {}", s, footnote.trim()),
+        None => footnote.to_string(),
+    }
+}
+
 fn order_of(values: &[String]) -> SortOrder {
     SortOrder::List { name: "template".to_string(), values: values.to_vec(), case_insensitive: true }
 }
@@ -387,6 +405,22 @@ fn history_cols(df: &DataFrame) -> Option<(String, String)> {
 // ------------------------------------------------------------------------------------------ prepare
 
 pub fn prepare(t: Template, df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
+    let mut p = prepare_inner(t, df, ctx)?;
+    stamp(&mut p);
+    Ok(p)
+}
+
+/// Marks the chart (and its second chart) with the template it came from: the subtitle of a template chart gets the unit.
+fn stamp(p: &mut Prepared) {
+    if p.spec.template.is_empty() {
+        p.spec.template = p.template.name().to_string();
+    }
+    if let Some(c) = p.companion.as_mut() {
+        stamp(c);
+    }
+}
+
+fn prepare_inner(t: Template, df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     match t {
         Template::GapLadder => gap_ladder(df),
         Template::RepricingGap => repricing_gap(df, ctx),
@@ -506,10 +540,35 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         Some(k) => strs(t, df, k)?,
         None => vec![None; df.height()],
     };
-    let sum = |col: &str| -> Result<f64> {
-        let v = nums(t, df, col)?;
-        Ok(v.iter().enumerate().filter(|(i, _)| keys.get(*i).and_then(|k| k.as_deref()) != Some("Total")).filter_map(|(_, x)| *x).sum())
-    };
+    // a key in one month only (New, Closed) has blank effects: its whole change goes to "New / closed". A blank is never
+    // read as 0, and a key with only some of its effects blank is a table the chart cannot trust.
+    let (prev_i, curr_i) = (nums(t, df, "Prev annual interest")?, nums(t, df, "Curr annual interest")?);
+    let (vol_v, rate_v, mix_v) = (nums(t, df, "Volume effect")?, nums(t, df, "Rate effect")?, nums(t, df, "Mix effect")?);
+    let (mut prev, mut curr, mut vol, mut rate, mut mix, mut new_closed) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut any_new_closed = false;
+    for i in 0..df.height() {
+        let name = keys.get(i).and_then(|k| k.clone()).unwrap_or_default();
+        if name == "Total" {
+            continue;
+        }
+        let (Some(p), Some(c)) = (prev_i[i], curr_i[i]) else {
+            bail!("{}: the key '{}' has no value in 'Prev annual interest' or 'Curr annual interest'. Run the month-on-month comparison again with a rate column.", t.name(), name);
+        };
+        prev += p;
+        curr += c;
+        match (vol_v[i], rate_v[i], mix_v[i]) {
+            (Some(v), Some(r), Some(m)) => {
+                vol += v;
+                rate += r;
+                mix += m;
+            }
+            (None, None, None) => {
+                any_new_closed = true;
+                new_closed += c - p;
+            }
+            _ => bail!("{}: the key '{}' has some of its volume, rate and mix effects blank and some not. Run the month-on-month comparison again.", t.name(), name),
+        }
+    }
     // one key in the tab: the bridge is that key's and the title names it; several keys: the bridge adds them up
     let distinct: Vec<String> = {
         let mut v: Vec<String> = Vec::new();
@@ -521,13 +580,15 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         v
     };
     let whose = if distinct.len() == 1 { format!("{} interest", distinct[0]) } else { "total interest".to_string() };
-    let (prev, curr) = (sum("Prev annual interest")?, sum("Curr annual interest")?);
-    let (vol, rate, mix) = (sum("Volume effect")?, sum("Rate effect")?, sum("Mix effect")?);
-    let table = frame(vec![
-        Series::new("Step".into(), ["Prior interest", "Volume", "Rate", "Mix", "Current interest"]),
-        Series::new("Interest (BDT)".into(), [prev, vol, rate, mix, curr]),
-    ])?;
-    let labels: Vec<String> = ["Prior interest", "Volume", "Rate", "Mix", "Current interest"].map(String::from).to_vec();
+    let mut labels: Vec<String> = ["Prior interest", "Volume", "Rate", "Mix"].map(String::from).to_vec();
+    let mut amounts = vec![prev, vol, rate, mix];
+    if any_new_closed {
+        labels.push("New / closed".to_string());
+        amounts.push(new_closed);
+    }
+    labels.push("Current interest".to_string());
+    amounts.push(curr);
+    let table = frame(vec![Series::new("Step".into(), labels.clone()), Series::new("Interest (BDT)".into(), amounts)])?;
     let mut spec = base_spec("Step", ChartKind::Waterfall);
     spec.order = order_of(&labels);
     spec.value = Some("Interest (BDT)".into());
@@ -535,7 +596,7 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     spec.subtitle = "Annualised interest".to_string();
     spec.footnote = "Volume = \u{394}Balance \u{d7} prior rate \u{b7} Rate = prior balance \u{d7} \u{394}rate \u{b7} Mix = \u{394}Balance \u{d7} \u{394}rate".to_string();
     // the finding: the largest effect and its share of all the effects
-    let effects = [("Volume", vol), ("Rate", rate), ("Mix", mix)];
+    let effects = [("Volume", vol), ("Rate", rate), ("Mix", mix), ("New / closed", new_closed)];
     let total_abs: f64 = effects.iter().map(|e| e.1.abs()).sum();
     let (name, e) = effects.iter().copied().fold(("Volume", 0.0f64), |a, b| if b.1.abs() > a.1.abs() { b } else { a });
     let change = curr - prev;
@@ -547,7 +608,8 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         let (phrase, verb) = match name {
             "Volume" => (if e >= 0.0 { "Higher balances" } else { "Lower balances" }, "explain"),
             "Rate" => (if e >= 0.0 { "Higher rates" } else { "Lower rates" }, "explain"),
-            _ => ("The product mix", "explains"),
+            "Mix" => ("The product mix", "explains"),
+            _ => ("New and closed items", "explain"),
         };
         if share >= 0.5 {
             format!("{} {} most of the {} {} in {}", phrase, verb, amount_signed(change, ctx), what, whose)
@@ -565,34 +627,60 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
 fn nii_by_key(df: &DataFrame, key_col: &str, keys: &[Option<String>], ctx: &Ctx) -> Result<Option<Prepared>> {
     let t = Template::NiiBridge;
     let (vol, rate, mix) = (nums(t, df, "Volume effect")?, nums(t, df, "Rate effect")?, nums(t, df, "Mix effect")?);
-    let mut rows: Vec<(String, f64, f64, f64)> = Vec::new();
+    let (prev_i, curr_i) = (nums(t, df, "Prev annual interest")?, nums(t, df, "Curr annual interest")?);
+    // per key: its three effects, or (a key in one month only, blank effects) its whole change as "New / closed"
+    let mut rows: Vec<(String, Option<(f64, f64, f64)>, f64)> = Vec::new();
     for i in 0..df.height() {
         let Some(k) = keys.get(i).cloned().flatten() else { continue };
         if k == "Total" {
             continue;
         }
-        let (v, r, m) = (vol[i].unwrap_or(0.0), rate[i].unwrap_or(0.0), mix[i].unwrap_or(0.0));
+        let (Some(p), Some(c)) = (prev_i[i], curr_i[i]) else {
+            bail!("{}: the key '{}' has no value in 'Prev annual interest' or 'Curr annual interest'.", t.name(), k);
+        };
+        let eff = match (vol[i], rate[i], mix[i]) {
+            (Some(v), Some(r), Some(m)) => Some((v, r, m)),
+            (None, None, None) => None,
+            _ => bail!("{}: the key '{}' has some of its volume, rate and mix effects blank and some not.", t.name(), k),
+        };
+        let change = c - p;
         match rows.iter_mut().find(|x| x.0 == k) {
-            Some(x) => {
-                x.1 += v;
-                x.2 += r;
-                x.3 += m;
-            }
-            None => rows.push((k, v, r, m)),
+            Some(x) => match (&mut x.1, eff) {
+                (Some(a), Some(e)) => {
+                    a.0 += e.0;
+                    a.1 += e.1;
+                    a.2 += e.2;
+                }
+                (None, None) => x.2 += change,
+                _ => bail!("{}: the key '{}' appears twice, once with effects and once without.", t.name(), k),
+            },
+            None => rows.push((k, eff, change)),
         }
     }
     if rows.len() < 2 {
         return Ok(None);
     }
-    rows.sort_by(|a, b| (b.1 + b.2 + b.3).abs().partial_cmp(&(a.1 + a.2 + a.3).abs()).unwrap_or(std::cmp::Ordering::Equal));
+    let net = |r: &(String, Option<(f64, f64, f64)>, f64)| r.1.map(|e| e.0 + e.1 + e.2).unwrap_or(r.2);
+    rows.sort_by(|a, b| net(b).abs().partial_cmp(&net(a).abs()).unwrap_or(std::cmp::Ordering::Equal));
     let total_keys = rows.len();
     rows.truncate(crate::charts::tokens::MAX_FACETS);
     let (mut k, mut e, mut v): (Vec<String>, Vec<String>, Vec<f64>) = Default::default();
-    for (name, vo, ra, mi) in &rows {
-        for (label, x) in [("Volume", vo), ("Rate", ra), ("Mix", mi)] {
-            k.push(name.clone());
-            e.push(label.to_string());
-            v.push(*x);
+    let mut any_new_closed = false;
+    for (name, eff, change) in &rows {
+        match eff {
+            Some((vo, ra, mi)) => {
+                for (label, x) in [("Volume", vo), ("Rate", ra), ("Mix", mi)] {
+                    k.push(name.clone());
+                    e.push(label.to_string());
+                    v.push(*x);
+                }
+            }
+            None => {
+                any_new_closed = true;
+                k.push(name.clone());
+                e.push("New / closed".to_string());
+                v.push(*change);
+            }
         }
     }
     let order: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
@@ -604,13 +692,16 @@ fn nii_by_key(df: &DataFrame, key_col: &str, keys: &[Option<String>], ctx: &Ctx)
     spec.stack = Stack::Stacked;
     spec.order = order_of(&order);
     spec.colour_map.assign_all(&["Volume", "Rate", "Mix"]);
+    if any_new_closed {
+        spec.colour_map.assign("New / closed");
+    }
     spec.net_marker = true;
     spec.subtitle = "Change in annualised interest by effect \u{b7} the tick is the net change".to_string();
     if total_keys > rows.len() {
         spec.footnote = format!("The {} keys with the largest change, of {}", rows.len(), total_keys);
     }
     let top = &rows[0];
-    let change = top.1 + top.2 + top.3;
+    let change = net(top);
     let finding = format!("{} has the largest change: {}", top.0, amount_signed(change, ctx));
     spec.title = finding.clone();
     Ok(Some(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: NII effects by key".to_string(), companion: None }))
@@ -694,6 +785,53 @@ fn cl_migration(df: &DataFrame) -> Result<Prepared> {
 
 // ------------------------------------------------------------------------------ classified trend
 
+/// A month cell as a date: "2026-10-31", "31/10/2026" (day first, as the CBS writes it) or "2026-10" (the month's first day).
+fn parse_month_text(s: &str) -> Option<chrono::NaiveDate> {
+    let s = s.trim();
+    for f in ["%Y-%m-%d", "%d/%m/%Y"] {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(s, f) {
+            return Some(d);
+        }
+    }
+    let (y, m) = s.split_once('-')?;
+    if y.len() == 4 && m.len() <= 2 {
+        return chrono::NaiveDate::from_ymd_opt(y.parse().ok()?, m.parse().ok()?, 1);
+    }
+    None
+}
+
+/// The month column as dates, so months sort as dates and never as text. A Date column is used as it is; a text
+/// column must be day/month/year or year-month-day; anything else is refused naming the first value.
+fn month_dates(t: Template, df: &DataFrame, col: &str) -> Result<Vec<Option<chrono::NaiveDate>>> {
+    let c = df.column(col).map_err(|_| missing(t, col))?;
+    let text = match c.dtype() {
+        DataType::Date | DataType::Datetime(_, _) => c.cast(&DataType::Date)?.cast(&DataType::String)?,
+        _ => c.cast(&DataType::String)?,
+    };
+    let mut out = Vec::with_capacity(df.height());
+    for v in text.str()?.into_iter() {
+        match v {
+            None => out.push(None),
+            Some(x) => match parse_month_text(x) {
+                Some(d) => out.push(Some(d)),
+                None => bail!("{}: the month '{}' in '{}' is not a date. Use a Date column, or text written day/month/year (31/10/2026) or year-month-day (2026-10-31), so the months can be put in order.", t.name(), x, col),
+            },
+        }
+    }
+    Ok(out)
+}
+
+/// The label of each month: "Oct 2026"; two different days of one month fall back to the whole date.
+fn month_labels(dates: &[chrono::NaiveDate]) -> Vec<String> {
+    let short: Vec<String> = dates.iter().map(|d| d.format("%b %Y").to_string()).collect();
+    let mut seen = std::collections::HashSet::new();
+    if short.iter().all(|s| seen.insert(s.clone())) {
+        short
+    } else {
+        dates.iter().map(|d| d.format("%-d %b %Y").to_string()).collect()
+    }
+}
+
 fn month_label(s: &str) -> String {
     // 2026-10-31 -> "Oct 2026"; any other text stays as it is
     match chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d") {
@@ -705,23 +843,30 @@ fn month_label(s: &str) -> String {
 fn classified_trend(df: &DataFrame) -> Result<Prepared> {
     let t = Template::ClassifiedTrend;
     let (month_c, grade_c, bal_c) = classified_cols(df).ok_or_else(|| anyhow!("{}: the tab needs a month column, a grade column (STD, SMA, SS, DF, BL) and a balance column. Pivot the stacked months by grade first.", t.name()))?;
-    let months = strs(t, df, &month_c)?;
+    let months = month_dates(t, df, &month_c)?;
     let grades = strs(t, df, &grade_c)?;
     let bal = nums(t, df, &bal_c)?;
-    // month (sortable key) -> label, grade -> balance
-    let mut by: std::collections::BTreeMap<String, (String, [f64; 5])> = std::collections::BTreeMap::new();
+    // month -> grade balances and which grades the month has a row for
+    let mut by: std::collections::BTreeMap<chrono::NaiveDate, ([f64; 5], [bool; 5])> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
-        let (Some(m), Some(g), Some(b)) = (months[i].clone(), grades[i].clone(), bal[i]) else { continue };
+        let (Some(m), Some(g), Some(b)) = (months[i], grades[i].clone(), bal[i]) else { continue };
         let Some(r) = grade_rank(&g) else { continue };
-        let e = by.entry(m.clone()).or_insert_with(|| (month_label(&m), [0.0; 5]));
-        e.1[r] += b;
+        let e = by.entry(m).or_insert_with(|| ([0.0; 5], [false; 5]));
+        e.0[r] += b;
+        e.1[r] = true;
     }
     if by.is_empty() {
         bail!("{}: no row has a month, a grade and a balance.", t.name());
     }
+    // the NPL ratio is over all loans: a month without its Standard (STD) row would overstate it
+    if let Some((d, _)) = by.iter().find(|(_, (_, has))| !has[0]) {
+        bail!("{}: the month {} has no STD row, so its NPL ratio cannot be worked out. Add the Standard (STD) balance for that month, or remove the month from the tab.", t.name(), d.format("%-d %b %Y"));
+    }
+    let label_of = month_labels(&by.keys().copied().collect::<Vec<_>>());
+    let by: Vec<(String, [f64; 5])> = by.into_iter().zip(label_of).map(|((_, (v, _)), l)| (l, v)).collect();
     let (mut mm, mut gg, mut bb, mut np): (Vec<String>, Vec<String>, Vec<f64>, Vec<f64>) = Default::default();
     let mut ratios: Vec<(String, f64)> = Vec::new();
-    for (_, (label, v)) in &by {
+    for (label, v) in &by {
         let total: f64 = v.iter().sum();
         let npl = if total != 0.0 { (v[2] + v[3] + v[4]) / total * 100.0 } else { 0.0 };
         ratios.push((label.clone(), npl));
@@ -735,7 +880,7 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
             }
         }
     }
-    let labels: Vec<String> = by.values().map(|(l, _)| l.clone()).collect();
+    let labels: Vec<String> = by.iter().map(|(l, _)| l.clone()).collect();
     let table = frame(vec![Series::new("Month".into(), mm), Series::new("Grade".into(), gg), Series::new("Balance".into(), bb), Series::new("NPL %".into(), np)])?;
     let mut spec = base_spec("Month", ChartKind::Bar);
     spec.series = Some("Grade".into());
@@ -805,6 +950,7 @@ fn irrbb(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
     if let Some(src) = sc.iter().position(|s| s.as_deref() == Some("Rule source")).and_then(|i| note[i].clone()).filter(|s| !s.trim().is_empty()) {
         spec.footnote = src;
     }
+    spec.footnote = with_sample(&spec.footnote, sample_text(df, "Scenario", "Note"));
     let (worst_name, worst) = rows[0].clone();
     let finding = if worst < 0.0 {
         format!("{} is the worst case at {} of Tier 1", worst_name, pct_title(worst))
@@ -822,14 +968,30 @@ fn lcr_nsfr(df: &DataFrame) -> Result<Prepared> {
     let item = strs(t, df, "Item")?;
     let value = nums(t, df, "Value")?;
     let get = |name: &str| item.iter().position(|s| s.as_deref() == Some(name)).and_then(|i| value[i]);
+    let note = if has(df, "Note") { strs(t, df, "Note")? } else { vec![None; df.height()] };
+    let note_of = |name: &str| item.iter().position(|s| s.as_deref() == Some(name)).and_then(|i| note[i].clone());
     let mut cats: Vec<String> = Vec::new();
     let mut vals: Vec<f64> = Vec::new();
     let mut mins: Vec<f64> = Vec::new();
+    let mut breaches: Vec<bool> = Vec::new();
     for r in ["LCR", "NSFR"] {
         if let Some(v) = get(r) {
+            // the minimum and whether it is met are the tool's own answer; a summary without them is not guessed at
+            let Some(min) = get(&format!("{} minimum", r)) else {
+                bail!("{}: the summary has no '{} minimum' row, so the ratio cannot be drawn against its minimum. Run the LCR / NSFR tool again.", t.name(), r);
+            };
+            let status = note_of(&format!("{} status", r)).unwrap_or_default();
+            let breach = if status.starts_with("Below") {
+                true
+            } else if status.starts_with("Meets") {
+                false
+            } else {
+                bail!("{}: the summary's '{} status' row says '{}', not 'Meets the minimum' or 'Below the minimum'. Run the LCR / NSFR tool again.", t.name(), r, status);
+            };
             cats.push(r.to_string());
             vals.push(v);
-            mins.push(get(&format!("{} minimum", r)).unwrap_or(100.0));
+            mins.push(min);
+            breaches.push(breach);
         }
     }
     if cats.is_empty() {
@@ -843,13 +1005,19 @@ fn lcr_nsfr(df: &DataFrame) -> Result<Prepared> {
     spec.measures = vec![measure("Ratio %", "Ratio %", true)];
     spec.subtitle = "Liquidity ratios against their minimums".to_string();
     spec.limit_note = "red ticks: minimum ratio".to_string();
+    let sample = sample_text(df, "Item", "Note");
+    spec.footnote = with_sample("", sample.clone());
     for (i, c) in cats.iter().enumerate() {
-        let breach = if vals[i] < mins[i] { format!("Breach: {} vs {} minimum", value_text(vals[i], ValueKind::Percent, 1, false), limit_text(mins[i])) } else { String::new() };
+        let breach = if breaches[i] { format!("Breach: {} vs {} minimum", value_text(vals[i], ValueKind::Percent, 1, false), limit_text(mins[i])) } else { String::new() };
         spec.limit_ticks.push(LimitTick { panel: 0, category: c.clone(), value: mins[i], status: Status::Critical, breach });
     }
     let finding = format!("{} {}% against a {}% minimum", cats[0], format_with_commas(vals[0], 1), format_with_commas(mins[0], 0));
     spec.title = finding.clone();
-    let companion = hqla_composition(&item, &value, t)?.map(Box::new);
+    let mut companion = hqla_composition(&item, &value, t)?;
+    if let Some(c) = companion.as_mut() {
+        c.spec.footnote = with_sample(&c.spec.footnote, sample);
+    }
+    let companion = companion.map(Box::new);
     Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: LCR and NSFR".to_string(), companion })
 }
 
@@ -918,6 +1086,7 @@ fn ecl_by_stage(df: &DataFrame) -> Result<Prepared> {
     spec.measures = vec![measure("EAD", "EAD", false), measure("ECL", "ECL", false), measure("Coverage %", "Coverage %", true)];
     spec.panels = (0..3).map(|i| PanelSpec { kind: ChartKind::Bar, measures: vec![i], title: ["EAD", "ECL", "Coverage % (ECL / EAD)"][i].to_string(), single: false }).collect();
     spec.subtitle = "IFRS 9 by stage".to_string();
+    spec.footnote = with_sample("", sample_text(df, "Section", "Group"));
     let total: f64 = l.iter().sum();
     let (top_i, top) = l.iter().enumerate().fold((0usize, f64::MIN), |a, (i, v)| if *v > a.1 { (i, *v) } else { a });
     let finding = if total <= 0.0 { "No expected credit loss is held in any stage".to_string() } else { format!("{} holds {}% of ECL", st[top_i], format_with_commas(top / total * 100.0, 1)) };
@@ -930,25 +1099,35 @@ fn ecl_by_stage(df: &DataFrame) -> Result<Prepared> {
 fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
     let t = Template::DepositMix;
     let (month_c, prod_c, bal_c) = mix_cols(df).ok_or_else(|| anyhow!("{}: the tab needs a month column, a product column and an amount column (balance, outstanding or amount).", t.name()))?;
+    let dates = month_dates(t, df, &month_c)?;
     let months = strs(t, df, &month_c)?;
     let prods = strs(t, df, &prod_c)?;
     let bal = nums(t, df, &bal_c)?;
-    let mut by: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>> = std::collections::BTreeMap::new();
+    // by date (never by text); the tab's own month texts, in date order, are the order of the columns
+    let mut by: std::collections::BTreeMap<chrono::NaiveDate, std::collections::BTreeMap<String, f64>> = std::collections::BTreeMap::new();
+    let mut texts: std::collections::BTreeMap<chrono::NaiveDate, Vec<String>> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
-        let (Some(m), Some(p), Some(b)) = (months[i].clone(), prods[i].clone(), bal[i]) else { continue };
-        *by.entry(m).or_default().entry(p).or_default() += b;
+        let (Some(d), Some(p), Some(b)) = (dates[i], prods[i].clone(), bal[i]) else { continue };
+        *by.entry(d).or_default().entry(p).or_default() += b;
+        if let Some(m) = months[i].clone() {
+            let e = texts.entry(d).or_default();
+            if !e.contains(&m) {
+                e.push(m);
+            }
+        }
     }
     if by.is_empty() {
         bail!("{}: no row has a month, a product and an amount.", t.name());
     }
+    let month_order: Vec<String> = texts.into_values().flatten().collect();
     let mut spec = base_spec(&month_c, ChartKind::Bar);
     spec.series = Some(prod_c.clone());
     spec.value = Some(bal_c.clone());
     spec.stack = Stack::Stacked;
     spec.subtitle = format!("{} by {} and {}", bal_c, prod_c.to_lowercase(), month_c.to_lowercase());
-    let months_sorted: Vec<&String> = by.keys().collect();
-    let (first, last) = (by[months_sorted[0]].clone(), by[months_sorted[months_sorted.len() - 1]].clone());
-    let finding = if months_sorted.len() < 2 {
+    spec.order = order_of(&month_order);
+    let (first, last) = (by.values().next().cloned().unwrap_or_default(), by.values().next_back().cloned().unwrap_or_default());
+    let finding = if by.len() < 2 {
         let (p, _) = last.iter().fold((String::new(), f64::MIN), |a, (k, v)| if *v > a.1 { (k.clone(), *v) } else { a });
         format!("{} is the largest part", p)
     } else {
@@ -1168,5 +1347,6 @@ pub fn yield_curves(curves: &[CurveInput]) -> Result<Prepared> {
         }
     };
     spec.title = finding.clone();
+    spec.template = t.name().to_string();
     Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: yield curves".to_string(), companion: None })
 }

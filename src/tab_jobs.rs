@@ -430,8 +430,11 @@ pub struct ChartBookRequest {
     pub source: TabSource,
     pub steps: Vec<TransformStep>,
     pub temp_dir: PathBuf,
-    /// Name, chart and how its numbers are written.
+    /// Name, chart and how its numbers are written, for saved charts that are calculated on the tab.
     pub charts: Vec<(String, crate::chart::ChartSpec, crate::charts::layout::LayoutOpts)>,
+    /// Charts already calculated (open chart tabs, the studio chart): written as they are, in this order and
+    /// before the saved charts. Nothing is calculated again and no number is scaled a second time.
+    pub snapshots: Vec<(String, crate::chart::ChartData, crate::charts::layout::LayoutOpts)>,
     pub title: String,
     pub date: String,
     pub path: PathBuf,
@@ -442,13 +445,15 @@ pub struct ChartBookRequest {
 pub fn chart_book_job(req: ChartBookRequest, ctx: &JobCtx) -> Result<JobOutput> {
     use anyhow::Context;
     ctx.set_progress("Calculating the charts\u{2026}", None);
-    let ChartBookRequest { source, steps, temp_dir, charts, title, date, path } = req;
-    let lf = compile_tab_lazy(&source, &steps, &temp_dir).map(|lf| crate::pivot_table::without_total_rows(lf, &steps))?;
-    let mut datas = Vec::new();
-    for (name, spec, opts) in &charts {
-        ctx.check()?;
-        let d = crate::charts::calc::compute(lf.clone(), spec).with_context(|| format!("Chart '{}'", name))?;
-        datas.push((d, opts.clone()));
+    let ChartBookRequest { source, steps, temp_dir, charts, snapshots, title, date, path } = req;
+    let mut datas: Vec<(crate::chart::ChartData, crate::charts::layout::LayoutOpts)> = snapshots.into_iter().map(|(_, d, o)| (d, o)).collect();
+    if !charts.is_empty() {
+        let lf = compile_tab_lazy(&source, &steps, &temp_dir).map(|lf| crate::pivot_table::without_total_rows(lf, &steps))?;
+        for (name, spec, opts) in &charts {
+            ctx.check()?;
+            let d = crate::charts::calc::compute(lf.clone(), spec).with_context(|| format!("Chart '{}'", name))?;
+            datas.push((d, opts.clone()));
+        }
     }
     let items: Vec<crate::charts::echarts::BookItem> = datas.iter().map(|(d, o)| crate::charts::echarts::BookItem { data: d, opts: o.clone() }).collect();
     crate::charts::echarts::write_chart_book(&path, &title, &date, &items)?;

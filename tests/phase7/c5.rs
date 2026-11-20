@@ -258,6 +258,8 @@ fn c5_the_other_templates_give_their_form_and_their_finding() {
     assert!(p.spec.limit_ticks.iter().all(|t| t.breach.is_empty()));
     let mut low = lcr_summary();
     low.with_column(Series::new("Value".into(), [Some(3_500.0), Some(1_000.0), Some(500.0), Some(0.0), Some(0.0), Some(5_000.0), Some(92.0), Some(100.0), None, Some(108.2), Some(100.0), None])).unwrap();
+    // the tool's own status row says it is below the minimum (the chart does not do that arithmetic)
+    low.with_column(Series::new("Note".into(), ["", "", "", "", "", "", "", "at least", "Below the minimum", "", "at least", "Meets the minimum"])).unwrap();
     assert_eq!(prepare(Template::LcrNsfr, &low, &ctx()).unwrap().spec.limit_ticks[0].breach, "Breach: 92.0% vs 100% minimum");
     // ECL by stage
     let (p, d) = chart_of(Template::EclByStage, &ecl_summary());

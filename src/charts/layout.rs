@@ -243,6 +243,58 @@ impl Default for LayoutOpts {
     }
 }
 
+/// The subtitle every renderer writes: the typed one, else what is measured (with what was done to it: "% of row")
+/// and the unit. A money unit is written only for amounts: never beside a percentage view (shares, ratios, counts).
+/// A banking template's own subtitle gets the unit appended when the chart has an amount measure.
+pub fn shows_unit(data: &ChartData, opts: &LayoutOpts) -> bool {
+    use super::spec::{ChartAgg, ChartKind as K, Stack, Transform};
+    let spec = &data.spec;
+    let share_stack = spec.stack == Stack::Percent && matches!(spec.kind, K::Bar | K::Area);
+    let is_amount = |m: &super::spec::MeasureSpec| !m.pct && m.agg != ChartAgg::Count && matches!(m.transform, Transform::None | Transform::RunningSum);
+    !opts.unit.is_empty() && !share_stack && spec.measure_list().iter().any(is_amount)
+}
+
+pub fn subtitle_text(data: &ChartData, opts: &LayoutOpts) -> String {
+    use super::spec::Transform;
+    let spec = &data.spec;
+    let measures = spec.measure_list();
+    use super::spec::{ChartKind as K, Stack};
+    let share_stack = spec.stack == Stack::Percent && matches!(spec.kind, K::Bar | K::Area);
+    let amount = shows_unit(data, opts);
+    let typed = spec.subtitle.trim();
+    if !typed.is_empty() {
+        if !spec.template.is_empty() && amount && !typed.contains(opts.unit.as_str()) {
+            return format!("{} \u{b7} {}", typed, opts.unit);
+        }
+        return typed.to_string();
+    }
+    let mut names: Vec<String> = Vec::new();
+    for (i, n) in data.measure_names.iter().enumerate() {
+        let word = if share_stack && i == 0 {
+            Some("as % of column")
+        } else {
+            match measures.get(i).map(|m| m.transform) {
+                Some(Transform::ShareOfTotal) => Some("as % of total"),
+                Some(Transform::ShareOfCategory) => Some("as % of column"),
+                Some(Transform::ShareOfSeries) => Some("as % of row"),
+                Some(Transform::RunningSum) => Some("running sum"),
+                _ => None,
+            }
+        };
+        names.push(match word {
+            Some(w) => format!("{} {}", n, w),
+            None => n.clone(),
+        });
+    }
+    let names = names.join(", ");
+    match (names.is_empty(), amount) {
+        (false, true) => format!("{} \u{b7} {}", names, opts.unit),
+        (false, false) => names,
+        (true, true) => opts.unit.clone(),
+        (true, false) => String::new(),
+    }
+}
+
 fn rgb(c: u32) -> Color32 {
     Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
@@ -541,19 +593,7 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
     if !opts.bare {
         y += HEADER_GAP;
     }
-    let subtitle = if opts.bare {
-        String::new()
-    } else if !data.spec.subtitle.trim().is_empty() {
-        data.spec.subtitle.trim().to_string()
-    } else {
-        let names = if data.measure_names.is_empty() { String::new() } else { data.measure_names.join(", ") };
-        match (names.is_empty(), opts.unit.is_empty()) {
-            (false, false) => format!("{} \u{b7} {}", names, opts.unit),
-            (false, true) => names,
-            (true, false) => opts.unit.clone(),
-            (true, true) => String::new(),
-        }
-    };
+    let subtitle = if opts.bare { String::new() } else { subtitle_text(data, opts) };
     if !subtitle.is_empty() {
         let sw = b.width_fn(t::SUBTITLE_PT, Face::Regular);
         let shown = fit_text(&subtitle, outer.width(), &sw);
@@ -596,6 +636,8 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
         b.out.message = Some(format!("{} charts are drawn in a web page: click \"Preview in browser\" in the Chart tab, or use Export \u{25b8} Chart to HTML. Choose another form to see this chart here.", data.spec.kind.label()));
     } else if let Some(r) = data.empty_reason() {
         b.out.message = Some(format!("No data to chart: {}.", r));
+    } else if let Some(m) = data.non_finite() {
+        b.out.message = Some(format!("Chart: {}. Fix those rows or filter them out, then chart again.", m));
     }
     let body = Rect::from_min_max(pos2(outer.left(), y), pos2(outer.right(), body_bottom));
     if b.out.message.is_none() && body.height() < MIN_BODY_H {

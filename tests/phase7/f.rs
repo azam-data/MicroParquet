@@ -592,8 +592,9 @@ fn f11_the_lcr_summary_also_gives_the_hqla_composition_as_a_tall_segmented_bar()
     let _ = d;
     // an older summary without the level rows has nothing to compose
     let old = DataFrame::new(vec![
-        Series::new("Item".into(), ["HQLA after caps", "LCR", "LCR minimum"]),
-        Series::new("Value".into(), [Some(5_000.0), Some(133.68), Some(100.0)]),
+        Series::new("Item".into(), ["HQLA after caps", "LCR", "LCR minimum", "LCR status"]),
+        Series::new("Value".into(), [Some(5_000.0), Some(133.68), Some(100.0), None]),
+        Series::new("Note".into(), ["", "", "at least", "Meets the minimum"]),
     ])
     .unwrap();
     assert!(prepare(Template::LcrNsfr, &old, &ctx()).unwrap().companion.is_none());

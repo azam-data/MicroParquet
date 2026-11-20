@@ -132,7 +132,7 @@ pub fn lcr_summary() -> DataFrame {
         ),
         Series::new("Value".into(), [Some(3_500.0), Some(1_000.0), Some(500.0), Some(0.0), Some(0.0), Some(5_000.0), Some(133.68), Some(100.0), None, Some(108.2), Some(100.0), None]),
         Series::new("Unit".into(), ["BDT", "BDT", "BDT", "BDT", "BDT", "BDT", "%", "%", "", "%", "%", ""]),
-        Series::new("Note".into(), ["", "", "", "", "", "", "", "at least", "Meets", "", "at least", "Meets"]),
+        Series::new("Note".into(), ["", "", "", "", "", "", "", "at least", "Meets the minimum", "", "at least", "Meets the minimum"]),
     ])
     .unwrap()
 }

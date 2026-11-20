@@ -372,7 +372,7 @@
     {
       "itemGap": 4,
       "left": 20.0,
-      "subtext": "Sum of Balance · BDT",
+      "subtext": "Sum of Balance as % of row",
       "subtextStyle": {
         "color": "#52514e",
         "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
