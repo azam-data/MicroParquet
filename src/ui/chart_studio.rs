@@ -821,6 +821,41 @@ impl MicroParquetApp {
                 });
                 rects.fields.push(("Highlight".to_string(), r.response.rect));
                 ui.end_row();
+                // ---- data labels: which, how many decimals, which unit, and the % of share views
+                ui.label("Data labels");
+                let r = egui::ComboBox::from_id_salt("chart_labels_mode").width(combo_w).selected_text(spec.labels.mode.label()).show_ui(ui, |ui| {
+                    for m in micro_parquet::charts::spec::LabelMode::all() {
+                        ui.selectable_value(&mut spec.labels.mode, *m, m.label());
+                    }
+                });
+                rects.fields.push(("Data labels".to_string(), r.response.rect));
+                ui.end_row();
+                ui.label("Label decimals");
+                let mut custom = spec.labels.decimals.is_some();
+                let mut d = spec.labels.decimals.unwrap_or(self.global_decimals).min(4);
+                ui.horizontal(|ui| {
+                    let c = ui.checkbox(&mut custom, "");
+                    rects.fields.push(("Label decimals set".to_string(), c.rect));
+                    let r = ui.add_enabled(custom, egui::DragValue::new(&mut d).range(0..=4).speed(0.2)); // not a size: a drag speed
+                    rects.fields.push(("Label decimals".to_string(), r.rect));
+                    if !custom {
+                        ui.label(egui::RichText::new("the view's").size(theme::TEXT_LABEL).color(tk.muted));
+                    }
+                });
+                spec.labels.decimals = custom.then_some(d);
+                ui.end_row();
+                ui.label("Label unit");
+                let r = egui::ComboBox::from_id_salt("chart_labels_unit").width(combo_w).selected_text(spec.labels.unit.label()).show_ui(ui, |ui| {
+                    for u in micro_parquet::charts::spec::LabelUnit::all() {
+                        ui.selectable_value(&mut spec.labels.unit, *u, u.label());
+                    }
+                });
+                rects.fields.push(("Label unit".to_string(), r.response.rect));
+                ui.end_row();
+                ui.label("Percent labels");
+                let r = ui.checkbox(&mut spec.labels.percent, "On share views");
+                rects.fields.push(("Percent labels".to_string(), r.rect));
+                ui.end_row();
             });
             ui.label(egui::RichText::new("The takeaway is your sentence for the title. The rest of the chart is de-emphasised around the highlight.").size(theme::TEXT_LABEL).color(tk.muted));
         });

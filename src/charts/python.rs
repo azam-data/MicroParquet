@@ -54,7 +54,7 @@ fn hexs(c: u32) -> String {
 }
 
 /// The house style and the drawing helpers every script starts with.
-fn preamble(w: &mut String, dark: bool, plotly: bool) {
+fn preamble(w: &mut String, dark: bool, plotly: bool, decimals: usize, labels: &str) {
     let ink = t::ink(dark);
     let _ = writeln!(w, "import math\nimport pandas as pd");
     if plotly {
@@ -100,12 +100,19 @@ plt.rcParams.update({{
     "xtick.major.size": 0, "ytick.major.size": 0, "legend.frameon": False,
 }})
 
-def fmt(v, kind="amount", decimals={dec}):
-    """The number as the chart writes it: thousands separators, the true minus sign, a % for shares."""
+DEC = {dec}  # the decimals of the view the chart was made in
+
+def fmt(v, kind="amount", decimals=None):
+    """The number as the chart writes it: thousands separators, the true minus sign, a % for shares
+    (one decimal for a share, the view's decimals for an amount, none for a count)."""
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return ""
-    text = f"{{abs(v):,.{{1 if kind == 'percent' else decimals}}f}}" + ("%" if kind == "percent" else "")
+    if decimals is None:
+        decimals = 1 if kind == "percent" else 0 if kind == "count" else DEC
+    text = f"{{abs(v):,.{{decimals}}f}}" + ("%" if kind == "percent" else "")
     return ("−" if v < 0 else "") + text
+
+{labels}
 
 def style_axes(ax, horizontal=False):
     """One zero baseline, light solid gridlines on the value axis only, no frame."""
@@ -122,7 +129,8 @@ def titles(fig, title, subtitle, footnote):
         fig.text(0.015, 0.012, footnote, fontsize={foot_pt}, color=MUTED, ha="left", va="bottom")
 "#,
             tick = t::TICK_PT,
-            dec = 2,
+            dec = decimals,
+            labels = labels,
             title_pt = t::TITLE_PT,
             sub_pt = t::SUBTITLE_PT,
             foot_pt = t::FOOTNOTE_PT
@@ -182,7 +190,7 @@ fn frame_literal(data: &ChartData, measure: usize, opts: &LayoutOpts, name: &str
 }
 
 const DRAW: &str = r##"
-def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=False, label_values=True, vkind="amount", net=False, segments=False):
+def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=False, label_values=True, vkind="amount", net=False, segments=False, named_end=False):
     """One panel: bars (grouped, stacked, 100% stacked), lines (stepped), areas. `df` has the categories as its
     index and one column per series."""
     colours = colours or {}
@@ -205,7 +213,7 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
                 offs, base = pos, [bottoms_pos[k] if v >= 0 else bottoms_neg[k] for k, v in enumerate(vals)]
             colour = [pick(i, n)] * len(pos)
             if len(names) == 1 and any(v < 0 for v in vals):
-                colour = ["#e34948" if v < 0 else "#2a78d6" for v in vals]  # diverging: red down, blue up
+                colour = ["#e34948" if v < 0 else "#2a78d6" if v > 0 else "#c3c2b7" for v in vals]  # diverging: red down, blue up, grey at zero
             if horizontal:
                 bars = ax.barh(offs, vals, height=width, left=base, color=colour, edgecolor=SURFACE, linewidth=2 if stack != "grouped" else 0, label=n)
             else:
@@ -216,11 +224,11 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
                         bottoms_pos[k] += v
                     else:
                         bottoms_neg[k] += v
-            if label_values and len(names) == 1 and len(pos) <= 12:
-                signed = any(v < 0 for v in vals)
-                texts = [(("+" if v > 0 else "") + fmt(v, vkind, 2)) if signed else fmt(v, vkind) for v in vals]
-                ax.bar_label(bars, labels=texts, padding=3, fontsize=9.5, color=INK)
-        if segments and stack == "stacked" and not horizontal:
+            if label_values and LABELS != "none" and ((LABELS == "auto" and len(names) == 1 and len(pos) <= 12) or LABELS in ("all", "ends")):
+                signed = len(names) == 1 and any(v < 0 for v in vals)
+                texts = [lab(v, vkind, signed) if show(k, len(vals)) and (i, k) not in DROPPED else "" for k, v in enumerate(vals)]
+                ax.bar_label(bars, labels=texts, padding=3, fontsize=9.5, color=INK, label_type="center" if stack != "grouped" else "edge")
+        if segments and stack == "stacked" and not horizontal and LABELS != "none":
             # each segment beside its stack with its value and its share of the stack
             totals = df.fillna(0).abs().sum(axis=1)
             for k in range(len(pos)):
@@ -228,13 +236,13 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
                 for n in names:
                     v = 0.0 if pd.isna(df[n].iloc[k]) else df[n].iloc[k]
                     share = 0 if totals.iloc[k] == 0 else abs(v) / totals.iloc[k] * 100
-                    ax.annotate(fmt(v, vkind, 0 if float(v).is_integer() else 2) + " \u00b7 " + f"{share:.1f}%", (k + width / 2, base + v / 2), xytext=(8, 0), textcoords="offset points", va="center", fontsize=9.5, color=INK)
+                    ax.annotate((lab(v, vkind) if LDEC is not None else fmt(v * (LABEL_SCALE if vkind == "amount" else 1), vkind, 0 if float(v * (LABEL_SCALE if vkind == "amount" else 1)).is_integer() else DEC)) + " \u00b7 " + f"{share:.1f}%", (k + width / 2, base + v / 2), xytext=(8, 0), textcoords="offset points", va="center", fontsize=9.5, color=INK)
                     base += v
-        if net and stack == "stacked" and not horizontal:
+        if net and stack == "stacked" and not horizontal and LABELS != "none":
             # the net of each stack: a short dark tick across it and its signed value beside it
             for k, total in enumerate(df.fillna(0).sum(axis=1)):
                 ax.hlines(total, k - width / 2 - 0.08, k + width / 2 + 0.08, color=INK, linewidth=2, zorder=5)
-                ax.annotate(("+" if total > 0 else "") + fmt(total, vkind, 2), (k + width / 2 + 0.1, total), xytext=(4, 0), textcoords="offset points", va="center", fontsize=9.5, color=INK)
+                ax.annotate(lab(total, vkind, True), (k + width / 2 + 0.1, total), xytext=(4, 0), textcoords="offset points", va="center", fontsize=9.5, color=INK)
         if horizontal:
             ax.set_yticks(pos, [str(i) for i in df.index])
             ax.invert_yaxis()
@@ -262,8 +270,18 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
                         marker="o" if len(pos) <= 24 and not (kind == "area" and len(names) > 1) else None, markersize=4,
                         markeredgecolor=SURFACE, markeredgewidth=2)
             last = max((k for k, v in enumerate(vals) if not math.isnan(v)), default=None)
+            first = min((k for k, v in enumerate(vals) if not math.isnan(v)), default=None)
+            if LABELS in ("all", "ends"):
+                for k, v in enumerate(vals):
+                    if math.isnan(v) or (LABELS == "ends" and k not in (first, last)) or (len(names) == 1 and k == last) or (i, k) in DROPPED:
+                        continue
+                    ax.annotate(lab(v, vkind), (x[k], v), xytext=(0, 7), textcoords="offset points", ha="center", fontsize=9.5)
             if last is not None and len(names) == 1:
-                ax.annotate(fmt(vals[last], vkind), (x[last], vals[last]), xytext=(8, 0), textcoords="offset points", va="center", fontsize=9.5)
+                # one series says its value; a panel that is one named measure (the NPL % panel) says its name too
+                value_text = lab(vals[last], vkind) if show(last, len(vals)) else ""
+                end_text = (n + "  " if named_end and value_text else n if named_end else "") + value_text
+                if end_text:
+                    ax.annotate(end_text, (x[last], vals[last]), xytext=(8, 0), textcoords="offset points", va="center", fontsize=9.5)
             elif last is not None and len(names) <= 4 and kind == "line":
                 ax.annotate(n, (x[last], vals[last]), xytext=(8, 0), textcoords="offset points", va="center", fontsize=10, color=INK2)
         ax.set_xticks(pos, [str(i) for i in df.index])
@@ -297,6 +315,47 @@ fn ref_lines(data: &ChartData, panel: usize, horizontal: bool, opts: &LayoutOpts
     }
 }
 
+/// The Data labels setting as Python: which labels, their unit and decimals, and the ones left out.
+fn label_helpers(plan: &super::labels::LabelPlan, opts: &LayoutOpts, dropped: &[super::labels::LabelKey]) -> String {
+    use super::spec::LabelMode;
+    let mode = match plan.mode {
+        LabelMode::Auto => "auto",
+        LabelMode::All => "all",
+        LabelMode::EndsOnly => "ends",
+        LabelMode::None => "none",
+    };
+    let scale = if plan.opts.divisor > 0.0 { opts.divisor / plan.opts.divisor } else { 1.0 };
+    let mut cells: Vec<String> = dropped.iter().map(|(_, si, ci)| format!("({}, {})", si, ci)).collect();
+    cells.sort();
+    cells.dedup();
+    format!(
+        r#"LABELS = "{mode}"  # which data labels: auto, all, ends (first and last) or none
+LABEL_SCALE = {scale}  # the labels' unit against the numbers in the tables below
+LDEC = {ldec}  # decimals of the labels (None = the view's)
+LPCT = {lpct}  # labels on percentages
+DROPPED = {{{dropped}}}  # labels of "all" left out because they would overlap: (series, category)
+
+def show(i, n, auto=True):
+    """Whether the label at position i of n is printed."""
+    return auto if LABELS == "auto" else True if LABELS == "all" else i in (0, n - 1) if LABELS == "ends" else False
+
+def lab(v, kind="amount", signed=False):
+    """A data label as the chart writes it: the label unit and decimals, a sign for a signed bar."""
+    if LABELS == "none" or (kind == "percent" and not LPCT) or v is None or (isinstance(v, float) and math.isnan(v)):
+        return ""
+    if kind == "amount":
+        v = v * LABEL_SCALE
+    d = LDEC if LDEC is not None else (2 if (signed and kind == "percent") else None)
+    text = fmt(v, kind, d)
+    return ("+" + text) if signed and v > 0 else text"#,
+        mode = mode,
+        scale = scale,
+        ldec = plan.decimals.map(|d| d.to_string()).unwrap_or_else(|| "None".to_string()),
+        lpct = if plan.percent { "True" } else { "False" },
+        dropped = cells.join(", "),
+    )
+}
+
 /// The script for a chart.
 pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
     if let Some(m) = data.non_finite() {
@@ -317,10 +376,18 @@ pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
     } else {
         let _ = writeln!(w, "# Needs: pip install pandas matplotlib");
     }
-    preamble(&mut w, opts.dark, plotly);
+    let plan = super::labels::LabelPlan::new(spec, opts);
+    let dropped = super::labels::dropped_labels(data, opts, 1000.0, 520.0);
+    let label_code = label_helpers(&plan, opts, &dropped);
+    preamble(&mut w, opts.dark, plotly, opts.decimals, &label_code);
     let unit = if opts.unit.is_empty() { String::new() } else { opts.unit.clone() };
     let subtitle = super::layout::subtitle_text(data, opts);
-    let _ = writeln!(w, "\nTITLE = {}\nSUBTITLE = {}\nFOOTNOTE = {}", s(&super::tokens::tidy(&title)), s(&super::tokens::tidy(&subtitle)), s(&super::tokens::tidy(spec.footnote.trim())));
+    let mut foot_parts: Vec<String> = Vec::new();
+    if !spec.footnote.trim().is_empty() {
+        foot_parts.push(spec.footnote.trim().to_string());
+    }
+    foot_parts.extend(super::labels::footnote_notes(data, opts, dropped.len()));
+    let _ = writeln!(w, "\nTITLE = {}\nSUBTITLE = {}\nFOOTNOTE = {}", s(&super::tokens::tidy(&title)), s(&super::tokens::tidy(&subtitle)), s(&super::tokens::tidy(&foot_parts.join(" \u{b7} "))));
     let (cm, _) = colours_of(data, opts);
     let vk0 = value_kind(spec, 0);
     match kind {
@@ -396,7 +463,7 @@ fn cartesian(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap
         let vk = value_kind(spec, *m);
         let frame = if *single { format!("panel{}_one", m) } else { format!("panel{}", m) };
         let lead = if *single { "_ = " } else { "names = " };
-        let _ = writeln!(w, "ax = axes[{i}][0]\n{lead}draw(ax, {frame}, {}, stack={}, horizontal={}, colours=COLOURS, stepped={}, vkind={}{})", s(kind_of(*k)), s(stack), if horizontal { "True" } else { "False" }, if spec.stepped { "True" } else { "False" }, s(kind_word(vk)), if spec.net_marker { ", label_values=False, net=True" } else if spec.segment_labels { ", segments=True" } else { "" });
+        let _ = writeln!(w, "ax = axes[{i}][0]\n{lead}draw(ax, {frame}, {}, stack={}, horizontal={}, colours=COLOURS, stepped={}, vkind={}{}{})", s(kind_of(*k)), s(stack), if horizontal { "True" } else { "False" }, if spec.stepped { "True" } else { "False" }, s(kind_word(vk)), if *single { ", named_end=True" } else { "" }, if spec.net_marker { ", label_values=False, net=True" } else if spec.segment_labels { ", segments=True" } else { "" });
         if !title.is_empty() {
             let _ = writeln!(w, "ax.set_title({}, loc=\"left\", fontsize=10, color=INK2)", s(title));
         }
@@ -502,10 +569,9 @@ fn waterfall(w: &mut String, data: &ChartData, opts: &LayoutOpts) -> Result<()> 
     );
     let _ = writeln!(
         w,
-        "\nTOTAL_START, TOTAL_END = {}, {}\nfig, ax = plt.subplots(figsize=(10, 5.2))\nfig.subplots_adjust(top=0.80, bottom=0.14)\nfor i, r in steps.reset_index().iterrows():\n    colour = TOTAL_START if r.Kind == \"start\" else TOTAL_END if r.Kind == \"end\" else (\"#2a78d6\" if r.Value >= 0 else \"#e34948\")\n    ax.bar(r['index'], max(r.Top - r.Base, 0.002 * max(abs(steps.Top).max(), 1)), bottom=r.Base, width=0.55, color=colour, edgecolor=SURFACE)\n    ax.annotate(fmt(r.Value, {}) if r.Kind != \"delta\" else (\"+\" if r.Value > 0 else \"\") + fmt(r.Value, {}), (r['index'], r.Top), xytext=(0, 4), textcoords=\"offset points\", ha=\"center\", fontsize=9.5)\n    if r['index'] < len(steps) - 1:\n        ax.plot([r['index'] + 0.275, r['index'] + 1 - 0.275], [r.Level, r.Level], color=BASELINE, linewidth=1)\nax.set_xticks(range(len(steps)), steps[\"Step\"])\nax.axhline(0, color=BASELINE, linewidth=1)\nstyle_axes(ax)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
+        "\nTOTAL_START, TOTAL_END = {}, {}\nfig, ax = plt.subplots(figsize=(10, 5.2))\nfig.subplots_adjust(top=0.80, bottom=0.14)\nfor i, r in steps.reset_index().iterrows():\n    colour = TOTAL_START if r.Kind == \"start\" else TOTAL_END if r.Kind == \"end\" else (\"#2a78d6\" if r.Value > 0 else \"#e34948\" if r.Value < 0 else \"#c3c2b7\")\n    ax.bar(r['index'], max(r.Top - r.Base, 0.002 * max(abs(steps.Top).max(), 1)), bottom=r.Base, width=0.55, color=colour, edgecolor=SURFACE)\n    if show(r['index'], len(steps)):\n        ax.annotate(lab(r.Value, {}, r.Kind == \"delta\"), (r['index'], r.Top), xytext=(0, 4), textcoords=\"offset points\", ha=\"center\", fontsize=9.5)\n    if r['index'] < len(steps) - 1:\n        ax.plot([r['index'] + 0.275, r['index'] + 1 - 0.275], [r.Level, r.Level], color=BASELINE, linewidth=1)\nax.set_xticks(range(len(steps)), steps[\"Step\"])\nax.axhline(0, color=BASELINE, linewidth=1)\nstyle_axes(ax)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
         hexs(t::WATERFALL_START),
         hexs(t::WATERFALL_END),
-        s(kind_word(vk)),
         s(kind_word(vk))
     );
     Ok(())
@@ -519,12 +585,38 @@ fn heat(w: &mut String, data: &ChartData, opts: &LayoutOpts) -> Result<()> {
     let cells: Vec<String> = h.cells.iter().map(|r| list_f(&r.iter().map(|v| v.map(|x| scaled(x, vk, opts))).collect::<Vec<_>>())).collect();
     let _ = writeln!(w, "\nmatrix = pd.DataFrame([\n    {}\n], index={}, columns={})", cells.join(",\n    "), list_s(&h.rows), list_s(&h.cols));
     let ramp = format!("[{}]", t::SEQUENTIAL.iter().map(|c| hexs(*c)).collect::<Vec<_>>().join(", "));
-    let _ = writeln!(
-        w,
-        "\nRAMP = {}  # one hue, 13 steps; in the dark theme low values use the darkest step\nif DARK:\n    RAMP = RAMP[::-1]\nfrom matplotlib.colors import ListedColormap\nfig, ax = plt.subplots(figsize=(10, 0.9 * len(matrix) + 2.4))\nfig.subplots_adjust(top=0.78, bottom=0.08, left=0.14)\nlo, hi = matrix.min().min(), matrix.max().max()\nfor r in range(len(matrix)):\n    for c in range(len(matrix.columns)):\n        v = matrix.iat[r, c]\n        step = 0 if pd.isna(v) or hi == lo else round((v - lo) / (hi - lo) * 12)\n        ax.add_patch(plt.Rectangle((c + 0.02, r + 0.02), 0.96, 0.96, color=RAMP[step], linewidth=0))\n        white = (step if not DARK else 12 - step) >= 6\n        ax.text(c + 0.5, r + 0.5, \"\" if pd.isna(v) else fmt(v, {}, 1), ha=\"center\", va=\"center\", fontsize=9.5, color=\"white\" if white else \"#0b0b0b\")\nax.set_xlim(0, len(matrix.columns))\nax.set_ylim(len(matrix), 0)\nax.set_xticks([c + 0.5 for c in range(len(matrix.columns))], matrix.columns)\nax.xaxis.tick_top()\nax.set_yticks([r + 0.5 for r in range(len(matrix))], matrix.index)\nfor sp in ax.spines.values():\n    sp.set_visible(False)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
-        ramp,
-        s(kind_word(vk))
-    );
+    let code = r##"
+RAMP = @RAMP@  # one hue, 13 steps; in the dark theme low values use the darkest step
+if DARK:
+    RAMP = RAMP[::-1]
+NEUTRAL, NEUTRAL_TEXT = GRID, MUTED  # zero and missing cells: near the surface, muted text; the ramp is for values above zero
+KIND = @KIND@
+fig, ax = plt.subplots(figsize=(10, 0.9 * len(matrix) + 2.4))
+fig.subplots_adjust(top=0.78, bottom=0.08, left=0.14)
+positive = [v for v in matrix.to_numpy().flatten() if not pd.isna(v) and v > 0]
+lo, hi = (min(positive), max(positive)) if positive else (0, 0)
+for r in range(len(matrix)):
+    for c in range(len(matrix.columns)):
+        v = matrix.iat[r, c]
+        if pd.isna(v) or v <= 0:
+            fill, text_colour = NEUTRAL, NEUTRAL_TEXT
+        else:
+            step = 6 if hi == lo else round((v - lo) / (hi - lo) * 12)
+            fill = RAMP[step]
+            text_colour = "white" if (step if not DARK else 12 - step) >= 6 else "#0b0b0b"
+        ax.add_patch(plt.Rectangle((c + 0.02, r + 0.02), 0.96, 0.96, color=fill, linewidth=0))
+        label = "" if pd.isna(v) else lab(v, KIND).rstrip("%" if KIND == "percent" else "")
+        ax.text(c + 0.5, r + 0.5, label, ha="center", va="center", fontsize=9.5, color=text_colour)
+ax.set_xlim(0, len(matrix.columns))
+ax.set_ylim(len(matrix), 0)
+ax.set_xticks([c + 0.5 for c in range(len(matrix.columns))], matrix.columns)
+ax.xaxis.tick_top()
+ax.set_yticks([r + 0.5 for r in range(len(matrix))], matrix.index)
+for sp in ax.spines.values():
+    sp.set_visible(False)
+titles(fig, TITLE, SUBTITLE, FOOTNOTE)
+plt.show()"##;
+    let _ = writeln!(w, "{}", code.replace("@RAMP@", &ramp).replace("@KIND@", &s(kind_word(vk))));
     Ok(())
 }
 
@@ -532,6 +624,9 @@ fn donut(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap) ->
     let vals: Vec<Option<f64>> = shown(data, 0, opts).first().cloned().unwrap_or_default();
     if vals.iter().flatten().count() > t::DONUT_MAX_SLICES {
         bail!("Use a bar chart: more than 5 parts are hard to compare as slices");
+    }
+    if vals.iter().flatten().count() < 2 {
+        bail!("A donut needs at least 2 parts, but this chart has {}. Choose another form.", vals.iter().flatten().count());
     }
     let colours: Vec<String> = data.categories.iter().enumerate().map(|(i, c)| {
         let l = cm.get(c).map(|x| x.hex(false)).unwrap_or(t::SERIES_LIGHT[i.min(t::SLOTS - 1)]);
@@ -541,7 +636,7 @@ fn donut(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap) ->
     let _ = writeln!(w, "\nparts = pd.DataFrame({{\"Part\": {}, \"Value\": {}}})", list_s(&data.categories), list_f(&vals));
     let _ = writeln!(
         w,
-        "\nCOLOURS = [{}]\nfig, ax = plt.subplots(figsize=(8, 6))\nfig.subplots_adjust(top=0.80, right=0.66)\nax.pie(parts[\"Value\"], colors=COLOURS, startangle=90, counterclock=False, wedgeprops=dict(width=0.42, edgecolor=SURFACE, linewidth=2))\nax.text(0, 0, fmt(parts[\"Value\"].sum()), ha=\"center\", va=\"center\", fontsize=15, fontweight=\"semibold\")\nax.legend([f\"{{p}}  {{fmt(v)}}\" for p, v in zip(parts[\"Part\"], parts[\"Value\"])], loc=\"center left\", bbox_to_anchor=(1, 0.5))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
+        "\nCOLOURS = [{}]\nfig, ax = plt.subplots(figsize=(8, 6))\nfig.subplots_adjust(top=0.80, right=0.66)\nax.pie(parts[\"Value\"], colors=COLOURS, startangle=90, counterclock=False, wedgeprops=dict(width=0.42, edgecolor=SURFACE, linewidth=2))\nax.text(0, 0, fmt(parts[\"Value\"].sum()), ha=\"center\", va=\"center\", fontsize=15, fontweight=\"semibold\")\nax.legend([f\"{{p}}  {{lab(v)}}\" if LABELS != \"none\" else p for p, v in zip(parts[\"Part\"], parts[\"Value\"])], loc=\"center left\", bbox_to_anchor=(1, 0.5))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
         colours.join(", ")
     );
     Ok(())

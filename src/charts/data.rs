@@ -435,7 +435,28 @@ pub struct HeatMatrix {
     pub row_totals: Vec<Option<f64>>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// The smallest value above zero: the ramp runs from here to `max` (zero and missing cells are neutral).
+    pub pos_min: Option<f64>,
     pub notes: Vec<String>,
+}
+
+/// How a heatmap cell is filled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeatFill {
+    /// Zero, missing or a pair with no rows: the neutral near-surface fill with muted text.
+    Neutral,
+    /// A value above zero: this step of the sequential ramp (0 to 12, before the dark-theme reversal).
+    Step(usize),
+}
+
+impl HeatMatrix {
+    /// The fill of one cell: the sequential ramp only for values above zero.
+    pub fn fill(&self, v: f64, rows: u64) -> HeatFill {
+        if rows == 0 || !(v > 0.0) {
+            return HeatFill::Neutral;
+        }
+        HeatFill::Step(sequential_step(v, self.pos_min.unwrap_or(v), self.max.unwrap_or(v)))
+    }
 }
 
 /// The order of a heatmap's rows or columns: the custom order list when the chart has one; with none, CL
@@ -495,6 +516,7 @@ pub fn heatmap(data: &ChartData, t: Transform) -> HeatMatrix {
     let flat: Vec<f64> = cells.iter().flatten().flatten().copied().collect();
     let min = flat.iter().copied().fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.min(v))));
     let max = flat.iter().copied().fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.max(v))));
+    let pos_min = flat.iter().copied().filter(|v| *v > 0.0).fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.min(v))));
     HeatMatrix {
         rows: ro.iter().filter_map(|&r| data.series.get(r).cloned()).collect(),
         cols: co.iter().filter_map(|&c| data.categories.get(c).cloned()).collect(),
@@ -503,6 +525,7 @@ pub fn heatmap(data: &ChartData, t: Transform) -> HeatMatrix {
         row_totals,
         min,
         max,
+        pos_min,
         notes,
     }
 }

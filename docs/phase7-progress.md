@@ -138,3 +138,20 @@ Tests: `tests/phase7/r.rs` (library) and `src/ui/render_tests_r.rs` (by real cli
 Part A deviations: E-1 the IFRS 9 summary has no "Sample parameters" row today, so the ECL chart can only copy one that is there (changing the summary tool was outside the review). E-2 a typed subtitle on a chart that is not from a template is never altered; a template chart's typed subtitle gets the unit appended.
 
 Also found while looking at the Excel screenshots: the 100% stacked chart wrote its value axis as 0 to 100, but Excel's 100% axis is 0 to 1 (written as percent), so the bars were invisible. Fixed (`r12_the_excel_100_percent_chart…`); `xlsx-percent.png` re-rendered.
+
+## Session E: review fixes, part B (should fix, polish, one feature)
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 12 | `blank_cell` refusals in nine templates; `measure_avg` keeps a blank blank; ECL coverage and the NPL % are blank with a note when the total is zero; DQ pass-or-fail rules are named | `r13_a_blank_is_refused…` |
+| 13 | Python: `DEC`, `lab()`, signed labels, heatmap text, `named_end`, donut refusal | `r14_python_uses…` (runs the scripts) |
+| 14 | `tokens::diverging_colour`; signed bars coloured in the page and the workbook too | `r15_an_exact_zero…` |
+| 15 | `MAX_BARS` 60, `MAX_HEAT_COLUMNS` 40 in `calc` | `r16_more_than_60_bars…` |
+| 16 | `write_preview(…, temp_dir)`, `preview_dir`, `clean_chart_temp` at start-up and `on_exit` | `r17_the_preview_goes_under…` |
+| 17 | `--export-html` needs `--pack`; `\u003c!--` | `r17_export_html_without_pack…` (headless), `r18_a_category_with_an_html_comment…` |
+| 18 | `HeatFill`, `HeatMatrix::pos_min`, `tokens::heat_neutral`; the workbook's neutral rule first with stop-if-true | `r19_zero_and_missing_heatmap_cells…` |
+| 19 | HTML line-end labels; deposit-mix colours by name; `check_single_panels`; "unchanged" for a zero change; guide wording; pack book-first order with a test | `r20_…`, `r21_…`, `c6_headless…` |
+| 20 | `ChartSpec.labels` (`LabelSpec`), `src/charts/labels.rs` (`LabelPlan`, `dropped_labels`), the four renderers, the studio controls | `r22_…`, `r23_each_data_label_option…`, `r24_all_never_prints…`, `r25_the_data_labels_controls…` (real clicks, 3 sizes) |
+
+Part B deviations: E-3 the ECL summary tool does not emit a "Sample parameters" row (see part A); E-4 the Excel and Python collision handling uses the app's layout at the chart's nominal size, not a measurement of the finished workbook or figure; E-5 in the page, the last point of a several-series line carries its name (not also its value) in "All"; E-6 workbook waterfalls have no data labels and heatmap numbers are the cell values, so the Labels setting does not change them.
+E-7: Excel honours the workbook's "stop if true", so the neutral cells of a heatmap lose the colour scale there; LibreOffice, which made `xlsx-heatmap.png`, ignores that flag and shows only the muted text on the ramp's lightest fill. The workbook itself is correct (tested: the neutral rule comes first, stops, and has the neutral fill).

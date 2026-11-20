@@ -308,6 +308,103 @@ impl ChartScale {
     }
 }
 
+/// Which data labels a chart prints.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LabelMode {
+    /// The selective rule of the design system (bars at the tip, lines at the end, every step of a waterfall).
+    #[default]
+    Auto,
+    /// Every bar, segment and point; a label that would collide is left out and the chart says how many.
+    All,
+    /// Only the first and the last category of each series.
+    EndsOnly,
+    /// No value labels (the tooltip and the table still have every number).
+    None,
+}
+
+impl LabelMode {
+    pub fn all() -> &'static [LabelMode] {
+        &[LabelMode::Auto, LabelMode::All, LabelMode::EndsOnly, LabelMode::None]
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            LabelMode::Auto => "Auto",
+            LabelMode::All => "All",
+            LabelMode::EndsOnly => "Ends only",
+            LabelMode::None => "None",
+        }
+    }
+}
+
+/// The unit the data labels are written in (the axis keeps the view's).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LabelUnit {
+    #[default]
+    AsView,
+    Absolute,
+    Thousand,
+    Lakh,
+    Million,
+    Crore,
+}
+
+impl LabelUnit {
+    pub fn all() -> &'static [LabelUnit] {
+        &[LabelUnit::AsView, LabelUnit::Absolute, LabelUnit::Thousand, LabelUnit::Lakh, LabelUnit::Million, LabelUnit::Crore]
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            LabelUnit::AsView => "As in view",
+            LabelUnit::Absolute => "Absolute",
+            LabelUnit::Thousand => "Thousand",
+            LabelUnit::Lakh => "Lakh",
+            LabelUnit::Million => "Million",
+            LabelUnit::Crore => "Crore",
+        }
+    }
+    /// BDT per unit; `None` = as in the view.
+    pub fn divisor(&self) -> Option<f64> {
+        match self {
+            LabelUnit::AsView => None,
+            LabelUnit::Absolute => Some(1.0),
+            LabelUnit::Thousand => Some(1_000.0),
+            LabelUnit::Lakh => Some(100_000.0),
+            LabelUnit::Million => Some(1_000_000.0),
+            LabelUnit::Crore => Some(10_000_000.0),
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// "Data labels" in "Titles and look": which labels, how many decimals, which unit, and whether share views print their %.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct LabelSpec {
+    pub mode: LabelMode,
+    /// 0 to 4; `None` = the view's decimals.
+    pub decimals: Option<usize>,
+    pub unit: LabelUnit,
+    /// Labels on share views (percentages) are printed; off = none of them.
+    #[serde(default = "yes")]
+    pub percent: bool,
+}
+
+impl Default for LabelSpec {
+    fn default() -> Self {
+        Self { mode: LabelMode::Auto, decimals: None, unit: LabelUnit::AsView, percent: true }
+    }
+}
+
+impl LabelSpec {
+    /// True when nothing differs from how a chart saved before this setting existed was drawn.
+    pub fn is_default(&self) -> bool {
+        *self == LabelSpec::default()
+    }
+}
+
 /// What to draw.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -372,6 +469,8 @@ pub struct ChartSpec {
     pub advanced_json: String,
     /// The banking template this chart came from (C5), if any.
     pub template: String,
+    /// Data labels: which, how many decimals, which unit, and the % of share views.
+    pub labels: LabelSpec,
 }
 
 impl Default for ChartSpec {
@@ -412,6 +511,7 @@ impl Default for ChartSpec {
             colour_map: ColourMap::default(),
             advanced_json: String::new(),
             template: String::new(),
+            labels: LabelSpec::default(),
         }
     }
 }

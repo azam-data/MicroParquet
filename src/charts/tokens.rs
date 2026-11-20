@@ -67,6 +67,22 @@ pub fn sequential_index(rank: usize, dark: bool) -> usize {
 }
 
 /// The fill colour of a rank in a theme.
+/// The fill of a heatmap cell that is zero or missing: near the surface, so the ramp stands for values above zero only.
+/// Light: the gridline colour; dark: `#2c2c2a` (the dark gridline colour). The text on it is the muted ink.
+pub const HEAT_NEUTRAL_LIGHT: u32 = 0xe1e0d9;
+pub const HEAT_NEUTRAL_DARK: u32 = 0x2c2c2a;
+pub fn heat_neutral(dark: bool) -> u32 {
+    if dark {
+        HEAT_NEUTRAL_DARK
+    } else {
+        HEAT_NEUTRAL_LIGHT
+    }
+}
+/// The text colour on a neutral cell.
+pub fn heat_neutral_text(dark: bool) -> u32 {
+    ink(dark).muted
+}
+
 pub fn sequential_colour(rank: usize, dark: bool) -> u32 {
     SEQUENTIAL[sequential_index(rank, dark)]
 }
@@ -80,6 +96,17 @@ pub fn sequential_text_white(rank: usize, dark: bool) -> bool {
 pub const DIVERGING_POSITIVE: u32 = 0x2a78d6;
 pub const DIVERGING_NEGATIVE: u32 = 0xe34948;
 pub const DIVERGING_ZERO: u32 = 0xc3c2b7;
+
+/// The colour of a signed bar: blue above zero, red below, grey for an exact zero. One rule for every renderer.
+pub fn diverging_colour(v: f64) -> u32 {
+    if v == 0.0 {
+        DIVERGING_ZERO
+    } else if v < 0.0 {
+        DIVERGING_NEGATIVE
+    } else {
+        DIVERGING_POSITIVE
+    }
+}
 
 /// Status colours: reserved, never a series colour, always shown with a text label.
 pub const STATUS_GOOD: u32 = 0x0ca30c;
@@ -140,6 +167,10 @@ pub const MAX_POINTS: usize = 5_000;
 /// A donut has 2 to this many slices.
 pub const DONUT_MAX_SLICES: usize = 5;
 /// Small multiples: at most this many panels.
+/// More bars or columns than this cannot be read side by side: the chart asks for Top N or a filter instead.
+pub const MAX_BARS: usize = 60;
+/// The same for the columns of a heatmap.
+pub const MAX_HEAT_COLUMNS: usize = 40;
 pub const MAX_FACETS: usize = 12;
 /// Linked panels: at most this many.
 pub const MAX_PANELS: usize = 3;

@@ -37,7 +37,7 @@ Explains a month-on-month change in interest: a waterfall from the prior month's
 
 ## 7. Check your result
 
-- Start + volume + rate + mix equals the end: a bridge that does not add up is refused, not drawn.
+- Start + volume + rate + mix (+ "New / closed" when a product exists in one month only) equals the end: a bridge that does not add up is refused, not drawn.
 - In the by-key chart, a key's three effects add up to that key's change in interest.
 
 ## 8. Worked example
@@ -48,7 +48,7 @@ One product, TD (Crore):
 | --- | --- | --- | --- | --- | --- |
 | TD | 80.00 | 93.50 | 8.00 | 5.00 | 0.50 |
 
-80.00 → +8.00 → +5.00 → +0.50 → 93.50: the floating bases are 80.00, 88.00 and 93.00. With three products (TD, Savings, Current) the total bridge runs 115.00 → +5.40 → +6.10 → +0.50 → 127.00 and the second chart says "TD has the largest change: +13.5 Cr".
+80.00 → +8.00 → +5.00 → +0.50 → 93.50: the floating bases are 80.00, 88.00 and 93.00. The labels on the chart use two decimals; the title rounds the change (+13.50) to one decimal, +13.5 Cr. With three products (TD, Savings, Current) the total bridge runs 115.00 → +5.40 → +6.10 → +0.50 → 127.00 (a change of +12.00), and the second chart's title rounds TD's change the same way: "TD has the largest change: +13.5 Cr".
 
 The title the template writes (a fixed rule, no AI): **Higher balances explain most of the +13.5 Cr rise in TD interest**
 

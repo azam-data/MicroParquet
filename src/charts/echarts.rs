@@ -11,8 +11,10 @@
 //! has no `http`/`https` address of its own.
 
 use super::axis::{padded_floor, diverging_text, nice_ticks, value_text, ValueKind};
+use super::labels::LabelPlan;
+use super::spec::LabelMode;
 use super::colours::ColourMap;
-use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, waterfall_stack, ChartData, StepKind};
+use super::data::{collapse_series, heatmap, waterfall_from_data, waterfall_stack, ChartData, HeatFill, StepKind};
 use super::layout::{base_word, chart_title, scaled, value_kind, LayoutOpts, DONUT_REFUSAL};
 use super::spec::{ChartKind, ChartSpec, Stack, Transform};
 use super::tokens as t;
@@ -91,6 +93,10 @@ struct Env<'a> {
     dark: bool,
     ink: t::ChartInk,
     cm: ColourMap,
+    /// Which data labels, in which unit and decimals (the Data labels setting).
+    lp: LabelPlan,
+    /// Labels of "All" left out because they would overlap (the app's layout decides, at the page's size).
+    dropped: std::collections::HashSet<(usize, usize, usize)>,
 }
 
 struct SerD {
@@ -128,8 +134,13 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// A value as a data label says it (the Data labels setting's unit and decimals).
     fn txt(&self, vk: ValueKind, v: f64, signed: bool) -> String {
-        value_text(scaled(v, vk, self.opts), vk, self.opts.decimals, signed)
+        self.lp.text(v, vk, signed)
+    }
+
+    fn left_out(&self, panel: usize, series: usize, cat: usize) -> bool {
+        self.dropped.contains(&(panel, series, cat))
     }
 
     fn tip(&self, p: &Plan, s: usize, c: usize, v: Option<f64>) -> String {
@@ -237,7 +248,11 @@ fn subtitle_of(data: &ChartData, opts: &LayoutOpts) -> String {
     super::layout::subtitle_text(data, opts)
 }
 
-fn foot_lines(data: &ChartData) -> Vec<String> {
+/// The width and height the labels' collisions are worked out at (a page chart is about this big).
+const PAGE_CHART_W: f32 = 1060.0;
+const PAGE_CHART_H: f32 = 480.0;
+
+fn foot_lines(data: &ChartData, notes: &[String]) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     if !data.spec.footnote.trim().is_empty() {
         parts.push(data.spec.footnote.trim().to_string());
@@ -246,6 +261,7 @@ fn foot_lines(data: &ChartData) -> Vec<String> {
         parts.push(format!("\u{2014} {}", data.spec.limit_note.trim()));
     }
     parts.extend(data.notes.iter().cloned());
+    parts.extend(notes.iter().cloned());
     if parts.is_empty() {
         return Vec::new();
     }
@@ -439,6 +455,16 @@ fn radius(positive: bool, horizontal: bool) -> Value {
     }
 }
 
+/// White on a dark fill, the ink on a pale one.
+fn text_on(fill: u32) -> String {
+    let lin = |c: u32| {
+        let v = (c & 0xff) as f64 / 255.0;
+        if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = 0.2126 * lin(fill >> 16) + 0.7152 * lin(fill >> 8) + 0.0722 * lin(fill);
+    if l > 0.30 { hx(t::INK_LIGHT.ink) } else { "#ffffff".to_string() }
+}
+
 fn label_style(env: &Env, text: &str, position: &str) -> Value {
     json!({"show": true, "formatter": lit(text), "position": position, "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::DATA_LABEL_PT})
 }
@@ -462,7 +488,15 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
         }
     }
     let totals: Vec<f64> = (0..n_cat).map(|c| p.series.iter().filter_map(|s| s.vals.get(c).copied().flatten()).sum()).collect();
-    let label_all = p.series.len() == 1 && n_cat <= LABEL_MAX_BARS;
+    let mode = env.lp.mode;
+    let labels_on = env.lp.kind_on(p.vk);
+    // Auto: one series of 12 bars or fewer; All and Ends only: every series; None: no value labels at all
+    let label_all = labels_on
+        && match mode {
+            LabelMode::Auto => p.series.len() == 1 && n_cat <= LABEL_MAX_BARS,
+            LabelMode::None => false,
+            _ => true,
+        };
     // one series with negative values is a diverging bar: its labels always carry a sign
     let diverging = p.series.len() == 1 && p.series[0].vals.iter().flatten().any(|v| *v < 0.0);
     let mut out = Vec::new();
@@ -482,26 +516,37 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 let status = spec.bar_status.iter().find(|x| p.series.len() == 1 && x.category == p.cats.get(c).cloned().unwrap_or_default());
                 if let Some(st) = status {
                     item["itemStyle"]["color"] = json!(hx(st.status.hex()));
+                } else if diverging {
+                    // a signed bar: blue above zero, red below, grey at exactly zero (as in the app)
+                    item["itemStyle"]["color"] = json!(hx(t::diverging_colour(raw)));
                 }
-                if spec.segment_labels && stacked && !horizontal && !percent && totals[c] != 0.0 {
+                if spec.segment_labels && stacked && !horizontal && !percent && totals[c] != 0.0 && labels_on {
                     // each segment beside its stack with its value and its share of the stack
                     let x = scaled(raw, p.vk, env.opts);
                     let body = if (x - x.round()).abs() < 1e-9 { value_text(x, p.vk, 0, false) } else { value_text(x, p.vk, env.opts.decimals, false) };
                     item["label"] = label_style(env, &format!("{} \u{b7} {}%", body, crate::models::format_with_commas(raw.abs() / totals[c].abs() * 100.0, 1)), "right");
                 }
-                if label_all {
+                if label_all && env.lp.shows(c, n_cat, true) && !env.left_out(p.idx, si, c) {
                     let pos = match (horizontal, raw >= 0.0) {
                         (false, true) => "top",
                         (false, false) => "bottom",
                         (true, true) => "right",
                         (true, false) => "left",
                     };
-                    let mut text = if diverging { diverging_text(scaled(raw, p.vk, env.opts), p.vk, env.opts.decimals) } else { env.txt(p.vk, raw, false) };
+                    let mut text = if diverging { env.lp.diverging(raw, p.vk) } else { env.txt(p.vk, raw, false) };
                     if let Some(st) = status {
                         // the status in words with an icon, after the value: the colour is never alone
                         text = format!("{}  \u{25b2} {}", text, st.label);
                     }
-                    item["label"] = label_style(env, &text, pos);
+                    if stacked {
+                        // "All" on a stack: each segment says its value inside it, in the colour its fill asks for
+                        if !spec.segment_labels {
+                            item["label"] = label_style(env, &text, "inside");
+                            item["label"]["color"] = json!(text_on(s.colour));
+                        }
+                    } else {
+                        item["label"] = label_style(env, &text, pos);
+                    }
                 }
                 item
             })
@@ -537,7 +582,9 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
             .map(|c| {
                 let raw: f64 = totals[c];
                 let mut item = json!({"value": num(scaled(raw, p.vk, env.opts)), "tip": lit_tip(&format!("Net: {}", diverging_text(scaled(raw, p.vk, env.opts), p.vk, env.opts.decimals)))});
-                item["label"] = label_style(env, &diverging_text(scaled(raw, p.vk, env.opts), p.vk, env.opts.decimals), "right");
+                if labels_on && env.lp.shows(c, n_cat, true) {
+                    item["label"] = label_style(env, &env.lp.diverging(raw, p.vk), "right");
+                }
                 item
             })
             .collect();
@@ -552,7 +599,9 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 let raw: f64 = totals[c];
                 let shown = if percent { 100.0 } else { scaled(raw, p.vk, env.opts) };
                 let mut item = json!({"value": num(shown)});
-                item["label"] = label_style(env, &env.txt(p.vk, raw, false), if horizontal { "right" } else { "top" });
+                if labels_on && env.lp.shows(c, n_cat, true) && mode != LabelMode::All || labels_on && mode == LabelMode::All && !env.left_out(p.idx, 0, c) {
+                    item["label"] = label_style(env, &env.txt(p.vk, raw, false), if horizontal { "right" } else { "top" });
+                }
                 item
             })
             .collect();
@@ -575,6 +624,7 @@ fn line_series(env: &Env, p: &Plan, grid: usize) -> Vec<Value> {
     let mut out = Vec::new();
     for (si, s) in p.series.iter().enumerate() {
         let last = (0..n_cat).rev().find(|c| s.vals.get(*c).copied().flatten().is_some());
+        let first = (0..n_cat).find(|c| s.vals.get(*c).copied().flatten().is_some());
         // with a highlighted series only that one carries markers (older curves are plain lines)
         let markers = markers && highlighted.as_ref().map_or(true, |h| *h == s.name);
         let data: Vec<Value> = (0..n_cat)
@@ -583,11 +633,46 @@ fn line_series(env: &Env, p: &Plan, grid: usize) -> Vec<Value> {
                 let Some(raw) = v else { return Value::Null };
                 let shown = if percent { if totals[c] == 0.0 { 0.0 } else { raw / totals[c] * 100.0 } } else { scaled(raw, p.vk, env.opts) };
                 let mut item = json!({"value": num(shown), "tip": env.axis_tip(p, si, c, v)});
+                let value_on = env.lp.kind_on(p.vk);
+                // the Data labels setting: All = every point, Ends only = the first and the last point, None = no values
+                let point_value = !stacked
+                    && value_on
+                    && match env.lp.mode {
+                        LabelMode::All => !env.left_out(p.idx, si, c),
+                        LabelMode::EndsOnly => Some(c) == first || Some(c) == last,
+                        _ => false,
+                    };
                 if Some(c) == last && !stacked {
-                    let text = if direct && !s.name.is_empty() { format!("{}  {}", s.name, env.txt(p.vk, raw, false)) } else { env.txt(p.vk, raw, false) };
-                    item["label"] = label_style(env, &text, "right");
+                    // as in the app: one series says its value (with its name when it has one); two to four say their names
+                    // (every curve when one is highlighted); more than that have the legend only
+                    let single_value = value_on && env.lp.shows(c, n_cat, true);
+                    let text = if p.series.len() == 1 {
+                        match (s.name.is_empty(), single_value) {
+                            (true, true) => Some(env.txt(p.vk, raw, false)),
+                            (false, true) => Some(format!("{}  {}", s.name, env.txt(p.vk, raw, false))),
+                            (false, false) => Some(s.name.clone()),
+                            (true, false) => None,
+                        }
+                    } else if direct {
+                        Some(s.name.clone())
+                    } else {
+                        None
+                    };
+                    if let Some(text) = text {
+                        let emphasised = highlighted.as_ref().map_or(true, |h| *h == s.name);
+                        item["label"] = label_style(env, &text, "right");
+                        if p.series.len() > 1 && !emphasised {
+                            item["label"]["color"] = json!(hx(env.ink.ink2));
+                        }
+                    }
                     if !markers {
                         // a line without markers still needs a (tiny, invisible) symbol to carry its end label
+                        item["symbol"] = json!("circle");
+                        item["symbolSize"] = json!(0);
+                    }
+                } else if point_value {
+                    item["label"] = label_style(env, &env.txt(p.vk, raw, false), "top");
+                    if !markers {
                         item["symbol"] = json!("circle");
                         item["symbolSize"] = json!(0);
                     }
@@ -863,8 +948,7 @@ fn waterfall_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
         match k {
             StepKind::Start => t::WATERFALL_START,
             StepKind::End => t::WATERFALL_END,
-            StepKind::Delta if v >= 0.0 => t::DIVERGING_POSITIVE,
-            StepKind::Delta => t::DIVERGING_NEGATIVE,
+            StepKind::Delta => t::diverging_colour(v),
         }
     };
     let cats: Vec<String> = steps.iter().map(|s| s.label.clone()).collect();
@@ -914,13 +998,19 @@ fn waterfall_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
                                   "lineStyle": {"color": hx(env.ink.baseline), "width": t::GRID_PX, "type": "solid"}, "data": connectors});
     }
     // every step is labelled: a hidden line at the bar's tip carries the text
+    let n_steps = steps.len();
     let label_items: Vec<Value> = steps
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let (y, pos) = if s.kind == StepKind::Delta && s.value < 0.0 { (s.base, "bottom") } else { (s.top.max(if s.top == 0.0 { s.base } else { s.top }), "top") };
             let y = if s.kind != StepKind::Delta && s.value < 0.0 { s.base } else { y };
             let pos = if s.kind != StepKind::Delta && s.value < 0.0 { "bottom" } else { pos };
-            json!({"value": sc(y), "label": label_style(env, &value_text(scaled(s.value, vk, env.opts), vk, env.opts.decimals, s.kind == StepKind::Delta), pos)})
+            if env.lp.kind_on(vk) && env.lp.shows(i, n_steps, true) && !env.left_out(0, 0, i) {
+                json!({"value": sc(y), "label": label_style(env, &env.txt(vk, s.value, s.kind == StepKind::Delta), pos)})
+            } else {
+                json!({"value": sc(y)})
+            }
         })
         .collect();
     let labels = json!({"name": "Labels", "type": "line", "data": label_items, "symbol": "circle", "symbolSize": 0, "lineStyle": {"opacity": 0}, "silent": true, "tooltip": {"show": false}, "z": 5});
@@ -948,9 +1038,12 @@ fn heat_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
         for (ci, c) in h.cols.iter().enumerate() {
             let Some(v) = h.cells.get(ri).and_then(|x| x.get(ci)).copied().flatten() else { continue };
             let n = h.counts.get(ri).and_then(|x| x.get(ci)).copied().unwrap_or(0);
-            let step = if n == 0 { 0 } else { sequential_step(v, lo, hi) };
-            let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, 1) } else { value_text(scaled(v, vk, env.opts), vk, env.opts.decimals, false) };
-            let white = t::sequential_text_white(step, env.dark);
+            let fill_kind = h.fill(v, n);
+            let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, env.lp.decimals.unwrap_or(1)) } else { env.txt(vk, v, false) };
+            let (fill_hex, text_hex) = match fill_kind {
+                HeatFill::Neutral => (hx(t::heat_neutral(env.dark)), hx(t::heat_neutral_text(env.dark))),
+                HeatFill::Step(step) => (hx(t::sequential_colour(step, env.dark)), if t::sequential_text_white(step, env.dark) { "#ffffff".to_string() } else { hx(t::INK_LIGHT.ink) }),
+            };
             let mut tip = if data.spec.series.is_some() { format!("{}: {}\n{}: {}", data.spec.series.clone().unwrap_or_default(), r, data.spec.category, c) } else { format!("{}: {}", data.spec.category, c) };
             tip.push_str(&format!("\n{}: {}\n{} rows", data.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string()), if vk == ValueKind::Percent { format!("{}%", crate::models::format_with_commas(v, 2)) } else { value_text(scaled(v, vk, env.opts), vk, env.opts.decimals, false) }, crate::models::format_with_commas(n as f64, 0)));
             if vk == ValueKind::Percent {
@@ -958,8 +1051,8 @@ fn heat_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
             }
             items.push(json!({
                 "value": [ci, ri, num(v)], "tip": lit_tip(&tip),
-                "itemStyle": {"color": hx(t::sequential_colour(step, env.dark)), "borderColor": hx(ink.surface), "borderWidth": 1, "borderRadius": t::HEAT_RADIUS_PX},
-                "label": {"show": true, "formatter": lit(&text), "color": if white { "#ffffff".to_string() } else { hx(t::INK_LIGHT.ink) }, "fontFamily": t::FONT_HTML, "fontSize": t::DATA_LABEL_PT}
+                "itemStyle": {"color": fill_hex, "borderColor": hx(ink.surface), "borderWidth": 1, "borderRadius": t::HEAT_RADIUS_PX},
+                "label": {"show": env.lp.kind_on(vk), "formatter": lit(&text), "color": text_hex, "fontFamily": t::FONT_HTML, "fontSize": t::DATA_LABEL_PT}
             }));
         }
     }
@@ -1000,7 +1093,7 @@ fn donut_series(env: &Env) -> Result<Vec<Value>> {
             let share = if total > 0.0 { v / total * 100.0 } else { 0.0 };
             let tip = format!("{}: {}\n{}: {}\nShare: {}%\n{} rows", data.spec.category, name, data.measure_names.first().cloned().unwrap_or_else(|| "Value".to_string()), value_text(scaled(*v, vk, env.opts), vk, env.opts.decimals, false), crate::models::format_with_commas(share, 1), crate::models::format_with_commas(*n as f64, 0));
             json!({"name": lit(name), "value": num(scaled(*v, vk, env.opts)), "tip": lit_tip(&tip), "itemStyle": {"color": hx(colour)},
-                   "label": {"formatter": lit(&format!("{}  {}%", name, crate::models::format_with_commas(share, 1)))}})
+                   "label": {"formatter": lit(&if env.lp.mode != LabelMode::None && env.lp.percent { format!("{}  {}%", name, crate::models::format_with_commas(share, 1)) } else { name.to_string() })}})
         })
         .collect();
     Ok(vec![json!({
@@ -1146,12 +1239,15 @@ fn build_one(data: &ChartData, opts: &LayoutOpts, dark: bool) -> Result<(Value, 
     let mut cm = opts.colours.clone().unwrap_or_else(|| spec.colour_map.clone());
     let named: Vec<String> = data.series.iter().filter(|s| !s.is_empty()).cloned().collect();
     cm.assign_all(&named);
-    let env = Env { data, opts, dark, ink, cm };
+    let lp = LabelPlan::new(spec, opts);
+    let dropped_list = super::labels::dropped_labels(data, opts, PAGE_CHART_W, PAGE_CHART_H);
+    let dropped: std::collections::HashSet<(usize, usize, usize)> = dropped_list.iter().copied().collect();
+    let env = Env { data, opts, dark, ink, cm, lp, dropped };
     if let Some(r) = data.empty_reason() {
         bail!("No data to chart: {}.", r);
     }
     let title = chart_title(data);
-    let foot = foot_lines(data);
+    let foot = foot_lines(data, &super::labels::footnote_notes(data, opts, dropped_list.len()));
     let foot_h = if foot.is_empty() { 0.0 } else { foot.len() as f64 * FOOT_LINE_H + 8.0 };
     let kind = spec.kind;
     let ps = plans(&env);
@@ -1599,13 +1695,36 @@ pub fn write_chart_book(path: &Path, title: &str, date: &str, items: &[BookItem]
     std::fs::write(path, html).map_err(|e| anyhow::anyhow!("Could not write {}: {}. Choose another folder, or close the file if it is open.", path.display(), e))
 }
 
-/// A temporary file for "Preview in browser": the chart's HTML in the system's temporary folder.
-pub fn write_preview(data: &ChartData, opts: &LayoutOpts) -> Result<PathBuf> {
+/// The folder of the previews: `<temp_dir>/preview`, inside the app's own temporary folder, never the system's.
+pub fn preview_dir(temp_dir: &Path) -> PathBuf {
+    temp_dir.join("preview")
+}
+
+/// A file for "Preview in browser": the chart's HTML in `<temp_dir>/preview/chart-preview.html`. The previous preview
+/// is removed first, so there is only ever one.
+pub fn write_preview(data: &ChartData, opts: &LayoutOpts, temp_dir: &Path) -> Result<PathBuf> {
     let html = chart_html(data, opts)?;
-    let stem = file_stem(&chart_title(data)).replace(' ', "-");
-    let path = std::env::temp_dir().join(format!("microparquet-preview-{}-{}.html", std::process::id(), stem));
+    let dir = preview_dir(temp_dir);
+    if dir.exists() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| anyhow::anyhow!("Could not make the preview folder {}: {}.", dir.display(), e))?;
+    let path = dir.join("chart-preview.html");
     std::fs::write(&path, html).map_err(|e| anyhow::anyhow!("Could not write the preview file {}: {}.", path.display(), e))?;
     Ok(path)
+}
+
+/// Removes what the chart studio leaves in the temporary folder: the previews and the tables of "Open chart data
+/// as tab", "Open as chart tab" and the templates. Run at start-up (what an earlier run left) and at exit.
+pub fn clean_chart_temp(temp_dir: &Path) {
+    let _ = std::fs::remove_dir_all(preview_dir(temp_dir));
+    let Ok(rd) = std::fs::read_dir(temp_dir) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if ["chart_data_", "chart_tab_", "chart_template_"].iter().any(|p| name.starts_with(p)) && name.ends_with(".parquet") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// Opens a file with the system's default program (the default browser for an HTML file). Nothing goes

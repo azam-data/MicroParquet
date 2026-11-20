@@ -41,6 +41,9 @@ pub(crate) fn run_headless_cli(args: &crate::CliArgs, paths: &PortablePaths) -> 
     if args.pack.is_some() {
         return run_pack_cli(args, paths);
     }
+    if args.export_html.is_some() {
+        anyhow::bail!("--export-html writes the chart book of a report pack run: add --pack <name> (with --slot, --cutoff and --export-xlsx). It is not an export of --input.");
+    }
     let input_path = args
         .input
         .as_ref()
@@ -342,6 +345,17 @@ mod tests {
         run_headless_cli(&args, &paths).expect("headless runs");
         let (a, b) = (std::fs::read_to_string(&ui_html).expect("ui book"), std::fs::read_to_string(&cli_html).expect("cli book"));
         assert!(a.contains("class=\"mp-chart\"") && a == b, "the chart book is the same from the command line");
+        // the chart book cannot be written (its folder is missing): the workbook is not left behind either
+        let (bx, bh) = (root.join("book-fail.xlsx"), root.join("no-such-folder").join("book.html"));
+        let mut argv5: Vec<String> = ["MicroParquet", "--headless", "--pack", "charted"].iter().map(|s| s.to_string()).collect();
+        argv5.extend(slots(&deposits, &loans));
+        argv5.extend(["--cutoff", "2026-10-31", "--export-xlsx"].iter().map(|s| s.to_string()));
+        argv5.push(bx.display().to_string());
+        argv5.push("--export-html".to_string());
+        argv5.push(bh.display().to_string());
+        let r5 = run_headless_cli(&crate::CliArgs::parse_from(argv5), &paths);
+        assert!(r5.is_err(), "an unwritable chart book stops the run");
+        assert!(!bx.exists(), "and the workbook is not left behind");
         for n in 1..=2 {
             let e = format!("xl/charts/chart{n}.xml");
             let (x, y) = (unzip(&ui_xlsx, &e), unzip(&cli_xlsx, &e));
@@ -385,5 +399,15 @@ mod tests {
         assert!(!fx.exists() && !fh.exists(), "nothing is written when an item fails");
         micro_parquet::rules::set_data_dir_override(None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `--export-html` without `--pack` is an error, never silently ignored.
+    #[test]
+    fn r17_export_html_without_pack_is_an_error() {
+        let root = std::env::temp_dir().join(format!("mp_r17_{}", std::process::id()));
+        let paths = PortablePaths { root_dir: root.clone(), macros_dir: root.join("m"), schemas_dir: root.join("s"), curves_dir: root.join("c"), buckets_file: root.join("b.json"), temp_dir: root.join("temp") };
+        let args = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--input", "x.csv", "--export-html", "out.html"]);
+        let e = format!("{:#}", run_headless_cli(&args, &paths).expect_err("refused"));
+        assert!(e.contains("--export-html") && e.contains("--pack"), "{e}");
     }
 }

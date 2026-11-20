@@ -139,7 +139,7 @@ pub fn diverging_text(v: f64, kind: ValueKind, decimals: usize) -> String {
     signed_body(v, kind, d, true)
 }
 
-fn signed_body(v: f64, kind: ValueKind, d: usize, signed: bool) -> String {
+pub(crate) fn signed_body(v: f64, kind: ValueKind, d: usize, signed: bool) -> String {
     let v = if v == 0.0 { 0.0 } else { v };
     let mut s = format_with_commas(v, d);
     // a negative that rounds to nothing is a plain zero, not "−0.00"

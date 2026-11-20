@@ -490,13 +490,14 @@ fn c3_writing_and_previewing_make_local_files_and_plain_errors() {
     let err = write_chart_html(&dir.join("no").join("x.html"), &d, &opts()).unwrap_err().to_string();
     assert!(err.starts_with("Could not write") && err.contains("Choose another folder"), "{err}");
     // the preview is a temporary file with the chart in it (nothing is opened by the test)
-    let pv = write_preview(&d, &opts()).unwrap();
-    assert!(pv.starts_with(std::env::temp_dir()) && pv.extension().unwrap() == "html");
+    let tmpd = std::env::temp_dir().join(format!("mp-c3-preview-{}", std::process::id()));
+    let pv = write_preview(&d, &opts(), &tmpd).unwrap();
+    assert!(pv.starts_with(tmpd.join("preview")) && pv.extension().unwrap() == "html");
     assert!(std::fs::read_to_string(&pv).unwrap().contains("mp-chart"));
     std::fs::remove_file(pv).ok();
     // the Sankey and the treemap, which only the HTML can draw, preview the same way
     let sk = compute(flows().lazy(), &flow_spec(ChartKind::Sankey, true)).unwrap();
-    let pv = write_preview(&sk, &opts()).unwrap();
+    let pv = write_preview(&sk, &opts(), &tmpd).unwrap();
     assert!(std::fs::read_to_string(&pv).unwrap().contains("\"type\":\"sankey\""));
     std::fs::remove_file(pv).ok();
     assert_eq!(file_stem("Sum of Balance by Month: all 24 rows (BDT)"), "Sum of Balance by Month all 24 rows BDT");

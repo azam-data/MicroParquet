@@ -346,6 +346,8 @@ impl MicroParquetApp {
         let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
             .map(|t| micro_parquet::commands::recent_from_text(&t))
             .unwrap_or_default();
+        // what an earlier run left of the chart studio's temporary files
+        micro_parquet::charts::echarts::clean_chart_temp(&paths.temp_dir);
         let mut app = Self {
             jobs: JobQueue::new(move || egui_ctx.request_repaint()),
             tab_id_counter: 0,
@@ -475,6 +477,11 @@ impl MicroParquetApp {
 impl eframe::App for MicroParquetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_ui(ctx);
+    }
+
+    /// The chart studio's temporary files (previews, chart-data tables) go when the app closes.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        micro_parquet::charts::echarts::clean_chart_temp(&self.paths.temp_dir);
     }
 }
 

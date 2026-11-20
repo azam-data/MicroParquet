@@ -7,8 +7,8 @@
 
 use super::axis::{padded_floor, diverging_text, fit_text, nice_ticks, tick_text, value_text, wrap_text, ValueKind, MINUS};
 use super::colours::{Colour, ColourMap};
-use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, ChartData, StepKind, WaterfallStep};
-use super::spec::{ChartAgg, ChartKind, ChartSpec, Stack, Status, Transform};
+use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, ChartData, HeatFill, StepKind, WaterfallStep};
+use super::spec::{ChartAgg, ChartKind, ChartSpec, LabelMode, Stack, Status, Transform};
 use super::tokens as t;
 use egui::{pos2, vec2, Color32, Pos2, Rect, Vec2};
 
@@ -194,6 +194,8 @@ pub struct ChartLayout {
     pub message: Option<String>,
     /// The colour map with every series of this chart in it (the caller stores it in the spec).
     pub colour_map: ColourMap,
+    /// Labels of "All" that were left out because they would overlap (panel, series, category).
+    pub dropped: Vec<super::labels::LabelKey>,
     /// The size the chart needs (small multiples can need more height than they were given).
     pub needed_height: f32,
     pub surface: Color32,
@@ -215,6 +217,7 @@ impl ChartLayout {
             footnote: None,
             message: None,
             colour_map: ColourMap::default(),
+            dropped: Vec::new(),
             needed_height: rect.height(),
             surface,
             dark,
@@ -328,6 +331,8 @@ struct Builder<'a> {
     dark: bool,
     bounds: Rect,
     out: ChartLayout,
+    /// Which data labels, in which unit and decimals (the Data labels setting).
+    lp: super::labels::LabelPlan,
 }
 
 impl<'a> Builder<'a> {
@@ -374,6 +379,16 @@ impl<'a> Builder<'a> {
 
     /// Writes a text only where it fits (inside the chart, clear of every text and mark); else `None`:
     /// the value stays in the tooltip.
+    /// `try_put` for a data label: one that does not fit is recorded (the chart says how many were left out).
+    #[allow(clippy::too_many_arguments)]
+    fn try_label(&mut self, key: super::labels::LabelKey, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Option<Rect> {
+        let r = self.try_put(role, s, anchor, at, pt, face, colour);
+        if r.is_none() {
+            self.out.dropped.push(key);
+        }
+        r
+    }
+
     fn try_put(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Option<Rect> {
         let r = self.rect_for(s, pt, face, anchor, at);
         if self.free(r) {
@@ -554,7 +569,25 @@ impl ChartLayout {
 
 /// Lays the chart out in `rect`.
 pub fn layout_chart(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
-    let mut out = layout_chart_inner(data, rect, opts, m);
+    let plan = super::labels::LabelPlan::new(&data.spec, opts);
+    let mut notes: Vec<String> = Vec::new();
+    if plan.kind_on(ValueKind::Amount) {
+        notes.extend(plan.unit_note(&data.spec));
+    }
+    let mut out = layout_chart_inner(data, rect, opts, m, &notes);
+    // "All" leaves out the labels that would overlap and says how many (the note takes room, so the count is checked once more)
+    if let Some(n) = super::labels::dropped_note(out.dropped.len()) {
+        let mut with = notes.clone();
+        with.push(n);
+        out = layout_chart_inner(data, rect, opts, m, &with);
+        if let Some(n2) = super::labels::dropped_note(out.dropped.len()) {
+            if with.last() != Some(&n2) {
+                let mut again = notes.clone();
+                again.push(n2);
+                out = layout_chart_inner(data, rect, opts, m, &again);
+            }
+        }
+    }
     for mk in out.marks.iter_mut() {
         mk.tip = t::tidy(&mk.tip);
     }
@@ -564,9 +597,9 @@ pub fn layout_chart(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Mea
     out
 }
 
-fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure) -> ChartLayout {
+fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn Measure, extra_notes: &[String]) -> ChartLayout {
     let ink = t::ink(opts.dark);
-    let mut b = Builder { m, ink, dark: opts.dark, bounds: rect, out: ChartLayout::empty(rect, rgb(ink.surface), opts.dark) };
+    let mut b = Builder { m, ink, dark: opts.dark, bounds: rect, out: ChartLayout::empty(rect, rgb(ink.surface), opts.dark), lp: super::labels::LabelPlan::new(&data.spec, opts) };
     let pad = (rect.width() * t::PADDING_SHARE).max(t::MIN_SPACE_PX);
     let outer = rect.shrink(pad);
     if outer.width() < 60.0 || outer.height() < 60.0 {
@@ -609,6 +642,7 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
     }
     if !opts.bare {
         foot.extend(data.notes.iter().cloned());
+        foot.extend(extra_notes.iter().cloned());
     }
     let mut foot_top = outer.bottom();
     if !foot.is_empty() {
@@ -1454,7 +1488,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
                 let base = if let Some(st) = status_of {
                     rgb(st.status.hex())
                 } else if diverging {
-                    if v < 0.0 { rgb(t::DIVERGING_NEGATIVE) } else { rgb(t::DIVERGING_POSITIVE) }
+                    rgb(t::diverging_colour(v))
                 } else {
                     s.colour
                 };
@@ -1511,7 +1545,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     }
 
     // each segment labelled beside its stack with its value and its share of the stack, nudged apart vertically
-    if spec.segment_labels && stacked && !horizontal {
+    if spec.segment_labels && stacked && !horizontal && b.lp.kind_on(p.vk) {
         let ink_c = rgb(ink.ink);
         let lh = b.size("Ag", t::DATA_LABEL_PT, Face::Regular).y;
         for c in 0..n_cat {
@@ -1523,8 +1557,8 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             let mut items: Vec<(f32, f32, String)> = segs
                 .iter()
                 .map(|(r, v)| {
-                    let x = scaled(*v, p.vk, opts);
-                    let body = if (x - x.round()).abs() < 1e-9 { value_text(x, p.vk, 0, false) } else { value_text(x, p.vk, opts.decimals, false) };
+                    let x = scaled(*v, p.vk, &b.lp.opts);
+                    let body = if b.lp.decimals.is_none() && (x - x.round()).abs() < 1e-9 { value_text(x, p.vk, 0, false) } else { b.lp.text(*v, p.vk, false) };
                     (r.center().y, r.right() + 8.0, format!("{} \u{b7} {}%", body, crate::models::format_with_commas(v.abs() / total * 100.0, 1)))
                 })
                 .collect();
@@ -1556,6 +1590,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
 
     // the net of each stack: a short dark tick across it and its signed value beside it (no label on the stack's edges)
     if spec.net_marker && stacked && !horizontal {
+        let show_net = b.lp.kind_on(p.vk);
         let ink_c = rgb(ink.ink);
         for c in 0..n_cat {
             let Some((pa, na)) = totals[c] else { continue };
@@ -1564,19 +1599,33 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             let mid = centre(c);
             let half = thick / 2.0 + 4.0;
             b.line(pos2(mid - half, y), pos2(mid + half, y), t::LINE_PX, ink_c);
-            let text = diverging_text(scaled(net, p.vk, opts), p.vk, opts.decimals);
-            b.try_put_clear(Role::Label, &text, Anchor::MidLeft, pos2(mid + half + 4.0, y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+            if show_net && b.lp.shows(c, n_cat, true) {
+                let text = b.lp.diverging(net, p.vk);
+                b.try_put_clear(Role::Label, &text, Anchor::MidLeft, pos2(mid + half + 4.0, y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+            }
         }
         return;
     }
 
     // value labels: single series (12 bars or fewer): at the tip; stacked columns: the total on top only
+    // (the Data labels setting: All adds every grouped bar and every segment; Ends only the first and last; None none)
+    let labels_ok = match b.lp.mode {
+        LabelMode::Auto => labels_ok,
+        LabelMode::None => false,
+        _ => true,
+    } && b.lp.kind_on(p.vk);
     if !labels_ok {
         return;
     }
     let ink_c = rgb(ink.ink);
     let label_pt = t::DATA_LABEL_PT;
+    if b.lp.mode == LabelMode::All && !one {
+        bar_labels_every_mark(b, p, pidx, horizontal, stacked, n_cat);
+    }
     for c in 0..n_cat {
+        if !b.lp.shows(c, n_cat, true) {
+            continue;
+        }
         let mid = centre(c);
         let (value, tip_v, positive) = if stacked && spec.stack == Stack::Stacked {
             let Some((pa, na)) = totals[c] else { continue };
@@ -1588,7 +1637,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
         } else {
             continue;
         };
-        let text = if diverging { diverging_text(scaled(value, p.vk, opts), p.vk, opts.decimals) } else { fmt(value, false) };
+        let text = if diverging { b.lp.diverging(value, p.vk) } else { b.lp.text(value, p.vk, false) };
         let at = g.coord(scaled(tip_v, p.vk, opts));
         let gapl = 4.0;
         let (anchor, pos) = if horizontal {
@@ -1604,7 +1653,7 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             None
         };
         let fill = bar.and_then(|r| b.out.prims.iter().rev().find_map(|p| if let Prim::Rect { rect, fill, .. } = p { (*rect == r).then_some(*fill) } else { None }));
-        let placed = b.try_put(Role::Label, &text, anchor, pos, label_pt, Face::Regular, ink_c);
+        let placed = b.try_label((pidx, 0, c), Role::Label, &text, anchor, pos, label_pt, Face::Regular, ink_c);
         // a long bar whose value does not fit beyond its tip (it ends at the edge of the plot) carries the value inside its end
         if placed.is_none() {
             if let (Some(r), Some(f)) = (bar, fill) {
@@ -1649,6 +1698,40 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     }
 }
 
+/// "All" on grouped or stacked bars: the value of every bar at its tip, or of every segment inside it; a label that does not
+/// fit is left out (and counted).
+fn bar_labels_every_mark(b: &mut Builder, p: &Plan, pidx: usize, horizontal: bool, stacked: bool, n_cat: usize) {
+    let ink_c = rgb(b.ink.ink);
+    let pt = t::DATA_LABEL_PT;
+    let marks: Vec<(Rect, usize, usize, f64)> = b.out.marks.iter().filter(|m| m.panel == pidx && matches!(m.kind, MarkKind::Bar | MarkKind::Segment)).filter_map(|m| m.value.map(|v| (m.rect, m.series, m.category, v))).collect();
+    for (r, si, c, v) in marks {
+        let text = b.lp.text(v, p.vk, false);
+        if stacked {
+            // inside the segment, in the text colour its fill asks for; left out when it does not fit
+            let fill = b.out.prims.iter().rev().find_map(|q| if let Prim::Rect { rect, fill, .. } = q { (*rect == r).then_some(*fill) } else { None });
+            let sz = b.size(&text, pt, Face::Regular);
+            if r.width() >= sz.x + 4.0 && r.height() >= sz.y + 2.0 {
+                let col = fill.map(contrast_text).unwrap_or(ink_c);
+                b.put(Role::Cell, &text, Anchor::Centre, r.center(), pt, Face::Regular, col);
+            } else {
+                b.out.dropped.push((pidx, si, c));
+            }
+        } else {
+            let positive = v >= 0.0;
+            let gapl = 4.0;
+            let (anchor, pos) = if horizontal {
+                if positive { (Anchor::MidLeft, pos2(r.right() + gapl, r.center().y)) } else { (Anchor::MidRight, pos2(r.left() - gapl, r.center().y)) }
+            } else if positive {
+                (Anchor::BottomCentre, pos2(r.center().x, r.top() - gapl))
+            } else {
+                (Anchor::TopCentre, pos2(r.center().x, r.bottom() + gapl))
+            };
+            b.try_label((pidx, si, c), Role::Label, &text, anchor, pos, pt, Face::Regular, ink_c);
+        }
+    }
+    let _ = n_cat;
+}
+
 /// White text on a dark fill, the light theme's ink on a pale one.
 fn contrast_text(fill: Color32) -> Color32 {
     let lin = |c: u8| {
@@ -1676,7 +1759,7 @@ fn waterfall(b: &mut Builder, data: &ChartData, p: &Plan, steps: &[WaterfallStep
         let (colour, positive) = match s.kind {
             StepKind::Start => (rgb(t::WATERFALL_START), s.value >= 0.0),
             StepKind::End => (rgb(t::WATERFALL_END), s.value >= 0.0),
-            StepKind::Delta => (if s.value >= 0.0 { rgb(t::DIVERGING_POSITIVE) } else { rgb(t::DIVERGING_NEGATIVE) }, s.value >= 0.0),
+            StepKind::Delta => (rgb(t::diverging_colour(s.value)), s.value >= 0.0),
         };
         // a connector from the previous bar's level to this bar's start
         if let Some((pr, y)) = prev_right {
@@ -1691,11 +1774,15 @@ fn waterfall(b: &mut Builder, data: &ChartData, p: &Plan, steps: &[WaterfallStep
     }
     // every step is labelled, above its bar
     let _ = data;
+    let n_steps = steps.len();
     for (i, s) in steps.iter().enumerate() {
+        if !b.lp.kind_on(p.vk) || !b.lp.shows(i, n_steps, true) {
+            continue;
+        }
         let mid = centre(i);
         let top = g.coord(scaled(s.top, p.vk, opts));
-        let text = fmt(s.value, s.kind == StepKind::Delta);
-        b.try_put(Role::Label, &text, Anchor::BottomCentre, pos2(mid, top - 4.0), t::DATA_LABEL_PT, Face::Regular, ink_c);
+        let text = b.lp.text(s.value, p.vk, s.kind == StepKind::Delta);
+        b.try_label((pidx, 0, i), Role::Label, &text, Anchor::BottomCentre, pos2(mid, top - 4.0), t::DATA_LABEL_PT, Face::Regular, ink_c);
     }
 }
 
@@ -1821,11 +1908,40 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
             if n_ser == 1 {
                 if let Some(v) = s.vals[lc] {
                     // a single series that has a name (the NPL % panel) is named at its end, with its value
-                    let text = if s.name.is_empty() { fmt(v, false) } else { format!("{}  {}", s.name, fmt(v, false)) };
-                    b.try_put(Role::Label, &text, Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                    let value_on = b.lp.kind_on(p.vk) && b.lp.shows(lc, n_cat, true);
+                    let text = match (s.name.is_empty(), value_on) {
+                        (true, true) => b.lp.text(v, p.vk, false),
+                        (false, true) => format!("{}  {}", s.name, b.lp.text(v, p.vk, false)),
+                        (false, false) => s.name.clone(),
+                        (true, false) => String::new(),
+                    };
+                    if !text.is_empty() {
+                        b.try_label((pidx, si, lc), Role::Label, &text, Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                    }
                 }
             } else if n_ser <= 4 || all_named {
                 ends.push((lp.y, lp.x + t::MARKER_PX, s.name.clone(), if emphasised { ink_c } else { ink2_c }, emphasised));
+            }
+        }
+        // the Data labels setting: every point (All) or the first and the last (Ends only) carries its value
+        if matches!(b.lp.mode, LabelMode::All | LabelMode::EndsOnly) && b.lp.kind_on(p.vk) {
+            for si in 0..n_ser {
+                let last = (0..n_cat).rev().find(|c| pts_at(p, si, *c).is_some());
+                let first = (0..n_cat).find(|c| pts_at(p, si, *c).is_some());
+                for c in 0..n_cat {
+                    let Some(v) = pts_at(p, si, c) else { continue };
+                    let ends = Some(c) == first || Some(c) == last;
+                    if b.lp.mode == LabelMode::EndsOnly && !ends {
+                        continue;
+                    }
+                    // a single series already has its end value; the others add theirs above the point
+                    if n_ser == 1 && Some(c) == last {
+                        continue;
+                    }
+                    let Some(pt) = point(si, c) else { continue };
+                    let text = b.lp.text(v, p.vk, false);
+                    b.try_label((pidx, si, c), Role::Label, &text, Anchor::BottomCentre, pos2(pt.x, pt.y - t::MARKER_PX - 2.0), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                }
             }
         }
         if !ends.is_empty() {
@@ -2021,16 +2137,23 @@ fn heatmap_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
             let Some(v) = h.cells[ri][ci] else { continue };
             let missing = h.counts.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(0) == 0;
             let cell = Rect::from_min_size(pos2(grid.left() + cw * ci as f32 + gap / 2.0, grid.top() + ch * ri as f32 + gap / 2.0), vec2((cw - gap).max(1.0), (ch - gap).max(1.0)));
-            // a missing pair is a 0.0 cell in the lightest step
-            let step = if missing { 0 } else { sequential_step(v, lo, hi) };
-            let fill = rgb(t::sequential_colour(step, b.dark));
+            // zero and missing cells are neutral, near the surface; the ramp is for values above zero
+            let fill_kind = if missing { HeatFill::Neutral } else { h.fill(v, h.counts.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(1)) };
+            let fill = match fill_kind {
+                HeatFill::Neutral => rgb(t::heat_neutral(b.dark)),
+                HeatFill::Step(step) => rgb(t::sequential_colour(step, b.dark)),
+            };
             let radius = t::HEAT_RADIUS_PX.min(cell.width().min(cell.height()) / 2.0);
             b.rect(cell, fill, [radius; 4]);
-            let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, 1) } else { value_text(scaled(v, vk, opts), vk, opts.decimals, false) };
+            let text = if vk == ValueKind::Percent { crate::models::format_with_commas(v, b.lp.decimals.unwrap_or(1)) } else { b.lp.text(v, vk, false) };
             // the text follows the fill actually drawn: white on step 7 and darker, the light ink on the paler steps
-            let tc = if t::sequential_text_white(step, b.dark) { Color32::WHITE } else { rgb(t::INK_LIGHT.ink) };
+            let tc = match fill_kind {
+                HeatFill::Neutral => rgb(t::heat_neutral_text(b.dark)),
+                HeatFill::Step(step) if t::sequential_text_white(step, b.dark) => Color32::WHITE,
+                HeatFill::Step(_) => rgb(t::INK_LIGHT.ink),
+            };
             let tr = b.rect_for(&text, t::DATA_LABEL_PT, Face::Regular, Anchor::Centre, cell.center());
-            if cell.contains_rect(tr) {
+            if cell.contains_rect(tr) && b.lp.kind_on(vk) {
                 b.put(Role::Cell, &text, Anchor::Centre, cell.center(), t::DATA_LABEL_PT, Face::Regular, tc);
             }
             let name = if data.spec.series.is_some() { format!("{}: {}\n{}: {}", data.spec.series.clone().unwrap_or_default(), h.rows[ri], data.spec.category, h.cols[ci]) } else { format!("{}: {}", data.spec.category, h.cols[ci]) };
@@ -2089,7 +2212,8 @@ fn donut_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts, 
         return;
     }
     cm.assign_all(&parts.iter().map(|p| p.0.clone()).collect::<Vec<_>>());
-    let legend_w = parts.iter().map(|p| b.size(&format!("{}  {}", p.0, value_text(scaled(p.1, vk, opts), vk, opts.decimals, false)), t::LABEL_PT, Face::Regular).x).fold(0.0, f32::max) + 40.0;
+    let value_labels = b.lp.kind_on(vk);
+    let legend_w = parts.iter().map(|p| b.size(&if value_labels { format!("{}  {}", p.0, b.lp.text(p.1, vk, false)) } else { p.0.clone() }, t::LABEL_PT, Face::Regular).x).fold(0.0, f32::max) + 40.0;
     let ring_area = Rect::from_min_max(body.min, pos2((body.right() - legend_w - t::MIN_SPACE_PX).max(body.left() + 60.0), body.bottom()));
     let r_out = (ring_area.width().min(ring_area.height()) / 2.0 - t::MIN_SPACE_PX).max(10.0);
     let c = ring_area.center();
@@ -2128,7 +2252,7 @@ fn donut_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts, 
         let x = body.right() - legend_w;
         let swatch = Rect::from_min_size(pos2(x, y + (lh - sw) / 2.0), vec2(sw, sw));
         b.rect(swatch, colour, [2.0; 4]);
-        let text = format!("{}  {} ({}%)", name, value_text(scaled(*v, vk, opts), vk, opts.decimals, false), crate::models::format_with_commas(*v / total * 100.0, 0));
+        let text = if value_labels { format!("{}  {} ({}%)", name, b.lp.text(*v, vk, false), crate::models::format_with_commas(*v / total * 100.0, 0)) } else { name.to_string() };
         let tr = b.put(Role::Legend, &text, Anchor::MidLeft, pos2(x + sw + 6.0, y + lh / 2.0), t::LABEL_PT, Face::Regular, ink2_c);
         b.out.legend.push(LegendItem { name: name.clone(), swatch, text: tr, colour });
     }

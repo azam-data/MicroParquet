@@ -89,7 +89,7 @@
             "color": "#0b0b0b",
             "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
             "fontSize": 9.5,
-            "formatter": "Term deposits  685.00",
+            "formatter": "Term deposits",
             "position": "right",
             "show": true
           },
@@ -151,7 +151,7 @@
             "color": "#0b0b0b",
             "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
             "fontSize": 9.5,
-            "formatter": "Savings  385.00",
+            "formatter": "Savings",
             "position": "right",
             "show": true
           },
@@ -213,7 +213,7 @@
             "color": "#0b0b0b",
             "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
             "fontSize": 9.5,
-            "formatter": "Current  285.00",
+            "formatter": "Current",
             "position": "right",
             "show": true
           },
@@ -275,7 +275,7 @@
             "color": "#0b0b0b",
             "fontFamily": "\"Source Sans 3\", \"Segoe UI\", system-ui, sans-serif",
             "fontSize": 9.5,
-            "formatter": "Foreign  235.00",
+            "formatter": "Foreign",
             "position": "right",
             "show": true
           },

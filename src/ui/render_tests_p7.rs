@@ -416,7 +416,7 @@ pub(crate) fn pclick(rig: &mut Rig, r: egui::Rect) {
 }
 
 /// Scrolls with the wheel over `at` until `rect_of` is inside the window (no animation: one step at a time).
-fn scroll_into_view(rig: &mut Rig, at: egui::Pos2, rect_of: &dyn Fn(&Rig) -> Option<egui::Rect>, what: &str) -> egui::Rect {
+pub(crate) fn scroll_into_view(rig: &mut Rig, at: egui::Pos2, rect_of: &dyn Fn(&Rig) -> Option<egui::Rect>, what: &str) -> egui::Rect {
     rig.ctx.style_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
     let screen = rig.ctx.screen_rect();
     for _ in 0..60 {

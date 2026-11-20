@@ -4,7 +4,7 @@
 
 use super::data::{apply_transform, BoxStat, ChartData, FacetData, Histogram, MeasureData, ScatterPoint};
 use super::spec::{ChartKind, ChartSpec, MeasureSpec, Transform};
-use super::tokens::{MAX_FACETS, MAX_POINTS, MAX_SCATTER_SERIES};
+use super::tokens::{MAX_BARS, MAX_FACETS, MAX_HEAT_COLUMNS, MAX_POINTS, MAX_SCATTER_SERIES};
 use crate::chart::{compute_chart_fixed, FixedKept, OTHER_LABEL};
 use crate::pivot_table::{key_text_expr, BLANK_LABEL};
 use anyhow::{bail, Context, Result};
@@ -81,6 +81,14 @@ fn compute_grid(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let mut data = compute_chart_fixed(lf.clone(), &primary_spec, None)?;
     data.spec = spec.clone();
     data.measure_names = measures.iter().map(measure_name).collect();
+    let (n, limit, what) = match spec.kind {
+        ChartKind::Bar => (data.categories.len(), MAX_BARS, "bars or columns"),
+        ChartKind::Heatmap => (data.categories.len(), MAX_HEAT_COLUMNS, "heatmap columns"),
+        _ => (0, usize::MAX, ""),
+    };
+    if n > limit {
+        bail!("Chart: '{}' would give {} {}, and more than {} cannot be read side by side. Use Top N or a filter to show fewer.", spec.category, n, what, limit);
+    }
     finite_or_stop(&data.values, &data.categories, &data.series, measures[0].column.as_deref().unwrap_or("Count of rows"))?;
     let fixed = FixedKept { categories: data.kept_categories.clone(), series: data.kept_series.clone() };
 
@@ -111,7 +119,34 @@ fn compute_grid(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         }
     }
     data.notes.extend(notes);
+    check_single_panels(&data)?;
     Ok(data)
+}
+
+/// A panel marked `single` draws one series for a measure that is the same in every series (a ratio of each category).
+/// If the series disagree for a category, it is not one number and the chart stops.
+fn check_single_panels(data: &ChartData) -> Result<()> {
+    for p in data.spec.panels.iter().filter(|p| p.single) {
+        let Some(&mi) = p.measures.first() else { continue };
+        let Some(m) = data.measure(mi) else { continue };
+        for (ci, cat) in data.categories.iter().enumerate() {
+            let vals: Vec<(usize, f64)> = m.values.iter().enumerate().filter_map(|(si, r)| r.get(ci).copied().flatten().map(|v| (si, v))).collect();
+            if let Some((s0, v0)) = vals.first().copied() {
+                if let Some((s1, v1)) = vals.iter().copied().find(|(_, v)| (v - v0).abs() > 1e-9 * v0.abs().max(1.0)) {
+                    bail!(
+                        "Chart: '{}' is drawn once, so it must be the same in every series, but for '{}' it is {} in '{}' and {} in '{}'. Fix the table so the ratio repeats on every row of that category.",
+                        m.name,
+                        cat,
+                        v0,
+                        data.series.get(s0).cloned().unwrap_or_default(),
+                        v1,
+                        data.series.get(s1).cloned().unwrap_or_default()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One chart table per value of the facet column (at most `MAX_FACETS`), largest first by rows.

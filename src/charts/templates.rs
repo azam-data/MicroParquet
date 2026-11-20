@@ -244,6 +244,11 @@ fn with_sample(footnote: &str, sample: Option<String>) -> String {
     }
 }
 
+/// A cell the chart needs is blank: the chart stops and says which one, never drawing it as 0 or leaving it out.
+fn blank_cell(t: Template, what: &str, row_name: &str, col: &str) -> anyhow::Error {
+    anyhow!("{}: {} '{}' has no value in '{}'. A blank is not read as zero: fill it in the tab, or filter that row out, then chart again.", t.name(), what, row_name, col)
+}
+
 fn order_of(values: &[String]) -> SortOrder {
     SortOrder::List { name: "template".to_string(), values: values.to_vec(), case_insensitive: true }
 }
@@ -258,7 +263,14 @@ fn minus(s: String) -> String {
 
 /// A percentage in a title: one decimal, a true minus sign: "−10.5%".
 fn pct_title(v: f64) -> String {
+    // a value that rounds to zero has no sign: never "-0.0%"
+    let v = if v.abs() < 0.05 { 0.0 } else { v };
     minus(format!("{}%", format_with_commas(v, 1)))
+}
+
+/// True when the amount shows as zero in the title (one decimal in the chart's scale).
+fn shows_zero(v: f64, ctx: &Ctx) -> bool {
+    (v / ctx.divisor).abs() < 0.05
 }
 
 /// A limit in a label: no decimals when it is a whole number: "−10%".
@@ -270,13 +282,19 @@ fn limit_text(v: f64) -> String {
 /// A signed amount in the chart's scale: "+13.5 Cr".
 fn amount_signed(v: f64, ctx: &Ctx) -> String {
     let x = v / ctx.divisor;
-    let sign = if x >= 0.0 { "+" } else { "\u{2212}" };
+    // an amount that shows as zero has no sign: never "+0.0" or "-0.0"
+    let sign = if x.abs() < 0.05 { "" } else if x >= 0.0 { "+" } else { "\u{2212}" };
     let unit = if ctx.suffix.is_empty() { String::new() } else { format!(" {}", ctx.suffix) };
     format!("{}{}{}", sign, format_with_commas(x.abs(), 1), unit)
 }
 
 fn base_spec(category: &str, kind: ChartKind) -> ChartSpec {
     ChartSpec { category: category.to_string(), kind, top_n: 60, ..Default::default() }
+}
+
+/// A measure that is the average of one value per category: a blank stays blank (a sum of blanks would be 0).
+fn measure_avg(col: &str, label: &str, pct: bool) -> MeasureSpec {
+    MeasureSpec { column: Some(col.to_string()), agg: ChartAgg::Average, label: label.to_string(), pct, ..Default::default() }
 }
 
 fn measure(col: &str, label: &str, pct: bool) -> MeasureSpec {
@@ -448,11 +466,18 @@ fn gap_ladder(df: &DataFrame) -> Result<Prepared> {
     let limit = if has(df, "Cumulative gap limit %") { nums(t, df, "Cumulative gap limit %")? } else { vec![None; df.height()] };
     let (mut b, mut n, mut c, mut l): (Vec<String>, Vec<f64>, Vec<f64>, Vec<Option<f64>>) = Default::default();
     for i in 0..df.height() {
-        let (Some(name), Some(nv), Some(cv)) = (bucket[i].clone(), net[i], cum[i]) else { continue };
+        let Some(name) = bucket[i].clone() else {
+            if net[i].is_some() || cum[i].is_some() {
+                bail!("{}: row {} of the ladder has numbers but no bucket name.", t.name(), i + 1);
+            }
+            continue;
+        };
         // the totals row and the overdue row are not buckets
         if name == "Total" || name.starts_with("Overdue assets") {
             continue;
         }
+        let Some(nv) = net[i] else { return Err(blank_cell(t, "the bucket", &name, "Net gap")) };
+        let Some(cv) = cum[i] else { return Err(blank_cell(t, "the bucket", &name, "Cumulative gap % of total assets")) };
         b.push(name);
         n.push(nv);
         c.push(cv);
@@ -501,13 +526,21 @@ fn repricing_gap(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
     let cum = nums(t, df, "Cumulative gap")?;
     let (mut b, mut g, mut c): (Vec<String>, Vec<f64>, Vec<f64>) = Default::default();
     for i in 0..df.height() {
-        let (Some(name), Some(gv)) = (bucket[i].clone(), gap[i]) else { continue };
-        if name == "Total" || name.trim().is_empty() {
+        let name = bucket[i].clone().unwrap_or_default();
+        if name == "Total" {
             continue;
         }
+        if name.trim().is_empty() {
+            if gap[i].is_some() || cum[i].is_some() {
+                bail!("{}: row {} of the summary has numbers but no bucket name.", t.name(), i + 1);
+            }
+            continue;
+        }
+        let Some(gv) = gap[i] else { return Err(blank_cell(t, "the bucket", &name, "Gap")) };
+        let Some(cv) = cum[i] else { return Err(blank_cell(t, "the bucket", &name, "Cumulative gap")) };
         b.push(name);
         g.push(gv);
-        c.push(cum[i].unwrap_or(0.0));
+        c.push(cv);
     }
     if b.is_empty() {
         bail!("{}: the summary has no repricing bucket with a gap. Build the \u{394}NII repricing summary first.", t.name());
@@ -601,7 +634,7 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     let (name, e) = effects.iter().copied().fold(("Volume", 0.0f64), |a, b| if b.1.abs() > a.1.abs() { b } else { a });
     let change = curr - prev;
     let what = if change >= 0.0 { "rise" } else { "fall" };
-    let finding = if total_abs == 0.0 || change == 0.0 && e == 0.0 {
+    let finding = if total_abs == 0.0 || shows_zero(change, ctx) {
         "Interest is unchanged between the two months".to_string()
     } else {
         let share = e.abs() / total_abs;
@@ -702,7 +735,7 @@ fn nii_by_key(df: &DataFrame, key_col: &str, keys: &[Option<String>], ctx: &Ctx)
     }
     let top = &rows[0];
     let change = net(top);
-    let finding = format!("{} has the largest change: {}", top.0, amount_signed(change, ctx));
+    let finding = if shows_zero(change, ctx) { "No key changed its interest".to_string() } else { format!("{} has the largest change: {}", top.0, amount_signed(change, ctx)) };
     spec.title = finding.clone();
     Ok(Some(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: NII effects by key".to_string(), companion: None }))
 }
@@ -726,21 +759,36 @@ fn cl_migration(df: &DataFrame) -> Result<Prepared> {
     let all_seg = "All segments";
     let seg_in_use = segment.as_ref().map(|s| s.iter().any(|v| v.as_deref() == Some(all_seg))).unwrap_or(false);
     for i in 0..df.height() {
-        let Some(p) = prev[i].clone() else { continue };
+        let Some(p) = prev[i].clone() else {
+            if grid.iter().any(|g| g[i].is_some()) {
+                bail!("{}: row {} of the matrix has numbers but no previous grade.", t.name(), i + 1);
+            }
+            continue;
+        };
         if grade_rank(&p).is_none() {
-            continue; // New, the totals
+            // only the rows the tool adds are left out; any other name is a table this chart does not know
+            if matches!(p.as_str(), "New" | "Total" | "Previous month total") || p.starts_with("Total") {
+                continue;
+            }
+            bail!("{}: the row '{}' of the matrix is not a grade (STD, SMA, SS, DF, BL) nor one of the rows the tool adds (New, Total, Previous month total). Remove it or rename it, then chart again.", t.name(), p);
         }
         if seg_in_use && segment.as_ref().and_then(|s| s[i].as_deref()) != Some(all_seg) {
             continue;
         }
+        // a blank cell is not a zero
+        for (ci, c) in cols.iter().enumerate() {
+            if grid[ci][i].is_none() {
+                return Err(blank_cell(t, "the grade", &p, c));
+            }
+        }
         // a grade with no balance in any column has nothing to chart
-        if grid.iter().all(|g| g[i].unwrap_or(0.0) == 0.0) {
+        if grid.iter().all(|g| g[i] == Some(0.0)) {
             continue;
         }
         for (ci, c) in cols.iter().enumerate() {
             from.push(p.clone());
             to.push(c.clone());
-            bal.push(grid[ci][i].unwrap_or(0.0));
+            bal.push(grid[ci][i].unwrap_or_default());
         }
     }
     if from.is_empty() {
@@ -849,8 +897,18 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
     // month -> grade balances and which grades the month has a row for
     let mut by: std::collections::BTreeMap<chrono::NaiveDate, ([f64; 5], [bool; 5])> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
-        let (Some(m), Some(g), Some(b)) = (months[i], grades[i].clone(), bal[i]) else { continue };
-        let Some(r) = grade_rank(&g) else { continue };
+        if months[i].is_none() && grades[i].is_none() && bal[i].is_none() {
+            continue;
+        }
+        let (Some(m), Some(g), Some(b)) = (months[i], grades[i].clone(), bal[i]) else {
+            bail!("{}: row {} has a blank month, grade or balance. A blank is not read as zero: fill it or remove the row, then chart again.", t.name(), i + 1);
+        };
+        let Some(r) = grade_rank(&g) else {
+            if g == "Total" {
+                continue;
+            }
+            bail!("{}: row {} has the grade '{}', which is not STD, SMA, SS, DF or BL. Fix the grade or remove the row, then chart again.", t.name(), i + 1, g);
+        };
         let e = by.entry(m).or_insert_with(|| ([0.0; 5], [false; 5]));
         e.0[r] += b;
         e.1[r] = true;
@@ -864,11 +922,16 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
     }
     let label_of = month_labels(&by.keys().copied().collect::<Vec<_>>());
     let by: Vec<(String, [f64; 5])> = by.into_iter().zip(label_of).map(|((_, (v, _)), l)| (l, v)).collect();
-    let (mut mm, mut gg, mut bb, mut np): (Vec<String>, Vec<String>, Vec<f64>, Vec<f64>) = Default::default();
-    let mut ratios: Vec<(String, f64)> = Vec::new();
+    let (mut mm, mut gg, mut bb, mut np): (Vec<String>, Vec<String>, Vec<f64>, Vec<Option<f64>>) = Default::default();
+    let mut ratios: Vec<(String, Option<f64>)> = Vec::new();
+    let mut no_loans: Vec<String> = Vec::new();
     for (label, v) in &by {
         let total: f64 = v.iter().sum();
-        let npl = if total != 0.0 { (v[2] + v[3] + v[4]) / total * 100.0 } else { 0.0 };
+        // the ratio of a month with no loans is blank, not 0%
+        let npl = if total != 0.0 { Some((v[2] + v[3] + v[4]) / total * 100.0) } else { None };
+        if npl.is_none() {
+            no_loans.push(label.clone());
+        }
         ratios.push((label.clone(), npl));
         for (r, g) in GRADES.iter().enumerate() {
             // Standard (STD) is not stacked: only SMA, SS, DF and BL, SMA always (so every month has a row)
@@ -888,11 +951,17 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
     spec.stack = Stack::Stacked;
     spec.order = order_of(&labels);
     spec.measures = vec![measure("Balance", "Balance", false), MeasureSpec { column: Some("NPL %".into()), agg: ChartAgg::Average, label: "NPL %".into(), pct: true, ..Default::default() }];
+    if !no_loans.is_empty() {
+        spec.footnote = format!("NPL % is blank where the month has no loans: {}", no_loans.join(", "));
+    }
     spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Balance by grade (SMA, SS, DF, BL)".into(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "NPL % (SS, DF and BL)".into(), single: true }];
     spec.colour_map.assign_all(&GRADES);
     spec.subtitle = "Standard (STD) not shown \u{b7} classified loans by grade, by month".to_string();
-    let (first, last) = (ratios.first().map(|r| r.1).unwrap_or(0.0), ratios.last().map(|r| r.1).unwrap_or(0.0));
-    let finding = if ratios.len() < 2 || (last - first).abs() < 0.05 {
+    let defined: Vec<f64> = ratios.iter().filter_map(|r| r.1).collect();
+    let (first, last) = (defined.first().copied().unwrap_or(0.0), defined.last().copied().unwrap_or(0.0));
+    let finding = if defined.is_empty() {
+        "NPL ratio is not defined: no month has loans".to_string()
+    } else if defined.len() < 2 || (last - first).abs() < 0.05 {
         format!("NPL ratio is {}%", format_with_commas(last, 1))
     } else if last > first {
         format!("NPL ratio rose to {}%", format_with_commas(last, 1))
@@ -929,9 +998,19 @@ fn irrbb(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
         .filter(|v| v.is_finite() && *v > 0.0)
         .ok_or_else(|| anyhow!("{}: the results do not state the outlier limit (the row 'Outlier (max loss \u{2265} x% of Tier 1)', from outlier_pct in the IRRBB shock rule file). Run the six scenarios again with a rule file that has outlier_pct; no limit is assumed.", t.name()))?;
     let mut rows: Vec<(String, f64)> = Vec::new();
+    // a scenario row has a loss figure; the rows under them (maximum loss, outlier, capital, the files used) have none
+    let loss = if has(df, "Loss") { Some(nums(t, df, "Loss")?) } else { None };
     for i in 0..df.height() {
-        let (Some(name), Some(v)) = (sc[i].clone(), eve[i]) else { continue };
-        rows.push((name, v / tier1 * 100.0));
+        let Some(name) = sc[i].clone() else { continue };
+        match eve[i] {
+            Some(v) => rows.push((name, v / tier1 * 100.0)),
+            None => {
+                let is_scenario = loss.as_ref().is_some_and(|l| l[i].is_some()) && name != "Maximum loss";
+                if is_scenario {
+                    return Err(blank_cell(t, "the scenario", &name, "EVE change"));
+                }
+            }
+        }
     }
     if rows.is_empty() {
         bail!("{}: the results have no scenario with an EVE change.", t.name());
@@ -952,7 +1031,10 @@ fn irrbb(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
     }
     spec.footnote = with_sample(&spec.footnote, sample_text(df, "Scenario", "Note"));
     let (worst_name, worst) = rows[0].clone();
-    let finding = if worst < 0.0 {
+    let finding = if worst < 0.0 && worst.abs() < 0.05 {
+        // a loss that shows as 0.0% is not written as "worst case at -0.0%"
+        "No scenario loses as much as 0.1% of Tier 1".to_string()
+    } else if worst < 0.0 {
         format!("{} is the worst case at {} of Tier 1", worst_name, pct_title(worst))
     } else {
         format!("No scenario loses value: the smallest gain is {} of Tier 1 ({})", pct_title(worst), worst_name)
@@ -1062,19 +1144,28 @@ fn ecl_by_stage(df: &DataFrame) -> Result<Prepared> {
     let group = strs(t, df, "Group")?;
     let ead = nums(t, df, "EAD")?;
     let ecl = nums(t, df, "ECL")?;
-    let (mut st, mut e, mut l, mut cov): (Vec<String>, Vec<f64>, Vec<f64>, Vec<f64>) = Default::default();
+    let (mut st, mut e, mut l, mut cov): (Vec<String>, Vec<f64>, Vec<f64>, Vec<Option<f64>>) = Default::default();
+    let mut zero_ead: Vec<String> = Vec::new();
     for i in 0..df.height() {
         if section[i].as_deref() != Some("Stage") {
             continue;
         }
-        let (Some(g), Some(a), Some(b)) = (group[i].clone(), ead[i], ecl[i]) else { continue };
+        let Some(g) = group[i].clone() else { bail!("{}: row {} of the summary is a stage row with no stage name.", t.name(), i + 1) };
         if g == "Total" {
             continue;
         }
-        st.push(g);
+        let Some(a) = ead[i] else { return Err(blank_cell(t, "the stage", &g, "EAD")) };
+        let Some(b) = ecl[i] else { return Err(blank_cell(t, "the stage", &g, "ECL")) };
+        st.push(g.clone());
         e.push(a);
         l.push(b);
-        cov.push(if a != 0.0 { b / a * 100.0 } else { 0.0 });
+        // a percentage of a zero total is blank, not 0%
+        if a != 0.0 {
+            cov.push(Some(b / a * 100.0));
+        } else {
+            cov.push(None);
+            zero_ead.push(g);
+        }
     }
     if st.is_empty() {
         bail!("{}: the summary has no stage rows. Build the IFRS 9 summary first.", t.name());
@@ -1083,10 +1174,11 @@ fn ecl_by_stage(df: &DataFrame) -> Result<Prepared> {
     let mut spec = base_spec("Stage", ChartKind::Bar);
     spec.order = order_of(&st);
     spec.value = Some("EAD".into());
-    spec.measures = vec![measure("EAD", "EAD", false), measure("ECL", "ECL", false), measure("Coverage %", "Coverage %", true)];
+    spec.measures = vec![measure("EAD", "EAD", false), measure("ECL", "ECL", false), measure_avg("Coverage %", "Coverage %", true)];
     spec.panels = (0..3).map(|i| PanelSpec { kind: ChartKind::Bar, measures: vec![i], title: ["EAD", "ECL", "Coverage % (ECL / EAD)"][i].to_string(), single: false }).collect();
     spec.subtitle = "IFRS 9 by stage".to_string();
-    spec.footnote = with_sample("", sample_text(df, "Section", "Group"));
+    let note = if zero_ead.is_empty() { String::new() } else { format!("Coverage is blank where the EAD is 0: {}", zero_ead.join(", ")) };
+    spec.footnote = with_sample(&note, sample_text(df, "Section", "Group"));
     let total: f64 = l.iter().sum();
     let (top_i, top) = l.iter().enumerate().fold((0usize, f64::MIN), |a, (i, v)| if *v > a.1 { (i, *v) } else { a });
     let finding = if total <= 0.0 { "No expected credit loss is held in any stage".to_string() } else { format!("{} holds {}% of ECL", st[top_i], format_with_commas(top / total * 100.0, 1)) };
@@ -1107,7 +1199,12 @@ fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
     let mut by: std::collections::BTreeMap<chrono::NaiveDate, std::collections::BTreeMap<String, f64>> = std::collections::BTreeMap::new();
     let mut texts: std::collections::BTreeMap<chrono::NaiveDate, Vec<String>> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
-        let (Some(d), Some(p), Some(b)) = (dates[i], prods[i].clone(), bal[i]) else { continue };
+        if dates[i].is_none() && prods[i].is_none() && bal[i].is_none() {
+            continue;
+        }
+        let (Some(d), Some(p), Some(b)) = (dates[i], prods[i].clone(), bal[i]) else {
+            bail!("{}: row {} has a blank month, product or amount. A blank is not read as zero: fill it or remove the row, then chart again.", t.name(), i + 1);
+        };
         *by.entry(d).or_default().entry(p).or_default() += b;
         if let Some(m) = months[i].clone() {
             let e = texts.entry(d).or_default();
@@ -1126,6 +1223,11 @@ fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
     spec.stack = Stack::Stacked;
     spec.subtitle = format!("{} by {} and {}", bal_c, prod_c.to_lowercase(), month_c.to_lowercase());
     spec.order = order_of(&month_order);
+    // colours are pinned to the product's name (in name order), so a filter or a new month never repaints a product
+    let mut product_names: Vec<String> = by.values().flat_map(|m| m.keys().cloned()).collect();
+    product_names.sort();
+    product_names.dedup();
+    spec.colour_map.assign_all(&product_names);
     let (first, last) = (by.values().next().cloned().unwrap_or_default(), by.values().next_back().cloned().unwrap_or_default());
     let finding = if by.len() < 2 {
         let (p, _) = last.iter().fold((String::new(), f64::MIN), |a, (k, v)| if *v > a.1 { (k.clone(), *v) } else { a });
@@ -1154,8 +1256,10 @@ fn rate_profile(df: &DataFrame) -> Result<Prepared> {
     let bal = nums(t, df, &bal_c)?;
     let mut by: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
-        if let (Some(b), Some(v)) = (bands[i].clone(), bal[i]) {
-            *by.entry(b).or_default() += v;
+        match (bands[i].clone(), bal[i]) {
+            (Some(b), Some(v)) => *by.entry(b).or_default() += v,
+            (None, None) => {}
+            _ => bail!("{}: row {} has a blank rate band or balance. A blank is not read as zero: fill it or remove the row, then chart again.", t.name(), i + 1),
         }
     }
     let total: f64 = by.values().sum();
@@ -1186,8 +1290,10 @@ fn behaviour(df: &DataFrame) -> Result<Prepared> {
     // per date, then the last date of each month (daily history is reduced to month-ends)
     let mut per_date: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
-        if let (Some(d), Some(b)) = (dates[i].clone(), bal[i]) {
-            *per_date.entry(d).or_default() += b;
+        match (dates[i].clone(), bal[i]) {
+            (Some(d), Some(b)) => *per_date.entry(d).or_default() += b,
+            (None, None) => {}
+            _ => bail!("{}: row {} has a blank date or balance. A blank is not read as zero: fill it or remove the row, then chart again.", t.name(), i + 1),
         }
     }
     let mut per_month: std::collections::BTreeMap<String, (String, f64)> = std::collections::BTreeMap::new();
@@ -1219,11 +1325,17 @@ fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     let rule = strs(t, df, "Rule")?;
     let pass = nums(t, df, "Pass %")?;
     let (mut names, mut vals): (Vec<String>, Vec<f64>) = Default::default();
+    let mut no_pct: Vec<String> = Vec::new();
     for i in 0..df.height() {
-        let (Some(r), Some(p)) = (rule[i].clone(), pass[i]) else { continue };
+        let Some(r) = rule[i].clone() else { continue };
         if r == "Overall score" {
             continue;
         }
+        // a rule that only passes or fails (a control total) has no pass %: it is named under the chart, not left out silently
+        let Some(p) = pass[i] else {
+            no_pct.push(r);
+            continue;
+        };
         names.push(r);
         vals.push(p);
     }
@@ -1245,6 +1357,9 @@ fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         RefLine { value: amber, label: format!("Amber {}%", format_with_commas(amber, 0)), status: Status::Warning, panel: 0 },
     ];
     spec.subtitle = "Data-quality scorecard, pass % by rule".to_string();
+    if !no_pct.is_empty() {
+        spec.footnote = format!("Not drawn (a pass or fail, no pass %): {}", no_pct.join(", "));
+    }
     // below Amber: the critical colour, an icon and "Below Amber"; between Amber and Green: the warning colour
     // and "Below Green"; the other bars keep the default colour
     for (n, v) in names.iter().zip(vals.iter()) {

@@ -94,7 +94,8 @@ fn f1_the_dark_sequential_ramp_runs_from_the_darkest_step_at_low_values_to_the_l
                 })
                 .unwrap_or_else(|| panic!("no fill for {r:?}"))
         };
-        let lo = cells.iter().min_by(|a, b| a.value.partial_cmp(&b.value).unwrap()).unwrap();
+        // the ramp is for values above zero: its lowest step is the smallest positive cell (zero is neutral, tested in r.rs)
+        let lo = cells.iter().filter(|c| c.value.is_some_and(|v| v > 0.0)).min_by(|a, b| a.value.partial_cmp(&b.value).unwrap()).unwrap();
         let hi = cells.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap()).unwrap();
         assert_eq!(fill_of(lo.rect), t::sequential_colour(0, dark), "dark={dark}: the lowest cell");
         assert_eq!(fill_of(hi.rect), t::sequential_colour(12, dark), "dark={dark}: the highest cell");
@@ -111,7 +112,7 @@ fn f1_the_dark_sequential_ramp_runs_from_the_darkest_step_at_low_values_to_the_l
         let series = opt["series"].as_array().unwrap().iter().find(|s| s["type"] == "heatmap").unwrap();
         let items = series["data"].as_array().unwrap();
         let val = |i: &Value| i["value"][2].as_f64().unwrap();
-        let lo = items.iter().min_by(|a, b| val(a).partial_cmp(&val(b)).unwrap()).unwrap();
+        let lo = items.iter().filter(|i| val(i) > 0.0).min_by(|a, b| val(a).partial_cmp(&val(b)).unwrap()).unwrap();
         let hi = items.iter().max_by(|a, b| val(a).partial_cmp(&val(b)).unwrap()).unwrap();
         assert_eq!(lo["itemStyle"]["color"], t::hex_text(t::sequential_colour(0, dark)), "html dark={dark}: low");
         assert_eq!(hi["itemStyle"]["color"], t::hex_text(t::sequential_colour(12, dark)), "html dark={dark}: high");

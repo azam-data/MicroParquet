@@ -790,7 +790,7 @@ impl MicroParquetApp {
     /// "Preview in browser": the page is written to a temporary file and opened with the default browser
     /// (nothing goes over the network). `open` is false in tests.
     pub(crate) fn chart_preview_in_browser(&mut self, open: bool) -> Option<std::path::PathBuf> {
-        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::echarts::write_preview(&d, &o).map_err(|e| format!("{:#}", e)));
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::echarts::write_preview(&d, &o, &self.paths.temp_dir).map_err(|e| format!("{:#}", e)));
         let path = match r {
             Ok(p) => p,
             Err(e) => {

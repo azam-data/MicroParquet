@@ -56,7 +56,7 @@ fn d1_a_cl_migration_heatmap_follows_the_cl_order_and_draws_every_pair() {
             let fill = l.prims.iter().find_map(|p| if let Prim::Rect { rect, fill, .. } = p { (*rect == c.rect).then_some(*fill) } else { None }).expect("a cell rect");
             if c.value == Some(0.0) {
                 zeros += 1;
-                assert_eq!(fill, rgb(t::sequential_colour(0, dark)), "a missing pair is the lowest step: the lightest in light, the darkest in dark");
+                assert_eq!(fill, rgb(t::heat_neutral(dark)), "a missing pair is the neutral near-surface fill (the ramp is for values above zero)");
                 // its value is written inside it
                 assert!(l.texts.iter().any(|x| x.role == Role::Cell && c.rect.contains_rect(x.rect) && x.text == "0.0"), "a missing pair carries its 0.0 label");
                 let tip = hit_test(&l, c.rect.center()).unwrap().tip;

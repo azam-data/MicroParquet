@@ -98,6 +98,10 @@ struct Cx<'a> {
     int: Format,
     head: Format,
     text: Format,
+    /// Which data labels, in which unit and decimals (the Data labels setting).
+    lp: super::labels::LabelPlan,
+    /// Labels of "All" left out because they would overlap (worked out by the app's layout at the chart's size).
+    dropped: Vec<super::labels::LabelKey>,
 }
 
 impl<'a> Cx<'a> {
@@ -183,6 +187,7 @@ impl<'a> Cx<'a> {
             foot.push(self.data.spec.footnote.trim().to_string());
         }
         foot.extend(self.data.notes.iter().cloned());
+        foot.extend(super::labels::footnote_notes(self.data, self.opts, self.dropped.len()));
         if !foot.is_empty() {
             ws.write_string_with_format(row, 0, t::tidy(&foot.join(" \u{b7} ")), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::FOOTNOTE_PT as f64).set_font_color(rgb(self.ink.muted))).map_err(x)?;
             row += 1;
@@ -224,6 +229,8 @@ pub fn add_chart_sheet(wb: &mut Workbook, sheet_name: &str, data: &ChartData, op
         int: Format::new().set_num_format(num_code(0, false, true)).set_font_name(t::FONT_EXCEL),
         head: Format::new().set_bold().set_font_name(t::FONT_EXCEL).set_border_bottom(rust_xlsxwriter::FormatBorder::Thin),
         text: Format::new().set_font_name(t::FONT_EXCEL),
+        lp: super::labels::LabelPlan::new(spec, opts),
+        dropped: super::labels::dropped_labels(data, opts, 720.0, 360.0),
     };
     let mut ws = Worksheet::new();
     ws.set_name(&name).map_err(x)?;
@@ -439,6 +446,17 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
                 .collect();
             series.set_points(&points);
         }
+        if kind == ChartKind::Bar && n_series == 1 && spec.bar_status.is_empty() && spec.panels.is_empty() {
+            // a signed bar: blue above zero, red below, grey at exactly zero (as in the app)
+            let vals: Vec<Option<f64>> = d.measure(measure).and_then(|md| md.values.get(*s).cloned()).unwrap_or_default();
+            if vals.iter().flatten().any(|v| *v < 0.0) {
+                let points: Vec<ChartPoint> = vals.iter().map(|v| match v {
+                    Some(v) => ChartPoint::new().set_format(&mut fill(t::diverging_colour(*v))),
+                    None => ChartPoint::new(),
+                }).collect();
+                series.set_points(&points);
+            }
+        }
         if spec.segment_labels && kind == ChartKind::Bar && spec.stack == Stack::Stacked && n_series > 1 && !horizontal {
             // each segment says its value and its share of the stack (Excel puts it in the segment)
             let labels: Vec<ChartDataLabel> = (0..d.categories.len())
@@ -455,6 +473,37 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
         }
         if let Some(dl) = diverging_labels(cx, d, measure, kind) {
             series.set_data_label(&dl);
+        }
+        // the Data labels setting: when it differs from the default, every point carries a custom label or none
+        if !cx.lp.is_default() && !(spec.segment_labels && kind == ChartKind::Bar) {
+            let n = d.categories.len();
+            let vals: Vec<Option<f64>> = d.measure(measure).and_then(|md| md.values.get(*s).cloned()).unwrap_or_default();
+            let diverging = kind == ChartKind::Bar && n_series == 1 && vals.iter().flatten().any(|v| *v < 0.0);
+            // what Auto labels (as in the app): the bars of one series (12 or fewer), the end of a line
+            let last = vals.iter().rposition(|v| v.is_some());
+            let auto_at = |i: usize| match kind {
+                ChartKind::Bar => n_series == 1 && n <= 12,
+                ChartKind::Line | ChartKind::Area => n_series == 1 && Some(i) == last,
+                _ => false,
+            };
+            let labels: Vec<ChartDataLabel> = (0..n)
+                .map(|i| {
+                    let shown = vals.get(i).copied().flatten().filter(|_| cx.lp.kind_on(vk) && cx.lp.shows(i, n, auto_at(i)) && !cx.dropped.iter().any(|(_, ss, cc)| ss == s && *cc == i));
+                    match shown {
+                        Some(v) => {
+                            let text = if diverging { cx.lp.diverging(v, vk) } else { cx.lp.text(v, vk, false) };
+                            let mut l = ChartDataLabel::new();
+                            l.set_value(text.as_str()).set_font(&font(t::DATA_LABEL_PT as f64, false, cx.ink.ink));
+                            if matches!(kind, ChartKind::Line) {
+                                l.set_position(rust_xlsxwriter::ChartDataLabelPosition::Above);
+                            }
+                            l.to_custom()
+                        }
+                        None => ChartDataLabel::new().set_hidden().to_custom(),
+                    }
+                })
+                .collect();
+            series.set_custom_data_labels(&labels);
         }
         if matches!(ct, ChartType::Column | ChartType::Bar) {
             series.set_gap(80);
@@ -746,8 +795,7 @@ fn waterfall_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result
             let c = match s.kind {
                 StepKind::Start => t::WATERFALL_START,
                 StepKind::End => t::WATERFALL_END,
-                StepKind::Delta if s.value >= 0.0 => t::DIVERGING_POSITIVE,
-                StepKind::Delta => t::DIVERGING_NEGATIVE,
+                StepKind::Delta => t::diverging_colour(s.value),
             };
             ChartPoint::new().set_format(&mut fill(c))
         })
@@ -788,11 +836,24 @@ fn heat_sheet(cx: &Cx, ws: &mut Worksheet, top: u32) -> Result<()> {
         ws.set_column_width(1 + c as u16, 14).map_err(x)?;
     }
     if !h.rows.is_empty() && !h.cols.is_empty() {
-        let scale = ConditionalFormat3ColorScale::new().set_minimum_color(rgb(t::SEQUENTIAL[0])).set_midpoint_color(rgb(t::SEQUENTIAL[6])).set_maximum_color(rgb(t::SEQUENTIAL[12]));
         let (r1, c1, r2, c2) = (top + 1, 1, top + h.rows.len() as u32, h.cols.len() as u16);
+        // zero and missing cells: the neutral near-surface fill and muted text, first, and nothing after them applies
+        let neutral = ConditionalFormatCell::new()
+            .set_rule(ConditionalFormatCellRule::LessThanOrEqualTo(0))
+            .set_format(Format::new().set_background_color(rgb(t::heat_neutral(false))).set_font_color(rgb(t::heat_neutral_text(false))))
+            .set_stop_if_true(true);
+        ws.add_conditional_format(r1, c1, r2, c2, &neutral).map_err(x)?;
+        // the ramp is for values above zero: from the smallest of them to the largest
+        let mut scale = ConditionalFormat3ColorScale::new().set_minimum_color(rgb(t::SEQUENTIAL[0])).set_midpoint_color(rgb(t::SEQUENTIAL[6])).set_maximum_color(rgb(t::SEQUENTIAL[12]));
+        if let (Some(lo), Some(hi)) = (h.pos_min, h.max) {
+            if hi > lo {
+                let (slo, shi) = (scaled(lo, vk, cx.opts), scaled(hi, vk, cx.opts));
+                scale = scale.set_minimum(rust_xlsxwriter::ConditionalFormatType::Number, slo).set_midpoint(rust_xlsxwriter::ConditionalFormatType::Number, (slo + shi) / 2.0).set_maximum(rust_xlsxwriter::ConditionalFormatType::Number, shi);
+            }
+        }
         ws.add_conditional_format(r1, c1, r2, c2, &scale).map_err(x)?;
         // the text is white from the sequential ramp's 7th step, as in the chart
-        if let (Some(lo), Some(hi)) = (h.min, h.max) {
+        if let (Some(lo), Some(hi)) = (h.pos_min, h.max) {
             if hi > lo {
                 let limit = scaled(lo + (hi - lo) * (t::SEQUENTIAL_WHITE_TEXT_FROM as f64 - 0.5) / (t::SEQUENTIAL.len() - 1) as f64, vk, cx.opts);
                 let white = ConditionalFormatCell::new().set_rule(ConditionalFormatCellRule::GreaterThanOrEqualTo(limit)).set_format(Format::new().set_font_color(Color::White));

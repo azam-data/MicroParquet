@@ -219,3 +219,68 @@ fn r3_changing_the_category_column_restarts_the_colours_at_slot_one_and_a_filter
         assert_eq!(rig.app.chart.spec.colour_map.get(name), Some(Colour::Slot(i)), "the {}st/nd/rd name '{}' takes slot {}", i + 1, name, i);
     }
 }
+
+#[test]
+fn r25_the_data_labels_controls_work_by_real_clicks_at_the_three_sizes() {
+    use crate::ui::chart_render::last_shown;
+    use crate::ui::render_tests_p7::{scroll_into_view, SIZES3};
+    use micro_parquet::charts::layout::Role;
+    use micro_parquet::charts::spec::LabelMode;
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig_with("r25labels", bdt(), ppp, w, h);
+        let what = rig.what.clone();
+        pump(&mut rig, "first chart", &chart_ready);
+        set_spec(&mut rig, &|s| {
+            s.category = "Month".into();
+            s.series = None;
+            s.value = Some("Balance".into());
+            s.kind = ChartKind::Bar;
+        });
+        rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let value_labels = |rig: &Rig| last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart").layout.texts.iter().filter(|t| t.role == Role::Label).count();
+        let r = scroll_into_view(&mut rig, at, &field("Titles and look"), "Titles and look");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        assert_eq!(value_labels(&rig), 4, "{what}: Auto labels each of the 4 bars");
+        // the Data labels drop-down: open it by its real rect, click "Ends only" where the list painted it
+        let r = scroll_into_view(&mut rig, at, &field("Data labels"), "Data labels");
+        pclick(&mut rig, r);
+        let p = rig.draw(3);
+        let item = p.boxes.iter().find(|(t, _)| t == "Ends only").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the list offers Ends only"));
+        pclick(&mut rig, item);
+        rig.draw(6);
+        assert_eq!(rig.app.chart.spec.labels.mode, LabelMode::EndsOnly, "{what}");
+        assert_eq!(value_labels(&rig), 2, "{what}: Ends only labels the first and the last");
+        // the same list: None
+        let r = scroll_into_view(&mut rig, at, &field("Data labels"), "Data labels");
+        pclick(&mut rig, r);
+        let p = rig.draw(3);
+        let item = p.boxes.iter().find(|(t, _)| t == "None").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the list offers None"));
+        pclick(&mut rig, item);
+        rig.draw(6);
+        assert_eq!(rig.app.chart.spec.labels.mode, LabelMode::None, "{what}");
+        assert_eq!(value_labels(&rig), 0, "{what}: None prints no value label");
+        // decimals: the tick box makes them the user's, and the number is a drag value
+        let r = scroll_into_view(&mut rig, at, &field("Label decimals set"), "Label decimals tick");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert_eq!(rig.app.chart.spec.labels.decimals, Some(rig.app.global_decimals.min(4)), "{what}: ticking sets the decimals to the view's");
+        // percent labels
+        let r = scroll_into_view(&mut rig, at, &field("Percent labels"), "Percent labels");
+        pclick(&mut rig, r);
+        rig.draw(4);
+        assert!(!rig.app.chart.spec.labels.percent, "{what}: the Percent labels box was clicked");
+        // the unit drop-down
+        let r = scroll_into_view(&mut rig, at, &field("Label unit"), "Label unit");
+        pclick(&mut rig, r);
+        let p = rig.draw(3);
+        let item = p.boxes.iter().find(|(t, _)| t == "Lakh").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the list offers Lakh"));
+        pclick(&mut rig, item);
+        rig.draw(4);
+        assert_eq!(rig.app.chart.spec.labels.unit, micro_parquet::charts::spec::LabelUnit::Lakh, "{what}");
+    }
+    micro_parquet::rules::set_data_dir_override(None);
+}
