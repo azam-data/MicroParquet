@@ -182,7 +182,7 @@ fn frame_literal(data: &ChartData, measure: usize, opts: &LayoutOpts, name: &str
 }
 
 const DRAW: &str = r##"
-def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=False, label_values=True, vkind="amount"):
+def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=False, label_values=True, vkind="amount", net=False, segments=False):
     """One panel: bars (grouped, stacked, 100% stacked), lines (stepped), areas. `df` has the categories as its
     index and one column per series."""
     colours = colours or {}
@@ -220,6 +220,21 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
                 signed = any(v < 0 for v in vals)
                 texts = [(("+" if v > 0 else "") + fmt(v, vkind, 2)) if signed else fmt(v, vkind) for v in vals]
                 ax.bar_label(bars, labels=texts, padding=3, fontsize=9.5, color=INK)
+        if segments and stack == "stacked" and not horizontal:
+            # each segment beside its stack with its value and its share of the stack
+            totals = df.fillna(0).abs().sum(axis=1)
+            for k in range(len(pos)):
+                base = 0.0
+                for n in names:
+                    v = 0.0 if pd.isna(df[n].iloc[k]) else df[n].iloc[k]
+                    share = 0 if totals.iloc[k] == 0 else abs(v) / totals.iloc[k] * 100
+                    ax.annotate(fmt(v, vkind, 0 if float(v).is_integer() else 2) + " \u00b7 " + f"{share:.1f}%", (k + width / 2, base + v / 2), xytext=(8, 0), textcoords="offset points", va="center", fontsize=9.5, color=INK)
+                    base += v
+        if net and stack == "stacked" and not horizontal:
+            # the net of each stack: a short dark tick across it and its signed value beside it
+            for k, total in enumerate(df.fillna(0).sum(axis=1)):
+                ax.hlines(total, k - width / 2 - 0.08, k + width / 2 + 0.08, color=INK, linewidth=2, zorder=5)
+                ax.annotate(("+" if total > 0 else "") + fmt(total, vkind, 2), (k + width / 2 + 0.1, total), xytext=(4, 0), textcoords="offset points", va="center", fontsize=9.5, color=INK)
         if horizontal:
             ax.set_yticks(pos, [str(i) for i in df.index])
             ax.invert_yaxis()
@@ -252,18 +267,33 @@ def draw(ax, df, kind, stack="grouped", horizontal=False, colours=None, stepped=
             elif last is not None and len(names) <= 4 and kind == "line":
                 ax.annotate(n, (x[last], vals[last]), xytext=(8, 0), textcoords="offset points", va="center", fontsize=10, color=INK2)
         ax.set_xticks(pos, [str(i) for i in df.index])
+        ax.margins(y=0.12)  # room for the end labels and for a breach ring below the lowest point
         style_axes(ax)
     return names
 "##;
 
 fn ref_lines(data: &ChartData, panel: usize, horizontal: bool, opts: &LayoutOpts, measure: usize, out: &mut String, indent: &str, axname: &str) {
     let vk = value_kind(&data.spec, measure);
-    for r in data.spec.ref_lines.iter().filter(|r| r.panel == panel) {
+    // the lines, then their labels: staggered above the plot (vertical lines) or at the right end (horizontal lines), so
+    // neighbouring labels never meet and none stands on a mark
+    for (k, r) in data.spec.ref_lines.iter().filter(|r| r.panel == panel).enumerate() {
         let v = scaled(r.value, vk, opts);
         let label = if r.label.is_empty() { r.status.label().to_string() } else { format!("{} ({})", r.label, r.status.label()) };
         let call = if horizontal { "axvline" } else { "axhline" };
-        let _ = writeln!(out, "{indent}{axname}.{call}({}, color={}, linewidth={}, label={})", f(v), status_colour(r.status), t::REFERENCE_LINE_PX, s(&label));
-        let _ = writeln!(out, "{indent}{axname}.annotate({}, ({} if {} else 1, {}), xytext=(4, 4), textcoords=\"offset points\", fontsize=10, color=INK2)", s(&label), if horizontal { f(v) } else { "0".into() }, if horizontal { "True" } else { "False" }, if horizontal { "1".into() } else { f(v) });
+        let _ = writeln!(out, "{indent}{axname}.{call}({}, color={}, linewidth={})", f(v), status_colour(r.status), t::REFERENCE_LINE_PX);
+        if horizontal {
+            let _ = writeln!(out, "{indent}{axname}.annotate({}, ({}, 1), xycoords=(\"data\", \"axes fraction\"), xytext=(4, {}), textcoords=\"offset points\", fontsize=10, color=INK2, annotation_clip=False)", s(&label), f(v), 4 + 13 * k);
+        } else {
+            let _ = writeln!(out, "{indent}{axname}.annotate({}, (1, {}), xycoords=(\"axes fraction\", \"data\"), xytext=(-4, {}), textcoords=\"offset points\", ha=\"right\", fontsize=10, color=INK2, annotation_clip=False)", s(&label), f(v), 4 + 13 * k);
+        }
+    }
+    for b in data.spec.ref_bands.iter().filter(|b| b.panel == panel) {
+        let (a, c) = (scaled(b.from, vk, opts), scaled(b.to, vk, opts));
+        let call = if horizontal { "axvspan" } else { "axhspan" };
+        let _ = writeln!(out, "{indent}{axname}.{call}({}, {}, color=DEEMPH, alpha=0.35, linewidth=0, label={})", f(a.min(c)), f(a.max(c)), s(&b.label));
+        if !b.label.is_empty() {
+            let _ = writeln!(out, "{indent}{axname}.annotate({}, (0, {}), xycoords=(\"axes fraction\", \"data\"), xytext=(4, 3), textcoords=\"offset points\", fontsize=10, color=INK2)", s(&b.label), f(a.max(c)));
+        }
     }
 }
 
@@ -337,35 +367,66 @@ fn cartesian(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap
         return;
     }
     // panels: the linked panels of the spec, else one panel per measure, else one
-    let panels: Vec<(ChartKind, usize, String)> = if !spec.panels.is_empty() {
-        spec.panels.iter().take(t::MAX_PANELS).map(|p| (p.kind, p.measures.first().copied().unwrap_or(0).min(data.measure_count().saturating_sub(1)), p.title.clone())).collect()
+    let panels: Vec<(ChartKind, usize, String, bool)> = if !spec.panels.is_empty() {
+        spec.panels.iter().take(t::MAX_PANELS).map(|p| (p.kind, p.measures.first().copied().unwrap_or(0).min(data.measure_count().saturating_sub(1)), p.title.clone(), p.single)).collect()
     } else if data.measure_count() > 1 {
-        (0..data.measure_count().min(t::MAX_PANELS)).map(|m| (spec.kind, m, data.measure_names.get(m).cloned().unwrap_or_default())).collect()
+        (0..data.measure_count().min(t::MAX_PANELS)).map(|m| (spec.kind, m, data.measure_names.get(m).cloned().unwrap_or_default(), false)).collect()
     } else {
-        vec![(spec.kind, 0, String::new())]
+        vec![(spec.kind, 0, String::new(), false)]
     };
-    let mut done: Vec<usize> = Vec::new();
-    for (_, m, _) in &panels {
-        if !done.contains(m) {
-            done.push(*m);
-            let _ = writeln!(w, "\n{}", frame_literal(data, *m, opts, &format!("panel{}", m)));
+    let mut done: Vec<(usize, bool)> = Vec::new();
+    for (_, m, _, single) in &panels {
+        if !done.contains(&(*m, *single)) {
+            done.push((*m, *single));
+            if *single {
+                // a ratio that is the same in every series: one column named after the measure
+                let cat = if spec.category.is_empty() { "Category".to_string() } else { spec.category.clone() };
+                let vk = value_kind(spec, *m);
+                let md = data.measure(*m);
+                let (vals, _) = md.as_ref().map(|x| super::data::collapse_series(&x.values, &x.rows, data.categories.len())).unwrap_or_default();
+                let vals: Vec<Option<f64>> = vals.into_iter().map(|v| v.map(|x| scaled(x, vk, opts))).collect();
+                let name = data.measure_names.get(*m).cloned().unwrap_or_else(|| "Value".to_string());
+                let _ = writeln!(w, "\npanel{}_one = pd.DataFrame({{\n    {}: {},\n    {}: {}\n}}).set_index({})", m, s(&cat), list_s(&data.categories), s(&name), list_f(&vals), s(&cat));
+            } else {
+                let _ = writeln!(w, "\n{}", frame_literal(data, *m, opts, &format!("panel{}", m)));
+            }
         }
     }
     let n = panels.len();
-    let _ = writeln!(w, "\nfig, axes = plt.subplots({n}, 1, sharex=True, figsize=(10, {}), squeeze=False)\nfig.subplots_adjust(top={}, bottom=0.12, hspace=0.35)", 2.6 * n as f32 + 2.2, if n == 1 { "0.80" } else { "0.84" });
-    for (i, (k, m, title)) in panels.iter().enumerate() {
+    let _ = writeln!(w, "\nfig, axes = plt.subplots({n}, 1, sharex=True, figsize=(10, {}), squeeze=False)\nfig.subplots_adjust(top={}, bottom=0.12, hspace=0.35)", 2.6 * n as f32 + 2.2, if n == 1 { "0.80" } else { "0.78" });
+    for (i, (k, m, title, single)) in panels.iter().enumerate() {
         let vk = value_kind(spec, *m);
-        let _ = writeln!(w, "ax = axes[{i}][0]\nnames = draw(ax, panel{m}, {}, stack={}, horizontal={}, colours=COLOURS, stepped={}, vkind={})", s(kind_of(*k)), s(stack), if horizontal { "True" } else { "False" }, if spec.stepped { "True" } else { "False" }, s(kind_word(vk)));
+        let frame = if *single { format!("panel{}_one", m) } else { format!("panel{}", m) };
+        let lead = if *single { "_ = " } else { "names = " };
+        let _ = writeln!(w, "ax = axes[{i}][0]\n{lead}draw(ax, {frame}, {}, stack={}, horizontal={}, colours=COLOURS, stepped={}, vkind={}{})", s(kind_of(*k)), s(stack), if horizontal { "True" } else { "False" }, if spec.stepped { "True" } else { "False" }, s(kind_word(vk)), if spec.net_marker { ", label_values=False, net=True" } else if spec.segment_labels { ", segments=True" } else { "" });
         if !title.is_empty() {
             let _ = writeln!(w, "ax.set_title({}, loc=\"left\", fontsize=10, color=INK2)", s(title));
         }
         ref_lines(data, i, horizontal, opts, *m, w, "", "ax");
+        if i == 0 && !spec.bar_status.is_empty() && *k == ChartKind::Bar && data.series.len() <= 1 {
+            // bars in a status colour, with the status in words and an icon (the colour is never alone)
+            let items: Vec<String> = spec
+                .bar_status
+                .iter()
+                .filter_map(|b| data.categories.iter().position(|c| *c == b.category).map(|ci| format!("({}, {}, {}, {})", ci, status_colour(b.status), s(&super::tokens::tidy(&b.label)), if b.status == Status::Critical { "\"white\"" } else { "\"#0b0b0b\"" })))
+                .collect();
+            let _ = writeln!(w, "for k, colour, text, ink in [{}]:\n    ax.patches[k].set_facecolor(colour)\n    ax.annotate(\"\\u25b2 \" + text, ({}, k), xytext=({}, {}), textcoords=\"offset points\", va=\"center\", fontsize=9.5, color=ink)", items.join(", "), if horizontal { "0" } else { "k" }, 8, 0);
+        }
         // limit ticks (per-category limits) as short dashes in their status colour
         for lt in spec.limit_ticks.iter().filter(|l| l.panel == i) {
             if let Some(ci) = data.categories.iter().position(|c| *c == lt.category) {
-                let _ = writeln!(w, "ax.plot([{} - 0.3, {} + 0.3], [{v}, {v}], color={}, linewidth=1.5)  # limit of {}", ci, ci, status_colour(lt.status), s(&lt.category), v = f(scaled(lt.value, vk, opts)));
-                if !lt.breach.is_empty() {
-                    let _ = writeln!(w, "ax.annotate({}, ({}, {}), xytext=(0, -16), textcoords=\"offset points\", ha=\"center\", fontsize=10, color=INK)", s(&super::tokens::tidy(&lt.breach)), ci, f(scaled(lt.value, vk, opts)));
+                let v = f(scaled(lt.value, vk, opts));
+                if horizontal {
+                    // a tick across the bar at its limit; the breach written to the right of it
+                    let _ = writeln!(w, "ax.plot([{v}, {v}], [{ci} - 0.3, {ci} + 0.3], color={}, linewidth=1.5)  # limit of {}", status_colour(lt.status), s(&lt.category));
+                    if !lt.breach.is_empty() {
+                        let _ = writeln!(w, "ax.annotate({}, ({v}, {ci}), xytext=(8, 0), textcoords=\"offset points\", va=\"center\", fontsize=10, color=INK)", s(&super::tokens::tidy(&lt.breach)));
+                    }
+                } else {
+                    let _ = writeln!(w, "ax.plot([{ci} - 0.3, {ci} + 0.3], [{v}, {v}], color={}, linewidth=1.5)  # limit of {}", status_colour(lt.status), s(&lt.category));
+                    if !lt.breach.is_empty() {
+                        let _ = writeln!(w, "ax.annotate({}, ({ci}, {v}), xytext=(0, -16), textcoords=\"offset points\", ha=\"center\", fontsize=10, color=INK)", s(&super::tokens::tidy(&lt.breach)));
+                    }
                 }
             }
         }
@@ -482,7 +543,7 @@ fn donut(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap) ->
     let _ = writeln!(w, "\nparts = pd.DataFrame({{\"Part\": {}, \"Value\": {}}})", list_s(&data.categories), list_f(&vals));
     let _ = writeln!(
         w,
-        "\nCOLOURS = [{}]\nfig, ax = plt.subplots(figsize=(7, 6))\nfig.subplots_adjust(top=0.80)\nax.pie(parts[\"Value\"], colors=COLOURS, startangle=90, counterclock=False, wedgeprops=dict(width=0.42, edgecolor=SURFACE, linewidth=2))\nax.text(0, 0, fmt(parts[\"Value\"].sum()), ha=\"center\", va=\"center\", fontsize=15, fontweight=\"semibold\")\nax.legend([f\"{{p}}  {{fmt(v)}}\" for p, v in zip(parts[\"Part\"], parts[\"Value\"])], loc=\"center left\", bbox_to_anchor=(1, 0.5))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
+        "\nCOLOURS = [{}]\nfig, ax = plt.subplots(figsize=(8, 6))\nfig.subplots_adjust(top=0.80, right=0.66)\nax.pie(parts[\"Value\"], colors=COLOURS, startangle=90, counterclock=False, wedgeprops=dict(width=0.42, edgecolor=SURFACE, linewidth=2))\nax.text(0, 0, fmt(parts[\"Value\"].sum()), ha=\"center\", va=\"center\", fontsize=15, fontweight=\"semibold\")\nax.legend([f\"{{p}}  {{fmt(v)}}\" for p, v in zip(parts[\"Part\"], parts[\"Value\"])], loc=\"center left\", bbox_to_anchor=(1, 0.5))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()",
         colours.join(", ")
     );
     Ok(())

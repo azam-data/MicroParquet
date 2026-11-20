@@ -96,6 +96,23 @@ pub struct ChartData {
     pub boxes: Vec<BoxStat>,
 }
 
+/// A measure that is the same in every series (the panel is `single`): one value per category, the first the
+/// series has, and the rows behind it taken from the series that gave it.
+pub fn collapse_series(values: &[Vec<Option<f64>>], rows: &[Vec<u64>], n_cat: usize) -> (Vec<Option<f64>>, Vec<u64>) {
+    let mut vals = vec![None; n_cat];
+    let mut rws = vec![0u64; n_cat];
+    for c in 0..n_cat {
+        for (s, r) in values.iter().enumerate() {
+            if let Some(Some(v)) = r.get(c) {
+                vals[c] = Some(*v);
+                rws[c] = rows.get(s).and_then(|x| x.get(c)).copied().unwrap_or(0);
+                break;
+            }
+        }
+    }
+    (vals, rws)
+}
+
 impl ChartData {
     /// "Sum of Balance by Term Period: all 244,250 rows (Crore)".
     pub fn title(&self, unit: Option<&str>) -> String {

@@ -835,8 +835,8 @@ impl MicroParquetApp {
             }
         }
         if let Some(TabSource::DqScorecard { rules, .. }) = tab.map(|t| &t.source) {
-            ctx.dq_green = rules.green_min;
-            ctx.dq_amber = rules.amber_min;
+            ctx.dq_green = Some(rules.green_min);
+            ctx.dq_amber = Some(rules.amber_min);
         }
         ctx
     }

@@ -138,7 +138,29 @@ pub fn load_pack(dir: &Path, name: &str) -> Result<ReportPack> {
     let text = std::fs::read_to_string(&path).with_context(|| format!("Could not read the pack {}. Packs are in {}.", path.display(), dir.display()))?;
     let mut p: ReportPack = serde_json::from_str(&text).map_err(|e| anyhow!("The pack {} is not valid: {}.", path.display(), e))?;
     p.name = pack_stem(name)?;
+    check_thresholds_stated(&text, &path)?;
     Ok(p)
+}
+
+/// A data-quality scorecard item that carries a chart reads its Green and Amber thresholds from the rule set stored with
+/// the run. A pack file that does not state them (the loader would fill in 98 and 95) is refused: no threshold is assumed.
+fn check_thresholds_stated(text: &str, path: &Path) -> Result<()> {
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(text) else { return Ok(()) };
+    for it in raw.get("items").and_then(|v| v.as_array()).into_iter().flatten() {
+        let run = it.get("source").and_then(|s| s.get("run"));
+        let is_dq = run.and_then(|r| r.get("tool")).and_then(|t| t.as_str()) == Some("dq_scorecard");
+        if !is_dq || it.get("chart").map_or(true, |c| c.is_null()) {
+            continue;
+        }
+        let rules = run.and_then(|r| r.get("rules"));
+        for field in ["green_min", "amber_min"] {
+            if !rules.and_then(|r| r.get(field)).is_some_and(|v| v.is_number()) {
+                let title = it.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                bail!("The pack {}: the item '{}' has a chart, which needs the data-quality thresholds, but its rule set has no '{}' (a number, in percent). Open the scorecard, check the rule set's Green and Amber, and add the item again; no threshold is assumed.", path.display(), title, field);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn list_packs(dir: &Path) -> Vec<String> {
@@ -493,8 +515,18 @@ pub fn run_pack(pack: &ReportPack, spec: &PackRunSpec, paths: &PortablePaths, ru
         }
         // the item's chart, calculated over its whole table: a chart that cannot be drawn stops the run
         let charts = match &item.chart {
-            Some(c) => crate::charts::pack::build_item_charts(&df, c, &paths.root_dir.join("charts"), &item.col_formats, pack.output.scale, pack.output.decimals)
-                .map_err(|e| anyhow!("The item '{}' (sheet '{}') could not be charted ({}): {:#}", item.title, item.sheet, c.label(), e))?,
+            Some(c) => (|| -> Result<Vec<crate::charts::pack::ItemChart>> {
+                // the data-quality thresholds are the rule set of the scorecard run behind the item, never a default
+                let dq = match &item.source {
+                    PackItemKind::Run { run: ToolRun::DqScorecard(r) } => {
+                        r.rules.check().map_err(|e| anyhow!("The item '{}' (sheet '{}'): the data-quality rule set '{}' is not usable: {:#}", item.title, item.sheet, r.rules.name, e))?;
+                        Some((r.rules.green_min, r.rules.amber_min))
+                    }
+                    _ => None,
+                };
+                crate::charts::pack::build_item_charts(&df, c, &paths.root_dir.join("charts"), &item.col_formats, pack.output.scale, pack.output.decimals, dq)
+            })()
+            .map_err(|e| anyhow!("The item '{}' (sheet '{}') could not be charted ({}): {:#}", item.title, item.sheet, c.label(), e))?,
             None => Vec::new(),
         };
         sheets.push(PackSheet { sheet: item.sheet.trim().to_string(), title: item.title.clone(), df, col_formats: item.col_formats.clone(), charts });

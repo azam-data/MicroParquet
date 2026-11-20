@@ -7,7 +7,7 @@
 
 use super::axis::{padded_floor, diverging_text, fit_text, nice_ticks, tick_text, value_text, wrap_text, ValueKind, MINUS};
 use super::colours::{Colour, ColourMap};
-use super::data::{heatmap, sequential_step, waterfall_from_data, ChartData, StepKind, WaterfallStep};
+use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, ChartData, StepKind, WaterfallStep};
 use super::spec::{ChartAgg, ChartKind, ChartSpec, Stack, Status, Transform};
 use super::tokens as t;
 use egui::{pos2, vec2, Color32, Pos2, Rect, Vec2};
@@ -675,7 +675,16 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
                 for (pi, p) in data.spec.panels.iter().take(t::MAX_PANELS).enumerate() {
                     let mi = p.measures.first().copied().unwrap_or(0).min(data.measure_count().saturating_sub(1));
                     let title = if p.title.is_empty() { data.measure_names.get(mi).cloned().unwrap_or_default() } else { p.title.clone() };
-                    plans.push(Plan { kind: p.kind, title, measure: mi, vk: value_kind(&data.spec, mi), series: mk_series(mi), categories: &data.categories, index: pi });
+                    let series = if p.single {
+                        // one series named after the measure, in the first categorical colour
+                        let md = data.measure(mi);
+                        let (vals, rows) = md.as_ref().map(|m| collapse_series(&m.values, &m.rows, data.categories.len())).unwrap_or_default();
+                        let name = data.measure_names.get(mi).cloned().unwrap_or_default();
+                        vec![Ser { name, vals, rows, base: Vec::new(), colour: rgb(t::series_colour(0, opts.dark).unwrap_or(0)) }]
+                    } else {
+                        mk_series(mi)
+                    };
+                    plans.push(Plan { kind: p.kind, title, measure: mi, vk: value_kind(&data.spec, mi), series, categories: &data.categories, index: pi });
                 }
             } else if data.measure_count() > 1 && !matches!(kind, ChartKind::Waterfall | ChartKind::Histogram | ChartKind::BoxPlot | ChartKind::Scatter | ChartKind::Bubble) {
                 for mi in 0..data.measure_count().min(t::MAX_PANELS) {
@@ -1459,6 +1468,66 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
         }
     }
 
+    // each segment labelled beside its stack with its value and its share of the stack, nudged apart vertically
+    if spec.segment_labels && stacked && !horizontal {
+        let ink_c = rgb(ink.ink);
+        let lh = b.size("Ag", t::DATA_LABEL_PT, Face::Regular).y;
+        for c in 0..n_cat {
+            let segs: Vec<(Rect, f64)> = b.out.marks.iter().filter(|m| m.panel == pidx && m.category == c && m.kind == MarkKind::Segment).filter_map(|m| m.value.map(|v| (m.rect, v))).collect();
+            let total: f64 = segs.iter().map(|s| s.1.abs()).sum();
+            if segs.is_empty() || total == 0.0 {
+                continue;
+            }
+            let mut items: Vec<(f32, f32, String)> = segs
+                .iter()
+                .map(|(r, v)| {
+                    let x = scaled(*v, p.vk, opts);
+                    let body = if (x - x.round()).abs() < 1e-9 { value_text(x, p.vk, 0, false) } else { value_text(x, p.vk, opts.decimals, false) };
+                    (r.center().y, r.right() + 8.0, format!("{} \u{b7} {}%", body, crate::models::format_with_commas(v.abs() / total * 100.0, 1)))
+                })
+                .collect();
+            items.sort_by(|a, c2| a.0.partial_cmp(&c2.0).unwrap_or(std::cmp::Ordering::Equal));
+            let gap = lh + 3.0;
+            let (top, bottom) = (g.plot.top() + lh / 2.0, g.plot.bottom() - lh / 2.0);
+            let mut ys: Vec<f32> = items.iter().map(|i| i.0.clamp(top, bottom)).collect();
+            for i in 1..ys.len() {
+                if ys[i] < ys[i - 1] + gap {
+                    ys[i] = ys[i - 1] + gap;
+                }
+            }
+            if let Some(last) = ys.last().copied() {
+                if last > bottom {
+                    let shift = last - bottom;
+                    ys.iter_mut().for_each(|y| *y -= shift);
+                    for i in (0..ys.len().saturating_sub(1)).rev() {
+                        if ys[i] > ys[i + 1] - gap {
+                            ys[i] = ys[i + 1] - gap;
+                        }
+                    }
+                }
+            }
+            for (it, y) in items.iter().zip(ys.iter()) {
+                b.try_put(Role::Label, &it.2, Anchor::MidLeft, pos2(it.1, *y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+            }
+        }
+    }
+
+    // the net of each stack: a short dark tick across it and its signed value beside it (no label on the stack's edges)
+    if spec.net_marker && stacked && !horizontal {
+        let ink_c = rgb(ink.ink);
+        for c in 0..n_cat {
+            let Some((pa, na)) = totals[c] else { continue };
+            let net = pa + na;
+            let y = g.coord(scaled(net, p.vk, opts));
+            let mid = centre(c);
+            let half = thick / 2.0 + 4.0;
+            b.line(pos2(mid - half, y), pos2(mid + half, y), t::LINE_PX, ink_c);
+            let text = diverging_text(scaled(net, p.vk, opts), p.vk, opts.decimals);
+            b.try_put_clear(Role::Label, &text, Anchor::MidLeft, pos2(mid + half + 4.0, y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+        }
+        return;
+    }
+
     // value labels: single series (12 bars or fewer): at the tip; stacked columns: the total on top only
     if !labels_ok {
         return;
@@ -1709,7 +1778,9 @@ fn lines(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32
             let emphasised = highlight.as_ref().map(|h| *h == s.name).unwrap_or(true);
             if n_ser == 1 {
                 if let Some(v) = s.vals[lc] {
-                    b.try_put(Role::Label, &fmt(v, false), Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::DATA_LABEL_PT, Face::Regular, ink_c);
+                    // a single series that has a name (the NPL % panel) is named at its end, with its value
+                    let text = if s.name.is_empty() { fmt(v, false) } else { format!("{}  {}", s.name, fmt(v, false)) };
+                    b.try_put(Role::Label, &text, Anchor::MidLeft, pos2(lp.x + t::MARKER_PX, lp.y), t::DATA_LABEL_PT, Face::Regular, ink_c);
                 }
             } else if n_ser <= 4 || all_named {
                 ends.push((lp.y, lp.x + t::MARKER_PX, s.name.clone(), if emphasised { ink_c } else { ink2_c }, emphasised));

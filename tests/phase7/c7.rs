@@ -79,6 +79,7 @@ fn c7_every_form_gives_a_python_script_that_parses_and_holds_its_numbers() {
         eprintln!("python3 is not installed: the scripts are checked for their text only");
     }
     let run = have_python && has_modules("matplotlib, pandas");
+    let run_plotly = have_python && has_modules("plotly, pandas");
     if !run {
         eprintln!("matplotlib and pandas are not installed: the scripts are parsed, not run");
     }
@@ -111,11 +112,31 @@ fn c7_every_form_gives_a_python_script_that_parses_and_holds_its_numbers() {
         if have_python {
             parses(&script, &name);
         }
+        let dir = std::env::temp_dir().join(format!("mp-c7-{}", std::process::id()));
+        let path = dir.join(format!("{}.py", name.replace([' ', '/', '(', ')'], "_")));
         if run && !plotly {
-            let dir = std::env::temp_dir().join(format!("mp-c7-{}", std::process::id()));
-            let path = dir.join(format!("{}.py", name.replace([' ', '/', '(', ')'], "_")));
-            let o = std::process::Command::new("python3").arg(&path).env("MPLBACKEND", "Agg").output().expect("python3 runs");
+            // run it with the headless backend; with MP_PY_OUT=<folder> the figure is also saved as a PNG to look at
+            let out = std::env::var("MP_PY_OUT").ok();
+            let png = out.as_ref().map(|d| {
+                std::fs::create_dir_all(d).unwrap();
+                format!("{}/{}.png", d, name.replace([' ', '/', '(', ')'], "_"))
+            });
+            let wrapper = format!(
+                "import matplotlib\nmatplotlib.use('Agg')\nimport sys\nsrc = open(sys.argv[1], encoding='utf-8').read()\nexec(compile(src, sys.argv[1], 'exec'), {{'__name__': '__main__'}})\nimport matplotlib.pyplot as plt\nif len(sys.argv) > 2:\n    plt.gcf().savefig(sys.argv[2], dpi=100)\n"
+            );
+            let mut cmd = std::process::Command::new("python3");
+            cmd.arg("-c").arg(wrapper).arg(&path).env("MPLBACKEND", "Agg");
+            if let Some(p) = &png {
+                cmd.arg(p);
+            }
+            let o = cmd.output().expect("python3 runs");
             assert!(o.status.success(), "{name}: the script runs:\n{}", String::from_utf8_lossy(&o.stderr));
+        }
+        if run_plotly && plotly {
+            // the plotly scripts build their figure; show() is replaced by to_json(), so no browser opens
+            let wrapper = "import sys\nimport plotly.basedatatypes as b\nb.BaseFigure.show = lambda self, *a, **k: self.to_json()\nsrc = open(sys.argv[1], encoding='utf-8').read()\nexec(compile(src, sys.argv[1], 'exec'), {'__name__': '__main__'})\n";
+            let o = std::process::Command::new("python3").arg("-c").arg(wrapper).arg(&path).output().expect("python3 runs");
+            assert!(o.status.success(), "{name}: the plotly script runs:\n{}", String::from_utf8_lossy(&o.stderr));
         }
     }
     assert!(count >= 30, "{count} charts were checked");

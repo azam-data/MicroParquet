@@ -59,4 +59,4 @@ The title the template writes (a fixed rule, no AI): **1 rule below Amber**
 
 ## 10. Limits and assumptions
 
-- The thresholds are the rule set's; a report pack uses the defaults (98 and 95).
+- The thresholds are the rule set's (green_min and amber_min in `portable_data/dq_rules/<set>.json`); a report pack reads them from the rule set stored with the scorecard item and stops with a message when they are missing: no threshold is assumed.

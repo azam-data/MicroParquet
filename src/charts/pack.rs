@@ -69,7 +69,10 @@ fn opts_for(scale: Option<MoneyScale>, decimals: usize) -> LayoutOpts {
 
 /// The charts of an item: calculated over its whole table with the pack's money scale and decimals.
 /// `charts_dir` is `portable_data/charts`.
-pub fn build_item_charts(df: &DataFrame, chart: &PackChart, charts_dir: &Path, col_formats: &HashMap<String, ColumnFormatSpec>, scale: NumberDisplayFormat, decimals: usize) -> Result<Vec<ItemChart>> {
+///
+/// `dq` is the (Green, Amber) pair of the data-quality rule set the item's scorecard run carries: a template that
+/// needs it and has none stops with a message (no threshold is assumed).
+pub fn build_item_charts(df: &DataFrame, chart: &PackChart, charts_dir: &Path, col_formats: &HashMap<String, ColumnFormatSpec>, scale: NumberDisplayFormat, decimals: usize, dq: Option<(f64, f64)>) -> Result<Vec<ItemChart>> {
     match chart {
         PackChart::Saved { name } => {
             let path = library::chart_path(charts_dir, name);
@@ -96,7 +99,7 @@ pub fn build_item_charts(df: &DataFrame, chart: &PackChart, charts_dir: &Path, c
                 bail!("the yield-curves template reads the curve store, not an item's table. Chart it from the Charts menu.");
             }
             let sc = scale.scale();
-            let ctx = Ctx { divisor: sc.map(|s| s.divisor).unwrap_or(1.0), suffix: sc.map(|s| s.suffix.to_string()).unwrap_or_default(), decimals, ..Default::default() };
+            let ctx = Ctx { divisor: sc.map(|s| s.divisor).unwrap_or(1.0), suffix: sc.map(|s| s.suffix.to_string()).unwrap_or_default(), decimals, dq_green: dq.map(|d| d.0), dq_amber: dq.map(|d| d.1) };
             let p = prepare(t, df, &ctx).map_err(|e| anyhow!("{:#}", e))?;
             let mut out = Vec::new();
             let mut all = vec![p.clone()];

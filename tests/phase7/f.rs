@@ -20,7 +20,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 fn ctx() -> Ctx {
-    Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() }
+    Ctx { divisor: 1.0, suffix: "Cr".into(), dq_green: Some(98.0), dq_amber: Some(95.0), ..Default::default() }
 }
 
 fn python() -> bool {
@@ -45,11 +45,22 @@ fn json_strings(v: &Value, out: &mut Vec<String>) {
 /// Every chart the checks run on: the 20 forms, every template's chart, and a signed chart of the owner's example.
 pub(crate) fn every_chart() -> Vec<(String, ChartData)> {
     let mut v: Vec<(String, ChartData)> = forms().into_iter().map(|(n, d)| (n.to_string(), d)).collect();
-    for (tpl, df) in all_cases() {
-        let (_, d) = chart_of(tpl, &df);
+    let mut cases = all_cases();
+    // the NII bridge of three products also has its effects-by-key chart
+    cases.push((Template::NiiBridge, sm_mom_keys()));
+    for (tpl, df) in cases {
+        let (p, d) = chart_of(tpl, &df);
         v.push((format!("template {}", tpl.name()), d));
+        if let Some(c) = p.companion {
+            let d2 = compute(c.table.clone().unwrap().lazy(), &c.spec).unwrap();
+            v.push((format!("template {} second chart", tpl.name()), d2));
+        }
     }
     v
+}
+
+fn sm_mom_keys() -> polars::prelude::DataFrame {
+    micro_parquet::charts::samples::mom_table_keys()
 }
 
 // ------------------------------------------------------------------------------ 1. dark sequential
@@ -454,6 +465,8 @@ fn f8_every_waterfall_step_is_at_least_two_pixels_tall_and_the_html_draws_the_co
     assert!((conns[0][0]["coord"][1].as_f64().unwrap() - 1000.0).abs() < 1e-6, "the level after the start bar");
     let bars: Vec<_> = series.iter().filter(|s| s["type"] == "bar" && s["name"] != "Base").collect();
     assert!(bars.iter().all(|s| s["barMinHeight"].as_f64() == Some(t::MIN_BAR_PX as f64)), "a minimum height in the page too");
+    // no border eats into a 2 px step (a border of 1 px would leave nothing of it)
+    assert!(bars.iter().all(|s| s["data"].as_array().unwrap().iter().filter(|i| !i.is_null()).all(|i| i["itemStyle"]["borderWidth"].as_f64() == Some(0.0))), "a waterfall step has no border");
     // a part without a value is null, so the minimum never draws a stub for a zero
     let nulls: usize = bars.iter().map(|s| s["data"].as_array().unwrap().iter().filter(|x| x.is_null()).count()).sum();
     assert!(nulls >= 3, "{nulls}");
@@ -591,7 +604,7 @@ fn f12_the_nii_bridge_is_per_key_when_the_tab_has_one_key_and_adds_the_effects_b
     use polars::prelude::*;
     // one key: its bridge (the tab filtered to a key is that key's bridge), and nothing to compare it with
     let (p, _) = chart_of(Template::NiiBridge, &mom_table());
-    assert!(p.finding.contains("total interest"), "{}", p.finding);
+    assert!(p.finding.contains("in TD interest"), "{}", p.finding);
     assert!(p.companion.is_none());
     // several keys: the total bridge, and each key's volume, rate and mix effects
     let df = DataFrame::new(vec![

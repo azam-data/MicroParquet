@@ -58,7 +58,7 @@ fn v2_matrix() -> DataFrame {
 
 
 fn ctx() -> Ctx {
-    Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() }
+    Ctx { divisor: 1.0, suffix: "Cr".into(), dq_green: Some(98.0), dq_amber: Some(95.0), ..Default::default() }
 }
 
 /// What a template makes, calculated: the derived table, or the tab itself, through the chart engine.
@@ -185,20 +185,20 @@ fn c5_the_nii_bridge_has_the_c0_bases_and_names_the_largest_effect() {
     let bases: Vec<f64> = steps[1..4].iter().map(|s| s.base).collect();
     assert_eq!(bases, vec![80.0, 88.0, 93.0], "the C0 floating bases");
     assert_eq!((steps[0].value, steps[4].value), (80.0, 93.5));
-    assert_eq!(p.finding, "Higher balances explain most of the +13.5 Cr rise in total interest");
+    assert_eq!(p.finding, "Higher balances explain most of the +13.5 Cr rise in TD interest");
     // no effect above half: the largest is named instead
     let mut flat = mom_table();
     flat.with_column(Series::new("Volume effect".into(), [4.0])).unwrap();
     flat.with_column(Series::new("Rate effect".into(), [4.5])).unwrap();
     flat.with_column(Series::new("Mix effect".into(), [5.0])).unwrap();
-    assert_eq!(prepare(Template::NiiBridge, &flat, &ctx()).unwrap().finding, "Mix is the largest effect behind the +13.5 Cr rise in total interest");
+    assert_eq!(prepare(Template::NiiBridge, &flat, &ctx()).unwrap().finding, "Mix is the largest effect behind the +13.5 Cr rise in TD interest");
     // a fall
     let mut fall = mom_table();
     fall.with_column(Series::new("Curr annual interest".into(), [70.0])).unwrap();
     fall.with_column(Series::new("Volume effect".into(), [-6.0])).unwrap();
     fall.with_column(Series::new("Rate effect".into(), [-3.0])).unwrap();
     fall.with_column(Series::new("Mix effect".into(), [-1.0])).unwrap();
-    assert_eq!(prepare(Template::NiiBridge, &fall, &ctx()).unwrap().finding, "Lower balances explain most of the \u{2212}10.0 Cr fall in total interest");
+    assert_eq!(prepare(Template::NiiBridge, &fall, &ctx()).unwrap().finding, "Lower balances explain most of the \u{2212}10.0 Cr fall in TD interest");
     // a bridge that does not add up is refused by the waterfall, not drawn
     let mut bad = mom_table();
     bad.with_column(Series::new("Mix effect".into(), [9.0])).unwrap();

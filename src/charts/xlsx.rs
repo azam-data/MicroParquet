@@ -396,7 +396,7 @@ fn series_format(kind: ChartKind, colour: u32, surface: u32) -> (ChartFormat, Op
 
 /// One chart over the columns of one measure (a panel).
 #[allow(clippy::too_many_arguments)]
-fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title: &str, d: &ChartData) -> Result<Chart> {
+fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title: &str, d: &ChartData, single: bool) -> Result<Chart> {
     let spec = &d.spec;
     let sheet = &cx.sheet;
     let horizontal = spec.horizontal && kind == ChartKind::Bar;
@@ -406,10 +406,11 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
     let vk = value_kind(spec, measure);
     cx.style(&mut chart, title, vk, horizontal, n_series > 1);
     let stacked_area = kind == ChartKind::Area && n_series > 1 && matches!(spec.stack, Stack::Stacked | Stack::Percent);
-    for (m, s, col) in g.cols.iter().filter(|(m, _, _)| *m == measure) {
+    // a `single` panel (a ratio that is the same in every series) is drawn once, named after the measure, in the first colour
+    for (m, s, col) in g.cols.iter().filter(|(m, _, _)| *m == measure).take(if single { 1 } else { usize::MAX }) {
         let _ = m;
-        let name = d.series.get(*s).cloned().unwrap_or_default();
-        let colour = cx.colour(&name, *s, n_series);
+        let name = if single { d.measure_names.get(measure).cloned().unwrap_or_default() } else { d.series.get(*s).cloned().unwrap_or_default() };
+        let colour = if single { t::series_colour(0, false).unwrap_or(0) } else { cx.colour(&name, *s, n_series) };
         let (mut fmt, marker) = series_format(kind, colour, cx.ink.surface);
         if stacked_area {
             fmt = ChartFormat::new();
@@ -443,6 +444,20 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
                 })
                 .collect();
             series.set_points(&points);
+        }
+        if spec.segment_labels && kind == ChartKind::Bar && spec.stack == Stack::Stacked && n_series > 1 && !horizontal {
+            // each segment says its value and its share of the stack (Excel puts it in the segment)
+            let labels: Vec<ChartDataLabel> = (0..d.categories.len())
+                .map(|i| {
+                    let val = |si: usize| d.measure(measure).and_then(|md| md.values.get(si).and_then(|r| r.get(i)).copied().flatten()).unwrap_or(0.0);
+                    let total: f64 = (0..n_series).map(|si| val(si).abs()).sum();
+                    let x = scaled(val(*s), vk, cx.opts);
+                    let body = if (x - x.round()).abs() < 1e-9 { super::axis::value_text(x, vk, 0, false) } else { super::axis::value_text(x, vk, cx.opts.decimals, false) };
+                    let text = if total == 0.0 { body } else { format!("{} \u{b7} {}%", body, crate::models::format_with_commas(val(*s).abs() / total * 100.0, 1)) };
+                    ChartDataLabel::new().set_value(text.as_str()).to_custom()
+                })
+                .collect();
+            series.set_custom_data_labels(&labels);
         }
         if let Some(dl) = diverging_labels(cx, d, measure, kind) {
             series.set_data_label(&dl);
@@ -542,7 +557,7 @@ fn grid_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usiz
         for f in &d.facets {
             ws.write_string_with_format(row, 0, t::tidy(&f.name), &cx.head).map_err(x)?;
             let (g, end) = write_grid_table(cx, ws, row + 1, &f.data, "facet")?;
-            let mut chart = cartesian_chart(cx, &g, spec.kind, 0, &format!("{}: {}", title, f.name), &f.data)?;
+            let mut chart = cartesian_chart(cx, &g, spec.kind, 0, &format!("{}: {}", title, f.name), &f.data, false)?;
             set_value_axis(cx, &mut chart, &g, spec.kind, 0, &f.data, &[]);
             ws.insert_chart(row, end.next_col + 1, &chart).map_err(x)?;
             let _ = &mut chart;
@@ -553,30 +568,31 @@ fn grid_sheet(cx: &Cx, ws: &mut Worksheet, top: u32, title: &str) -> Result<usiz
     }
     let (g, end) = write_grid_table(cx, ws, top, d, "")?;
     // the panels: the spec's linked panels, else one per measure, else one
-    let panels: Vec<(ChartKind, usize, String)> = if !spec.panels.is_empty() {
+    let panels: Vec<(ChartKind, usize, String, bool)> = if !spec.panels.is_empty() {
         spec.panels
             .iter()
             .take(t::MAX_PANELS)
             .map(|p| {
                 let mi = p.measures.first().copied().unwrap_or(0).min(d.measure_count().saturating_sub(1));
-                (p.kind, mi, if p.title.is_empty() { d.measure_names.get(mi).cloned().unwrap_or_default() } else { p.title.clone() })
+                (p.kind, mi, if p.title.is_empty() { d.measure_names.get(mi).cloned().unwrap_or_default() } else { p.title.clone() }, p.single)
             })
             .collect()
     } else if d.measure_count() > 1 {
-        (0..d.measure_count().min(t::MAX_PANELS)).map(|mi| (spec.kind, mi, d.measure_names.get(mi).cloned().unwrap_or_default())).collect()
+        (0..d.measure_count().min(t::MAX_PANELS)).map(|mi| (spec.kind, mi, d.measure_names.get(mi).cloned().unwrap_or_default(), false)).collect()
     } else {
-        vec![(spec.kind, 0, String::new())]
+        vec![(spec.kind, 0, String::new(), false)]
     };
     let linked = panels.len() > 1;
     let mut row = top;
     let mut panel_no = 0usize;
-    for (kind, mi, ptitle) in &panels {
+    for (kind, mi, ptitle, single) in &panels {
         let heading = if linked { format!("{}: {}", title, ptitle) } else { title.to_string() };
-        let mut chart = cartesian_chart(cx, &g, *kind, *mi, &heading, d)?;
+        let mut chart = cartesian_chart(cx, &g, *kind, *mi, &heading, d, *single)?;
         add_reference_lines(cx, ws, &g, &end, &mut chart, *mi, *kind)?;
         let free = end.next_col + spec.ref_lines.len() as u16;
         let free = add_limit_ticks(cx, ws, &g, &end, &mut chart, panel_no, *mi, *kind, free)?;
         add_bar_status(cx, ws, &g, panel_no, *kind, free)?;
+        add_net_marker(cx, ws, &g, &mut chart, *mi, *kind, free)?;
         let mut extras: Vec<f64> = spec.ref_lines.iter().filter(|r| r.panel == (*mi).min(spec.measures.len().saturating_sub(1)).min(*mi)).map(|r| r.value).collect();
         extras.extend(spec.limit_ticks.iter().filter(|l| l.panel == panel_no).map(|l| l.value));
         set_value_axis(cx, &mut chart, &g, *kind, *mi, d, &extras);
@@ -612,6 +628,37 @@ fn add_reference_lines(cx: &Cx, ws: &mut Worksheet, g: &GridCols, end: &GridEnd,
         s.set_marker(&mk);
     }
     chart.combine(&line_chart);
+    Ok(())
+}
+
+/// The net of each stack of a stacked column chart (`net_marker`): a "Net" column and a dark dash marker on the chart with
+/// a signed data label; the stacks themselves carry no labels.
+fn add_net_marker(cx: &Cx, ws: &mut Worksheet, g: &GridCols, chart: &mut Chart, measure: usize, kind: ChartKind, col: u16) -> Result<()> {
+    let d = cx.data;
+    let spec = &d.spec;
+    if !spec.net_marker || kind != ChartKind::Bar || spec.stack != Stack::Stacked || d.series.len() < 2 || spec.horizontal {
+        return Ok(());
+    }
+    let vk = value_kind(spec, measure);
+    ws.write_string_with_format(g.header_row, col, "Net", &cx.head).map_err(x)?;
+    for (i, _) in d.categories.iter().enumerate() {
+        let net: f64 = (0..d.series.len()).filter_map(|s| d.measure(measure).and_then(|md| md.values.get(s).and_then(|r| r.get(i)).copied().flatten())).sum();
+        ws.write_number_with_format(g.first_row + i as u32, col, scaled(net, vk, cx.opts), cx.num_fmt(vk)).map_err(x)?;
+    }
+    let mut line_chart = Chart::new(ChartType::Line);
+    let mut mk = ChartMarker::new();
+    let mut mf = ChartFormat::new();
+    mf.set_solid_fill(&ChartSolidFill::new().set_color(rgb(cx.ink.ink))).set_border(&ChartLine::new().set_color(rgb(cx.ink.ink)).set_width(2.0));
+    mk.set_type(ChartMarkerType::LongDash).set_size(16).set_format(&mut mf);
+    let s = line_chart.add_series();
+    s.set_categories(&range(&cx.sheet, g.first_row, 0, g.last_row, 0)).set_values(&range(&cx.sheet, g.first_row, col, g.last_row, col)).set_name("Net");
+    s.set_format(&mut ChartFormat::new().set_no_line().clone());
+    s.set_marker(&mk);
+    let mut label = ChartDataLabel::new();
+    label.show_value().set_num_format(&signed_code(if vk == ValueKind::Percent { 2 } else { cx.opts.decimals }, vk == ValueKind::Percent)).set_font(&font(t::DATA_LABEL_PT as f64, false, cx.ink.ink));
+    s.set_data_label(&label);
+    chart.combine(&line_chart);
+    ws.set_column_width(col, 14).map_err(x)?;
     Ok(())
 }
 

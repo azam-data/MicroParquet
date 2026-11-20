@@ -210,3 +210,93 @@ fn c6_an_old_pack_without_charts_loads_and_a_chart_is_saved_with_the_pack() {
     assert_eq!(back.items[1].chart, Some(PackChart::Saved { name: "Deposits by product".into() }));
     assert!(back.output.html_charts);
 }
+
+// ------------------------------------------------------------------------ Q3: thresholds from the rule set
+
+const ACCOUNTS: &str = "Account_No,Rate,Maturity,Open_Date\nA1,9.5,2027-03-31,2026-01-05\nA2,12,2028-10-31,2026-02-10\nA2,40,2026-01-01,2026-03-01\nA4,8,2027-06-30,2026-04-20\n";
+
+fn dq_pack(rig: &Rig, mutate: &dyn Fn(&mut micro_parquet::dq::DqRuleSet)) -> ReportPack {
+    let mut set = micro_parquet::dq::load_ruleset(&rig.root.join("dq_rules"), "sample").expect("the shipped sample rule set loads");
+    mutate(&mut set);
+    ReportPack {
+        name: "quality".into(),
+        inputs: vec![slot("Accounts", &["Account_No", "Rate", "Maturity", "Open_Date"])],
+        items: vec![PackItem {
+            title: "Data quality".into(),
+            sheet: "DQ".into(),
+            source: PackItemKind::Run { run: ToolRun::DqScorecard(DqScorecardRun { source: "Accounts".into(), rules: set, view: DqView::Scorecard }) },
+            col_formats: Default::default(),
+            chart: Some(PackChart::Template { template: "data-quality".into() }),
+        }],
+        output: PackOutput::default(),
+    }
+}
+
+fn dq_rig(name: &str) -> Rig {
+    let mut rig = Rig::new(name);
+    let accounts = rig.root.join("accounts.csv");
+    std::fs::write(&accounts, ACCOUNTS).unwrap();
+    rig.spec.files = BTreeMap::from([("Accounts".to_string(), accounts)]);
+    rig
+}
+
+#[test]
+fn c6_q3_a_packs_data_quality_chart_reads_green_and_amber_from_the_rule_set() {
+    let rig = dq_rig("c6_q3a");
+    // the shipped sample rule set states them (98 and 95): they are read from it, not assumed
+    let sample = std::fs::read_to_string(micro_parquet::dq::dq_dir().join("sample.json")).ok().unwrap_or_else(|| micro_parquet::dq::SAMPLE_RULES.to_string());
+    assert!(sample.contains("\"green_min\"") && sample.contains("\"amber_min\""), "the shipped sample rule file states both thresholds");
+    let r = run_pack(&dq_pack(&rig, &|_| {}), &rig.spec, &rig.paths, "t", &JobCtx::inert()).unwrap_or_else(|e| panic!("{e:#}"));
+    let lines: Vec<(f64, String)> = r.sheets[0].charts[0].data.spec.ref_lines.iter().map(|l| (l.value, l.label.clone())).collect();
+    assert_eq!(lines, [(98.0, "Green 98%".to_string()), (95.0, "Amber 95%".to_string())]);
+    // the bank's own thresholds in its rule set are the ones drawn
+    let r = run_pack(&dq_pack(&rig, &|s| {
+        s.green_min = 99.0;
+        s.amber_min = 80.0;
+    }), &rig.spec, &rig.paths, "t", &JobCtx::inert()).unwrap_or_else(|e| panic!("{e:#}"));
+    let lines: Vec<(f64, String)> = r.sheets[0].charts[0].data.spec.ref_lines.iter().map(|l| (l.value, l.label.clone())).collect();
+    assert_eq!(lines, [(99.0, "Green 99%".to_string()), (80.0, "Amber 80%".to_string())]);
+}
+
+#[test]
+fn c6_q3_a_missing_threshold_or_outlier_limit_stops_the_pack_with_a_plain_message() {
+    let rig = dq_rig("c6_q3b");
+    // a pack file whose scorecard rule set has no amber_min: refused when it is loaded, naming the item and the field
+    let pack = dq_pack(&rig, &|_| {});
+    let dir = rig.root.join("packs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut raw: serde_json::Value = serde_json::to_value(&pack).unwrap();
+    raw["items"][0]["source"]["run"]["rules"].as_object_mut().unwrap().remove("amber_min");
+    std::fs::write(dir.join("quality.json"), serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    let e = format!("{:#}", load_pack(&dir, "quality").expect_err("no amber_min"));
+    assert!(e.contains("'Data quality'") && e.contains("amber_min") && e.contains("no threshold is assumed"), "{e}");
+    // the same pack with both thresholds loads
+    std::fs::write(dir.join("ok.json"), serde_json::to_string_pretty(&serde_json::to_value(&pack).unwrap()).unwrap()).unwrap();
+    assert!(load_pack(&dir, "ok").is_ok());
+    // the data-quality template on an item that is not a scorecard run has no rule set to read: it stops, naming the item
+    let mut p2 = dq_pack(&rig, &|_| {});
+    let table = "Rule,Rows checked,Rows failing,Pass %,Result\nA,10,0,100,\nB,10,2,80,\n";
+    let file = rig.root.join("scorecard.csv");
+    std::fs::write(&file, table).unwrap();
+    p2.inputs = vec![slot("Score", &["Rule", "Rows failing", "Pass %"])];
+    p2.items[0].source = PackItemKind::Steps { slot: "Score".into() };
+    let mut spec = rig.spec.clone();
+    spec.files = BTreeMap::from([("Score".to_string(), file)]);
+    let e = format!("{:#}", run_pack(&p2, &spec, &rig.paths, "t", &JobCtx::inert()).expect_err("no rule set"));
+    assert!(e.contains("'Data quality'") && e.contains("thresholds") && e.contains("none was given"), "{e}");
+    // the IRRBB outlier limit: results that do not state it stop the chart; a shock file without outlier_pct stops the run
+    use micro_parquet::charts::samples::irrbb_results;
+    use micro_parquet::charts::templates::{prepare, Ctx, Template};
+    use polars::prelude::*;
+    let full = irrbb_results();
+    assert!(prepare(Template::IrrbbScenarios, &full, &Ctx::default()).is_ok(), "the limit is in the result's own row label, from the rule file");
+    let keep: Vec<bool> = full.column("Scenario").unwrap().str().unwrap().into_iter().map(|s| !s.unwrap_or("").starts_with("Outlier")).collect();
+    let no_outlier = full.filter(&BooleanChunked::new("m".into(), keep)).unwrap();
+    let e = prepare(Template::IrrbbScenarios, &no_outlier, &Ctx::default()).err().expect("no limit").to_string();
+    assert!(e.contains("outlier limit") && e.contains("outlier_pct") && e.contains("no limit is assumed"), "{e}");
+    let shocks = rig.root.join("rules").join("irrbb_shocks");
+    std::fs::create_dir_all(&shocks).unwrap();
+    std::fs::write(shocks.join("2021-04-13.json"), r#"{"as_of":"2021-04-13","source":"test","decay_x":4,"currencies":[{"currency":"BDT","parallel_bp":250,"short_bp":300,"long_bp":150}]}"#).unwrap();
+    let e = format!("{:#}", micro_parquet::rules::load_shocks(chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()).expect_err("no outlier_pct"));
+    assert!(e.contains("outlier_pct"), "{e}");
+}

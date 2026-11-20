@@ -136,7 +136,7 @@ pub(crate) fn all_forms() -> Vec<(&'static str, ChartData)> {
         MeasureSpec { column: Some("Balance".into()), agg: ChartAgg::Sum, label: "Balance".into(), ..Default::default() },
         MeasureSpec { column: Some("Rate".into()), agg: ChartAgg::Average, label: "Average rate".into(), ..Default::default() },
     ];
-    lp.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new() }];
+    lp.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new(), single: false }];
     v.push(("linked-panels", calc(book(), &lp)));
     v.push(("small-multiples", calc(book(), &ChartSpec { facet: Some("Product".into()), ..single(base(ChartKind::Bar)) })));
     let gaps = DataFrame::new(vec![
@@ -284,7 +284,7 @@ fn c1_the_screenshots_of_every_form_are_written_when_python_with_pillow_is_there
 fn template_forms() -> Vec<(&'static str, ChartData)> {
     use micro_parquet::charts::samples as sm;
     use micro_parquet::charts::templates::{prepare, yield_curves, Ctx, Template};
-    let ctx = Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() };
+    let ctx = Ctx { divisor: 1.0, suffix: "Cr".into(), dq_green: Some(98.0), dq_amber: Some(95.0), ..Default::default() };
     let mut out: Vec<(&'static str, ChartData)> = Vec::new();
     let mut add = |name: &'static str, t: Template, df: DataFrame| {
         let p = prepare(t, &df, &ctx).unwrap_or_else(|e| panic!("{name}: {e:#}"));

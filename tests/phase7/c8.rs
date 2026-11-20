@@ -16,7 +16,7 @@ fn read(name: &str) -> String {
 }
 
 fn ctx() -> Ctx {
-    Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() }
+    Ctx { divisor: 1.0, suffix: "Cr".into(), dq_green: Some(98.0), dq_amber: Some(95.0), ..Default::default() }
 }
 
 fn finding(t: Template, df: DataFrame) -> String {
@@ -116,4 +116,45 @@ fn c8_every_screenshot_the_chart_notes_name_exists_and_the_readme_lists_the_note
     for f in ["column", "grouped", "stacked", "percent", "bar", "line", "stepped", "area", "stacked-area", "scatter", "bubble", "histogram", "box", "waterfall", "heatmap", "donut", "linked-panels", "small-multiples"] {
         assert!(primer.contains(&format!("img/charts/{f}.png")) && primer.contains(&format!("img/charts/{f}-dark.png")), "the primer shows {f} in both themes");
     }
+}
+
+/// (width, height) of a PNG, from its header.
+fn png_size(path: &std::path::Path) -> (u32, u32) {
+    let b = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert!(b.len() > 24 && &b[1..4] == b"PNG", "{}: a PNG", path.display());
+    (u32::from_be_bytes([b[16], b[17], b[18], b[19]]), u32::from_be_bytes([b[20], b[21], b[22], b[23]]))
+}
+
+/// The in-app render is 1203 pt wide at two pixels to the point; an HTML page is 1100 px wide. A picture of one kind
+/// that has the size of the other was made by the wrong tool (the HTML tool once overwrote the in-app images).
+#[test]
+fn c8_every_screenshot_has_the_size_of_its_kind() {
+    let dir = guide().join("img/charts");
+    let (mut app, mut html, mut xlsx) = (0, 0, 0);
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let path = e.unwrap().path();
+        if path.extension().map_or(true, |x| x != "png") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let (w, h) = png_size(&path);
+        if name.starts_with("html-") {
+            html += 1;
+            assert_eq!(w, 1100, "{name}: an HTML page is 1100 px wide, it is {w}");
+            assert!(h >= 300 && h <= 1500, "{name}: height {h}");
+        } else if name.starts_with("xlsx-") {
+            xlsx += 1;
+            assert!(w >= 800 && h >= 300, "{name}: {w}x{h}");
+        } else {
+            app += 1;
+            assert_eq!(w, 2406, "{name}: an in-app render is 2406 px wide (1203 pt at 2x), it is {w}: was it overwritten by another tool?");
+            assert!(h >= 600 && h <= 2800, "{name}: height {h}");
+        }
+        // every picture has a dark twin
+        if !name.ends_with("-dark.png") && !name.starts_with("xlsx-") {
+            let twin = dir.join(name.replace(".png", "-dark.png"));
+            assert!(twin.is_file(), "{name}: its dark twin exists");
+        }
+    }
+    assert!(app >= 70 && html == 40 && xlsx == 20, "{app} in-app, {html} html, {xlsx} excel pictures");
 }

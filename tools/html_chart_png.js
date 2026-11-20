@@ -1,6 +1,7 @@
 // Opens each chart page written by the C3 test (MP_HTML_OUT=<in folder>) in headless Chromium with the
 // network blocked, checks that it draws without a script error or a request, and saves a PNG of the
 // light and of the dark page:  node tools/html_chart_png.js <in folder> <out folder> [names...]
+// The files are always called html-<name>.png and html-<name>-dark.png: they never overwrite the in-app images.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
@@ -35,7 +36,7 @@ const path = require('path');
       await page.mouse.move(520, 300); await page.waitForTimeout(100);
       await page.setViewportSize({ width: 1100, height: Math.ceil(h) + 90 });
       await page.waitForTimeout(150);
-      await page.screenshot({ path: path.join(outDir, `${name}${theme === 'dark' ? '-dark' : ''}.png`) });
+      await page.screenshot({ path: path.join(outDir, `html-${name}${theme === 'dark' ? '-dark' : ''}.png`) });
       if (problems.length) { bad++; console.log(name, theme, problems.join(' | ')); }
       await ctx.close();
     }

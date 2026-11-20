@@ -360,4 +360,13 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
   - Excel line panels use the app's nice axis range (not forced to 0); stacked areas show no point markers.
   - C5 completed: LCR/NSFR HQLA composition as a tall segmented bar, NII bridge per key.
 - Session C details: older yield curves are fainter (muted, then de-emphasised grey) in both themes; status bars carry their icon and words inside the bar when it is long enough; of several vertical threshold lines the highest is labelled to its right and the others to their left; a panel with a breach gets 25% axis room; the NII bridge per key is a second chart ("effects by key"), the HQLA composition a second chart; "stacked areas show no markers" applies to the app and HTML (Excel areas have none). See `docs/phase7-progress.md`.
+- Owner decisions on Session C (20 Nov 2026):
+  - Q1: the NII bridge title names the product when the tab has one key ("... rise in TD interest") and says "total interest" when it has several (replaces the F10-1 wording).
+  - Q2: older yield curves are fainter in both themes (accepted as built).
+  - Q3: a report pack reads the data-quality thresholds (Green, Amber) and the IRRBB outlier limit from the rule set of the item's tool run; a missing value stops the pack with a plain message and there is no default; both are in the shipped sample rule files and tested.
+  - Screenshots: `tools/html_chart_png.js` always writes `html-<name>.png`; they are re-rendered in the order in-app (render tests), HTML, Excel; a test pins the size of every image (in-app render size, or the page size for `html-`).
+  - Classified trend: the NPL % panel is one series in the first categorical colour, end-labelled "NPL %".
+  - NII effects by key: each key's net change is a dark tick across its stack with a signed two-decimal label; stack edges carry no labels.
+  - HQLA composition: each segment is labelled beside the bar with its value and share ("3,500 · 70.0%"), never overlapping.
+  - C7: the scripts are run with matplotlib (Agg) and plotly installed in the session, saved to PNG and looked at; the test still skips when they are absent.
 </accepted_deviations>

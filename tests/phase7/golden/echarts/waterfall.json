@@ -134,7 +134,7 @@
           "itemStyle": {
             "borderColor": "#fcfcfb",
             "borderRadius": 0,
-            "borderWidth": 1,
+            "borderWidth": 0,
             "color": "#52514e"
           },
           "tip": "Step: Sep interest\nStart: 80.00\nLevel after: 80.00",
@@ -144,7 +144,7 @@
           "itemStyle": {
             "borderColor": "#fcfcfb",
             "borderRadius": 0,
-            "borderWidth": 1,
+            "borderWidth": 0,
             "color": "#2a78d6"
           },
           "tip": "Step: Volume\nChange: +8.00\nLevel after: 88.00",
@@ -154,7 +154,7 @@
           "itemStyle": {
             "borderColor": "#fcfcfb",
             "borderRadius": 0,
-            "borderWidth": 1,
+            "borderWidth": 0,
             "color": "#2a78d6"
           },
           "tip": "Step: Rate\nChange: +5.00\nLevel after: 93.00",
@@ -164,7 +164,7 @@
           "itemStyle": {
             "borderColor": "#fcfcfb",
             "borderRadius": 0,
-            "borderWidth": 1,
+            "borderWidth": 0,
             "color": "#2a78d6"
           },
           "tip": "Step: Mix\nChange: +0.50\nLevel after: 93.50",
@@ -174,7 +174,7 @@
           "itemStyle": {
             "borderColor": "#fcfcfb",
             "borderRadius": 0,
-            "borderWidth": 1,
+            "borderWidth": 0,
             "color": "#0d366b"
           },
           "tip": "Step: Oct interest\nEnd: 93.50\nLevel after: 93.50",

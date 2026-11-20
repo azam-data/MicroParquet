@@ -32,7 +32,7 @@ Explains a month-on-month change in interest: a waterfall from the prior month's
 ## 6. What you get
 
 - A waterfall: prior interest (grey), volume, rate and mix (blue up, red down, floating from the C0 bases), current interest (navy); every step labelled with its sign, and a connector between bars.
-- The title names the largest effect when it is more than half of all the effects ("Higher balances explain most of the +13.5 Cr rise in total interest"), else the largest effect without "most".
+- The title names the product when the tab has one key ("... in TD interest") and says "total interest" when it has several. It names the largest effect when it is more than half of all the effects ("Higher balances explain most of the +13.5 Cr rise in TD interest"), else the largest effect without "most".
 - A second chart of the effects by key, the largest change first (at most 12 keys).
 
 ## 7. Check your result
@@ -50,7 +50,7 @@ One product, TD (Crore):
 
 80.00 → +8.00 → +5.00 → +0.50 → 93.50: the floating bases are 80.00, 88.00 and 93.00. With three products (TD, Savings, Current) the total bridge runs 115.00 → +5.40 → +6.10 → +0.50 → 127.00 and the second chart says "TD has the largest change: +13.5 Cr".
 
-The title the template writes (a fixed rule, no AI): **Higher balances explain most of the +13.5 Cr rise in total interest**
+The title the template writes (a fixed rule, no AI): **Higher balances explain most of the +13.5 Cr rise in TD interest**
 
 ![The NII bridge of one product](img/charts/tpl-nii-bridge.png)
 

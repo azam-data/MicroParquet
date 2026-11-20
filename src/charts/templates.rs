@@ -174,16 +174,15 @@ pub struct Ctx {
     /// "Cr", "L", "M", "K" or empty.
     pub suffix: String,
     pub decimals: usize,
-    /// The IRRBB outlier test: a loss of this % of Tier 1 (the rule file's number; 15 by default).
-    pub outlier_pct: f64,
-    /// The data-quality thresholds of the rule set.
-    pub dq_green: f64,
-    pub dq_amber: f64,
+    /// The data-quality thresholds of the rule set the scorecard was run with. There is no default: a regulatory
+    /// or policy threshold lives in a data file, and a template that needs one without it stops with a message.
+    pub dq_green: Option<f64>,
+    pub dq_amber: Option<f64>,
 }
 
 impl Default for Ctx {
     fn default() -> Self {
-        Ctx { divisor: 1.0, suffix: String::new(), decimals: 2, outlier_pct: 15.0, dq_green: 98.0, dq_amber: 95.0 }
+        Ctx { divisor: 1.0, suffix: String::new(), decimals: 2, dq_green: None, dq_amber: None }
     }
 }
 
@@ -434,8 +433,8 @@ fn gap_ladder(df: &DataFrame) -> Result<Prepared> {
     spec.value = Some("Net gap".into());
     spec.measures = vec![measure("Net gap", "Net gap", false), measure("Cumulative gap % of total assets", "Cumulative gap, % of assets", true)];
     spec.panels = vec![
-        PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Net gap".into() },
-        PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "Cumulative gap, % of assets".into() },
+        PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Net gap".into(), single: false },
+        PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "Cumulative gap, % of assets".into(), single: false },
     ];
     spec.subtitle = "Liquidity gap ladder".to_string();
     let mut any_limit = false;
@@ -484,7 +483,7 @@ fn repricing_gap(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
     spec.order = order_of(&b);
     spec.value = Some("Gap".into());
     spec.measures = vec![measure("Gap", "Repricing gap", false), measure("Cumulative gap", "Cumulative gap", false)];
-    spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Gap".into() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "Cumulative gap".into() }];
+    spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Gap".into(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "Cumulative gap".into(), single: false }];
     spec.subtitle = "Repricing gap by bucket".to_string();
     let (mut best, mut at) = (0.0f64, 0usize);
     for (i, v) in g.iter().enumerate() {
@@ -511,7 +510,7 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         let v = nums(t, df, col)?;
         Ok(v.iter().enumerate().filter(|(i, _)| keys.get(*i).and_then(|k| k.as_deref()) != Some("Total")).filter_map(|(_, x)| *x).sum())
     };
-    // the bridge adds up the keys of the tab (filter the tab to one key for that key's bridge)
+    // one key in the tab: the bridge is that key's and the title names it; several keys: the bridge adds them up
     let distinct: Vec<String> = {
         let mut v: Vec<String> = Vec::new();
         for k in keys.iter().flatten() {
@@ -521,7 +520,7 @@ fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         }
         v
     };
-    let whose = "total interest";
+    let whose = if distinct.len() == 1 { format!("{} interest", distinct[0]) } else { "total interest".to_string() };
     let (prev, curr) = (sum("Prev annual interest")?, sum("Curr annual interest")?);
     let (vol, rate, mix) = (sum("Volume effect")?, sum("Rate effect")?, sum("Mix effect")?);
     let table = frame(vec![
@@ -605,7 +604,8 @@ fn nii_by_key(df: &DataFrame, key_col: &str, keys: &[Option<String>], ctx: &Ctx)
     spec.stack = Stack::Stacked;
     spec.order = order_of(&order);
     spec.colour_map.assign_all(&["Volume", "Rate", "Mix"]);
-    spec.subtitle = "Change in annualised interest by effect".to_string();
+    spec.net_marker = true;
+    spec.subtitle = "Change in annualised interest by effect \u{b7} the tick is the net change".to_string();
     if total_keys > rows.len() {
         spec.footnote = format!("The {} keys with the largest change, of {}", rows.len(), total_keys);
     }
@@ -743,7 +743,7 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
     spec.stack = Stack::Stacked;
     spec.order = order_of(&labels);
     spec.measures = vec![measure("Balance", "Balance", false), MeasureSpec { column: Some("NPL %".into()), agg: ChartAgg::Average, label: "NPL %".into(), pct: true, ..Default::default() }];
-    spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Balance by grade (SMA, SS, DF, BL)".into() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "NPL % (SS, DF and BL)".into() }];
+    spec.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: "Balance by grade (SMA, SS, DF, BL)".into(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: "NPL % (SS, DF and BL)".into(), single: true }];
     spec.colour_map.assign_all(&GRADES);
     spec.subtitle = "Standard (STD) not shown \u{b7} classified loans by grade, by month".to_string();
     let (first, last) = (ratios.first().map(|r| r.1).unwrap_or(0.0), ratios.last().map(|r| r.1).unwrap_or(0.0));
@@ -760,7 +760,7 @@ fn classified_trend(df: &DataFrame) -> Result<Prepared> {
 
 // --------------------------------------------------------------------------------------- IRRBB
 
-fn irrbb(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
+fn irrbb(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
     let t = Template::IrrbbScenarios;
     let sc = strs(t, df, "Scenario")?;
     let eve = nums(t, df, "EVE change")?;
@@ -772,7 +772,8 @@ fn irrbb(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         .and_then(|n| n.replace(',', "").trim().parse::<f64>().ok())
         .filter(|v| *v > 0.0)
         .ok_or_else(|| anyhow!("{}: the results have no 'Tier 1 capital' row. Run the six scenarios again.", t.name()))?;
-    // the outlier test's percentage from its row label ("Outlier (max loss ≥ 15% of Tier 1)"), else the rule's default
+    // the outlier limit is the rule file's (outlier_pct): the tool writes it in the row label "Outlier (max loss ≥ 15% of
+    // Tier 1)". Without it the chart has no outlier line to draw and stops: no limit is assumed.
     let outlier = sc
         .iter()
         .flatten()
@@ -780,7 +781,8 @@ fn irrbb(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
         .and_then(|s| s.split('\u{2265}').nth(1))
         .and_then(|s| s.trim().split('%').next().map(str::to_string))
         .and_then(|s| s.trim().parse::<f64>().ok())
-        .unwrap_or(ctx.outlier_pct);
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| anyhow!("{}: the results do not state the outlier limit (the row 'Outlier (max loss \u{2265} x% of Tier 1)', from outlier_pct in the IRRBB shock rule file). Run the six scenarios again with a rule file that has outlier_pct; no limit is assumed.", t.name()))?;
     let mut rows: Vec<(String, f64)> = Vec::new();
     for i in 0..df.height() {
         let (Some(name), Some(v)) = (sc[i].clone(), eve[i]) else { continue };
@@ -877,6 +879,7 @@ fn hqla_composition(item: &[Option<String>], value: &[Option<f64>], t: Template)
     spec.stack = Stack::Stacked;
     spec.order = order_of(&["HQLA".to_string()]);
     spec.colour_map.assign_all(&["Level 1", "Level 2A", "Level 2B"]);
+    spec.segment_labels = true;
     spec.subtitle = "HQLA by level, after the factors".to_string();
     let finding = format!("{}% of the HQLA is Level 1", format_with_commas(l1 / gross * 100.0, 1));
     spec.title = finding.clone();
@@ -913,7 +916,7 @@ fn ecl_by_stage(df: &DataFrame) -> Result<Prepared> {
     spec.order = order_of(&st);
     spec.value = Some("EAD".into());
     spec.measures = vec![measure("EAD", "EAD", false), measure("ECL", "ECL", false), measure("Coverage %", "Coverage %", true)];
-    spec.panels = (0..3).map(|i| PanelSpec { kind: ChartKind::Bar, measures: vec![i], title: ["EAD", "ECL", "Coverage % (ECL / EAD)"][i].to_string() }).collect();
+    spec.panels = (0..3).map(|i| PanelSpec { kind: ChartKind::Bar, measures: vec![i], title: ["EAD", "ECL", "Coverage % (ECL / EAD)"][i].to_string(), single: false }).collect();
     spec.subtitle = "IFRS 9 by stage".to_string();
     let total: f64 = l.iter().sum();
     let (top_i, top) = l.iter().enumerate().fold((0usize, f64::MIN), |a, (i, v)| if *v > a.1 { (i, *v) } else { a });
@@ -1048,6 +1051,10 @@ fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     if names.is_empty() {
         bail!("{}: no rule has a pass %. Run a rule that checks rows (control totals only have a pass or fail).", t.name());
     }
+    let (green, amber) = match (ctx.dq_green, ctx.dq_amber) {
+        (Some(g), Some(a)) if g.is_finite() && a.is_finite() && a <= g => (g, a),
+        _ => bail!("{}: the Green and Amber thresholds come from the data-quality rule set the scorecard was run with, and none was given. Chart the scorecard's own result tab (or add the scorecard as the pack item); no threshold is assumed.", t.name()),
+    };
     let table = frame(vec![Series::new("Rule".into(), names.clone()), Series::new("Pass %".into(), vals.clone())])?;
     let mut spec = base_spec("Rule", ChartKind::Bar);
     spec.horizontal = true;
@@ -1055,20 +1062,20 @@ fn data_quality(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     spec.value = Some("Pass %".into());
     spec.measures = vec![measure("Pass %", "Pass %", true)];
     spec.ref_lines = vec![
-        RefLine { value: ctx.dq_green, label: format!("Green {}%", format_with_commas(ctx.dq_green, 0)), status: Status::Good, panel: 0 },
-        RefLine { value: ctx.dq_amber, label: format!("Amber {}%", format_with_commas(ctx.dq_amber, 0)), status: Status::Warning, panel: 0 },
+        RefLine { value: green, label: format!("Green {}%", format_with_commas(green, 0)), status: Status::Good, panel: 0 },
+        RefLine { value: amber, label: format!("Amber {}%", format_with_commas(amber, 0)), status: Status::Warning, panel: 0 },
     ];
     spec.subtitle = "Data-quality scorecard, pass % by rule".to_string();
     // below Amber: the critical colour, an icon and "Below Amber"; between Amber and Green: the warning colour
     // and "Below Green"; the other bars keep the default colour
     for (n, v) in names.iter().zip(vals.iter()) {
-        if *v < ctx.dq_amber {
+        if *v < amber {
             spec.bar_status.push(BarStatus { category: n.clone(), status: Status::Critical, label: "Below Amber".to_string() });
-        } else if *v < ctx.dq_green {
+        } else if *v < green {
             spec.bar_status.push(BarStatus { category: n.clone(), status: Status::Warning, label: "Below Green".to_string() });
         }
     }
-    let below = vals.iter().filter(|v| **v < ctx.dq_amber).count();
+    let below = vals.iter().filter(|v| **v < amber).count();
     let finding = match below {
         0 => "No rule is below Amber".to_string(),
         1 => "1 rule below Amber".to_string(),

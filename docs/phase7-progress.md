@@ -1,6 +1,6 @@
 # Phase 7 progress (chart studio)
 
-Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C: owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8 (all done). Resume from this file.
+Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C: owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8 (all done). Session D (this one): owner decisions Q1–Q3 and fixes 1–5 (screenshots, classified NPL, NII effects, HQLA labels, C7 run with matplotlib). Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -101,3 +101,18 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C
 
 - C8-1: the template notes are `docs/guide/chart-<template>.md` (13 of them, the spec said "one guide note per banking template, ten sections each"); the primer is `docs/guide/charts.md`. The worked examples use the sample tables of `src/charts/samples.rs` (the same numbers as the tests); a test pins each note's title to the code.
 - C8-2: every screenshot under `docs/guide/img/charts/` was re-rendered from the final code: the in-app forms and templates (render tests, light and dark), the HTML pages (headless Chromium, network blocked, `tools/html_chart_png.js`) and the Excel workbooks (LibreOffice to PDF, `pdftoppm`). New: `tpl-lcr-nsfr-hqla`, `tpl-nii-effects-by-key`, `tpl-nii-bridge-keys`.
+
+## Owner decisions on Session C (also in the spec `<accepted_deviations>`)
+
+- Q1 the NII bridge names the product with one key, "total interest" with several. Q2 fainter older curves accepted. Q3 packs read the DQ thresholds and the IRRBB outlier limit from the rule set; a missing value stops the pack; none is defaulted.
+- Fixes: screenshot tool and size test (1), classified NPL one series (2), NII effects net markers (3), HQLA segment labels (4), C7 scripts run with matplotlib and plotly (5).
+
+## Session D deviations (owner decisions Q1–Q3 and fixes 1–5)
+
+- D-1 (Q1): the NII bridge names the product when the tab has one key ("... rise in TD interest") and says "total interest" with several keys. This replaces F10-1's wording.
+- D-2 (Q3): `Ctx` has no default for the data-quality thresholds (`dq_green`, `dq_amber` are `Option`); the IRRBB outlier limit is read from the result's own "Outlier (max loss ≥ x% of Tier 1)" row (the shock file's `outlier_pct`, which the tool requires) and a result without it stops the template. A pack's scorecard item reads Green and Amber from the rule set stored with its run; a pack file whose scorecard item has a chart but no `green_min`/`amber_min` is refused when it is loaded, and the data-quality template on an item that is not a scorecard run stops the run. The shipped `assets/dq_rules/sample.json` and `assets/rules/irrbb_shocks/2021-04-13.json` already state both values (the test reads them). The studio's "Chart this result" for a data-quality tab that was not made by the scorecard now stops with the same message (no default 98/95).
+- D-3 (fix 1): `tools/html_chart_png.js` writes `html-<name>(-dark).png` only. The four `sankey*`/`treemap*` pictures were HTML pages under in-app names (those two forms are HTML-only and the app shows a message), so they are deleted; `html-sankey*` and `html-treemap*` remain. A test checks the size of every picture by kind (in-app 2406 px wide, HTML 1100 px).
+- D-4 (fix 2): `PanelSpec.single` (a ratio that is the same in every series is one series named after the measure, first colour, end-labelled "NPL %  7.0%"); also in the HTML, Excel and Python outputs.
+- D-5 (fix 3): `ChartSpec.net_marker`: the net of a stack is a dark tick with a signed two-decimal label (app), a "Net" series of rect markers (HTML), a "Net" column and dash markers (Excel); stack edges have no labels.
+- D-6 (fix 4): `ChartSpec.segment_labels`: each segment of a stacked column is labelled beside the stack ("3,500 · 70.0%", whole numbers without decimals), nudged apart; HTML uses `shiftY`, Excel puts the same text in the segment.
+- D-7 (fix 5): matplotlib 3.11 and plotly 7.1 installed in the session; every script runs headless and was saved to a PNG and looked at. Fixed: horizontal limit ticks, reference-line labels (staggered above the plot), the donut legend cut off, the legend over a panel title, reference bands, status bars (the data-quality chart), room below a line.

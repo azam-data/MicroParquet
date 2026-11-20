@@ -66,5 +66,5 @@ The title the template writes (a fixed rule, no AI): **Parallel up is the worst 
 
 ## 10. Limits and assumptions
 
-- The outlier percentage is read from the rule file of the run (15 by default); the chart does not choose it.
+- The outlier percentage is the rule file's outlier_pct, written in the result's own outlier row; with no such row the chart stops with a message and assumes no limit (a report pack stops the same way).
 - ΔNII is in the result table, not in this chart.

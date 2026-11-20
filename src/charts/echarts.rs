@@ -12,7 +12,7 @@
 
 use super::axis::{padded_floor, diverging_text, nice_ticks, value_text, ValueKind};
 use super::colours::ColourMap;
-use super::data::{heatmap, sequential_step, waterfall_from_data, waterfall_stack, ChartData, StepKind};
+use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, waterfall_stack, ChartData, StepKind};
 use super::layout::{base_word, chart_title, scaled, value_kind, LayoutOpts, DONUT_REFUSAL};
 use super::spec::{ChartKind, ChartSpec, Stack, Transform};
 use super::tokens as t;
@@ -207,7 +207,15 @@ fn plans<'a>(env: &Env<'a>) -> Vec<Plan<'a>> {
         for (pi, p) in spec.panels.iter().take(t::MAX_PANELS).enumerate() {
             let mi = p.measures.first().copied().unwrap_or(0).min(data.measure_count().saturating_sub(1));
             let title = if p.title.is_empty() { data.measure_names.get(mi).cloned().unwrap_or_default() } else { p.title.clone() };
-            out.push(Plan { kind: p.kind, title, measure: mi, vk: value_kind(spec, mi), series: mk(mi), cats: &data.categories, idx: pi });
+            let series = if p.single {
+                // one series named after the measure, in the first categorical colour
+                let md = data.measure(mi);
+                let (vals, rows) = md.as_ref().map(|m| collapse_series(&m.values, &m.rows, data.categories.len())).unwrap_or_default();
+                vec![SerD { name: data.measure_names.get(mi).cloned().unwrap_or_default(), vals, rows, colour: t::series_colour(0, env.dark).unwrap_or(0) }]
+            } else {
+                mk(mi)
+            };
+            out.push(Plan { kind: p.kind, title, measure: mi, vk: value_kind(spec, mi), series, cats: &data.categories, idx: pi });
         }
     } else if data.measure_count() > 1 && !matches!(kind, ChartKind::Waterfall | ChartKind::Histogram | ChartKind::BoxPlot | ChartKind::Scatter | ChartKind::Bubble) {
         for mi in 0..data.measure_count().min(t::MAX_PANELS) {
@@ -485,6 +493,12 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 if let Some(st) = status {
                     item["itemStyle"]["color"] = json!(hx(st.status.hex()));
                 }
+                if spec.segment_labels && stacked && !horizontal && !percent && totals[c] != 0.0 {
+                    // each segment beside its stack with its value and its share of the stack
+                    let x = scaled(raw, p.vk, env.opts);
+                    let body = if (x - x.round()).abs() < 1e-9 { value_text(x, p.vk, 0, false) } else { value_text(x, p.vk, env.opts.decimals, false) };
+                    item["label"] = label_style(env, &format!("{} \u{b7} {}%", body, crate::models::format_with_commas(raw.abs() / totals[c].abs() * 100.0, 1)), "right");
+                }
                 if label_all {
                     let pos = match (horizontal, raw >= 0.0) {
                         (false, true) => "top",
@@ -512,6 +526,9 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
         }
         if stacked {
             ser["stack"] = json!(format!("total{}", grid));
+            if spec.segment_labels {
+                ser["labelLayout"] = json!({"moveOverlap": "shiftY"});
+            }
         }
         if si == 0 {
             let (ml, ma) = mark_lines(env, p, horizontal);
@@ -523,6 +540,20 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
             }
         }
         out.push(ser);
+    }
+    // the net of each stack: a short dark tick across it and its signed value beside it; the stack edges carry no label
+    if stacked && spec.net_marker && !horizontal && !percent {
+        let data: Vec<Value> = (0..n_cat)
+            .map(|c| {
+                let raw: f64 = totals[c];
+                let mut item = json!({"value": num(scaled(raw, p.vk, env.opts)), "tip": lit_tip(&format!("Net: {}", diverging_text(scaled(raw, p.vk, env.opts), p.vk, env.opts.decimals)))});
+                item["label"] = label_style(env, &diverging_text(scaled(raw, p.vk, env.opts), p.vk, env.opts.decimals), "right");
+                item
+            })
+            .collect();
+        out.push(json!({"name": "Net", "type": "line", "xAxisIndex": grid, "yAxisIndex": grid, "data": data, "symbol": "rect", "symbolSize": [t::BAR_MAX_PX + 8.0, t::LINE_PX],
+                        "itemStyle": {"color": hx(env.ink.ink), "borderWidth": 0}, "lineStyle": {"opacity": 0}, "tooltip": {"show": false}, "silent": true, "z": 6}));
+        return out;
     }
     // the total on top of a stacked column, and only there
     if stacked {
@@ -870,7 +901,7 @@ fn waterfall_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
                 if empty {
                     return Value::Null;
                 }
-                json!({"value": sc(vals[i]), "tip": tips[i], "itemStyle": {"color": hx(colour_of(s.kind, s.value)), "borderRadius": 0, "borderColor": surface, "borderWidth": 1}})
+                json!({"value": sc(vals[i]), "tip": tips[i], "itemStyle": {"color": hx(colour_of(s.kind, s.value)), "borderRadius": 0, "borderColor": surface, "borderWidth": 0}})
             })
             .collect();
         let mut o = json!({"name": name, "type": "bar", "stack": "wf", "data": items, "barMaxWidth": t::BAR_MAX_PX, "barMinHeight": t::MIN_BAR_PX, "z": 2});

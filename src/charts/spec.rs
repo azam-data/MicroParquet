@@ -185,6 +185,9 @@ pub struct PanelSpec {
     pub kind: ChartKind,
     pub measures: Vec<usize>,
     pub title: String,
+    /// The panel's measure is the same in every series of the chart (a ratio of each category, such as the NPL %):
+    /// it is drawn once, as one series named after the measure in the first categorical colour.
+    pub single: bool,
 }
 
 /// The status colour of a reference line (always shown with its text label).
@@ -352,6 +355,12 @@ pub struct ChartSpec {
     pub limit_ticks: Vec<LimitTick>,
     /// A line chart whose value axis starts one tick below the lowest value (yield curves).
     pub pad_axis_below: bool,
+    /// Stacked columns with positive and negative segments: the net of each stack is a short dark tick across it with a
+    /// signed two-decimal label; the stack edges carry no labels (NII effects by key).
+    pub net_marker: bool,
+    /// A stacked column: each segment is labelled beside the stack with its value and its share of the stack
+    /// ("3,500 \u{b7} 70.0%"), the labels kept apart vertically (HQLA composition).
+    pub segment_labels: bool,
     /// Bars drawn in a status colour with an icon and a text (data quality: "Below Amber").
     pub bar_status: Vec<BarStatus>,
     /// What the ticks mean, written once under the plot ("red ticks: minimum cumulative gap").
@@ -396,6 +405,8 @@ impl Default for ChartSpec {
             limit_ticks: Vec::new(),
             bar_status: Vec::new(),
             pad_axis_below: false,
+            net_marker: false,
+            segment_labels: false,
             limit_note: String::new(),
             highlight: None,
             colour_map: ColourMap::default(),

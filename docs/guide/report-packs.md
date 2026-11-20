@@ -88,6 +88,8 @@ Headless: a pack that asks for the book writes `<pack>-charts.html` beside the `
 
 If any chart cannot be drawn (the saved chart is missing, a column is missing, the template does not fit the item's table) the run stops with the item's name and the reason, and **no file is written**: not the workbook, not the book.
 
+The data-quality template takes its Green and Amber from the rule set stored with the scorecard item, and the IRRBB template its outlier limit from the result's own outlier row (the shock file's outlier_pct): none is assumed. A pack file whose scorecard item has a chart but no thresholds is refused when it is opened, naming the item and the field; the data-quality template on an item that is not a scorecard stops the run.
+
 Limits: a chart sheet's name is the item's sheet plus " chart", so the sheet name of a charted item is at most 20 characters; the PDF has no charts.
 
 ## 9. Common messages and fixes

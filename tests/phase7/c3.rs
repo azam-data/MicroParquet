@@ -159,7 +159,7 @@ pub(crate) fn forms() -> Vec<(&'static str, ChartData)> {
         MeasureSpec { column: Some("Balance".into()), agg: ChartAgg::Sum, label: "Net gap".into(), ..Default::default() },
         MeasureSpec { column: Some("Rate".into()), agg: ChartAgg::Average, label: "Average rate".into(), ..Default::default() },
     ];
-    s.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new() }];
+    s.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new(), single: false }];
     v.push(("linked-panels", data(&s)));
     let mut s = base(ChartKind::Bar);
     s.series = None;

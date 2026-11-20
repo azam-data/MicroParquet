@@ -533,7 +533,7 @@ fn c1_linked_panels_share_one_x_axis_and_each_has_its_own_scale() {
         MeasureSpec { column: Some("Balance".into()), agg: ChartAgg::Sum, label: "Net gap".into(), ..Default::default() },
         MeasureSpec { column: Some("Rate".into()), agg: ChartAgg::Average, label: "Average rate".into(), ..Default::default() },
     ];
-    s.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new() }];
+    s.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new(), single: false }];
     let d = data(&s);
     for l in all_sizes(&d, "linked") {
         assert_eq!(l.panels.len(), 2);

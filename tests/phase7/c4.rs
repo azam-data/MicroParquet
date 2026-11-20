@@ -387,7 +387,7 @@ fn c4_a_multi_measure_chart_and_an_empty_chart() {
     need_python!();
     let mut s = ChartSpec { category: "Month".into(), value: Some("Balance".into()), kind: ChartKind::Bar, order: crate::p7_c3::months(), stack: Stack::Grouped, ..Default::default() };
     s.measures = vec![MeasureSpec { column: Some("Balance".into()), agg: ChartAgg::Sum, label: "Net gap".into(), ..Default::default() }, MeasureSpec { column: Some("Rate".into()), agg: ChartAgg::Average, label: "Average rate".into(), ..Default::default() }];
-    s.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new() }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new() }];
+    s.panels = vec![PanelSpec { kind: ChartKind::Bar, measures: vec![0], title: String::new(), single: false }, PanelSpec { kind: ChartKind::Line, measures: vec![1], title: String::new(), single: false }];
     let d = compute(crate::p7_c3::frame().lazy(), &s).unwrap();
     let (j, _) = write(&d, "two.xlsx");
     assert_eq!(plots(&j).len(), 2);
