@@ -64,6 +64,11 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::TogglePanel => ph::SIDEBAR_SIMPLE,
         CommandId::ToggleSql => ph::TERMINAL_WINDOW,
         CommandId::ToggleChart => ph::CHART_BAR,
+        CommandId::ChartNew | CommandId::ChartThis => ph::CHART_BAR,
+        CommandId::ChartOpenSaved => ph::FOLDER_OPEN,
+        CommandId::ChartBook => ph::FILES,
+        CommandId::ExportChartHtml => ph::FILE_HTML,
+        CommandId::ExportChartXlsx => ph::FILE_XLS,
         CommandId::ToggleSummary => ph::SIGMA,
         CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
@@ -110,6 +115,7 @@ impl MicroParquetApp {
         let tab = self.tabs.get(self.active_tab);
         cmds::CommandState {
             tabs: self.tabs.len(),
+            result_tab: tab.is_some_and(|t| is_result_source(&t.source) && !self.chart_tabs.contains_key(&t.id)),
             can_undo: tab.is_some_and(|t| t.history.can_undo()),
             can_redo: tab.is_some_and(|t| t.history.can_redo()),
         }
@@ -261,6 +267,12 @@ impl MicroParquetApp {
             }
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::SortLists => self.open_sort_lists(),
+            CommandId::ChartNew => self.open_chart_gallery(),
+            CommandId::ChartThis => self.chart_this_result(),
+            CommandId::ChartOpenSaved => self.open_chart_open(),
+            CommandId::ChartBook => self.open_chart_book(),
+            CommandId::ExportChartHtml => self.chart_export_html(),
+            CommandId::ExportChartXlsx => self.chart_export_xlsx(),
             CommandId::SavedRuns => self.open_saved_runs(),
             CommandId::Packs => self.open_packs(),
             CommandId::Mudaraba => self.open_mudaraba(),
@@ -462,4 +474,9 @@ impl MicroParquetApp {
             self.command_open = false;
         }
     }
+}
+
+/// True for a tab a tool made (gap ladder, IRRBB, MoM variance, …) rather than a file, a stack or a join.
+pub fn is_result_source(s: &TabSource) -> bool {
+    !matches!(s, TabSource::SingleFile { .. } | TabSource::VerticalStack { .. } | TabSource::JoinedTabs { .. })
 }

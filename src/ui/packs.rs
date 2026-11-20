@@ -133,14 +133,14 @@ impl MicroParquetApp {
         };
         let taken: Vec<String> = self.packs.pack.items.iter().map(|i| i.sheet.clone()).collect();
         let sheet = sheet_for(&title, &taken);
-        self.packs.pack.items.push(PackItem { title: title.clone(), sheet, source, col_formats });
+        self.packs.pack.items.push(PackItem { title: title.clone(), sheet, source, col_formats, chart: None });
         self.pack_message(false, format!("Added the item '{}'.", title));
     }
 
     fn pack_add_slot_table(&mut self, slot: &str) {
         let taken: Vec<String> = self.packs.pack.items.iter().map(|i| i.sheet.clone()).collect();
         let sheet = sheet_for(slot, &taken);
-        self.packs.pack.items.push(PackItem { title: format!("{} table", slot), sheet, source: PackItemKind::Steps { slot: slot.to_string() }, col_formats: Default::default() });
+        self.packs.pack.items.push(PackItem { title: format!("{} table", slot), sheet, source: PackItemKind::Steps { slot: slot.to_string() }, col_formats: Default::default(), chart: None });
     }
 
     fn pack_remove_slot(&mut self, i: usize) {
@@ -215,12 +215,13 @@ impl MicroParquetApp {
             PathBuf::from(self.packs.out_path.trim())
         };
         let pdf = if pack.output.pdf { Some(out.with_extension("pdf")) } else { None };
+        let html = if pack.output.html_charts { Some(micro_parquet::packs::html_path_for(&out, &pack.name)) } else { None };
         let spec = PackRunSpec { files, cutoff };
         let paths = self.paths.clone();
         let label = format!("Running pack '{}'", pack.name);
         self.jobs.submit(JobKey::unique(JobKind::Export), label, true, move |ctx| {
             let r = run_pack(&pack, &spec, &paths, &run_time_now(), ctx)?;
-            let message = write_pack(&r, &out, pdf.as_deref(), ctx)?;
+            let message = micro_parquet::packs::write_pack_with_charts(&r, &out, pdf.as_deref(), html.as_deref(), ctx)?;
             Ok(JobOutput::Exported(micro_parquet::tab_jobs::ExportOutcome { message, path_used: None, written: Some(out) }))
         });
         self.pack_message(false, "The pack is running; the status bar shows its progress. The workbook is written when every item has worked.");
@@ -326,6 +327,7 @@ impl MicroParquetApp {
                         ui.label(egui::RichText::new("No item yet. Open the result tab of a tool (or a pivot) and add it.").color(tk.muted));
                     }
                     let n = self.packs.pack.items.len();
+                    let saved_charts: Vec<String> = micro_parquet::charts::library::list_charts(&self.charts_dir()).into_iter().map(|(n, _)| n).collect();
                     for i in 0..n {
                         let row = ui.horizontal(|ui| {
                             let b = ui.add_enabled(i > 0, egui::Button::new(theme::ph::ARROW_UP));
@@ -358,6 +360,31 @@ impl MicroParquetApp {
                             });
                         });
                         rects.rows.push((format!("Item {}", i + 1), row.response.rect));
+                        // the item's chart: none, a saved chart, or a banking template (a native Excel chart on its own sheet)
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Chart").color(tk.muted));
+                            let current = self.packs.pack.items[i].chart.clone();
+                            let shown = current.as_ref().map(|c| c.label()).unwrap_or_else(|| "none".to_string());
+                            let r = egui::ComboBox::from_id_salt(("pack_item_chart", i)).selected_text(shown).width(name_w * 2.0).show_ui(ui, |ui| {
+                                let it = &mut self.packs.pack.items[i];
+                                if ui.selectable_label(it.chart.is_none(), "No chart").clicked() {
+                                    it.chart = None;
+                                }
+                                for name in &saved_charts {
+                                    let pick = micro_parquet::charts::pack::PackChart::Saved { name: name.clone() };
+                                    if ui.selectable_label(it.chart.as_ref() == Some(&pick), format!("Saved chart: {}", name)).clicked() {
+                                        it.chart = Some(pick);
+                                    }
+                                }
+                                for t in micro_parquet::charts::templates::Template::all().iter().filter(|t| **t != micro_parquet::charts::templates::Template::YieldCurves) {
+                                    let pick = micro_parquet::charts::pack::PackChart::Template { template: t.id().to_string() };
+                                    if ui.selectable_label(it.chart.as_ref() == Some(&pick), format!("Template: {}", t.name())).clicked() {
+                                        it.chart = Some(pick);
+                                    }
+                                }
+                            });
+                            rects.fields.push((format!("Chart {}", i + 1), r.response.rect));
+                        });
                     }
                     let b = ui.button("Add item from result tab");
                     rects.buttons.push(("Add item from result tab".to_string(), b.rect));
@@ -370,6 +397,8 @@ impl MicroParquetApp {
                     ui.horizontal_wrapped(|ui| {
                         let r = ui.checkbox(&mut self.packs.pack.output.pdf, "Also write a PDF");
                         rects.fields.push(("PDF".to_string(), r.rect));
+                        let r = ui.checkbox(&mut self.packs.pack.output.html_charts, "Also write an HTML chart book");
+                        rects.fields.push(("HTML chart book".to_string(), r.rect));
                         ui.label("Money in");
                         let cur = self.packs.pack.output.scale;
                         let r = egui::ComboBox::from_id_salt("pack_scale").selected_text(cur.label()).show_ui(ui, |ui| {

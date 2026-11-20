@@ -420,9 +420,44 @@ pub fn compute_chart_job(req: ChartRequest, ctx: &JobCtx) -> Result<ChartResult>
     ctx.check()?;
     let ChartRequest { tab_id, token, source, steps, spec, temp_dir } = req;
     let data = compile_tab_lazy(&source, &steps, &temp_dir)
-        .and_then(|lf| crate::chart::compute_chart(crate::pivot_table::without_total_rows(lf, &steps), &spec))
+        .and_then(|lf| crate::charts::calc::compute(crate::pivot_table::without_total_rows(lf, &steps), &spec))
         .map_err(|e| format!("{:#}", e));
     Ok(ChartResult { tab_id, token, data })
+}
+
+/// A chart book to calculate and write on the worker (Phase 7 C3): several saved charts of one tab on one HTML page.
+pub struct ChartBookRequest {
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub temp_dir: PathBuf,
+    /// Name, chart and how its numbers are written, for saved charts that are calculated on the tab.
+    pub charts: Vec<(String, crate::chart::ChartSpec, crate::charts::layout::LayoutOpts)>,
+    /// Charts already calculated (open chart tabs, the studio chart): written as they are, in this order and
+    /// before the saved charts. Nothing is calculated again and no number is scaled a second time.
+    pub snapshots: Vec<(String, crate::chart::ChartData, crate::charts::layout::LayoutOpts)>,
+    pub title: String,
+    pub date: String,
+    pub path: PathBuf,
+}
+
+/// Calculates each chart over the whole tab and writes the page. One chart that cannot be drawn stops the
+/// book: no file is written.
+pub fn chart_book_job(req: ChartBookRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    use anyhow::Context;
+    ctx.set_progress("Calculating the charts\u{2026}", None);
+    let ChartBookRequest { source, steps, temp_dir, charts, snapshots, title, date, path } = req;
+    let mut datas: Vec<(crate::chart::ChartData, crate::charts::layout::LayoutOpts)> = snapshots.into_iter().map(|(_, d, o)| (d, o)).collect();
+    if !charts.is_empty() {
+        let lf = compile_tab_lazy(&source, &steps, &temp_dir).map(|lf| crate::pivot_table::without_total_rows(lf, &steps))?;
+        for (name, spec, opts) in &charts {
+            ctx.check()?;
+            let d = crate::charts::calc::compute(lf.clone(), spec).with_context(|| format!("Chart '{}'", name))?;
+            datas.push((d, opts.clone()));
+        }
+    }
+    let items: Vec<crate::charts::echarts::BookItem> = datas.iter().map(|(d, o)| crate::charts::echarts::BookItem { data: d, opts: o.clone() }).collect();
+    crate::charts::echarts::write_chart_book(&path, &title, &date, &items)?;
+    Ok(JobOutput::Exported(ExportOutcome { message: format!("Chart book with {} chart(s) written to {}", items.len(), path.display()), path_used: None, written: Some(path) }))
 }
 
 // --------------------------------------------------------------------------- data-quality scorecard
@@ -639,6 +674,8 @@ pub struct ExportTab {
     pub summary: HashMap<String, SummarySpec>,
     /// The tab's pinned control column (weight of rate-like columns by default).
     pub control_col: Option<String>,
+    /// A chart tab: its chart (with how its numbers are written); the PDF export draws it instead of the table.
+    pub chart: Option<(crate::chart::ChartData, crate::charts::layout::LayoutOpts)>,
 }
 
 /// Excel workbook of the ticked tabs. Money columns are written in the chosen scale with the
@@ -739,7 +776,7 @@ pub fn export_tabs_pdf_with(
             let df = lf.limit((PDF_MAX_ROWS_PER_TAB + 1) as u32).collect()?;
             Ok((df, summary))
         }) {
-            Ok((df, summary)) => collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary }),
+            Ok((df, summary)) => collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary, chart: tab.chart.clone() }),
             Err(e) => failed.push(format!("'{}' ({:#})", tab.title, e)),
         }
     }

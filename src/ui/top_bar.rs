@@ -23,7 +23,7 @@ pub const BAR_ITEMS: [(CommandId, usize); 11] = [
 ];
 
 /// The menus, left to right. They never fold: only the buttons after them do.
-pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Banking", "Export", "Help"];
+pub const MENUS: [&str; 7] = ["File", "Edit", "View", "Banking", "Charts", "Export", "Help"];
 
 /// How the bar is laid out: how many of the visible buttons (counted from the right) are in the
 /// overflow menu "»", and how wide the search box is. Buttons always keep their labels.
@@ -130,6 +130,7 @@ fn item_text(id: CommandId) -> String {
 fn menu_text(name: &str) -> String {
     match name {
         "Banking" => menu_label(theme::ph::BANK, "Banking"),
+        "Charts" => menu_label(theme::ph::CHART_BAR, "Charts"),
         "Export" => menu_label(theme::ph::EXPORT, "Export"),
         other => other.to_string(),
     }
@@ -219,18 +220,23 @@ impl MicroParquetApp {
         theme::paint_app_logo(ui.painter(), rect);
         rects.push(("Mark".to_string(), rect));
 
-        // the menus: File, Edit, View, Banking, Export, Help (they never fold)
+        // the menus: File, Edit, View, Banking, Charts, Export, Help (they never fold)
         let r = self.file_menu(ui, ctx);
         rects.push(("File".to_string(), r.rect));
         let r = self.edit_menu(ui, ctx);
         rects.push(("Edit".to_string(), r.rect));
         let r = self.view_menu(ui, ctx);
         rects.push(("View".to_string(), r.rect));
-        for group_id in [CommandGroup::Banking, CommandGroup::Export] {
-            let name = if group_id == CommandGroup::Banking { "Banking" } else { "Export" };
+        for group_id in [CommandGroup::Banking, CommandGroup::Charts, CommandGroup::Export] {
+            let name = match group_id {
+                CommandGroup::Banking => "Banking",
+                CommandGroup::Charts => "Charts",
+                _ => "Export",
+            };
             let text = menu_text(name);
+            // (the Charts menu is always open: its items say why one cannot run)
             let r = ui
-                .add_enabled_ui(has_tab, |ui| {
+                .add_enabled_ui(has_tab || group_id == CommandGroup::Charts, |ui| {
                     ui.menu_button(text, |ui| {
                         // compact rows: the Banking menu has about twenty entries and four headings, and must
                         // fit a 686 pt window under the top bar

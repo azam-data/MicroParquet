@@ -145,7 +145,7 @@ fn guide_report_packs() {
     let pack = ReportPack {
         name: "mini".into(),
         inputs: vec![PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "PROD".into()], ..Default::default() }],
-        items: vec![PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default() }],
+        items: vec![PackItem { title: "By product".into(), sheet: "By product".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot) }, col_formats: Default::default(), chart: None }],
         output: PackOutput::default(),
     };
     let spec = PackRunSpec { files: std::collections::BTreeMap::from([("Deposits".to_string(), file)]), cutoff: "2026-10-31".into() };

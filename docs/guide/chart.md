@@ -1,5 +1,7 @@
 # Chart
 
+(How to choose a chart, and one note for each banking template: [Charts: how to choose one](charts.md).)
+
 ## 1. What it does
 
 Draws bars or a line of one number by one category, calculated over the whole tab after its steps (never just the rows on screen). Choose the category (X), an optional series (grouped bars, at most 8), the value and how to add it up (Sum, Count, Average, W.Avg, Min, Max). The x-axis shows the category names, the title says what was drawn and in which unit, and a tooltip gives the category, series, value and the number of rows behind it.
@@ -36,6 +38,14 @@ Draws bars or a line of one number by one category, calculated over the whole ta
 7. "Scale" follows the value column's display format (Crore, Lakh, Million, Thousand or plain) unless you choose another.
 8. "Open chart data as tab" puts the table behind the chart in a new tab, which can be exported to Excel or PDF.
 9. The choices are kept for the tab (by its file name) for the next session.
+10. "Export to HTML…" (also Export ▸ "Chart to HTML…") writes the chart as one web page. It has the title, subtitle and footnote, a Table switch, a light/dark switch and a toolbox with "Save as PNG", "Save as SVG" and "Data view". The page works offline and contains no web address: send it by e-mail or put it on a share.
+11. "Preview in browser" writes the same page to a temporary file and opens it with your default browser. Sankey and Treemap are drawn only this way (the chart in the app says so).
+12. "Advanced options (HTML only)" is a box for JSON that is merged over the page's ECharts option, for what the controls cannot do. It is checked as you type (a mistake is shown with its line and column); "Reset" clears it. The chart in the app and the Excel chart never use it.
+13. "Export to Excel…" (also Export ▸ "Chart to Excel…") writes a workbook: the chart's numbers on a sheet and a native Excel chart beside them (editable in Excel and Power BI), in the same palette and Segoe UI. A waterfall is a stacked column with an invisible base series; a heatmap is the table under a three-colour scale; linked panels and small multiples are one chart each, one under the other; a bubble chart is written as a scatter, a stepped line as an ordinary line, and Sankey and treemap only as data, each with a note on the sheet.
+14. Charts ▸ "Chart this result" (or Charts ▸ New chart ▸ "Banking templates") charts a tool's result the way a banker would draw it: the gap ladder, repricing gap, NII bridge (MoM variance), CL migration, IRRBB scenarios, LCR / NSFR, ECL by stage, data-quality scorecard, yield curves, rate profile, balance history, deposit / loan mix and classified trend. The chart's own table opens as a tab, the title is a finding worked out from the numbers by fixed rules (for example "Parallel up is the worst case at −10.5% of Tier 1"), and every setting stays editable; a takeaway you type replaces the finding.
+15. Charts ▸ "Chart book (HTML)…" puts several saved charts of the active tab on one page: a title, the date and a two-column grid.
+16. "Copy as Python" puts a script on the clipboard: the chart's numbers as a pandas DataFrame and matplotlib code in the same style (fonts, palette, marks, title), so you can carry on in Python (`pip install pandas matplotlib`). A Sankey and a treemap use plotly instead (`pip install plotly pandas`) and the script says so. The numbers are the chart's own table in the chart's scale; a flag at the top (`DARK`) switches the theme.
+17. A report pack can carry a chart on any of its items (see "Report packs"): the workbook gets the native chart on a sheet beside the item's, and the pack can write an HTML chart book.
 
 ## 6. What you get
 
@@ -89,4 +99,5 @@ Test: `guide_chart`
 - A category called "Other" in the data is kept apart from the rest ("Other categories").
 - Count counts rows; the value column is not used.
 - On a pivot table the subtotal and Grand total rows are not charted.
+- The HTML page carries Apache ECharts 6.1.0 inside it (about 1 MB); a chart of 1,000 points is under 2 MB. A donut with more than 5 parts, a waterfall that does not add up and invalid advanced JSON stop the export with a message, and no file is written.
 - The first chart of a tab picks the first text column and the first number column; change them as needed.

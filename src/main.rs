@@ -26,6 +26,9 @@ pub(crate) struct CliArgs {
     export_xlsx: Option<PathBuf>,
     #[arg(long)]
     export_pdf: Option<PathBuf>,
+    /// With --pack: write the pack's charts as one HTML chart book to this file.
+    #[arg(long)]
+    export_html: Option<PathBuf>,
     /// Export even when the control column has values that could not be converted.
     #[arg(long)]
     allow_parse_failures: bool,
@@ -123,6 +126,14 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// New chart: the chart gallery (Phase 7 C2).
+    ChartGallery,
+    /// Charts ▸ Save chart (Phase 7 C2).
+    ChartSave,
+    /// Charts ▸ Open saved chart (Phase 7 C2).
+    ChartOpen,
+    /// Charts ▸ Chart book (HTML) (Phase 7 C3).
+    ChartBook,
     /// The Mudaraba profit distribution (Phase 6 P5).
     Mudaraba,
     /// The data-quality scorecard (Phase 6 P4).
@@ -194,6 +205,8 @@ pub struct MicroParquetApp {
     chart_popped: bool,
     /// How many times the chart was popped out (the render tests read it: a backend without windows docks it back at once).
     chart_pop_requests: u32,
+    /// The tabs that are charts (Phase 7: "Open as tab"), by tab id: they fill the main area with the chart.
+    chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -265,6 +278,12 @@ pub struct MicroParquetApp {
     pub filter: FilterState,
     pub sort: SortState,
     pub sort_lists: SortListsState,
+    pub chart_gallery: crate::ui::chart_studio::ChartGalleryState,
+    pub chart_save: crate::ui::chart_studio::ChartSaveState,
+    pub chart_open: crate::ui::chart_studio::ChartOpenState,
+    pub chart_book: crate::ui::chart_studio::ChartBookState,
+    /// A template's chart for a tab that is still being opened (by tab id): taken by the studio when the tab is ready.
+    pub chart_pending: HashMap<u64, micro_parquet::charts::spec::ChartSpec>,
     pub runs: RunsState,
     pub packs: PacksState,
     pub mom: MomState,
@@ -327,6 +346,8 @@ impl MicroParquetApp {
         let recent_commands = std::fs::read_to_string(paths.root_dir.join("recent_commands.txt"))
             .map(|t| micro_parquet::commands::recent_from_text(&t))
             .unwrap_or_default();
+        // what an earlier run left of the chart studio's temporary files
+        micro_parquet::charts::echarts::clean_chart_temp(&paths.temp_dir);
         let mut app = Self {
             jobs: JobQueue::new(move || egui_ctx.request_repaint()),
             tab_id_counter: 0,
@@ -342,6 +363,7 @@ impl MicroParquetApp {
             show_steps_sidebar: true,
             chart_popped: false,
             chart_pop_requests: 0,
+            chart_tabs: HashMap::new(),
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -390,6 +412,11 @@ impl MicroParquetApp {
             filter: FilterState::default(),
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
+            chart_gallery: Default::default(),
+            chart_save: Default::default(),
+            chart_open: Default::default(),
+            chart_book: Default::default(),
+            chart_pending: HashMap::new(),
             runs: RunsState::default(),
             packs: PacksState::default(),
             mom: MomState::default(),
@@ -451,6 +478,11 @@ impl eframe::App for MicroParquetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_ui(ctx);
     }
+
+    /// The chart studio's temporary files (previews, chart-data tables) go when the app closes.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        micro_parquet::charts::echarts::clean_chart_temp(&self.paths.temp_dir);
+    }
 }
 
 impl MicroParquetApp {
@@ -491,6 +523,10 @@ impl MicroParquetApp {
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     self.render_empty_state(ui);
+                    return;
+                }
+                if self.active_is_chart_tab() {
+                    self.render_chart_main(ui);
                     return;
                 }
                 self.render_pivot_bar(ui);

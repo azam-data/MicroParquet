@@ -75,9 +75,9 @@ fn monthly_pack() -> ReportPack {
         name: "monthly".into(),
         inputs: vec![slot("Loans", &["ACNO", "BAL", "MAT", "GRADE"]), slot("Deposits", &["ACNO", "BAL", "MAT", "PROD"])],
         items: vec![
-            PackItem { title: "Liquidity gap ladder".into(), sheet: "Gap".into(), source: PackItemKind::Run { run: gap }, col_formats: Default::default() },
-            PackItem { title: "CL-1 summary".into(), sheet: "CL1".into(), source: PackItemKind::Run { run: cl1 }, col_formats: Default::default() },
-            PackItem { title: "Deposits by product".into(), sheet: "Deposits".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot_step()) }, col_formats: Default::default() },
+            PackItem { title: "Liquidity gap ladder".into(), sheet: "Gap".into(), source: PackItemKind::Run { run: gap }, col_formats: Default::default(), chart: None },
+            PackItem { title: "CL-1 summary".into(), sheet: "CL1".into(), source: PackItemKind::Run { run: cl1 }, col_formats: Default::default(), chart: None },
+            PackItem { title: "Deposits by product".into(), sheet: "Deposits".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot_step()) }, col_formats: Default::default(), chart: None },
         ],
         output: PackOutput::default(),
     }
@@ -246,7 +246,7 @@ fn p2_a_pack_is_a_json_file_with_slots_schema_and_steps_and_an_old_file_loads() 
     let rig = Rig::new("p2_e");
     let mut pack = monthly_pack();
     pack.inputs[0].steps = vec![TransformStep::FilterRows { column: "GRADE".into(), operator: FilterOp::NotEq, value: "B/L".into(), keep_matching: true }];
-    pack.output = PackOutput { pdf: true, scale: NumberDisplayFormat::BdtLakh, decimals: 1 };
+    pack.output = PackOutput { pdf: true, scale: NumberDisplayFormat::BdtLakh, decimals: 1, ..Default::default() };
     let dir = rig.root.join("packs");
     let path = save_pack(&dir, &pack).expect("saves");
     assert!(path.ends_with("monthly.json"));
@@ -280,7 +280,7 @@ fn p2_a_slot_with_a_saved_schema_reads_the_file_with_it_and_a_pdf_can_be_asked_f
     let pack = ReportPack {
         name: "withschema".into(),
         inputs: vec![PackInput { slot: "Loans".into(), schema_template: Some("loans".into()), ..Default::default() }],
-        items: vec![PackItem { title: "Loans".into(), sheet: "Loans".into(), source: PackItemKind::Steps { slot: "Loans".into() }, col_formats: Default::default() }],
+        items: vec![PackItem { title: "Loans".into(), sheet: "Loans".into(), source: PackItemKind::Steps { slot: "Loans".into() }, col_formats: Default::default(), chart: None }],
         output: PackOutput { pdf: true, ..Default::default() },
     };
     let spec = PackRunSpec { files: BTreeMap::from([("Loans".to_string(), rig.loans.clone())]), cutoff: "2026-10-31".into() };
@@ -321,7 +321,7 @@ fn e2_a_parse_failure_stops_the_run_only_in_a_column_an_item_or_step_uses_else_i
     let pivot_only = ReportPack {
         name: "e2".into(),
         inputs: vec![slot.clone()],
-        items: vec![PackItem { title: "By product".into(), sheet: "Deposits".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot_step()) }, col_formats: Default::default() }],
+        items: vec![PackItem { title: "By product".into(), sheet: "Deposits".into(), source: PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(pivot_step()) }, col_formats: Default::default(), chart: None }],
         output: PackOutput::default(),
     };
     let r = run_pack(&pivot_only, &spec, &rig.paths, "t", &JobCtx::inert()).unwrap_or_else(|e| panic!("{e:#}"));

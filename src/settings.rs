@@ -29,8 +29,13 @@ pub struct Settings {
     pub pdf_title: String,
     pub pdf_portrait: bool,
     pub pdf_legal: bool,
+    /// "Add the data table on the next page" for chart tabs in the PDF export.
+    #[serde(default)]
+    pub pdf_chart_tables: bool,
     /// Chart choices by tab key (the file name of the tab's first file, or its title).
     pub chart: HashMap<String, serde_json::Value>,
+    /// The chart tabs of the session (Phase 7): title, the key of the tab they chart, and the chart.
+    pub chart_tabs: Vec<serde_json::Value>,
 }
 
 pub fn settings_path(root: &Path) -> PathBuf {

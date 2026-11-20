@@ -1,0 +1,241 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "series": [
+    {
+      "bottom": 30,
+      "data": [
+        {
+          "depth": 0,
+          "itemStyle": {
+            "color": "#2a78d6"
+          },
+          "label": {
+            "formatter": "STD",
+            "position": "left"
+          },
+          "name": "From STD",
+          "value": 130.0
+        },
+        {
+          "depth": 0,
+          "itemStyle": {
+            "color": "#eb6834"
+          },
+          "label": {
+            "formatter": "SS",
+            "position": "left"
+          },
+          "name": "From SS",
+          "value": 50.0
+        },
+        {
+          "depth": 0,
+          "itemStyle": {
+            "color": "#1baf7a"
+          },
+          "label": {
+            "formatter": "New",
+            "position": "left"
+          },
+          "name": "From New",
+          "value": 20.0
+        },
+        {
+          "depth": 1,
+          "itemStyle": {
+            "color": "#eda100"
+          },
+          "label": {
+            "formatter": "Closed/Repaid",
+            "position": "right"
+          },
+          "name": "To Closed/Repaid",
+          "value": 30.0
+        },
+        {
+          "depth": 1,
+          "itemStyle": {
+            "color": "#e87ba4"
+          },
+          "label": {
+            "formatter": "DF",
+            "position": "right"
+          },
+          "name": "To DF",
+          "value": 50.0
+        },
+        {
+          "depth": 1,
+          "itemStyle": {
+            "color": "#008300"
+          },
+          "label": {
+            "formatter": "SMA",
+            "position": "right"
+          },
+          "name": "To SMA",
+          "value": 100.0
+        },
+        {
+          "depth": 1,
+          "itemStyle": {
+            "color": "#2a78d6"
+          },
+          "label": {
+            "formatter": "STD",
+            "position": "right"
+          },
+          "name": "To STD",
+          "value": 20.0
+        }
+      ],
+      "draggable": false,
+      "emphasis": {
+        "focus": "adjacency"
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1
+      },
+      "label": {
+        "color": "#0b0b0b",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0
+      },
+      "layoutIterations": 0,
+      "left": 90,
+      "lineStyle": {
+        "color": "source",
+        "curveness": 0.5,
+        "opacity": 0.35
+      },
+      "links": [
+        {
+          "source": "From STD",
+          "target": "To Closed/Repaid",
+          "tip": "STD → Closed/Repaid\nSum of Balance: 30.00\n1 row",
+          "value": 30.0
+        },
+        {
+          "source": "From STD",
+          "target": "To SMA",
+          "tip": "STD → SMA\nSum of Balance: 100.00\n1 row",
+          "value": 100.0
+        },
+        {
+          "source": "From SS",
+          "target": "To DF",
+          "tip": "SS → DF\nSum of Balance: 50.00\n1 row",
+          "value": 50.0
+        },
+        {
+          "source": "From New",
+          "target": "To STD",
+          "tip": "New → STD\nSum of Balance: 20.00\n1 row",
+          "value": 20.0
+        }
+      ],
+      "nodeAlign": "justify",
+      "nodeGap": 12,
+      "nodeWidth": 14,
+      "right": 130,
+      "top": 68.0,
+      "type": "sankey"
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Sum of Balance · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Sum of Balance by Current and Previous",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  }
+}

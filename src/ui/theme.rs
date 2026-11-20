@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Response, RichText, Rounding, Stroke};
 
-const fn hex(rgb: u32) -> Color32 {
+pub const fn hex(rgb: u32) -> Color32 {
     Color32::from_rgb(((rgb >> 16) & 0xFF) as u8, ((rgb >> 8) & 0xFF) as u8, (rgb & 0xFF) as u8)
 }
 
@@ -102,6 +102,87 @@ pub fn tokens(dark: bool) -> &'static Tokens {
         &LIGHT
     }
 }
+
+// ---- Chart tokens (Phase 7): the design system of the charts. The values live in
+// `micro_parquet::charts::tokens` (the HTML and Excel renderers read the same ones); these are the
+// UI's `Color32` and `f32` names for them.
+use micro_parquet::charts::tokens as ct;
+
+const fn hex_all<const N: usize>(a: [u32; N]) -> [Color32; N] {
+    let mut out = [Color32::TRANSPARENT; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = hex(a[i]);
+        i += 1;
+    }
+    out
+}
+
+/// The surface, inks, gridline, baseline and de-emphasised colour of a chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChartColours {
+    pub surface: Color32,
+    pub ink: Color32,
+    pub ink2: Color32,
+    pub muted: Color32,
+    pub grid: Color32,
+    pub baseline: Color32,
+    pub deemph: Color32,
+}
+
+const fn chart_colours(i: ct::ChartInk) -> ChartColours {
+    ChartColours { surface: hex(i.surface), ink: hex(i.ink), ink2: hex(i.ink2), muted: hex(i.muted), grid: hex(i.grid), baseline: hex(i.baseline), deemph: hex(i.deemph) }
+}
+
+pub const CHART_LIGHT: ChartColours = chart_colours(ct::INK_LIGHT);
+pub const CHART_DARK: ChartColours = chart_colours(ct::INK_DARK);
+pub const CHART_SERIES_LIGHT: [Color32; ct::SLOTS] = hex_all(ct::SERIES_LIGHT);
+pub const CHART_SERIES_DARK: [Color32; ct::SLOTS] = hex_all(ct::SERIES_DARK);
+pub const CHART_SEQUENTIAL: [Color32; 13] = hex_all(ct::SEQUENTIAL);
+pub const CHART_DIVERGING_POSITIVE: Color32 = hex(ct::DIVERGING_POSITIVE);
+pub const CHART_DIVERGING_NEGATIVE: Color32 = hex(ct::DIVERGING_NEGATIVE);
+pub const CHART_DIVERGING_ZERO: Color32 = hex(ct::DIVERGING_ZERO);
+pub const CHART_STATUS_GOOD: Color32 = hex(ct::STATUS_GOOD);
+pub const CHART_STATUS_WARNING: Color32 = hex(ct::STATUS_WARNING);
+pub const CHART_STATUS_SERIOUS: Color32 = hex(ct::STATUS_SERIOUS);
+pub const CHART_STATUS_CRITICAL: Color32 = hex(ct::STATUS_CRITICAL);
+pub const CHART_WATERFALL_START: Color32 = hex(ct::WATERFALL_START);
+pub const CHART_WATERFALL_END: Color32 = hex(ct::WATERFALL_END);
+
+pub fn chart_colours_for(dark: bool) -> &'static ChartColours {
+    if dark {
+        &CHART_DARK
+    } else {
+        &CHART_LIGHT
+    }
+}
+
+pub fn chart_series_colour(slot: usize, dark: bool) -> Color32 {
+    let t = if dark { &CHART_SERIES_DARK } else { &CHART_SERIES_LIGHT };
+    t.get(slot).copied().unwrap_or(chart_colours_for(dark).deemph)
+}
+
+pub const CHART_TITLE_PT: f32 = ct::TITLE_PT;
+pub const CHART_SUBTITLE_PT: f32 = ct::SUBTITLE_PT;
+pub const CHART_TICK_PT: f32 = ct::TICK_PT;
+pub const CHART_LABEL_PT: f32 = ct::LABEL_PT;
+pub const CHART_DATA_LABEL_PT: f32 = ct::DATA_LABEL_PT;
+pub const CHART_FOOTNOTE_PT: f32 = ct::FOOTNOTE_PT;
+pub const CHART_BAR_MAX_PX: f32 = ct::BAR_MAX_PX;
+pub const CHART_BAR_RADIUS_PX: f32 = ct::BAR_RADIUS_PX;
+pub const CHART_SEGMENT_GAP_PX: f32 = ct::SEGMENT_GAP_PX;
+pub const CHART_LINE_PX: f32 = ct::LINE_PX;
+pub const CHART_MARKER_PX: f32 = ct::MARKER_PX;
+pub const CHART_MARKER_RING_PX: f32 = ct::MARKER_RING_PX;
+pub const CHART_AREA_OPACITY: f32 = ct::AREA_OPACITY;
+pub const CHART_GRID_PX: f32 = ct::GRID_PX;
+pub const CHART_REFERENCE_LINE_PX: f32 = ct::REFERENCE_LINE_PX;
+pub const CHART_HEAT_RADIUS_PX: f32 = ct::HEAT_RADIUS_PX;
+pub const CHART_STACKED_AREA_OPACITY: f32 = ct::STACKED_AREA_OPACITY;
+pub const CHART_HEAT_GAP_PX: f32 = ct::HEAT_GAP_PX;
+pub const CHART_PADDING_SHARE: f32 = ct::PADDING_SHARE;
+pub const CHART_MIN_SPACE_PX: f32 = ct::MIN_SPACE_PX;
+pub const CHART_HIT_SLOP_PX: f32 = ct::HIT_SLOP_PX;
 
 // ---- Sizes (logical px at 100% UI scale)
 pub const TEXT_BASE: f32 = 14.0;
@@ -383,6 +464,20 @@ pub const SQL_HISTORY_CHARS: usize = 44;
 pub const SQL_HISTORY_POPUP_H: f32 = 420.0;
 // chart
 pub const CHART_H: f32 = 175.0;
+pub const CHART_TOOLTIP_W: f32 = 260.0;
+pub const CHART_GALLERY_W: f32 = 1040.0;
+pub const CHART_CARD_W: f32 = 232.0;
+pub const CHART_CARD_H: f32 = 196.0;
+/// A banking template card: name, tool, form and the use / avoid lines (no thumbnail).
+pub const CHART_TEMPLATE_CARD_H: f32 = 268.0;
+pub const CHART_THUMB_H: f32 = 70.0;
+pub const CHART_TEXT_FIELD_W: f32 = 150.0;
+pub const CHART_REF_LABEL_W: f32 = 90.0;
+pub const CHART_CONTROLS_W: f32 = 330.0;
+pub const CHART_WIDE_MIN_W: f32 = 720.0;
+pub const CHART_MIN_W: f32 = 200.0;
+pub const CHART_MIN_H: f32 = 175.0;
+pub const CHART_MAX_H: f32 = 520.0;
 pub const CHART_BAR_W: f64 = 0.65;
 /// The chart's controls and marks.
 pub const CHART_COMBO_W: f32 = 130.0;

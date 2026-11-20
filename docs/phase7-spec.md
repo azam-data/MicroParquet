@@ -266,8 +266,8 @@ A result tab of each tool gets a **"Chart this"** button (and the Charts menu en
 
 - **Finding titles** are computed from the data by fixed rules (no AI). The user's takeaway replaces them.
 - **Acceptance:**
-  - each template on its tool's guide example gives the stated form and the exact auto-title, e.g. "Parallel up is the worst case at −10.50% of Tier 1"
-  - on the Phase 4 V3 gap-ladder example (limit −10% on the first bucket), the breach is ringed on bucket 1 and labelled "Breach: −16.67% vs −10% limit", and the auto-title is "Cumulative gap turns positive after 1–3 months"
+  - each template on its tool's guide example gives the stated form and the exact auto-title, e.g. "Parallel up is the worst case at −10.5% of Tier 1"
+  - on the Phase 4 V3 gap-ladder example (limit −10% on the first bucket), the breach is ringed on bucket 1 and labelled "Breach: −16.7% vs −10% limit", and the auto-title is "Cumulative gap turns positive after 1–3 months"
   - the NII bridge has the C0 bases
   - the CL migration title is "100.0% of SS moved to DF" on the V2 example
 </task>
@@ -331,5 +331,63 @@ Reply in no more than 30 lines: a table (Task | Status | Tests added | Deviation
 </report>
 
 <accepted_deviations>
-(none yet)
+- C0: the colour and size literals live in `src/charts/tokens.rs` (library), exposed to the UI as `CHART_*` tokens in `theme.rs`; the HTML and Excel renderers are in the library and cannot read the binary's theme. Both crates pin every hex value in a test.
+- C0: the Phase 6 chart types moved to `src/charts/` and are re-exported from `src/chart.rs`; `ChartKind::Bar` stays the vertical column form (horizontal is a flag).
+- C1: layout geometry lives in `src/charts/layout.rs` (library), painter in `src/ui/chart_render.rs`; histogram bars fill their band (2 px gaps); stacked areas 55% opacity; axis names are horizontal above the plot; more than 3 scatter series fold into 2 + Other; heatmap rows follow series size.
+- C2: "Chart this result" opens the studio (templates are C5); "Chart book" is disabled until C3; the studio's extra sections are under the chart in the side panel and beside it in the pop-out; the right panel no longer drag-scrolls; Phase 6 tests adjusted for the Charts menu and the chart's own title.
+- C1: a chart tab is a normal tab (the chart's data table) drawn as a chart in the main area; tabs are not restored at start-up, so "saved with the session" is `settings.json` `chart_tabs`.
+- C0: a percentage of a zero total is blank with a note; a waterfall that does not add up, and more than 12 facet values, are refused with a message.
+- Owner decisions on Session A (19 Nov 2026), these replace the earlier C1 lines they contradict:
+  1. Heatmap: rows AND columns follow the custom order list; with no list, CL/grade codes use `cl_code_map` order (STD, SMA, SS, DF, BL), other text sorts naturally. Every row×column pair is drawn; a missing pair is a 0.0 cell in the lightest sequential step, with its value label. Cell corner radius 2 px (not 6% of the cell), gaps stay 2 px. Same rules in the HTML and Excel renderers (replaces C1-5, "heatmap rows follow series size").
+  2. Stacked area: fill opacity about 35% (pinned in `tokens.rs`), with a 2 px line on top of each layer (replaces 55%).
+  3. Write Δ, not "d": ΔEVE and ΔNII everywhere (titles, axes, tooltips, HTML, Excel), tested in all three renderers.
+  4. C3 adds "Preview in browser" for the HTML-only forms (Sankey, Treemap): it writes a temp HTML file and opens the default browser. Nothing goes over the network.
+  5. Accepted as is: `tokens.rs`, blank cell for a percent of a zero total, histogram bars filling their band, horizontal axis names, chart tab in `settings.json`, panel scrolls by scrollbar.
+- C3: the vendored ECharts file holds six `http(s)://` strings (XML namespace names and licence comments, never fetched); the page around it has none, and the test pins both. Title, subtitle and footnote are inside the chart so PNG/SVG carry them. Stacked segments use a 1 px surface-colour border (ECharts has no gap setting). Function-valued options are names ("@fmt:amount:2") that the page's script replaces.
+- C4: subtitle and footnote are cells above the table, not part of the Excel chart title; a bubble chart is written as a scatter and a stepped line as an ordinary line, each with a note on the sheet; the .xlsx checks read the zip with `python3` (no new crate) and are skipped where it is absent.
+- C5: finding titles follow the reference images (one decimal, true minus: "−10.5% of Tier 1", "Breach: -16.7% vs −10% limit"), not the two-decimal examples in the C5 acceptance; the LCR/NSFR HQLA composition, a per-key NII bridge and start-of-line labels on older yield curves are not done; percentage bar labels have one decimal and no plus sign.
+- Owner decisions on Session B (19 Nov 2026), these replace the C5 line above where they contradict it:
+  - Q1: finding titles use one decimal for percentages, as the reference images ("−10.5% of Tier 1", "Breach: −16.7% vs −10% limit"); the C5 acceptance strings above are updated.
+  - Q2: data labels on diverging bars always carry a sign and two decimals ("+4.82%", "−10.50%"), in all three renderers (replaces C5-6).
+  - Dark-mode sequential fills (in-app and HTML heatmaps, any sequential fill): low values use the darkest step (nearest the surface), high values the lightest; both directions pinned in `tokens.rs` and tested.
+  - Negative numbers use U+2212 (−) everywhere (titles, data labels, axis ticks, tooltips, breach labels, HTML, Excel number formats); a test scans every rendered string and the xlsx XML for "-" before a digit.
+  - Classified trend: the top panel stacks SMA, SS, DF and BL only, subtitle "Standard (STD) not shown"; the NPL % panel is unchanged.
+  - Yield curves: every curve is labelled at its right end, collisions nudged vertically; latest curve blue with markers, older curves two grey steps (lighter for older); y-axis padded one tick below the minimum. This replaces the start-of-line labels of the C5 table.
+  - Data quality: a rule below Amber is drawn in the critical status colour with an icon and "Below Amber"; between Amber and Green the warning colour and "Below Green"; other bars default; threshold labels never overlap.
+  - Gap ladder: the breach label sits on the side away from the line, overlapping no mark (layout test).
+  - Waterfall: every step is at least 2 px tall; the HTML waterfall draws the connector lines the app draws.
+  - HTML tooltips: "row"/"rows" singular/plural, no repeated category line.
+  - Excel line panels use the app's nice axis range (not forced to 0); stacked areas show no point markers.
+  - C5 completed: LCR/NSFR HQLA composition as a tall segmented bar, NII bridge per key.
+- Session C details: older yield curves are fainter (muted, then de-emphasised grey) in both themes; status bars carry their icon and words inside the bar when it is long enough; of several vertical threshold lines the highest is labelled to its right and the others to their left; a panel with a breach gets 25% axis room; the NII bridge per key is a second chart ("effects by key"), the HQLA composition a second chart; "stacked areas show no markers" applies to the app and HTML (Excel areas have none). See `docs/phase7-progress.md`.
+- Owner decisions on Session C (20 Nov 2026):
+  - Q1: the NII bridge title names the product when the tab has one key ("... rise in TD interest") and says "total interest" when it has several (replaces the F10-1 wording).
+  - Q2: older yield curves are fainter in both themes (accepted as built).
+  - Q3: a report pack reads the data-quality thresholds (Green, Amber) and the IRRBB outlier limit from the rule set of the item's tool run; a missing value stops the pack with a plain message and there is no default; both are in the shipped sample rule files and tested.
+  - Screenshots: `tools/html_chart_png.js` always writes `html-<name>.png`; they are re-rendered in the order in-app (render tests), HTML, Excel; a test pins the size of every image (in-app render size, or the page size for `html-`).
+  - Classified trend: the NPL % panel is one series in the first categorical colour, end-labelled "NPL %".
+  - NII effects by key: each key's net change is a dark tick across its stack with a signed two-decimal label; stack edges carry no labels.
+  - HQLA composition: each segment is labelled beside the bar with its value and share ("3,500 · 70.0%"), never overlapping.
+  - C7: the scripts are run with matplotlib (Agg) and plotly installed in the session, saved to PNG and looked at; the test still skips when they are absent.
+- Owner decisions on the review of PR #13 (Session E, 20 Nov 2026), part A:
+  - Chart book: it lists every open chart tab and the studio chart with their own `ChartData` and look (scale, decimals, colours; always the light theme), ticked, reorderable, with a title; it writes those snapshots, never recalculating and never scaling twice. "Saved charts on the active tab" is a second, unticked section (recalculated, with the missing-column check). `--export-html` and packs are unchanged.
+  - "Open chart data as tab": the tab stores absolute BDT; the value column carries the format that matches the chart's scale, so the scale is applied once, on display. A chart of that tab gives the original chart's numbers.
+  - The colour map belongs to the category and series columns: changing either empties it (new names take slots 1, 2, 3 …); a filter or Top N keeps it. A saved chart or a template that brings its own map keeps it.
+  - The subtitle says what was done to the numbers ("as % of row", "as % of column", "as % of total", "running sum") and never a money unit beside a percentage; a template's own subtitle ends with " · <unit>" when the chart has an amount measure. One function (`subtitle_text`) feeds the four renderers.
+  - HTML "Save as SVG": the copy of the option used for the SVG keeps no toolbox (its function-valued button made ECharts throw); tested by clicking the real button in headless Chromium (`tools/html_svg_click.js`).
+  - NII bridge: a key in one month only (blank effects) is the step "New / closed" between Mix and Current interest, and the fourth series by key; a blank is never read as 0, and a key with only some effects blank is refused.
+  - Classified trend and deposit mix sort months as dates (a Date column, or text day/month/year, year-month-day or year-month); anything else, and a month without its STD row, is refused.
+  - A value that adds up to NaN or infinity, or a scatter point that is one, stops the chart naming the column and the category, in every renderer; no workbook holds `inf`.
+  - LCR/NSFR: the minimum and the breach are the result's rows ("LCR minimum", "LCR status"); a summary without them is refused; no default 100.
+  - IRRBB, LCR/NSFR and ECL charts copy the result's "Sample parameters" text into the footnote. The IFRS 9 summary does not carry such a row today, so the ECL footnote shows it only for a summary that has one (the summary tool itself is unchanged).
+- Owner decisions on the review of PR #13 (Session E), part B:
+  - Blanks: a blank the chart needs is refused naming the row and the column (gap ladder, repricing gap, CL migration, classified trend, ECL, IRRBB, deposit mix, rate profile, balance history); only the rows the tools add (Total, Overdue assets, New, Previous month total, the IRRBB footers) are left out. A percentage of a zero total (ECL coverage with EAD 0, an NPL % of a month with no loans) is blank with a note under the chart. A data-quality rule that only passes or fails is named in the footnote, not left out silently.
+  - Python: the labels use the view's decimals, signed two-decimal diverging labels, the app's heatmap text (no % sign, one decimal) and the NPL end label "NPL %  7.0%"; it refuses what the other renderers refuse.
+  - A signed bar is blue above zero, red below and the grey `DIVERGING_ZERO` at exactly zero, in the app, the page, the workbook and the script (the page and the workbook did not colour signed bars before; `tokens::diverging_colour` is the one rule).
+  - More than 60 bars or columns, and more than 40 heatmap columns, are refused with "Use Top N or a filter"; the 2 MB page limit still holds.
+  - "Preview in browser" writes `<temp_dir>/preview/chart-preview.html` (replacing the last one); the chart studio's `chart_data_`, `chart_tab_` and `chart_template_` files and the previews are removed at start-up and at exit.
+  - `--export-html` without `--pack` is an error. `<!--` in the page data is written `\u003c!--`.
+  - Heatmaps: a zero or missing cell is the neutral fill (light: the gridline colour `#e1e0d9`; dark: `#2c2c2a`) with muted text, in all four renderers; the sequential ramp runs from the smallest value above zero to the largest (`tokens::heat_neutral`; replaces the "missing pair is the lightest step" of decision D1 and the lowest-cell rule of F1).
+  - HTML line-end labels are the app's (names for 2 to 4 series, the value for one, name and value for a named single series); deposit-mix colours are pinned by product name; a `single` panel's ratio must be equal across series; a change that shows as 0.0 says "unchanged", never "+0.0" or "\u22120.0"; the guide's NII numbers say how the title rounds.
+  - Data labels (Charts \u25b8 Titles and look): Labels Auto / All / Ends only / None, Label decimals (0\u20134, default the view's), Label unit (As in view, Absolute, Thousand, Lakh, Million, Crore) and Percent labels on/off. Stored in `ChartSpec.labels` (`#[serde(default)]`, old charts load unchanged). It applies to bars and columns (single, grouped, stacked), lines and areas, waterfalls, heatmap cells and the donut's legend; scatter, histogram, box plot, Sankey and treemap have no value labels to control. "All" never prints a label that collides: the app's layout leaves such labels out and counts them; the page, the workbook and the script leave out the same ones (worked out at 1,060 px, 720 px and 1,000 px) and every renderer says "N data labels left out where they would overlap" under the chart. A label unit that differs from the view's is stated under the chart ("Data labels are in Lakh"). In the workbook a waterfall carries no data labels and heatmap cell numbers are the data, so Labels and Percent apply to the others.
 </accepted_deviations>

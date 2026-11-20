@@ -284,6 +284,28 @@ pub fn write_xlsx_tabs_noted(
     rows_per_sheet: usize,
     scale: Option<XlsxScale>,
 ) -> Result<XlsxExportReport> {
+    write_xlsx_tabs_charted(tabs, Vec::new(), errors, totals_errors, out_path, rows_per_sheet, scale)
+}
+
+/// The native Excel charts of a tab (Phase 7 C6): each chart gets a sheet of its own right after the
+/// tab's sheet, named "<sheet> chart", with the chart's table and the chart beside it.
+#[derive(Clone, Debug)]
+pub struct TabCharts {
+    /// The title of the tab the charts belong to (as in `XlsxTab::title`).
+    pub tab_title: String,
+    pub charts: Vec<(crate::charts::data::ChartData, crate::charts::layout::LayoutOpts)>,
+}
+
+/// `write_xlsx_tabs_noted` with native charts after the sheets of the tabs that have them.
+pub fn write_xlsx_tabs_charted(
+    tabs: Vec<XlsxTab>,
+    tab_charts: Vec<TabCharts>,
+    errors: Vec<(String, String)>,
+    totals_errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
+) -> Result<XlsxExportReport> {
     let rows_per_sheet = rows_per_sheet.max(1);
     let mut workbook = Workbook::new();
     let mut report = XlsxExportReport::default();
@@ -430,6 +452,13 @@ pub fn write_xlsx_tabs_noted(
             // Totals: two rows (what each cell is, then its value) under the last part of the data.
             if part + 1 == sheet_count && !summary.is_empty() {
                 write_xlsx_totals(worksheet, &summary, cols, last - first, &col_scales, &col_formats, scale)?;
+            }
+        }
+        // the tab's charts: a sheet each, right after the tab's own
+        if let Some(tc) = tab_charts.iter().find(|t| t.tab_title == raw_title) {
+            for (n, (data, opts)) in tc.charts.iter().enumerate() {
+                let name = crate::charts::pack::chart_sheet_name(&base_name, n);
+                crate::charts::xlsx::add_chart_sheet(&mut workbook, &name, data, opts).with_context(|| format!("Excel: the chart of '{}' could not be written", raw_title))?;
             }
         }
         report.sheets.push((raw_title, sheet_count));
@@ -593,7 +622,7 @@ pub fn export_tabs_to_pdf(
 ) -> Result<PdfExportReport> {
     let tabs = tabs
         .into_iter()
-        .map(|(title, df, col_formats)| PdfTab { title, df, col_formats, summary: Vec::new() })
+        .map(|(title, df, col_formats)| PdfTab { title, df, col_formats, summary: Vec::new(), chart: None })
         .collect();
     export_pdf_tabs(tabs, out_path, num_format, global_decimals)
 }
@@ -606,6 +635,9 @@ pub struct PdfTab {
     pub col_formats: HashMap<String, ColumnFormatSpec>,
     /// Empty = no totals band.
     pub summary: Vec<SummaryCell>,
+    /// A chart tab: the page shows this chart (vector drawing, embedded fonts), not the table; the table follows on the
+    /// next page only when `PdfOptions::chart_tables` is set.
+    pub chart: Option<(crate::charts::data::ChartData, crate::charts::layout::LayoutOpts)>,
 }
 
 /// What the PDF export dialog asks (L2).
@@ -614,6 +646,8 @@ pub struct PdfOptions {
     /// The heading of every page; blank = no heading line.
     pub title: String,
     pub page: crate::pdf_layout::PdfPage,
+    /// "Add the data table on the next page": a chart tab also prints its table (off by default).
+    pub chart_tables: bool,
 }
 
 pub fn export_pdf_tabs(
@@ -657,7 +691,34 @@ pub fn export_pdf_tabs_with(
         layer.add_line(Line { points: vec![(Point::new(Mm(x1), Mm(y)), false), (Point::new(Mm(x2), Mm(y)), false)], is_closed: false });
     };
 
-    for PdfTab { title, df, col_formats, summary } in tabs {
+    let mut chart_fonts: Option<crate::charts::pdf::ChartPdfFonts> = None;
+    for PdfTab { title, df, col_formats, summary, chart } in tabs {
+        // a chart tab: the chart on its own page (the heading of the export dialog above it); the table only when asked for
+        if let Some((cdata, copts)) = chart {
+            if !first_page {
+                let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
+                current_page = p;
+                current_layer = l;
+            }
+            first_page = false;
+            if chart_fonts.is_none() {
+                chart_fonts = Some(crate::charts::pdf::add_fonts(&doc)?);
+            }
+            let layer = doc.get_page(current_page).get_layer(current_layer);
+            let mut y = opts.page.top_mm();
+            for line in &heading {
+                layer.use_text(line.clone(), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
+                y -= 5.5;
+            }
+            let top = y + 2.0;
+            let area = crate::charts::pdf::ChartArea { left_mm: LEFT_MM, top_mm: top, width_mm: opts.page.usable_w_mm(), height_mm: (top - 12.0).max(40.0) };
+            if let Some(f) = chart_fonts.as_ref() {
+                crate::charts::pdf::draw_chart(&layer, f, &cdata, &copts, area).with_context(|| format!("Chart '{}' could not be drawn on the page", title))?;
+            }
+            if !opts.chart_tables {
+                continue;
+            }
+        }
         let truncated = df.height() > PDF_MAX_ROWS_PER_TAB;
         if truncated {
             report.truncated_tabs.push(title.clone());

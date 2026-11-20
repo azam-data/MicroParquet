@@ -1,0 +1,225 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 330.0,
+      "left": 12.0,
+      "right": 24.0,
+      "top": 64.0
+    }
+  ],
+  "series": [
+    {
+      "boxWidth": [
+        8,
+        24.0
+      ],
+      "data": [
+        {
+          "tip": "Grade: A\nMedian: 15.00\nQ1 to Q3: 12.50 to 17.50\nWhiskers: 10.00 to 19.50\n21 rows",
+          "value": [
+            10.0,
+            12.5,
+            15.0,
+            17.5,
+            19.5
+          ]
+        },
+        {
+          "tip": "Grade: B\nMedian: 24.75\nQ1 to Q3: 22.38 to 27.12\nWhiskers: 20.00 to 29.50\n20 rows",
+          "value": [
+            20.0,
+            22.375,
+            24.75,
+            27.125,
+            29.5
+          ]
+        }
+      ],
+      "itemStyle": {
+        "borderColor": "#2a78d6",
+        "borderWidth": 2,
+        "color": "#2a78d633"
+      },
+      "name": "Box",
+      "type": "boxplot"
+    },
+    {
+      "data": [
+        {
+          "tip": "Grade: A\nOutlier: 80.00",
+          "value": [
+            0,
+            80.0
+          ]
+        }
+      ],
+      "itemStyle": {
+        "color": "#2a78d6"
+      },
+      "name": "Outliers",
+      "symbolSize": 6,
+      "type": "scatter"
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Median of Rate · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Rate by Grade",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": false,
+        "interval": 0,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "A",
+        "B"
+      ],
+      "gridIndex": 0,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain"
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 20.0,
+      "max": 80.0,
+      "min": 0.0,
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    }
+  ]
+}
