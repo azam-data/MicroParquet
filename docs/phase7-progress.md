@@ -1,6 +1,6 @@
 # Phase 7 progress (chart studio)
 
-Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C (this one): owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8. Resume from this file.
+Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C: owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8 (all done). Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -10,6 +10,7 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C
 
 | C3 | DONE | (see git log: "Phase 7 C3") | tests/phase7/c3.rs ×16 (golden option of all 20 forms, dark option, offline page, vendored file, 2 MB limit, Sankey values, treemap, waterfall bases, donut refusal, marks, theme, advanced JSON, chart book, preview/write, Δ); render_tests_p7 ×1 (Export, Preview, advanced box, Reset, chart book by real clicks at 3 sizes); `tools/html_chart_png.js` loads every page in headless Chromium with the network blocked (no script error, no request) and saves PNGs `docs/guide/img/charts/html-*.png` |
 | C4 | DONE | (see git log: "Phase 7 C4") | tests/phase7/c4.rs ×9 (every form's .xlsx opened as a zip with python3: chart type, series references on the data range, palette colours, waterfall base with no fill, heatmap scale, Δ, notes, sheet names); render_tests_p7 (Export to Excel by a real click at 3 sizes); every workbook also rendered in LibreOffice for `docs/guide/img/charts/xlsx-*.png` |
+| C8 | DONE | (see git log: "Phase 7 C8") | tests/phase7/c8.rs ×3 (each of the 13 notes has its ten sections and the title the code writes on its worked example; the second charts' titles and the breach label quoted by the notes are the code's; every picture a chart note names exists, the README lists the notes, the primer shows every form in both themes) |
 | C7 | DONE | (see git log: "Phase 7 C7") | tests/phase7/c7.rs ×2 (every form and template: the script parses with python3, holds the chart's numbers and categories, names matplotlib or plotly, keeps the palette; run headless where matplotlib and pandas are installed; escaping; refusal of an empty chart); render_tests_p7 (Copy as Python by a real click) |
 | C6 | DONE | (see git log: "Phase 7 C6") | tests/phase7/c6.rs ×4 (a pack with a gap-ladder template item and a saved-chart item writes the workbook with native charts, the chart book and the Cover rows; twice gives the same charts and book; a failing chart writes nothing; old packs load); headless test (same book from the command line, `--export-html`, nothing written on failure); render_tests_p6 ×1 (the Chart drop-down, the HTML chart book tick and Run by real clicks at 3 sizes) |
 | C5 | DONE | (see git log: "Phase 7 C5") | tests/phase7/c5.rs ×8 (each of the 13 templates on its tool's guide example: form, exact finding, three renderers, save/load; gap ladder breach ringed and labelled; limit ticks in HTML and Excel); render_tests_p7 ×2 (gallery cards and a click on the gap ladder card by real rects at 3 sizes, Chart this result) |
@@ -95,3 +96,8 @@ Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C
 
 - C7-1: the matplotlib scripts are parsed with python3's `ast` in the tests and run (Agg backend) only where matplotlib and pandas are installed (not in this container); the plotly scripts (Sankey, treemap) are parsed only. Bars have square data-ends in matplotlib (rounded ends need a patch per bar), and the heatmap is drawn with rectangles, not `imshow`.
 - C7-2: the script writes the numbers as the chart shows them (the chart's scale, not raw BDT) and says the unit in a comment; small multiples hold each facet's own table.
+
+## C8 deviations
+
+- C8-1: the template notes are `docs/guide/chart-<template>.md` (13 of them, the spec said "one guide note per banking template, ten sections each"); the primer is `docs/guide/charts.md`. The worked examples use the sample tables of `src/charts/samples.rs` (the same numbers as the tests); a test pins each note's title to the code.
+- C8-2: every screenshot under `docs/guide/img/charts/` was re-rendered from the final code: the in-app forms and templates (render tests, light and dark), the HTML pages (headless Chromium, network blocked, `tools/html_chart_png.js`) and the Excel workbooks (LibreOffice to PDF, `pdftoppm`). New: `tpl-lcr-nsfr-hqla`, `tpl-nii-effects-by-key`, `tpl-nii-bridge-keys`.

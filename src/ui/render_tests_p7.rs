@@ -288,12 +288,21 @@ fn template_forms() -> Vec<(&'static str, ChartData)> {
     let mut out: Vec<(&'static str, ChartData)> = Vec::new();
     let mut add = |name: &'static str, t: Template, df: DataFrame| {
         let p = prepare(t, &df, &ctx).unwrap_or_else(|e| panic!("{name}: {e:#}"));
-        let src = p.table.unwrap_or(df);
+        let src = p.table.clone().unwrap_or(df);
         out.push((name, compute(src.lazy(), &p.spec).unwrap_or_else(|e| panic!("{name}: {e:#}"))));
+        // a second chart of the same result (HQLA composition, NII effects by key) has its own picture
+        if let Some(c) = p.companion {
+            let second: &'static str = match name {
+                "tpl-lcr-nsfr" => "tpl-lcr-nsfr-hqla",
+                _ => "tpl-nii-effects-by-key",
+            };
+            out.push((second, compute(c.table.expect("table").lazy(), &c.spec).unwrap_or_else(|e| panic!("{second}: {e:#}"))));
+        }
     };
     add("tpl-gap-ladder", Template::GapLadder, sm::ladder_table());
     add("tpl-repricing-gap", Template::RepricingGap, sm::repricing());
     add("tpl-nii-bridge", Template::NiiBridge, sm::mom_table());
+    add("tpl-nii-bridge-keys", Template::NiiBridge, sm::mom_table_keys());
     add("tpl-cl-migration", Template::ClMigration, sm::cl_matrix_large());
     add("tpl-classified-trend", Template::ClassifiedTrend, sm::classified());
     add("tpl-irrbb-scenarios", Template::IrrbbScenarios, sm::irrbb_results());

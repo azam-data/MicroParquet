@@ -1,5 +1,7 @@
 # Chart
 
+(How to choose a chart, and one note for each banking template: [Charts: how to choose one](charts.md).)
+
 ## 1. What it does
 
 Draws bars or a line of one number by one category, calculated over the whole tab after its steps (never just the rows on screen). Choose the category (X), an optional series (grouped bars, at most 8), the value and how to add it up (Sum, Count, Average, W.Avg, Min, Max). The x-axis shows the category names, the title says what was drawn and in which unit, and a tooltip gives the category, series, value and the number of rows behind it.

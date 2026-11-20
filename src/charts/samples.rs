@@ -98,6 +98,19 @@ pub fn mom_table() -> DataFrame {
     .unwrap()
 }
 
+/// A month-on-month variance with three products and a Total row (the NII bridge's second chart).
+pub fn mom_table_keys() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Product".into(), ["TD", "Savings", "Current", "Total"]),
+        Series::new("Prev annual interest".into(), [80.0, 30.0, 5.0, 115.0]),
+        Series::new("Curr annual interest".into(), [93.5, 28.0, 5.5, 127.0]),
+        Series::new("Volume effect".into(), [8.0, -3.0, 0.4, 5.4]),
+        Series::new("Rate effect".into(), [5.0, 1.0, 0.1, 6.1]),
+        Series::new("Mix effect".into(), [0.5, 0.0, 0.0, 0.5]),
+    ])
+    .unwrap()
+}
+
 pub fn lcr_summary() -> DataFrame {
     DataFrame::new(vec![
         Series::new(
