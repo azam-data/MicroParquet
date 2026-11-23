@@ -39,6 +39,8 @@ pub struct PickerPanel {
     /// The calendar of the Calendar order (W0): with no list for the column, a list whose every label is a
     /// month, a day name, a quarter … is shown in that order, and one of ranges in the Ranges order.
     pub calendar: micro_parquet::dates::CalendarSettings,
+    /// The date part the values are of (the filter's "By" choice, W2); `field` is then the part's name.
+    pub part: Option<micro_parquet::dates::DateFieldRef>,
 }
 
 impl PickerPanel {
@@ -212,7 +214,11 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        let steps = tab.steps[..self.picker_prefix_len().min(tab.steps.len())].to_vec();
+        let mut steps = tab.steps[..self.picker_prefix_len().min(tab.steps.len())].to_vec();
+        // the values of a date part (W2): the part as a column first
+        if let Some(p) = self.picker.part.as_ref().filter(|p| p.name == self.picker.field) {
+            steps.push(TransformStep::date_field_step(p));
+        }
         self.picker.token += 1;
         self.picker.waiting = true;
         self.picker.error = None;

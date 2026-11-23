@@ -4,6 +4,7 @@ Branch `phase8`. Session A: W0, W1, W2, W3. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
+| W2 | DONE | (see git log: "Phase 8 W2") | tests/phase8/w2.rs ×6 (a pivot by a date field equals the pivot by the Split date column for 6 parts; every part with two calendars adds up to the total with "(blank)" last; a chart by Quarter: Q1…Q4 and the pivot's totals, series and facet by a part, stale parts ignored, missing columns, the calendar in the calculation key; a filter by Day name in Fri, Sat keeps exactly those rows, by Year, text refused, the Python; a real column of the field's name refused, the value lists of a part, a pivot filter on a part; old pivots, charts and conditions load); render_tests_p8 ×3 (the pivot expander and Add to Rows, the chart Category picker, the filter By choice, the picker and Apply, by real clicks at 3 sizes) |
 | W1 | DONE | (see git log: "Phase 8 W1") | tests/phase8/w1.rs ×6 (every part of the 1,000-row tab equals dates.rs and 3 blanks stay blank, two calendars; Datetime = its date; text column, name clash, no part, missing column, bad month refused; declared Calendar orders and a pivot by Day name Sat…Fri; label, JSON defaults, macro round trip; the generated Python parses and its part function gives the same 14 columns for all 1,000 rows); render_tests_p8 ×1 (Column panel button, ticks, text column message, Add, Edit menu, clash message, pivot order, by real clicks at 3 sizes) |
 | W0 | DONE | (see git log: "Phase 8 W0") | tests/phase8/w0.rs ×13 (week rules, fiscal labels, every part as an expression and on a Datetime, blanks, text refused, Calendar and Ranges acceptance lists and the sort step, reserved names and JSON, auto order, Python mirrors run with python3, Python export, version and workflow, the Phase 7 replay of goal 3); render_tests_p8 ×2 (View ▸ Calendar… by real clicks at 3 sizes; auto order in pivot, sort by real clicks and chart) |
 
@@ -47,6 +48,23 @@ seven older macro fixtures. `tests/phase8/p7_baseline.rs` is the code that made 
   `map_elements`), not pandas `dt`: the macro export has always been Polars. The test runs that function with
   python3 on all 1,000 dates and times (Polars is not installed here, so the whole script is parsed, not run).
 - W1-4: the preview is the first 5 rows of the page in view (already in memory), worked out in the dialog.
+
+- W2-1: a date field's name is "Open Date · Month" everywhere it is stored (pivot field, chart category, series
+  and facet); the pickers and the field list show it as "Open Date › Month" (chart) and "› Month" under its column
+  (pivot). A part offers Rows, Columns and Filters in the pivot, not Values.
+- W2-2: the value lists of a date field (the pivot's Filters checklist, the pivot bar, the filter's picker) are read
+  through a one-part Split date step named like the field (`TransformStep::date_field_step`), added to the steps
+  the job reads; nothing is added to the tab.
+- W2-3: the filter's "By" choice offers Date, Year, Month-Year, Month, Quarter and Day name (the spec's list);
+  changing it clears the picked values (values of one part are not values of another). A filter condition on a
+  part tests a temporary column `__mp_part<i>` that is dropped after the filter, in the app and in the Python.
+- W2-4: the chart pickers' lists are taller (`CHART_PICKER_POPUP_H`, 460 pt) so the parts of a date column are in
+  view; with many columns the list scrolls. Series order and facet order are as in Phase 7 (W0-1).
+- W2-5: the pivot step has no Python translation (as in Phase 7), so W2's Python covers the filter "By" choice.
+- W2-6: fixed while testing: a chart with a facet recalculated each panel on a table that already had the parts,
+  which then counted as a clash; the panels now skip adding them again (`charts::calc::compute_on`).
+- W2-7: the render test of the filter picks Sat and Sun: the picker's list (Phase 6) scrolls below its height, and
+  Fri is the last of the seven; the library test pins Fri and Sat.
 
 ## Found, not changed
 

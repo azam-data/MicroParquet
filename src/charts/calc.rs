@@ -60,6 +60,20 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    // the date parts of the category, series or facet (W2) are added as columns first
+    let fields = spec.date_fields();
+    let lf = if fields.is_empty() {
+        lf
+    } else {
+        let mut lf = lf;
+        let schema = lf.collect_schema().context("Could not read the column types for the chart")?;
+        crate::dates::with_date_fields(lf, &fields, &schema, "Chart")?
+    };
+    compute_on(lf, spec)
+}
+
+/// The chart of a table that already has the chart's date parts as columns (a facet's panel).
+fn compute_on(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let mut data = match spec.kind {
         ChartKind::Scatter | ChartKind::Bubble => compute_points(lf.clone(), spec)?,
         ChartKind::Histogram => compute_histogram(lf.clone(), spec)?,
@@ -187,7 +201,7 @@ fn compute_facets(lf: LazyFrame, spec: &ChartSpec, facet: &str) -> Result<Vec<Fa
     let mut out = Vec::new();
     for i in order {
         let part = lf.clone().filter(key.clone().eq(lit(names[i].clone())));
-        let d = compute(part, &inner).with_context(|| format!("Chart: the panel '{}'", names[i]))?;
+        let d = compute_on(part, &inner).with_context(|| format!("Chart: the panel '{}'", names[i]))?;
         out.push(FacetData { name: names[i].clone(), data: Box::new(d) });
     }
     Ok(out)

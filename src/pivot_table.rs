@@ -339,7 +339,7 @@ fn key_label(k: &Key) -> String {
 /// The pivot table of `lf` as a frame: label columns (the Rows fields), then the value columns
 /// (one per column label and value field, then the totals), and a last row of column totals.
 pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
-    let mut lf = lf;
+    let mut lf = pivot_input(lf, spec)?;
     let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
     validate_pivot(&schema, spec)?;
     let (nr, nc) = (spec.rows.len(), spec.columns.len());
@@ -729,6 +729,16 @@ pub fn without_total_rows(lf: LazyFrame, steps: &[TransformStep]) -> LazyFrame {
 }
 
 /// The pivot as a step of a pipeline: the table, then lazy again.
+/// The pivot's input: the table with its date fields (W2) added as columns.
+pub fn pivot_input(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
+    if spec.date_fields.is_empty() {
+        return Ok(lf);
+    }
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
+    crate::dates::with_date_fields(lf, &spec.date_fields, &schema, "Pivot")
+}
+
 pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
     Ok(build_pivot(lf, spec)?.df.lazy())
 }
@@ -736,7 +746,7 @@ pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
 /// For each weighted-average value field: how many cells (groups of Rows × Columns) have weights
 /// of both signs, and so no rate. For the status-bar note.
 pub fn pivot_mixed_sign_cells(lf: LazyFrame, spec: &PivotSpec) -> Result<Vec<(String, usize)>> {
-    let mut lf = lf;
+    let mut lf = pivot_input(lf, spec)?;
     let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
     validate_pivot(&schema, spec)?;
     if !spec.values.iter().any(|v| v.agg == PivotAgg::WeightedAvg) {
@@ -932,6 +942,7 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
             scale: PivotScale::Global,
             sort_by_value,
             field_orders: Vec::new(),
+            date_fields: Vec::new(),
         },
         renames,
         notes,

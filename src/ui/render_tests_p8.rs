@@ -299,3 +299,151 @@ fn w1_split_date_from_the_column_panel_and_the_edit_menu_by_real_clicks_at_three
         assert_eq!(rig.app.pivot_builder.spec.field_orders.first().map(|o| o.order.clone()), Some(SortOrder::Calendar { week_start: Weekday::Sat }), "{what}: known at once from the steps");
     }
 }
+
+// ================================================================================ W2: date grouping
+
+fn last_box(p: &Painted, text: &str, below: f32) -> Option<egui::Rect> {
+    p.boxes.iter().rev().find(|(t, b)| t == text && b.top() > below - 1.0).map(|(_, b)| *b)
+}
+
+#[test]
+fn w2_the_pivot_expander_adds_a_date_part_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig8("p8w2piv", ppp, w, h, book8());
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        let p = rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &format!("{}  Pivot table", theme::ph::TABLE), &what);
+        let g = rig.app.pivot_builder.rects.clone();
+        let exp = g.expanders.iter().find(|(n, _)| n == "Open Date").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: a Date parts expander under Open Date"));
+        assert!(inside(exp, g.fields_list), "{what}: the expander {exp:?} is in the field list {:?}", g.fields_list);
+        assert!(g.expanders.len() == 1, "{what}: only the date column has one: {:?}", g.expanders);
+        assert_no_overlap(&dialog_texts(&mut rig, &p, r.window), &what);
+        // open it: the parts are listed under the column, inside the list, without overlapping
+        click_rect(&mut rig, exp);
+        let p = rig.draw(3);
+        let g = rig.app.pivot_builder.rects.clone();
+        let month_row = g.field_rows.iter().find(|(n, _)| n == "Open Date \u{b7} Month").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Month part is listed"));
+        assert!(month_row.left() >= g.fields_list.left() - 0.5 && month_row.right() <= g.fields_list.right() + 0.5, "{what}: {month_row:?} in {:?}", g.fields_list);
+        assert!(p.boxes.iter().any(|(t, _)| t == "\u{203a} Month"), "{what}: shown as '› Month'");
+        let texts = dialog_texts(&mut rig, &p, g.fields_list);
+        assert_no_overlap(&texts, &what);
+        // its menu, then "Add to Rows", by real clicks
+        let menu = g.field_menus.iter().find(|(n, _)| n == "Open Date \u{b7} Month").map(|(_, b)| *b).expect("the part's menu");
+        let p = click_rect(&mut rig, menu);
+        assert!(!p.boxes.iter().any(|(t, b)| t == "Add to Values" && b.top() > menu.top() - 1.0 && (b.left() - menu.left()).abs() < 300.0), "{what}: a part is not offered for Values");
+        let add = last_box(&p, "Add to Rows", menu.top()).unwrap_or_else(|| panic!("{what}: Add to Rows"));
+        click_rect(&mut rig, add);
+        let spec = rig.app.pivot_builder.spec.clone();
+        assert_eq!(spec.rows, vec!["Open Date \u{b7} Month".to_string()], "{what}");
+        assert_eq!(spec.date_fields.len(), 1, "{what}");
+        assert_eq!(spec.date_fields[0].part, DatePart::Month, "{what}");
+        assert_eq!(spec.field_orders.first().map(|o| o.order.clone()), Some(SortOrder::Calendar { week_start: Weekday::Sat }), "{what}: Calendar order");
+        // with a value the preview lists the months in calendar order
+        rig.app.add_pivot_field("Balance", crate::ui::pivot_builder::Area::Values);
+        rig.draw(4);
+        let pv = match &rig.app.pivot_builder.preview {
+            Some(Ok(df)) => df.clone(),
+            other => panic!("{what}: the preview: {other:?}"),
+        };
+        let labels: Vec<String> = pv.column("Open Date \u{b7} Month").expect("labels").str().expect("text").into_iter().flatten().map(str::to_string).collect();
+        let months: Vec<String> = labels.iter().filter(|l| micro_parquet::dates::parse_month(l).is_some()).cloned().collect();
+        let mut sorted = months.clone();
+        sorted.sort_by_key(|m| micro_parquet::dates::parse_month(m));
+        assert_eq!(months, sorted, "{what}: {labels:?}");
+        // close it again
+        let exp = rig.app.pivot_builder.rects.expanders[0].1;
+        click_rect(&mut rig, exp);
+        assert!(!rig.app.pivot_builder.rects.field_rows.iter().any(|(n, _)| n.contains('\u{b7}')), "{what}: collapsed");
+    }
+}
+
+#[test]
+fn w2_the_chart_category_picker_offers_the_parts_of_a_date_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig8("p8w2chart", ppp, w, h, book8());
+        let what = rig.what.clone();
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+        let mut spec = rig.app.chart.spec.clone();
+        spec.category = "Branch".into();
+        spec.value = Some("Balance".into());
+        rig.app.chart_set_spec(spec);
+        rig.draw(4);
+        let cat = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Category").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Category box"));
+        let p = click_rect(&mut rig, cat);
+        let q = last_box(&p, "Open Date \u{203a} Quarter", 0.0).unwrap_or_else(|| panic!("{what}: the picker lists Open Date › Quarter: {cat:?} {:?}", p.boxes.iter().rev().take(25).collect::<Vec<_>>()));
+        let screen = rig.ctx.screen_rect();
+        assert!(q.left() >= screen.left() && q.right() <= screen.right() + 0.5, "{what}: the item {q:?} is in the window");
+        // the list scrolls to it if needed: a click on its real rect
+        click_rect(&mut rig, q);
+        rig.draw(4);
+        let s = rig.app.chart.spec.clone();
+        assert_eq!(s.category, "Open Date \u{b7} Quarter", "{what}");
+        assert_eq!(s.category_part.as_ref().map(|p| p.part), Some(DatePart::Quarter), "{what}");
+        assert_eq!(s.order, SortOrder::Calendar { week_start: Weekday::Sat }, "{what}");
+        let d = rig.app.chart.data.clone().unwrap_or_else(|| panic!("{what}: the chart was calculated: {:?}", rig.app.chart.error));
+        let qs: Vec<&String> = d.categories.iter().filter(|c| c.starts_with('Q')).collect();
+        let mut sorted = qs.clone();
+        sorted.sort();
+        assert_eq!(qs, sorted, "{what}: {:?}", d.categories);
+        let total: f64 = d.values[0].iter().flatten().sum();
+        assert!((total - 3600.0).abs() < 1e-9, "{what}: the chart adds up to the table: {total}");
+    }
+}
+
+#[test]
+fn w2_the_filter_by_choice_filters_on_day_name_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig8("p8w2flt", ppp, w, h, book8());
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Filter);
+        rig.app.filter.conditions = vec![FilterCondition { column: "Open Date".into(), op: CondOp::InList, ..Default::default() }];
+        let p = rig.draw(4);
+        let title = "\u{E30C}  Filter rows";
+        let r = assert_dialog_fits(&rig.ctx, title, &what);
+        assert_no_overlap(&dialog_texts(&mut rig, &p, r.window), &what);
+        let by = rig.app.filter.by_boxes.first().map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: a date column has a By box"));
+        assert!(inside(by, r.window), "{what}: the By box {by:?} is in the dialog");
+        assert!(p.boxes.iter().any(|(t, _)| t == "By Date"), "{what}: By Date to start with");
+        let p = click_rect(&mut rig, by);
+        for want in ["Year", "Month-Year", "Month", "Quarter", "Day name"] {
+            assert!(last_box(&p, want, by.top()).is_some(), "{what}: the By list has {want}");
+        }
+        let day = last_box(&p, "Day name", by.top()).expect("Day name");
+        click_rect(&mut rig, day);
+        assert_eq!(rig.app.filter.conditions[0].part.as_ref().map(|p| p.part), Some(DatePart::DayName), "{what}");
+        // the picker lists day names (Sat first: the week starts on Saturday); pick Fri and Sat
+        let pick = rig.app.filter.pick_buttons.first().map(|(_, b)| *b).expect("the picker button");
+        click_rect(&mut rig, pick);
+        settle(&mut rig.app);
+        rig.draw(4);
+        let rows: Vec<String> = rig.app.picker.rects.rows.iter().map(|(t, _)| t.clone()).collect();
+        let days: Vec<String> = rows.iter().filter(|t| Weekday::parse(t).is_some()).cloned().collect();
+        let mut sorted = days.clone();
+        sorted.sort_by_key(|d| CalendarSettings::default().day_position(Weekday::parse(d).expect("a day")));
+        assert_eq!(days, sorted, "{what}: in week order from Saturday: {rows:?}");
+        // Sat and Sun, the two at the top of the list (the list scrolls below its height; the library test pins Fri and Sat)
+        for d in ["Sat", "Sun"] {
+            let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == d).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: {d} is listed"));
+            click_rect(&mut rig, b);
+        }
+        let c = rig.app.filter.conditions[0].clone();
+        assert_eq!(c.values, vec!["Sat".to_string(), "Sun".to_string()], "{what}");
+        assert_eq!(rig.app.filter.conditions.len(), 1, "{what}");
+        // Apply: the tab keeps the Friday and Saturday rows
+        let p = rig.draw(2);
+        let apply = last_box(&p, "\u{E182}  Apply to current tab", 0.0).expect("Apply");
+        click_rect(&mut rig, apply);
+        settle(&mut rig.app);
+        rig.draw(3);
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        assert!(matches!(tab.steps.last(), Some(TransformStep::FilterGroup { .. })), "{what}: {:?} tool {:?} status {}", tab.steps, rig.app.active_tool, rig.app.status_message);
+        let df = &tab.cached_slice;
+        let days: Vec<i32> = df.column("Open Date").expect("dates").cast(&polars::prelude::DataType::Int32).expect("days").i32().expect("i32").into_iter().flatten().collect();
+        assert!(!days.is_empty(), "{what}: some rows are kept");
+        for d in days {
+            let wd = chrono::Datelike::weekday(&micro_parquet::dates::date_from_days(d).expect("date"));
+            assert!(matches!(wd, chrono::Weekday::Sat | chrono::Weekday::Sun), "{what}: {wd:?} kept");
+        }
+    }
+}

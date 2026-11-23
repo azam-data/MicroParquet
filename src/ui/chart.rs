@@ -528,23 +528,35 @@ impl MicroParquetApp {
         let builtin = self.builtin_orders();
         let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
+        let parts = self.chart_date_parts();
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
             ui.label("Category (X)");
-            let r = egui::ComboBox::from_id_salt("chart_category").width(combo_w).selected_text(&spec.category).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt("chart_category").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(&spec.category).show_ui(ui, |ui| {
                 for c in &avail {
                     ui.selectable_value(&mut spec.category, c.clone(), c);
+                }
+                // W2: the parts of each date column, "Open Date › Quarter"
+                if let Some(f) = date_part_items(ui, &parts, Some(spec.category.as_str())) {
+                    spec.category = f.name.clone();
+                    spec.order = f.sort_order().unwrap_or_default();
+                    spec.by_value = false;
+                    spec.category_part = Some(f);
                 }
             });
             add(ui, "Category", rects, r.response.rect);
             ui.end_row();
             ui.label("Series");
             let shown = spec.series.clone().unwrap_or_else(|| "(none)".to_string());
-            let r = egui::ComboBox::from_id_salt("chart_series").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt("chart_series").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(shown).show_ui(ui, |ui| {
                 ui.selectable_value(&mut spec.series, None, "(none)");
                 for c in avail.iter().filter(|c| **c != spec.category) {
                     ui.selectable_value(&mut spec.series, Some(c.clone()), c);
+                }
+                if let Some(f) = date_part_items(ui, &parts, spec.series.as_deref()) {
+                    spec.series = Some(f.name.clone());
+                    spec.series_part = Some(f);
                 }
             });
             add(ui, "Series", rects, r.response.rect);
@@ -672,8 +684,10 @@ impl MicroParquetApp {
         });
         rects.controls = Some(controls.response.rect);
         self.chart.show_table = show_table;
+        // a part left behind when another column is picked is dropped (W2)
+        spec.drop_stale_date_parts();
         // W0 auto order: a category picked here with no order chosen gets the steps' order, Calendar or Ranges
-        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty();
+        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none();
         let auto = new_category && spec.order.is_natural() && !spec.by_value;
         if spec != self.chart.spec {
             let category = spec.category.clone();
@@ -1121,5 +1135,37 @@ impl MicroParquetApp {
         let out = crate::ui::chart_render::show_chart(ui, egui::Id::new("chart_plot"), data, &opts, None);
         let plot = out.layout.panels.first().map(|p| p.plot).unwrap_or(out.rect);
         (plot, out.layout.colour_map, out.layout.labels_dont_fit)
+    }
+}
+
+/// The date parts of each Date or Datetime column of a tab (W2), with the calendar in force.
+pub(crate) fn date_parts_of(df: &DataFrame, cal: micro_parquet::dates::CalendarSettings) -> Vec<micro_parquet::dates::DateFieldRef> {
+    df.get_columns()
+        .iter()
+        .filter(|c| micro_parquet::dates::is_date_type(c.dtype()))
+        .flat_map(|c| micro_parquet::dates::DatePart::ALL.into_iter().map(move |p| micro_parquet::dates::DateFieldRef::new(c.name(), p, cal)))
+        .collect()
+}
+
+/// The parts listed in a chart picker under their date column ("Open Date › Quarter"); the one clicked.
+pub(crate) fn date_part_items(ui: &mut egui::Ui, parts: &[micro_parquet::dates::DateFieldRef], current: Option<&str>) -> Option<micro_parquet::dates::DateFieldRef> {
+    let mut picked = None;
+    let mut last_col = "";
+    for f in parts {
+        if f.column != last_col {
+            ui.separator();
+            last_col = f.column.as_str();
+        }
+        if ui.selectable_label(current == Some(f.name.as_str()), micro_parquet::dates::picker_label(&f.column, f.part)).clicked() {
+            picked = Some(f.clone());
+        }
+    }
+    picked
+}
+
+impl MicroParquetApp {
+    /// The date parts the chart pickers offer for the active tab.
+    pub(crate) fn chart_date_parts(&self) -> Vec<micro_parquet::dates::DateFieldRef> {
+        self.tabs.get(self.active_tab).map(|t| date_parts_of(&t.cached_slice, self.calendar())).unwrap_or_default()
     }
 }

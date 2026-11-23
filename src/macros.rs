@@ -831,7 +831,24 @@ pub fn generate_python_polars_code(
             }
             TransformStep::FilterGroup { conditions, join, keep_matching } => {
                 if !conditions.is_empty() {
-                    let parts: Vec<String> = conditions.iter().map(py_condition_expr).collect();
+                    // a condition on a date part (W2) tests a column of that part, made first and dropped after
+                    let mut temps: Vec<String> = Vec::new();
+                    let mut tested: Vec<FilterCondition> = Vec::new();
+                    for (i, c) in conditions.iter().enumerate() {
+                        match &c.part {
+                            Some(p) => {
+                                if !py.contains("def _mp_date_part") {
+                                    py.push_str(PY_DATE_PART_HELPER);
+                                }
+                                let name = format!("__mp_part{}", i);
+                                py.push_str(&format!("lf = lf.with_columns({}.alias(\"{}\"))\n", py_date_part_expr(&c.column, p.part, &p.calendar), name));
+                                tested.push(FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                                temps.push(name);
+                            }
+                            None => tested.push(c.clone()),
+                        }
+                    }
+                    let parts: Vec<String> = tested.iter().map(py_condition_expr).collect();
                     let sep = match join {
                         GroupJoin::And => " & ",
                         GroupJoin::Or => " | ",
@@ -843,6 +860,10 @@ pub fn generate_python_polars_code(
                         py.push_str(&format!("lf = lf.filter({})\n\n", matches));
                     } else {
                         py.push_str(&format!("lf = lf.filter(~{})\n\n", matches));
+                    }
+                    if !temps.is_empty() {
+                        let quoted: Vec<String> = temps.iter().map(|t| format!("\"{}\"", t)).collect();
+                        py.push_str(&format!("lf = lf.drop([{}])\n\n", quoted.join(", ")));
                     }
                 }
             }

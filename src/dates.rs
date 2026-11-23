@@ -714,3 +714,70 @@ mod tests {
         assert_eq!(parse_range("No rate"), None);
     }
 }
+
+// ------------------------------------------------------------------------------------ date fields (W2)
+
+/// A date part used as a field without adding a column (Phase 8 W2): a pivot's Rows, Columns or Filters
+/// field, a chart's category, series or facet, a filter condition's "By" choice. It carries its own copy of
+/// the calendar, like a step.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct DateFieldRef {
+    /// The field's name in the spec ("Open Date · Month").
+    #[serde(default)]
+    pub name: String,
+    /// The Date or Datetime column.
+    #[serde(default)]
+    pub column: String,
+    #[serde(default)]
+    pub part: DatePart,
+    #[serde(default)]
+    pub calendar: CalendarSettings,
+}
+
+/// "Open Date · Month": the name of a date field.
+pub fn field_name(column: &str, part: DatePart) -> String {
+    format!("{} \u{b7} {}", column, part.label())
+}
+
+/// "Open Date › Month": how the pickers list a part under its column.
+pub fn picker_label(column: &str, part: DatePart) -> String {
+    format!("{} \u{203a} {}", column, part.label())
+}
+
+impl DateFieldRef {
+    pub fn new(column: &str, part: DatePart, calendar: CalendarSettings) -> DateFieldRef {
+        DateFieldRef { name: field_name(column, part), column: column.to_string(), part, calendar }
+    }
+
+    /// The part as a column named after the field.
+    pub fn expr(&self) -> Expr {
+        self.part.expr(&self.column, self.calendar).alias(self.name.as_str())
+    }
+
+    /// The order of the field's labels (Calendar for the text parts).
+    pub fn sort_order(&self) -> Option<crate::sort_lists::SortOrder> {
+        self.part.sort_order(&self.calendar)
+    }
+}
+
+/// Adds the date fields as columns before a pivot or chart groups (they are not kept after it). A field
+/// whose column is missing or not a date, or whose name is a real column, is refused; `what` starts the
+/// message ("Pivot", "Chart").
+pub fn with_date_fields(lf: LazyFrame, fields: &[DateFieldRef], schema: &Schema, what: &str) -> Result<LazyFrame> {
+    if fields.is_empty() {
+        return Ok(lf);
+    }
+    let mut exprs = Vec::with_capacity(fields.len());
+    for f in fields {
+        let Some(dt) = schema.get(f.column.as_str()) else {
+            anyhow::bail!("{}: the date column '{}' of '{}' was not found. Remove the field or pick another column.", what, f.column, f.name);
+        };
+        check_date_column(&f.column, dt).map_err(|e| anyhow::anyhow!("{}: {}", what, e))?;
+        if schema.get(f.name.as_str()).is_some() {
+            anyhow::bail!("{}: the table already has a column called '{}'. Rename that column, or use it instead of the date field.", what, f.name);
+        }
+        f.calendar.validate()?;
+        exprs.push(f.expr());
+    }
+    Ok(lf.with_columns(exprs))
+}

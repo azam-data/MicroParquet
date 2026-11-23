@@ -481,6 +481,8 @@ pub const CHART_MAX_H: f32 = 520.0;
 pub const CHART_BAR_W: f64 = 0.65;
 /// The chart's controls and marks.
 pub const CHART_COMBO_W: f32 = 130.0;
+/// The list of a chart field picker: tall enough for the columns and the parts of a date column (W2).
+pub const CHART_PICKER_POPUP_H: f32 = 460.0;
 pub const CHART_COMBO_NARROW_W: f32 = 90.0;
 /// Longest category name on the x-axis, and room for one.
 pub const CHART_LABEL_CHARS: usize = 14;

@@ -508,6 +508,14 @@ pub struct ChartSpec {
     pub text_size: TextSize,
     /// Donut: "Group small parts": `None` = every part is drawn; `Some(n)` = the n largest and the rest as "Other" (2 to 12).
     pub donut_top: Option<usize>,
+
+    // ---- Phase 8 W2 ----
+    /// The category is a date part ("Open Date › Quarter"): its name is `category`.
+    pub category_part: Option<crate::dates::DateFieldRef>,
+    /// The series is a date part: its name is `series`.
+    pub series_part: Option<crate::dates::DateFieldRef>,
+    /// The facet is a date part: its name is `facet`.
+    pub facet_part: Option<crate::dates::DateFieldRef>,
 }
 
 impl Default for ChartSpec {
@@ -551,6 +559,9 @@ impl Default for ChartSpec {
             labels: LabelSpec::default(),
             text_size: TextSize::Normal,
             donut_top: None,
+            category_part: None,
+            series_part: None,
+            facet_part: None,
         }
     }
 }
@@ -561,6 +572,33 @@ impl ChartSpec {
     pub fn reset_colours_if_columns_changed(&mut self, before: &ChartSpec) {
         if self.category != before.category || self.series != before.series {
             self.colour_map = ColourMap::default();
+        }
+    }
+
+    /// The date parts the chart uses as its category, series or facet (W2): only those whose name is still the
+    /// field's (a part left behind after another column was picked is ignored).
+    pub fn date_fields(&self) -> Vec<crate::dates::DateFieldRef> {
+        let mut out: Vec<crate::dates::DateFieldRef> = Vec::new();
+        for (part, field) in [(&self.category_part, Some(self.category.as_str())), (&self.series_part, self.series.as_deref()), (&self.facet_part, self.facet.as_deref())] {
+            if let Some(p) = part.as_ref().filter(|p| Some(p.name.as_str()) == field) {
+                if !out.contains(p) {
+                    out.push(p.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Drops a date part whose field is no longer the category, series or facet (another column was picked).
+    pub fn drop_stale_date_parts(&mut self) {
+        if self.category_part.as_ref().is_some_and(|p| p.name != self.category) {
+            self.category_part = None;
+        }
+        if self.series_part.as_ref().is_some_and(|p| Some(p.name.as_str()) != self.series.as_deref()) {
+            self.series_part = None;
+        }
+        if self.facet_part.as_ref().is_some_and(|p| Some(p.name.as_str()) != self.facet.as_deref()) {
+            self.facet_part = None;
         }
     }
 
@@ -582,7 +620,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -599,7 +637,9 @@ impl ChartSpec {
             self.bins,
             // a donut groups its small parts (and draws every part otherwise): the numbers change with it
             self.donut_top,
-            (self.kind == ChartKind::Donut) as u8
+            (self.kind == ChartKind::Donut) as u8,
+            // the date parts (W2): their calendar changes the numbers
+            self.date_fields()
         )
     }
 }

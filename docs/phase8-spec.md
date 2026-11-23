@@ -385,4 +385,9 @@ Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, f
 - W1-2: a prefix equal to the column's name is stored empty (the default).
 - W1-3: the Python export is Polars with a plain-Python part function, not pandas `dt`; the test runs the function on all 1,000 rows.
 - W1-4: the preview is the first 5 rows of the page in view.
+- W2-1: date fields are stored as "Open Date · Month"; pickers show "Open Date › Month" (chart) and "› Month" (pivot list); a part is offered for Rows, Columns and Filters, not Values.
+- W2-2: a date field's value lists are read through a one-part Split date step on the worker; nothing is added to the tab.
+- W2-3: "By" offers Date, Year, Month-Year, Month, Quarter, Day name; changing it clears the picked values.
+- W2-4: chart picker lists are 460 pt tall; series and facet orders are unchanged from Phase 7.
+- W2-5: the pivot has no Python translation (as before); the filter "By" choice has one.
 </accepted_deviations>

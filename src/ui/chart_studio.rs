@@ -934,10 +934,16 @@ impl MicroParquetApp {
                 ui.end_row();
                 ui.label("Small multiples");
                 let shown = spec.facet.clone().unwrap_or_else(|| "(none)".to_string());
-                let r = egui::ComboBox::from_id_salt("chart_facet").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
+                let parts = self.chart_date_parts();
+                let r = egui::ComboBox::from_id_salt("chart_facet").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(shown).show_ui(ui, |ui| {
                     ui.selectable_value(&mut spec.facet, None, "(none)");
                     for c in avail.iter().filter(|c| **c != spec.category && spec.series.as_deref() != Some(c.as_str())) {
                         ui.selectable_value(&mut spec.facet, Some(c.clone()), c);
+                    }
+                    // W2: a date part as the panels ("Open Date › Year")
+                    if let Some(f) = crate::ui::chart::date_part_items(ui, &parts, spec.facet.as_deref()) {
+                        spec.facet = Some(f.name.clone());
+                        spec.facet_part = Some(f);
                     }
                 });
                 rects.fields.push(("Facet".to_string(), r.response.rect));

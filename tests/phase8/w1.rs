@@ -110,6 +110,7 @@ fn w1_the_step_declares_calendar_orders_and_a_pivot_by_day_name_lists_sat_to_fri
         scale: PivotScale::default(),
         sort_by_value: None,
         field_orders: vec![PivotFieldOrder { field: day.clone(), order: orders[&day].clone() }],
+        date_fields: vec![],
     };
     let out = run_steps("w1_pivot", &date_tab(), &[steps[0].clone(), pivot]).expect("pivots");
     let labels: Vec<Option<String>> = out.column(&day).expect("labels").str().expect("text").into_iter().map(|v| v.map(str::to_string)).collect();

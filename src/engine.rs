@@ -2699,11 +2699,16 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 return Ok(lf);
             }
             let mut lf = lf;
-            let schema = lf
+            let mut schema = lf
                 .collect_schema()
                 .context("Could not read the column types for this filter")?;
+            // a condition on a date part (W2) tests a column of that part, added here and dropped after
+            let (conditions, temps) = with_condition_parts(&mut lf, conditions, &schema)?;
+            if !temps.is_empty() {
+                schema = lf.collect_schema().context("Could not read the column types for this filter")?;
+            }
             let mut exprs = Vec::with_capacity(conditions.len());
-            for c in conditions {
+            for c in &conditions {
                 exprs.push(build_condition_expr(c, &schema)?);
             }
             let mut it = exprs.into_iter();
@@ -2716,7 +2721,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             }
             // An unknown test (a null against a value) is "does not match".
             let matches = combined.fill_null(lit(false));
-            Ok(lf.filter(if *keep_matching { matches } else { matches.not() }))
+            let out = lf.filter(if *keep_matching { matches } else { matches.not() });
+            Ok(if temps.is_empty() { out } else { out.drop(temps.iter().map(|t| t.as_str()).collect::<Vec<_>>()) })
         }
         TransformStep::FilterRows {
             column,
@@ -2950,6 +2956,33 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(res_lf)
         }
     }
+}
+
+/// The conditions of a filter with their date parts (W2) made columns: each condition with a part reads a
+/// column `__mp_part<i>` holding that part of its date column (added to `lf`); returns the conditions to test
+/// and the names to drop after. A part of a column that is missing or not a date is refused.
+pub fn with_condition_parts(lf: &mut LazyFrame, conditions: &[crate::models::FilterCondition], schema: &Schema) -> Result<(Vec<crate::models::FilterCondition>, Vec<String>)> {
+    let mut out = Vec::with_capacity(conditions.len());
+    let mut temps = Vec::new();
+    let mut exprs = Vec::new();
+    for (i, c) in conditions.iter().enumerate() {
+        match &c.part {
+            Some(p) => {
+                let dt = schema.get(c.column.as_str()).ok_or_else(|| anyhow::anyhow!("Filter: column '{}' was not found. Pick it again in the filter editor.", c.column))?;
+                crate::dates::check_date_column(&c.column, dt).map_err(|e| anyhow::anyhow!("Filter: {}", e))?;
+                p.calendar.validate()?;
+                let name = format!("__mp_part{}", i);
+                exprs.push(p.part.expr(&c.column, p.calendar).alias(name.as_str()));
+                out.push(crate::models::FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                temps.push(name);
+            }
+            None => out.push(c.clone()),
+        }
+    }
+    if !exprs.is_empty() {
+        *lf = lf.clone().with_columns(exprs);
+    }
+    Ok((out, temps))
 }
 
 /// What stops a Split date step, in words a banker can act on: no column or part, a column that is missing

@@ -14,6 +14,8 @@ pub struct FilterState {
     pub keep: bool,
     /// Where the value pickers' buttons were drawn (tests).
     pub pick_buttons: Vec<(usize, egui::Rect)>,
+    /// Where the "By" boxes of date columns were drawn (W2, tests).
+    pub by_boxes: Vec<(usize, egui::Rect)>,
 }
 
 impl Default for FilterState {
@@ -25,6 +27,7 @@ impl Default for FilterState {
             join: GroupJoin::And,
             keep: true,
             pick_buttons: Vec::new(),
+            by_boxes: Vec::new(),
         }
     }
 }
@@ -200,6 +203,9 @@ impl MicroParquetApp {
         let totals = self.picker_totals.clone();
         let sort_lists = self.sort_lists.lists.clone();
         let calendar = self.calendar();
+        // the date columns of the tab: their value picker has a "By" choice (W2)
+        let date_cols: Vec<String> = self.tabs.get(self.active_tab).map(|t| t.cached_slice.get_columns().iter().filter(|c| micro_parquet::dates::is_date_type(c.dtype())).map(|c| c.name().to_string()).collect()).unwrap_or_default();
+        let mut by_rects: Vec<(usize, egui::Rect)> = Vec::new();
         let mut ask_values: Option<(String, Option<String>)> = None;
         let mut picker_buttons_seen: Vec<(usize, egui::Rect)> = Vec::new();
         let title = if editing.is_some() {
@@ -231,16 +237,49 @@ impl MicroParquetApp {
                                     ui.selectable_value(&mut c.op, *op, op.label());
                                 }
                             });
-                        if picker.owner == Some(i) && picker.field != c.column {
+                        // a part of a column that is no longer the condition's column is dropped (W2)
+                        if c.part.as_ref().is_some_and(|p| p.column != c.column) {
+                            c.part = None;
+                        }
+                        // "By": Date (the list of dates) or a part of it, for a date column (W2)
+                        if is_pick_op(c.op) && date_cols.contains(&c.column) {
+                            let shown = c.part.as_ref().map(|p| p.part.label()).unwrap_or("Date");
+                            let before = c.part.clone();
+                            let r = egui::ComboBox::from_id_salt(("flt_by", i)).width(theme::FIELD_W_OP).selected_text(format!("By {}", shown)).show_ui(ui, |ui| {
+                                if ui.selectable_label(c.part.is_none(), "Date").clicked() {
+                                    c.part = None;
+                                }
+                                for part in micro_parquet::dates::DatePart::FILTER_BY {
+                                    if ui.selectable_label(c.part.as_ref().is_some_and(|p| p.part == part), part.label()).clicked() {
+                                        c.part = Some(micro_parquet::dates::DateFieldRef::new(&c.column, part, calendar));
+                                    }
+                                }
+                            });
+                            by_rects.push((i, r.response.rect));
+                            if c.part.as_ref().map(|p| p.part) != before.as_ref().map(|p| p.part) {
+                                // values of one kind are not values of another
+                                c.values.clear();
+                                c.or_blank = false;
+                                c.value.clear();
+                                if picker.owner == Some(i) {
+                                    picker.owner = None;
+                                }
+                            }
+                        } else if c.part.is_some() && !is_pick_op(c.op) {
+                            c.part = None;
+                        }
+                        let pick_field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
+                        if picker.owner == Some(i) && picker.field != pick_field {
                             picker.owner = None;
                         }
                         if is_pick_op(c.op) {
                             let n = picker_selection(c).len();
-                            let label = format!("{}  \u{25be}", micro_parquet::value_picker::picker_summary(n, c.or_blank, totals.get(&c.column).copied()));
+                            let label = format!("{}  \u{25be}", micro_parquet::value_picker::picker_summary(n, c.or_blank, totals.get(&pick_field).copied()));
                             let b = ui.add(egui::Button::new(label).min_size(egui::vec2(theme::FIELD_W_PICK, 0.0)));
                             picker_buttons_seen.push((i, b.rect));
-                            if b.clicked() && picker.toggle(i, &c.column) {
-                                ask_values = Some((c.column.clone(), None));
+                            if b.clicked() && picker.toggle(i, &pick_field) {
+                                picker.part = c.part.clone();
+                                ask_values = Some((pick_field.clone(), None));
                             }
                         } else if !c.op.is_unary() {
                             ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(theme::FIELD_W_VALUE).hint_text("value"));
@@ -257,7 +296,10 @@ impl MicroParquetApp {
                     if picker.owner == Some(i) && is_pick_op(c.op) {
                         let mut values = picker_selection(c);
                         let mut blank = c.or_blank;
-                        let order = crate::ui::value_picker::picker_order(&sort_lists, &c.column);
+                        let order = match &c.part {
+                            Some(p) => p.sort_order().unwrap_or_default(),
+                            None => crate::ui::value_picker::picker_order(&sort_lists, &c.column),
+                        };
                         picker.calendar = calendar;
                         let out = crate::ui::value_picker::picker_body(ui, &tk, &mut picker, &mut values, &mut blank, true, &order);
                         if out.changed {
@@ -330,6 +372,7 @@ impl MicroParquetApp {
         });
         self.picker = picker;
         self.filter.pick_buttons = picker_buttons_seen;
+        self.filter.by_boxes = by_rects;
         if let Some((field, search)) = ask_values {
             self.picker.field = field;
             self.picker_request(search);

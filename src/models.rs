@@ -770,6 +770,10 @@ pub struct FilterCondition {
     /// "(blank)" was picked as well: blank values match (or, for "not in list", are left out too).
     #[serde(default)]
     pub or_blank: bool,
+    /// The value picker's "By" choice (Phase 8 W2): the condition matches a part of the date column (its Day
+    /// name, its Month-Year …) instead of the date. `None`: the column itself (every condition before W2).
+    #[serde(default)]
+    pub part: Option<crate::dates::DateFieldRef>,
 }
 
 /// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
@@ -794,15 +798,24 @@ impl FilterCondition {
         matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank)
     }
 
-    /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000".
+    /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000", "Open Date › Day name in list Fri; Sat".
     pub fn describe(&self) -> String {
+        let subject = self.subject();
         if self.uses_values() {
-            return format!("{} {} {}", self.column, self.op.label(), values_summary(&self.values, self.or_blank, 3));
+            return format!("{} {} {}", subject, self.op.label(), values_summary(&self.values, self.or_blank, 3));
         }
         match self.op {
-            CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", self.column, self.op.label()),
-            CondOp::Between => format!("{} between {} and {}", self.column, self.value.trim(), self.value2.trim()),
-            _ => format!("{} {} {}", self.column, self.op.label(), self.value.trim()),
+            CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", subject, self.op.label()),
+            CondOp::Between => format!("{} between {} and {}", subject, self.value.trim(), self.value2.trim()),
+            _ => format!("{} {} {}", subject, self.op.label(), self.value.trim()),
+        }
+    }
+
+    /// What the condition tests: the column, or "Open Date › Day name" for a date part (W2).
+    pub fn subject(&self) -> String {
+        match &self.part {
+            Some(p) => crate::dates::picker_label(&self.column, p.part),
+            None => self.column.clone(),
         }
     }
 }
@@ -1479,6 +1492,9 @@ pub struct PivotSpec {
     /// The order of the labels of a Rows or Columns field other than Natural (Phase 6 U3).
     #[serde(default)]
     pub field_orders: Vec<PivotFieldOrder>,
+    /// Date parts used as fields ("Open Date · Month", Phase 8 W2): added as columns before grouping.
+    #[serde(default)]
+    pub date_fields: Vec<crate::dates::DateFieldRef>,
 }
 
 /// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
@@ -1862,6 +1878,9 @@ pub enum TransformStep {
         sort_by_value: Option<PivotSortByValue>,
         #[serde(default)]
         field_orders: Vec<PivotFieldOrder>,
+        /// Date parts used as fields (Phase 8 W2).
+        #[serde(default)]
+        date_fields: Vec<crate::dates::DateFieldRef>,
     },
     SqlQuery {
         query: String,
@@ -2079,6 +2098,14 @@ impl TransformStep {
         }
     }
 
+    /// A one-part Split date that makes a date field's part a column of the field's name ("Open Date · Month"):
+    /// how the value lists of a date field are read (W2).
+    pub fn date_field_step(f: &crate::dates::DateFieldRef) -> TransformStep {
+        let label = f.part.label();
+        let prefix = f.name.strip_suffix(label).map(|p| p.trim_end().to_string()).unwrap_or_else(|| f.name.clone());
+        TransformStep::SplitDate { column: f.column.clone(), parts: vec![f.part], calendar: f.calendar, prefix }
+    }
+
     /// The names of the columns a Split date step adds, in its part order: "<prefix> <Part>" (the prefix
     /// defaults to the column's name). Empty for any other step.
     pub fn split_date_names(&self) -> Vec<(crate::dates::DatePart, String)> {
@@ -2096,7 +2123,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -2108,6 +2135,7 @@ impl TransformStep {
                 scale: *scale,
                 sort_by_value: *sort_by_value,
                 field_orders: field_orders.clone(),
+                date_fields: date_fields.clone(),
             }),
             _ => None,
         }
@@ -2127,6 +2155,7 @@ impl TransformStep {
             scale: spec.scale,
             sort_by_value: spec.sort_by_value,
             field_orders: spec.field_orders,
+            date_fields: spec.date_fields,
         }
     }
 }
