@@ -714,10 +714,18 @@ fn group_of(code: &str, cl_map: &[(String, String)]) -> Option<&'static str> {
     })
 }
 
+/// The warning a summary carries when the ECL step it summarises ran on a parameter file marked sample: the text of the
+/// "Sample parameters" row. `None` when the steps have no ECL step, or its parameter file is the bank's own.
+pub fn sample_parameters_note(steps: &[crate::models::TransformStep]) -> Option<String> {
+    let cutoff = steps.iter().rev().find_map(|s| spec_of(s).ok().and_then(|e| e.cutoff))?;
+    let (file, _) = load_params(cutoff).ok()?;
+    file.meta.sample.then(|| format!("The parameter file {} is marked sample: the PD curves, LGD, CCF and scenarios must be the bank's own before these figures are used in a return.", file.meta.file))
+}
+
 /// The §9.1 summary: ECL, regulatory provision and the higher of the two, by grade group and by
 /// stage, and the shortfall to the Loan Loss Reserve (the total regulatory provision less the total
 /// ECL, not below 0).
-pub fn summary_frame(df: &DataFrame, spec: &EclSummarySpec, cl_map: &[(String, String)]) -> Result<DataFrame> {
+pub fn summary_frame(df: &DataFrame, spec: &EclSummarySpec, cl_map: &[(String, String)], sample_note: Option<&str>) -> Result<DataFrame> {
     let who = "IFRS 9 summary";
     let (keys, key_label) = row_keys(df);
     for c in ["Stage", "EAD", "ECL"] {
@@ -785,14 +793,29 @@ pub fn summary_frame(df: &DataFrame, spec: &EclSummarySpec, cl_map: &[(String, S
     }
     let ts = total(&by_stage);
     push("Stage", "Total", ts, Some((ts[3] - ts[2]).max(0.0)));
+    // a summary made from a sample parameter file says so in a row of its own (the chart copies it into its footnote)
+    let mut sample_row = false;
+    if let Some(n) = sample_note {
+        section.push("Sample parameters".to_string());
+        group.push(n.to_string());
+        loans.push(0.0);
+        e.push(0.0);
+        l.push(0.0);
+        p.push(0.0);
+        h.push(0.0);
+        sf.push(None);
+        sample_row = true;
+    }
+    // the sample row has no numbers: blank, never 0
+    let opt = |v: &Vec<f64>| -> Vec<Option<f64>> { v.iter().enumerate().map(|(i, x)| if sample_row && i + 1 == v.len() { None } else { Some(*x) }).collect() };
     Ok(DataFrame::new(vec![
         Series::new(SUMMARY_COLUMNS[0].into(), section),
         Series::new(SUMMARY_COLUMNS[1].into(), group),
-        Series::new(SUMMARY_COLUMNS[2].into(), loans),
-        Series::new(SUMMARY_COLUMNS[3].into(), e),
-        Series::new(SUMMARY_COLUMNS[4].into(), l),
-        Series::new(SUMMARY_COLUMNS[5].into(), p),
-        Series::new(SUMMARY_COLUMNS[6].into(), h),
+        Series::new(SUMMARY_COLUMNS[2].into(), opt(&loans)),
+        Series::new(SUMMARY_COLUMNS[3].into(), opt(&e)),
+        Series::new(SUMMARY_COLUMNS[4].into(), opt(&l)),
+        Series::new(SUMMARY_COLUMNS[5].into(), opt(&p)),
+        Series::new(SUMMARY_COLUMNS[6].into(), opt(&h)),
         Series::new(SUMMARY_COLUMNS[7].into(), sf),
     ])?)
 }

@@ -247,6 +247,29 @@ fn s3_a_donut_draws_every_part_with_outside_labels_leader_lines_and_grey_past_th
             }
         }
     }
+    // leader lines never cross: on each side the labels run top to bottom in the order of their parts on the ring
+    // (several small parts near 12 o'clock used to swap places when their heights were clamped)
+    let nine = donut_of(&[310.0, 220.0, 150.0, 90.0, 70.0, 55.0, 40.0, 25.0, 12.0], None);
+    for (w, h) in [(900.0, 560.0), (1219.0, 686.0), (1600.0, 900.0)] {
+        let l = lay(&nine, w, h, false);
+        let centre_x = l.marks[0].slice.as_ref().unwrap().centre.x;
+        for right in [true, false] {
+            let mut side: Vec<(f32, f32)> = l
+                .texts
+                .iter()
+                .filter(|x| x.role == Role::Label && (x.rect.center().x > centre_x) == right)
+                .filter_map(|x| {
+                    let name = x.text.split("  ").next()?;
+                    let i = nine.categories.iter().position(|c| c == name)?;
+                    Some((x.rect.center().y, l.marks[i].rect.center().y))
+                })
+                .collect();
+            side.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for w2 in side.windows(2) {
+                assert!(w2[0].1 <= w2[1].1 + 0.5, "{w}x{h} right={right}: labels out of order, lines cross: {side:?}");
+            }
+        }
+    }
     // a part under 1% has no ring label, but is in the legend and the tooltip
     let d = donut_of(&[60.0, 30.0, 9.6, 0.4], None);
     let l = lay(&d, 900.0, 560.0, false);
@@ -469,4 +492,170 @@ fn s6_a_chart_tab_in_a_pdf_is_the_chart_on_the_first_page_and_the_table_only_whe
         };
         assert!(text.contains(&probe), "{name}: '{probe}' is on the page: {text}");
     }
+}
+
+// ---------------------------------------------------------------------------- 7. the IFRS 9 summary's sample row
+
+fn ecl_table() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Stage".into(), [1i64, 2, 3, 3]),
+        Series::new("EAD".into(), [800.0, 1000.0, 1000.0, 1000.0]),
+        Series::new("ECL".into(), [8.0, 40.0, 300.0, 900.0]),
+        Series::new("CL_Final".into(), ["STD-0", "STD-2", "SS", "B/L"]),
+        Series::new("Required_Provision_BDT".into(), [8.0, 10.0, 200.0, 1000.0]),
+    ])
+    .unwrap()
+}
+
+fn ecl_step() -> micro_parquet::models::TransformStep {
+    serde_json::from_value(serde_json::json!({"IfrsEcl": {"fixed_segment": "Corporate", "drawn_col": "Drawn", "eir_col": "EIR", "maturity_col": "Matdat", "classified_stage3": true, "cutoff_date": "2026-10-31"}})).expect("step")
+}
+
+#[test]
+fn s9_the_ifrs9_summary_emits_a_sample_parameters_row_on_the_sample_file_and_the_chart_copies_it() {
+    use micro_parquet::charts::templates::{prepare, Ctx, Template};
+    use micro_parquet::ecl::{sample_parameters_note, summary_frame, EclSummarySpec};
+    let dir = std::env::temp_dir().join(format!("mp-s9-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    micro_parquet::rules::set_data_dir_override(Some(dir.clone()));
+    let cl = micro_parquet::banking::ProvisionConfig::load_or_create(&dir).expect("cl map").cl_code_map;
+    let spec = EclSummarySpec { grade_col: "CL_Final".into(), provision_col: "Required_Provision_BDT".into() };
+    let ctx = Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() };
+    // the shipped sample parameter file (nothing in the data folder: the built-in one is used)
+    let note = sample_parameters_note(&[ecl_step()]).expect("the shipped parameter file is a sample");
+    assert!(note.contains("marked sample") && note.contains("2026-03-08.json"), "{note}");
+    let df = summary_frame(&ecl_table(), &spec, &cl, Some(&note)).unwrap();
+    let section: Vec<String> = df.column("Section").unwrap().str().unwrap().into_iter().map(|s| s.unwrap().to_string()).collect();
+    assert_eq!(section.last().map(String::as_str), Some("Sample parameters"));
+    let i = section.len() - 1;
+    assert_eq!(df.column("Group").unwrap().str().unwrap().get(i), Some(note.as_str()));
+    assert_eq!(df.column("EAD").unwrap().f64().unwrap().get(i), None, "no numbers on the row");
+    assert_eq!(df.column("Loans").unwrap().f64().unwrap().get(i), None);
+    // the Stage rows are what they were
+    assert_eq!(df.column("EAD").unwrap().f64().unwrap().get(section.iter().position(|s| s == "Stage").unwrap()), Some(800.0));
+    let p = prepare(Template::EclByStage, &df, &ctx).unwrap();
+    assert!(p.spec.footnote.contains("marked sample"), "the chart's footnote: {}", p.spec.footnote);
+    // the bank's own parameter file (sample: false) gives no row
+    let folder = dir.join("ecl_params");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("2026-03-08.json"),
+        serde_json::json!({
+            "as_of": "2026-03-08", "source": "the bank's own parameters", "sample": false,
+            "segments": [{"name": "Corporate", "cumulative_pd_pct": [2.0, 5.0], "lgd_pct": 45, "ccf_pct": 50}],
+            "scenarios": [{"name": "Base", "weight_pct": 100, "pd_multiplier": 1.0}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(sample_parameters_note(&[ecl_step()]), None, "the bank's own file is not a sample");
+    let df = summary_frame(&ecl_table(), &spec, &cl, None).unwrap();
+    assert!(!df.column("Section").unwrap().str().unwrap().into_iter().any(|s| s == Some("Sample parameters")));
+    assert!(!prepare(Template::EclByStage, &df, &ctx).unwrap().spec.footnote.contains("sample"));
+    // steps without an ECL step: nothing to say
+    assert_eq!(sample_parameters_note(&[]), None);
+    micro_parquet::rules::set_data_dir_override(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ------------------------------------------------------------------------------------------------ 8. "All" labels on the page
+
+#[test]
+fn s8_the_page_hides_overlapping_all_labels_only_when_labels_are_all() {
+    use micro_parquet::charts::spec::LabelMode;
+    for kind in [ChartKind::Bar, ChartKind::Line] {
+        let mut d = ten_buckets();
+        d.spec.kind = kind;
+        d.spec.labels.mode = LabelMode::All;
+        let pair = chart_pair(&d, &opts()).unwrap();
+        let series = pair.light["series"].as_array().unwrap();
+        assert!(!series.is_empty());
+        assert!(series.iter().all(|s| s["labelLayout"]["hideOverlap"] == true), "{kind:?}: every series hides overlapping labels: {}", pair.light["series"]);
+        // Auto and Ends only keep the nominal rule: no hideOverlap
+        for mode in [LabelMode::Auto, LabelMode::EndsOnly, LabelMode::None] {
+            d.spec.labels.mode = mode;
+            let pair = chart_pair(&d, &opts()).unwrap();
+            assert!(pair.light["series"].as_array().unwrap().iter().all(|s| s["labelLayout"]["hideOverlap"] != true), "{kind:?} {mode:?}");
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ 9. months as "Aug 2026"
+
+#[test]
+fn s10_the_deposit_mix_writes_months_as_aug_2026_and_two_days_of_one_month_keep_the_whole_date() {
+    use micro_parquet::charts::templates::{prepare, Ctx, Template};
+    let ctx = Ctx { divisor: 1.0, suffix: "Cr".into(), ..Default::default() };
+    let build = |months: &[&str]| {
+        let (mut m, mut p, mut b) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, mo) in months.iter().enumerate() {
+            for (pr, v) in [("Term deposit", 100.0 + i as f64), ("Savings", 50.0)] {
+                m.push(*mo);
+                p.push(pr);
+                b.push(v);
+            }
+        }
+        DataFrame::new(vec![Series::new("Month".into(), m), Series::new("Product".into(), p), Series::new("Balance".into(), b)]).unwrap()
+    };
+    // the shipped sample ("2026-08") and a CBS export (D/M/Y) read the same
+    for months in [["2026-08-31", "2026-09-30", "2026-10-31"], ["31/08/2026", "30/09/2026", "31/10/2026"]] {
+        let p = prepare(Template::DepositMix, &build(&months), &ctx).unwrap();
+        let d = compute(p.table.clone().unwrap().lazy(), &p.spec).unwrap();
+        assert_eq!(d.categories, ["Aug 2026", "Sep 2026", "Oct 2026"]);
+    }
+    let p = prepare(Template::DepositMix, &build(&["15/08/2026", "31/08/2026"]), &ctx).unwrap();
+    let d = compute(p.table.clone().unwrap().lazy(), &p.spec).unwrap();
+    assert_eq!(d.categories, ["15 Aug 2026", "31 Aug 2026"]);
+}
+
+/// The pictures of the guide for the label settings, the donut and the category labels: written by the two
+/// "every form" tests next to the other pages and workbooks when `MP_HTML_OUT` / `MP_XLSX_OUT` is set.
+pub(crate) fn label_forms() -> Vec<(&'static str, ChartData)> {
+    use micro_parquet::charts::spec::{LabelMode, LabelSpec};
+    let months = ["May", "Jun", "Jul", "Aug", "Sep", "Oct"];
+    let (mut m, mut p, mut v) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, mo) in months.iter().enumerate() {
+        for (j, pr) in ["Term deposits", "Savings", "Current", "Other"].iter().enumerate() {
+            m.push(*mo);
+            p.push(*pr);
+            v.push(600.0 / (j as f64 + 1.0) + i as f64 * 17.0);
+        }
+    }
+    let df = DataFrame::new(vec![Series::new("Month".into(), m), Series::new("Product".into(), p), Series::new("Balance".into(), v)]).unwrap();
+    let order = micro_parquet::sort_lists::SortOrder::List { name: "o".into(), values: months.iter().map(|s| s.to_string()).collect(), case_insensitive: true };
+    let spec = ChartSpec { category: "Month".into(), series: Some("Product".into()), value: Some("Balance".into()), order, kind: ChartKind::Bar, labels: micro_parquet::charts::spec::LabelSpec { mode: LabelMode::All, ..LabelSpec::default() }, ..Default::default() };
+    let nine = [310.0, 220.0, 150.0, 90.0, 70.0, 55.0, 40.0, 25.0, 12.0];
+    let products = ["Term deposits", "Savings", "Current", "DPS", "FDR", "Call money", "Foreign currency", "Sundry", "Other"];
+    let donut = DataFrame::new(vec![Series::new("Product".into(), products), Series::new("Balance".into(), nine)]).unwrap();
+    let dspec = ChartSpec { category: "Product".into(), value: Some("Balance".into()), kind: ChartKind::Donut, by_value: true, ..Default::default() };
+    let top4 = ChartSpec { donut_top: Some(4), ..dspec.clone() };
+    vec![
+        ("labels-all", compute(df.lazy(), &spec).unwrap()),
+        ("donut-9", compute(donut.clone().lazy(), &dspec).unwrap()),
+        ("donut-top4", compute(donut.lazy(), &top4).unwrap()),
+        ("column-10-buckets", ten_buckets()),
+    ]
+}
+
+/// The picture of a chart page of a PDF for the guide (`docs/guide/img/charts/pdf-chart-page.png`), when poppler is there.
+#[test]
+fn s11_the_picture_of_a_chart_pdf_page_is_written() {
+    use micro_parquet::exporters::{export_pdf_tabs_with, PdfOptions, PdfTab};
+    use micro_parquet::models::NumberDisplayFormat;
+    if std::process::Command::new("pdftoppm").arg("-v").output().is_err() {
+        eprintln!("s11: pdftoppm (poppler) is not installed here: no picture of the PDF page");
+        return;
+    }
+    let d = ten_buckets();
+    let table = micro_parquet::chart::chart_table(&d).unwrap();
+    let path = tmp("s11.pdf");
+    let tab = PdfTab { title: "Chart: buckets".into(), df: table, col_formats: Default::default(), summary: vec![], chart: Some((d, opts())) };
+    let o = PdfOptions { title: "ALCO pack".into(), page: micro_parquet::pdf_layout::PdfPage { landscape: true, legal: false }, chart_tables: false };
+    export_pdf_tabs_with(vec![tab], &path, NumberDisplayFormat::BdtCrore, 2, &o).expect("pdf");
+    let out = std::path::Path::new("docs/guide/img/charts/pdf-chart-page");
+    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+    let r = std::process::Command::new("pdftoppm").args(["-r", "110", "-png", "-f", "1", "-l", "1", "-singlefile"]).arg(&path).arg(out).output().expect("pdftoppm runs");
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert!(out.with_extension("png").metadata().map(|m| m.len() > 5000).unwrap_or(false));
 }

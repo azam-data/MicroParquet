@@ -418,7 +418,7 @@ fn r7_the_summary_by_grade_group_and_stage_gives_the_higher_of_and_the_shortfall
     let cl = micro_parquet::banking::ProvisionConfig::load_or_create(&data).expect("cl map").cl_code_map;
     set_data_dir_override(None);
     let spec = EclSummarySpec { grade_col: "CL_Final".into(), provision_col: "Required_Provision_BDT".into() };
-    let s = summary_frame(&df, &spec, &cl).expect("summary");
+    let s = summary_frame(&df, &spec, &cl, None).expect("summary");
     assert_eq!(s.get_column_names().iter().map(|n| n.to_string()).collect::<Vec<_>>(), SUMMARY_COLUMNS.to_vec());
     let groups = strings(&s, "Group");
     let at = |sec: &str, g: &str| (0..s.height()).find(|i| strings(&s, "Section")[*i].as_deref() == Some(sec) && groups[*i].as_deref() == Some(g)).expect("row");
@@ -438,16 +438,16 @@ fn r7_the_summary_by_grade_group_and_stage_gives_the_higher_of_and_the_shortfall
     // ECL above the provision: no shortfall (never negative); the higher of is the ECL
     let mut df2 = df.clone();
     df2.with_column(Series::new("Required_Provision_BDT".into(), &[5_000.0])).expect("col");
-    let s2 = summary_frame(&df2, &spec, &cl).expect("summary");
+    let s2 = summary_frame(&df2, &spec, &cl, None).expect("summary");
     let t = (0..s2.height()).find(|i| strings(&s2, "Group")[*i].as_deref() == Some("Total")).expect("total");
     near(floats(&s2, "Shortfall to Loan Loss Reserve")[t], 0.0, "no shortfall");
     near(floats(&s2, "Higher of")[t], 19_338.84, "the ECL is the higher");
     // a table without the ECL columns, an unknown grade
-    let e = format!("{:#}", summary_frame(&df.drop("Stage").expect("drop"), &spec, &cl).err().expect("no Stage"));
+    let e = format!("{:#}", summary_frame(&df.drop("Stage").expect("drop"), &spec, &cl, None).err().expect("no Stage"));
     assert!(e.contains("no column 'Stage'") && e.contains("IFRS 9 ECL step"), "{e}");
     let mut df3 = df.clone();
     df3.with_column(Series::new("CL_Final".into(), &["ZZ"])).expect("col");
-    let e = format!("{:#}", summary_frame(&df3, &spec, &cl).err().expect("grade"));
+    let e = format!("{:#}", summary_frame(&df3, &spec, &cl, None).err().expect("grade"));
     assert!(e.contains("not a known code") && e.contains("A1"), "{e}");
     // grade groups from sub-grades and coarse codes
     let df4 = DataFrame::new(vec![
@@ -459,7 +459,7 @@ fn r7_the_summary_by_grade_group_and_stage_gives_the_higher_of_and_the_shortfall
         Series::new("ECL".into(), &[0.1, 0.2, 4.5, 4.5, 4.5]),
     ])
     .expect("tab");
-    let s4 = summary_frame(&df4, &spec, &cl).expect("summary");
+    let s4 = summary_frame(&df4, &spec, &cl, None).expect("summary");
     let g4 = strings(&s4, "Group");
     let l = |g: &str, sec: &str| floats(&s4, "Loans")[(0..s4.height()).find(|i| g4[*i].as_deref() == Some(g) && strings(&s4, "Section")[*i].as_deref() == Some(sec)).expect("row")];
     assert_eq!((l("Standard", "Grade group"), l("SS", "Grade group"), l("DF", "Grade group"), l("B/L", "Grade group")), (Some(2.0), Some(1.0), Some(1.0), Some(1.0)));

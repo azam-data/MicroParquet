@@ -16,13 +16,13 @@ Shows how a book's mix changed: stacked columns of product by month (the total o
 
 | Column | Required? | Notes |
 | --- | --- | --- |
-| Month | Yes | A date or text; sorted as dates when they are dates. |
+| Month | Yes | A date, or text written day/month/year or year-month-day. The months are put in date order and written "Aug 2026" (two dates in one month keep the whole date, "15 Aug 2026"). |
 | Product | Yes | More than 8 products: the rest fold into "Other". |
 | Balance / outstanding / amount | Yes | A number column (never a guess among several). |
 
 ## 5. Step by step
 
-1. Open the tab and choose Charts ▸ "Chart this result".
+1. Open the tab and choose Charts ▸ "Chart this result". The chart's own table (month, product, amount) opens as the tab "Chart: deposit mix".
 2. Change anything you like in the studio (type, order, scale, titles, reference lines); a takeaway you type replaces the finding as the title.
 3. Export to HTML (a page that works offline), Export to Excel (a native chart beside the numbers) or Copy as Python from the buttons under the chart; a report pack can carry the chart too.
 
@@ -39,7 +39,7 @@ Shows how a book's mix changed: stacked columns of product by month (the total o
 
 Three months (Crore):
 
-| Product | 2026-08 | 2026-09 | 2026-10 |
+| Product | Aug 2026 | Sep 2026 | Oct 2026 |
 | --- | --- | --- | --- |
 | Term deposit | 500 | 540 | 600 |
 | Savings | 300 | 305 | 310 |

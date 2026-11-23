@@ -1192,12 +1192,10 @@ fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
     let t = Template::DepositMix;
     let (month_c, prod_c, bal_c) = mix_cols(df).ok_or_else(|| anyhow!("{}: the tab needs a month column, a product column and an amount column (balance, outstanding or amount).", t.name()))?;
     let dates = month_dates(t, df, &month_c)?;
-    let months = strs(t, df, &month_c)?;
     let prods = strs(t, df, &prod_c)?;
     let bal = nums(t, df, &bal_c)?;
     // by date (never by text); the tab's own month texts, in date order, are the order of the columns
     let mut by: std::collections::BTreeMap<chrono::NaiveDate, std::collections::BTreeMap<String, f64>> = std::collections::BTreeMap::new();
-    let mut texts: std::collections::BTreeMap<chrono::NaiveDate, Vec<String>> = std::collections::BTreeMap::new();
     for i in 0..df.height() {
         if dates[i].is_none() && prods[i].is_none() && bal[i].is_none() {
             continue;
@@ -1206,17 +1204,22 @@ fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
             bail!("{}: row {} has a blank month, product or amount. A blank is not read as zero: fill it or remove the row, then chart again.", t.name(), i + 1);
         };
         *by.entry(d).or_default().entry(p).or_default() += b;
-        if let Some(m) = months[i].clone() {
-            let e = texts.entry(d).or_default();
-            if !e.contains(&m) {
-                e.push(m);
-            }
-        }
     }
     if by.is_empty() {
         bail!("{}: no row has a month, a product and an amount.", t.name());
     }
-    let month_order: Vec<String> = texts.into_values().flatten().collect();
+    // the months are written "Aug 2026" (two days of one month fall back to the whole date); the chart is drawn from this
+    // table of month, product and amount, in date order
+    let month_order = month_labels(&by.keys().copied().collect::<Vec<_>>());
+    let (mut mm, mut pp, mut bb): (Vec<String>, Vec<String>, Vec<f64>) = Default::default();
+    for (label, (_, prods_of)) in month_order.iter().zip(by.iter()) {
+        for (p, v) in prods_of {
+            mm.push(label.clone());
+            pp.push(p.clone());
+            bb.push(*v);
+        }
+    }
+    let table = frame(vec![Series::new(month_c.as_str().into(), mm), Series::new(prod_c.as_str().into(), pp), Series::new(bal_c.as_str().into(), bb)])?;
     let mut spec = base_spec(&month_c, ChartKind::Bar);
     spec.series = Some(prod_c.clone());
     spec.value = Some(bal_c.clone());
@@ -1245,7 +1248,7 @@ fn deposit_mix(df: &DataFrame) -> Result<Prepared> {
         }
     };
     spec.title = finding.clone();
-    Ok(Prepared { template: t, table: None, spec, finding, tab_title: String::new(), companion: None })
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: deposit mix".to_string(), companion: None })
 }
 
 fn rate_profile(df: &DataFrame) -> Result<Prepared> {

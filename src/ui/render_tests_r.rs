@@ -419,3 +419,96 @@ fn s8_reset_colours_and_text_size_work_by_real_clicks_and_the_pdf_dialog_offers_
     let tabs = rig.app.ticked_export_tabs_for_test();
     assert_eq!(tabs.iter().filter(|t| t.chart.is_some()).count(), 1, "the chart tab carries its chart into the PDF export");
 }
+
+// ------------------------------------------------------------------------------------------------ final fixes B: screenshots
+
+/// Runs one frame and writes it (meshes and font atlas) for `tools/egui_mesh_png.py`.
+fn dump_frame(rig: &mut Rig, path: &std::path::Path, dark: bool) {
+    let out = rig.ctx.run(rig.input.clone(), |c| rig.app.frame_ui(c));
+    let ppp = out.pixels_per_point;
+    let prims = rig.ctx.tessellate(out.shapes, ppp);
+    let mut meshes = Vec::new();
+    for p in prims {
+        let egui::epaint::Primitive::Mesh(m) = p.primitive else { continue };
+        let tex = match m.texture_id {
+            egui::TextureId::Managed(n) => n as i64,
+            egui::TextureId::User(_) => -1,
+        };
+        meshes.push(serde_json::json!({
+            "texture": tex,
+            "clip": [p.clip_rect.left(), p.clip_rect.top(), p.clip_rect.right(), p.clip_rect.bottom()],
+            "pos": m.vertices.iter().flat_map(|v| [v.pos.x, v.pos.y]).collect::<Vec<_>>(),
+            "uv": m.vertices.iter().flat_map(|v| [v.uv.x, v.uv.y]).collect::<Vec<_>>(),
+            "col": m.vertices.iter().flat_map(|v| { let c = v.color; [c.r(), c.g(), c.b(), c.a()] }).collect::<Vec<_>>(),
+            "idx": m.indices,
+        }));
+    }
+    let (size, rgba) = rig.ctx.fonts(|f| {
+        let atlas = f.texture_atlas();
+        let a = atlas.lock();
+        let img = a.image();
+        let rgba: Vec<u8> = img.srgba_pixels(None).flat_map(|c| [c.r(), c.g(), c.b(), c.a()]).collect();
+        (img.size, rgba)
+    });
+    let s = rig.ctx.screen_rect().size();
+    let tk = *crate::theme::tokens(dark);
+    let bg = tk.bg;
+    let doc = serde_json::json!({"ppp": ppp, "size": [s.x, s.y], "background": [bg.r(), bg.g(), bg.b()], "atlas": {"size": size, "rgba": rgba}, "meshes": meshes});
+    std::fs::write(path, serde_json::to_string(&doc).expect("json")).expect("write the frame");
+}
+
+fn python_with_numpy_and_pillow() -> bool {
+    std::process::Command::new("python3").args(["-c", "import numpy, PIL"]).output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+#[test]
+fn r26_the_screenshots_of_the_label_and_text_size_controls_are_written() {
+    use crate::ui::render_tests_p7::scroll_into_view;
+    if !python_with_numpy_and_pillow() {
+        eprintln!("skipped: python3 with numpy and Pillow is not available");
+        return;
+    }
+    let out = std::path::Path::new("docs/guide/img/charts");
+    std::fs::create_dir_all(out).expect("folder");
+    for dark in [false, true] {
+        let mut rig = chart_rig_with("r26ctl", bdt(), 2.0, 1291.0, 1000.0);
+        if dark {
+            rig.app.dark_mode = true;
+            crate::theme::apply_ui_theme(&rig.ctx, true, rig.app.ui_zoom);
+        }
+        pump(&mut rig, "first chart", &chart_ready);
+        set_spec(&mut rig, &|s| {
+            s.category = "Month".into();
+            s.series = None;
+            s.value = Some("Balance".into());
+            s.kind = ChartKind::Bar;
+        });
+        let screen = rig.ctx.screen_rect();
+        let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+        let field = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let r = scroll_into_view(&mut rig, at, &field("Titles and look"), "Titles and look");
+        pclick(&mut rig, r);
+        rig.draw(3);
+        // the last of the label controls in view brings the whole block (text size to percent labels) on screen
+        let _ = scroll_into_view(&mut rig, at, &field("Percent labels"), "Percent labels");
+        rig.step(vec![egui::Event::PointerMoved(egui::pos2(5.0, 5.0))]);
+        rig.draw(4);
+        // the theme call set the app's zoom (105%); the picture is made at two pixels to the point in both themes
+        rig.ctx.set_zoom_factor(2.0);
+        rig.draw(2);
+        let tmp = std::env::temp_dir().join(format!("mp_r26_{}_{}.json", std::process::id(), dark));
+        dump_frame(&mut rig, &tmp, dark);
+        let png = out.join(format!("studio-labels-and-text-size{}.png", if dark { "-dark" } else { "" }));
+        // the right-hand panel and the chart beside it
+        let r = std::process::Command::new("python3")
+            .args(["-I", "tools/egui_mesh_png.py"])
+            .arg(&tmp)
+            .arg(&png)
+            .args([(screen.right() - 400.0).to_string(), "60".to_string(), screen.right().to_string(), screen.bottom().to_string()])
+            .output()
+            .expect("python3 runs");
+        assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+        assert!(png.metadata().map(|m| m.len() > 5000).unwrap_or(false));
+        let _ = std::fs::remove_file(&tmp);
+    }
+}

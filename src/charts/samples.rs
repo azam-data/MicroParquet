@@ -111,6 +111,15 @@ pub fn mom_table_keys() -> DataFrame {
     .unwrap()
 }
 
+/// A month-on-month variance with a New key (FX) and a Closed key (Old): their whole change is "New / closed".
+pub fn mom_table_new_closed() -> DataFrame {
+    let f = |p: &[&str], b: &[f64], r: &[f64]| DataFrame::new(vec![Series::new("Product".into(), p), Series::new("Balance".into(), b), Series::new("Rate".into(), r)]).unwrap();
+    let prev = f(&["TD", "Savings", "Old scheme"], &[100.0, 50.0, 20.0], &[8.0, 4.0, 6.0]);
+    let curr = f(&["TD", "Savings", "FX"], &[120.0, 50.0, 30.0], &[8.5, 4.0, 5.0]);
+    let spec = crate::mom::MomSpec { key_cols: vec!["Product".into()], bal_col: "Balance".into(), rate_col: Some("Rate".into()), ..Default::default() };
+    crate::mom::build_mom(prev.lazy(), curr.lazy(), &spec).unwrap()
+}
+
 pub fn lcr_summary() -> DataFrame {
     DataFrame::new(vec![
         Series::new(
@@ -162,6 +171,19 @@ pub fn scorecard() -> DataFrame {
 pub fn classified() -> DataFrame {
     let (mut m, mut g, mut b) = (Vec::new(), Vec::new(), Vec::new());
     for (month, vals) in [("2026-08-31", [900.0, 50.0, 20.0, 20.0, 10.0]), ("2026-09-30", [890.0, 50.0, 25.0, 20.0, 15.0]), ("2026-10-31", [880.0, 50.0, 30.0, 22.0, 18.0])] {
+        for (i, gr) in ["STD", "SMA", "SS", "DF", "BL"].iter().enumerate() {
+            m.push(month);
+            g.push(*gr);
+            b.push(vals[i]);
+        }
+    }
+    DataFrame::new(vec![dates("Month", &m), Series::new("Grade".into(), g), Series::new("Balance".into(), b)]).unwrap()
+}
+
+/// The classified loans of three months, the middle one with no loans at all (its NPL % is blank, not 0%).
+pub fn classified_empty_month() -> DataFrame {
+    let (mut m, mut g, mut b) = (Vec::new(), Vec::new(), Vec::new());
+    for (month, vals) in [("2026-08-31", [900.0, 50.0, 20.0, 20.0, 10.0]), ("2026-09-30", [0.0; 5]), ("2026-10-31", [880.0, 50.0, 30.0, 22.0, 18.0])] {
         for (i, gr) in ["STD", "SMA", "SS", "DF", "BL"].iter().enumerate() {
             m.push(month);
             g.push(*gr);

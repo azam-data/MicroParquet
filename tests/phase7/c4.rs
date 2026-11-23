@@ -401,7 +401,7 @@ fn c4_a_multi_measure_chart_and_an_empty_chart() {
 #[test]
 fn c4_every_form_can_be_written_for_a_visual_check() {
     let out = std::env::var("MP_XLSX_OUT").ok().map(PathBuf::from);
-    for (name, d) in forms() {
+    for (name, d) in forms().into_iter().chain(crate::p7_s::label_forms()) {
         let path = out.clone().map(|d| d.join(format!("{name}.xlsx"))).unwrap_or_else(|| tmp(&format!("{name}-all.xlsx")));
         if let Some(dir) = &out {
             std::fs::create_dir_all(dir).unwrap();

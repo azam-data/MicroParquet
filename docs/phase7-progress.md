@@ -168,3 +168,20 @@ E-7: Excel honours the workbook's "stop if true", so the neutral cells of a heat
 | 6 | `charts::pdf` (layout primitives to printpdf, embedded fonts, `PdfMeasure`), `PdfTab.chart`, `PdfOptions.chart_tables`, the dialog's tick box | `s6_a_chart_tab_in_a_pdf…` (pdftotext, pdffonts), `s8_…` |
 
 Part A deviations: F-1 the Excel label interval cannot be forced to 1 (see the spec); F-2 a breach label that finds no room stays in the tooltip (the ring is drawn) instead of being forced over another text, and the limit-ticks note shortens, then drops, in a very small chart with large text; F-3 an axis whose labels leave no room for the plot says "The chart is too small for its category labels…" instead of drawing nothing.
+
+## Session F: final fixes for PR #13, part B (items 7-12)
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 7 | `ecl::sample_parameters_note`; the IFRS 9 summary appends a "Sample parameters" row for the shipped sample file; the ECL chart copies it | `s9_the_ifrs9_summary_emits_a_sample_parameters_row…` (both cases), phase 5 callers updated |
+| 8 | `labelLayout.hideOverlap` on every series of an "All" page; the page no longer uses the nominal drop list and says so in its note | `s8_the_page_hides_overlapping_all_labels_only_when_labels_are_all`, `r24_all_never_prints…` (page part rewritten) |
+| 9 | `month_labels` for the deposit mix (derived table "Chart: deposit mix") | `s10_the_deposit_mix_writes_months_as_aug_2026…`, `c5_…`, `r7_…` |
+| 10 | Phase 8 item recorded (below) | - |
+| 11 | Pictures: `studio-labels-and-text-size` (the panel, light and dark, `tools/egui_mesh_png.py` rasterises an egui frame), `labels-all`, `labels-none`, `donut-9`, `donut-top4`, `column-10-buckets` (in-app, light and dark), `html-` and `xlsx-` twins of the last four but `labels-none`, `pdf-chart-page` | `r26_the_screenshots_of_the_label_and_text_size_controls…`, `c1_the_screenshots…`, `s11_the_picture_of_a_chart_pdf_page…`, `c8_…` |
+| 12 | Looked again: `tpl-nii-effects-by-key-new` (a New key FX and a Closed key "Old scheme", both in amber "New / closed", +1.50 and −1.20), `tpl-nii-bridge-new`, `tpl-classified-trend-no-loans` (the footnote "NPL % is blank where the month has no loans: Sep 2026"; the month's NPL point is a gap, not 0%) | the screenshot test |
+
+Found by eye and fixed: on a donut with several small parts near 12 o'clock the left-side labels were out of order and their leader lines crossed (`s3_a_donut_draws_every_part…`, new assertion).
+
+Phase 8 item: rate-profile band names: remove the serial prefix ("09. 8%–9%" becomes "8%–9%") and set the band order automatically.
+
+Part B deviations: F-4 the "All" note on the page is a standing statement, not a count. F-5 the studio-controls picture is a software rasterisation of the egui frame (numpy and Pillow), so its anti-aliasing differs a little from the app on screen.

@@ -591,6 +591,10 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 ser["labelLayout"] = json!({"moveOverlap": "shiftY"});
             }
         }
+        if env.lp.mode == LabelMode::All {
+            // "All" never prints a label that collides: ECharts hides the ones that would overlap
+            ser["labelLayout"]["hideOverlap"] = json!(true);
+        }
         if si == 0 {
             let (ml, ma) = mark_lines(env, p, horizontal);
             if let Some(ml) = ml {
@@ -719,6 +723,9 @@ fn line_series(env: &Env, p: &Plan, grid: usize) -> Vec<Value> {
         if direct && p.series.len() > 1 {
             // end labels of nearby curves are nudged apart vertically
             ser["labelLayout"] = json!({"moveOverlap": "shiftY"});
+        }
+        if env.lp.mode == LabelMode::All {
+            ser["labelLayout"]["hideOverlap"] = json!(true);
         }
         if area {
             ser["areaStyle"] = json!({"color": hx(s.colour), "opacity": num(if stacked { t::STACKED_AREA_OPACITY } else { t::AREA_OPACITY } as f64)});
@@ -1039,7 +1046,10 @@ fn waterfall_parts(env: &Env) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
             }
         })
         .collect();
-    let labels = json!({"name": "Labels", "type": "line", "data": label_items, "symbol": "circle", "symbolSize": 0, "lineStyle": {"opacity": 0}, "silent": true, "tooltip": {"show": false}, "z": 5});
+    let mut labels = json!({"name": "Labels", "type": "line", "data": label_items, "symbol": "circle", "symbolSize": 0, "lineStyle": {"opacity": 0}, "silent": true, "tooltip": {"show": false}, "z": 5});
+    if env.lp.mode == LabelMode::All {
+        labels["labelLayout"] = json!({"hideOverlap": true});
+    }
     let lo = steps.iter().map(|s| s.base).fold(0.0, f64::min);
     let hi = steps.iter().map(|s| s.top).fold(0.0, f64::max);
     let mut series = vec![base, part(&stack.pos, "Increase", true), part(&stack.neg, "Decrease", true), labels];
@@ -1270,14 +1280,20 @@ fn build_one(data: &ChartData, opts: &LayoutOpts, dark: bool) -> Result<(Value, 
     let named: Vec<String> = data.series.iter().filter(|s| !s.is_empty()).cloned().collect();
     cm.assign_all(&named);
     let lp = LabelPlan::new(spec, opts);
-    let dropped_list = super::labels::dropped_labels(data, opts, PAGE_CHART_W, PAGE_CHART_H);
-    let dropped: std::collections::HashSet<(usize, usize, usize)> = dropped_list.iter().copied().collect();
+    // "All" on the page: every label is in the option and ECharts hides the ones that really overlap at the size the
+    // page is shown in (`labelLayout.hideOverlap`); the nominal rule of the app, the workbook and the script is not used
+    let dropped: std::collections::HashSet<(usize, usize, usize)> = std::collections::HashSet::new();
     let env = Env { data, opts, dark, ink, cm, lp, dropped };
     if let Some(r) = data.empty_reason() {
         bail!("No data to chart: {}.", r);
     }
     let title = chart_title(data);
-    let foot = foot_lines(data, &super::labels::footnote_notes(data, opts, dropped_list.len()));
+    let mut notes = super::labels::footnote_notes(data, opts, 0);
+    if env.lp.mode == LabelMode::All {
+        // the page cannot count what the browser hides: the note says so, and the tooltip holds every value
+        notes.push("Data labels that would overlap are hidden; hover a mark for its value".to_string());
+    }
+    let foot = foot_lines(data, &notes);
     let foot_h = if foot.is_empty() { 0.0 } else { foot.len() as f64 * FOOT_LINE_H + 8.0 };
     let kind = spec.kind;
     let ps = plans(&env);

@@ -205,7 +205,7 @@ fn c3_the_dark_option_uses_the_dark_tokens_and_the_same_marks() {
 
 #[test]
 fn c3_the_page_loads_nothing_and_has_no_address() {
-    for (name, d) in forms() {
+    for (name, d) in forms().into_iter().chain(crate::p7_s::label_forms()) {
         let html = chart_html(&d, &opts()).unwrap_or_else(|e| panic!("{name}: {e:#}"));
         // the page without the vendored library has no address, no link, no import, no external file
         let (before, after) = html.split_once(ECHARTS_JS).expect("the library is written into the page");
@@ -530,7 +530,7 @@ fn c3_every_form_makes_a_page_and_can_be_written_for_the_screenshots() {
     if let Some(d) = &out {
         std::fs::create_dir_all(d).unwrap();
     }
-    for (name, d) in forms() {
+    for (name, d) in forms().into_iter().chain(crate::p7_s::label_forms()) {
         let html = chart_html(&d, &opts()).unwrap_or_else(|e| panic!("{name}: {e:#}"));
         assert!(html.len() > ECHARTS_JS.len());
         if let Some(dir) = &out {

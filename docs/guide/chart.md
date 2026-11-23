@@ -45,7 +45,8 @@ Draws bars or a line of one number by one category, calculated over the whole ta
 14. Charts ▸ "Chart this result" (or Charts ▸ New chart ▸ "Banking templates") charts a tool's result the way a banker would draw it: the gap ladder, repricing gap, NII bridge (MoM variance), CL migration, IRRBB scenarios, LCR / NSFR, ECL by stage, data-quality scorecard, yield curves, rate profile, balance history, deposit / loan mix and classified trend. The chart's own table opens as a tab, the title is a finding worked out from the numbers by fixed rules (for example "Parallel up is the worst case at −10.5% of Tier 1"), and every setting stays editable; a takeaway you type replaces the finding.
 15. Charts ▸ "Chart book (HTML)…" puts several saved charts of the active tab on one page: a title, the date and a two-column grid.
 16. "Copy as Python" puts a script on the clipboard: the chart's numbers as a pandas DataFrame and matplotlib code in the same style (fonts, palette, marks, title), so you can carry on in Python (`pip install pandas matplotlib`). A Sankey and a treemap use plotly instead (`pip install plotly pandas`) and the script says so. The numbers are the chart's own table in the chart's scale; a flag at the top (`DARK`) switches the theme.
-17. A report pack can carry a chart on any of its items (see "Report packs"): the workbook gets the native chart on a sheet beside the item's, and the pack can write an HTML chart book.
+17. "Titles and look" also holds "Text size", "Reset colours", "Data labels" (Auto, All, Ends only, None, with decimals, unit and percent), and, for a donut, "Group small parts". They are explained with pictures in [Charts: how to choose one](charts.md), section 7a. A chart tab exported to PDF is written as the chart (Export ▸ PDF); the dialog's "Add the data table on the next page" adds the table.
+18. A report pack can carry a chart on any of its items (see "Report packs"): the workbook gets the native chart on a sheet beside the item's, and the pack can write an HTML chart book.
 
 ## 6. What you get
 
@@ -99,5 +100,5 @@ Test: `guide_chart`
 - A category called "Other" in the data is kept apart from the rest ("Other categories").
 - Count counts rows; the value column is not used.
 - On a pivot table the subtotal and Grand total rows are not charted.
-- The HTML page carries Apache ECharts 6.1.0 inside it (about 1 MB); a chart of 1,000 points is under 2 MB. A donut with more than 5 parts, a waterfall that does not add up and invalid advanced JSON stop the export with a message, and no file is written.
+- The HTML page carries Apache ECharts 6.1.0 inside it (about 1 MB); a chart of 1,000 points is under 2 MB. A waterfall that does not add up and invalid advanced JSON stop the export with a message, and no file is written.
 - The first chart of a tab picks the first text column and the first number column; change them as needed.

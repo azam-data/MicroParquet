@@ -10,7 +10,7 @@ Start with the question your reader asks, not with the chart.
 | --- | --- | --- |
 | Which is bigger? (compare) | A sorted bar, or grouped bars for two series | ![Bars](img/charts/bar.png) |
 | How does it change over time? | A line (or columns by month); an area when the total matters | ![Line](img/charts/line.png) |
-| What is it made of? (composition) | Stacked columns; 100% stacked for shares; a donut for 2 to 5 parts; a waterfall for a bridge | ![Stacked](img/charts/stacked.png) |
+| What is it made of? (composition) | Stacked columns; 100% stacked for shares; a donut for the parts of one whole; a waterfall for a bridge | ![Stacked](img/charts/stacked.png) |
 | How are the values spread? (distribution) | A histogram, or a box plot for several groups | ![Histogram](img/charts/histogram.png) |
 | Do two numbers move together? (relationship) | A scatter, a bubble (a third number as size), a heatmap for two categories | ![Scatter](img/charts/scatter.png) |
 | Where did it flow? (HTML only) | A Sankey, or a treemap for the share of parts and groups | ![Sankey](img/charts/html-sankey.png) |
@@ -19,7 +19,7 @@ Start with the question your reader asks, not with the chart.
 
 ## 2. Why a sorted bar beats a pie
 
-The eye compares lengths from a common baseline well and angles badly. A sorted bar shows the order at once and every label has room. A donut is allowed only for two to five parts of one whole; with more, the studio refuses with "Use a bar chart: more than 5 parts are hard to compare as slices". There are no 3D charts and no gauges.
+The eye compares lengths from a common baseline well and angles badly. A sorted bar shows the order at once and every label has room. A donut shows the parts of one whole. Every part is drawn, with its name and share outside the ring; with more than six parts the studio adds "Many parts are hard to compare; a sorted bar may read better", and "Group small parts" keeps the largest few and adds the rest into one "Other" part (section 7a). There are no 3D charts and no gauges.
 
 ![A sorted bar](img/charts/bar.png)
 
@@ -79,6 +79,37 @@ Every chart in the studio has a "Table" switch and a "Chart tab" (Open as tab) f
 | Small multiples | ![Small multiples](img/charts/small-multiples.png) | ![Small multiples, dark](img/charts/small-multiples-dark.png) |
 
 The same charts as a web page and as a native Excel chart are in [Chart](chart.md); "Copy as Python" gives a script to carry on in Python.
+
+## 7a. Labels, text size, donut grouping, colours and PDF
+
+Five settings in "Titles and look" of the chart studio change how a chart reads, in the app, the HTML page, the Excel workbook and the Python script alike.
+
+![The Data labels, Text size and Colours controls](img/charts/studio-labels-and-text-size.png)
+![The same controls, dark](img/charts/studio-labels-and-text-size-dark.png)
+
+- **Data labels.** Auto is the design system's rule (a few labels, never a crowd). All prints every label; one that would collide with another is left out, and a line under the chart says so (in the app, the workbook and the script it counts them; on the HTML page the browser hides the ones that overlap and the line says so). Ends only labels the first and last category of each series; None prints none. "Label decimals" (0 to 4, default the view's), "Label unit" (As in view, Absolute, Thousand, Lakh, Million, Crore) and "Percent labels" (on or off for share views) apply to every label. A label unit that differs from the view's is stated under the chart.
+
+| Labels = All | Labels = None |
+| --- | --- |
+| ![Labels All](img/charts/labels-all.png) | ![Labels None](img/charts/labels-none.png) |
+
+- **Text size.** Small, Normal, Large or Larger (0.9, 1.0, 1.15, 1.3 times) scales the value labels, the axis ticks, the axis names and the legend. Titles keep their size. The same size is used in the page, the workbook and the script.
+- **Category labels.** Every category keeps its whole label. When the names do not fit the width of their column, the long ones go on two lines; when two lines do not fit either, every label is angled. If even that cannot fit, the chart says "Labels don't fit; try horizontal bars" and the studio offers the switch. Nothing is cut with "…" and no label is skipped.
+
+![Ten maturity buckets, every label kept](img/charts/column-10-buckets.png)
+
+- **Donut grouping.** "Group small parts" is Off or "Top N + Other" (N from 2 to 12, default 4). The parts past the eighth colour, and "Other", are the grey of de-emphasis. A part under 1% has no label on the ring; it is in the legend and the tooltip.
+
+| Nine parts | Top 4 + Other |
+| --- | --- |
+| ![A donut of nine parts](img/charts/donut-9.png) | ![A donut grouped to Top 4 and Other](img/charts/donut-top4.png) |
+
+- **Reset colours.** Colours stay with a name (a product keeps its colour when a filter removes another). If an old chart left them in a different order, "Reset colours" gives the names the palette again, in their present order.
+- **A chart in a PDF.** A chart tab ticked in Export ▸ PDF is written as the chart itself, drawn as vectors with the Source Sans 3 fonts in the file, on a page with the export's title; it is always the light chart. Tick "Add the data table on the next page" to follow it with the table.
+
+![A chart page of a PDF](img/charts/pdf-chart-page.png)
+
+On the banking templates, months are written as "Aug 2026" (two dates in one month keep the whole date).
 
 ## 8. The banking templates
 

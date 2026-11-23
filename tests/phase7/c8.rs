@@ -138,6 +138,14 @@ fn c8_every_screenshot_has_the_size_of_its_kind() {
         }
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let (w, h) = png_size(&path);
+        if name.starts_with("studio-") || name.starts_with("pdf-") {
+            // pictures of the app's own controls (a cropped panel) and of a PDF page: their own sizes, light and dark twins for the panel only
+            assert!(w >= 600 && h >= 600, "{name}: {w}x{h}");
+            if name.starts_with("studio-") && !name.ends_with("-dark.png") {
+                assert!(dir.join(name.replace(".png", "-dark.png")).is_file(), "{name}: its dark twin exists");
+            }
+            continue;
+        }
         if name.starts_with("html-") {
             html += 1;
             assert_eq!(w, 1100, "{name}: an HTML page is 1100 px wide, it is {w}");
@@ -156,5 +164,5 @@ fn c8_every_screenshot_has_the_size_of_its_kind() {
             assert!(twin.is_file(), "{name}: its dark twin exists");
         }
     }
-    assert!(app >= 70 && html == 40 && xlsx == 20, "{app} in-app, {html} html, {xlsx} excel pictures");
+    assert!(app >= 70 && html == 48 && xlsx == 24, "{app} in-app, {html} html, {xlsx} excel pictures");
 }

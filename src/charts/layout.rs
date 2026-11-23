@@ -2349,7 +2349,8 @@ fn donut_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts, 
         }
         for right in [true, false] {
             let mut side: Vec<&mut (usize, f32, bool, Pos2, Pos2)> = placed.iter_mut().filter(|p| p.2 == right).collect();
-            side.sort_by(|a, c2| a.1.partial_cmp(&c2.1).unwrap_or(std::cmp::Ordering::Equal));
+            // in the order of the parts' own places on the ring (not of the clamped label heights), so leader lines never cross
+            side.sort_by(|a, c2| a.4.y.partial_cmp(&c2.4.y).unwrap_or(std::cmp::Ordering::Equal));
             let gap = ring_lh + 2.0;
             for k in 1..side.len() {
                 if side[k].1 < side[k - 1].1 + gap {

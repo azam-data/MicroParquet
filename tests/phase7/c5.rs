@@ -270,7 +270,10 @@ fn c5_the_other_templates_give_their_form_and_their_finding() {
     // deposit / loan mix
     let (p, _) = chart_of(Template::DepositMix, &mix());
     assert_eq!(p.finding, "Term deposit drove growth");
-    assert!(p.table.is_none(), "the tab is charted as it is");
+    let t = p.table.as_ref().expect("the months are written as labels, so the chart has its own table");
+    assert_eq!(p.tab_title, "Chart: deposit mix");
+    let months: Vec<String> = t.column("Month").unwrap().str().unwrap().into_iter().flatten().map(String::from).collect();
+    assert_eq!(&months[..3], ["Aug 2026", "Aug 2026", "Aug 2026"], "months read Aug 2026, not 2026-08");
     // rate profile
     let (p, d) = chart_of(Template::RateProfile, &rate_bands());
     assert_eq!(p.finding, "62.5% of balances sit at 8%\u{2013}9%");

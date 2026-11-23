@@ -263,6 +263,7 @@ fn c1_the_screenshots_of_every_form_are_written_when_python_with_pillow_is_there
     let (ppp, w, h) = SIZES3[0];
     let mut forms = all_forms();
     forms.extend(template_forms());
+    forms.extend(label_forms());
     for (name, data) in forms {
         for dark in [false, true] {
             let (ctx, input) = screen(ppp, w, h);
@@ -280,6 +281,30 @@ fn c1_the_screenshots_of_every_form_are_written_when_python_with_pillow_is_there
     let _ = last_shown;
 }
 
+/// The pictures for the data labels, the donut and the category labels of the guide (final fixes B, item 11).
+fn label_forms() -> Vec<(&'static str, ChartData)> {
+    use micro_parquet::charts::spec::{LabelMode, LabelSpec};
+    let mut v: Vec<(&'static str, ChartData)> = Vec::new();
+    // Labels = All and None on the same grouped columns: All prints every label that fits and leaves the rest out
+    for (name, mode) in [("labels-all", LabelMode::All), ("labels-none", LabelMode::None)] {
+        let spec = ChartSpec { labels: LabelSpec { mode, ..Default::default() }, ..base(ChartKind::Bar) };
+        v.push((name, calc(book(), &spec)));
+    }
+    // a donut of nine products, every part with its label outside the ring; and the same grouped to Top 4 + Other
+    let products = ["Term deposits", "Savings", "Current", "DPS", "FDR", "Call money", "Foreign currency", "Sundry", "Other"];
+    let shares = [310.0, 220.0, 150.0, 90.0, 70.0, 55.0, 40.0, 25.0, 12.0];
+    let donut = DataFrame::new(vec![Series::new("Product".into(), products).into(), Series::new("Balance".into(), shares).into()]).expect("donut");
+    let spec = ChartSpec { category: "Product".into(), value: Some("Balance".into()), kind: ChartKind::Donut, by_value: true, ..Default::default() };
+    v.push(("donut-9", calc(donut.clone(), &spec)));
+    v.push(("donut-top4", calc(donut, &ChartSpec { donut_top: Some(4), ..spec })));
+    // ten maturity buckets: every category keeps its label (two lines, or angled when two lines do not fit)
+    let buckets = ["0\u{2013}1 month", "1\u{2013}3 months", "3\u{2013}6 months", "6\u{2013}12 months", "1\u{2013}2 years", "2\u{2013}3 years", "3\u{2013}5 years", "5\u{2013}7 years", "7\u{2013}10 years", "Over 10 years"];
+    let df = DataFrame::new(vec![Series::new("Bucket".into(), buckets).into(), Series::new("Balance".into(), (0..10).map(|i| 100.0 + i as f64 * 37.0).collect::<Vec<_>>()).into()]).expect("buckets");
+    let spec = ChartSpec { category: "Bucket".into(), value: Some("Balance".into()), kind: ChartKind::Bar, order: list(&buckets), ..Default::default() };
+    v.push(("column-10-buckets", calc(df, &spec)));
+    v
+}
+
 /// The banking templates on their guide examples (name of the screenshot, chart), for the guide's images.
 fn template_forms() -> Vec<(&'static str, ChartData)> {
     use micro_parquet::charts::samples as sm;
@@ -294,6 +319,7 @@ fn template_forms() -> Vec<(&'static str, ChartData)> {
         if let Some(c) = p.companion {
             let second: &'static str = match name {
                 "tpl-lcr-nsfr" => "tpl-lcr-nsfr-hqla",
+                "tpl-nii-bridge-new" => "tpl-nii-effects-by-key-new",
                 _ => "tpl-nii-effects-by-key",
             };
             out.push((second, compute(c.table.expect("table").lazy(), &c.spec).unwrap_or_else(|e| panic!("{second}: {e:#}"))));
@@ -303,8 +329,10 @@ fn template_forms() -> Vec<(&'static str, ChartData)> {
     add("tpl-repricing-gap", Template::RepricingGap, sm::repricing());
     add("tpl-nii-bridge", Template::NiiBridge, sm::mom_table());
     add("tpl-nii-bridge-keys", Template::NiiBridge, sm::mom_table_keys());
+    add("tpl-nii-bridge-new", Template::NiiBridge, sm::mom_table_new_closed());
     add("tpl-cl-migration", Template::ClMigration, sm::cl_matrix_large());
     add("tpl-classified-trend", Template::ClassifiedTrend, sm::classified());
+    add("tpl-classified-trend-no-loans", Template::ClassifiedTrend, sm::classified_empty_month());
     add("tpl-irrbb-scenarios", Template::IrrbbScenarios, sm::irrbb_results());
     add("tpl-lcr-nsfr", Template::LcrNsfr, sm::lcr_summary());
     add("tpl-ecl-by-stage", Template::EclByStage, sm::ecl_summary());

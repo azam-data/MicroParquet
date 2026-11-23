@@ -49,7 +49,7 @@ How the stage is set: Stage 3 at 90 or more days past due, or a classified grade
 
 ECL: for each scenario, the cumulative PD of each year is multiplied by the scenario's PD multiplier and capped at 100%, and the marginal PD of year y is that of year y less that of year y−1 (so the losses never add up to more than LGD × EAD); each year's loss is the marginal PD × LGD × EAD ÷ (1 + EIR)^t, where t is the end of that year, or the remaining term for the final part-year (a loan with 1.5 years left discounts its last half year at 1.5 years, a Stage 1 loan with 0.5 years left at 0.5 years); Stage 1 takes year 1 (or the remaining term if shorter), Stage 2 every year to the remaining term with a final part-year taking its fraction of the marginal PD; the scenarios are weighted. Stage 3 is LGD × EAD.
 
-The "IFRS 9 summary" tab: rows by grade group (Standard includes SMA, then SS, DF, B/L) and by stage, with `Loans`, `EAD`, `ECL`, `Regulatory provision`, `Higher of` (the larger of the two for the row) and, on the Total rows, `Shortfall to Loan Loss Reserve` = the total regulatory provision less the total ECL, not below 0.
+The "IFRS 9 summary" tab: rows by grade group (Standard includes SMA, then SS, DF, B/L) and by stage, with `Loans`, `EAD`, `ECL`, `Regulatory provision`, `Higher of` (the larger of the two for the row) and, on the Total rows, `Shortfall to Loan Loss Reserve` = the total regulatory provision less the total ECL, not below 0. When the parameter file is the sample that ships, a last row, section "Sample parameters", carries the same yellow text (the numbers are blank); a bank's own file adds no such row. The ECL chart copies it into its footnote.
 
 ## 7. Check your result
 

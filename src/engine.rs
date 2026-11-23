@@ -2479,7 +2479,7 @@ pub fn compile_tab_lazy(
         TabSource::EclSummary { source, steps, spec } => {
             let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("The IFRS 9 summary could not read the table")?;
             let cl_map = crate::banking::ProvisionConfig::load_or_create(&crate::rules::data_dir())?.cl_code_map;
-            crate::ecl::summary_frame(&df, spec, &cl_map)?.lazy()
+            crate::ecl::summary_frame(&df, spec, &cl_map, crate::ecl::sample_parameters_note(steps).as_deref())?.lazy()
         }
         TabSource::Liquidity { source, steps, spec, map, map_file, view } => {
             let df = compile_tab_lazy(source, steps, temp_dir)?.collect().context("LCR / NSFR could not read the GL table")?;

@@ -242,8 +242,8 @@ fn r7_months_are_sorted_as_dates_and_a_month_without_std_or_a_date_is_refused() 
     let mix = DataFrame::new(vec![Series::new("Month".into(), m), Series::new("Product".into(), pr), Series::new("Balance".into(), b)]).unwrap();
     let p = prepare(Template::DepositMix, &mix, &ctx()).unwrap();
     assert_eq!(p.finding, "Savings drove growth");
-    let d = compute(mix.clone().lazy(), &p.spec).unwrap();
-    assert_eq!(d.categories, ["31/01/2026", "31/03/2026", "30/04/2026"], "the columns follow the dates");
+    let d = compute(p.table.clone().expect("the mix has its own table").lazy(), &p.spec).unwrap();
+    assert_eq!(d.categories, ["Jan 2026", "Mar 2026", "Apr 2026"], "the columns follow the dates and read Jan 2026");
     let bad_mix = mix.clone().lazy().with_column(lit("soon").alias("Month")).collect().unwrap();
     assert!(prepare(Template::DepositMix, &bad_mix, &ctx()).is_err());
 }
@@ -1044,14 +1044,13 @@ fn r24_all_never_prints_a_label_that_collides_and_says_how_many_were_left_out() 
     let note = format!("{} data label", l.dropped.len());
     let foot = l.texts.iter().find(|x| x.role == Role::Footnote).map(|x| x.text.clone()).unwrap_or_default();
     assert!(foot.contains(&note) && foot.contains("left out where"), "the note says how many: {foot}");
-    // the page, the script and the workbook leave out labels too, and say it
-    let n_html_dropped = micro_parquet::charts::labels::dropped_labels(&d, &o, 1060.0, 480.0).len();
-    if n_html_dropped > 0 {
-        let pair = chart_pair(&d, &o).unwrap();
-        assert!(pair.light.to_string().contains("data label") && pair.light.to_string().contains("left out where"));
-        let shown = pair.light["series"][0]["data"].as_array().unwrap().iter().filter(|i| i["label"]["formatter"].is_string()).count();
-        assert_eq!(shown + n_html_dropped, n, "the page prints the labels the layout kept");
-    }
+    // the page keeps every label in the option and lets ECharts hide the ones that really overlap; its note says so
+    let pair = chart_pair(&d, &o).unwrap();
+    assert!(pair.light.to_string().contains("would overlap are hidden"), "the page's note");
+    assert!(pair.light["series"].as_array().unwrap().iter().all(|s| s["labelLayout"]["hideOverlap"] == true), "hideOverlap on every series");
+    let shown = pair.light["series"][0]["data"].as_array().unwrap().iter().filter(|i| i["label"]["formatter"].is_string()).count();
+    assert_eq!(shown, n, "the page puts every label in the option");
+    // the script and the workbook keep the nominal rule: they leave out the labels the app leaves out, and say it
     let py = chart_to_python(&d, &o).unwrap();
     assert!(py.contains("DROPPED = {(0, "), "the script lists the labels it leaves out");
     assert!(py.contains("left out where"));
