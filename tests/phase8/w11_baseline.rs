@@ -69,6 +69,15 @@ fn xlsx_parts(path: &Path) -> String {
     String::from_utf8_lossy(&o.stdout).to_string()
 }
 
+/// Whether `pdftotext` (poppler) is here to read PDF pages; the PDF checks are skipped, with a note, where it is not (as in Phase 7's s6).
+pub fn have_pdftotext() -> bool {
+    let ok = std::process::Command::new("pdftotext").arg("-v").output().is_ok();
+    if !ok {
+        eprintln!("w11: pdftotext (poppler) is not installed here: the PDF pages are not read");
+    }
+    ok
+}
+
 /// The text on the pages of a PDF as `pdftotext -layout` reads it.
 pub fn pdf_text(path: &Path) -> String {
     let o = std::process::Command::new("pdftotext").arg("-layout").arg(path).arg("-").output().expect("pdftotext runs");
@@ -98,7 +107,7 @@ pub fn outputs() -> BTreeMap<String, String> {
         write_chart_xlsx(&x, &d, &opts(false)).expect("xlsx");
         out.insert(format!("{name}/xlsx"), hash(xlsx_parts(&x).as_bytes()));
         // the chart as a PDF page: the text of the page and the number of pages
-        {
+        if have_pdftotext() {
             use micro_parquet::exporters::{export_pdf_tabs_with, PdfOptions, PdfTab};
             let p = tmp(&format!("{name}.pdf"));
             let tab = PdfTab { title: "Chart".into(), df: micro_parquet::chart::chart_table(&d).expect("table"), col_formats: Default::default(), summary: vec![], chart: Some((d.clone(), opts(false))) };

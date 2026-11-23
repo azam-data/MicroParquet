@@ -542,5 +542,6 @@ Session C3 (W11) choices:
 - W11-6: the report-pack PDF printed tables only, no charts. A pack chart whose Data table is on now gets a page of its own after its item's table, with the table; a chart with the option off is not in the PDF, as in Phase 7. The pack's chart book (HTML) and a single chart's page show the table open under the chart; the page's "Table" toggle leaves it alone, and a page with no open table is the page of Phase 7 byte for byte.
 - W11-7: the Python script has neither the labels inside the segments nor the table.
 - W11-8: the Phase 7 baseline (`tests/fixtures/phase8_w11_off.hashes.json`, made by the Phase 7 code in a temporary worktree) found a change of W7-8: the script of a chart of one series wrote a `COLOURS` entry for its measure. It is now written only for a pick or a house colour, so an automatic colour gives the script of Phase 7.
+- W11-9: CI found that the runner has no `pdftotext` (poppler). As in Phase 7 (s6), the W11 tests that read PDF pages (and the `/pdf/` hashes of the baseline) are skipped with a note where `pdftotext` or `pypdf` is missing; they run here. To have them run in CI, the workflow needs `sudo apt-get install -y poppler-utils` (not changed: owner decision).
 - Not done in W11: the guide note (W8); `cargo build --release` was not run in this session.
 </accepted_deviations>
