@@ -133,6 +133,7 @@ impl MicroParquetApp {
                             self.project_tab_failed(id, &msg);
                         }
                     }
+                    JobKind::ProjectSave => self.project_save_failed(&msg),
                     JobKind::ProjectCheck => self.status_message = format!("The project's files could not be checked: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
                     JobKind::Dq => self.dq_failed(msg.clone()),
@@ -190,6 +191,7 @@ impl MicroParquetApp {
         match out {
             JobOutput::ProjectTab(l) => self.apply_project_tab(*l),
             JobOutput::ProjectCheck(c) => self.apply_project_check(*c),
+            JobOutput::ProjectSave(b) => self.apply_project_built(*b),
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
                 let status = match self.open_notes.remove(&tab.id) {

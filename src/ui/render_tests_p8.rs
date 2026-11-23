@@ -520,6 +520,11 @@ fn pump_until(rig: &mut Rig, what: &str, done: &dyn Fn(&Rig) -> bool) {
     panic!("{}: '{what}' timed out (status: {})", rig.what, rig.app.status_message);
 }
 
+/// Waits for the worker that builds and hashes a project for Save (the window is never blocked by it).
+fn wait_saved(rig: &mut Rig) {
+    pump_until(rig, "the project is saved", &|r| !r.app.project.saving);
+}
+
 fn tick(rig: &mut Rig) {
     rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
     rig.draw(2);
@@ -621,6 +626,7 @@ fn w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_siz
         // Save project as…: nothing is written until the file is chosen; then it is, with the project in the title
         rig.app.project.test_pick = Some(pfile.clone());
         file_item(&mut rig, "Save project as\u{2026}");
+        wait_saved(&mut rig);
         assert!(pfile.exists(), "{what}: the project file is written: {}", rig.app.status_message);
         assert!(rig.app.project.active && rig.app.project.name == "Treasury", "{what}");
         assert_eq!(rig.app.settings.recent_projects.first().map(String::as_str), Some(pfile.display().to_string().as_str()), "{what}: recent");
@@ -635,6 +641,7 @@ fn w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_siz
         tick(&mut rig);
         assert!(rig.app.window_title.contains("Treasury \u{2022}"), "{what}: {}", rig.app.window_title);
         file_item(&mut rig, "Save project");
+        wait_saved(&mut rig);
         tick(&mut rig);
         assert!(!rig.app.window_title.contains('\u{2022}'), "{what}: saved: {}", rig.app.window_title);
         assert_eq!(micro_parquet::project::load_project(&pfile).expect("reads").tabs[0].steps.len(), 1, "{what}: the step is in the file");
@@ -669,6 +676,7 @@ fn w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_siz
         // saving it again gives the same file but saved_at
         let before = micro_parquet::project::load_project(&pfile).expect("reads");
         file_item(&mut rig, "Save project");
+        wait_saved(&mut rig);
         let mut after = micro_parquet::project::load_project(&pfile).expect("reads");
         let mut b2 = before.clone();
         (after.saved_at, b2.saved_at) = (String::new(), String::new());
@@ -677,6 +685,29 @@ fn w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_siz
         file_item(&mut rig, "Close project");
         assert!(rig.app.tabs.is_empty() && !rig.app.project.active && rig.app.chart_tabs.is_empty(), "{what}: closed");
     }
+}
+
+#[test]
+fn w4_save_is_a_worker_job_the_window_does_not_wait_for() {
+    let mut rig = proj_rig("p8w4j", 1.0, 1280.0, 720.0);
+    let root = rig.app.paths.root_dir.clone();
+    let pfile = root.join("proj").join("Job.mpproj");
+    rig.app.project.test_pick = Some(pfile.clone());
+    rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+    // the command has returned: the work is a job, and nothing has been written by the window's own thread
+    assert!(rig.app.project.saving, "Save is waiting for its job");
+    assert!(rig.app.jobs.kind_busy(micro_parquet::jobs::JobKind::ProjectSave) || rig.app.project.saving, "the job is submitted");
+    assert!(!pfile.exists(), "the file is written when the job's result is taken, not by the command");
+    assert!(rig.app.status_message.starts_with("Saving the project"), "{}", rig.app.status_message);
+    // a second Save while the first runs is not started
+    rig.app.project.test_pick = Some(pfile.clone());
+    rig.app.run_command(&rig.ctx, CommandId::ProjectSave);
+    assert!(rig.app.status_message.contains("being saved"), "{}", rig.app.status_message);
+    wait_saved(&mut rig);
+    assert!(pfile.exists() && !rig.app.project.saving, "{}", rig.app.status_message);
+    assert!(rig.app.status_message.starts_with("Saved the project"), "{}", rig.app.status_message);
+    // the cache has the file's hash, so the next Save reads nothing
+    assert!(!rig.app.project.hash_cache.is_empty(), "the hashes are kept");
 }
 
 #[test]
@@ -689,6 +720,7 @@ fn w4_the_sources_dialog_relinks_by_browse_and_look_in_folder_and_a_tab_that_fai
         let pfile = root.join("proj").join("Relink.mpproj");
         rig.app.project.test_pick = Some(pfile.clone());
         rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
         assert!(pfile.exists(), "{what}: {}", rig.app.status_message);
         let original = std::fs::read_to_string(&pfile).expect("project text");
         // this month's file: another place, one more column, other rows
@@ -743,6 +775,7 @@ fn w4_the_sources_dialog_relinks_by_browse_and_look_in_folder_and_a_tab_that_fai
         assert!(rig.app.command_unavailable(CommandId::ExportParquet).is_some(), "{what}: a placeholder cannot be exported");
         // saving the project again does not lose the three tabs
         file_item(&mut rig, "Save project");
+        wait_saved(&mut rig);
         let mut after = std::fs::read_to_string(&pfile).expect("text");
         let strip = |t: &str| -> String { t.lines().filter(|l| !l.contains("\"saved_at\"")).collect::<Vec<_>>().join("\n") };
         after = strip(&after);
@@ -759,6 +792,7 @@ fn w4_unsaved_changes_ask_save_dont_save_or_cancel_on_a_real_close_request_and_o
         let pfile = root.join("proj").join("Quit.mpproj");
         rig.app.project.test_pick = Some(pfile.clone());
         rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
         assert!(pfile.exists(), "{what}");
         tick(&mut rig);
         // a close request with nothing unsaved goes through
@@ -799,7 +833,7 @@ fn w4_unsaved_changes_ask_save_dont_save_or_cancel_on_a_real_close_request_and_o
         // Save: the project is written, then the window closes
         close(&mut rig);
         click_button(&mut rig, "Save");
-        rig.draw(2);
+        pump_until(&mut rig, "the save, then the close", &|r| r.app.project.close_confirmed);
         assert!(rig.app.project.close_confirmed, "{what}: Save then close");
         assert_eq!(micro_parquet::project::load_project(&pfile).expect("reads").tabs[0].steps.len(), 1, "{what}: the change was saved");
         rig.app.project.close_confirmed = false;
@@ -852,6 +886,7 @@ fn w4_save_lists_the_tabs_it_leaves_out_and_a_newer_project_is_refused_by_the_me
         let pfile = root.join("proj").join("Left out.mpproj");
         rig.app.project.test_pick = Some(pfile.clone());
         file_item(&mut rig, "Save project as\u{2026}");
+        pump_until(&mut rig, "the list of tabs left out", &|r| r.app.active_tool == ActiveToolModal::ProjectSave);
         assert_eq!(rig.app.active_tool, ActiveToolModal::ProjectSave, "{what}: the tab that cannot be saved is listed first");
         assert!(!pfile.exists(), "{what}: nothing is written before the list is answered");
         let p = rig.draw(3);
@@ -893,6 +928,7 @@ fn w4_a_file_that_changed_since_the_project_was_saved_is_said_in_the_status_line
         let pfile = root.join("proj").join("Changed.mpproj");
         rig.app.project.test_pick = Some(pfile.clone());
         rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
         assert!(pfile.exists(), "{what}");
         // the same file, rewritten with other numbers (the same columns)
         let mut df = book8();

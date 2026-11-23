@@ -313,6 +313,29 @@ pub fn file_hash(path: &Path) -> Result<String> {
     Ok(h.finalize().to_hex().to_string())
 }
 
+/// The same hash, read in 1 MiB steps that report `(bytes read, file size)` to `on`; `on` returns true to stop
+/// (the job was cancelled), which is an error.
+pub fn file_hash_progress(path: &Path, on: &dyn Fn(u64, u64) -> bool) -> Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).with_context(|| format!("Could not open {}", path.display()))?;
+    let total = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut h = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut read = 0u64;
+    loop {
+        let n = f.read(&mut buf).with_context(|| format!("Could not read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        read += n as u64;
+        if on(read, total) {
+            anyhow::bail!("Stopped while reading {}", path.display());
+        }
+    }
+    Ok(h.finalize().to_hex().to_string())
+}
+
 fn key_of(name: &str) -> String {
     name.trim().to_lowercase()
 }

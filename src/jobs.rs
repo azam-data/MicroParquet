@@ -59,6 +59,8 @@ pub enum JobKind {
     ProjectTab,
     /// The files of a project compared with the hashes it saved (Phase 8 W4).
     ProjectCheck,
+    /// Builds the project from the open tabs, hashing the files (Phase 8 W4 follow-up).
+    ProjectSave,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

@@ -260,13 +260,23 @@ pub fn short_date(secs: i64) -> String {
 /// Hashes already worked out, by file: (size, modified time, blake3). A file is hashed again only when its size or time changed.
 pub type HashCache = HashMap<PathBuf, (u64, i64, String)>;
 
-fn hashed(path: &Path, size: u64, modified: i64, cache: &mut HashCache) -> Result<String> {
+/// Reports a file being hashed: its name, bytes read and its size; returns true to stop the save.
+pub type HashProgress<'a> = &'a dyn Fn(&str, u64, u64) -> bool;
+
+/// What the Save job says while a file is hashed ("Hashing Loans.csv 40%") and how far it is (0 to 1).
+pub fn hashing_text(name: &str, read: u64, total: u64) -> (String, f32) {
+    let pct = if total == 0 { 100 } else { (read.min(total) * 100 / total).min(100) };
+    (format!("Hashing {} {}%", name, pct), pct as f32 / 100.0)
+}
+
+fn hashed(path: &Path, size: u64, modified: i64, cache: &mut HashCache, progress: HashProgress) -> Result<String> {
     if let Some((s, m, h)) = cache.get(path) {
         if *s == size && *m == modified {
             return Ok(h.clone());
         }
     }
-    let h = crate::packs::file_hash(path)?;
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let h = crate::packs::file_hash_progress(path, &|read, total| progress(&name, read, total))?;
     cache.insert(path.to_path_buf(), (size, modified, h.clone()));
     Ok(h)
 }
@@ -277,9 +287,9 @@ pub fn file_columns(path: &Path, is_parquet: bool, config: &IngestionConfig) -> 
     Ok(df.get_column_names().iter().map(|n| n.to_string()).collect())
 }
 
-fn describe_file(path: &Path, is_parquet: bool, config: &IngestionConfig, project_dir: &Path, cache: &mut HashCache) -> Result<SourceFile> {
+fn describe_file(path: &Path, is_parquet: bool, config: &IngestionConfig, project_dir: &Path, cache: &mut HashCache, progress: HashProgress) -> Result<SourceFile> {
     let (size, modified) = file_stamp(path).map_err(|_| anyhow!("the file {} is not there", path.display()))?;
-    let blake3 = hashed(path, size, modified, cache)?;
+    let blake3 = hashed(path, size, modified, cache, progress)?;
     let columns = if !is_parquet && !config.columns.is_empty() { config.columns.iter().map(|c| c.name.clone()).collect() } else { file_columns(path, is_parquet, config)? };
     let abs = absolute(path);
     Ok(SourceFile {
@@ -389,6 +399,11 @@ fn steps_of(s: &TabSnapshot) -> Vec<TransformStep> {
 /// Makes the project from the open tabs. A tab that cannot be built again is left out with the reason;
 /// a tab built on one that is left out is left out too.
 pub fn build_project(tabs: &[TabSnapshot], active: Option<u64>, project_dir: &Path, paths: &PortablePaths, cache: &mut HashCache) -> Result<SavedProject> {
+    build_project_progress(tabs, active, project_dir, paths, cache, &|_, _, _| false)
+}
+
+/// `build_project` that tells `progress` how far each file's hash is (the save runs it on the worker).
+pub fn build_project_progress(tabs: &[TabSnapshot], active: Option<u64>, project_dir: &Path, paths: &PortablePaths, cache: &mut HashCache, progress: HashProgress) -> Result<SavedProject> {
     // keys: those the tabs have, then the next numbers
     let mut used: HashSet<String> = tabs.iter().filter_map(|t| t.key.clone()).collect();
     let mut next = used.iter().filter_map(|k| k.strip_prefix('t').and_then(|n| n.parse::<u32>().ok())).max().unwrap_or(0);
@@ -420,7 +435,7 @@ pub fn build_project(tabs: &[TabSnapshot], active: Option<u64>, project_dir: &Pa
 
     let mut recipes: Vec<std::result::Result<Recipe, String>> = Vec::new();
     for (t, _) in tabs.iter().zip(&keys) {
-        recipes.push(recipe_of(t, &key_of_id, &env, project_dir, paths, cache));
+        recipes.push(recipe_of(t, &key_of_id, &env, project_dir, paths, cache, progress));
     }
 
     // a tab built on a tab that is left out is left out
@@ -472,7 +487,7 @@ pub fn build_project(tabs: &[TabSnapshot], active: Option<u64>, project_dir: &Pa
     Ok(SavedProject { project, excluded, keys: tabs.iter().zip(keys).map(|(t, k)| (t.id, k)).collect() })
 }
 
-fn recipe_of(t: &TabSnapshot, key_of_id: &dyn Fn(u64) -> Option<String>, env: &ProjectEnv, project_dir: &Path, paths: &PortablePaths, cache: &mut HashCache) -> std::result::Result<Recipe, String> {
+fn recipe_of(t: &TabSnapshot, key_of_id: &dyn Fn(u64) -> Option<String>, env: &ProjectEnv, project_dir: &Path, paths: &PortablePaths, cache: &mut HashCache, progress: HashProgress) -> std::result::Result<Recipe, String> {
     if let Some(k) = &t.kept {
         return Ok(k.recipe.clone());
     }
@@ -489,7 +504,7 @@ fn recipe_of(t: &TabSnapshot, key_of_id: &dyn Fn(u64) -> Option<String>, env: &P
             if let Some(why) = temp_file_reason(path, &paths.temp_dir) {
                 return Err(why);
             }
-            let source = describe_file(path, *is_parquet, config, project_dir, cache).map_err(|e| format!("{:#}", e))?;
+            let source = describe_file(path, *is_parquet, config, project_dir, cache, progress).map_err(|e| format!("{:#}", e))?;
             Ok(Recipe::File(FileRecipe { source, is_parquet: *is_parquet, config: config.clone() }))
         }
         source => {
@@ -501,7 +516,7 @@ fn recipe_of(t: &TabSnapshot, key_of_id: &dyn Fn(u64) -> Option<String>, env: &P
                     if let Some(why) = temp_file_reason(&f.path, &paths.temp_dir) {
                         return Err(why);
                     }
-                    stack_files.push(describe_file(&f.path, f.is_parquet, &f.config, project_dir, cache).map_err(|e| format!("{:#}", e))?);
+                    stack_files.push(describe_file(&f.path, f.is_parquet, &f.config, project_dir, cache, progress).map_err(|e| format!("{:#}", e))?);
                 }
             }
             Ok(Recipe::Run(RunRecipe { run, stack_files }))

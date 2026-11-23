@@ -412,3 +412,66 @@ fn w4_headless_writes_every_tab_as_parquet_and_a_failing_tab_writes_nothing() {
     let left: Vec<_> = std::fs::read_dir(&out2).map(|d| d.flatten().collect()).unwrap_or_default();
     assert!(left.is_empty(), "nothing is written: {left:?}");
 }
+
+#[test]
+fn w4_save_open_save_writes_the_same_file_bytes_but_the_saved_at_line() {
+    let r = rig("p8w4_bytes");
+    let snaps = session(&r);
+    let (pfile, _) = save(&r, &snaps, 6, "first");
+    let loaded = load_project(&pfile).expect("reads");
+    let (hashes, rebuilt) = open_all(&loaded, &pfile, BTreeMap::new(), &r.paths);
+    assert!(hashes.iter().all(|(_, h)| h.is_ok()), "every tab opens: {hashes:?}");
+    let (pfile2, _) = save(&r, &rebuilt, 6, "first");
+    // the same name in the same folder: the second write replaces the first; keep the first's bytes to compare
+    let second = std::fs::read(&pfile2).expect("second file");
+    let (first_path, _) = save(&r, &snaps, 6, "other");
+    let first = std::fs::read(&first_path).expect("first file");
+    let strip = |b: &[u8]| -> Vec<u8> { String::from_utf8(b.to_vec()).expect("utf-8").lines().filter(|l| !l.contains("\"saved_at\"")).collect::<Vec<_>>().join("\n").into_bytes() };
+    assert!(String::from_utf8_lossy(&first).contains("\"saved_at\""), "the file has a saved_at line");
+    assert_eq!(strip(&first), strip(&second), "the two files are the same bytes but the saved_at line");
+}
+
+#[test]
+fn w4_the_save_job_reports_each_file_it_hashes_and_the_cache_spares_the_second_save() {
+    let r = rig("p8w4_hashing");
+    // a file of 3 MiB, so the hash reports several times
+    let big = r.root.join("data/Big.csv");
+    let mut text = String::from("ACNO,BAL\n");
+    while text.len() < 3 << 20 {
+        text.push_str("L100000,12345678\n");
+    }
+    std::fs::write(&big, text).expect("big file");
+    let snaps = vec![snap(1, "Big.csv", csv_source(&big), vec![])];
+    let seen = std::cell::RefCell::new(Vec::<(String, u64, u64)>::new());
+    let mut cache = HashCache::new();
+    let pdir = project_dir_of(&r.root.join("proj/x.mpproj"));
+    let built = build_project_progress(&snaps, Some(1), &pdir, &r.paths, &mut cache, &|n, read, total| {
+        seen.borrow_mut().push((n.to_string(), read, total));
+        false
+    })
+    .expect("builds");
+    assert!(built.excluded.is_empty());
+    let calls = seen.borrow().clone();
+    assert!(calls.len() >= 3, "the hash reports as it reads: {}", calls.len());
+    assert!(calls.iter().all(|(n, _, t)| n == "Big.csv" && *t == 3 << 20 || n == "Big.csv" && *t > 3 << 20), "{calls:?}");
+    assert!(calls.windows(2).all(|w| w[0].1 < w[1].1), "bytes read only grow");
+    assert_eq!(calls.last().map(|c| c.1), calls.last().map(|c| c.2), "the last report is the whole file");
+    // the same file again: the cache has its hash, so nothing is read and nothing is reported
+    let again = std::cell::Cell::new(0usize);
+    let second = build_project_progress(&snaps, Some(1), &pdir, &r.paths, &mut cache, &|_, _, _| {
+        again.set(again.get() + 1);
+        false
+    })
+    .expect("builds again");
+    assert_eq!(again.get(), 0, "a file that did not change is not hashed again");
+    let Recipe::File(a) = &built.project.tabs[0].recipe else { panic!("a file") };
+    let Recipe::File(b) = &second.project.tabs[0].recipe else { panic!("a file") };
+    assert_eq!(a.source.file.blake3, b.source.file.blake3);
+    // a stop request ends the hash with an error and writes nothing
+    let stopped = build_project_progress(&snaps, Some(1), &pdir, &r.paths, &mut HashCache::new(), &|_, _, _| true);
+    assert!(stopped.is_err() || !stopped.expect("ok").excluded.is_empty(), "a cancelled save is not a saved project");
+    // the line the job shows
+    assert_eq!(hashing_text("Loans.csv", 40, 100), ("Hashing Loans.csv 40%".to_string(), 0.4));
+    assert_eq!(hashing_text("Loans.csv", 100, 100).0, "Hashing Loans.csv 100%");
+    assert_eq!(hashing_text("Empty.csv", 0, 0).0, "Hashing Empty.csv 100%");
+}

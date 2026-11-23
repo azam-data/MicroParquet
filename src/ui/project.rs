@@ -9,10 +9,10 @@ use crate::ui::chart::{scale_word, tab_key, ChartTabInfo};
 use crate::ui::prelude::*;
 use micro_parquet::commands::CommandId;
 use micro_parquet::project::{
-    build_project, changed_since_saved, load_project, look_in_folder, opened_summary, project_dir_of, project_name, projects_dir, push_recent, source_rows, short_date, write_project, Excluded, HashCache, Opener,
+    build_project_progress, changed_since_saved, hashing_text, load_project, look_in_folder, opened_summary, project_dir_of, project_name, projects_dir, push_recent, source_rows, short_date, write_project, Excluded, HashCache, Opener,
     Prepared, Project, ProjectTab, SourceRow, SourceStatus, TabSnapshot, PROJECT_EXT,
 };
-use micro_parquet::tab_jobs::{ProjectChecked, ProjectLoaded};
+use micro_parquet::tab_jobs::{ProjectBuilt, ProjectChecked, ProjectLoaded};
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
@@ -95,6 +95,8 @@ pub struct ProjectState {
     pub prompt: Option<AfterPrompt>,
     /// What to do once a save that the prompt asked for is done.
     pub after_save: Option<AfterPrompt>,
+    /// The project is being built and hashed on the worker.
+    pub saving: bool,
     pub close_confirmed: bool,
     pub quit_now: bool,
     /// The line "9 tabs opened, 1 failed: …" of the last open.
@@ -336,23 +338,52 @@ impl MicroParquetApp {
     /// Builds the project from the open tabs. Tabs that cannot be rebuilt are listed first; the file is written
     /// when the list is empty or the owner accepts it.
     fn project_write(&mut self, path: PathBuf, after: Option<AfterPrompt>) {
+        if self.project.saving {
+            self.status_message = "The project is being saved. Wait for it to finish.".to_string();
+            return;
+        }
         let snaps = self.project_snapshots();
         let active = self.tabs.get(self.active_tab).map(|t| t.id);
         let dir = project_dir_of(&path);
-        let built = build_project(&snaps, active, &dir, &self.paths, &mut self.project.hash_cache);
-        match built {
-            Err(e) => self.status_message = format!("The project was not saved: {:#}", e),
-            Ok(saved) => {
-                let draft = SaveDraft { project: saved.project, excluded: saved.excluded, keys: saved.keys, path };
-                self.project.after_save = after;
-                if draft.excluded.is_empty() {
-                    self.project_commit(draft);
-                } else {
-                    self.project.save = Some(draft);
-                    self.active_tool = ActiveToolModal::ProjectSave;
+        let paths = self.paths.clone();
+        let mut cache = self.project.hash_cache.clone();
+        self.project.saving = true;
+        self.project.after_save = after;
+        self.status_message = "Saving the project\u{2026}".to_string();
+        // the recipes are built and the files hashed on the worker (reusing the cache): the window never waits
+        self.jobs.submit(JobKey::unique(JobKind::ProjectSave), "Saving the project", false, move |ctx| {
+            let last = std::cell::RefCell::new(String::new());
+            let progress = |name: &str, read: u64, total: u64| {
+                let (text, fraction) = hashing_text(name, read, total);
+                // one report per whole percent of a file
+                if *last.borrow() != text {
+                    ctx.set_progress(text.clone(), Some(fraction));
+                    *last.borrow_mut() = text;
                 }
-            }
+                ctx.is_cancelled()
+            };
+            let saved = build_project_progress(&snaps, active, &dir, &paths, &mut cache, &progress)?;
+            Ok(JobOutput::ProjectSave(Box::new(ProjectBuilt { saved, cache, path })))
+        });
+    }
+
+    /// The worker built the project: written at once, or the tabs that were left out are listed first.
+    pub(crate) fn apply_project_built(&mut self, b: ProjectBuilt) {
+        self.project.saving = false;
+        self.project.hash_cache.extend(b.cache);
+        let draft = SaveDraft { project: b.saved.project, excluded: b.saved.excluded, keys: b.saved.keys, path: b.path };
+        if draft.excluded.is_empty() {
+            self.project_commit(draft);
+        } else {
+            self.project.save = Some(draft);
+            self.active_tool = ActiveToolModal::ProjectSave;
         }
+    }
+
+    pub(crate) fn project_save_failed(&mut self, msg: &str) {
+        self.project.saving = false;
+        self.project.after_save = None;
+        self.status_message = format!("The project was not saved: {}", msg);
     }
 
     fn project_commit(&mut self, draft: SaveDraft) {

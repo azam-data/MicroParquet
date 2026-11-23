@@ -49,6 +49,8 @@ pub enum JobOutput {
     ProjectTab(Box<ProjectLoaded>),
     /// The files of a project that changed since it was saved, and the hashes worked out (Phase 8 W4).
     ProjectCheck(Box<ProjectChecked>),
+    /// The project built from the open tabs, and the hashes worked out on the way.
+    ProjectSave(Box<ProjectBuilt>),
 }
 
 /// A tab of a project, built on the worker.
@@ -58,6 +60,12 @@ pub struct ProjectLoaded {
     pub chart: Option<crate::chart::ChartData>,
     /// The tab's place in the project's tab list.
     pub index: usize,
+}
+
+pub struct ProjectBuilt {
+    pub saved: crate::project::SavedProject,
+    pub cache: crate::project::HashCache,
+    pub path: PathBuf,
 }
 
 pub struct ProjectChecked {
