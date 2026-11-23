@@ -6,6 +6,7 @@ pub mod batch;
 pub mod buckets;
 pub mod calc_column;
 pub mod calendar;
+pub mod chart_filters;
 pub mod colour_picker;
 pub mod chart;
 pub mod chart_render;

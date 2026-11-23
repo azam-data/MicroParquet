@@ -921,6 +921,8 @@ impl MicroParquetApp {
                 self.open_colour_picker(crate::ui::colour_picker::PickTarget::Studio, &n);
             }
         }
+        // ---- the values the chart keeps: tick lists of its fields, and filters on any column (Phase 8 W10)
+        self.studio_filters_section(ui, spec, avail, rects);
         // ---- reference lines
         let h = egui::CollapsingHeader::new(format!("Reference lines ({})", spec.ref_lines.len())).id_salt("chart_refs").show(ui, |ui| {
             let mut remove: Option<usize> = None;

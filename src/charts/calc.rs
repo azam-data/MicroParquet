@@ -62,6 +62,7 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     // W6: the chart is drawn at its drill level, from the rows its path and its own filters leave
     spec.check_drill()?;
+    spec.check_filters()?;
     let level = spec.at_level();
     let spec = &level;
     let conditions = spec.row_conditions();

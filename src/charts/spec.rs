@@ -819,17 +819,37 @@ impl ChartSpec {
         out
     }
 
+    /// One of the chart's own filters in words: "Bank = Conventional", "Bank = Conventional or Islamic", "Bank \u{2260} Islamic".
+    pub fn filter_text(c: &FilterCondition) -> String {
+        let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
+        let mut vals: Vec<String> = c.values.clone();
+        if c.or_blank {
+            vals.push(crate::pivot_table::BLANK_LABEL.to_string());
+        }
+        let op = if c.op == CondOp::NotInList { "\u{2260}" } else { "=" };
+        if vals.is_empty() {
+            return format!("{} {} nothing ticked", field, op);
+        }
+        format!("{} {} {}", field, op, vals.join(" or "))
+    }
+
+    /// The chart's own filters must say which values they keep: a list with none ticked keeps no rows, and a chart of no rows
+    /// is refused in words rather than drawn empty. (Phase 8 W10)
+    pub fn check_filters(&self) -> anyhow::Result<()> {
+        for c in &self.filters {
+            if matches!(c.op, CondOp::InList | CondOp::NotInList) && c.values.is_empty() && !c.or_blank {
+                let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
+                anyhow::bail!("Chart: the filter on '{}' has no value ticked, so it keeps no rows. Tick a value, or press All to keep every value.", field);
+            }
+        }
+        Ok(())
+    }
+
     /// "Filtered: Deposit Type = FDR, Branch = Dhaka" (the path, then the chart's own filters); empty when nothing is.
     pub fn filtered_text(&self) -> String {
         let mut parts: Vec<String> = self.drill_path.iter().map(|(n, v)| format!("{} = {}", n, v)).collect();
         for c in &self.filters {
-            let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
-            let mut vals: Vec<String> = c.values.clone();
-            if c.or_blank {
-                vals.push(crate::pivot_table::BLANK_LABEL.to_string());
-            }
-            let op = if c.op == CondOp::NotInList { "\u{2260}" } else { "=" };
-            parts.push(format!("{} {} {}", field, op, vals.join(" or ")));
+            parts.push(Self::filter_text(c));
         }
         if parts.is_empty() {
             String::new()

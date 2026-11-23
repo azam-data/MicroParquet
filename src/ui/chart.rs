@@ -47,6 +47,8 @@ pub struct ChartState {
     pub reset_colours: bool,
     /// The chart tab the studio is editing (Phase 8 W5): its spec is the studio's, Update puts it back.
     pub editing: Option<u64>,
+    /// The "Filters on this chart" section: the tick list that is open (Phase 8 W10).
+    pub filters_ui: crate::ui::chart_filters::ChartFilterState,
 }
 
 /// The names a chart's colours go to: its series, or its categories when it has no series.
@@ -103,7 +105,7 @@ pub struct ClosedSource {
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, editing: None, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, editing: None, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None, filters_ui: Default::default() }
     }
 }
 

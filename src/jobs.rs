@@ -65,6 +65,8 @@ pub enum JobKind {
     ChartTab,
     /// The rows behind a cell of a pivot table, found by building the pivot again (Phase 8 W6).
     ShowRows,
+    /// The values of a field of the chart studio's "Filters on this chart" tick lists (Phase 8 W10).
+    ChartPickerValues,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

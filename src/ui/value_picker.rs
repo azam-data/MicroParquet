@@ -100,15 +100,22 @@ pub fn picker_order(lists: &[micro_parquet::sort_lists::SortList], field: &str) 
 
 /// Draws the picker for one condition. `values` and `or_blank` are its selection.
 pub fn picker_body(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPanel, values: &mut Vec<String>, or_blank: &mut bool, allow_blank: bool, order: &SortOrder) -> PickerOutcome {
+    picker_body_with(ui, tk, panel, values, or_blank, allow_blank, order, ("Select all listed", "Clear"))
+}
+
+/// `picker_body` with the names of its two buttons (the chart's tick lists say "All" and "None").
+pub fn picker_body_with(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPanel, values: &mut Vec<String>, or_blank: &mut bool, allow_blank: bool, order: &SortOrder, buttons: (&str, &str)) -> PickerOutcome {
     let mut out = PickerOutcome::default();
     let mut rects = PickerRects::default();
     let frame = egui::Frame::none().stroke(theme::line(tk.border)).rounding(theme::RADIUS_CONTROL).inner_margin(theme::SPACE_S).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let shown = shown_values(panel, order);
-        ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut panel.search).desired_width(theme::PICKER_SEARCH_W).hint_text("Search values"));
+        ui.horizontal_wrapped(|ui| {
+            // (in a narrow panel the search box gives room to the two buttons, and they wrap rather than leave the window)
+            let search_w = (ui.available_width() - theme::PICKER_BUTTONS_W).clamp(theme::PICKER_SEARCH_MIN_W, theme::PICKER_SEARCH_W);
+            let r = ui.add(egui::TextEdit::singleline(&mut panel.search).desired_width(search_w).hint_text("Search values"));
             rects.search = Some(r.rect);
-            let all = ui.button("Select all listed");
+            let all = ui.button(buttons.0);
             rects.select_all = Some(all.rect);
             if all.clicked() {
                 for (k, _) in &shown {
@@ -120,7 +127,7 @@ pub fn picker_body(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPane
                 }
                 out.changed = true;
             }
-            let clear = ui.button("Clear");
+            let clear = ui.button(buttons.1);
             rects.clear = Some(clear.rect);
             if clear.clicked() {
                 values.clear();
@@ -142,7 +149,7 @@ pub fn picker_body(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPane
         } else if panel.full.is_none() {
             ui.label(egui::RichText::new("Listing the values\u{2026}").color(tk.muted));
         }
-        egui::ScrollArea::vertical().id_salt("picker_list").max_height(theme::PICKER_LIST_H).auto_shrink([false, true]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("picker_list").max_height(theme::PICKER_LIST_H).min_scrolled_height(theme::PICKER_LIST_H).auto_shrink([false, true]).show(ui, |ui| {
             for (k, n) in &shown {
                 let label = k.clone().unwrap_or_else(|| "(blank)".to_string());
                 if k.is_none() && !allow_blank {

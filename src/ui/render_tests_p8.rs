@@ -2468,3 +2468,327 @@ fn w7_a_chart_tab_takes_the_pick_without_being_calculated_again_and_a_chart_of_o
         micro_parquet::rules::set_data_dir_override(None);
     }
 }
+
+// ================================================================================ W10: filters on a chart
+
+/// Scrolls the studio's panel with the wheel until the rectangle `get` gives is well inside the window; the rectangle.
+fn show_rect(rig: &mut Rig, what: &str, get: &dyn Fn(&Rig) -> Option<egui::Rect>) -> egui::Rect {
+    for _ in 0..30 {
+        rig.draw(3);
+        let screen = rig.ctx.screen_rect();
+        let (lo, hi) = (screen.top() + 140.0, screen.bottom() - 45.0);
+        let delta = match get(rig) {
+            Some(r) if r.top() >= lo && r.bottom() <= hi => return r,
+            Some(r) if r.bottom() > hi => -(r.bottom() - hi).min(200.0),
+            Some(r) => (lo - r.top()).min(200.0),
+            None => -200.0,
+        };
+        let x = rig.app.chart.rects.controls.map(|c| c.center().x).unwrap_or(screen.right() - 100.0);
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.5);
+        rig.step(vec![egui::Event::PointerMoved(egui::pos2(x, screen.center().y)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE }]);
+        for _ in 0..6 {
+            rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+            rig.draw(1);
+        }
+    }
+    panic!("{}: {what} could not be scrolled into view", rig.what);
+}
+
+/// The check box of the value `label` in the open tick list, scrolled into view.
+fn tick_box(rig: &mut Rig, label: &str) -> egui::Rect {
+    let l = label.to_string();
+    show_rect(rig, &format!("the check box of '{label}'"), &move |r| r.app.chart.filters_ui.panel.rects.boxes.iter().find(|(n, _)| *n == l).map(|(_, b)| *b))
+}
+
+fn filter_panel_button(rig: &mut Rig, which: &str) -> egui::Rect {
+    let which = which.to_string();
+    show_rect(rig, &format!("the tick list's '{which}'"), &move |r| {
+        let p = &r.app.chart.filters_ui.panel.rects;
+        match which.as_str() {
+            "All" => p.select_all,
+            "None" => p.clear,
+            "Search" => p.search,
+            _ => None,
+        }
+    })
+}
+
+fn wait_chart_series(rig: &mut Rig, series: &[&str]) {
+    let want: Vec<String> = series.iter().map(|s| s.to_string()).collect();
+    pump_until(rig, &format!("the chart of {series:?}"), &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| {
+        let mut have = d.series.clone();
+        have.sort();
+        let mut w = want.clone();
+        w.sort();
+        have == w
+    }));
+    rig.draw(3);
+}
+
+/// The first mark of the studio's chart and the category it stands for.
+fn first_mark(rig: &Rig) -> (egui::Rect, String) {
+    let s = crate::ui::chart_render::last_shown(&rig.ctx, egui::Id::new(PLOT_ID)).unwrap_or_else(|| panic!("{}: a chart", rig.what));
+    let d = rig.app.chart.data.as_ref().expect("data");
+    let m = s.layout.marks.iter().find(|m| m.kind == micro_parquet::charts::layout::MarkKind::Bar).expect("a bar");
+    (m.rect, d.categories[m.category].clone())
+}
+
+fn wait_list(rig: &mut Rig) {
+    pump_until(rig, "the tick list's values", &|r| r.app.chart.filters_ui.panel.full.is_some() && !r.app.jobs.any_busy());
+    rig.draw(3);
+}
+
+/// The chart of the book (Month by Branch) with the rows of `keep` only, calculated by hand with the spec the studio has.
+fn by_hand(rig: &Rig, keep: &dyn Fn(&str) -> bool) -> micro_parquet::charts::data::ChartData {
+    let df = book8();
+    let branch: Vec<bool> = df.column("Branch").expect("Branch").str().expect("text").into_iter().map(|v| keep(v.unwrap_or(""))).collect();
+    let mask: polars::prelude::BooleanChunked = branch.into_iter().collect();
+    let mut spec = rig.app.chart.spec.clone();
+    spec.filters.clear();
+    micro_parquet::charts::calc::compute(df.filter(&mask).expect("filtered").lazy(), &spec).expect("by hand")
+}
+
+#[test]
+fn w10_the_tick_lists_of_the_fields_keep_the_ticked_values_with_all_and_none_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w10a", ppp, w, h, false);
+        let what = rig.what.clone();
+        let rows_before = (rig.app.tabs[0].total_rows, rig.app.tabs[0].steps.len());
+        let dhaka_before = studio_bar_fill(&rig, "Dhaka");
+        // the section
+        click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+        for f in ["Values: Category", "Values: Series", "Add a filter"] {
+            show_field(&mut rig, f);
+        }
+        assert!(rig.app.chart.rects.fields.iter().all(|(n, _)| n != "Values: Panels"), "{what}: there are no panels");
+        // the series' tick list: three banks with their row counts, all ticked (no filter yet)
+        click_field(&mut rig, "Values: Series");
+        wait_list(&mut rig);
+        let full = rig.app.chart.filters_ui.panel.full.clone().expect("the list");
+        let mut counts: Vec<(String, u64)> = full.values.iter().map(|(k, n)| (k.clone().unwrap_or_default(), *n)).collect();
+        counts.sort();
+        assert_eq!(counts, vec![("Ctg".to_string(), 3), ("Dhaka".to_string(), 3), ("Sylhet".to_string(), 2)], "{what}");
+        show_rect(&mut rig, "the tick list", &|r| r.app.chart.filters_ui.panel.rects.panel);
+        let p = rig.draw(3);
+        let panel = rig.app.chart.filters_ui.panel.rects.clone();
+        let area = panel.panel.expect("the picker's frame");
+        assert!(rig.app.chart.spec.filters.is_empty(), "{what}: every value ticked is no filter");
+        // each row says its label and its number of rows, side by side, inside the panel
+        for (label, n) in &counts {
+            let row = panel.rows.iter().find(|(l, _)| l == label).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: a row for {label}: {:?}", panel.rows));
+            assert!(inside(row, area), "{what}: {label} {row:?} in {area:?}");
+            let texts: Vec<&(String, egui::Rect)> = p.glyphs.iter().filter(|(t, b)| inside(*b, area) && (b.center().y - row.center().y).abs() < row.height() / 2.0 && !t.trim().is_empty()).collect();
+            assert!(texts.iter().any(|(t, _)| t == label) && texts.iter().any(|(t, _)| *t == n.to_string()), "{what}: {label} and {n} are in its row: {texts:?}");
+        }
+        let texts: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(_, b)| inside(*b, area)).cloned().collect();
+        assert_no_overlap(&texts, &what);
+        for b in [panel.search, panel.select_all, panel.clear, panel.summary].into_iter().flatten() {
+            assert!(inside(b, area), "{what}: {b:?} is inside the picker {area:?}");
+        }
+        assert!(has_text(&p, "All") && has_text(&p, "None"), "{what}: the two buttons are All and None");
+
+        // untick Ctg: the chart keeps Dhaka and Sylhet, adds up to the source filtered by hand, and says so
+        let b = tick_box(&mut rig, "Ctg");
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.chart.spec.filters.len(), 1, "{what}: {:?}", rig.app.chart.spec.filters);
+        assert_eq!((rig.app.chart.spec.filters[0].op, rig.app.chart.spec.filters[0].column.as_str()), (micro_parquet::models::CondOp::InList, "Branch"), "{what}");
+        wait_chart_series(&mut rig, &["Dhaka", "Sylhet"]);
+        let want = by_hand(&rig, &|b| b != "Ctg");
+        let have = rig.app.chart.data.clone().expect("data");
+        assert_eq!((have.categories.clone(), have.values.iter().flatten().flatten().sum::<f64>()), (want.categories.clone(), want.values.iter().flatten().flatten().sum::<f64>()), "{what}");
+        // Sylhet too: only Dhaka. The source tab is as it was and Dhaka keeps its colour
+        let b = tick_box(&mut rig, "Sylhet");
+        click_rect(&mut rig, b);
+        wait_chart_series(&mut rig, &["Dhaka"]);
+        let want = by_hand(&rig, &|b| b == "Dhaka");
+        let have = rig.app.chart.data.clone().expect("data");
+        assert_eq!((have.categories.clone(), have.values.clone()), (want.categories.clone(), want.values.clone()), "{what}: the totals equal a chart of the source filtered by hand");
+        assert_eq!((rig.app.tabs[0].total_rows, rig.app.tabs[0].steps.len()), rows_before, "{what}: the source tab is as it was");
+        assert_eq!(studio_bar_fill(&rig, "Dhaka"), dhaka_before, "{what}: Dhaka keeps its colour");
+        assert!(has_text(&rig.draw(4), "Filtered: Branch = Dhaka"), "{what}: the subtitle says so");
+        let summary = show_field(&mut rig, "Values: Series");
+        assert!(summary.width() > 0.0 && has_text(&rig.draw(3), "1 kept"), "{what}: the button says 1 kept");
+
+        // None keeps nothing, and says so in words; All keeps every value (the filter is gone)
+        let b = filter_panel_button(&mut rig, "None");
+        click_rect(&mut rig, b);
+        pump_until(&mut rig, "the refusal", &|r| !r.app.chart.busy && r.app.chart.error.is_some());
+        let e = rig.app.chart.error.clone().expect("error");
+        assert!(e.contains("the filter on 'Branch' has no value ticked") && e.contains("press All"), "{what}: {e}");
+        let b = filter_panel_button(&mut rig, "All");
+        click_rect(&mut rig, b);
+        assert!(rig.app.chart.spec.filters.is_empty(), "{what}: All is no filter: {:?}", rig.app.chart.spec.filters);
+        wait_chart_series(&mut rig, &["Dhaka", "Ctg", "Sylhet"]);
+        assert!(rig.app.chart.error.is_none(), "{what}");
+        assert_eq!(studio_bar_fill(&rig, "Dhaka"), dhaka_before, "{what}");
+
+        // the search narrows the list to what contains it
+        let b = filter_panel_button(&mut rig, "Search");
+        click_rect(&mut rig, b);
+        rig.step(vec![egui::Event::Text("syl".into())]);
+        rig.draw(3);
+        let rows: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+        assert_eq!(rows, vec!["Sylhet".to_string()], "{what}: only the values that contain 'syl'");
+        // the category has its own list, of the months
+        let b = show_field(&mut rig, "Values: Category");
+        click_rect(&mut rig, b);
+        wait_list(&mut rig);
+        let rows: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+        assert!(rows.contains(&"Jan".to_string()) && rows.contains(&"Aug".to_string()), "{what}: the months: {rows:?}");
+        assert_eq!(rig.app.chart.filters_ui.open.as_ref().map(|k| k.name.as_str()), Some("Month"), "{what}: one list is open at a time");
+
+        // Show rows of a mark of the filtered chart includes the chart's filters: the rows are those of the mark among the kept
+        let mut s = rig.app.chart.spec.clone();
+        s.filters = vec![micro_parquet::models::FilterCondition { column: "Branch".into(), op: micro_parquet::models::CondOp::InList, values: vec!["Dhaka".into(), "Sylhet".into()], ..Default::default() }];
+        rig.app.chart_set_spec(s);
+        wait_chart_series(&mut rig, &["Dhaka", "Sylhet"]);
+        let d = rig.app.chart.data.clone().expect("data");
+        let si = d.series.iter().position(|x| x == "Dhaka").expect("Dhaka");
+        let ci = (0..d.categories.len()).find(|c| d.values[si][*c].is_some()).expect("a month with Dhaka");
+        let (category, value) = (d.categories[ci].clone(), d.values[si][ci].expect("value"));
+        let tabs = rig.app.tabs.len();
+        rig.app.studio_chart_action(crate::ui::chart_render::ChartAction::ShowRows(micro_parquet::charts::data::MarkRef { category: category.clone(), series: Some("Dhaka".into()), facet: None }));
+        pump_until(&mut rig, "the rows of the mark", &|r| r.app.tabs.len() == tabs + 1 && !r.app.jobs.any_busy());
+        let tab = rig.app.tabs.last().expect("the rows tab");
+        let filter = tab.steps.iter().find_map(|s| s.as_filter_group()).expect("a filter step").0;
+        assert!(filter.iter().any(|c| c.column == "Branch" && c.op == micro_parquet::models::CondOp::InList && c.values == vec!["Dhaka".to_string(), "Sylhet".to_string()]), "{what}: the chart's own filter is in the rows' filter: {filter:?}");
+        let n = rig.app.tabs.len() - 1;
+        assert_eq!(rows_of(&rig, n).1, value, "{what}: the rows add up to the mark of {category}");
+    }
+}
+
+#[test]
+fn w10_a_filter_made_by_keep_only_this_is_in_the_list_and_is_removed_there_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w10b", ppp, w, h, false);
+        let what = rig.what.clone();
+        let months = rig.app.chart.data.as_ref().expect("data").categories.clone();
+        show_studio_chart(&mut rig);
+        let (r, month) = first_mark(&rig);
+        let p = right_click(&mut rig, r.center());
+        click_rect(&mut rig, text_box(&p, "Keep only this").unwrap_or_else(|| panic!("{what}: Keep only this")));
+        pump_until(&mut rig, "the chart of one month", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 1));
+        assert_eq!(rig.app.chart.spec.filters.len(), 1, "{what}");
+        // the section lists it, with its remove button
+        click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+        let p = rig.draw(4);
+        assert!(has_text(&p, &format!("Month = {month}")), "{what}: the list says Month = {month}");
+        let x = show_field(&mut rig, "Filter 1 remove");
+        assert!(inside(x, rig.ctx.screen_rect()), "{what}: {x:?} in {:?}, controls {:?}", rig.ctx.screen_rect(), rig.app.chart.rects.controls);
+        click_rect(&mut rig, x);
+        assert!(rig.app.chart.spec.filters.is_empty(), "{what}: removed from the list");
+        pump_until(&mut rig, "every month again", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == months.len()));
+        // Exclude this too: the list says "≠"
+        show_studio_chart(&mut rig);
+        let (r, month) = first_mark(&rig);
+        let p = right_click(&mut rig, r.center());
+        click_rect(&mut rig, text_box(&p, "Exclude this").unwrap_or_else(|| panic!("{what}: Exclude this")));
+        pump_until(&mut rig, "the chart without a month", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == months.len() - 1));
+        assert!(has_text(&rig.draw(4), &format!("Month \u{2260} {month}")), "{what}: the list says Month ≠ {month}");
+    }
+}
+
+#[test]
+fn w10_a_filter_on_another_column_and_on_a_part_of_a_date_is_added_and_ticked_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w10c", ppp, w, h, false);
+        let what = rig.what.clone();
+        click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+        // Band is not a field of the chart: add a filter on it. Its values are listed (all ticked); None, then 0%
+        let r = show_field(&mut rig, "Add a filter");
+        let p = click_rect(&mut rig, r);
+        let item = last_box(&p, "Band", 0.0).unwrap_or_else(|| panic!("{what}: Band is in the list of columns"));
+        click_rect(&mut rig, item);
+        wait_list(&mut rig);
+        assert_eq!(rig.app.chart.filters_ui.open.as_ref().map(|k| k.name.as_str()), Some("Band"), "{what}");
+        let b = filter_panel_button(&mut rig, "None");
+        click_rect(&mut rig, b);
+        let b = tick_box(&mut rig, "0%");
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.chart.spec.filters.len(), 1, "{what}: {:?}", rig.app.chart.spec.filters);
+        assert_eq!(rig.app.chart.spec.filters[0].values, vec!["0%".to_string()], "{what}");
+        pump_until(&mut rig, "the chart of 0%", &|r| !r.app.chart.busy && r.app.chart.error.is_none() && r.app.chart.data.as_ref().is_some_and(|d| d.values.iter().flatten().flatten().sum::<f64>() == 1000.0));
+        // (0% is rows 3 and 7 of the book: 300 and 700). The list row is there, with its remove button and its own Values button
+        let p = rig.draw(4);
+        assert!(has_text(&p, "Band = 0%"), "{what}: the list says Band = 0%");
+        show_field(&mut rig, "Filter 1 remove");
+        show_field(&mut rig, "Filter 1 values");
+        assert!(has_text(&rig.draw(3), "Filtered: Band = 0%"), "{what}: the chart's subtitle says so too");
+
+        // a date column: "By" appears; by Quarter, the values are Q1… and the filter keeps one of them
+        let r = show_field(&mut rig, "Add a filter");
+        let p = click_rect(&mut rig, r);
+        let item = last_box(&p, "Open Date", 0.0).unwrap_or_else(|| panic!("{what}: Open Date is in the list"));
+        click_rect(&mut rig, item);
+        rig.draw(3);
+        let by = show_field(&mut rig, "Add by");
+        let p = click_rect(&mut rig, by);
+        let q = last_box(&p, "Quarter", 0.0).unwrap_or_else(|| panic!("{what}: Quarter is in the By list"));
+        click_rect(&mut rig, q);
+        wait_list(&mut rig);
+        assert_eq!(rig.app.chart.filters_ui.open.as_ref().map(|k| k.name.as_str()), Some("Open Date \u{b7} Quarter"), "{what}");
+        let listed: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+        assert!(!listed.is_empty() && listed.iter().all(|l| l.starts_with('Q')), "{what}: {listed:?}");
+        // the rows of that quarter, by hand from the dates (20454 + 37 i days since 1970)
+        let quarter_of = |i: usize| -> String {
+            let d = micro_parquet::dates::date_from_days(20_454 + i as i32 * 37).expect("a date");
+            format!("Q{}", (chrono::Datelike::month(&d) - 1) / 3 + 1)
+        };
+        let target = listed[0].clone();
+        let b = filter_panel_button(&mut rig, "None");
+        click_rect(&mut rig, b);
+        let b = tick_box(&mut rig, &target);
+        click_rect(&mut rig, b);
+        let band: Vec<Option<&str>> = vec![Some("10%\u{2013}11%"), Some("No rate"), Some("0%"), Some("8%\u{2013}9%"), Some("> 15%"), Some("Below 0%"), Some("0%"), Some("8%\u{2013}9%")];
+        let balance = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0];
+        let want: f64 = (0..8).filter(|i| quarter_of(*i) == target && band[*i] == Some("0%")).map(|i| balance[i]).sum();
+        assert_eq!(rig.app.chart.spec.filters.len(), 2, "{what}: the Band filter and the quarter: {:?}", rig.app.chart.spec.filters);
+        assert_eq!(rig.app.chart.spec.filters[1].part.as_ref().map(|p| p.part), Some(DatePart::Quarter), "{what}");
+        pump_until(&mut rig, "the chart of the quarter", &|r| !r.app.chart.busy && (r.app.chart.error.is_some() || r.app.chart.data.is_some()));
+        if want > 0.0 {
+            let total = rig.app.chart.data.as_ref().map(|d| d.values.iter().flatten().flatten().sum::<f64>()).unwrap_or(-1.0);
+            assert!((total - want).abs() < 1e-9, "{what}: {total} vs {want} for {target}");
+        } else {
+            // no 0% row is in that quarter: the chart has nothing to draw and says so
+            assert!(rig.app.chart.error.is_some() || rig.app.chart.data.as_ref().is_some_and(|d| d.categories.is_empty()), "{what}");
+        }
+        assert!(has_text(&rig.draw(4), &format!("Open Date \u{b7} Quarter = {target}")), "{what}: the list says the quarter");
+    }
+}
+
+#[test]
+fn w10_a_filtered_chart_tab_and_a_project_keep_the_filter_and_old_charts_load_as_they_were() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w10d", ppp, w, h, false);
+        let what = rig.what.clone();
+        let mut s = rig.app.chart.spec.clone();
+        s.filters = vec![micro_parquet::models::FilterCondition { column: "Branch".into(), op: micro_parquet::models::CondOp::InList, values: vec!["Dhaka".into(), "Sylhet".into()], ..Default::default() }];
+        rig.app.chart_set_spec(s);
+        wait_chart_series(&mut rig, &["Dhaka", "Sylhet"]);
+        let kept = rig.app.chart.data.clone().expect("data");
+        rig.app.chart_open_as_chart_tab();
+        pump_until(&mut rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1 && !r.app.jobs.any_busy());
+        let id = chart_tab_id(&rig);
+        assert_eq!(rig.app.chart_tabs[&id].data.spec.filters.len(), 1, "{what}");
+        // the project: save, open, and the chart tab is calculated again with the filter
+        let pfile = rig.app.paths.root_dir.join("proj").join("Filtered.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
+        let saved = micro_parquet::project::load_project(&pfile).expect("the project reads");
+        assert!(serde_json::to_string(&saved).expect("json").contains("Dhaka"), "{what}: the filter is in the file");
+        rig.app.project.test_pick = Some(pfile.clone());
+        file_item(&mut rig, "Open project\u{2026}");
+        click_button(&mut rig, "Open");
+        pump_until(&mut rig, "the project opens", &|r| r.app.project.opening.is_none() && r.app.chart_tabs.len() == 1 && !r.app.jobs.any_busy());
+        let id2 = chart_tab_id(&rig);
+        let back = &rig.app.chart_tabs[&id2];
+        assert_eq!(back.data.spec.filters, rig.app.chart_tabs[&id2].data.spec.filters, "{what}");
+        assert_eq!(back.data.spec.filters.len(), 1, "{what}: the project keeps the filter");
+        let mut got = back.data.series.clone();
+        got.sort();
+        assert_eq!((got, back.data.values.iter().flatten().flatten().sum::<f64>()), (vec!["Dhaka".to_string(), "Sylhet".to_string()], kept.values.iter().flatten().flatten().sum::<f64>()), "{what}: the same numbers");
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id2).expect("the chart tab");
+        assert!(has_text(&rig.draw(4), "Filtered: Branch = Dhaka or Sylhet"), "{what}: and says so");
+    }
+}

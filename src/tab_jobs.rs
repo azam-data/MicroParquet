@@ -55,6 +55,8 @@ pub enum JobOutput {
     ChartTab(Box<ChartTabCalc>),
     /// The tab behind a cell of a pivot (Phase 8 W6).
     ShowRows(Box<ShowRowsResult>),
+    /// The values a chart's tick list lists (Phase 8 W10).
+    ChartPicker(Box<PickerResult>),
 }
 
 /// A tab of a project, built on the worker.
