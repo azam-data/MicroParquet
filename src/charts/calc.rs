@@ -196,7 +196,14 @@ fn compute_facets(lf: LazyFrame, spec: &ChartSpec, facet: &str) -> Result<Vec<Fa
         );
     }
     let mut order: Vec<usize> = (0..names.len()).collect();
-    order.sort_by(|&a, &b| ns[b].cmp(&ns[a]).then_with(|| names[a].cmp(&names[b])));
+    match spec.facet_order.as_ref() {
+        // Q1: the panels in the order chosen for the facet
+        Some(o) => {
+            let key = |i: usize| -> Option<String> { if names[i] == BLANK_LABEL { None } else { Some(names[i].clone()) } };
+            order.sort_by(|&a, &b| o.compare(&key(a), &key(b)));
+        }
+        None => order.sort_by(|&a, &b| ns[b].cmp(&ns[a]).then_with(|| names[a].cmp(&names[b]))),
+    }
     let inner = ChartSpec { facet: None, ..spec.clone() };
     let mut out = Vec::new();
     for i in order {

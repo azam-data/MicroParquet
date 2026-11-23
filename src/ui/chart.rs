@@ -699,6 +699,7 @@ impl MicroParquetApp {
         let auto = new_category && spec.order.is_natural() && !spec.by_value;
         if spec != self.chart.spec {
             let category = spec.category.clone();
+            self.auto_series_facet_order(&mut spec);
             self.chart_set_spec(spec);
             if auto {
                 if let Some(order) = self.auto_order(&category, crate::ui::auto_order::AutoTarget::ChartCategory) {
@@ -760,6 +761,7 @@ impl MicroParquetApp {
         }
         self.studio_sections(ui, &mut spec, &avail, &numeric, rects);
         if spec != self.chart.spec {
+            self.auto_series_facet_order(&mut spec);
             self.chart_set_spec(spec);
         }
     }

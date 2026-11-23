@@ -84,8 +84,9 @@ def _mp_sort_key(e, dtype):
 "#;
 
 /// Python mirror of the custom-list and Tenor sort orders (`sort_lists::order_sort_keys`, U3).
-const PY_ORDER_HELPER: &str = r#"_MP_TENOR_DAYS = {"d": 1, "day": 1, "days": 1, "w": 7, "wk": 7, "wks": 7, "week": 7, "weeks": 7,
-                  "m": 30, "mon": 30, "mons": 30, "month": 30, "months": 30,
+pub const PY_ORDER_HELPER: &str = r#"_MP_TENOR_DAYS = {"d": 1, "day": 1, "days": 1, "w": 7, "wk": 7, "wks": 7, "week": 7, "weeks": 7,
+                  "m": 365 / 12, "mo": 365 / 12, "mos": 365 / 12, "mon": 365 / 12, "mons": 365 / 12,
+                  "month": 365 / 12, "months": 365 / 12,
                   "y": 365, "yr": 365, "yrs": 365, "year": 365, "years": 365}
 
 

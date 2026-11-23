@@ -516,6 +516,10 @@ pub struct ChartSpec {
     pub series_part: Option<crate::dates::DateFieldRef>,
     /// The facet is a date part: its name is `facet`.
     pub facet_part: Option<crate::dates::DateFieldRef>,
+    /// The order of the series (Q1): `None` = by size, as before Phase 8. Filled when a series is added.
+    pub series_order: Option<SortOrder>,
+    /// The order of the facet panels (Q1): `None` = largest first, as before Phase 8.
+    pub facet_order: Option<SortOrder>,
 }
 
 impl Default for ChartSpec {
@@ -562,6 +566,8 @@ impl Default for ChartSpec {
             category_part: None,
             series_part: None,
             facet_part: None,
+            series_order: None,
+            facet_order: None,
         }
     }
 }
@@ -620,7 +626,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -639,7 +645,9 @@ impl ChartSpec {
             self.donut_top,
             (self.kind == ChartKind::Donut) as u8,
             // the date parts (W2): their calendar changes the numbers
-            self.date_fields()
+            self.date_fields(),
+            self.series_order,
+            self.facet_order
         )
     }
 }

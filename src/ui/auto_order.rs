@@ -10,6 +10,7 @@
 //! never re-ordered.
 
 use crate::ui::prelude::*;
+use micro_parquet::charts::spec::ChartSpec;
 use micro_parquet::sort_lists::{detect_order, SortOrder};
 
 /// Where the order goes when it is known.
@@ -19,6 +20,10 @@ pub enum AutoTarget {
     Pivot,
     /// The chart's category.
     ChartCategory,
+    /// The chart's series (Q1).
+    ChartSeries,
+    /// The chart's small-multiple panels (Q1).
+    ChartFacet,
     /// Level `n` of the sort dialog.
     SortLevel(usize),
 }
@@ -91,12 +96,53 @@ impl MicroParquetApp {
                     self.chart_set_spec(spec);
                 }
             }
+            AutoTarget::ChartSeries => {
+                let s = &self.chart.spec;
+                if s.series.as_deref() == Some(w.field.as_str()) && s.series_order.is_none() {
+                    let mut spec = s.clone();
+                    spec.series_order = Some(order);
+                    self.chart_set_spec(spec);
+                }
+            }
+            AutoTarget::ChartFacet => {
+                let s = &self.chart.spec;
+                if s.facet.as_deref() == Some(w.field.as_str()) && s.facet_order.is_none() {
+                    let mut spec = s.clone();
+                    spec.facet_order = Some(order);
+                    self.chart_set_spec(spec);
+                }
+            }
             AutoTarget::SortLevel(n) => {
                 if let Some(l) = self.sort.levels.get_mut(n) {
                     if l.column == w.field && l.order.is_natural() {
                         l.order = order;
                     }
                 }
+            }
+        }
+    }
+
+    /// Q1: a series or facet was picked in `spec` (the studio's copy, not yet the chart's): its order is
+    /// filled by the W0 rule, a date part from its own order (Natural for a number such as the year), a column
+    /// from the steps or its labels. A field that gets no order keeps today's behaviour (`None`). Only a
+    /// field that *changed* is given an order, so a saved chart never changes.
+    pub(crate) fn auto_series_facet_order(&mut self, spec: &mut ChartSpec) {
+        let old = self.chart.spec.clone();
+        if spec.series != old.series {
+            spec.series_order = None;
+            if let (Some(name), Some(f)) = (spec.series.clone(), spec.series_part.as_ref().filter(|p| Some(p.name.as_str()) == spec.series.as_deref())) {
+                let _ = name;
+                spec.series_order = Some(f.sort_order().unwrap_or(SortOrder::Natural));
+            } else if let Some(name) = spec.series.clone().as_deref() {
+                spec.series_order = self.auto_order(&name, AutoTarget::ChartSeries);
+            }
+        }
+        if spec.facet != old.facet {
+            spec.facet_order = None;
+            if let (Some(_), Some(f)) = (spec.facet.clone(), spec.facet_part.as_ref().filter(|p| Some(p.name.as_str()) == spec.facet.as_deref())) {
+                spec.facet_order = Some(f.sort_order().unwrap_or(SortOrder::Natural));
+            } else if let Some(name) = spec.facet.clone().as_deref() {
+                spec.facet_order = self.auto_order(&name, AutoTarget::ChartFacet);
             }
         }
     }

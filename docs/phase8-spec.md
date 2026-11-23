@@ -397,8 +397,8 @@ Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, f
 
 Owner decisions on Session A (given with the Session B brief):
 - W0-1 to W3-4 are accepted.
-- Q1: `ChartSpec.series_order` and `facet_order` (`Option<SortOrder>`, serde default `None` = today's behaviour), filled by the W0 auto-order rule when a field is added; existing charts never change. Test: a new chart with series "Open Date › Year" lists 2024, 2025, 2026; a Phase 7 saved chart keeps its order. Decided, not built yet (Session B was told W4 only).
-- Q2: the Python Tenor mirror uses the app's day count (month = 365/12 days, year = 365). Test against the app on 12M, 1Y, 18M, 2Y, 30D, 1M. Decided, not built yet.
+- Q1: `ChartSpec.series_order` and `facet_order` (`Option<SortOrder>`, serde default `None` = today's behaviour), filled by the W0 auto-order rule when a field is added; existing charts never change. Test: a new chart with series "Open Date › Year" lists 2024, 2025, 2026; a Phase 7 saved chart keeps its order. Built (Session B2), `tests/phase8/q.rs`. A series or facet picked in the studio gets its order from the field (a date part: its own order, Natural for a number such as the year; a column: the steps' order, else Calendar or Ranges when its labels parse). A column whose labels give no order keeps `None` (series by size, panels largest first), so only a field that was added changes. The series that stay are still the largest; `series_order` then lists them. Suggestions, templates and opened charts are not touched.
+- Q2: the Python Tenor mirror uses the app's day count (month = 365/12 days, year = 365). Test against the app on 12M, 1Y, 18M, 2Y, 30D, 1M. Built (Session B2), `tests/phase8/q.rs`; the mirror also reads the units "mo" and "mos" like the app.
 - Q3: plain-Python date parts in the Polars export: accepted.
 
 Session B (W4) choices:
@@ -415,4 +415,9 @@ Session B (W4) choices:
 - W4-11: Open closes the session's tabs only after "Open" is pressed in the Sources dialog; Cancel leaves everything as it was.
 - W4-12: `--project` writes `<tab title>.parquet` (a second title gets "(2)") through a staging folder in `--export-dir`; a step that cannot run stops the run like a failing tab.
 - W4-13: not done in W4: the guide note `projects.md` and screenshots (W8); `cargo build --release` was not run in this session (the debug `cargo test` was).
+
+Owner decisions on Session B (W4):
+- W4-1 to W4-13 are accepted.
+- Q1 and Q2 are built (see above).
+- Project save: the blake3 hash runs on the worker with progress ("Hashing Loans.csv 40%"), reusing the cache; the UI never blocks. A test checks that save is dispatched as a worker job. (This replaces W4-4.)
 </accepted_deviations>

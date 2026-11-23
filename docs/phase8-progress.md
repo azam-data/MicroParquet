@@ -86,8 +86,8 @@ seven older macro fixtures. `tests/phase8/p7_baseline.rs` is the code that made 
 ## Found, not changed
 
 - The Python Tenor mirror counts a month as 30 days (`_MP_TENOR_DAYS`), the app as 365/12; "12M" and "1Y" tie in
-  the app and not in Python. The owner decided (Q2) that the mirror uses the app's day count: **not built yet.**
-- Owner decision Q1 (`ChartSpec.series_order` and `facet_order`) is also **not built yet** (Session B was told W4 only).
+  the app and not in Python. The owner decided (Q2) that the mirror uses the app's day count: **built** (`tests/phase8/q.rs`).
+- Owner decision Q1 (`ChartSpec.series_order` and `facet_order`) is **built** (`tests/phase8/q.rs`).
 
 ## Session B (W4): deviations W4-1 to W4-13
 
