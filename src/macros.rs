@@ -99,9 +99,12 @@ def _mp_tenor_days(v):
     if not m or m.group(2) not in _MP_TENOR_DAYS:
         return None
     try:
-        return float(m.group(1)) * _MP_TENOR_DAYS[m.group(2)]
+        n = float(m.group(1))
     except ValueError:
         return None
+    if n != n or n in (float("inf"), float("-inf")):
+        return None  # the app refuses a number too big to hold
+    return n * _MP_TENOR_DAYS[m.group(2)]
 
 
 def _mp_rank_keys(e, rank_fn, sub_fn=None):

@@ -114,6 +114,8 @@ struct Item {
     words: String,
     group: &'static str,
     reason: Option<&'static str>,
+    /// The whole reason, when the short one is not all of it (a chart tab names its source tab): the hover and the status line.
+    full_reason: Option<String>,
     recent: Option<usize>,
 }
 
@@ -126,11 +128,22 @@ impl MicroParquetApp {
             can_undo: tab.is_some_and(|t| t.history.can_undo()),
             can_redo: tab.is_some_and(|t| t.history.can_redo()),
             project: self.project.active,
+            chart_tab: self.active_is_chart_tab(),
         }
     }
 
+    /// The whole text of a short reason: on a chart tab the note of the steps panel, which names the source tab.
+    fn full_reason_of(&self, short: &'static str) -> String {
+        if short == cmds::CHART_TAB_STEP_REASON {
+            if let Some(note) = self.chart_tab_steps_note() {
+                return note;
+            }
+        }
+        short.to_string()
+    }
+
     /// Why a command cannot run now (shown greyed in the search and the menus).
-    pub(crate) fn command_unavailable(&self, id: CommandId) -> Option<&'static str> {
+    pub(crate) fn command_unavailable(&self, id: CommandId) -> Option<String> {
         // a tab of a project that did not open has no rows: nothing to export, copy or script
         if self.active_is_unavailable()
             && matches!(
@@ -138,9 +151,9 @@ impl MicroParquetApp {
                 CommandId::ExportParquet | CommandId::ExportCsv | CommandId::ExportXlsx | CommandId::ExportCl1 | CommandId::ExportPdf | CommandId::ExportSplit | CommandId::CopyTable | CommandId::PythonExport | CommandId::SaveMacro
             )
         {
-            return Some("This tab could not be opened, so it has nothing to export. Its reason is in the main area.");
+            return Some("This tab could not be opened, so it has nothing to export. Its reason is in the main area.".to_string());
         }
-        cmds::command(id).and_then(|c| cmds::unavailable_reason(c, self.command_state()))
+        cmds::command(id).and_then(|c| cmds::unavailable_reason(c, self.command_state())).map(|r| self.full_reason_of(r))
     }
 
     /// A menu or toolbar item for a command: disabled with the reason when it cannot run.
@@ -339,6 +352,7 @@ impl MicroParquetApp {
                 words: format!("{} {}", c.words, c.group.label()),
                 group: c.group.label(),
                 reason: cmds::unavailable_reason(c, state),
+                full_reason: cmds::unavailable_reason(c, state).map(|r| self.full_reason_of(r)),
                 recent: self.recent_commands.iter().position(|r| *r == c.id),
             })
             .collect();
@@ -350,6 +364,7 @@ impl MicroParquetApp {
                     words: "column field inspector statistics".to_string(),
                     group: "Column",
                     reason: None,
+                    full_reason: None,
                     recent: None,
                     column: Some(name),
                 });
@@ -457,6 +472,11 @@ impl MicroParquetApp {
                                     })
                                     .response
                                     .interact(egui::Sense::click());
+                                // the whole reason on hover, as on the greyed menu items
+                                let r = match &it.full_reason {
+                                    Some(full) => r.on_hover_text(full),
+                                    None => r,
+                                };
                                 if on_cursor && (down || up) {
                                     r.scroll_to_me(None);
                                 }
@@ -478,7 +498,7 @@ impl MicroParquetApp {
         if let Some(idx) = run {
             let it = &items[idx];
             if let Some(why) = it.reason {
-                self.status_message = why.to_string();
+                self.status_message = it.full_reason.clone().unwrap_or_else(|| why.to_string());
             } else {
                 close = true;
                 match (&it.id, &it.column) {

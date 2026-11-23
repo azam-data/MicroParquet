@@ -1081,9 +1081,25 @@ fn w5_closing_the_source_dims_the_chart_with_a_message_and_reopen_restores_it() 
         wait_saved(&mut rig);
         let src_title = rig.app.tabs[0].title.clone();
         let kept = rig.app.chart_tabs[&id].data.clone();
+        // the chart as it is drawn while its source is open, and when it is closed: its labels' glyphs fade by the dim factor
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+        let p = rig.draw(3);
+        // (the side panel's studio draws the same category labels, so the chart's title is the text to read: it is drawn once)
+        let alpha_of = |p: &Painted, label: &str| {
+            let all: Vec<f32> = p.alpha.iter().filter(|(t, _)| t == label).map(|(_, a)| *a as f32).collect();
+            assert_eq!(all.len(), 1, "{what}: the chart tab draws '{label}' once: {all:?}");
+            all[0]
+        };
+        let label = chart_title(&kept);
+        let open_alpha = alpha_of(&p, &label);
+        assert!(open_alpha > 200.0, "{what}: an open source draws the chart's labels opaque: {open_alpha}");
         rig.app.close_tab(0);
         rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
         let p = rig.draw(3);
+        let dim = crate::ui::theme::CHART_TAB_DIMMED_OPACITY;
+        assert!(dim < 1.0 && dim > 0.0);
+        let shut_alpha = alpha_of(&p, &label);
+        assert!((shut_alpha - open_alpha * dim).abs() <= 3.0, "{what}: a closed source dims the chart to {dim}: alpha {open_alpha} became {shut_alpha}");
         let msg = format!("The source tab '{}' is closed. Reopen it to edit or refresh this chart.", src_title);
         assert!(has_text(&p, &msg), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
         let info = &rig.app.chart_tabs[&id];
@@ -1106,6 +1122,7 @@ fn w5_closing_the_source_dims_the_chart_with_a_message_and_reopen_restores_it() 
         assert!(info.closed.is_none() && info.source_tab.is_some(), "{what}");
         let p = rig.draw(3);
         assert!(!has_text(&p, "is closed. Reopen it"), "{what}: the message goes");
+        assert_eq!(alpha_of(&p, &label), open_alpha, "{what}: Reopen draws the chart as it was, no longer dimmed");
         // the chart is as it was: the source has the same steps, so nothing is calculated again
         tick(&mut rig);
         tick(&mut rig);
@@ -1169,4 +1186,167 @@ fn w5_the_project_fingerprint_does_not_move_when_a_chart_tab_is_calculated_again
     pump_chart_tab(&mut rig);
     tick(&mut rig);
     assert!(!rig.app.project_unsaved(), "a chart tab that follows its source is not a change");
+}
+
+// ---- W5 follow-up: the step commands are greyed on a chart tab
+
+/// How many texts of the frame contain `text` (the steps panel draws the note too, so a tooltip is one more).
+fn count_text(p: &Painted, text: &str) -> usize {
+    p.boxes.iter().filter(|(t, _)| t.contains(text)).count()
+}
+
+/// Moves the pointer onto `pos` the way a hand does (egui counts a movement only when it sees three positions over more
+/// than 10 ms, and shows no tooltip while the pointer rests where it clicked), then holds it there while the clock runs.
+fn hover_at(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+    let t0 = rig.input.time.unwrap_or(0.0) + 1.0;
+    for (dt, dx) in [(0.0, 30.0), (0.03, 20.0), (0.06, 10.0), (0.09, 0.0)] {
+        rig.input.time = Some(t0 + dt);
+        rig.step(vec![egui::Event::PointerMoved(pos + egui::vec2(dx, 0.0))]);
+    }
+    rig.input.time = Some(t0 + 1.0);
+    rig.step(vec![egui::Event::PointerMoved(pos)]);
+    rig.input.time = Some(t0 + 2.0);
+    rig.step(vec![egui::Event::PointerMoved(pos)])
+}
+
+/// A key press with Ctrl held (the app's `COMMAND`), then a few frames.
+fn ctrl_key(rig: &mut Rig, key: egui::Key) -> Painted {
+    let m = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    let ev = |pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: m };
+    rig.step(vec![ev(true), ev(false)]);
+    rig.draw(3)
+}
+
+const STEP_COMMANDS_P8: [(CommandId, &str); 4] = [
+    (CommandId::Conditional, "Conditional column"),
+    (CommandId::Normaliser, "Counterparty name normaliser"),
+    (CommandId::CleanBreaks, "Clean line breaks"),
+    (CommandId::SplitDate, "Split date"),
+];
+
+#[test]
+fn w5_the_step_commands_are_greyed_on_a_chart_tab_in_the_edit_menu_and_ctrl_k_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w5g", ppp, w, h);
+        let what = rig.what.clone();
+        three_tabs(&mut rig);
+        let id = chart_tab_id(&rig);
+        let chart_idx = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+        let src_title = rig.app.tabs[0].title.clone();
+        let note = format!("This tab draws a chart of '{}'. Change the data on that tab, or use Edit chart.", src_title);
+        rig.app.active_tab = chart_idx;
+        // the steps panel says it, and the greyed commands say the same
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Steps, true);
+        let p = rig.draw(3);
+        let panel = count_text(&p, &note);
+        assert_eq!(panel, 1, "{what}: the steps panel's note {note:?}");
+        assert_eq!(rig.app.chart_tab_steps_note().as_deref(), Some(note.as_str()), "{what}");
+        let (steps_before, tabs_before) = (rig.app.tabs.iter().map(|t| t.steps.len()).collect::<Vec<_>>(), rig.app.tabs.len());
+        for (cid, _) in STEP_COMMANDS_P8 {
+            assert_eq!(rig.app.command_unavailable(cid).as_deref(), Some(note.as_str()), "{what}: {cid:?}");
+        }
+        // every command that adds a step in place is greyed; the others are not
+        for cid in [CommandId::Filter, CommandId::Sort, CommandId::Columns, CommandId::CalcColumn, CommandId::Pivot, CommandId::RateProfile] {
+            assert_eq!(rig.app.command_unavailable(cid).as_deref(), Some(note.as_str()), "{what}: {cid:?}");
+        }
+        for cid in [CommandId::JoinTabs, CommandId::CopyTable, CommandId::ChartNew, CommandId::ExportCsv, CommandId::ToggleTheme, CommandId::OpenFile] {
+            assert!(rig.app.command_unavailable(cid).is_none(), "{what}: {cid:?} still works on a chart tab");
+        }
+
+        // the Edit menu: each item is greyed, a real click on it does nothing, and its tooltip is the note
+        let p = rig.draw(3);
+        let bar = bar_box(&p, "Edit").unwrap_or_else(|| panic!("{what}: the Edit menu"));
+        let mut p = click_rect(&mut rig, bar);
+        for (cid, title) in STEP_COMMANDS_P8 {
+            let it = p.boxes.iter().rev().find(|(t, b)| t.contains(title) && b.top() > bar.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: '{title}' is in the Edit menu"));
+            assert!(inside(it, rig.ctx.screen_rect()), "{what}: '{title}' {it:?} is inside the window");
+            click_rect(&mut rig, it);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: a click on the greyed '{title}' opens nothing");
+            p = hover_at(&mut rig, it.center());
+            assert_eq!(count_text(&p, &note), panel + 1, "{what}: the tooltip of '{title}' is the note: {:?}", p.boxes.iter().filter(|(_, b)| b.top() > bar.bottom()).map(|(t, _)| t.clone()).collect::<Vec<_>>());
+            assert!(p.boxes.iter().any(|(t, _)| t.contains(title)), "{what}: the menu is still open after the click on '{title}' ({cid:?})");
+        }
+        // the items that still work are not greyed: Copy the table opens no dialog but its click is taken (the menu closes)
+        let copy = p.boxes.iter().rev().find(|(t, b)| t.contains("Copy the table") && b.top() > bar.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: Copy the table"));
+        assert_eq!(count_text(&hover_at(&mut rig, copy.center()), &note), panel, "{what}: no tooltip on an item that works");
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(2);
+        assert_eq!((rig.app.tabs.iter().map(|t| t.steps.len()).collect::<Vec<_>>(), rig.app.tabs.len()), (steps_before.clone(), tabs_before), "{what}: nothing was added");
+
+        // Ctrl+K: type "split date"; the row is greyed with the short reason, a click says the note, its hover has it
+        ctrl_key(&mut rig, egui::Key::K);
+        assert!(rig.app.command_open, "{what}: Ctrl+K opens the search");
+        rig.step(vec![egui::Event::Text("split date".into())]);
+        let p = rig.draw(3);
+        let row = text_box(&p, "Split date\u{2026}").unwrap_or_else(|| panic!("{what}: the Split date row: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+        let short = micro_parquet::commands::CHART_TAB_STEP_REASON;
+        let why = text_box(&p, short).unwrap_or_else(|| panic!("{what}: the short reason {short:?} on the row"));
+        assert!(row.right() <= why.left() + 0.5 || row.bottom() <= why.top() || why.bottom() <= row.top(), "{what}: the title {row:?} and the reason {why:?} do not overlap");
+        let area = rig.ctx.memory(|m| m.area_rect(egui::Id::new("command_palette"))).expect("the search was drawn");
+        assert!(inside(row, area) && inside(why, area), "{what}: the row is inside the search {area:?}");
+        // the texts the search itself draws (the chart behind it draws its own in the same place)
+        rig.app.command_open = false;
+        let behind = rig.draw(2);
+        rig.app.command_open = true;
+        let p = rig.draw(2);
+        let same = |a: &egui::Rect, b: &egui::Rect| (a.min - b.min).length() < 0.5 && (a.max - b.max).length() < 0.5;
+        // (only the Split date row: other rows of the list, such as "Chart this result" with its long Phase 7 reason, are not this test's)
+        let band = |b: &egui::Rect| b.top() >= row.top() - 3.0 && b.bottom() <= row.bottom() + 3.0;
+        let glyphs: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(t, b)| inside(*b, area) && band(b) && !behind.glyphs.iter().any(|(u, c)| u == t && same(b, c))).cloned().collect();
+        assert!(glyphs.iter().any(|(t, _)| t.contains("Split date")) && glyphs.iter().any(|(t, _)| t == short), "{what}: the search's own texts: {glyphs:?}");
+        assert_no_overlap(&glyphs, &what);
+        let tip = hover_at(&mut rig, row.center());
+        assert_eq!(count_text(&tip, &note), panel + 1, "{what}: the tooltip of the row is the note");
+        click_rect(&mut rig, row);
+        assert_eq!(rig.app.status_message, note, "{what}: a click says why");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        assert!(rig.app.command_open, "{what}: the search stays open, as for any greyed row");
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(2);
+        assert!(!rig.app.command_open, "{what}");
+
+        // nothing else can slip a step into a chart tab either (the Column panel's button, a macro, …)
+        rig.app.status_message.clear();
+        rig.app.push_step_to_active_tab(TransformStep::SelectAndReorderColumns { cols: vec!["Branch".into()] }, false);
+        assert_eq!(rig.app.status_message, note, "{what}");
+        assert_eq!(rig.app.tabs.iter().map(|t| t.steps.len()).collect::<Vec<_>>(), steps_before, "{what}: no step was added to the chart tab");
+
+        // the control: on the source tab the same items work by the same clicks
+        rig.app.active_tab = 0;
+        rig.draw(3);
+        for (cid, title) in STEP_COMMANDS_P8 {
+            assert!(rig.app.command_unavailable(cid).is_none(), "{what}: {cid:?} works on the source tab");
+            let _ = title;
+        }
+        let p = menu_item(&mut rig, "Edit", "Split date");
+        let _ = p;
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SplitDate, "{what}: on the source tab the click opens the dialog");
+    }
+}
+
+#[test]
+fn w5_a_file_that_changes_under_the_source_updates_the_chart_tab_to_equal_a_new_chart() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w5f", ppp, w, h);
+        let what = rig.what.clone();
+        three_tabs(&mut rig);
+        let id = chart_tab_id(&rig);
+        let before = rig.app.chart_tabs[&id].data.clone();
+        // the month's file is replaced by one with twice the rows: nothing in the app was touched
+        let root = rig.app.paths.root_dir.clone();
+        let twice = book8().vstack(&book8()).expect("twice the rows");
+        let src = parquet_source(&root, "book", twice);
+        let path_of = |s: &TabSource| match s {
+            TabSource::SingleFile { path, .. } => path.clone(),
+            other => panic!("a file tab, not {other:?}"),
+        };
+        assert_eq!(path_of(&src), path_of(&rig.app.tabs[0].source), "{what}: the same file, with other contents");
+        pump_until(&mut rig, "the chart tab follows the file", &|r| r.app.chart_tabs[&id].data.values != before.values);
+        pump_chart_tab(&mut rig);
+        let info = &rig.app.chart_tabs[&id];
+        let want = fresh_chart(&rig, &info.data.spec);
+        assert_eq!((info.data.categories.clone(), info.data.values.clone()), (want.categories.clone(), want.values.clone()), "{what}: the chart tab equals a new chart made from the changed file");
+        let sum = |v: &Vec<Vec<Option<f64>>>| v.iter().flatten().flatten().sum::<f64>();
+        assert!((sum(&info.data.values) - 2.0 * sum(&before.values)).abs() < 1e-6, "{what}: twice the rows, twice the total");
+    }
 }

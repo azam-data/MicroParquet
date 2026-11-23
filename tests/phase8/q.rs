@@ -70,27 +70,68 @@ fn q1_facet_panels_follow_the_facet_order_and_without_one_the_largest_first() {
     assert_eq!(d.facets.len(), before.facets.len());
 }
 
+/// Every label the Q2 test puts to both the app and the Python mirror: each unit word the app reads (and the words of
+/// the Ranges grammar and some near misses, which neither may read) in four spellings, and the odd numbers.
+fn q2_labels() -> Vec<String> {
+    let units = [
+        "d", "day", "days", "w", "wk", "wks", "week", "weeks", "m", "mo", "mos", "mon", "mons", "month", "months", "y", "yr", "yrs", "year", "years",
+        // near misses and the Ranges grammar's words: not tenor units, so both must refuse them
+        "min", "mins", "mth", "mths", "hr", "h", "q", "qtr", "fortnight", "fortnights", "k", "cr", "crore", "lakh", "bn", "%", "dd", "ww", "yy", "mm", "monthly", "",
+    ];
+    let mut out: Vec<String> = Vec::new();
+    for n in ["3", "1.5", "0", "12", "100"] {
+        for u in units {
+            out.push(format!("{n}{u}"));
+            out.push(format!("{n} {u}"));
+            out.push(format!("  {n}  {}  ", u.to_uppercase()));
+            out.push(format!("{n}\u{a0}{u}"));
+        }
+    }
+    for t in ["12M", "1Y", "18M", "2Y", "30D", "1M", "6 months", "3 mo", "2 mos", "1.5y", "2 weeks", "O/N", "ON", "o/n", "Overnight", "7 wks", "3 Mon", "5 mons", "abc", "12", "3 fortnights", ""] {
+        out.push(t.to_string());
+    }
+    // numbers that are not whole tenors, or too big to hold
+    let huge = "9".repeat(400);
+    for t in [format!("{huge}d"), format!("{huge}m"), ".5d".into(), "5.d".into(), ".d".into(), "..d".into(), "1.2.3d".into(), "1e5d".into(), "-3m".into(), "+3m".into(), "m3".into(), "3 m m".into(), "3 2m".into(), "1,5m".into(), "\u{0663}m".into()] {
+        out.push(t);
+    }
+    out
+}
+
 #[test]
 fn q2_the_python_tenor_day_count_equals_the_apps() {
     if !have_python() {
         eprintln!("q2: python3 is not installed here, so the Python mirror is not run (skipped)");
         return;
     }
-    let tenors = ["12M", "1Y", "18M", "2Y", "30D", "1M", "6 months", "3 mo", "2 mos", "1.5y", "2 weeks", "O/N", "ON", "7 wks", "3 Mon", "5 mons", "abc", "12", "3 fortnights", ""];
+    let labels = q2_labels();
     let d = dir("q2_py");
     let mut script = String::from("import re as _re\nimport json\n");
     script.push_str(micro_parquet::macros::PY_ORDER_HELPER);
-    script.push_str(&format!("print(json.dumps([_mp_tenor_days(t) for t in {}]))\n", serde_json::to_string(&tenors).expect("json")));
+    script.push_str(&format!("print(json.dumps([_mp_tenor_days(t) for t in {}]))\n", serde_json::to_string(&labels).expect("json")));
     let out = run_python(&d, "q2", &script);
     let py: Vec<Option<f64>> = serde_json::from_str(out.trim()).expect("python json");
-    for (t, p) in tenors.iter().zip(py.iter()) {
+    assert_eq!(py.len(), labels.len());
+    let (mut read, mut refused) = (0, 0);
+    for (t, p) in labels.iter().zip(py.iter()) {
         let a = parse_tenor_days(t);
         match (a, p) {
-            (Some(a), Some(p)) => assert!((a - p).abs() < 1e-9, "'{t}': app {a} vs Python {p}"),
-            (None, None) => {}
-            _ => panic!("'{t}': app {a:?} vs Python {p:?}"),
+            (Some(a), Some(p)) => {
+                read += 1;
+                assert!((a - p).abs() <= 1e-9 * a.abs().max(1.0), "'{t}': app {a} vs Python {p}");
+            }
+            (None, None) => refused += 1,
+            _ => panic!("'{t}': the app gives {a:?} and the Python mirror {p:?}: they must accept exactly the same labels"),
         }
     }
+    // the test reaches both sides: the app reads many labels and refuses many
+    assert!(read > 400 && refused > 200, "read {read}, refused {refused}");
+    // the units of the owner's question are read by both ("mo" and "mos" included)
+    for t in ["3 mo", "2 mos", "3mo", "  3  MOS  "] {
+        let i = labels.iter().position(|l| l == t).unwrap_or_else(|| panic!("'{t}' is in the list"));
+        assert!(parse_tenor_days(t).is_some() && py[i].is_some(), "'{t}' is read by the app and the mirror");
+    }
     // 12M and 1Y tie, as in the app
-    assert_eq!(py[0], py[1]);
+    let at = |t: &str| py[labels.iter().position(|l| l == t).expect("in the list")];
+    assert_eq!(at("12M"), at("1Y"));
 }

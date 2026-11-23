@@ -66,3 +66,68 @@ fn w5_the_chart_of_the_owners_case_is_calculated_from_the_source_and_reads_sum_o
     let table = LazyFrame::scan_parquet(&path, Default::default()).expect("scan").collect().expect("table");
     assert_eq!(table.height(), 3);
 }
+
+#[test]
+fn w5_a_source_looks_different_when_its_steps_or_its_file_change_and_the_same_when_nothing_did() {
+    let d = dir("w5_sig");
+    let path = d.join("book.parquet");
+    let write = |mut df: DataFrame| {
+        let f = std::fs::File::create(&path).expect("create");
+        ParquetWriter::new(f).finish(&mut df).expect("write");
+    };
+    write(loans());
+    let src = TabSource::SingleFile { path: path.clone(), is_parquet: true, config: IngestionConfig::default() };
+    let sig = micro_parquet::tab_jobs::source_signature(&src, &[]);
+    assert!(!sig.is_empty());
+    assert_eq!(sig, micro_parquet::tab_jobs::source_signature(&src, &[]), "nothing changed: the same signature, so nothing is calculated again");
+    // a step (or a filter) on the source
+    let step = TransformStep::SelectAndReorderColumns { cols: vec!["Branch".into()] };
+    let with_step = micro_parquet::tab_jobs::source_signature(&src, std::slice::from_ref(&step));
+    assert_ne!(sig, with_step, "a step is a change");
+    // the data: the file is replaced by one with more rows (its size changes)
+    let bigger = loans().vstack(&loans()).expect("stack");
+    write(bigger);
+    assert_ne!(sig, micro_parquet::tab_jobs::source_signature(&src, &[]), "a changed file is a change");
+    // a file that is not there has a signature too (the chart then says why it cannot be calculated again)
+    std::fs::remove_file(&path).expect("remove");
+    let gone = micro_parquet::tab_jobs::source_signature(&src, &[]);
+    assert!(!gone.is_empty());
+}
+
+#[test]
+fn w5_the_step_commands_are_greyed_on_a_chart_tab_and_every_other_command_is_as_it_was() {
+    use micro_parquet::commands::*;
+    let on_chart = CommandState { tabs: 3, chart_tab: true, can_undo: true, can_redo: true, ..Default::default() };
+    let on_table = CommandState { chart_tab: false, ..on_chart };
+    let mut greyed: Vec<CommandId> = Vec::new();
+    for c in COMMANDS {
+        let (a, b) = (unavailable_reason(c, on_chart), unavailable_reason(c, on_table));
+        if adds_step_to_active_tab(c.id) {
+            assert_eq!(a, Some(CHART_TAB_STEP_REASON), "{:?} is greyed on a chart tab", c.id);
+            assert_eq!(b, None, "{:?} works on a table tab", c.id);
+            greyed.push(c.id);
+        } else {
+            assert_eq!(a, b, "{:?}: a command that adds no step is as it was on a chart tab", c.id);
+        }
+    }
+    // every Transform command that changes the tab's own steps is on the list (a join opens a tab and Copy changes nothing)
+    let transform: Vec<CommandId> = in_group(CommandGroup::Transform).map(|c| c.id).filter(|id| !matches!(id, CommandId::JoinTabs | CommandId::CopyTable)).collect();
+    for id in &transform {
+        assert!(greyed.contains(id), "{id:?} is a Transform command");
+    }
+    // the Edit menu's own step commands, and the toolbar's Transform buttons, are greyed
+    for id in EDIT_MENU.iter().filter(|id| !matches!(id, CommandId::Undo | CommandId::Redo | CommandId::JoinTabs | CommandId::CopyTable)) {
+        assert!(greyed.contains(id), "{id:?} is in the Edit menu");
+    }
+    for id in TOOLBAR_BUTTONS_TRANSFORM {
+        assert!(greyed.contains(id), "{id:?} is a toolbar button");
+    }
+    assert_eq!(greyed.len(), 17, "{greyed:?}");
+    // with no tab open the older reason stays
+    let none = CommandState { tabs: 0, chart_tab: true, ..Default::default() };
+    assert_eq!(unavailable_reason(command(CommandId::Filter).expect("filter"), none), Some("Open a file first."));
+    // a chart tab does not stop opening a file, exporting its table, charting, or the view commands
+    for id in [CommandId::OpenFile, CommandId::ExportCsv, CommandId::ChartNew, CommandId::ToggleTheme, CommandId::CopyTable, CommandId::Undo] {
+        assert!(!greyed.contains(&id));
+    }
+}

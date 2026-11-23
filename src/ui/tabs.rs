@@ -279,6 +279,11 @@ impl MicroParquetApp {
         let Some(curr) = self.tabs.get(self.active_tab).cloned() else {
             return;
         };
+        // a chart tab has no steps of its own (they are its source tab's): nothing is added to it in place
+        if !open_new_tab && self.active_is_chart_tab() {
+            self.status_message = self.chart_tab_steps_note().unwrap_or_else(|| "This tab draws a chart. Change the data on its source tab.".to_string());
+            return;
+        }
 
         // Inherit per-metric format specifications if this is a Pivot step; formats chosen in the
         // Columns dialog arrive with its step (so one undo takes back both).

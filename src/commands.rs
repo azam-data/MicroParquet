@@ -317,10 +317,43 @@ pub struct CommandState {
     pub can_redo: bool,
     /// A project is open.
     pub project: bool,
+    /// The active tab draws a chart of another tab (Phase 8 W5): its steps are the source tab's.
+    pub chart_tab: bool,
+}
+
+/// The short reason a step command gives on a chart tab (the full text is the note of the steps panel).
+pub const CHART_TAB_STEP_REASON: &str = "Not on a chart tab.";
+
+/// The commands that add a step to the active tab in place (their dialogs end in "Add" on that tab). On a chart tab
+/// they are greyed: the tab has no steps of its own (they are its source tab's), and the steps panel says so.
+pub fn adds_step_to_active_tab(id: CommandId) -> bool {
+    matches!(
+        id,
+        CommandId::Filter
+            | CommandId::Sort
+            | CommandId::Columns
+            | CommandId::CalcColumn
+            | CommandId::Pivot
+            | CommandId::Conditional
+            | CommandId::Normaliser
+            | CommandId::CleanBreaks
+            | CommandId::SplitDate
+            | CommandId::Buckets
+            | CommandId::RateProfile
+            | CommandId::Duration
+            | CommandId::Ftp
+            | CommandId::Provision
+            | CommandId::ClassifyOverdue
+            | CommandId::IfrsEcl
+            | CommandId::Limits
+    )
 }
 
 /// Why a command cannot run now; `None` when it can.
 pub fn unavailable_reason(cmd: &Command, state: CommandState) -> Option<&'static str> {
+    if state.tabs > 0 && state.chart_tab && adds_step_to_active_tab(cmd.id) {
+        return Some(CHART_TAB_STEP_REASON);
+    }
     match cmd.needs {
         Needs::Nothing => None,
         Needs::Tab if state.tabs == 0 => Some("Open a file first."),

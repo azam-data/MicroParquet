@@ -511,6 +511,9 @@ pub(crate) struct Painted {
     /// The rectangle of each text's laid-out rows (a label in a wrapped row starts after the row's leading
     /// space, which `boxes` includes): what the overlap checks of Phase 8 compare.
     pub(crate) glyphs: Vec<(String, egui::Rect)>,
+    /// The alpha of the first glyph of each text as drawn (255 for an opaque colour; a `Ui` faded with `set_opacity`
+    /// multiplies the colours of its glyphs, so a dimmed text has less).
+    pub(crate) alpha: Vec<(String, u8)>,
 }
 
 pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
@@ -519,6 +522,9 @@ pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted 
             egui::Shape::Text(t) => {
                 let fam = t.galley.job.sections.first().map(|s| s.format.font_id.family.clone()).unwrap_or(egui::FontFamily::Proportional);
                 out.colors.push((t.galley.text().to_string(), t.galley.job.sections.first().map(|s| s.format.color).unwrap_or(egui::Color32::PLACEHOLDER)));
+                if let Some(v) = t.galley.rows.iter().find_map(|r| r.visuals.mesh.vertices.first()) {
+                    out.alpha.push((t.galley.text().to_string(), v.color.a()));
+                }
                 out.shown.push((t.galley.rows.iter().map(|r| r.text()).collect::<String>(), t.pos));
                 out.boxes.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2())));
                 let rows = t.galley.rows.iter().filter(|r| !r.glyphs.is_empty()).fold(egui::Rect::NOTHING, |a, r| {

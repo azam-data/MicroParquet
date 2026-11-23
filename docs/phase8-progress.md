@@ -1,10 +1,10 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done). Next: C = W6, W7, W8. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: W6 (this session), then W7, W8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
-| W5 | DONE | (see git log: "Phase 8 W5") | tests/phase8/w5.rs ×2 (a Phase 7 `settings.json` with chart tabs loads and saves back unchanged, its chart reads with the Phase 8 fields at default; the owner's case is calculated from the source and reads "Sum of Balance", a filtered source gives the source's numbers); render_tests_p8 ×5 (a filter on the source updates the chart tab to equal a new chart, table included; Edit chart by a real click opens the studio on the source with the banner, Update chart tab keeps one chart tab with the new numbers and the title rule, Open as new chart tab leaves the first as it was; closing the source dims the chart with the message, Reopen by a real click restores it, Reopen is not offered outside a project; a chart tab of an older version stays frozen and Edit chart opens it on its own table; recalculating does not set the project's "•"; at 3 sizes) |
+| W5 | DONE | (see git log: "Phase 8 W5" and "Phase 8 W5: follow-ups") | tests/phase8/w5.rs ×4 (a Phase 7 `settings.json` with chart tabs loads and saves back unchanged, its chart reads with the Phase 8 fields at default; the owner's case is calculated from the source and reads "Sum of Balance", a filtered source gives the source's numbers; a source's signature changes with a step or a changed file and not otherwise; the step commands are greyed on a chart tab and every other command is as it was); render_tests_p8 ×7 (a filter on the source updates the chart tab to equal a new chart, table included; a file that changes under the source does the same; Edit chart by a real click opens the studio on the source with the banner, Update chart tab keeps one chart tab with the new numbers and the title rule, Open as new chart tab leaves the first as it was; closing the source dims the chart (glyph alpha 0.45) with the message, Reopen by a real click restores it, Reopen is not offered outside a project; a chart tab of an older version stays frozen and Edit chart opens it on its own table; recalculating does not set the project's "•"; the step commands are greyed in the Edit menu and Ctrl+K by real clicks, with the note as tooltip and the status line; at 3 sizes, the "•" test at one) |
 | W4 | DONE | (see git log: "Phase 8 W4") | tests/phase8/w4.rs ×10 (six kinds of tab round-trip by the hash of their rows, with keys, active tab, formats, summary, control column, chart specs, and save → open → save equal but `saved_at`; moving the project and its files together opens by relative paths; a relink to a file with an extra column works and a missing column is refused with the list, and the tabs built on it fail; Found/Changed/Missing, Look in folder, the changed-since-saved line; tabs left out with the reason and their dependants; a placeholder keeps its recipe; a newer version is refused, unknown fields ignored, recent list of 8; headless writes every tab and a failing tab writes nothing; save → open → save gives the same file bytes but the saved_at line; the save job reports each file it hashes and the cache spares the second save); src/headless.rs ×1 (`--project`/`--export-dir`); render_tests_p8 ×6 (File menu entries, Ctrl+K, Save as, "•", Save, Open ▸ Sources dialog ▸ Open, Close; Browse and Look in folder, placeholders and Save keeping them; close request prompt with Cancel/Don't save/Save, New project, recent list; the left-out list; the changed-file status line, at 3 sizes; Save is a worker job) |
 | W3 | DONE | (see git log: "Phase 8 W3") | tests/phase8/w3.rs ×4 (numbered defaults to true for every saved form and the plain labels, the band order and its declared list; the owner's bands unnumbered in band order in the sorted step result, a pivot, the template's chart, the Excel workbook and the Python; a Phase 7 macro with the step replays to the numbered labels and its Phase 7 hash; the title "… sit at 8%–9%" in both forms); render_tests_p8 ×1 (the tick box off, on and off by real clicks, Add makes plain labels, a pivot takes the band order at once, at 3 sizes) |
 | W2 | DONE | (see git log: "Phase 8 W2") | tests/phase8/w2.rs ×6 (a pivot by a date field equals the pivot by the Split date column for 6 parts; every part with two calendars adds up to the total with "(blank)" last; a chart by Quarter: Q1…Q4 and the pivot's totals, series and facet by a part, stale parts ignored, missing columns, the calendar in the calculation key; a filter by Day name in Fri, Sat keeps exactly those rows, by Year, text refused, the Python; a real column of the field's name refused, the value lists of a part, a pivot filter on a part; old pivots, charts and conditions load); render_tests_p8 ×3 (the pivot expander and Add to Rows, the chart Category picker, the filter By choice, the picker and Apply, by real clicks at 3 sizes) |
@@ -30,6 +30,28 @@ is in `src/headless.rs`. Totals: 10 library + 6 UI + 1 headless = 17.
 | Render tests: menus, Sources dialog, prompt by real clicks at 3 sizes | `w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_sizes`, the Sources, prompt and status-line tests above, `w4_save_lists_the_tabs_it_leaves_out_and_a_newer_project_is_refused_by_the_menu` |
 | Tabs that cannot be saved are left out with the reason; a placeholder keeps its recipe; a newer version is refused | `w4_tabs_that_cannot_be_rebuilt_are_left_out_with_the_reason_and_so_are_the_tabs_built_on_them`, `w4_a_tab_that_did_not_open_keeps_its_recipe_when_the_project_is_saved_again`, `w4_a_newer_project_is_refused_unknown_fields_are_ignored_and_the_recent_list_keeps_eight` |
 | Owner decision: the hash runs on the worker with progress ("Hashing Loans.csv 40%"), reusing the cache; Save is a worker job | `w4_save_is_a_worker_job_the_window_does_not_wait_for` (UI: the command returns with the job pending and nothing written; a second Save is refused; the result is taken at the next frame); `w4_the_save_job_reports_each_file_it_hashes_and_the_cache_spares_the_second_save` (library: progress per file, text "Hashing Loans.csv 40%", cached file not read, stop request is an error) |
+
+## W5 acceptance: item -> test
+
+Library tests are `tests/phase8/w5.rs` (`cargo test -q --test phase3 p8_w5`); UI tests are in `src/ui/render_tests_p8.rs`
+(`cargo test -q --bin MicroParquet w5_`), each at the 3 sizes unless noted. Totals: 4 library + 7 UI = 11. "Spec" means
+the bullets of task W5 and its Acceptance list in `docs/phase8-spec.md`.
+
+| Acceptance item (spec W5) | Test |
+| --- | --- |
+| Changing a filter on the source updates the chart tab's numbers to equal a new chart made from the source (its table too); nothing is calculated when nothing changed | `w5_a_filter_on_the_source_updates_the_chart_tab_to_equal_a_new_chart` (UI) |
+| Recalculated when the source's data change ("steps, filters or data") | `w5_a_source_looks_different_when_its_steps_or_its_file_change_and_the_same_when_nothing_did` (library); `w5_a_file_that_changes_under_the_source_updates_the_chart_tab_to_equal_a_new_chart` (UI) — **added in the follow-ups** |
+| Recalculated after a project opens | `w4_a_project_of_six_kinds_of_tab_round_trips_by_the_hash_of_its_rows` (library); `w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_sizes` (UI: the chart tab has the same rows and knows its source tab) |
+| Edit chart opens the studio on the source with the chart tab's spec, the banner "Editing chart tab '…'", Update chart tab and Open as new chart tab | `w5_edit_chart_opens_the_studio_on_the_source_and_update_keeps_one_chart_tab_with_the_new_numbers` (UI) |
+| Edit chart → change the aggregation → Update keeps one chart tab with the new numbers and the old title rule; Open as new chart tab leaves the first as it was | same test |
+| Edit chart on the owner's case (Sum of Balance by Term period) shows "Sum of Balance", never "Sum of Sum of Balance" | `w5_the_chart_of_the_owners_case_is_calculated_from_the_source_and_reads_sum_of_balance` (library); the studio's measure names and the tab title in the Edit chart test (UI) |
+| The steps panel of a chart tab is read-only with the note "This tab draws a chart of '…'. Change the data on that tab, or use Edit chart." | the Edit chart test (the note is drawn); the greyed-commands test (the note is the steps panel's) |
+| Owner decision (B2): the step commands are greyed in the Edit menu, the toolbar and Ctrl+K, with the note as tooltip | `w5_the_step_commands_are_greyed_on_a_chart_tab_in_the_edit_menu_and_ctrl_k_by_real_clicks_at_three_sizes` (UI: real clicks on the four Edit-menu items and on the Ctrl+K row, tooltips, status line, no overlap, a step pushed by another door is refused, the source tab's items work); `w5_the_step_commands_are_greyed_on_a_chart_tab_and_every_other_command_is_as_it_was` (library: the exact list of 17) |
+| Closing the source dims the chart with the message; Reopen restores it; Reopen only for a file tab of the open project; Edit chart is greyed while the source is closed | `w5_closing_the_source_dims_the_chart_with_a_message_and_reopen_restores_it` (UI: glyph alpha open 255 → closed 0.45 × → open again; the message; Reopen by a real click) — the dimming assertion was **added in the follow-ups** |
+| A Phase 7 `settings.json` with chart tabs loads and is saved back unchanged (owner decision: Phase 7 never reopened them as tabs, and Phase 8 does not) | `w5_a_phase7_settings_file_with_chart_tabs_loads_and_keeps_them` (library) |
+| A chart tab with no source tab is frozen, marked "Made by an older version; …", Edit chart opens it on its own table, only "Open as new chart tab" is offered | `w5_a_chart_tab_of_an_older_version_stays_as_it_was_and_edit_chart_opens_it_on_its_own_table` (UI) |
+| Recalculating a chart tab does not set the project's "•" | `w5_the_project_fingerprint_does_not_move_when_a_chart_tab_is_calculated_again` (UI, one size) |
+| Render tests by real clicks at 3 sizes | every UI test above but the last; the last runs at 1280×720 only |
 
 ## The Phase 7 baseline (goal 3)
 
@@ -108,6 +130,14 @@ seven older macro fixtures. `tests/phase8/p7_baseline.rs` is the code that made 
 
 - The Python Tenor mirror counts a month as 30 days (`_MP_TENOR_DAYS`), the app as 365/12; "12M" and "1Y" tie in
   the app and not in Python. The owner decided (Q2) that the mirror uses the app's day count: **built** (`tests/phase8/q.rs`).
+  Follow-up (B2): the mirror must read exactly the labels the app reads. The app reads "mo"/"mos" (and "mon"/"mons"), so they
+  stay; the test now puts every unit word, in four spellings, to both and found one difference (a number too big to hold:
+  the app refuses it, the mirror read infinity), now fixed.
+- The Ctrl+K list can overlap a row's title and its reason when the reason is long: at 1219 pt "Chart this result" and
+  "Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it." overlap (a Phase 7 reason).
+  Not changed (not part of W5); the new test checks only the rows it is about. Worth a short reason or a tooltip-only reason.
+- A project's file stamp is size and modified time in whole seconds (`project::file_stamp`): a file replaced within the same
+  second by one of the same size looks unchanged to a chart tab. Not changed.
 - Owner decision Q1 (`ChartSpec.series_order` and `facet_order`) is **built** (`tests/phase8/q.rs`).
 
 ## Session B (W4): deviations W4-1 to W4-13
@@ -126,4 +156,7 @@ screenshots are W8; the release build was not run in session B (it was run, and 
 They are listed in `docs/phase8-spec.md` `<accepted_deviations>`. In short: the chart tab compares its source's recipe
 (source, steps that run, file size and time) every 0.4 s and is calculated again on the worker from the source; the
 steps panel of a chart tab shows the note and no list; Edit chart is greyed while the source is closed; a chart tab
-with no source (made before Phase 8) is frozen.
+with no source (made before Phase 8) is frozen. Owner decisions (B2): all accepted; W5-6's "step commands are not greyed" is
+replaced by **W5-7** (the step commands are greyed on a chart tab in the Edit menu, the toolbar and Ctrl+K, with the steps
+panel's note as tooltip; `push_step_to_active_tab` refuses a step for a chart tab as a backstop). Phase 7 chart tabs: the
+current behaviour is correct, and the spec's compatibility line now says so.
