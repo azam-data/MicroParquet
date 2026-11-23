@@ -333,6 +333,18 @@ The Power BI date hierarchy, without adding columns.
 - **Acceptance:** a c8-style test checks every note has its sections, every picture it names exists, and the README lists the notes.
 </task>
 
+<task id="W10" name="Filters on a chart">
+- Studio: the series, category and facet fields each get a value tick list (search, All/None, row counts), like the filter value picker. A "Filters on this chart" section takes any column with the tab filter's picker, date "By" included.
+- Stored in ChartSpec.filters (added in W6, where Keep only this / Exclude this write), so the list shows those too and can remove them. Applied before aggregation; the source tab is unchanged.
+- The subtitle states them ("Bank: Conventional"). Colours follow the entity, so a kept item keeps its colour. Honoured by every renderer, chart tabs, saved charts, chart books, projects, drill and Show rows.
+- Acceptance:
+  - Balance by Bucket, series Bank, keep Conventional: totals equal a chart of the source filtered to Bank = Conventional; the source tab's row count is unchanged; Conventional keeps its colour
+  - a filter made by Keep only this appears in the list and can be removed there
+  - a saved chart and a project round trip keep the filter; old charts load unchanged
+  - Show rows from a filtered chart includes the chart's filters
+  - render tests by real clicks at 3 sizes: the tick list, All/None, the "Filters on this chart" section
+</task>
+
 </tasks>
 
 <guide_notes>
@@ -357,8 +369,9 @@ Every new note has these sections, in this order: What it does · When to use it
   - W1, W2 and W3 need W0.
   - W5 needs W4.
   - W6 needs W2 and W5.
+  - W10 needs W6 (it reads and writes `ChartSpec.filters`).
   - W8 runs last.
-- Sessions: A = W0, W1, W2, W3; B = W4, W5; C = W6, W7, W8.
+- Sessions: A = W0, W1, W2, W3; B = W4, W5; C1 = W6, C2 = W7 + W10, C3 = W9 + W11, C4 = W8.
 - One PR from `phase8` to main. Wait for Tests, and don't merge.
 </workflow>
 
