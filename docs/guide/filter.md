@@ -33,10 +33,15 @@ Keeps or removes rows that meet one or more conditions (equals, greater than, be
 4. Choose "Keep matching rows" or "Delete matching rows".
 5. Click "Apply to current tab", or "Open filtered view in new tab".
 6. To change it later, click the filter chip above the table, or Edit on the step, then "Save filter". "Remove this condition" takes one condition out; removing the last one removes the filter.
+7. **A Date or Datetime column also has "By".** It is Date (the dates themselves, as before), Year, Month-Year, Year-Quarter, Month, Quarter or Day name. "By" shows for every condition (equals, does not equal, is in list, is not in list, >, ≥, <, ≤ and between) and stays when you change the condition. For a list you tick the part's values ("Fri", "Sat"); for >, ≥, <, ≤ and between you type the limit (Aug 2025, 2025, Q2, Wed) or choose it with the "▾" list, which shows the part's own values in order. See also [Date grouping](date-grouping.md) and, for the chart's own filters ("Filters on this chart"), [Chart](chart.md).
+
+![The By choice of a date condition](img/filter-by-choice.png)
 
 ## 6. What you get
 
 The same columns with fewer rows. Conditions on rows whose value is blank are "unknown": "Keep matching" drops those rows and "Delete matching" keeps them. The exception is "is not in list" (typed or picked): a blank row (empty text, spaces or nothing) is not in the list, so it stays unless "(blank)" is ticked. Numbers are compared in the column's own type, so 17-digit account numbers and amounts stay exact. The status bar shows the new row count and the control total.
+
+**Comparing by a date part** uses the part's order, never its text: Year and Month number as numbers; Month-Year and Year-Quarter by time (Dec 2025 comes before Jan 2026); Month, Quarter and Day name by the Calendar order (Day name from the week start in View ▸ Calendar…); Date by date. So "Year ≥ 2025" keeps 2025 and 2026; "Month-Year ≥ Aug 2025 and ≤ Jan 2026" keeps exactly Aug 2025 to Jan 2026 across the year change; "Month < Apr" keeps Jan to Mar of every year; "Day name ≥ Wed" with a Saturday week keeps Wed, Thu and Fri. A blank date never matches =, ≠, >, ≥, <, ≤, between or in list. As for every column, "is not in list" keeps the rows with no date unless "(blank)" is ticked.
 
 ## 7. Check your result
 
@@ -73,6 +78,9 @@ Test: `guide_filter`
 - "Add at least one condition." / "{column}: enter a value." / "{column}: enter the upper limit of the range." Fill the missing field.
 - "Pick a column." Choose a column for each condition.
 - A filter step that turns red after you delete or rename a column it uses: restore the column or edit the filter.
+- "'13/2026' is not a Month-Year. Write it like Aug 2026." A value that is not a value of the part is refused in words (Year as four digits, Quarter as Q1 to Q4, Day name as Fri or Friday). Apply stays off until it is fixed.
+- "'Jan 2026' comes after 'Aug 2025'. Write the earlier one first." For between.
+- A Week of year or fiscal part (stored by an old file or by Show rows) takes =, ≠, in list and not in list by its label and refuses >, ≥, < and ≤; contains, starts with and ends with are refused for every part.
 
 ## 10. Limits and assumptions
 

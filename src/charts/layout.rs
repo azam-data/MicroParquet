@@ -615,7 +615,7 @@ impl ChartLayout {
         let texts: Vec<serde_json::Value> = self
             .texts
             .iter()
-            .map(|t| json!({"text": t.text, "r": rc(t.rect), "pt": t.pt, "semibold": t.face == Face::Semibold, "col": col(t.colour)}))
+            .map(|t| json!({"text": t.text, "r": rc(t.rect), "pt": t.pt, "semibold": t.face == Face::Semibold, "col": col(t.colour), "angle": t.angle}))
             .collect();
         json!({"rect": rc(self.rect), "height": self.needed_height.max(self.rect.height()), "surface": col(self.surface), "prims": prims, "texts": texts})
     }

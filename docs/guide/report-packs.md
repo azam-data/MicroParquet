@@ -90,7 +90,7 @@ If any chart cannot be drawn (the saved chart is missing, a column is missing, t
 
 The data-quality template takes its Green and Amber from the rule set stored with the scorecard item, and the IRRBB template its outlier limit from the result's own outlier row (the shock file's outlier_pct): none is assumed. A pack file whose scorecard item has a chart but no thresholds is refused when it is opened, naming the item and the field; the data-quality template on an item that is not a scorecard stops the run.
 
-Limits: a chart sheet's name is the item's sheet plus " chart", so the sheet name of a charted item is at most 20 characters; the PDF has no charts.
+Limits: a chart sheet's name is the item's sheet plus " chart", so the sheet name of a charted item is at most 20 characters; a pack chart whose Data table is on gets a page of its own in the PDF after its item's table (the chart and its table); a chart with the option off is not in the PDF.
 
 ## 9. Common messages and fixes
 

@@ -3240,3 +3240,314 @@ fn w11_the_studio_options_are_clicked_on_and_the_stacked_chart_labels_its_segmen
     // between them, the three outcomes
     assert!(seen.0 > 0 && seen.1 > 0 && seen.2 > 0, "straight, turned and left out over the sizes and themes: {seen:?}");
 }
+
+// ================================================================================ W8: the pictures of the guide
+
+// Each test drives the app to the state a guide note shows, by the same real clicks the tests above use, and writes the
+// picture under docs/guide/img/ (light, and dark where the app draws both), when python3 with numpy and Pillow is there.
+
+const SHOT_W: f32 = 1291.0;
+const SHOT_H: f32 = 700.0;
+/// The pictures are made at two pixels to the point.
+const SHOT_PPP: f32 = 2.0;
+
+fn can_shoot() -> bool {
+    let ok = crate::ui::render_tests_r::python_with_numpy_and_pillow();
+    if !ok {
+        eprintln!("skipped: python3 with numpy and Pillow is not available, so no guide pictures were written");
+    }
+    ok
+}
+
+/// Makes the rig draw in the theme asked for, at the picture's scale.
+fn styled(rig: &mut Rig, dark: bool) {
+    rig.app.ui_zoom = SHOT_PPP;
+    rig.app.dark_mode = dark;
+    crate::theme::apply_ui_theme(&rig.ctx, dark, SHOT_PPP);
+    rig.draw(3);
+}
+
+/// Writes `docs/guide/img/<name>[-dark].png`: the part `crop` (in points) of the frame as it is drawn now.
+fn shoot(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
+    rig.step(vec![egui::Event::PointerMoved(egui::pos2(2.0, 2.0))]);
+    rig.draw(3);
+    let screen = rig.ctx.screen_rect();
+    let c = crop.intersect(screen);
+    assert!(c.width() > 100.0 && c.height() > 40.0, "{name}: the part to draw {c:?} of {screen:?}");
+    let out = std::path::Path::new("docs/guide/img");
+    std::fs::create_dir_all(out).expect("the picture folder");
+    let tmp = std::env::temp_dir().join(format!("mp_p8shot_{}_{}_{}.json", std::process::id(), name, dark));
+    crate::ui::render_tests_r::dump_frame(rig, &tmp, dark);
+    let png = out.join(format!("{name}{}.png", if dark { "-dark" } else { "" }));
+    let r = std::process::Command::new("python3")
+        .args(["-I", "tools/egui_mesh_png.py"])
+        .arg(&tmp)
+        .arg(&png)
+        .args([c.left().to_string(), c.top().to_string(), c.right().to_string(), c.bottom().to_string()])
+        .output()
+        .expect("python3 runs");
+    assert!(r.status.success(), "{name}: {}", String::from_utf8_lossy(&r.stderr));
+    assert!(png.metadata().map(|m| m.len() > 3000).unwrap_or(false), "{name}: the picture has content");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+fn shot_rig(name: &str, dark: bool) -> Rig {
+    let mut rig = rig8(name, SHOT_PPP, SHOT_W, SHOT_H, book8());
+    styled(&mut rig, dark);
+    rig
+}
+
+#[test]
+fn w8_pictures_of_the_split_date_and_calendar_dialogs() {
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = shot_rig("p8w8a", dark);
+        let what = rig.what.clone();
+        rig.app.selected_column = Some("Open Date".into());
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Column, true);
+        rig.app.right_tab = crate::ui::steps::RightTab::Column;
+        let p = rig.draw(4);
+        let b = p.boxes.iter().find(|(t, _)| t.contains("Split date\u{2026}")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Split date…"));
+        click_rect(&mut rig, b);
+        rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, &split_title(), &what);
+        shoot(&mut rig, "split-date-dialog", dark, r.window.expand(10.0));
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        menu_item(&mut rig, "View", "Calendar");
+        rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+        shoot(&mut rig, "calendar-dialog", dark, r.window.expand(10.0));
+    }
+}
+
+#[test]
+fn w8_pictures_of_the_pivot_date_expander_and_the_filter_by_choice() {
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        // the pivot: the parts of Open Date open, Month in Rows, Balance in Values, the preview in calendar order
+        let mut rig = shot_rig("p8w8b", dark);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(6);
+        let exp = rig.app.pivot_builder.rects.expanders.iter().find(|(n, _)| n == "Open Date").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the expander"));
+        click_rect(&mut rig, exp);
+        rig.draw(3);
+        let menu = rig.app.pivot_builder.rects.field_menus.iter().find(|(n, _)| n == "Open Date \u{b7} Month").map(|(_, b)| *b).expect("the part's menu");
+        let p = click_rect(&mut rig, menu);
+        let add = last_box(&p, "Add to Rows", menu.top()).expect("Add to Rows");
+        click_rect(&mut rig, add);
+        rig.app.pivot_builder.spec.scale = micro_parquet::models::PivotScale::Plain;
+        rig.app.add_pivot_field("Balance", crate::ui::pivot_builder::Area::Values);
+        rig.draw(5);
+        assert!(rig.app.pivot_builder.rects.field_rows.iter().any(|(n, _)| n == "Open Date \u{b7} Month"), "{what}: the parts are listed");
+        let r = assert_dialog_fits(&rig.ctx, &format!("{}  Pivot table", theme::ph::TABLE), &what);
+        shoot(&mut rig, "pivot-date-expander", dark, r.window.expand(10.0));
+
+        // the filter: By, with its list open
+        let mut rig = shot_rig("p8w8c", dark);
+        rig.app.run_command(&rig.ctx, CommandId::Filter);
+        rig.app.filter.conditions = vec![FilterCondition { column: "Open Date".into(), op: CondOp::InList, ..Default::default() }];
+        rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, "\u{E30C}  Filter rows", &what);
+        let by = rig.app.filter.by_boxes.first().map(|(_, b)| *b).expect("the By box");
+        let p = click_rect(&mut rig, by);
+        let day = last_box(&p, "Day name", by.top()).expect("Day name");
+        let year = last_box(&p, "Year", by.top()).expect("Year");
+        shoot(&mut rig, "filter-by-choice", dark, r.window.union(day).union(year).expand(10.0));
+    }
+}
+
+#[test]
+fn w8_pictures_of_the_sources_dialog() {
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = proj_rig("p8w8d", SHOT_PPP, SHOT_W, SHOT_H);
+        styled(&mut rig, dark);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        three_tabs(&mut rig);
+        let pfile = root.join("proj").join("Month-end.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
+        assert!(pfile.exists(), "{what}: {}", rig.app.status_message);
+        // this month's file is not where it was: Missing, and the two ways to relink it
+        let moved = root.join("moved");
+        std::fs::create_dir_all(&moved).expect("folder");
+        std::fs::rename(root.join("book.parquet"), moved.join("book.parquet")).expect("moved");
+        rig.app.project.test_pick = Some(pfile);
+        rig.app.run_command(&rig.ctx, CommandId::ProjectOpen);
+        rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, &sources_title(), &what);
+        shoot(&mut rig, "sources-dialog", dark, r.window.expand(10.0));
+    }
+}
+
+#[test]
+fn w8_pictures_of_a_drilled_chart_its_breadcrumb_and_the_right_click_menu() {
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = studio_rig("p8w8e", SHOT_PPP, SHOT_W, SHOT_H);
+        styled(&mut rig, dark);
+        let what = rig.what.clone();
+        let mut plain = rig.app.chart.spec.clone();
+        plain.scale = micro_parquet::charts::spec::ChartScale::Plain;
+        rig.app.chart_set_spec(plain);
+        pump_until(&mut rig, "the plain chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some() && r.app.chart.spec.scale == micro_parquet::charts::spec::ChartScale::Plain);
+        rig.draw(6);
+        let plot = egui::Id::new(PLOT_ID);
+        let cats = |r: &Rig| r.app.chart.data.as_ref().expect("data").categories.clone();
+        // Branch › Month › Band: Dhaka, then Jan
+        let i = category_index(&cats(&rig), "Dhaka", &what);
+        let r = mark_at(&mut rig, plot, i);
+        click_rect(&mut rig, r);
+        pump_until(&mut rig, "the Month level", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Month"));
+        let i = category_index(&cats(&rig), "Jan", &what);
+        let r = mark_at(&mut rig, plot, i);
+        click_rect(&mut rig, r);
+        pump_until(&mut rig, "the Band level", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Band"));
+        show_studio_chart(&mut rig);
+        rig.draw(3);
+        let shown = crate::ui::chart_render::last_shown(&rig.ctx, plot).expect("the chart");
+        let crumbs = breadcrumb(&rig).iter().fold(shown.rect, |a, (_, r)| a.union(*r));
+        shoot(&mut rig, "drill-breadcrumb", dark, crumbs.expand(14.0));
+
+        // back to the top by the breadcrumb, then the right-click menu on Ctg
+        let all = breadcrumb(&rig).iter().find(|(n, _)| n == "Level 0").map(|(_, r)| *r).expect("All");
+        click_rect(&mut rig, all);
+        pump_until(&mut rig, "back at the top", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Branch"));
+        let i = category_index(&cats(&rig), "Ctg", &what);
+        let c = mark_at(&mut rig, plot, i).center();
+        right_click(&mut rig, c);
+        // the menu fades in: let it finish before the picture
+        for _ in 0..8 {
+            tick(&mut rig);
+        }
+        let p = rig.draw(2);
+        let mut area = crate::ui::chart_render::last_shown(&rig.ctx, plot).expect("the chart").rect;
+        for item in ["Drill down", "Show rows", "Keep only this", "Exclude this", "Colour\u{2026}"] {
+            area = area.union(text_box(&p, item).unwrap_or_else(|| panic!("{what}: the menu has '{item}'")));
+        }
+        shoot(&mut rig, "drill-right-click-menu", dark, area.expand(14.0));
+    }
+}
+
+#[test]
+fn w8_pictures_of_the_colour_picker_with_a_warning_and_the_house_colours() {
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = colour_rig("p8w8f", SHOT_PPP, SHOT_W, SHOT_H, dark);
+        styled(&mut rig, dark);
+        let what = rig.what.clone();
+        micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+        click_field(&mut rig, "Colours");
+        let r = show_field(&mut rig, "Colour of Dhaka");
+        click_rect(&mut rig, r);
+        rig.draw(4);
+        let r = picker_field(&rig, "Deep Blue");
+        click_rect(&mut rig, r);
+        let p = rig.draw(4);
+        assert!(has_text(&p, "Low contrast on the dark background"), "{what}: the warning");
+        let d = assert_dialog_fits(&rig.ctx, &picker_title("Dhaka"), &what);
+        shoot(&mut rig, "colour-picker-warning", dark, d.window.expand(10.0));
+        let r = picker_field(&rig, "Done");
+        click_rect(&mut rig, r);
+        rig.draw(3);
+
+        // House colours: three names
+        for (n, pick) in [("TD", ColourPick::swatch(2, 2)), ("Savings", ColourPick::swatch(1, 1)), ("Current", ColourPick::swatch(0, 2))] {
+            house::set(n, pick).expect("a house colour");
+        }
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        menu_item(&mut rig, "View", "House colours");
+        rig.draw(4);
+        let title = format!("{}  {}", theme::ph::PALETTE, crate::ui::colour_picker::HOUSE_TITLE);
+        let d = assert_dialog_fits(&rig.ctx, &title, &what);
+        assert!(has_text(&rig.draw(2), "#037952"), "{what}: TD is listed");
+        shoot(&mut rig, "house-colours", dark, d.window.expand(10.0));
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn w8_pictures_of_the_tick_list_of_the_charts_filters() {
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = colour_rig("p8w8g", SHOT_PPP, SHOT_W, SHOT_H, dark);
+        styled(&mut rig, dark);
+        click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+        let head = show_field(&mut rig, "Values: Series");
+        click_field(&mut rig, "Values: Series");
+        wait_list(&mut rig);
+        show_rect(&mut rig, "the tick list", &|r| r.app.chart.filters_ui.panel.rects.panel);
+        let b = tick_box(&mut rig, "Ctg");
+        click_rect(&mut rig, b);
+        wait_chart_series(&mut rig, &["Dhaka", "Sylhet"]);
+        show_rect(&mut rig, "the tick list", &|r| r.app.chart.filters_ui.panel.rects.panel);
+        rig.draw(3);
+        let panel = rig.app.chart.filters_ui.panel.rects.panel.expect("the list");
+        let title = rig.app.chart.rects.fields.iter().find(|(n, _)| n == crate::ui::chart_filters::FILTERS_TITLE).map(|(_, b)| *b).unwrap_or(head);
+        let controls = rig.app.chart.rects.controls.unwrap_or(panel);
+        let area = egui::Rect::from_min_max(egui::pos2(controls.left(), title.top().min(head.top())), egui::pos2(rig.ctx.screen_rect().right(), panel.bottom())).expand(10.0);
+        shoot(&mut rig, "chart-filter-tick-list", dark, area);
+    }
+}
+
+#[test]
+fn w8_pictures_of_the_segment_labels_straight_turned_and_left_out() {
+    use micro_parquet::charts::spec::{ChartScale, Stack};
+    if !can_shoot() {
+        return;
+    }
+    // the first size at which one chart shows all three outcomes
+    let mut done = false;
+    for (ppp, w, h) in SIZES3 {
+        let mut pngs: Vec<std::path::PathBuf> = Vec::new();
+        let mut all_three = true;
+        for dark in [false, true] {
+            let mut rig = chart_rig_with("p8w8h", stack_book(), ppp, w, h);
+            rig.app.dark_mode = dark;
+            rig.draw(4);
+            pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+            let spec = ChartSpec { category: "Month".into(), series: Some("Product".into()), value: Some("Balance".into()), agg: ChartAgg::Sum, kind: ChartKind::Bar, stack: Stack::Stacked, scale: ChartScale::Plain, top_n: 50, inside_labels: true, ..Default::default() };
+            rig.app.chart_set_spec(spec);
+            pump_until(&mut rig, "the stacked chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.series.len() == 3 && d.spec.inside_labels));
+            rig.app.chart_open_as_chart_tab();
+            pump_until(&mut rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1 && !r.app.jobs.any_busy());
+            let id = chart_tab_id(&rig);
+            rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+            rig.draw(4);
+            let tab_id = egui::Id::new(("chart_tab", id));
+            let n = segment_outcomes(&rig, tab_id, 5.0);
+            all_three &= n.0 > 0 && n.1 > 0 && n.2 > 0;
+            let shown = crate::ui::chart_render::last_shown(&rig.ctx, tab_id).expect("the chart");
+            let json = std::env::temp_dir().join(format!("mp_p8seg_{}_{}.json", std::process::id(), dark));
+            std::fs::write(&json, serde_json::to_string(&shown.layout.to_json()).expect("json")).expect("write json");
+            let png = std::path::Path::new("docs/guide/img").join(format!("segment-labels-straight-and-turned{}.png", if dark { "-dark" } else { "" }));
+            std::fs::create_dir_all("docs/guide/img").expect("folder");
+            let r = std::process::Command::new("python3").args(["-I", "tools/chart_layout_png.py"]).arg(&json).arg(&png).output().expect("python3 runs");
+            assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+            let _ = std::fs::remove_file(&json);
+            pngs.push(png);
+        }
+        if all_three {
+            done = true;
+            break;
+        }
+    }
+    assert!(done, "no size shows straight, turned and left-out labels in one chart");
+}
