@@ -3097,3 +3097,146 @@ fn w9_the_by_choice_stays_when_the_operator_changes_in_the_charts_filters_and_a_
         assert!(rig.app.chart.spec.filters.is_empty(), "{what}");
     }
 }
+
+// ================================================================================ W11: stacked segment labels and data table
+
+/// Six columns of three products: a long number (turned), a middle one (straight where the column is wide enough) and a tiny one.
+fn stack_book() -> DataFrame {
+    let (mut m, mut p, mut v) = (Vec::new(), Vec::new(), Vec::new());
+    for (c, month) in ["Jan", "Feb", "Mar", "Apr", "May", "Jun"].iter().enumerate() {
+        for (name, value) in [("Term deposit", 123_456.78 + 1_000.0 * c as f64), ("Savings", 8_000.5 + 100.0 * c as f64), ("Current", 12.0 + c as f64)] {
+            m.push(*month);
+            p.push(name);
+            v.push(value);
+        }
+    }
+    DataFrame::new(vec![Series::new("Month".into(), m).into(), Series::new("Product".into(), p).into(), Series::new("Balance".into(), v).into()]).expect("stack book")
+}
+
+fn white_or_ink(c: egui::Color32) -> bool {
+    c == egui::Color32::WHITE || ((c.r() as u32) << 16 | (c.g() as u32) << 8 | c.b() as u32) == micro_parquet::charts::tokens::INK_LIGHT.ink
+}
+
+/// (straight, turned, left out) among the segments of the studio's chart as drawn, with every rule checked: a label is inside its
+/// segment, touches no other label, is white or ink, and the segments of less than the share asked for have none.
+fn studio_segment_outcomes(rig: &Rig, min_pct: f64) -> (usize, usize, usize) {
+    segment_outcomes(rig, egui::Id::new(PLOT_ID), min_pct)
+}
+
+/// The same for the chart drawn under `id` (the studio's, or a chart tab's).
+fn segment_outcomes(rig: &Rig, id: egui::Id, min_pct: f64) -> (usize, usize, usize) {
+    let shown = crate::ui::chart_render::last_shown(&rig.ctx, id).unwrap_or_else(|| panic!("{}: the chart is drawn", rig.what));
+    let l = &shown.layout;
+    let segs: Vec<&micro_parquet::charts::layout::Mark> = l.marks.iter().filter(|m| m.kind == micro_parquet::charts::layout::MarkKind::Segment).collect();
+    let labels: Vec<&micro_parquet::charts::layout::LText> = l.texts.iter().filter(|t| t.role == micro_parquet::charts::layout::Role::Cell).collect();
+    let (mut straight, mut turned, mut none) = (0, 0, 0);
+    for s in &segs {
+        let total: f64 = segs.iter().filter(|o| o.category == s.category).filter_map(|o| o.value).map(f64::abs).sum();
+        let share = s.value.map_or(0.0, f64::abs) / total * 100.0;
+        let inside: Vec<_> = labels.iter().filter(|t| s.rect.contains_rect(t.rect)).collect();
+        assert!(inside.len() <= 1, "{}: a segment holds one label", rig.what);
+        if share < min_pct {
+            assert!(inside.is_empty(), "{}: a segment of {share:.1}% has no label", rig.what);
+        }
+        match inside.first() {
+            Some(t) if t.angle == 0.0 => straight += 1,
+            Some(_) => turned += 1,
+            None => none += 1,
+        }
+    }
+    for (i, a) in labels.iter().enumerate() {
+        assert!(segs.iter().any(|s| s.rect.contains_rect(a.rect)), "{}: '{}' {:?} leaves its segment", rig.what, a.text, a.rect);
+        assert!(white_or_ink(a.colour), "{}: '{}' is {:?}", rig.what, a.text, a.colour);
+        for b in labels.iter().skip(i + 1) {
+            assert!(!a.rect.intersects(b.rect), "{}: '{}' and '{}' overlap", rig.what, a.text, b.text);
+        }
+    }
+    assert_eq!(labels.len(), straight + turned, "{}: every label is in a segment", rig.what);
+    (straight, turned, none)
+}
+
+#[test]
+fn w11_the_studio_options_are_clicked_on_and_the_stacked_chart_labels_its_segments_straight_turned_or_not_at_all_at_three_sizes_light_and_dark() {
+    let mut seen = (0, 0, 0);
+    for dark in [false, true] {
+        for (ppp, w, h) in SIZES3 {
+            let mut rig = chart_rig_with("p8w11a", stack_book(), ppp, w, h);
+            rig.app.dark_mode = dark;
+            micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            rig.draw(4);
+            pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+            let spec = ChartSpec { category: "Month".into(), series: Some("Product".into()), value: Some("Balance".into()), agg: ChartAgg::Sum, kind: ChartKind::Bar, stack: micro_parquet::charts::spec::Stack::Grouped, scale: micro_parquet::charts::spec::ChartScale::Plain, top_n: 50, ..Default::default() };
+            rig.app.chart_set_spec(spec);
+            pump_until(&mut rig, "the chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.series.len() == 3));
+            rig.draw(3);
+            click_field(&mut rig, "Titles and look");
+            // side by side: the Segment labels box is greyed, and the Data table box is not (a column chart has a table)
+            let r = show_field(&mut rig, "Segment labels");
+            let before = rig.app.chart.spec.clone();
+            let p = click_rect(&mut rig, r);
+            assert!(last_box(&p, "On", r.top()).is_none(), "{what}: Segment labels is greyed while the columns are side by side");
+            assert_eq!(rig.app.chart.spec, before, "{what}");
+            // stacked, by a real click on the Series box
+            let r = show_field(&mut rig, "Stack");
+            let p = click_rect(&mut rig, r);
+            let item = popup_item(&p, "Stacked", r).unwrap_or_else(|| panic!("{what}: Stacked is in the list"));
+            click_rect(&mut rig, item);
+            assert_eq!(rig.app.chart.spec.stack, micro_parquet::charts::spec::Stack::Stacked, "{what}");
+            pump_until(&mut rig, "the stacked chart", &|r| !r.app.chart.busy);
+            show_studio_chart(&mut rig);
+            assert_eq!(studio_segment_outcomes(&rig, 0.0).0 + studio_segment_outcomes(&rig, 0.0).1, 0, "{what}: Off writes no label inside a segment");
+            // Segment labels On, by a real click
+            let r = show_field(&mut rig, "Segment labels");
+            let p = click_rect(&mut rig, r);
+            let on = popup_item(&p, "On", r).unwrap_or_else(|| panic!("{what}: On is in the list"));
+            click_rect(&mut rig, on);
+            assert!(rig.app.chart.spec.inside_labels, "{what}");
+            rig.draw(4);
+            // 5% of the bar is the default, and the box for it is there
+            assert_eq!(rig.app.chart.spec.inside_min_pct, 5.0, "{what}");
+            show_field(&mut rig, "Hide below");
+            show_studio_chart(&mut rig);
+            // (the studio's chart is a small one: whatever it labels obeys the rules, and may label nothing)
+            studio_segment_outcomes(&rig, 5.0);
+            // Hide below 40%: a real click into the box, the number typed, Enter; and back to 5
+            for (typed, want) in [("40", 40.0), ("5", 5.0)] {
+                let hb = show_field(&mut rig, "Hide below");
+                click_rect(&mut rig, hb);
+                type_replacing(&mut rig, typed);
+                rig.step(vec![egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }, egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::Enter), pressed: false, repeat: false, modifiers: egui::Modifiers::NONE }]);
+                rig.draw(4);
+                assert_eq!(rig.app.chart.spec.inside_min_pct, want, "{what}");
+            }
+            // the Data table box: Below the chart, by a real click
+            let r = show_field(&mut rig, "Data table");
+            let p = click_rect(&mut rig, r);
+            let item = popup_item(&p, "Below the chart", r).unwrap_or_else(|| panic!("{what}: Below the chart is in the list"));
+            click_rect(&mut rig, item);
+            assert_eq!(rig.app.chart.spec.data_table, micro_parquet::charts::spec::DataTable::Below, "{what}");
+            // a scatter chart has no table of categories and series: the box is greyed and says why
+            let mut s = rig.app.chart.spec.clone();
+            s.kind = ChartKind::Scatter;
+            assert!(s.data_table_reason().is_some_and(|r| r.contains("scatter")), "{what}");
+            // the chart as a tab of its own is large enough to show every outcome
+            rig.app.chart_open_as_chart_tab();
+            pump_until(&mut rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1 && !r.app.jobs.any_busy());
+            let id = chart_tab_id(&rig);
+            rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+            rig.draw(4);
+            let tab_id = egui::Id::new(("chart_tab", id));
+            assert_eq!(rig.app.chart_tabs[&id].data.spec.inside_labels, true, "{what}");
+            assert_eq!(rig.app.chart_tabs[&id].data.spec.data_table, micro_parquet::charts::spec::DataTable::Below, "{what}");
+            let n = segment_outcomes(&rig, tab_id, 5.0);
+            assert!(n.2 > 0 && n.0 + n.1 > 0, "{what}: some segments are labelled and some are not: {n:?}");
+            seen = (seen.0 + n.0, seen.1 + n.1, seen.2 + n.2);
+            // a bigger share to hide leaves fewer labels
+            rig.app.chart_tabs.get_mut(&id).expect("tab").data.spec.inside_min_pct = 40.0;
+            rig.draw(3);
+            let m = segment_outcomes(&rig, tab_id, 40.0);
+            assert!(m.0 + m.1 < n.0 + n.1, "{what}: a bigger share hides more: {m:?} against {n:?}");
+        }
+    }
+    // between them, the three outcomes
+    assert!(seen.0 > 0 && seen.1 > 0 && seen.2 > 0, "straight, turned and left out over the sizes and themes: {seen:?}");
+}

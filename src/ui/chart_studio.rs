@@ -876,6 +876,43 @@ impl MicroParquetApp {
                 let r = ui.checkbox(&mut spec.labels.percent, "On share views");
                 rects.fields.push(("Percent labels".to_string(), r.rect));
                 ui.end_row();
+                // ---- the value of each segment inside it, for stacked and 100% stacked columns and bars (Phase 8 W11)
+                let stacked_bar = spec.kind == ChartKind::Bar && matches!(spec.stack, Stack::Stacked | Stack::Percent);
+                ui.label("Segment labels");
+                let r = ui.add_enabled_ui(stacked_bar, |ui| {
+                    egui::ComboBox::from_id_salt("chart_segment_labels").width(combo_w).selected_text(if spec.inside_labels { "On" } else { "Off" }).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut spec.inside_labels, false, "Off");
+                        ui.selectable_value(&mut spec.inside_labels, true, "On");
+                    })
+                });
+                rects.fields.push(("Segment labels".to_string(), r.response.rect));
+                if !stacked_bar {
+                    r.response.on_disabled_hover_text("Segment labels are for stacked and 100% stacked columns and bars. Choose Stacked or 100% stacked under Series.");
+                }
+                ui.end_row();
+                if spec.inside_labels && stacked_bar {
+                    ui.label("Hide below");
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::DragValue::new(&mut spec.inside_min_pct).range(0.0..=50.0).speed(0.2).suffix(" % of the bar")); // not a size: a drag speed
+                        rects.fields.push(("Hide below".to_string(), r.rect));
+                    });
+                    ui.end_row();
+                }
+                // ---- the chart's data printed with it, on a PDF page and in the HTML page (Phase 8 W11)
+                let table_reason = spec.data_table_reason();
+                ui.label("Data table");
+                let r = ui.add_enabled_ui(table_reason.is_none(), |ui| {
+                    egui::ComboBox::from_id_salt("chart_data_table").width(combo_w).selected_text(spec.data_table.label()).show_ui(ui, |ui| {
+                        for d in micro_parquet::charts::spec::DataTable::all() {
+                            ui.selectable_value(&mut spec.data_table, d, d.label());
+                        }
+                    })
+                });
+                rects.fields.push(("Data table".to_string(), r.response.rect));
+                if let Some(why) = &table_reason {
+                    r.response.on_disabled_hover_text(why.clone());
+                }
+                ui.end_row();
             });
             ui.label(egui::RichText::new("The takeaway is your sentence for the title. The rest of the chart is de-emphasised around the highlight.").size(theme::TEXT_LABEL).color(tk.muted));
         });

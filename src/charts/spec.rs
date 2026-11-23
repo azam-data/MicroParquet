@@ -126,6 +126,31 @@ pub enum Stack {
     Percent,
 }
 
+/// Where a chart's data is printed with it (Phase 8 W11): on a PDF page and in the HTML page.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DataTable {
+    #[default]
+    Off,
+    /// Under the chart, on the same page.
+    Below,
+    /// Beside the chart, on a landscape page.
+    Beside,
+}
+
+impl DataTable {
+    pub fn all() -> [DataTable; 3] {
+        [DataTable::Off, DataTable::Below, DataTable::Beside]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            DataTable::Off => "Off",
+            DataTable::Below => "Below the chart",
+            DataTable::Beside => "Beside the chart",
+        }
+    }
+}
+
 /// What is done to a measure after it is added up.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Transform {
@@ -563,7 +588,19 @@ pub struct ChartSpec {
     pub drill_path: Vec<(String, String)>,
     /// The chart's own filters ("Keep only this", "Exclude this"): conditions on the rows the chart reads, all of them.
     pub filters: Vec<FilterCondition>,
+
+    // ---- Phase 8 W11 ----
+    /// Stacked and 100% stacked column and bar: each segment says its value inside it (percent for 100% stacked), straight
+    /// where it fits, turned where it does not and a column has room, left out where nothing fits. Off = as before Phase 8.
+    pub inside_labels: bool,
+    /// With `inside_labels`: a segment that is less than this percent of its bar has no label (5).
+    pub inside_min_pct: f64,
+    /// The chart's data printed with it: Off, below it or beside it.
+    pub data_table: DataTable,
 }
+
+/// The share of a bar below which a segment has no label (Phase 8 W11).
+pub const INSIDE_MIN_PCT_DEFAULT: f64 = 5.0;
 
 impl Default for ChartSpec {
     fn default() -> Self {
@@ -614,6 +651,9 @@ impl Default for ChartSpec {
             drill: Vec::new(),
             drill_path: Vec::new(),
             filters: Vec::new(),
+            inside_labels: false,
+            inside_min_pct: INSIDE_MIN_PCT_DEFAULT,
+            data_table: DataTable::Off,
         }
     }
 }

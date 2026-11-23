@@ -91,6 +91,20 @@ pub struct LText {
     pub angle: f32,
 }
 
+/// A label inside a stacked segment (Phase 8 W11), as the layout decided it: the renderers that cannot measure text (the HTML page,
+/// the workbook) read these decisions. A segment with no entry has no label (too small, or below the share asked for).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SegmentLabel {
+    pub panel: usize,
+    pub series: usize,
+    pub category: usize,
+    pub text: String,
+    /// Turned 90° (reads upward): the segment is narrower than the text but long enough for it.
+    pub turned: bool,
+    /// White or ink, by contrast with the segment's fill.
+    pub colour: Color32,
+}
+
 /// Something to paint, in screen coordinates.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
@@ -201,6 +215,8 @@ pub struct ChartLayout {
     pub colour_map: ColourMap,
     /// Labels of "All" that were left out because they would overlap (panel, series, category).
     pub dropped: Vec<super::labels::LabelKey>,
+    /// The labels inside stacked segments (Phase 8 W11); empty with "Segment labels" off.
+    pub segment_labels: Vec<SegmentLabel>,
     /// Category labels that run into each other even angled, or bars too thin for their names: the studio offers
     /// horizontal bars.
     pub labels_dont_fit: bool,
@@ -226,6 +242,7 @@ impl ChartLayout {
             message: None,
             colour_map: ColourMap::default(),
             dropped: Vec::new(),
+            segment_labels: Vec::new(),
             labels_dont_fit: false,
             needed_height: rect.height(),
             surface,
@@ -386,6 +403,14 @@ impl<'a> Builder<'a> {
     fn put(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
         let rect = self.rect_for(s, pt, face, anchor, at);
         self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role, angle: 0.0 });
+        rect
+    }
+
+    /// A text turned 90° (it reads upward) and centred on `at`, written without any check: `rect` is the box around the turned text.
+    fn put_turned(&mut self, role: Role, s: &str, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
+        let sz = self.size(s, pt, face);
+        let rect = Rect::from_center_size(at, egui::vec2(sz.y, sz.x));
+        self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role, angle: -std::f32::consts::FRAC_PI_2 });
         rect
     }
 
@@ -1533,16 +1558,21 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     let thick = if touching {
         (band - gap).max(1.0)
     } else if stacked || one {
-        (band * BAND_FILL).min(t::BAR_MAX_PX).max(1.0)
+        // (a stack whose segments carry their values inside them is wider: the labels need the room)
+        (band * BAND_FILL).min(if spec.inside_labels && stacked { t::BAR_MAX_PX_LABELLED } else { t::BAR_MAX_PX }).max(1.0)
     } else {
         ((band * BAND_FILL - gap * (n_ser as f32 - 1.0)) / n_ser as f32).min(t::BAR_MAX_PX).max(1.0)
     };
     let labels_ok = n_cat <= LABEL_MAX_BARS && !touching || (touching && n_cat <= LABEL_MAX_BARS);
     let mut totals: Vec<Option<(f64, f64)>> = vec![None; n_cat]; // (positive top, negative bottom) of each category
+    // Phase 8 W11: each stacked segment says its value inside it, when asked
+    let inside_on = spec.inside_labels && stacked;
 
     for c in 0..n_cat {
         let mid = centre(c);
         let (mut pos_acc, mut neg_acc) = (0.0f64, 0.0f64);
+        // what the bar adds up to (a segment's share of it decides whether it is labelled)
+        let abs_total: f64 = p.series.iter().filter_map(|x| x.vals.get(c).copied().flatten()).map(f64::abs).sum();
         for (si, s) in p.series.iter().enumerate() {
             let Some(Some(v0)) = s.vals.get(c) else { continue };
             let v = if spec.stack == Stack::Percent && stacked { *v0 } else { *v0 };
@@ -1627,6 +1657,13 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             let _ = surface;
             let tip = tip_text(data, p, si, c, Some(*v0), p.vk, opts);
             b.out.marks.push(Mark { rect: r, kind: if stacked { MarkKind::Segment } else { MarkKind::Bar }, panel: pidx, series: si, category: c, value: Some(*v0), tip, slice: None });
+            if inside_on && abs_total > 0.0 {
+                let share = v0.abs() / abs_total * 100.0;
+                if share > 0.0 && share >= spec.inside_min_pct.max(0.0) {
+                    let text = if spec.stack == Stack::Percent { format!("{}%", crate::models::format_with_commas(share, 1)) } else { b.lp.text(*v0, p.vk, false) };
+                    segment_label(b, (pidx, si, c), r, &text, colour, horizontal);
+                }
+            }
         }
         if stacked {
             totals[c] = Some((pos_acc, neg_acc));
@@ -1708,7 +1745,8 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     }
     let ink_c = rgb(ink.ink);
     let label_pt = t::data_label_pt();
-    if b.lp.mode == LabelMode::All && !one {
+    // ("All" says each segment inside it as well; with segment labels on, those are the ones that say it)
+    if b.lp.mode == LabelMode::All && !one && !inside_on {
         bar_labels_every_mark(b, p, pidx, horizontal, stacked, n_cat);
     }
     for c in 0..n_cat {
@@ -1819,6 +1857,30 @@ fn bar_labels_every_mark(b: &mut Builder, p: &Plan, pidx: usize, horizontal: boo
         }
     }
     let _ = n_cat;
+}
+
+/// Room a label keeps clear of the edge of its segment: along the text, and across it.
+const SEGMENT_PAD_ALONG: f32 = 3.0;
+const SEGMENT_PAD_ACROSS: f32 = 2.0;
+
+/// The label inside a stacked segment (Phase 8 W11): straight when the segment is wide and tall enough for it, else turned 90° on a
+/// column when it is long enough for the text and wide enough for its height, else left out (the tooltip and the table still have it).
+/// It is written centred in the segment, so it never leaves it, and a segment holds one label, so two never touch. The text is white
+/// or ink by contrast with the segment's fill, never the series colour.
+fn segment_label(b: &mut Builder, key: (usize, usize, usize), r: Rect, text: &str, fill: Color32, horizontal: bool) {
+    let pt = t::data_label_pt();
+    let sz = b.size(text, pt, Face::Regular);
+    let col = contrast_text(fill);
+    let fits_straight = r.width() >= sz.x + 2.0 * SEGMENT_PAD_ALONG && r.height() >= sz.y + 2.0 * SEGMENT_PAD_ACROSS;
+    let fits_turned = !horizontal && r.height() >= sz.x + 2.0 * SEGMENT_PAD_ALONG && r.width() >= sz.y + 2.0 * SEGMENT_PAD_ACROSS;
+    if fits_straight {
+        b.put(Role::Cell, text, Anchor::Centre, r.center(), pt, Face::Regular, col);
+    } else if fits_turned {
+        b.put_turned(Role::Cell, text, r.center(), pt, Face::Regular, col);
+    } else {
+        return;
+    }
+    b.out.segment_labels.push(SegmentLabel { panel: key.0, series: key.1, category: key.2, text: t::tidy(text), turned: !fits_straight, colour: col });
 }
 
 /// White text on a dark fill, the light theme's ink on a pale one.

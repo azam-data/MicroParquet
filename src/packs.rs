@@ -636,7 +636,13 @@ pub fn write_pack_with_charts(result: &PackResult, xlsx: &Path, pdf: Option<&Pat
     let mut pdf_tmp = None;
     if let Some(p) = pdf {
         let mut ptabs: Vec<PdfTab> = vec![PdfTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new(), chart: None }];
-        ptabs.extend(result.sheets.iter().map(|s| PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new(), chart: None }));
+        for s in &result.sheets {
+            ptabs.push(PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new(), chart: None });
+            // a chart whose Data table is on gets its page, with its data below or beside it (Phase 8 W11); the others are not in the PDF
+            for c in s.charts.iter().filter(|c| c.data.spec.data_table != crate::charts::spec::DataTable::Off) {
+                ptabs.push(PdfTab { title: format!("{} chart", s.title), df: DataFrame::default(), col_formats: HashMap::new(), summary: Vec::new(), chart: Some((c.data.clone(), c.opts.clone())) });
+            }
+        }
         let tmp = crate::jobs::TempOutput::new(p);
         let prep = crate::exporters::export_pdf_tabs(ptabs, tmp.path(), result.output.scale, result.output.decimals)?;
         msg.push_str(&format!("; wrote {}", p.display()));

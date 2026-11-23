@@ -187,3 +187,89 @@ fn circle(c: Pos2, r: f32) -> Vec<Pos2> {
         Pos2::new(c.x + r * a.cos(), c.y + r * a.sin())
     }).collect()
 }
+
+// ------------------------------------------------------------------------------------------ the data table (Phase 8 W11)
+
+use super::data_table::DataTableText;
+
+/// The size of the table's text: never below 8 pt.
+pub const TABLE_PT: f32 = 8.0;
+/// One table row, in millimetres (8 pt text with a little air).
+pub const TABLE_ROW_MM: f32 = 4.4;
+const TABLE_PAD_MM: f32 = 2.0;
+
+/// The width of each column of the table at 8 pt, in millimetres (the widest text of the column and some air).
+pub fn table_col_widths_mm(table: &DataTableText, m: &PdfMeasure) -> Vec<f32> {
+    let mm = |text: &str, semibold: bool| m.size(text, TABLE_PT, semibold).x * MM_PER_PT;
+    (0..table.header.len())
+        .map(|j| {
+            let mut w = mm(&table.header[j], true);
+            for r in &table.rows {
+                w = w.max(mm(r.get(j).map(String::as_str).unwrap_or(""), false));
+            }
+            if let Some(t) = &table.total {
+                w = w.max(mm(t.get(j).map(String::as_str).unwrap_or(""), true));
+            }
+            w + 2.0 * TABLE_PAD_MM
+        })
+        .collect()
+}
+
+/// How many rows of the table fit in `height_mm` under a caption and a header, leaving a row for the total when `total_row` (a part
+/// that ends the table).
+pub fn table_rows_fit(height_mm: f32, caption: bool, total_row: bool) -> usize {
+    let fixed = 1 + usize::from(caption) + usize::from(total_row);
+    ((height_mm / TABLE_ROW_MM).floor() as usize).saturating_sub(fixed)
+}
+
+/// Draws a part of the table with its top at `top_mm`: the caption (when given), the header, `rows` and the total row (when given).
+/// Numbers are right-aligned in their columns. Returns the y (mm) under what it drew.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_table_part(layer: &PdfLayerReference, fonts: &ChartPdfFonts, m: &PdfMeasure, table: &DataTableText, widths: &[f32], left_mm: f32, top_mm: f32, rows: &[Vec<String>], total: Option<&Vec<String>>, caption: Option<&str>) -> f32 {
+    let ink = super::tokens::INK_LIGHT;
+    let col = |hex: u32| Color::Rgb(Rgb::new(((hex >> 16) & 0xFF) as f32 / 255.0, ((hex >> 8) & 0xFF) as f32 / 255.0, (hex & 0xFF) as f32 / 255.0, None));
+    let pt_mm = TABLE_PT * MM_PER_PT;
+    let total_w: f32 = widths.iter().sum();
+    let rule = |y: f32, hex: u32| {
+        layer.set_outline_color(col(hex));
+        layer.set_outline_thickness(0.4);
+        layer.add_line(Line { points: vec![(Point::new(Mm(left_mm), Mm(y)), false), (Point::new(Mm(left_mm + total_w), Mm(y)), false)], is_closed: false });
+    };
+    let mut y = top_mm;
+    if let Some(c) = caption {
+        layer.set_fill_color(col(ink.ink2));
+        layer.use_text(c.to_string(), TABLE_PT, Mm(left_mm), Mm(y - TABLE_ROW_MM * 0.5 - pt_mm * 0.34), &fonts.semibold);
+        y -= TABLE_ROW_MM;
+    }
+    let mut line = |y_top: f32, cells: &[String], bold: bool| {
+        layer.set_fill_color(col(ink.ink));
+        let font = if bold { &fonts.semibold } else { &fonts.regular };
+        let base = y_top - TABLE_ROW_MM * 0.5 - pt_mm * 0.34;
+        let mut x = left_mm;
+        for (j, w) in widths.iter().enumerate() {
+            let text = cells.get(j).map(String::as_str).unwrap_or("");
+            if !text.is_empty() {
+                if j == 0 {
+                    layer.use_text(text.to_string(), TABLE_PT, Mm(x + TABLE_PAD_MM), Mm(base), font);
+                } else {
+                    let tw = m.size(text, TABLE_PT, bold).x * MM_PER_PT;
+                    layer.use_text(text.to_string(), TABLE_PT, Mm(x + w - TABLE_PAD_MM - tw), Mm(base), font);
+                }
+            }
+            x += w;
+        }
+    };
+    line(y, &table.header, true);
+    y -= TABLE_ROW_MM;
+    rule(y, ink.baseline);
+    for r in rows {
+        line(y, r, false);
+        y -= TABLE_ROW_MM;
+    }
+    if let Some(t) = total {
+        rule(y, ink.baseline);
+        line(y, t, true);
+        y -= TABLE_ROW_MM;
+    }
+    y
+}

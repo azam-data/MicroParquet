@@ -147,6 +147,8 @@ pub const FOOTNOTE_PT: f32 = 9.0;
 // ---- marks (px) ----
 /// Bars never fill their band: at most this thick.
 pub const BAR_MAX_PX: f32 = 24.0;
+/// The widest stacked bar when its segments carry labels inside them (Phase 8 W11): a label needs the room.
+pub const BAR_MAX_PX_LABELLED: f32 = 48.0;
 /// The rounded data-end of a bar (square at the baseline).
 pub const BAR_RADIUS_PX: f32 = 4.0;
 /// The gap between stacked segments and touching bars, in the surface colour.

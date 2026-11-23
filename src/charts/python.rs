@@ -153,7 +153,8 @@ fn colour_dict(data: &ChartData, cm: &ColourMap) -> String {
     };
     let mut items: Vec<String> = data.series.iter().filter(|n| !n.is_empty()).map(|n| item(n, cm.get(n))).collect();
     // a chart of one series: its pick is on its measure's name (the column of its frame); a scatter's one series has no name
-    if let Some(m) = super::colours::single_series_name(data) {
+    // (written only for a pick or a house colour: an automatic colour is the script's first slot, as it always was)
+    if let Some(m) = super::colours::single_series_name(data).filter(|m| cm.picked(m).is_some()) {
         let one = Some(super::colours::single_colour(data, cm));
         items.push(item(&m, one));
         if matches!(data.spec.kind, ChartKind::Scatter | ChartKind::Bubble) {
