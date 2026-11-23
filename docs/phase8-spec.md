@@ -1,0 +1,374 @@
+# MicroParquet — Phase 8 specification (Workspace and dates)
+
+Sources for this phase:
+- The owner's requests of 20–23 Nov 2026, made after testing the Phase 7 builds:
+  - a chart tab stays tied to its source tab and can be edited again
+  - drill-down from a chart, as in Power BI
+  - a project file that reopens the sources, steps, pivots and charts
+  - a colour picker for single items ("management asks to change colours for a specific item")
+  - rate-band labels without serial numbers
+  - month and day names in their natural order
+  - a "Split date" tool (Open Date → Year, Quarter, Month, Day name…) and date grouping as in Power BI
+- The owner's decisions of 23 Nov 2026: the fiscal year starts in **January** and the week starts on **Saturday**, both changeable.
+- Not in this phase: links between tabs, a shared calendar across tabs, and time intelligence (MTD, YTD, same period last year, average daily balance). They are Phase 9 ("Model"), which needs this phase's project file.
+
+Sessions are told which task IDs to do. Read only those task sections, plus `<architecture>`, `<conventions>`, `<constraints>`, `<guide_notes>`, `<workflow>`, `<report>` and `<accepted_deviations>`.
+
+<goal>
+Phase 8 is done when:
+1. Tasks W0–W8 are implemented, and `cargo build --release` and `cargo test` pass.
+2. Every acceptance item is an automated assertion. Every UI item has a headless egui render test at 1219×686, 1600×900 and 1291×700 pt, asserting that:
+   - nothing overflows or is clipped
+   - no two labels overlap
+   - every control works when its real rect is clicked
+3. Existing results are unchanged: every macro, pack, saved run, saved chart and settings file from Phase 7 loads and gives the same rows in the same order. A test replays the Phase 7 sample macros and packs and compares their output hashes.
+4. Each new tool has a guide note (`<guide_notes>`), and `docs/guide/README.md` lists them.
+</goal>
+
+<architecture>
+**Calendar core (W0).** A new library module `src/dates.rs` is the only place that knows about calendars. Everything else calls it: the Split date step, pivot, chart, filter, sort and the Python export.
+- `CalendarSettings { fy_start_month: u32 (1–12), week_start: Weekday }`, serde with defaults **January** and **Saturday**. It is stored in `settings.json` and edited in View ▸ Calendar….
+- `DatePart`: the parts in the table under W0, each with:
+  - a Polars expression on a Date or Datetime column
+  - the label it writes
+  - its data type
+  - its order
+- Every step or spec that uses a date part **copies** the `CalendarSettings` it was made with, the way a sort step copies its custom list. A macro therefore replays the same result even if the settings change later.
+
+**Orders.** Two built-in orders join Natural, Tenor and custom lists in `sort_lists::SortOrder`:
+- **Calendar**: month names, day names (in week order from the copied week start), quarters, "Aug 2026" and "2026 Q1" labels
+- **Ranges**: labels of numeric ranges, such as "8%–9%", "Below 0%", "> 15%", "1 Crore to 5 Crore" and "Above 10 Crore"
+
+Natural is **not** changed, so old results keep their order. Pivot, chart and filter pick Calendar or Ranges *when a field is added* if every non-blank label parses, and store that choice in their spec. A step that writes an ordered label column (Split date, Rate band) declares the column's order; `engine::column_orders(steps)` derives it from the steps, so no new tab state is needed.
+
+**Project file (W4).** A `.mpproj` file (JSON, `"project_version": 1`) describes a session, not its data:
+- the tabs, in order, with stable keys `t1`, `t2`, …
+- the active tab
+- each tab's recipe, which is one of:
+  - **File**: the file (absolute path, path relative to the project file, size, modified time, blake3), Parquet or CSV, its `IngestionConfig`, and the file's own column names
+  - **Run**: a `tool_runs::ToolRun` whose source names are project tab keys. This covers join, stack, period reconcile, pivot tabs and every banking tool.
+  - **Chart**: a `ChartSpec` and the key of its source tab (W5)
+- for every tab: its steps, column formats, summary choices, control column, side-panel chart spec and title
+
+It reuses the Phase 6 machinery: `ToolRun`, `RunEnv`, `SourceId` and the pack `required_columns` check. Opening a project rebuilds the tabs in dependency order on the worker.
+
+**Linked chart tabs (W5).** A chart tab stops being a frozen table. It is a view of its **source tab**: its `ChartSpec` plus the source tab's id. It recalculates when the source's steps change. "Edit chart" opens the studio on the source with the chart's spec.
+
+**Drill (W6).** `ChartSpec` gains drill levels and a drill path:
+- clicking a mark goes one level down
+- a breadcrumb goes back up
+- "Show rows" opens a new tab: the source's steps plus a `FilterGroup` for the path
+
+Pivot cells get the same "Show rows".
+
+**Colours (W7).** Precedence for an item's colour:
+1. the chart's own pick
+2. the house colour (`portable_data/house_colours.json`)
+3. the automatic slot of `ColourMap`
+
+The 8-slot palette is not extended (see `<conventions>`).
+</architecture>
+
+<conventions>
+- **Dates are typed.** Every date feature needs a Date or Datetime column. A text column is refused with: "'Open Date' is text. Set it to Date in Schema & Ingestion (D/M/Y) first." Nothing is guessed from text.
+- **Blank dates give blank parts.** They are never "Unknown", never 0 and never a default date. Pivot and chart show them as "(blank)", as they do today.
+- **No new palette slots.** Past 8 series the existing rule stands: grey plus direct labels, or "Top N + Other". A palette past about 8 colours can't be told apart, especially by colour-blind readers. The owner's need is met by the colour picker and house colours (W7).
+- **Week numbers** are defined once (W0) and quoted the same way in the guide, the tooltip and the Python export.
+- **Fiscal labels:** with a January start, fiscal year = calendar year and is written "FY2026". With any other start it is written "FY2026-27" (the year it starts in, then the last two digits of the year it ends in).
+- **Project files hold no row data.** They do hold what the user typed into steps (filter values, SQL text, labels). The guide says to treat a `.mpproj` like a macro file: keep it out of shared folders that the data itself may not go to.
+- **Saving:** settings in `settings.json`; house colours in `portable_data/house_colours.json`; projects wherever the user saves them (default folder `portable_data/projects/`).
+</conventions>
+
+<tasks>
+
+<task id="W0" name="Calendar core, Calendar and Ranges orders">
+- Add `src/dates.rs` with `CalendarSettings` and `DatePart`. Each part maps to one Polars expression (`temporal` feature; no new crate) with this output:
+
+  | Part | Label (example) | Type | Order |
+  | --- | --- | --- | --- |
+  | Year | 2026 | Int32 | numeric |
+  | Quarter | Q1 | text | Calendar |
+  | Year-Quarter | 2026 Q1 | text | Calendar |
+  | Month | Jan | text | Calendar |
+  | Month number | 1 | Int32 | numeric |
+  | Month-Year | Aug 2026 | text | Calendar |
+  | Week of year | W01 | text | Calendar |
+  | Week starting | 01 Aug 2026 | Date | date |
+  | Day name | Sat | text | Calendar, from the week start |
+  | Day of month | 1 | Int32 | numeric |
+  | Date | 01 Aug 2026 | Date | date (drops the time of a Datetime) |
+  | Fiscal year | FY2026 or FY2026-27 | text | Calendar |
+  | Fiscal quarter | FQ1 | text | Calendar |
+  | Fiscal month | 1 (first month of the fiscal year) | Int32 | numeric |
+
+- **Week rules.** A week starts on `week_start`. "Week starting" is the date of the week's first day, on or before the date. "Week of year" counts the weeks of the calendar year: W01 is the week that contains 1 January, so it can start in the previous December. Pin these with tests on known dates, using Saturday and one other start day.
+- **View ▸ Calendar…** edits the settings: fiscal year start (Jan–Dec) and week start (Sat–Fri). The defaults are January and Saturday. Shown in the status of any dialog that uses date parts: "Week starts Saturday · Fiscal year from January".
+- **Orders.** Add `SortOrder::Calendar` and `SortOrder::Ranges`, and add "calendar" and "ranges" to `RESERVED_NAMES`.
+  - **Calendar** ranks month names (short and long, any case), day names (in week order from the copied week start), Q1–Q4, FQ1–FQ4, W01–W53, "Aug 2026", "2026 Q1", "FY2026" and "FY2026-27".
+  - **Ranges** ranks a label by its first number, scaled by its unit word: % none; Thousand/K ×1e3; Lakh ×1e5; Million/M ×1e6; Crore/Cr ×1e7; days, months and years by their length in days. Order:
+    1. "Below x" / "< x" / "Under x" before x
+    2. an exact "x" (e.g. "0%") before a range that starts at x
+    3. "Above x" / "> x" / "≥ x" / "Over x" after every range that starts below x
+    4. "No rate" / "No …" / unparsed labels after all ranked ones, in Natural order
+  - Mirror both orders in the Python export (`macros.rs`, next to the Tenor mirror).
+- **Column orders from steps.** Add `engine::column_orders(steps) -> HashMap<String, SortOrder>` (filled by W1 and W3).
+- **Version housekeeping.** The v1.7.0 release was built with `Cargo.toml` still at 1.6.0, so its window title, macro `app_version` and Mac bundle say 1.6.0.
+  - Set `version = "1.8.0"` in `Cargo.toml`, keeping its CRLF line endings.
+  - In `.github/workflows/main.yml`, add a first step to the tag-push path that fails with "Tag vX does not match Cargo.toml version Y" when they differ. Manual runs are unaffected.
+  - Run `actionlint` on the workflow.
+- **Auto order.** When a field is *added* to a pivot's Rows or Columns, a chart's category, series or facet, or a sort level, the order defaults to:
+  1. the column's order from `column_orders`, else
+  2. Calendar if every non-blank label parses, else
+  3. Ranges if every non-blank label parses, else
+  4. today's default
+
+  The choice is stored in the spec. Existing specs are never re-ordered.
+- **Acceptance:**
+  - 15 Jan 2026 (a Thursday) with Saturday start: Week starting = 10 Jan 2026, Day name = Thu, Week of year = W03; with Monday start, Week starting = 12 Jan 2026
+  - 1 Jan 2026 is in W01 for every start day
+  - with fy_start 7: 15 Jan 2026 is FY2025-26, FQ3, Fiscal month 7; with fy_start 1: FY2026, FQ1, Fiscal month 1
+  - Calendar sorts ["Mar", "Jan", "Feb"] → Jan, Feb, Mar, and ["Mon", "Sat", "Fri"] with Saturday start → Sat, Mon, Fri
+  - Ranges sorts ["10%–11%", "No rate", "0%", "8%–9%", "> 15%", "Below 0%"] → Below 0%, 0%, 8%–9%, 10%–11%, > 15%, No rate
+  - Ranges sorts ["Below 1 Crore", "25 Crore to 50 Crore", "1 Crore to 5 Crore", "Above 10 Crore", "5 Crore to 10 Crore"] → Below 1 Crore, 1 Crore to 5 Crore, 5 Crore to 10 Crore, Above 10 Crore, 25 Crore to 50 Crore
+  - Python mirrors give the same orders
+  - the Phase 7 replay test (goal 3) passes
+</task>
+
+<task id="W1" name="Split date step">
+- New step `TransformStep::SplitDate`, with every field `#[serde(default)]`:
+  - `column`
+  - `parts: Vec<DatePart>`
+  - `calendar: CalendarSettings`, copied from the settings when the step is made
+  - `prefix: String`, default = the column name
+- New columns are named "<prefix> <Part>" ("Open Date Year", "Open Date Month", …). A name that already exists is refused, naming the column, with the option to change the prefix in the dialog.
+- **Dialog:** Transform ▸ Split date…, also offered as a button in the Column panel when the inspected column is a Date, and in Ctrl+K.
+  - pick the column (Date and Datetime columns only; a text column shows the `<conventions>` message)
+  - tick the parts. Default ticks: Year, Quarter, Month, Month-Year, Day name.
+  - a preview of 5 rows
+  - the calendar line from W0
+- The step declares its text parts' order to `column_orders`, so a pivot of "Open Date Month" lists Jan…Dec without any choice.
+- Steps panel label: "Split date: Open Date → 5 columns". Python export uses pandas `dt` with the same labels and week rules.
+- **Acceptance:**
+  - on a synthetic 1,000-row tab, every new column equals `dates.rs` part by part, and the 3 blank dates give 3 blanks in every part
+  - a Datetime column gives the same parts as its date
+  - a text date column is refused with the message
+  - an existing "Open Date Year" is refused
+  - a pivot by "Open Date Day name" with Saturday start lists Sat…Fri
+  - the generated Python gives identical columns (run when pandas is present, as in C7)
+  - an old macro without the step loads unchanged
+</task>
+
+<task id="W2" name="Date grouping in pivot, chart and filter (no new columns)">
+The Power BI date hierarchy, without adding columns.
+- **Pivot.** In the field list, a Date or Datetime column has an expander showing the parts of W0. Adding "Open Date › Month" to Rows, Columns or Filters (the same way as a column) adds a date field:
+  - `PivotSpec.date_fields: Vec<DateFieldRef { name, column, part, calendar }>`, `#[serde(default)]`
+  - its name is "Open Date · Month"; a real column with that name is refused
+  - the engine adds the part as a column before grouping and drops it after
+  - Rows/Columns accept these names like any field, with the order from W0
+- **Chart.** The category, series and facet pickers list "Open Date › Year / Quarter / Month / Month-Year / Day name / …" under each date column (`ChartSpec.category_part`, `series_part`, `facet_part`, each `Option<DateFieldRef>`, serde default).
+- **Filter.** The value picker of a date column gets a "By" choice: Date (today's list) / Year / Month-Year / Month / Quarter / Day name. Picking values by part stores `FilterCondition.part: Option<DateFieldRef>` (serde default None) and matches on the part. Example: keep Day name in {Fri, Sat}.
+- **Python export:** the same parts through the W0 mirror.
+- **Acceptance:**
+  - a pivot by "Open Date · Month-Year" equals a pivot by the W1 column of the same name, row for row and in the same order
+  - a chart by "Open Date › Quarter" has categories Q1…Q4 in order and the same totals as the pivot
+  - a filter "Day name in Fri, Sat" keeps exactly the weekend rows of the synthetic tab
+  - the totals of every date grouping equal the ungrouped total, blanks included as "(blank)"
+  - old pivots, charts and filters load unchanged
+  - render tests: the expander, the chart picker and the filter "By" choice work by real clicks at 3 sizes
+</task>
+
+<task id="W3" name="Rate bands without serial numbers">
+- `RateBandDef` gets `numbered: bool`:
+  - serde default **true**, so every saved step, preset and macro writes "09. 8%–9%" as before
+  - the Rate profile dialog makes new steps with **false**, and has a tick box "Number the bands (09. 8%–9%)", off
+- With `numbered = false` the labels are "0%", "8%–9%", "> 15%", "Below 0%" and "No rate". The step declares the band order to `column_orders` as a list in band order: Below 0%, 0%, the bands, the top band, No rate.
+- The rate profile template (`charts/templates.rs` `rate_profile`):
+  - orders by the declared order or by Ranges, not by a `BTreeMap` of the text
+  - its finding strips a number prefix only when one is there (as today)
+- The Python export writes the same labels.
+- `docs/guide/rate-profile.md` and `chart-rate-profile.md` show the plain labels and explain the tick box.
+- **Acceptance:**
+  - the owner's example bands (0, 2–3 … 10–11, No rate) unnumbered come out in band order in the step result, a pivot, the chart, the Excel export and the Python export
+  - an old macro with the step gives the numbered labels byte for byte
+  - the template title reads "… sit at 8%–9%" in both forms
+</task>
+
+<task id="W4" name="Project files">
+- **File menu:**
+  - New project
+  - Open project…
+  - Open recent project (the last 8, in `settings.json` `recent_projects`)
+  - Save project
+  - Save project as…
+  - Close project
+
+  These are also in Ctrl+K. The window title becomes "MicroParquet v<version> — <project> — <file>". A "•" marks unsaved changes.
+- **Save** writes the `.mpproj` described in `<architecture>`:
+  - atomically: a temp file, then a rename
+  - with `app_version` and `saved_at`
+  - every tab whose recipe can be written
+  - tabs that cannot be rebuilt are listed in the save dialog and left out, with the reason ("SQL result tab: save its query as a step first")
+- **Open** shows the **Sources** dialog before anything runs, one row per file:
+  - name and saved path
+  - status, one of:
+    - **Found** (same size and modified time)
+    - **Changed** (the file is there, but its size or time differs, with both dates)
+    - **Missing**
+  - **Browse…** to relink one file
+  - **Look in folder…** to relink every missing file by its file name
+
+  Relinking to a different file is allowed and is the monthly workflow: last month's project on this month's file. The file's columns are checked against the saved column names. A missing column refuses that file, listing the columns, and the tabs built on it don't open.
+- **Rebuild** runs on the worker in dependency order: files, then runs, then charts.
+  - Progress shows "Opening 4 of 9: Gap ladder".
+  - A tab that fails opens as a placeholder tab showing the reason in the main area (a new `TabSource::Unavailable { reason }`; it has no rows and can't be exported). Its recipe is kept, so saving the project again doesn't lose it. The other tabs still open.
+  - At the end, one line: "9 tabs opened, 1 failed: Gap ladder — the file has no 'MATDAT' column".
+  - The blake3 of each file is computed on the worker after the tabs open. A different hash from the one saved shows in the status line: "Loans.csv changed since the project was saved (saved 31 Oct, file 30 Nov)".
+- **Unsaved changes.** Closing the app, opening another project or New project with unsaved changes asks: Save / Don't save / Cancel. Extend the existing close check (`close_requested`, `ui::jobs::CloseDecision`) rather than adding a second one.
+- **Compatibility:**
+  - a project with a newer `project_version` is refused with "This project was saved by a newer MicroParquet (vX). Update the app to open it."
+  - unknown fields are ignored
+  - tabs, macros, packs and runs are unaffected
+- **Headless:** `--project <file> --export-dir <folder>` opens the project (no relink: a missing or column-short file stops the run with its name) and writes every tab as Parquet. A failing tab stops the run, and nothing is written.
+- **Acceptance:**
+  - a project of 6 tabs round-trips: file, file + steps, join, pivot tab, gap ladder run, chart tab. Every tab equals the original by hash of its rows, and the active tab, order, formats and chart specs are the same.
+  - moving the project folder and its files together opens through the relative paths
+  - relinking to a file with an extra column works; with a missing column it is refused with the list
+  - a changed file shows the status line
+  - the save → reopen → save cycle gives byte-identical JSON except `saved_at`
+  - the unsaved-changes prompt appears by a real close request and Cancel keeps the app open
+  - headless writes the same Parquet as the UI
+  - render tests: the menus, the Sources dialog (Browse, Look in folder) and the prompt work by real clicks at 3 sizes
+</task>
+
+<task id="W5" name="Linked, editable chart tabs">
+- A chart tab stores `source_tab` (the session id, and the project key in W4) and its `ChartSpec`. Its table is the chart's data, as today, so export still works. It is recalculated:
+  - when the source's steps, filters or data change
+  - after a project opens
+- **"Edit chart"** on the chart tab opens the studio on the **source** tab with the chart tab's spec. The studio shows "Editing chart tab 'Chart: …'" with **Update chart tab** (replaces the spec) and **Open as new chart tab**. Values never re-aggregate the chart's own table, so "Sum of Sum of …" can't happen.
+- The steps panel of a chart tab is read-only, with: "This tab draws a chart of 'Loans'. Change the data on that tab, or use Edit chart."
+- **Source closed:** the chart keeps its last data, dimmed, with "The source tab 'Loans' is closed. Reopen it to edit or refresh this chart" and a **Reopen** button when the source is a file tab of the open project.
+- **Phase 7 compatibility:** chart tabs saved in `settings.json` by Phase 7 open as before (frozen), marked "Made by an older version; Edit chart opens it on its own table".
+- **Acceptance:**
+  - changing a filter on the source updates the chart tab's numbers to equal a new chart made from the source
+  - Edit chart → change the aggregation → Update keeps one chart tab with the new numbers and the old title rule
+  - Edit chart on the owner's case (Sum of Balance by Term period) shows "Sum of Balance", never "Sum of Sum of Balance"
+  - closing the source dims the chart with the message; Reopen restores it
+  - a Phase 7 `settings.json` chart tab still opens
+  - render tests by real clicks at 3 sizes
+</task>
+
+<task id="W6" name="Drill-down and Show rows">
+- **Drill levels.** `ChartSpec.drill: Vec<DrillLevel>` (a column, or a `DateFieldRef`) and `drill_path: Vec<(String, String)>` (level, value), both serde default. In the studio: "Drill levels", a list to add, remove and reorder. When the category is a date (or a date part), the studio offers "Year › Quarter › Month › Day" in one click.
+- **In the app** (studio, side panel, pop-out and chart tab):
+  - clicking a mark of column, bar, stacked, grouped, line (category point), donut or heatmap (both levels) drills one level down, with the clicked value added to the path
+  - a breadcrumb above the plot ("All › FDR › Dhaka") goes back to any level, as does the Back key
+  - the subtitle states the path ("Filtered: Deposit Type = FDR")
+  - at the last level a click does nothing and the tooltip says so
+  - scatter, bubble, histogram, box and waterfall have no drill: the "Drill levels" section is hidden with its reason
+- **Right-click a mark:**
+  - **Drill down**
+  - **Show rows**: a new tab with the source's file and steps plus a `FilterGroup` (keep matching) for the path and the clicked value. Its title is "Rows: Deposit Type = FDR, Branch = Dhaka", and its control total equals the mark's value when the chart sums that column.
+  - **Keep only this** and **Exclude this**: add the filter to the chart's own filters
+- **Pivot "Show rows".** Double-click or right-click a value cell (totals included) of a pivot tab. Show rows filters by every row and column field of that cell (date fields through `FilterCondition.part`) plus the pivot's filters.
+- **Exports** (HTML, Excel, PDF, Python, chart book) draw the current level, with the path in the subtitle.
+- **Acceptance:**
+  - on a synthetic deposit tab, drill Deposit Type › Branch › Product: the totals of each level equal the clicked parent
+  - the breadcrumb goes back to each level by real clicks
+  - Show rows from a column gives a tab whose row count and sum equal the mark, and the same from a pivot cell, a pivot total and a date-part cell (Month-Year)
+  - a date drill Year › Quarter › Month › Day on a Datetime column sums to the year
+  - a chart tab saved at level 2 reopens at level 2 (project round trip)
+  - exports at a level carry the path
+  - render tests by real clicks at 3 sizes: a click drills, the breadcrumb goes back, the right-click menu items, pivot Show rows
+</task>
+
+<task id="W7" name="Colour picker and house colours">
+- **Picker.** In the studio, "Colours" lists the chart's names with their swatch. Clicking a swatch (or right-click a mark ▸ Colour…) opens a picker with:
+  - **Automatic**: the palette slot, as today
+  - **24 swatches**: the 8 house hues in three shades. The Base shade pins the item to that palette **slot**, so it keeps the validated dark-mode pair. Light and Deep are fixed hex values, used in both themes.
+
+    | Hue | Light | Base (slot) | Deep |
+    | --- | --- | --- | --- |
+    | Blue | `#6ea5ee` | slot 1 | `#014a94` |
+    | Orange | `#ffa889` | slot 2 | `#ac3c01` |
+    | Green | `#7dd6ac` | slot 3 | `#037952` |
+    | Amber | `#ffd7a0` | slot 4 | `#ad7502` |
+    | Pink | `#ffb9d0` | slot 5 | `#ac5074` |
+    | Dark green | `#60a95a` | slot 6 | `#024e02` |
+    | Violet | `#8a86eb` | slot 7 | `#3a2196` |
+    | Red | `#fe8c85` | slot 8 | `#a31921` |
+
+  - **Hex**: any `#rrggbb`
+  - a tick box **Save as house colour**
+
+  The pick is stored in `ColourMap.custom: Vec<(String, ColourPick)>` (serde default). It is honoured by the in-app, HTML, Excel, PDF and Python renderers and in chart books.
+- **Warnings, not refusals.** The pick is the owner's call; the warning is the honest part. They appear under the picker and in the chart's notes:
+  - "Hard to tell from 'Savings'": OKLab ΔE×100 below 10 against another item of this chart, in either theme (a small Rust OKLab function, no crate)
+  - "Low contrast on the dark background": below 3:1 against the surface of a theme
+  - "This is a status colour": within ΔE 5 of good, warning, serious or critical. Status colours mean a state and shouldn't name an item.
+  - Text never takes the item's colour, as before.
+- **House colours.** `portable_data/house_colours.json` holds `[{ "name": "TD", "pick": … }]`, matched trimmed and case-insensitive. It applies to every chart, template, pack chart and chart book unless the chart has its own pick. View ▸ House colours… lists, edits and removes them. A missing file means none. A broken file is refused at start-up with its line, and charts then use the palette.
+- **Reset colours** (Phase 7) clears the chart's own picks and slots. House colours stay, and the button's tooltip says so.
+- **Acceptance:**
+  - a pick of Deep green on "TD" draws TD in `#037952` in all five renderers, and a Base pick follows the theme
+  - a house colour for "TD" colours TD in a new chart and a template; a chart's own pick overrides it
+  - the three warnings fire on known pairs and not on the default palette
+  - Reset keeps the house colour
+  - a filter or Top N never repaints a picked item
+  - render tests: the picker, the hex field, the tick box and View ▸ House colours… by real clicks at 3 sizes, light and dark
+</task>
+
+<task id="W8" name="Guide and screenshots">
+- New notes, following `<guide_notes>`: `split-date.md`, `date-grouping.md`, `calendar-settings.md`, `projects.md`, `drill-down.md`, `colours.md`.
+- Updates: `chart.md` (linked chart tabs, Edit chart), `pivot.md` (date fields, Show rows), `filter.md` (filter by part), `custom-sort-lists.md` (Calendar and Ranges), `rate-profile.md` and `chart-rate-profile.md` (W3).
+- `date-grouping.md` has a box, **"Balances are stocks"**: summing month-end balances across months gives a meaningless total. Group by Month-Year and read one month at a time, or wait for Phase 9's closing and average-balance measures.
+- Screenshots from the render tests in `docs/guide/img/` (light and dark where the app draws it):
+  - the Split date dialog
+  - the pivot date expander
+  - the filter "By" choice
+  - the Sources dialog
+  - a drill breadcrumb at level 2
+  - the right-click menu
+  - the colour picker with a warning
+  - House colours
+- **Acceptance:** a c8-style test checks every note has its sections, every picture it names exists, and the README lists the notes.
+</task>
+
+</tasks>
+
+<guide_notes>
+Every new note has these sections, in this order: What it does · When to use it · How to use it (numbered steps) · Example (from the tests, with real numbers) · What it refuses and why · Python export · Saved in (macro, project, settings) · Related tools. Plain English for a banker; no Rust or Polars terms.
+</guide_notes>
+
+<constraints>
+- No new Rust crates. Use Polars `temporal` (already enabled), `serde_json`, `blake3`, `egui` and `printpdf`.
+- Every new serialised field gets `#[serde(default)]`, with the defaults stated in the task (W3's `numbered` defaults to true). Old macros, packs, runs, settings, saved charts and chart tabs load unchanged, and the replay test of goal 3 proves the results are the same.
+- No `unwrap()`, `expect()` or index panics on user data. Refuse with a plain message a banker can act on; never default a value (no "Unknown" date part, no 0 for a blank, no guessed date format).
+- Colour literals live only in `src/charts/tokens.rs` and `theme.rs`, pinned by tests (the W7 swatches included).
+- Test data is synthetic. Never commit anything from `portable_data`, and never a `.mpproj` that points outside `tests/fixtures`.
+</constraints>
+
+<workflow>
+- Never run `cargo clean`. Run `cargo check` while editing and the full `cargo test` before each commit.
+- One commit per task (`Phase 8 <ID>: …`), pushed after each. Guide notes go in the same commit.
+- Tests go in `tests/phase8/`, compiled into the phase3 binary like `tests/phase7/`. Render tests go in `src/ui/render_tests_p8.rs`.
+- Keep `docs/phase8-progress.md` updated, and resume from it.
+- Never stop to ask. Take the option closest to this spec and the Phase 7 house style, record it in `<accepted_deviations>`, and list it in the report.
+- If blocked three times on the same failure, mark the task BLOCKED and continue. Dependencies:
+  - W1, W2 and W3 need W0.
+  - W5 needs W4.
+  - W6 needs W2 and W5.
+  - W8 runs last.
+- Sessions: A = W0, W1, W2, W3; B = W4, W5; C = W6, W7, W8.
+- One PR from `phase8` to main. Wait for Tests, and don't merge.
+</workflow>
+
+<report>
+Reply in no more than 30 lines:
+- a table: Task | Status | Tests added | Deviations
+- the final `cargo test` summary
+- questions
+- a "look at by eye" list of screenshot paths: one per new dialog, plus a drilled chart and a picked colour in both themes
+</report>
+
+<accepted_deviations>
+</accepted_deviations>
