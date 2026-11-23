@@ -45,6 +45,8 @@ pub struct ChartState {
     /// "Reset colours" was clicked while the numbers were being calculated again: it is done when they arrive, on
     /// the names they have (the names of the old numbers are about to go).
     pub reset_colours: bool,
+    /// The chart tab the studio is editing (Phase 8 W5): its spec is the studio's, Update puts it back.
+    pub editing: Option<u64>,
 }
 
 /// The names a chart's colours go to: its series, or its categories when it has no series.
@@ -74,11 +76,31 @@ pub struct ChartTabInfo {
     pub unit: String,
     /// The id of the tab the chart draws (a project writes it as the chart's source, Phase 8 W4).
     pub source_tab: Option<u64>,
+    /// What the source tab looked like when the numbers were calculated (empty = calculate again). A chart tab of
+    /// Phase 7 has no source tab and is never calculated again.
+    pub source_sig: String,
+    /// The signature a calculation on the worker is for.
+    pub pending_sig: Option<String>,
+    /// The source tab was closed: what it was, so Reopen can open it again.
+    pub closed: Option<ClosedSource>,
+    /// Why the chart could not be calculated again (the numbers shown are the last ones).
+    pub error: Option<String>,
+}
+
+/// A source tab that was closed.
+#[derive(Clone, Debug)]
+pub struct ClosedSource {
+    pub title: String,
+    /// Its key in the open project, if it had one.
+    pub key: Option<String>,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
 }
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, editing: None, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
     }
 }
 
@@ -359,14 +381,8 @@ impl MicroParquetApp {
         };
         data.spec = self.chart.spec.clone();
         let scale = self.chart_scale(&self.chart.spec);
-        let info = ChartTabInfo {
-            data: data.clone(),
-            show_table: false,
-            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
-            decimals: self.global_decimals,
-            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
-            source_tab: self.chart.tab_id,
-        };
+        let sig = self.tabs.iter().find(|t| Some(t.id) == self.chart.tab_id).map(|t| micro_parquet::tab_jobs::source_signature(&t.source, &t.steps[..t.exec_steps.min(t.steps.len())])).unwrap_or_default();
+        let info = ChartTabInfo::linked(data.clone(), scale.map(|s| s.divisor).unwrap_or(1.0), self.global_decimals, scale.as_ref().map(scale_word).unwrap_or("").to_string(), self.chart.tab_id, sig);
         let result = (|| -> anyhow::Result<TabSource> {
             let mut df = chart_table(&data)?;
             std::fs::create_dir_all(&self.paths.temp_dir)?;
@@ -395,18 +411,48 @@ impl MicroParquetApp {
         self.tabs.get(self.active_tab).is_some_and(|t| self.chart_tabs.contains_key(&t.id))
     }
 
-    /// What fills the main area while a chart tab is active: a Table / Chart toggle, then the chart.
+    /// What fills the main area while a chart tab is active: a Table / Chart toggle and Edit chart, a note when the
+    /// chart is frozen, its source is closed or it could not be calculated again, then the chart.
     pub(crate) fn render_chart_main(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) else { return };
         let dark = self.dark_mode;
+        let tk = *theme::tokens(dark);
+        let mut edit = false;
+        let mut reopen = false;
+        let closed = self.chart_tabs.get(&id).and_then(|i| i.closed.clone());
+        let can_reopen = closed.as_ref().is_some_and(|c| self.chart_tab_can_reopen(c));
         let Some(info) = self.chart_tabs.get_mut(&id) else { return };
         let label = if info.show_table { format!("{}  Show chart", egui_phosphor::regular::CHART_BAR) } else { format!("{}  Table", egui_phosphor::regular::TABLE) };
-        let b = ui.button(label);
-        if b.clicked() {
-            info.show_table = !info.show_table;
+        ui.horizontal_wrapped(|ui| {
+            let b = ui.button(label);
+            if b.clicked() {
+                info.show_table = !info.show_table;
+            }
+            let e = ui.add_enabled(info.closed.is_none(), egui::Button::new(format!("{}  Edit chart", egui_phosphor::regular::PENCIL_SIMPLE)));
+            let e = if info.closed.is_some() { e.on_disabled_hover_text("The source tab is closed. Reopen it to edit this chart.") } else { e.on_hover_text("Open the chart in the studio on its source tab") };
+            edit = e.clicked();
+        });
+        // what the chart is made from, and what is wrong with it
+        if let Some(c) = &closed {
+            let msg = format!("The source tab '{}' is closed. Reopen it to edit or refresh this chart.", c.title);
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Label::new(egui::RichText::new(msg).color(tk.warning)).wrap());
+                if can_reopen && ui.button("Reopen").clicked() {
+                    reopen = true;
+                }
+            });
+        } else if info.source_tab.is_none() {
+            ui.add(egui::Label::new(egui::RichText::new(crate::ui::chart_tab::OLDER_VERSION_NOTE).color(tk.muted)).wrap());
         }
+        if let Some(e) = &info.error {
+            ui.add(egui::Label::new(egui::RichText::new(format!("The chart could not be updated from its source tab, so it shows the last numbers: {}", e)).color(tk.danger)).wrap());
+        }
+        let dimmed = info.closed.is_some();
         ui.add_space(theme::SPACE_S);
         let opts = micro_parquet::charts::layout::LayoutOpts { dark, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: None };
+        if dimmed {
+            ui.set_opacity(theme::CHART_TAB_DIMMED_OPACITY);
+        }
         if info.show_table {
             crate::ui::chart_render::show_table(ui, &info.data, &opts);
         } else {
@@ -415,6 +461,12 @@ impl MicroParquetApp {
                 let h = ui.available_height().max(theme::CHART_MIN_H);
                 crate::ui::chart_render::show_chart(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h));
             });
+        }
+        if edit {
+            self.edit_chart_tab(id);
+        }
+        if reopen {
+            self.chart_tab_reopen(id);
         }
     }
 
@@ -527,6 +579,7 @@ impl MicroParquetApp {
     /// The controls: the Phase 6 grid (category, series, aggregation, value, type, order, Top N, scale),
     /// the buttons, and the studio sections.
     fn chart_controls(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects, acts: &mut StudioActions) {
+        self.chart_editing_banner(ui, rects);
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };

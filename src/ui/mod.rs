@@ -9,6 +9,7 @@ pub mod calendar;
 pub mod chart;
 pub mod chart_render;
 pub mod chart_studio;
+pub mod chart_tab;
 pub mod cl_migration;
 pub mod columns;
 pub mod commands;

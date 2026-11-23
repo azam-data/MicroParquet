@@ -945,3 +945,228 @@ fn w4_a_file_that_changed_since_the_project_was_saved_is_said_in_the_status_line
         assert!(s.starts_with("1 tab opened. book.parquet changed since the project was saved (saved ") && s.contains(", file ") && s.ends_with(')'), "{what}: {s}");
     }
 }
+
+// ================================================================================ W5: linked, editable chart tabs
+
+use micro_parquet::charts::layout::chart_title;
+
+/// The box of a text that ends with `text` (a button with its icon).
+fn text_box(p: &Painted, text: &str) -> Option<egui::Rect> {
+    p.boxes.iter().rev().find(|(t, _)| t.trim().ends_with(text)).map(|(_, b)| *b)
+}
+
+fn has_text(p: &Painted, text: &str) -> bool {
+    p.boxes.iter().any(|(t, _)| t.contains(text))
+}
+
+fn chart_tab_id(rig: &Rig) -> u64 {
+    *rig.app.chart_tabs.keys().next().expect("a chart tab")
+}
+
+/// What a new chart made from the source tab gives (the numbers the chart tab must equal).
+fn fresh_chart(rig: &Rig, spec: &ChartSpec) -> micro_parquet::chart::ChartData {
+    let src = &rig.app.tabs[0];
+    let exec = src.exec_steps.min(src.steps.len());
+    micro_parquet::project::chart_tab_source(&src.source, &src.steps[..exec], spec, &rig.app.paths.temp_dir).expect("a new chart").0
+}
+
+fn pump_chart_tab(rig: &mut Rig) {
+    pump_until(rig, "the chart tab is calculated again", &|r| {
+        let id = *r.app.chart_tabs.keys().next().expect("a chart tab");
+        let i = &r.app.chart_tabs[&id];
+        i.pending_sig.is_none() && !i.source_sig.is_empty() && !r.app.jobs.kind_busy(micro_parquet::jobs::JobKind::ChartTab)
+    });
+}
+
+#[test]
+fn w5_a_filter_on_the_source_updates_the_chart_tab_to_equal_a_new_chart() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w5a", ppp, w, h);
+        let what = rig.what.clone();
+        three_tabs(&mut rig);
+        let id = chart_tab_id(&rig);
+        let before = rig.app.chart_tabs[&id].data.clone();
+        assert!(before.categories.iter().any(|c| c == "Ctg"), "{what}: {:?}", before.categories);
+        assert!(!rig.app.chart_tabs[&id].source_sig.is_empty(), "{what}: the chart tab knows what its source looked like");
+        // nothing changed: the chart tab stays as it was (nothing is calculated again)
+        tick(&mut rig);
+        tick(&mut rig);
+        assert!(rig.app.chart_tabs[&id].pending_sig.is_none() && !rig.app.jobs.kind_busy(micro_parquet::jobs::JobKind::ChartTab), "{what}");
+        // a filter on the source tab: the rows of branch Ctg go
+        let cond = FilterCondition { column: "Branch".into(), op: CondOp::Equals, value: "Ctg".into(), ..Default::default() };
+        rig.app.tabs[0].steps.push(TransformStep::FilterGroup { conditions: vec![cond], join: GroupJoin::And, keep_matching: false });
+        rig.app.tabs[0].exec_steps = 1;
+        tick(&mut rig);
+        pump_chart_tab(&mut rig);
+        let info = &rig.app.chart_tabs[&id];
+        assert!(!info.data.categories.iter().any(|c| c == "Ctg"), "{what}: {:?}", info.data.categories);
+        let want = fresh_chart(&rig, &info.data.spec);
+        assert_eq!((info.data.categories.clone(), info.data.values.clone()), (want.categories.clone(), want.values.clone()), "{what}: the chart tab equals a new chart made from the source");
+        // its table (what exports) is the new numbers too
+        let idx = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+        pump_until(&mut rig, "the table of the chart tab", &|r| r.app.tabs[idx].total_rows == want.categories.len());
+        assert!(rig.app.status_message.is_empty() || !rig.app.status_message.contains("could not"), "{what}: {}", rig.app.status_message);
+    }
+}
+
+#[test]
+fn w5_edit_chart_opens_the_studio_on_the_source_and_update_keeps_one_chart_tab_with_the_new_numbers() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w5b", ppp, w, h);
+        let what = rig.what.clone();
+        three_tabs(&mut rig);
+        let id = chart_tab_id(&rig);
+        let title = rig.app.tabs.iter().find(|t| t.id == id).expect("tab").title.clone();
+        let src_id = rig.app.tabs[0].id;
+        assert!(title.contains("Sum of Balance") && !title.contains("Sum of Sum"), "{what}: {title}");
+        // the chart tab: its main area has Edit chart, and the steps panel is read-only
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("idx");
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Steps, true);
+        let p = rig.draw(3);
+        assert!(has_text(&p, "This tab draws a chart of 'Book'. Change the data on that tab, or use Edit chart.") || has_text(&p, "This tab draws a chart of"), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        let b = text_box(&p, "Edit chart").unwrap_or_else(|| panic!("{what}: the Edit chart button"));
+        let p = click_rect(&mut rig, b);
+        // the studio is on the source tab, with the chart tab's spec and its banner
+        assert_eq!(rig.app.tabs[rig.app.active_tab].id, src_id, "{what}: the studio opens on the source");
+        assert_eq!(rig.app.chart.editing, Some(id), "{what}");
+        assert_eq!(rig.app.chart.spec, rig.app.chart_tabs[&id].data.spec, "{what}: the studio has the chart tab's chart");
+        let p = if has_text(&p, "Editing chart tab") { p } else { rig.draw(3) };
+        assert!(has_text(&p, &format!("Editing chart tab '{}'", title)), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        assert!(text_box(&p, "Update chart tab").is_some() && text_box(&p, "Open as new chart tab").is_some(), "{what}");
+        // the owner's case: Sum of Balance, never Sum of Sum of Balance
+        pump_until(&mut rig, "the studio chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+        let names = rig.app.chart.data.as_ref().expect("data").measure_names.clone();
+        assert_eq!(names, vec!["Sum of Balance".to_string()], "{what}");
+        // another aggregation, then Update chart tab by a real click
+        let mut spec = rig.app.chart.spec.clone();
+        spec.agg = ChartAgg::Average;
+        rig.app.chart_set_spec(spec);
+        pump_until(&mut rig, "the new studio chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.agg == ChartAgg::Average));
+        let p = rig.draw(3);
+        let b = text_box(&p, "Update chart tab").unwrap_or_else(|| panic!("{what}: Update chart tab"));
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.chart.editing, None, "{what}");
+        pump_chart_tab(&mut rig);
+        assert_eq!((rig.app.chart_tabs.len(), rig.app.tabs.len()), (1, 3), "{what}: one chart tab");
+        let info = &rig.app.chart_tabs[&id];
+        assert_eq!(info.data.spec.agg, ChartAgg::Average, "{what}");
+        let want = fresh_chart(&rig, &info.data.spec);
+        assert_eq!(info.data.values, want.values, "{what}: the new numbers");
+        assert_eq!(info.data.measure_names, vec!["Average of Balance".to_string()], "{what}");
+        // the title follows the rule it had ("Chart: " and the chart's title), not "Sum of Sum"
+        let t = rig.app.tabs.iter().find(|t| t.id == id).expect("tab").title.clone();
+        assert_eq!(t, format!("Chart: {}", chart_title(&info.data)), "{what}");
+        assert!(t.contains("Average of Balance") && !t.contains("Sum of Sum"), "{what}: {t}");
+        // Open as new chart tab leaves the first one as it is
+        rig.app.edit_chart_tab(id);
+        let p = rig.draw(3);
+        let b = text_box(&p, "Open as new chart tab").unwrap_or_else(|| panic!("{what}: Open as new chart tab"));
+        click_rect(&mut rig, b);
+        pump_until(&mut rig, "the new chart tab", &|r| r.app.chart_tabs.len() == 2 && r.app.tabs.len() == 4);
+        assert_eq!(rig.app.chart_tabs[&id].data.spec.agg, ChartAgg::Average, "{what}: the first chart tab is as it was");
+    }
+}
+
+#[test]
+fn w5_closing_the_source_dims_the_chart_with_a_message_and_reopen_restores_it() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w5c", ppp, w, h);
+        let what = rig.what.clone();
+        three_tabs(&mut rig);
+        let id = chart_tab_id(&rig);
+        // a project, so that the source is a file tab of it
+        let pfile = rig.app.paths.root_dir.join("proj").join("Charts.mpproj");
+        rig.app.project.test_pick = Some(pfile);
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
+        let src_title = rig.app.tabs[0].title.clone();
+        let kept = rig.app.chart_tabs[&id].data.clone();
+        rig.app.close_tab(0);
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+        let p = rig.draw(3);
+        let msg = format!("The source tab '{}' is closed. Reopen it to edit or refresh this chart.", src_title);
+        assert!(has_text(&p, &msg), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        let info = &rig.app.chart_tabs[&id];
+        assert!(info.source_tab.is_none() && info.closed.is_some(), "{what}");
+        assert_eq!((info.data.categories.clone(), info.data.values.clone()), (kept.categories, kept.values), "{what}: the chart keeps its last data");
+        // Edit chart is not offered while the source is closed
+        rig.app.edit_chart_tab(id);
+        assert_eq!(rig.app.chart.editing, None, "{what}");
+        // Reopen is not offered outside a project
+        rig.app.project.active = false;
+        let p = rig.draw(3);
+        assert!(text_box(&p, "Reopen").is_none(), "{what}");
+        rig.app.project.active = true;
+        let p = rig.draw(3);
+        let b = text_box(&p, "Reopen").unwrap_or_else(|| panic!("{what}: Reopen"));
+        let n = rig.app.tabs.len();
+        click_rect(&mut rig, b);
+        pump_until(&mut rig, "the source tab is open again", &|r| r.app.tabs.len() == n + 1);
+        let info = &rig.app.chart_tabs[&id];
+        assert!(info.closed.is_none() && info.source_tab.is_some(), "{what}");
+        let p = rig.draw(3);
+        assert!(!has_text(&p, "is closed. Reopen it"), "{what}: the message goes");
+        // the chart is as it was: the source has the same steps, so nothing is calculated again
+        tick(&mut rig);
+        tick(&mut rig);
+        assert!(rig.app.chart_tabs[&id].pending_sig.is_none(), "{what}");
+        assert_eq!(rig.app.chart_tabs[&id].data.values, kept_values(&rig, id), "{what}");
+    }
+}
+
+fn kept_values(rig: &Rig, id: u64) -> Vec<Vec<Option<f64>>> {
+    rig.app.chart_tabs[&id].data.values.clone()
+}
+
+#[test]
+fn w5_a_chart_tab_of_an_older_version_stays_as_it_was_and_edit_chart_opens_it_on_its_own_table() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w5d", ppp, w, h);
+        let what = rig.what.clone();
+        three_tabs(&mut rig);
+        let id = chart_tab_id(&rig);
+        // a Phase 7 chart tab knew no source tab
+        let sig = {
+            let i = rig.app.chart_tabs.get_mut(&id).expect("info");
+            i.source_tab = None;
+            i.source_sig.clear();
+            i.data.clone()
+        };
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id).expect("idx");
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Steps, true);
+        // the source changes: the frozen chart is not calculated again
+        let cond = FilterCondition { column: "Branch".into(), op: CondOp::Equals, value: "Ctg".into(), ..Default::default() };
+        rig.app.tabs[0].steps.push(TransformStep::FilterGroup { conditions: vec![cond], join: GroupJoin::And, keep_matching: false });
+        tick(&mut rig);
+        tick(&mut rig);
+        assert!(!rig.app.jobs.kind_busy(micro_parquet::jobs::JobKind::ChartTab), "{what}");
+        assert_eq!(rig.app.chart_tabs[&id].data.values, sig.values, "{what}: frozen");
+        let p = rig.draw(3);
+        assert!(has_text(&p, crate::ui::chart_tab::OLDER_VERSION_NOTE), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        let b = text_box(&p, "Edit chart").unwrap_or_else(|| panic!("{what}: Edit chart"));
+        click_rect(&mut rig, b);
+        // the studio is on the chart tab's own table, and only "Open as new chart tab" is offered
+        assert_eq!(rig.app.tabs[rig.app.active_tab].id, id, "{what}");
+        assert_eq!(rig.app.chart.editing, Some(id), "{what}");
+        let p = rig.draw(3);
+        assert!(text_box(&p, "Open as new chart tab").is_some() && text_box(&p, "Update chart tab").is_none(), "{what}");
+    }
+}
+
+#[test]
+fn w5_the_project_fingerprint_does_not_move_when_a_chart_tab_is_calculated_again() {
+    let mut rig = proj_rig("p8w5e", 1.0, 1280.0, 720.0);
+    three_tabs(&mut rig);
+    let id = chart_tab_id(&rig);
+    let pfile = rig.app.paths.root_dir.join("proj").join("Fp.mpproj");
+    rig.app.project.test_pick = Some(pfile);
+    rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+    wait_saved(&mut rig);
+    tick(&mut rig);
+    assert!(!rig.app.project_unsaved(), "saved");
+    // the chart is calculated again (its table is a new file): nothing the project saves has changed
+    rig.app.chart_tabs.get_mut(&id).expect("info").source_sig.clear();
+    pump_chart_tab(&mut rig);
+    tick(&mut rig);
+    assert!(!rig.app.project_unsaved(), "a chart tab that follows its source is not a change");
+}

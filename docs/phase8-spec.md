@@ -414,10 +414,18 @@ Session B (W4) choices:
 - W4-10: the "changed since saved" line leaves out files that were relinked, and follows "N tabs opened.".
 - W4-11: Open closes the session's tabs only after "Open" is pressed in the Sources dialog; Cancel leaves everything as it was.
 - W4-12: `--project` writes `<tab title>.parquet` (a second title gets "(2)") through a staging folder in `--export-dir`; a step that cannot run stops the run like a failing tab.
-- W4-13: not done in W4: the guide note `projects.md` and screenshots (W8); `cargo build --release` was not run in this session (the debug `cargo test` was).
+- W4-13: not done in W4: the guide note `projects.md` and screenshots (W8); `cargo build --release` was not run in that session; it was run and passed at the end of B2.
 
 Owner decisions on Session B (W4):
 - W4-1 to W4-13 are accepted.
 - Q1 and Q2 are built (see above).
 - Project save: the blake3 hash runs on the worker with progress ("Hashing Loans.csv 40%"), reusing the cache; the UI never blocks. A test checks that save is dispatched as a worker job. (This replaces W4-4.)
+
+Session B2 (W5) choices:
+- W5-1: a chart tab is linked by `ChartTabInfo.source_tab` (the session id; in a project the key, as in W4-7). It remembers the source's signature (`tab_jobs::source_signature`: the source, the steps that run and, for a file, its size and time) and looks at it every 0.4 s; a different signature calculates the chart again on the worker from the source tab (`project::chart_tab_source`, the studio's own calculation), then replaces the chart tab's numbers, table and, when it still had the rule's title ("Chart: " and the chart's title), its title. Nothing is calculated when nothing changed.
+- W5-2: a calculation that fails (a step removed the column, for example) keeps the last numbers and says why in red above the chart; it is not tried again until the source changes once more.
+- W5-3: "Update chart tab" puts the studio's spec in the chart tab and the worker calculates it from the source (not from the studio's numbers); the app then shows the chart tab. "Open as new chart tab" is the existing "Open as tab". The banner is in the studio (side panel and pop-out); a switch to another tab ends the editing.
+- W5-4: Reopen is offered when the closed source was a file tab of the open project (`ClosedSource.key` and a file outside the temporary folder); any other closed source gets the message only. Edit chart is greyed while the source is closed. A chart tab whose source is closed is left out of a saved project (W4-7).
+- W5-5: a chart tab with no source tab (made by Phase 7, which kept only its spec in `settings.json`; the app never restored those entries, and still does not) is frozen: it is never calculated again, says "Made by an older version; Edit chart opens it on its own table", and Edit chart opens the studio on the chart tab's own table without loading its spec (the table's columns are not the spec's); only "Open as new chart tab" is offered.
+- W5-6: the project's "unsaved" fingerprint leaves out a chart tab's own source (a temporary table made again from the source). The step commands in the Edit menu are not greyed on a chart tab (only the steps panel is read-only), as the spec asks for the panel only.
 </accepted_deviations>

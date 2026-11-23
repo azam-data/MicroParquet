@@ -476,6 +476,10 @@ pub const CHART_REF_LABEL_W: f32 = 90.0;
 pub const CHART_CONTROLS_W: f32 = 330.0;
 pub const CHART_WIDE_MIN_W: f32 = 720.0;
 pub const CHART_MIN_W: f32 = 200.0;
+/// Seconds between two looks of a chart tab at its source tab (Phase 8 W5).
+pub const CHART_TAB_LINK_CHECK_S: f64 = 0.4;
+/// How faint a chart tab is drawn while its source tab is closed (Phase 8 W5).
+pub const CHART_TAB_DIMMED_OPACITY: f32 = 0.45;
 pub const CHART_MIN_H: f32 = 175.0;
 pub const CHART_MAX_H: f32 = 520.0;
 pub const CHART_BAR_W: f64 = 0.65;

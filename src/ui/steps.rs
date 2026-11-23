@@ -615,6 +615,14 @@ impl MicroParquetApp {
 
     fn render_steps_tab(&mut self, ui: &mut egui::Ui, panel_h: f32) {
         let tk = *theme::tokens(self.dark_mode);
+        // a chart tab has no steps of its own: they are the source tab's (Phase 8 W5)
+        if let Some(note) = self.chart_tab_steps_note() {
+            egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
+                ui.label(theme::bold("Source").color(tk.ink));
+                ui.add(egui::Label::new(egui::RichText::new(note).color(tk.muted)).wrap());
+            });
+            return;
+        }
         let mut open_schema = false;
         let mut select: Option<usize> = None;
         let mut do_edit: Option<usize> = None;

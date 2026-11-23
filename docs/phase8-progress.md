@@ -1,9 +1,10 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done). Next: C = W6, W7, W8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
+| W5 | DONE | (see git log: "Phase 8 W5") | tests/phase8/w5.rs ×2 (a Phase 7 `settings.json` with chart tabs loads and saves back unchanged, its chart reads with the Phase 8 fields at default; the owner's case is calculated from the source and reads "Sum of Balance", a filtered source gives the source's numbers); render_tests_p8 ×5 (a filter on the source updates the chart tab to equal a new chart, table included; Edit chart by a real click opens the studio on the source with the banner, Update chart tab keeps one chart tab with the new numbers and the title rule, Open as new chart tab leaves the first as it was; closing the source dims the chart with the message, Reopen by a real click restores it, Reopen is not offered outside a project; a chart tab of an older version stays frozen and Edit chart opens it on its own table; recalculating does not set the project's "•"; at 3 sizes) |
 | W4 | DONE | (see git log: "Phase 8 W4") | tests/phase8/w4.rs ×10 (six kinds of tab round-trip by the hash of their rows, with keys, active tab, formats, summary, control column, chart specs, and save → open → save equal but `saved_at`; moving the project and its files together opens by relative paths; a relink to a file with an extra column works and a missing column is refused with the list, and the tabs built on it fail; Found/Changed/Missing, Look in folder, the changed-since-saved line; tabs left out with the reason and their dependants; a placeholder keeps its recipe; a newer version is refused, unknown fields ignored, recent list of 8; headless writes every tab and a failing tab writes nothing; save → open → save gives the same file bytes but the saved_at line; the save job reports each file it hashes and the cache spares the second save); src/headless.rs ×1 (`--project`/`--export-dir`); render_tests_p8 ×6 (File menu entries, Ctrl+K, Save as, "•", Save, Open ▸ Sources dialog ▸ Open, Close; Browse and Look in folder, placeholders and Save keeping them; close request prompt with Cancel/Don't save/Save, New project, recent list; the left-out list; the changed-file status line, at 3 sizes; Save is a worker job) |
 | W3 | DONE | (see git log: "Phase 8 W3") | tests/phase8/w3.rs ×4 (numbered defaults to true for every saved form and the plain labels, the band order and its declared list; the owner's bands unnumbered in band order in the sorted step result, a pivot, the template's chart, the Excel workbook and the Python; a Phase 7 macro with the step replays to the numbered labels and its Phase 7 hash; the title "… sit at 8%–9%" in both forms); render_tests_p8 ×1 (the tick box off, on and off by real clicks, Add makes plain labels, a pivot takes the band order at once, at 3 sizes) |
 | W2 | DONE | (see git log: "Phase 8 W2") | tests/phase8/w2.rs ×6 (a pivot by a date field equals the pivot by the Split date column for 6 parts; every part with two calendars adds up to the total with "(blank)" last; a chart by Quarter: Q1…Q4 and the pivot's totals, series and facet by a part, stale parts ignored, missing columns, the calendar in the calculation key; a filter by Day name in Fri, Sat keeps exactly those rows, by Year, text refused, the Python; a real column of the field's name refused, the value lists of a part, a pivot filter on a part; old pivots, charts and conditions load); render_tests_p8 ×3 (the pivot expander and Add to Rows, the chart Category picker, the filter By choice, the picker and Apply, by real clicks at 3 sizes) |
@@ -118,4 +119,11 @@ the file when the result arrives; Save while a save runs is refused with a messa
 They are listed in `docs/phase8-spec.md` `<accepted_deviations>`. In short: a pivot tab is its source's recipe plus its
 steps; a result tab is its run plus later steps; a chart tab is recalculated from its source tab on open (W5 links it);
 "unsaved" is asked only with a project open; Open recent project is a submenu and a Ctrl+K list; the guide note and the
-screenshots are W8; the release build was not run.
+screenshots are W8; the release build was not run in session B (it was run, and passed, at the end of session B2).
+
+## Session B2 (W5): deviations W5-1 to W5-6
+
+They are listed in `docs/phase8-spec.md` `<accepted_deviations>`. In short: the chart tab compares its source's recipe
+(source, steps that run, file size and time) every 0.4 s and is calculated again on the worker from the source; the
+steps panel of a chart tab shows the note and no list; Edit chart is greyed while the source is closed; a chart tab
+with no source (made before Phase 8) is frozen.

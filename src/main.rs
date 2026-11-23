@@ -225,6 +225,8 @@ pub struct MicroParquetApp {
     chart_pop_requests: u32,
     /// The tabs that are charts (Phase 7: "Open as tab"), by tab id: they fill the main area with the chart.
     chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
+    /// When the linked chart tabs last looked at their source tabs (seconds on the egui clock).
+    chart_tab_checked_at: f64,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -388,6 +390,7 @@ impl MicroParquetApp {
             chart_popped: false,
             chart_pop_requests: 0,
             chart_tabs: HashMap::new(),
+            chart_tab_checked_at: 0.0,
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -523,6 +526,8 @@ impl MicroParquetApp {
         }
         self.poll_jobs(ctx);
         self.project_tick(ctx);
+        let now = ctx.input(|i| i.time);
+        self.chart_tab_links_tick(now);
         if ctx.input(|i| i.viewport().close_requested()) {
             match self.close_requested() {
                 ui::jobs::CloseDecision::Ask => ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose),

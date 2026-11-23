@@ -520,6 +520,7 @@ impl MicroParquetApp {
             return;
         }
         let closed_id = self.tabs.get(idx).map(|t| t.id);
+        self.chart_tabs_source_closing(idx);
         if let Some(id) = closed_id {
             self.chart_tabs.remove(&id);
         }

@@ -61,6 +61,8 @@ pub enum JobKind {
     ProjectCheck,
     /// Builds the project from the open tabs, hashing the files (Phase 8 W4 follow-up).
     ProjectSave,
+    /// A linked chart tab calculated again from its source tab (Phase 8 W5).
+    ChartTab,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

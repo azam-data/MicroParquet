@@ -154,7 +154,10 @@ impl MicroParquetApp {
             t.id.hash(&mut h);
             t.title.hash(&mut h);
             // what the tab is made from, not the files' sizes and dates: a data file that changes is not a change to the project
-            format!("{:?}", t.source).hash(&mut h);
+            // (a chart tab's own table is made again from its source, so it is left out)
+            if !self.chart_tabs.contains_key(&t.id) {
+                format!("{:?}", t.source).hash(&mut h);
+            }
             for s in &t.steps {
                 format!("{:?}", s).hash(&mut h);
             }
@@ -537,7 +540,8 @@ impl MicroParquetApp {
             let src_id = self.project.keys.iter().find(|(_, k)| **k == c.source).map(|(i, _)| *i);
             let src_tab = src_id.and_then(|i| self.tabs.iter().find(|t| t.id == i));
             let scale = self.chart_scale_of(&data.spec, src_tab);
-            let info = ChartTabInfo { data, show_table: false, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(), source_tab: src_id };
+            let sig = src_tab.map(|t| micro_parquet::tab_jobs::source_signature(&t.source, &t.steps[..t.exec_steps.min(t.steps.len())])).unwrap_or_default();
+            let info = ChartTabInfo::linked(data, scale.map(|s| s.divisor).unwrap_or(1.0), self.global_decimals, scale.as_ref().map(scale_word).unwrap_or("").to_string(), src_id, sig);
             self.chart_tabs.insert(id, info);
         }
         self.tabs.push(tab);

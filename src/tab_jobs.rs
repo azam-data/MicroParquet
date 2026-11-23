@@ -51,6 +51,8 @@ pub enum JobOutput {
     ProjectCheck(Box<ProjectChecked>),
     /// The project built from the open tabs, and the hashes worked out on the way.
     ProjectSave(Box<ProjectBuilt>),
+    /// A linked chart tab's new numbers and table (Phase 8 W5).
+    ChartTab(Box<ChartTabCalc>),
 }
 
 /// A tab of a project, built on the worker.
@@ -60,6 +62,43 @@ pub struct ProjectLoaded {
     pub chart: Option<crate::chart::ChartData>,
     /// The tab's place in the project's tab list.
     pub index: usize,
+}
+
+/// A linked chart tab to calculate again from its source tab.
+pub struct ChartTabRequest {
+    pub chart_tab: u64,
+    /// What the source tab looked like (`source_signature`) when the request was made.
+    pub sig: String,
+    pub base: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::chart::ChartSpec,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ChartTabCalc {
+    pub chart_tab: u64,
+    pub sig: String,
+    pub data: crate::chart::ChartData,
+    /// The chart's table, a Parquet file the program made.
+    pub source: TabSource,
+}
+
+/// The chart over the source tab's table, and the table of its numbers (what the chart tab shows and exports).
+pub fn chart_tab_job(req: ChartTabRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Calculating the chart tab\u{2026}", None);
+    ctx.check()?;
+    let (data, source) = crate::project::chart_tab_source(&req.base, &req.steps, &req.spec, &req.temp_dir)?;
+    Ok(JobOutput::ChartTab(Box::new(ChartTabCalc { chart_tab: req.chart_tab, sig: req.sig, data, source })))
+}
+
+/// What a chart tab compares to find out that its source changed: the source, the steps that run and, for a file,
+/// its size and time.
+pub fn source_signature(source: &TabSource, steps: &[TransformStep]) -> String {
+    let stamp = match source {
+        TabSource::SingleFile { path, .. } => crate::project::file_stamp(path).map(|(s, m)| format!("{s}|{m}")).unwrap_or_default(),
+        _ => String::new(),
+    };
+    format!("{:?}|{:?}|{}", source, steps, stamp)
 }
 
 pub struct ProjectBuilt {
