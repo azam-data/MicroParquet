@@ -155,3 +155,16 @@ Also found while looking at the Excel screenshots: the 100% stacked chart wrote 
 
 Part B deviations: E-3 the ECL summary tool does not emit a "Sample parameters" row (see part A); E-4 the Excel and Python collision handling uses the app's layout at the chart's nominal size, not a measurement of the finished workbook or figure; E-5 in the page, the last point of a several-series line carries its name (not also its value) in "All"; E-6 workbook waterfalls have no data labels and heatmap numbers are the cell values, so the Labels setting does not change them.
 E-7: Excel honours the workbook's "stop if true", so the neutral cells of a heatmap lose the colour scale there; LibreOffice, which made `xlsx-heatmap.png`, ignores that flag and shows only the muted text on the ramp's lightest fill. The workbook itself is correct (tested: the neutral rule comes first, stops, and has the neutral fill).
+
+## Session F: final fixes for PR #13, part A (items 1-6)
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 1 | `FONT_HTML` single-quoted; `tools/html_svg_click.js` parses the SVG as XML (`--dark`, `--svg-only`) and finds the toolbox icons by their drawn shapes | `s1_the_svg_from_a_real_click_is_well_formed_xml…` |
+| 2 | `charts::catlabels` (plan: Full / Wrapped / Angled), `LText.angle`, `ChartLayout.labels_dont_fit`, the studio message and switch, ECharts `interval 0` with `overflow break` or `rotate 35`, Python `cat_labels`, Excel rotation | `s2_every_category_keeps_its_label…` (lib), `s2_the_page_the_workbook_and_the_script…`, `s7_labels_that_do_not_fit…` (by clicks) |
+| 3 | Refusal removed; `donut_top`; outside labels with leader lines in the app, page and script; Excel labels inside; "Many parts" line; the donut grouping is part of the recalculation key | `s3_a_donut_draws_every_part…`, `s3_group_small_parts…`, `s3_the_page_the_workbook_and_the_script_draw_the_donut…`, `s7_…` |
+| 4 | "Reset colours" | `s8_reset_colours_and_text_size…` (by clicks) |
+| 5 | `TextSize`, `tokens::with_text_scale`; every form and template at Larger: no collision, no clipping | `s5_text_size_scales…`, `s8_…` |
+| 6 | `charts::pdf` (layout primitives to printpdf, embedded fonts, `PdfMeasure`), `PdfTab.chart`, `PdfOptions.chart_tables`, the dialog's tick box | `s6_a_chart_tab_in_a_pdf…` (pdftotext, pdffonts), `s8_…` |
+
+Part A deviations: F-1 the Excel label interval cannot be forced to 1 (see the spec); F-2 a breach label that finds no room stays in the tooltip (the ring is drawn) instead of being forced over another text, and the limit-ticks note shortens, then drops, in a very small chart with large text; F-3 an axis whose labels leave no room for the plot says "The chart is too small for its category labels…" instead of drawing nothing.
