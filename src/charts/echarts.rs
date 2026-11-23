@@ -615,8 +615,9 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 ser["labelLayout"] = json!({"moveOverlap": "shiftY"});
             }
         }
-        if env.lp.mode == LabelMode::All {
-            // "All" never prints a label that collides: ECharts hides the ones that would overlap
+        if env.lp.mode == LabelMode::All || (spec.inside_labels && stacked) {
+            // "All" never prints a label that collides: ECharts hides the ones that would overlap. The same goes for the
+            // labels inside segments (W11): they are decided at a nominal size, and on a smaller page the ones that collide drop out
             ser["labelLayout"]["hideOverlap"] = json!(true);
         }
         if si == 0 {

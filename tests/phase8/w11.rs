@@ -223,6 +223,8 @@ fn w11_the_page_labels_the_segments_inside_them_straight_or_turned_and_none_wher
             assert_eq!(bars.len(), 3);
             for s in &bars {
                 assert!(s["barMaxWidth"].as_f64().unwrap_or(0.0) > 24.0, "wider bars for labelled segments");
+                // a page shown smaller than the nominal size drops the labels that collide instead of printing them over each other
+                assert_eq!(s["labelLayout"]["hideOverlap"], true, "{name} {theme}: hideOverlap on the labelled series");
                 for item in s["data"].as_array().expect("data") {
                     let label = &item["label"];
                     if label["show"] == false {
@@ -245,6 +247,7 @@ fn w11_the_page_labels_the_segments_inside_them_straight_or_turned_and_none_wher
     // off: no label on a segment at all
     let off = chart_pair(&narrow_n(20, Stack::Stacked, false), &opts(false, 1)).expect("html");
     assert!(off.light["series"].as_array().expect("series").iter().filter(|s| s["type"] == "bar").all(|s| s["data"].as_array().expect("data").iter().all(|i| i.get("label").is_none())));
+    assert!(off.light["series"].as_array().expect("series").iter().filter(|s| s["type"] == "bar").all(|s| s.get("labelLayout").is_none()), "Off: no label layout, as in Phase 7");
 }
 
 // ---- the data table
@@ -456,4 +459,12 @@ fn w11_the_report_pack_pdf_prints_the_chart_with_its_table_when_the_chart_asks_a
     assert!(on.contains("Sum of Balance") && on.contains("Total"), "the table's caption and its total row");
     // the chart with the option off is not in the PDF at all, as in Phase 7
     assert!(!off.contains("Sum of Balance by Month and Product"), "no chart page when the data table is off");
+}
+
+#[test]
+fn w11_the_test_workflow_installs_poppler_before_cargo_test_so_the_pdf_checks_run_in_ci() {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/test.yml")).expect("test.yml");
+    let at = text.find("sudo apt-get install -y poppler-utils").expect("the install step");
+    let run = text.find("run: cargo test").expect("cargo test");
+    assert!(at < run, "poppler is installed before cargo test");
 }

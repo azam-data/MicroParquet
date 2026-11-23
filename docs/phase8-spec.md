@@ -542,6 +542,16 @@ Session C3 (W11) choices:
 - W11-6: the report-pack PDF printed tables only, no charts. A pack chart whose Data table is on now gets a page of its own after its item's table, with the table; a chart with the option off is not in the PDF, as in Phase 7. The pack's chart book (HTML) and a single chart's page show the table open under the chart; the page's "Table" toggle leaves it alone, and a page with no open table is the page of Phase 7 byte for byte.
 - W11-7: the Python script has neither the labels inside the segments nor the table.
 - W11-8: the Phase 7 baseline (`tests/fixtures/phase8_w11_off.hashes.json`, made by the Phase 7 code in a temporary worktree) found a change of W7-8: the script of a chart of one series wrote a `COLOURS` entry for its measure. It is now written only for a pick or a house colour, so an automatic colour gives the script of Phase 7.
-- W11-9: CI found that the runner has no `pdftotext` (poppler). As in Phase 7 (s6), the W11 tests that read PDF pages (and the `/pdf/` hashes of the baseline) are skipped with a note where `pdftotext` or `pypdf` is missing; they run here. To have them run in CI, the workflow needs `sudo apt-get install -y poppler-utils` (not changed: owner decision).
+- W11-9: CI found that the runner has no `pdftotext` (poppler). As in Phase 7 (s6), the W11 tests that read PDF pages (and the `/pdf/` hashes of the baseline) are skipped with a note where `pdftotext` or `pypdf` is missing; they run here. To have them run in CI, the workflow needs `sudo apt-get install -y poppler-utils` (done in the follow-ups: owner decision below).
 - Not done in W11: the guide note (W8); `cargo build --release` was not run in this session.
+
+Owner decisions on Session C3 (W9 + W11):
+- W7-8, W9-1 to W9-7, W11-1 to W11-9 and the report-pack chart page (W11-6) are accepted.
+- W9-4: "not in list" by a date part keeps blank dates unless "(blank)" is ticked, as for every column: accepted, no change.
+- W11-9: the test workflow installs `poppler-utils` before `cargo test`, so the PDF checks run in CI instead of skipping. Built (follow-ups): W11-10; `actionlint` was run.
+- HTML segment labels keep the app's layout decision at the nominal size, and the series that carry them also get ECharts `labelLayout.hideOverlap`, so a smaller page drops colliding labels instead of overlapping them. Excel stays as it is. Built (follow-ups): W11-11.
+
+Session C3 (W11 follow-ups) choices:
+- W11-10: `.github/workflows/test.yml` has a step "Install poppler-utils (pdftotext)" (`sudo apt-get install -y poppler-utils`) before "cargo test" in the `test` job. `main.yml`'s release test job is not changed. `actionlint` (v1.7.7) passes on both workflow files.
+- W11-11: with Segment labels On on a stacked chart, every bar series of the page has `labelLayout: {hideOverlap: true}`; with it Off the series has no `labelLayout`, so the page is Phase 7's byte for byte. The text, the turning and the colour of each label are still the app's decision at 640 × 420 pt.
 </accepted_deviations>

@@ -1,6 +1,6 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: C1 = W6 (done, follow-ups done), C2 = W7 + W10 (both done, follow-ups done), C3 = W9 + W11 (both done), C4 = W8. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: C1 = W6 (done, follow-ups done), C2 = W7 + W10 (both done, follow-ups done), C3 = W9 + W11 (both done, follow-ups done), C4 = W8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -216,3 +216,10 @@ Owner decisions: W6-12, W6-13, W7-1 to W7-7 and W10-1 to W10-5 accepted; W7-3 (a
 in all five renderers. Tests: `tests/phase8/w7.rs` ×1 (the list, a Deep green pick in the app, the page, the script, the workbook, the PDF page and the chart book,
 a Base pick follows the theme, six kinds, the warning, a house colour, the chart's own pick first, Automatic); `render_tests_p8` ×1 (the Colours list shows the measure with its swatch, a real click opens the picker, Deep Green, Base Orange, Deep Blue and its warning,
 Done, right-click ▸ Colour… on a bar, Deep Red, Automatic, Reset colours; at 3 sizes, light and dark). The Phase 7 test that expected a column chart of one colour to refuse the picker now uses a waterfall.
+
+## Session C3 follow-ups (W11-10, W11-11)
+
+Owner decisions: W7-8, W9-1 to W9-7, W11-1 to W11-9 and the report-pack chart page accepted; W9-4 ("not in list" by a part keeps blank dates unless "(blank)" is ticked, as for every column) accepted, no change. They are in
+`docs/phase8-spec.md` `<accepted_deviations>`. Built: **W11-10**, `.github/workflows/test.yml` installs `poppler-utils` before `cargo test` (so the PDF page checks run in CI instead of skipping), `actionlint` v1.7.7 passes on both workflow files;
+**W11-11**, the HTML page puts `labelLayout.hideOverlap` on the bar series that carry segment labels (nothing when the option is Off, so the page is Phase 7's byte for byte); Excel is unchanged.
+Tests: `tests/phase8/w11.rs` (the page test also checks `hideOverlap` on every labelled series and none when Off; ×1 new: the workflow installs poppler before `cargo test`).
