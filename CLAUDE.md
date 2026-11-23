@@ -37,6 +37,7 @@ When compacting, keep: the task IDs in progress, which tests pass or fail, devia
 - One or two task IDs per session; resume from the progress file.
 - While editing: cargo check, then only the task's tests, e.g.
   cargo test -q --test phase3 w5 2>&1 | tail -40
+  cargo test -q --test phase3 w4 2>&1 | tail -40
 - Full cargo test once before each commit, piped through tail -40.
 - Don't read src/main.rs or other large files whole; grep and read ranges.
 - Never paste build logs or test lists into the reply; summarise.
