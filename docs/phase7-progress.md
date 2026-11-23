@@ -1,0 +1,198 @@
+# Phase 7 progress (chart studio)
+
+Branch `phase7`. Session A: C0, C1, C2 done. Session B: owner decisions 1–5, C3, C4, C5 (done). Session C: owner decisions Q1/Q2 and fixes 1–10, then C6, C7, C8 (all done). Session D: owner decisions Q1–Q3 and fixes 1–5 (screenshots, classified NPL, NII effects, HQLA labels, C7 run with matplotlib). Session E (this one): the review of PR #13, part A (correctness, items 1–11) then part B (items 12–20). Resume from this file.
+
+| Task | Status | Commit | Tests |
+| --- | --- | --- | --- |
+| C0 | DONE | (see git log: "Phase 7 C0") | tests/phase7/c0.rs ×20; render_tests_p7 ×1 (theme tokens) |
+| C1 | DONE | (see git log: "Phase 7 C1") | tests/phase7/c1.rs ×22 (layout rules, all forms); render_tests_p7 ×4 (every form × light/dark × 3 sizes with real fonts, hover by real rect, Table toggle and Chart tab by real clicks, screenshots) |
+| C2 | DONE | (see git log: "Phase 7 C2") | tests/phase7/c2.rs ×9 (suggestion rules, gallery catalogue, card to columns, saved charts round trip and plain errors, Charts commands and Ctrl+K); render_tests_p7 ×4 (Charts menu order and clicks, gallery cards/suggest by real rects at 3 sizes, studio sections typed and clicked, save and open by real clicks) |
+
+| C3 | DONE | (see git log: "Phase 7 C3") | tests/phase7/c3.rs ×16 (golden option of all 20 forms, dark option, offline page, vendored file, 2 MB limit, Sankey values, treemap, waterfall bases, donut refusal, marks, theme, advanced JSON, chart book, preview/write, Δ); render_tests_p7 ×1 (Export, Preview, advanced box, Reset, chart book by real clicks at 3 sizes); `tools/html_chart_png.js` loads every page in headless Chromium with the network blocked (no script error, no request) and saves PNGs `docs/guide/img/charts/html-*.png` |
+| C4 | DONE | (see git log: "Phase 7 C4") | tests/phase7/c4.rs ×9 (every form's .xlsx opened as a zip with python3: chart type, series references on the data range, palette colours, waterfall base with no fill, heatmap scale, Δ, notes, sheet names); render_tests_p7 (Export to Excel by a real click at 3 sizes); every workbook also rendered in LibreOffice for `docs/guide/img/charts/xlsx-*.png` |
+| C8 | DONE | (see git log: "Phase 7 C8") | tests/phase7/c8.rs ×3 (each of the 13 notes has its ten sections and the title the code writes on its worked example; the second charts' titles and the breach label quoted by the notes are the code's; every picture a chart note names exists, the README lists the notes, the primer shows every form in both themes) |
+| C7 | DONE | (see git log: "Phase 7 C7") | tests/phase7/c7.rs ×2 (every form and template: the script parses with python3, holds the chart's numbers and categories, names matplotlib or plotly, keeps the palette; run headless where matplotlib and pandas are installed; escaping; refusal of an empty chart); render_tests_p7 (Copy as Python by a real click) |
+| C6 | DONE | (see git log: "Phase 7 C6") | tests/phase7/c6.rs ×4 (a pack with a gap-ladder template item and a saved-chart item writes the workbook with native charts, the chart book and the Cover rows; twice gives the same charts and book; a failing chart writes nothing; old packs load); headless test (same book from the command line, `--export-html`, nothing written on failure); render_tests_p6 ×1 (the Chart drop-down, the HTML chart book tick and Run by real clicks at 3 sizes) |
+| C5 | DONE | (see git log: "Phase 7 C5") | tests/phase7/c5.rs ×8 (each of the 13 templates on its tool's guide example: form, exact finding, three renderers, save/load; gap ladder breach ringed and labelled; limit ticks in HTML and Excel); render_tests_p7 ×2 (gallery cards and a click on the gap ladder card by real rects at 3 sizes, Chart this result) |
+
+## Deviations (also in `docs/phase7-spec.md` `<accepted_deviations>`)
+
+- C0-1: the palette and size literals live in `src/charts/tokens.rs` (library crate), not in `src/ui/theme.rs`: the HTML and Excel renderers are in the library and cannot read the binary's theme. `theme.rs` exposes them as `Color32`/`f32` tokens (`CHART_*`), and both the library test (`c0_every_hex_value…`) and the UI test pin every hex value.
+- C0-2: the Phase 6 types (`ChartSpec`, `ChartAgg`, `ChartKind`, `ChartScale`, `ChartData`) moved to `src/charts/` and are re-exported from `src/chart.rs`, so Phase 6 code and tests compile unchanged. `ChartKind::Bar` stays the name of the vertical column chart (old settings say "Bar"); horizontal bars are `horizontal: true`.
+- C0-3: a percentage of a zero total is blank with a note, not 0; a waterfall whose end does not equal start plus steps is refused with a message (a bridge that does not add up is a wrong number).
+- C0-4: more than 12 facet values is refused (spec says "up to 12"), asking the user to filter first, rather than silently dropping panels.
+- C1-1: the geometry (marks, labels, collision checks) is in the library, `src/charts/layout.rs`, so it is asserted without a window and the HTML/Excel renderers can share the same tokens; `src/ui/chart_render.rs` only paints it, adds hover and the Table view.
+- C1-2: histogram bars fill their band (minus the 2 px gap): the 24 px cap would leave floating slivers; every other bar, column, segment and box is capped at 24 px. Stacked areas use 55% opacity (10% is unreadable when stacked); plain areas use the 10%.
+- C1-3: the axis name sits above the plot (horizontal), not rotated; scatter/bubble fold more than 3 colour series into the top 2 and "Other".
+- C1-4: a "Chart tab" is a normal tab (the chart's data table, so it exports like any tab) whose main area draws the chart (`chart_tabs`, by tab id). Tabs are not restored when the app restarts, so "saved with the session" is `settings.json` `chart_tabs` (title, source key, chart); Charts ▸ "Open saved chart…" (C2) reopens it.
+- C1-5: heatmap rows follow the series' size, not the order list (columns follow the order list).
+- C1-6: the Phase 6 quick chart keeps its own title and notes above the plot (the renderer runs in `bare` mode there); the studio of C2 uses the full title block. Screenshots are made by `tools/chart_layout_png.py` (Pillow) from the layout the render tests produced; they are skipped with a note when python3/Pillow is absent. PNGs are in `docs/guide/img/charts/`.
+- C2-1: "Chart this result" is enabled on tool result tabs and opens the studio on that tab; the banking templates it applies are task C5. "Chart book (HTML)…" is in the menu and Ctrl+K but disabled with its reason until the HTML export (C3). The gallery's "Banking templates" group is a line of text for the same reason.
+- C2-2: the Phase 6 Chart tab is the studio. Its Phase 6 controls keep their places; the new sections (shape, Titles and look, Reference lines, Measures and panels, Save / Open saved chart) are under the chart in the side panel and beside it in the pop-out window (controls in a left column). The right panel no longer scrolls by dragging with the mouse (a click on a control scrolled it once the panel was taller than the window); the wheel and the bar still scroll.
+- C2-3: Phase 6 tests adjusted for the intended changes: the menu order has Charts; the "Chart" toolbar button test matches the label exactly (the Charts menu contains the word); the quick chart's status line ("… all 250 rows (Crore)") is found by its text now that the chart has its own title; fields under the chart are not required to be inside the window (they scroll).
+- C2-4: a reference line's label goes beside the line where there is room; when the line crosses the bars it stands above the plot after a short piece of the line in the status colour. The extra measures are panels (never a second axis); a facet and several measures at once are allowed.
+- C2-5: `Needs::ResultTab` / `Needs::Later` were added to the command list (a tool's result tab is any tab that is not a file, a stack or a join).
+
+## Owner decisions on Session A (also in the spec `<accepted_deviations>`)
+
+- D1: heatmap rows and columns follow the custom order list; with no list, CL grade codes use `cl_code_map` order (STD, SMA, SS, DF, BL), other text sorts naturally. Every row×column pair is drawn; a missing pair is a 0.0 cell in the lightest step with its label. Radius 2 px, gaps 2 px. Same in HTML and Excel. Replaces C1-5.
+- D2: stacked area fill about 35% (in `tokens.rs`), 2 px line on top of each layer. Replaces the 55% of C1-2.
+- D3: Δ (not "d") in ΔEVE and ΔNII everywhere; tested in all three renderers.
+- D4: C3 "Preview in browser" for Sankey and Treemap (temp HTML file, default browser, no network).
+- D5: accepted as is: tokens.rs; blank cell for % of zero total; histogram bars fill their band; horizontal axis names; chart tab in settings.json; panel scrolls by scrollbar.
+
+## C3 deviations
+
+- C3-1: the vendored `echarts.min.js` (6.1.0, SHA-256 in `THIRD_PARTY_NOTICES.md`) contains six `http(s)://` strings: XML namespace names (`www.w3.org/...`) and two licence comments. None is ever fetched. The test asserts that the page *without* the library has no `http`, `src=`, `href=`, `url(` or `@import`, and that the library holds exactly those six strings, so a new one in a future version is noticed. The page was also opened in headless Chromium with every network request blocked: it drew, with no error.
+- C3-2: the title, subtitle and footnote are drawn inside the chart (ECharts `title` and `graphic`), so "Save as PNG/SVG" carries them; the page has only the Table and Dark/Light buttons above the chart.
+- C3-3: ECharts has no "gap between segments" setting, so stacked and grouped bars use a 1 px border in the surface colour (a 2 px gap between neighbours), the one place a border is used.
+- C3-4: formatters, tooltips and the toolbox's SVG button are functions in ECharts; the option holds names (`@fmt:amount:2`, `@tip`, `@axistip`, `@saveSvg`) that the page's script swaps for functions. The advanced box may use the same names.
+- C3-5: Sankey node names are "From STD" / "To STD" (a grade is on both sides) and their label shows the grade; node values are the sums of their links. A flow table needs the Series column (from) and the Category column (to).
+- C3-6: `Needs::Later` was removed from the command list; "Chart book (HTML)…" and "Chart to HTML…" need an open tab. The book dialog lists the saved charts that fit the active tab; the worker calculates each over the whole tab and writes the page (one that cannot be drawn stops the book and nothing is written).
+- C3-7: tests can set `chart.export_path_override`, `chart.no_browser` and `chart_book.path_override`, so a click never opens a file dialog or the browser.
+
+## C4 deviations
+
+- C4-1: the chart's title is the chart title in Excel; the subtitle and footnote are cells above the table (Excel's chart title has one text style, so two sizes in one title are not possible with rust_xlsxwriter).
+- C4-2: Excel has no bubble chart in rust_xlsxwriter 0.79 (a scatter with a note and the size column), no stepped line (an ordinary line, noted), and no cap of 24 px on bars (the gap width is set instead).
+- C4-3: the zip is read by `python3` in the tests (no new crate, so no zip reader in Rust); they are skipped with a note where `python3` is missing.
+- C4-4: reference lines are a helper column and a 1.5 px line series in the status colour on the same chart; "Chart to Excel…" writes the active chart. A tab in the multi-tab workbook export and a report-pack item get their chart in C6.
+- C4-5: box plots (not listed in the spec) are stacked columns with an invisible base and error-bar whiskers; the whisker columns are on the sheet.
+- C4-6: the Phase 3 Ctrl+K test for "excel" accepts either Excel export as the first hit (there are two now) and still requires the workbook of tabs to be found.
+
+## C5 deviations
+
+- C5-1: the finding titles follow the reference images (`docs/design/charts/01_gap_ladder.png`, `04_irrbb_scenarios.png`), not the longer examples printed in the spec: "Parallel up is the worst case at −10.5% of Tier 1" (one decimal, true minus; the spec's acceptance printed −10.50%) and the breach label "Breach: -16.7% vs −10% limit" (the value like a data label, the limit like an axis tick; the spec printed −16.67%). The gap-ladder title is "Cumulative gap turns positive after 1–3 months" (the first bucket with a positive cumulative gap, as the spec's V3 example). Other templates use the spec's wording; the NII bridge follows the image's "Higher balances explain most of the +13.5 Cr rise in total interest".
+- C5-2: new chart features the templates needed: per-category limit ticks with a breach ring and text (`ChartSpec.limit_ticks`, `limit_note`), drawn in the app, as scatter series in the HTML and as a "Limit" column with dash markers in Excel (the ring is HTML and app only); `MeasureSpec.pct` for numbers that are already percentages ("%" labels).
+- C5-3: a template whose chart needs numbers the tab does not have as columns (ΔEVE % of Tier 1, bridge steps, grade shares, NPL %) opens that small table as a tab (named "Chart: …") and charts it; the others chart the tab as it is.
+- C5-4: not done: the LCR/NSFR "HQLA composition" tall segmented bar (the ratios are drawn against their minimums); the NII bridge is for the total, not per key (filter the tab, then chart); older yield curves are de-emphasised and the latest highlighted but not labelled at their start; the behaviour-profile band is the core balance (volatility method) as a band from zero.
+- C5-5: Classified trend and Behaviour profile read the rows in the tab's view, so a tab with more rows than the view holds is refused with the pivot to make first.
+- C5-6: bar labels of a percentage use one decimal and no plus sign ("-10.5%", "4.8%"); the reference image shows two decimals and "+4.82%".
+
+## Owner decisions on Session B (also in the spec `<accepted_deviations>`)
+
+- Q1: one decimal in finding titles (spec strings updated). Q2: diverging bar labels always signed with two decimals in all renderers (replaces C5-6).
+- F1 dark sequential: low = darkest step, high = lightest, pinned in tokens.rs. F2 U+2212 everywhere, scan test. F3 classified trend top panel SMA/SS/DF/BL, "Standard (STD) not shown". F4 yield curves labelled at the right end (replaces start labels), latest blue with markers, older two greys, y padded one tick. F5 data quality statuses "Below Amber"/"Below Green". F6 gap-ladder breach label away from the line. F7 waterfall min 2 px, HTML connectors. F8 HTML tooltips row/rows, no repeated category. F9 Excel line axis like the app; no markers on stacked areas. F10 HQLA composition, per-key NII bridge.
+
+## Session C: deviations (fixes 1-10)
+
+- F4-1: "lighter for older" is read as fainter: the older curves use the muted ink, then the de-emphasised grey, so the oldest is nearest the surface in both themes (in the dark theme that is the darker grey). Stored in the colour map as grey steps (`Colour::Grey`).
+- F5-1: on a status bar (data quality) the icon and the words sit inside the start of the bar (white or ink, by the fill's contrast) when the bar is long enough, else after the value. The icon is the text colour, not the status colour, because the bar already is the status colour. A horizontal bar whose value does not fit beyond its tip (it ends at the edge of the plot) carries the value inside its end.
+- F5-2: of several vertical threshold lines the highest has its label to its right, the others to their left; a label is never put where a line of 1.5 px or more runs; if no place is free the labels stagger in rows above the plot.
+- F6-1: a panel with a breach gets 25% room on both sides of its axis so the label can stand on the side away from the line; the label is tried below the ring first when the line rises, above when it falls, and always clear of lines, rings and marks.
+- F7-1: the HTML waterfall puts the connectors in a markLine under the bars (z 1) and sets `barMinHeight` 2; a part with no value is null, so no stub is drawn for a zero.
+- F9-1: "no point markers on stacked areas" is applied in the app and the HTML (a point shows on hover only); Excel area charts have no markers. Excel line axes use the nice-tick range for six ticks (the app's tick count depends on the window height), so the ranges agree in kind but not always in step.
+- F10-1: the NII bridge "per key": the tab's bridge is the total of its rows (as the reference image, "total interest"; filter the tab to one key for that key's bridge), and with two or more keys a second chart, "Chart: NII effects by key", opens (volume, rate and mix per key, the largest change first, at most 12 keys). The LCR/NSFR HQLA composition is a second chart too ("Chart: HQLA composition": Level 1, 2A, 2B and, when caps leave some out, "Not counted (caps)"), shown only when the summary has the level rows.
+- F-misc: `1 rows` is written `1 row` in every renderer; the sample LCR summary now has the level rows (guide numbers unchanged).
+
+## C6 deviations
+
+- C6-1: the native chart of a pack item is on its own sheet right after the item's ("<sheet> chart"), not on the item's data sheet: the chart's table has its own layout (categories and series columns) and the item's sheet is the raw table. The Cover lists them. A charted item's sheet name is at most 20 characters (the exporter's "2_" numbering and " chart 2" must fit Excel's 31).
+- C6-2: a template that makes two charts (LCR/NSFR with the HQLA composition, NII bridge with effects by key) writes both ("<sheet> chart", "<sheet> chart 2") and both go in the book.
+- C6-3: the template's thresholds in a pack are the defaults (data quality 98/95 %, IRRBB outlier 15 %): a pack does not read the rule set of the result's tab.
+- C6-4: `PackOutput.html_charts` (default off) asks for the book; `--export-html <file>` also asks, and names it. The book's date is the cutoff, so a rerun of the same files gives the same book.
+
+## C7 deviations
+
+- C7-1: the matplotlib scripts are parsed with python3's `ast` in the tests and run (Agg backend) only where matplotlib and pandas are installed (not in this container); the plotly scripts (Sankey, treemap) are parsed only. Bars have square data-ends in matplotlib (rounded ends need a patch per bar), and the heatmap is drawn with rectangles, not `imshow`.
+- C7-2: the script writes the numbers as the chart shows them (the chart's scale, not raw BDT) and says the unit in a comment; small multiples hold each facet's own table.
+
+## C8 deviations
+
+- C8-1: the template notes are `docs/guide/chart-<template>.md` (13 of them, the spec said "one guide note per banking template, ten sections each"); the primer is `docs/guide/charts.md`. The worked examples use the sample tables of `src/charts/samples.rs` (the same numbers as the tests); a test pins each note's title to the code.
+- C8-2: every screenshot under `docs/guide/img/charts/` was re-rendered from the final code: the in-app forms and templates (render tests, light and dark), the HTML pages (headless Chromium, network blocked, `tools/html_chart_png.js`) and the Excel workbooks (LibreOffice to PDF, `pdftoppm`). New: `tpl-lcr-nsfr-hqla`, `tpl-nii-effects-by-key`, `tpl-nii-bridge-keys`.
+
+## Owner decisions on Session C (also in the spec `<accepted_deviations>`)
+
+- Q1 the NII bridge names the product with one key, "total interest" with several. Q2 fainter older curves accepted. Q3 packs read the DQ thresholds and the IRRBB outlier limit from the rule set; a missing value stops the pack; none is defaulted.
+- Fixes: screenshot tool and size test (1), classified NPL one series (2), NII effects net markers (3), HQLA segment labels (4), C7 scripts run with matplotlib and plotly (5).
+
+## Session D deviations (owner decisions Q1–Q3 and fixes 1–5)
+
+- D-1 (Q1): the NII bridge names the product when the tab has one key ("... rise in TD interest") and says "total interest" with several keys. This replaces F10-1's wording.
+- D-2 (Q3): `Ctx` has no default for the data-quality thresholds (`dq_green`, `dq_amber` are `Option`); the IRRBB outlier limit is read from the result's own "Outlier (max loss ≥ x% of Tier 1)" row (the shock file's `outlier_pct`, which the tool requires) and a result without it stops the template. A pack's scorecard item reads Green and Amber from the rule set stored with its run; a pack file whose scorecard item has a chart but no `green_min`/`amber_min` is refused when it is loaded, and the data-quality template on an item that is not a scorecard run stops the run. The shipped `assets/dq_rules/sample.json` and `assets/rules/irrbb_shocks/2021-04-13.json` already state both values (the test reads them). The studio's "Chart this result" for a data-quality tab that was not made by the scorecard now stops with the same message (no default 98/95).
+- D-3 (fix 1): `tools/html_chart_png.js` writes `html-<name>(-dark).png` only. The four `sankey*`/`treemap*` pictures were HTML pages under in-app names (those two forms are HTML-only and the app shows a message), so they are deleted; `html-sankey*` and `html-treemap*` remain. A test checks the size of every picture by kind (in-app 2406 px wide, HTML 1100 px).
+- D-4 (fix 2): `PanelSpec.single` (a ratio that is the same in every series is one series named after the measure, first colour, end-labelled "NPL %  7.0%"); also in the HTML, Excel and Python outputs.
+- D-5 (fix 3): `ChartSpec.net_marker`: the net of a stack is a dark tick with a signed two-decimal label (app), a "Net" series of rect markers (HTML), a "Net" column and dash markers (Excel); stack edges have no labels.
+- D-6 (fix 4): `ChartSpec.segment_labels`: each segment of a stacked column is labelled beside the stack ("3,500 · 70.0%", whole numbers without decimals), nudged apart; HTML uses `shiftY`, Excel puts the same text in the segment.
+- D-7 (fix 5): matplotlib 3.11 and plotly 7.1 installed in the session; every script runs headless and was saved to a PNG and looked at. Fixed: horizontal limit ticks, reference-line labels (staggered above the plot), the donut legend cut off, the legend over a panel title, reference bands, status bars (the data-quality chart), room below a line.
+
+## Session E: review fixes, part A (correctness)
+
+Tests: `tests/phase7/r.rs` (library) and `src/ui/render_tests_r.rs` (by real clicks on the app). Decisions are in the spec's `<accepted_deviations>`.
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 1 | Chart book = snapshots of open chart tabs and the studio chart (own `ChartData`, scale, decimals, colours, light), ticked, up/down, title; saved charts are a second unticked section; the job writes snapshots as they are | `r1_a_chart_book_of_two_chart_tabs…` |
+| 2 | "Open chart data as tab" keeps absolute BDT and gives the value column the chart's scale as its display format; the studio's live look settings (not the stale ones from the calculation) are used | `r2_a_chart_made_on_a_chart_data_tab…` |
+| 3 | `ChartSpec::reset_colours_if_columns_changed`, called when the studio changes the category or series column | `r3_…` (UI and library) |
+| 4 | `layout::subtitle_text` is the one subtitle for the app, HTML, Excel and Python | `r4_the_subtitle_says_what_was_done…` |
+| 5 | The SVG copy of the option drops the toolbox; `tools/html_svg_click.js` clicks the real buttons | `r5_the_save_as_svg_button…` |
+| 6 | NII bridge step and series "New / closed"; blanks are never zeros | `r6_a_new_key_is_its_own_step…` |
+| 7 | Months as dates in the classified trend and the deposit mix; a month without STD is refused | `r7_months_are_sorted_as_dates…` |
+| 8 | `ChartData::non_finite`, `finite_or_stop` in the calculation; every renderer refuses | `r8_a_value_that_is_not_a_number…` |
+| 9 | LCR/NSFR minimum and breach from the result's rows; guide line fixed; the sample summary says "Meets the minimum" as the tool does | `r9_the_lcr_minimum…` |
+| 10 | `ChartSpec.template` is now set; a template subtitle ends with the unit for amounts | `r10_a_template_subtitle…` |
+| 11 | "Sample parameters" text copied into the footnote (IRRBB, LCR/NSFR, ECL) | `r11_irrbb_lcr_and_ecl…` |
+
+Part A deviations: E-1 the IFRS 9 summary has no "Sample parameters" row today, so the ECL chart can only copy one that is there (changing the summary tool was outside the review). E-2 a typed subtitle on a chart that is not from a template is never altered; a template chart's typed subtitle gets the unit appended.
+
+Also found while looking at the Excel screenshots: the 100% stacked chart wrote its value axis as 0 to 100, but Excel's 100% axis is 0 to 1 (written as percent), so the bars were invisible. Fixed (`r12_the_excel_100_percent_chart…`); `xlsx-percent.png` re-rendered.
+
+## Session E: review fixes, part B (should fix, polish, one feature)
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 12 | `blank_cell` refusals in nine templates; `measure_avg` keeps a blank blank; ECL coverage and the NPL % are blank with a note when the total is zero; DQ pass-or-fail rules are named | `r13_a_blank_is_refused…` |
+| 13 | Python: `DEC`, `lab()`, signed labels, heatmap text, `named_end`, donut refusal | `r14_python_uses…` (runs the scripts) |
+| 14 | `tokens::diverging_colour`; signed bars coloured in the page and the workbook too | `r15_an_exact_zero…` |
+| 15 | `MAX_BARS` 60, `MAX_HEAT_COLUMNS` 40 in `calc` | `r16_more_than_60_bars…` |
+| 16 | `write_preview(…, temp_dir)`, `preview_dir`, `clean_chart_temp` at start-up and `on_exit` | `r17_the_preview_goes_under…` |
+| 17 | `--export-html` needs `--pack`; `\u003c!--` | `r17_export_html_without_pack…` (headless), `r18_a_category_with_an_html_comment…` |
+| 18 | `HeatFill`, `HeatMatrix::pos_min`, `tokens::heat_neutral`; the workbook's neutral rule first with stop-if-true | `r19_zero_and_missing_heatmap_cells…` |
+| 19 | HTML line-end labels; deposit-mix colours by name; `check_single_panels`; "unchanged" for a zero change; guide wording; pack book-first order with a test | `r20_…`, `r21_…`, `c6_headless…` |
+| 20 | `ChartSpec.labels` (`LabelSpec`), `src/charts/labels.rs` (`LabelPlan`, `dropped_labels`), the four renderers, the studio controls | `r22_…`, `r23_each_data_label_option…`, `r24_all_never_prints…`, `r25_the_data_labels_controls…` (real clicks, 3 sizes) |
+
+Part B deviations: E-3 the ECL summary tool does not emit a "Sample parameters" row (see part A); E-4 the Excel and Python collision handling uses the app's layout at the chart's nominal size, not a measurement of the finished workbook or figure; E-5 in the page, the last point of a several-series line carries its name (not also its value) in "All"; E-6 workbook waterfalls have no data labels and heatmap numbers are the cell values, so the Labels setting does not change them.
+E-7: Excel honours the workbook's "stop if true", so the neutral cells of a heatmap lose the colour scale there; LibreOffice, which made `xlsx-heatmap.png`, ignores that flag and shows only the muted text on the ramp's lightest fill. The workbook itself is correct (tested: the neutral rule comes first, stops, and has the neutral fill).
+
+## Session F: final fixes for PR #13, part A (items 1-6)
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 1 | `FONT_HTML` single-quoted; `tools/html_svg_click.js` parses the SVG as XML (`--dark`, `--svg-only`) and finds the toolbox icons by their drawn shapes | `s1_the_svg_from_a_real_click_is_well_formed_xml…` |
+| 2 | `charts::catlabels` (plan: Full / Wrapped / Angled), `LText.angle`, `ChartLayout.labels_dont_fit`, the studio message and switch, ECharts `interval 0` with `overflow break` or `rotate 35`, Python `cat_labels`, Excel rotation | `s2_every_category_keeps_its_label…` (lib), `s2_the_page_the_workbook_and_the_script…`, `s7_labels_that_do_not_fit…` (by clicks) |
+| 3 | Refusal removed; `donut_top`; outside labels with leader lines in the app, page and script; Excel labels inside; "Many parts" line; the donut grouping is part of the recalculation key | `s3_a_donut_draws_every_part…`, `s3_group_small_parts…`, `s3_the_page_the_workbook_and_the_script_draw_the_donut…`, `s7_…` |
+| 4 | "Reset colours" | `s8_reset_colours_and_text_size…` (by clicks) |
+| 5 | `TextSize`, `tokens::with_text_scale`; every form and template at Larger: no collision, no clipping | `s5_text_size_scales…`, `s8_…` |
+| 6 | `charts::pdf` (layout primitives to printpdf, embedded fonts, `PdfMeasure`), `PdfTab.chart`, `PdfOptions.chart_tables`, the dialog's tick box | `s6_a_chart_tab_in_a_pdf…` (pdftotext, pdffonts), `s8_…` |
+
+Part A deviations: F-1 the Excel label interval cannot be forced to 1 (see the spec); F-2 a breach label that finds no room stays in the tooltip (the ring is drawn) instead of being forced over another text, and the limit-ticks note shortens, then drops, in a very small chart with large text; F-3 an axis whose labels leave no room for the plot says "The chart is too small for its category labels…" instead of drawing nothing.
+
+## Session F: final fixes for PR #13, part B (items 7-12)
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 7 | `ecl::sample_parameters_note`; the IFRS 9 summary appends a "Sample parameters" row for the shipped sample file; the ECL chart copies it | `s9_the_ifrs9_summary_emits_a_sample_parameters_row…` (both cases), phase 5 callers updated |
+| 8 | `labelLayout.hideOverlap` on every series of an "All" page; the page no longer uses the nominal drop list and says so in its note | `s8_the_page_hides_overlapping_all_labels_only_when_labels_are_all`, `r24_all_never_prints…` (page part rewritten) |
+| 9 | `month_labels` for the deposit mix (derived table "Chart: deposit mix") | `s10_the_deposit_mix_writes_months_as_aug_2026…`, `c5_…`, `r7_…` |
+| 10 | Phase 8 item recorded (below) | - |
+| 11 | Pictures: `studio-labels-and-text-size` (the panel, light and dark, `tools/egui_mesh_png.py` rasterises an egui frame), `labels-all`, `labels-none`, `donut-9`, `donut-top4`, `column-10-buckets` (in-app, light and dark), `html-` and `xlsx-` twins of the last four but `labels-none`, `pdf-chart-page` | `r26_the_screenshots_of_the_label_and_text_size_controls…`, `c1_the_screenshots…`, `s11_the_picture_of_a_chart_pdf_page…`, `c8_…` |
+| 12 | Looked again: `tpl-nii-effects-by-key-new` (a New key FX and a Closed key "Old scheme", both in amber "New / closed", +1.50 and −1.20), `tpl-nii-bridge-new`, `tpl-classified-trend-no-loans` (the footnote "NPL % is blank where the month has no loans: Sep 2026"; the month's NPL point is a gap, not 0%) | the screenshot test |
+
+Found by eye and fixed: on a donut with several small parts near 12 o'clock the left-side labels were out of order and their leader lines crossed (`s3_a_donut_draws_every_part…`, new assertion).
+
+Phase 8 item: rate-profile band names: remove the serial prefix ("09. 8%–9%" becomes "8%–9%") and set the band order automatically.
+
+Part B deviations: F-4 the "All" note on the page is a standing statement, not a count. F-5 the studio-controls picture is a software rasterisation of the egui frame (numpy and Pillow), so its anti-aliasing differs a little from the app on screen.
+
+## Small fixes after final B: menu labels and Reset colours
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 1 | Banking, Charts and Export are plain text like File, Edit, View and Help; `menu_text`, `menu_label` and `menu_icon_label` removed; the bar-width plan measures the names. No guide screenshot shows the menu bar, so none was re-rendered | `r28_all_seven_menus_are_plain_text_at_the_three_window_sizes`; the bar-width tests pass unchanged |
+| 2 | "Reset colours" works every time (cause below) | `r27_…` (studio, after Open saved chart…, chart tab, four series forms, slow worker, chart tab as shown) |
+
+Cause of item 2. Two faults, both reproduced first:
+1. The studio chart is drawn from the old numbers while the new ones are calculated, and the drawing wrote its colour map back into the spec (`chart_plot_area`, the `new_map` write-back). After a change of the category or series column (which empties the map) the old names took slots 1, 2, 3 during that wait and the new names the slots after them (4, 5, 6 …; past the eighth the grey). The Reset button read its names from the same old numbers, so a click in that window assigned the old names. The render tests ran the job queue inline, so the wait never happened there; `set_spec_slow` now holds the answer back. Fix: the write-back is kept only when the numbers are the ones of the current settings (`!busy` and the same `calc_key`); "Reset colours" is `chart_reset_colours`: done at once on fresh numbers, or, while a calculation is running, when its numbers arrive (`ChartState.reset_colours`). The button also syncs the studio's local copy of the spec, which would otherwise have written the old map back at the end of the frame.
+2. On a chart tab the chart that is shown is the tab's own snapshot (`ChartTabInfo.data`); the studio's reset only changed the studio's chart of the tab's table, so nothing visible happened. The reset now also resets the snapshot's map (and its copy in `settings.chart_tabs`).

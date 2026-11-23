@@ -958,7 +958,7 @@ fn i17_the_pdf_file_says_the_unit_once_under_the_title_and_has_no_unit_in_header
     let (df, formats) = pivot_for_pdf(3, PivotScale::Crore);
     let d = dir("i17pdf");
     let p = d.join("pivot.pdf");
-    let rep = export_pdf_tabs(vec![PdfTab { title: "Pivot: Segment".into(), df, col_formats: formats, summary: Vec::new() }], &p, NumberDisplayFormat::BdtCrore, 2).expect("pdf");
+    let rep = export_pdf_tabs(vec![PdfTab { title: "Pivot: Segment".into(), df, col_formats: formats, summary: Vec::new(), chart: None }], &p, NumberDisplayFormat::BdtCrore, 2).expect("pdf");
     assert!(rep.omitted_columns.is_empty() && rep.truncated_tabs.is_empty());
     assert!(std::fs::metadata(&p).map(|m| m.len() > 800).unwrap_or(false));
     // the text of the file, when pdftotext is installed

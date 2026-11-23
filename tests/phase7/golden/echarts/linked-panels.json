@@ -1,0 +1,493 @@
+{
+  "animation": false,
+  "axisPointer": {
+    "link": [
+      {
+        "xAxisIndex": "all"
+      }
+    ]
+  },
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 170.0,
+      "left": 12.0,
+      "right": 62.0,
+      "top": 86.0
+    },
+    {
+      "containLabel": true,
+      "height": 170.0,
+      "left": 12.0,
+      "right": 62.0,
+      "top": 296.0
+    }
+  ],
+  "series": [
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,250.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: May\nNet gap: 1,250.00\n4 rows",
+          "value": 1250.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,318.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jun\nNet gap: 1,318.00\n4 rows",
+          "value": 1318.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,386.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Jul\nNet gap: 1,386.00\n4 rows",
+          "value": 1386.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,454.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Aug\nNet gap: 1,454.00\n4 rows",
+          "value": 1454.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,522.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Sep\nNet gap: 1,522.00\n4 rows",
+          "value": 1522.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,590.00",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Month: Oct\nNet gap: 1,590.00\n4 rows",
+          "value": 1590.0
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 0,
+        "color": "#2a78d6"
+      },
+      "name": "",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    },
+    {
+      "connectNulls": false,
+      "data": [
+        {
+          "tip": "Average rate: 4.50 (4 rows)",
+          "value": 4.5
+        },
+        {
+          "tip": "Average rate: 5.50 (4 rows)",
+          "value": 5.5
+        },
+        {
+          "tip": "Average rate: 6.50 (4 rows)",
+          "value": 6.5
+        },
+        {
+          "tip": "Average rate: 4.50 (4 rows)",
+          "value": 4.5
+        },
+        {
+          "tip": "Average rate: 5.50 (4 rows)",
+          "value": 5.5
+        },
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "6.50",
+            "position": "right",
+            "show": true
+          },
+          "tip": "Average rate: 6.50 (4 rows)",
+          "value": 6.5
+        }
+      ],
+      "emphasis": {
+        "focus": "none"
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 2.0,
+        "color": "#2a78d6"
+      },
+      "lineStyle": {
+        "cap": "round",
+        "color": "#2a78d6",
+        "join": "round",
+        "width": 2.0
+      },
+      "name": "",
+      "smooth": false,
+      "symbol": "circle",
+      "symbolSize": 8.0,
+      "type": "line",
+      "xAxisIndex": 1,
+      "yAxisIndex": 1
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Net gap, Average rate · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Net gap by Month",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    },
+    {
+      "left": 20.0,
+      "text": "Net gap",
+      "textStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "600"
+      },
+      "top": 64.0
+    },
+    {
+      "left": 20.0,
+      "text": "Average rate",
+      "textStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "600"
+      },
+      "top": 274.0
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "axisPointer": {
+      "label": {
+        "show": false
+      },
+      "lineStyle": {
+        "color": "#898781",
+        "type": "solid",
+        "width": 1
+      },
+      "type": "line"
+    },
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@axistip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "axis"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": false,
+        "interval": 0,
+        "margin": 8,
+        "show": false
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 0,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    },
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": false,
+        "interval": 0,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": false,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 1,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 500.0,
+      "max": 2000.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    },
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 1,
+      "interval": 0.5,
+      "max": 6.5,
+      "min": 4.5,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    }
+  ]
+}

@@ -446,6 +446,8 @@ impl MicroParquetApp {
                     .id_salt(("right_panel_scroll", tab as u8))
                     .max_height(panel_h)
                     .auto_shrink([false, false])
+                    // a click on a control must never scroll the panel (the wheel and the bar do)
+                    .drag_to_scroll(false)
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| match tab {
                         RightTab::Steps => self.render_steps_tab(ui, panel_h),

@@ -55,7 +55,14 @@ pub enum CommandId {
     MomVariance,
     Mudaraba,
     DqScorecard,
+    // Charts
+    ChartNew,
+    ChartThis,
+    ChartOpenSaved,
+    ChartBook,
     // Export
+    ExportChartHtml,
+    ExportChartXlsx,
     ExportParquet,
     ExportCsv,
     ExportXlsx,
@@ -94,6 +101,7 @@ pub enum CommandGroup {
     Edit,
     Transform,
     Banking,
+    Charts,
     Export,
     View,
     Help,
@@ -106,6 +114,7 @@ impl CommandGroup {
             CommandGroup::Edit => "Edit",
             CommandGroup::Transform => "Transform",
             CommandGroup::Banking => "Banking",
+            CommandGroup::Charts => "Charts",
             CommandGroup::Export => "Export",
             CommandGroup::View => "View",
             CommandGroup::Help => "Help",
@@ -121,6 +130,8 @@ pub enum Needs {
     Tab,
     /// At least two open tabs.
     TwoTabs,
+    /// The active tab is a tool's result (gap ladder, IRRBB, MoM variance, …).
+    ResultTab,
     /// Something to undo on the active tab.
     Undo,
     /// Something to redo on the active tab.
@@ -192,9 +203,15 @@ pub const COMMANDS: &[Command] = &[
     c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Edit, "hygiene audit data checks ghost exceptions quality", N::Tab),
     c(I::Mudaraba, "Mudaraba profit distribution\u{2026}", G::Banking, "islamic window psr weightage profit sharing ratio mudarib depositors pool crr investable shariah", N::Tab),
     c(I::Packs, "Report packs: build and run\u{2026}", G::Banking, "monthly workbook cover slots items alco return pack headless", N::Nothing),
+    c(I::ChartNew, "New chart\u{2026}", G::Charts, "graph plot gallery visualise visualize studio bar line area donut histogram box scatter bubble heatmap waterfall sankey treemap suggest", N::Tab),
+    c(I::ChartThis, "Chart this result", G::Charts, "template graph result tab gap ladder bridge irrbb scenarios migration yield curves lcr nsfr ecl", N::ResultTab),
+    c(I::ChartOpenSaved, "Open saved chart\u{2026}", G::Charts, "load charts folder json named", N::Tab),
+    c(I::ChartBook, "Chart book (HTML)\u{2026}", G::Charts, "html page several charts report alco pack", N::Tab),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
     c(I::ExportXlsx, "Export tabs to an Excel workbook\u{2026}", G::Export, "xlsx save spreadsheet totals", N::Tab),
+    c(I::ExportChartHtml, "Chart to HTML\u{2026}", G::Export, "echarts html page interactive png svg sankey treemap offline web browser share", N::Tab),
+    c(I::ExportChartXlsx, "Chart to Excel\u{2026}", G::Export, "xlsx native editable chart workbook spreadsheet columns bars line waterfall heatmap", N::Tab),
     c(I::ExportCl1, "Export the CL-1 summary to Excel\u{2026}", G::Export, "cl1 excel xlsx template return layout merged headers", N::Tab),
     c(I::ExportPdf, "Export tabs to a PDF report\u{2026}", G::Export, "save print", N::Tab),
     c(I::ExportSplit, "Split export by column\u{2026}", G::Export, "partition branch files", N::Tab),
@@ -267,6 +284,7 @@ pub fn toolbar_commands() -> Vec<CommandId> {
     v.extend_from_slice(EDIT_MENU);
     v.extend_from_slice(DATA_CHECKS);
     v.extend(in_group(CommandGroup::Banking).map(|c| c.id));
+    v.extend(in_group(CommandGroup::Charts).map(|c| c.id));
     v.extend(in_group(CommandGroup::Export).map(|c| c.id));
     v
 }
@@ -275,6 +293,8 @@ pub fn toolbar_commands() -> Vec<CommandId> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CommandState {
     pub tabs: usize,
+    /// The active tab is a tool's result tab.
+    pub result_tab: bool,
     pub can_undo: bool,
     pub can_redo: bool,
 }
@@ -285,6 +305,7 @@ pub fn unavailable_reason(cmd: &Command, state: CommandState) -> Option<&'static
         Needs::Nothing => None,
         Needs::Tab if state.tabs == 0 => Some("Open a file first."),
         Needs::TwoTabs if state.tabs < 2 => Some("Needs two open tabs."),
+        Needs::ResultTab if state.tabs == 0 || !state.result_tab => Some("Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it."),
         Needs::Undo if state.tabs == 0 || !state.can_undo => Some("Nothing to undo."),
         Needs::Redo if state.tabs == 0 || !state.can_redo => Some("Nothing to redo."),
         _ => None,

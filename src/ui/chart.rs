@@ -33,11 +33,50 @@ pub struct ChartState {
     /// The settings as last written to `settings.json`.
     pub saved: String,
     pub rects: ChartRects,
+    /// The Table view instead of the plot.
+    pub show_table: bool,
+    /// What the last HTML export or preview said (true = a problem).
+    pub export_message: Option<(bool, String)>,
+    /// Tests: write here instead of asking for a file, and never start the browser.
+    pub export_path_override: Option<std::path::PathBuf>,
+    pub no_browser: bool,
+    /// The last script "Copy as Python" put on the clipboard (tests read it; the clipboard itself is not readable).
+    pub copied_python: Option<String>,
+    /// "Reset colours" was clicked while the numbers were being calculated again: it is done when they arrive, on
+    /// the names they have (the names of the old numbers are about to go).
+    pub reset_colours: bool,
+}
+
+/// The names a chart's colours go to: its series, or its categories when it has no series.
+pub(crate) fn colour_names(d: &ChartData, by_series: bool) -> Vec<String> {
+    if by_series {
+        d.series.iter().filter(|s| !s.is_empty()).cloned().collect()
+    } else {
+        d.categories.clone()
+    }
+}
+
+/// What the studio's buttons asked for this frame.
+#[derive(Default)]
+pub(crate) struct StudioActions {
+    pub open_tab: bool,
+    pub open_chart_tab: bool,
+    pub save: bool,
+}
+
+/// A chart that is a tab of its own ("Open as tab"): what it shows and in what scale.
+#[derive(Clone, Debug)]
+pub struct ChartTabInfo {
+    pub data: ChartData,
+    pub show_table: bool,
+    pub divisor: f64,
+    pub decimals: usize,
+    pub unit: String,
 }
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default() }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
     }
 }
 
@@ -114,7 +153,10 @@ impl MicroParquetApp {
         let key = tab_key(tab);
         let saved = self.settings.chart.get(&key).and_then(|v| serde_json::from_value::<ChartSpec>(v.clone()).ok());
         let cols = tab.available_columns();
+        let pending = self.chart_pending.remove(&tab.id);
         let spec = match saved {
+            // a template's chart for this tab (it was opened for it)
+            _ if pending.is_some() => pending.unwrap_or_default(),
             // a saved choice that names a column this tab no longer has is not used
             Some(s) if cols.contains(&s.category) && s.value.as_ref().is_none_or(|v| cols.contains(v)) && s.series.as_ref().is_none_or(|v| cols.contains(v)) => s,
             _ => {
@@ -157,10 +199,69 @@ impl MicroParquetApp {
             Ok(d) => {
                 self.chart.data = Some(d);
                 self.chart.error = None;
+                if self.chart.reset_colours {
+                    self.chart.reset_colours = false;
+                    self.chart_reset_colours_now();
+                }
             }
             Err(e) => {
                 self.chart.data = None;
                 self.chart.error = Some(e);
+                self.chart.reset_colours = false;
+            }
+        }
+    }
+
+    /// "Reset colours": the names of the chart as it is now take the slots 1, 2, 3 … in their order. While the numbers
+    /// are being calculated again the names are the old ones, so the reset waits for the new numbers. On a chart tab
+    /// the chart that is shown (the tab's own snapshot) is reset as well.
+    pub(crate) fn chart_reset_colours(&mut self) {
+        self.chart_tab_reset_colours();
+        if self.chart.busy {
+            self.chart.reset_colours = true;
+        } else {
+            self.chart_reset_colours_now();
+        }
+    }
+
+    fn chart_reset_colours_now(&mut self) {
+        let Some(d) = self.chart.data.as_ref() else {
+            return;
+        };
+        let mut map = micro_parquet::charts::colours::ColourMap::default();
+        map.assign_all(&colour_names(d, self.chart.spec.series.is_some()));
+        if map == self.chart.spec.colour_map {
+            return;
+        }
+        self.chart.spec.colour_map = map.clone();
+        if let Some(d) = self.chart.data.as_mut() {
+            d.spec.colour_map = map;
+        }
+        self.chart_save_choices();
+    }
+
+    /// On a chart tab the chart that is shown is the tab's own: its colours are reset on its own names.
+    fn chart_tab_reset_colours(&mut self) {
+        let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) else { return };
+        let title = self.tabs[self.active_tab].title.clone();
+        let Some(info) = self.chart_tabs.get_mut(&id) else { return };
+        let mut map = micro_parquet::charts::colours::ColourMap::default();
+        map.assign_all(&colour_names(&info.data, info.data.spec.series.is_some()));
+        if map == info.data.spec.colour_map {
+            return;
+        }
+        info.data.spec.colour_map = map;
+        // kept with the session, with the chart's other settings
+        if let Ok(spec) = serde_json::to_value(&info.data.spec) {
+            let mut changed = false;
+            for e in self.settings.chart_tabs.iter_mut() {
+                if e.get("title").and_then(|t| t.as_str()) == Some(title.as_str()) {
+                    e["spec"] = spec.clone();
+                    changed = true;
+                }
+            }
+            if changed {
+                self.save_settings();
             }
         }
     }
@@ -188,12 +289,41 @@ impl MicroParquetApp {
         self.chart_save_choices();
     }
 
+    /// How the value column of a chart's table is shown in its own tab: the scale the chart showed it in. The numbers
+    /// in the table are always absolute (BDT); only this format divides them, once, on display, so a chart of that
+    /// tab (or of its Sum column) never divides a second time.
+    pub(crate) fn chart_data_formats(&self, data: &ChartData) -> HashMap<String, ColumnFormatSpec> {
+        use micro_parquet::models::MetricFormatType as F;
+        let mut m = HashMap::new();
+        if data.spec.agg == ChartAgg::Count {
+            return m;
+        }
+        let fmt_type = match self.chart_scale(&data.spec) {
+            Some(s) => match s.suffix {
+                "Cr" => Some(F::BdtCrore),
+                "L" => Some(F::BdtLakh),
+                "M" => Some(F::BdtMillion),
+                "K" => Some(F::BdtThousand),
+                _ => None,
+            },
+            // "Plain (BDT)" chosen on the chart: the table shows the numbers as they are
+            None if data.spec.scale == ChartScale::Plain => Some(F::StandardCommas),
+            None => None,
+        };
+        if let Some(fmt_type) = fmt_type {
+            m.insert(micro_parquet::chart::chart_value_name(data), ColumnFormatSpec { fmt_type, decimals: self.global_decimals });
+        }
+        m
+    }
+
     /// "Open chart data as tab": the table behind the chart, in a new tab that can be exported.
     pub(crate) fn chart_open_as_tab(&mut self) {
-        let Some(data) = self.chart.data.clone() else {
+        let Some(mut data) = self.chart.data.clone() else {
             self.status_message = "There is no chart data yet.".to_string();
             return;
         };
+        // the look settings (scale, title, colours) are the live ones: the numbers were calculated before they changed
+        data.spec = self.chart.spec.clone();
         let result = (|| -> anyhow::Result<TabSource> {
             let mut df = chart_table(&data)?;
             std::fs::create_dir_all(&self.paths.temp_dir)?;
@@ -206,9 +336,77 @@ impl MicroParquetApp {
             Ok(src) => {
                 let what = data.title(None);
                 let title = format!("Chart: {}", what.split(':').next().unwrap_or("data"));
-                self.create_tab_from_source(title, src, Vec::new(), HashMap::new());
+                let formats = self.chart_data_formats(&data);
+                self.create_tab_from_source(title, src, Vec::new(), formats);
             }
             Err(e) => self.status_message = format!("The chart data could not be opened as a tab: {:#}", e),
+        }
+    }
+
+    /// "Open as tab": the chart in a tab of its own that fills the main area. The tab is the chart's data
+    /// table (so it can be exported like any tab); the main area draws the chart, with a Table toggle.
+    pub(crate) fn chart_open_as_chart_tab(&mut self) {
+        let Some(mut data) = self.chart.data.clone() else {
+            self.status_message = "There is no chart data yet.".to_string();
+            return;
+        };
+        data.spec = self.chart.spec.clone();
+        let scale = self.chart_scale(&self.chart.spec);
+        let info = ChartTabInfo {
+            data: data.clone(),
+            show_table: false,
+            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+            decimals: self.global_decimals,
+            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+        };
+        let result = (|| -> anyhow::Result<TabSource> {
+            let mut df = chart_table(&data)?;
+            std::fs::create_dir_all(&self.paths.temp_dir)?;
+            let path = self.paths.temp_dir.join(format!("chart_tab_{}_{}.parquet", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+            let f = std::fs::File::create(&path)?;
+            polars::prelude::ParquetWriter::new(f).finish(&mut df)?;
+            Ok(TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() })
+        })();
+        match result {
+            Ok(src) => {
+                let title = format!("Chart: {}", micro_parquet::charts::layout::chart_title(&data));
+                let formats = self.chart_data_formats(&data);
+                let id = self.create_tab_from_source_with(title.clone(), src, Vec::new(), formats, None);
+                self.chart_tabs.insert(id, info);
+                // kept with the session: the chart's own settings, by the title of the tab it charts
+                if let Ok(spec) = serde_json::to_value(&data.spec) {
+                    self.settings.chart_tabs.push(serde_json::json!({"title": title, "source": self.chart.tab_key, "spec": spec}));
+                    self.save_settings();
+                }
+            }
+            Err(e) => self.status_message = format!("The chart could not be opened as a tab: {:#}", e),
+        }
+    }
+
+    pub(crate) fn active_is_chart_tab(&self) -> bool {
+        self.tabs.get(self.active_tab).is_some_and(|t| self.chart_tabs.contains_key(&t.id))
+    }
+
+    /// What fills the main area while a chart tab is active: a Table / Chart toggle, then the chart.
+    pub(crate) fn render_chart_main(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) else { return };
+        let dark = self.dark_mode;
+        let Some(info) = self.chart_tabs.get_mut(&id) else { return };
+        let label = if info.show_table { format!("{}  Show chart", egui_phosphor::regular::CHART_BAR) } else { format!("{}  Table", egui_phosphor::regular::TABLE) };
+        let b = ui.button(label);
+        if b.clicked() {
+            info.show_table = !info.show_table;
+        }
+        ui.add_space(theme::SPACE_S);
+        let opts = micro_parquet::charts::layout::LayoutOpts { dark, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: None };
+        if info.show_table {
+            crate::ui::chart_render::show_table(ui, &info.data, &opts);
+        } else {
+            let data = info.data.clone();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let h = ui.available_height().max(theme::CHART_MIN_H);
+                crate::ui::chart_render::show_chart(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h));
+            });
         }
     }
 
@@ -265,30 +463,72 @@ impl MicroParquetApp {
     /// What fills the chart's own window (tests draw it in a headless window of its size).
     pub(crate) fn chart_popout_ui(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                self.render_chart_body(ui);
-            });
+            self.render_chart_studio(ui, true);
         });
     }
 
     fn render_chart_body(&mut self, ui: &mut egui::Ui) {
+        self.render_chart_studio(ui, false);
+    }
+
+    /// The chart studio: the controls and the chart. `wide` puts the controls in a column beside the
+    /// chart (the pop-out window); otherwise the chart is under the controls (the side panel).
+    pub(crate) fn render_chart_studio(&mut self, ui: &mut egui::Ui, wide: bool) {
         if self.tabs.is_empty() {
             return;
         }
         self.chart_attach_tab();
         self.chart_tick();
-        let tk = *theme::tokens(self.dark_mode);
+        let pop_button = self.chart.rects.pop_button;
+        let mut rects = ChartRects::default();
+        let mut acts = StudioActions::default();
+        if wide {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(egui::vec2(theme::CHART_CONTROLS_W, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::ScrollArea::vertical().id_salt("studio_controls").auto_shrink([false, false]).show(ui, |ui| {
+                        self.chart_controls(ui, &mut rects, &mut acts);
+                        self.chart_sections(ui, &mut rects);
+                    });
+                });
+                ui.vertical(|ui| {
+                    self.chart_plot_area(ui, &mut rects);
+                });
+            });
+        } else {
+            self.chart_controls(ui, &mut rects, &mut acts);
+            self.chart_plot_area(ui, &mut rects);
+            // under the chart: shape, titles, reference lines, measures (the chart stays where it was)
+            ui.add_space(theme::SPACE_S);
+            self.chart_sections(ui, &mut rects);
+        }
+        rects.pop_button = pop_button;
+        let old = std::mem::take(&mut self.chart.rects);
+        // the controls and the plot each fill their own part of the rectangles
+        self.chart.rects = ChartRects { title: rects.title.or(old.title), plot: rects.plot, notes: rects.notes, ..rects };
+        if acts.open_tab {
+            self.chart_open_as_tab();
+        }
+        if acts.open_chart_tab {
+            self.chart_open_as_chart_tab();
+        }
+        if acts.save {
+            self.open_chart_save();
+        }
+    }
+
+    /// The controls: the Phase 6 grid (category, series, aggregation, value, type, order, Top N, scale),
+    /// the buttons, and the studio sections.
+    fn chart_controls(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects, acts: &mut StudioActions) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
         let avail = tab.available_columns();
+        let numeric: Vec<String> = tab.cached_slice.get_columns().iter().filter(|c| is_number_type(c.dtype())).map(|c| c.name().to_string()).collect();
         let order_lists = self.sort_lists.lists.clone();
-        let mut rects = ChartRects::default();
-        let mut open_tab = false;
+        let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
-        let pop_button = self.chart.rects.pop_button;
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
-            let mut add = |ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
+            let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
             ui.label("Category (X)");
             let r = egui::ComboBox::from_id_salt("chart_category").width(combo_w).selected_text(&spec.category).show_ui(ui, |ui| {
@@ -296,7 +536,7 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.category, c.clone(), c);
                 }
             });
-            add(ui, "Category", &mut rects, r.response.rect);
+            add(ui, "Category", rects, r.response.rect);
             ui.end_row();
             ui.label("Series");
             let shown = spec.series.clone().unwrap_or_else(|| "(none)".to_string());
@@ -306,7 +546,7 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.series, Some(c.clone()), c);
                 }
             });
-            add(ui, "Series", &mut rects, r.response.rect);
+            add(ui, "Series", rects, r.response.rect);
             ui.end_row();
             ui.label("Aggregation");
             let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.agg.label()).show_ui(ui, |ui| {
@@ -314,7 +554,7 @@ impl MicroParquetApp {
                     ui.selectable_value(&mut spec.agg, *a, a.label());
                 }
             });
-            add(ui, "Aggregation", &mut rects, r.response.rect);
+            add(ui, "Aggregation", rects, r.response.rect);
             ui.end_row();
             if spec.agg.needs_value() {
                 ui.label("Value");
@@ -324,7 +564,7 @@ impl MicroParquetApp {
                         ui.selectable_value(&mut spec.value, Some(c.clone()), c);
                     }
                 });
-                add(ui, "Value", &mut rects, r.response.rect);
+                add(ui, "Value", rects, r.response.rect);
                 ui.end_row();
             }
             if spec.agg == ChartAgg::WeightedAvg {
@@ -335,15 +575,16 @@ impl MicroParquetApp {
                         ui.selectable_value(&mut spec.weight, Some(c.clone()), c);
                     }
                 });
-                add(ui, "Weight", &mut rects, r.response.rect);
+                add(ui, "Weight", rects, r.response.rect);
                 ui.end_row();
             }
             ui.label("Type");
-            let r = egui::ComboBox::from_id_salt("chart_kind").width(theme::CHART_COMBO_NARROW_W).selected_text(if spec.kind == ChartKind::Bar { "Bar" } else { "Line" }).show_ui(ui, |ui| {
-                ui.selectable_value(&mut spec.kind, ChartKind::Bar, "Bar");
-                ui.selectable_value(&mut spec.kind, ChartKind::Line, "Line");
+            let r = egui::ComboBox::from_id_salt("chart_kind").width(combo_w).selected_text(spec.kind.label()).show_ui(ui, |ui| {
+                for k in ChartKind::all() {
+                    ui.selectable_value(&mut spec.kind, *k, k.label());
+                }
             });
-            add(ui, "Type", &mut rects, r.response.rect);
+            add(ui, "Type", rects, r.response.rect);
             ui.end_row();
             ui.label("Order");
             let order_text = if spec.by_value { "By value".to_string() } else { spec.order.label() };
@@ -367,35 +608,128 @@ impl MicroParquetApp {
                     spec.by_value = true;
                 }
             });
-            add(ui, "Order", &mut rects, r.response.rect);
+            add(ui, "Order", rects, r.response.rect);
             ui.end_row();
-            ui.label("Top N");
-            let r = ui.add(egui::DragValue::new(&mut spec.top_n).range(1..=500).speed(0.2)); // not a size: a drag speed
-            add(ui, "Top N", &mut rects, r.rect);
-            ui.end_row();
+            if spec.kind == ChartKind::Donut {
+                // a donut draws every part; "Group small parts" keeps the N largest and puts the rest in "Other"
+                ui.label("Group small parts");
+                ui.horizontal(|ui| {
+                    let r = egui::ComboBox::from_id_salt("chart_donut_group").width(theme::CHART_COMBO_NARROW_W).selected_text(if spec.donut_top.is_some() { "Top N + Other" } else { "Off" }).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut spec.donut_top, None, "Off");
+                        if ui.selectable_label(spec.donut_top.is_some(), "Top N + Other").clicked() && spec.donut_top.is_none() {
+                            spec.donut_top = Some(4);
+                        }
+                    });
+                    add(ui, "Group small parts", rects, r.response.rect);
+                    if let Some(n) = spec.donut_top.as_mut() {
+                        let r = ui.add(egui::DragValue::new(n).range(2..=12).speed(0.2)); // not a size: a drag speed
+                        add(ui, "Group N", rects, r.rect);
+                    }
+                });
+                ui.end_row();
+            } else {
+                ui.label("Top N");
+                let r = ui.add(egui::DragValue::new(&mut spec.top_n).range(1..=500).speed(0.2)); // not a size: a drag speed
+                add(ui, "Top N", rects, r.rect);
+                ui.end_row();
+            }
             ui.label("Scale");
             let r = egui::ComboBox::from_id_salt("chart_scale").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.scale.label()).show_ui(ui, |ui| {
                 for s in ChartScale::all() {
                     ui.selectable_value(&mut spec.scale, *s, s.label());
                 }
             });
-            add(ui, "Scale", &mut rects, r.response.rect);
+            add(ui, "Scale", rects, r.response.rect);
             ui.end_row();
             ui.label("");
             let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Open chart data as tab"));
-            add(ui, "Open chart data as tab", &mut rects, b.rect);
+            add(ui, "Open chart data as tab", rects, b.rect);
             ui.end_row();
             if b.clicked() {
-                open_tab = true;
+                acts.open_tab = true;
             }
+            ui.label("View");
+            ui.horizontal(|ui| {
+                let b = ui.selectable_label(show_table, "Table");
+                add(ui, "Table", rects, b.rect);
+                if b.clicked() {
+                    show_table = !show_table;
+                }
+                let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Chart tab"));
+                add(ui, "Open as chart tab", rects, b.rect);
+                if b.clicked() {
+                    acts.open_chart_tab = true;
+                }
+            });
+            ui.end_row();
         });
         rects.controls = Some(controls.response.rect);
+        self.chart.show_table = show_table;
         if spec != self.chart.spec {
-            self.chart.spec = spec;
-            self.chart_save_choices();
-            self.chart_tick();
+            self.chart_set_spec(spec);
         }
-        // the title, then the plot (or why there is none)
+    }
+
+    /// The studio sections (shape, titles and look, reference lines, measures and panels).
+    fn chart_sections(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let avail = tab.available_columns();
+        let numeric: Vec<String> = tab.cached_slice.get_columns().iter().filter(|c| is_number_type(c.dtype())).map(|c| c.name().to_string()).collect();
+        let mut spec = self.chart.spec.clone();
+        ui.horizontal(|ui| {
+            let b = ui.add_enabled(self.chart.data.is_some(), egui::Button::new("Save chart\u{2026}"));
+            rects.fields.push(("Save chart".to_string(), b.rect));
+            if b.clicked() {
+                self.open_chart_save();
+            }
+            let b = ui.button("Open saved chart\u{2026}");
+            rects.fields.push(("Open saved chart".to_string(), b.rect));
+            if b.clicked() {
+                self.open_chart_open();
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let ready = self.chart.data.is_some() && !self.chart.busy;
+            let b = ui.add_enabled(ready, egui::Button::new("Export to HTML\u{2026}"));
+            rects.fields.push(("Export to HTML".to_string(), b.rect));
+            if b.clicked() {
+                self.chart_export_html();
+            }
+            let b = ui.add_enabled(ready, egui::Button::new("Export to Excel\u{2026}"));
+            rects.fields.push(("Export to Excel".to_string(), b.rect));
+            if b.clicked() {
+                self.chart_export_xlsx();
+            }
+            let b = ui.add_enabled(ready, egui::Button::new("Preview in browser"));
+            rects.fields.push(("Preview in browser".to_string(), b.rect));
+            if b.clicked() {
+                let open = !self.chart.no_browser;
+                self.chart_preview_in_browser(open);
+            }
+            let b = ui.add_enabled(ready, egui::Button::new("Copy as Python"));
+            rects.fields.push(("Copy as Python".to_string(), b.rect));
+            if b.clicked() {
+                self.chart_copy_as_python(ui.ctx());
+            }
+        });
+        if let Some((bad, m)) = self.chart.export_message.clone() {
+            let tk = *theme::tokens(self.dark_mode);
+            ui.add(egui::Label::new(egui::RichText::new(m).size(theme::TEXT_LABEL).color(if bad { tk.danger } else { tk.success })).wrap());
+        }
+        self.studio_sections(ui, &mut spec, &avail, &numeric, rects);
+        if spec != self.chart.spec {
+            self.chart_set_spec(spec);
+        }
+    }
+
+    /// The title line (what was calculated), then the chart or its table (or why there is none).
+    fn chart_plot_area(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects) {
+        let tk = *theme::tokens(self.dark_mode);
+        let mut new_map: Option<micro_parquet::charts::colours::ColourMap> = None;
+        let mut labels_dont_fit = false;
+        let mut switch_horizontal: Option<ChartSpec> = None;
         let scale = self.chart_scale(&self.chart.spec);
         let unit = scale.as_ref().map(scale_word).filter(|u| !u.is_empty()).map(str::to_string);
         match (&self.chart.data, &self.chart.error) {
@@ -407,21 +741,324 @@ impl MicroParquetApp {
                 if self.chart.busy {
                     title.push_str("  \u{2014} calculating\u{2026}");
                 }
-                rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap()).rect);
-                if !d.notes.is_empty() {
-                    rects.notes = Some(ui.add(egui::Label::new(egui::RichText::new(d.notes.join(" ")).color(tk.muted).size(theme::TEXT_LABEL)).wrap()).rect);
+                rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(title).color(tk.ink2).size(theme::TEXT_LABEL)).wrap()).rect);
+                if self.chart.show_table {
+                    let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: String::new(), bare: true, colours: None };
+                    crate::ui::chart_render::show_table(ui, d, &opts);
+                } else {
+                    let (plot, map, dont_fit) = self.draw_chart_plot(ui, d, scale);
+                    rects.plot = Some(plot);
+                    new_map = Some(map);
+                    labels_dont_fit = dont_fit;
                 }
-                rects.plot = Some(self.draw_chart_plot(ui, d, scale));
             }
             (None, None) => {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
             }
         }
-        rects.pop_button = pop_button;
-        self.chart.rects = rects;
-        if open_tab {
-            self.chart_open_as_tab();
+        // a donut of many parts: one line of advice
+        if let (ChartKind::Donut, Some(d)) = (self.chart.spec.kind, self.chart.data.as_ref()) {
+            let parts = d.categories.len();
+            if parts > 6 {
+                let l = ui.add(egui::Label::new(egui::RichText::new("Many parts are hard to compare; a sorted bar may read better").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+                rects.fields.push(("Many parts".to_string(), l.rect));
+            }
         }
+        // the category names run into each other even angled: say so, and offer horizontal bars in one click
+        if labels_dont_fit {
+            let vertical_bars = self.chart.spec.kind == ChartKind::Bar && !self.chart.spec.horizontal;
+            let text = if vertical_bars { "Labels don't fit; try horizontal bars." } else { "Labels don't fit; use Top N or a filter to show fewer." };
+            ui.horizontal(|ui| {
+                let l = ui.add(egui::Label::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                rects.fields.push(("Labels don't fit".to_string(), l.rect));
+                if vertical_bars {
+                    let b = ui.button("Horizontal bars");
+                    rects.fields.push(("Switch to horizontal bars".to_string(), b.rect));
+                    if b.clicked() {
+                        let mut spec = self.chart.spec.clone();
+                        spec.horizontal = true;
+                        switch_horizontal = Some(spec);
+                    }
+                }
+            });
+        }
+        if let Some(spec) = switch_horizontal {
+            self.chart_set_spec(spec);
+        }
+        // the map the drawing filled in is kept only when it was drawn from the numbers of these settings: while they
+        // are being calculated again the chart shows the old names, which must not take the slots of the new ones
+        let fresh = !self.chart.busy && self.chart.data.as_ref().is_some_and(|d| d.spec.calc_key() == self.chart.spec.calc_key());
+        if let Some(m) = new_map.filter(|m| fresh && *m != self.chart.spec.colour_map) {
+            self.chart.spec.colour_map = m.clone();
+            if let Some(d) = self.chart.data.as_mut() {
+                d.spec.colour_map = m;
+            }
+            self.chart_save_choices();
+        }
+    }
+
+    /// Makes `spec` the chart's settings: saved for the tab, and the numbers recalculated when they changed.
+    pub(crate) fn chart_set_spec(&mut self, mut spec: ChartSpec) {
+        // the colours belong to the category and series columns: new columns, new names, slots 1, 2, 3 again
+        // (a chart that brings its own colour map, a saved chart or a template, keeps it)
+        if spec.colour_map == self.chart.spec.colour_map {
+            spec.reset_colours_if_columns_changed(&self.chart.spec);
+        }
+        self.chart.spec = spec;
+        self.chart_save_choices();
+        self.chart_tick();
+    }
+
+    /// The calculated chart with the live look settings, and how its numbers are written, for the HTML page.
+    pub(crate) fn chart_export_parts(&self) -> Result<(ChartData, micro_parquet::charts::layout::LayoutOpts), String> {
+        if self.chart.busy {
+            return Err("The chart is still being calculated. Wait for it to finish, then try again.".to_string());
+        }
+        let Some(d) = self.chart.data.as_ref() else {
+            return Err("There is no chart to write yet. Fix the problem shown above the chart first.".to_string());
+        };
+        let scale = self.chart_scale(&self.chart.spec);
+        let opts = micro_parquet::charts::layout::LayoutOpts {
+            dark: false,
+            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+            decimals: self.global_decimals,
+            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+            bare: false,
+            colours: Some(self.chart.spec.colour_map.clone()),
+        };
+        let mut data = d.clone();
+        data.spec = self.chart.spec.clone();
+        Ok((data, opts))
+    }
+
+    /// Export ▸ "Chart to HTML…": asks where, then writes the one file.
+    pub(crate) fn chart_export_html(&mut self) {
+        self.chart_attach_tab_pub();
+        let data = match self.chart_export_parts() {
+            Ok((d, _)) => d,
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                return;
+            }
+        };
+        let name = format!("{}.html", micro_parquet::charts::echarts::file_stem(&micro_parquet::charts::layout::chart_title(&data)));
+        let picked = match self.chart.export_path_override.clone() {
+            Some(p) => Some(p),
+            None => rfd::FileDialog::new().add_filter("HTML page", &["html"]).set_file_name(&name).set_title("Save the chart as a web page").save_file(),
+        };
+        let Some(path) = picked else {
+            return;
+        };
+        self.chart_write_html_to(&path);
+    }
+
+    /// Export ▸ "Chart to Excel…": the chart's numbers on a sheet with a native Excel chart beside them.
+    pub(crate) fn chart_export_xlsx(&mut self) {
+        self.chart_attach_tab_pub();
+        let data = match self.chart_export_parts() {
+            Ok((d, _)) => d,
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                return;
+            }
+        };
+        let name = format!("{}.xlsx", micro_parquet::charts::echarts::file_stem(&micro_parquet::charts::layout::chart_title(&data)));
+        let picked = match self.chart.export_path_override.clone() {
+            Some(p) => Some(p),
+            None => rfd::FileDialog::new().add_filter("Excel workbook", &["xlsx"]).set_file_name(&name).set_title("Save the chart as an Excel workbook").save_file(),
+        };
+        let Some(path) = picked else {
+            return;
+        };
+        self.chart_write_xlsx_to(&path);
+    }
+
+    /// Writes the workbook to `path` and says so (or why not) in the studio and the status line.
+    pub(crate) fn chart_write_xlsx_to(&mut self, path: &std::path::Path) -> bool {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::xlsx::write_chart_xlsx(path, &d, &o).map_err(|e| format!("{:#}", e)));
+        match r {
+            Ok(info) => {
+                let extra = info.note.map(|n| format!(" {}", n)).unwrap_or_default();
+                let m = format!("Chart written to {}: the numbers on the sheet '{}' and {} native chart(s) beside them.{}", path.display(), info.sheet, info.charts, extra);
+                self.chart.export_message = Some((false, m.clone()));
+                self.status_message = m;
+                true
+            }
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                false
+            }
+        }
+    }
+
+    /// Writes the chart's page to `path` and says so (or why not) in the studio and the status line.
+    pub(crate) fn chart_write_html_to(&mut self, path: &std::path::Path) -> bool {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::echarts::write_chart_html(path, &d, &o).map_err(|e| format!("{:#}", e)));
+        match r {
+            Ok(()) => {
+                let m = format!("Chart written to {}. Open it in any browser; it needs no internet.", path.display());
+                self.chart.export_message = Some((false, m.clone()));
+                self.status_message = m;
+                true
+            }
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                false
+            }
+        }
+    }
+
+    /// "Preview in browser": the page is written to a temporary file and opened with the default browser
+    /// (nothing goes over the network). `open` is false in tests.
+    pub(crate) fn chart_preview_in_browser(&mut self, open: bool) -> Option<std::path::PathBuf> {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::echarts::write_preview(&d, &o, &self.paths.temp_dir).map_err(|e| format!("{:#}", e)));
+        let path = match r {
+            Ok(p) => p,
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+                return None;
+            }
+        };
+        if open {
+            if let Err(e) = micro_parquet::charts::echarts::open_in_browser(&path) {
+                let m = format!("{:#}", e);
+                self.chart.export_message = Some((true, m.clone()));
+                self.status_message = m;
+                return Some(path);
+            }
+        }
+        let m = format!("Preview opened in your browser from {} (a temporary file on this computer).", path.display());
+        self.chart.export_message = Some((false, m.clone()));
+        self.status_message = m;
+        Some(path)
+    }
+
+    /// "Copy as Python": a self-contained script (the chart's data as a pandas DataFrame, the drawing in
+    /// matplotlib, or plotly for a Sankey and a treemap) goes to the clipboard.
+    pub(crate) fn chart_copy_as_python(&mut self, ctx: &egui::Context) {
+        let r = self.chart_export_parts().and_then(|(d, o)| micro_parquet::charts::python::chart_to_python(&d, &o).map_err(|e| format!("{:#}", e)));
+        match r {
+            Ok(script) => {
+                let lines = script.lines().count();
+                let plotly = script.contains("import plotly");
+                self.chart.copied_python = Some(script.clone());
+                ctx.copy_text(script);
+                let m = format!("Copied a Python script of {} lines ({}). Paste it into a .py file or a notebook.", lines, if plotly { "plotly: pip install plotly pandas" } else { "matplotlib: pip install pandas matplotlib" });
+                self.chart.export_message = Some((false, m.clone()));
+                self.status_message = m;
+            }
+            Err(e) => {
+                self.chart.export_message = Some((true, e.clone()));
+                self.status_message = e;
+            }
+        }
+    }
+
+    pub(crate) fn chart_attach_tab_pub(&mut self) {
+        self.chart_attach_tab();
+    }
+
+    /// Charts ▸ "Chart this result": the banking template that fits the active result tab is applied (the
+    /// studio opens with it, every setting still editable); with several (or no) fitting templates the
+    /// gallery's "Banking templates" is shown.
+    pub(crate) fn chart_this_result(&mut self) {
+        use micro_parquet::charts::templates::detect;
+        let found = self.tabs.get(self.active_tab).map(|t| detect(&t.cached_slice)).unwrap_or_default();
+        match found.as_slice() {
+            [one] => match self.chart_apply_template(*one) {
+                Ok(m) => self.status_message = m,
+                Err(e) => self.status_message = e,
+            },
+            [] => {
+                self.chart_attach_tab();
+                self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+                self.status_message = "No banking template fits this tab, so the studio is open on it. Charts \u{25b8} New chart \u{25b8} Banking templates lists them.".to_string();
+            }
+            _ => self.open_chart_gallery(),
+        }
+    }
+
+    /// The scale and thresholds a template's finding is written with.
+    pub(crate) fn chart_template_ctx(&self, t: micro_parquet::charts::templates::Template) -> micro_parquet::charts::templates::Ctx {
+        use micro_parquet::charts::templates::{Ctx, Template};
+        let mut ctx = Ctx { decimals: self.global_decimals, ..Ctx::default() };
+        let tab = self.tabs.get(self.active_tab);
+        if t == Template::NiiBridge {
+            let col = "Volume effect";
+            let fmt = tab.and_then(|t| t.col_formats.get(col));
+            if let Some(s) = micro_parquet::models::resolved_scale(col, fmt, self.num_format) {
+                ctx.divisor = s.divisor;
+                ctx.suffix = s.suffix.to_string();
+            }
+        }
+        if let Some(TabSource::DqScorecard { rules, .. }) = tab.map(|t| &t.source) {
+            ctx.dq_green = Some(rules.green_min);
+            ctx.dq_amber = Some(rules.amber_min);
+        }
+        ctx
+    }
+
+    /// Applies a banking template to the active tab: its table (when the chart needs numbers the tab does not
+    /// have as columns) opens as a tab of its own, and the studio shows the template's chart with the
+    /// finding as its title. Returns the message for the status line.
+    pub(crate) fn chart_apply_template(&mut self, t: micro_parquet::charts::templates::Template) -> Result<String, String> {
+        use micro_parquet::charts::templates::{prepare, yield_curves, CurveInput, Template};
+        let ctx = self.chart_template_ctx(t);
+        let prepared = if t == Template::YieldCurves {
+            let store = micro_parquet::curves::CurveStore::load(&micro_parquet::curves::curves_dir());
+            let inputs: Vec<CurveInput> = store.curves.iter().map(CurveInput::from).collect();
+            yield_curves(&inputs)
+        } else {
+            let Some(tab) = self.tabs.get(self.active_tab) else {
+                return Err("Open a tab first.".to_string());
+            };
+            if matches!(t, Template::ClassifiedTrend | Template::BehaviourProfile) && tab.total_rows > tab.cached_slice.height() {
+                return Err(format!(
+                    "{}: this tab has {} rows and the template reads them all at once. Make a pivot with one row per month and grade (or per month-end) first, then chart that.",
+                    t.name(),
+                    format_with_commas(tab.total_rows as f64, 0)
+                ));
+            }
+            prepare(t, &tab.cached_slice, &ctx)
+        }
+        .map_err(|e| format!("{:#}", e))?;
+        self.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+        let message = format!("Chart this \u{2014} {}: {}.", t.name(), prepared.finding);
+        // a second chart of the same result (HQLA composition, NII effects by key) opens first, so the main chart is the one in front
+        if let Some(c) = prepared.companion.clone() {
+            self.chart_open_prepared(*c)?;
+        }
+        self.chart_open_prepared(prepared)?;
+        self.status_message = message.clone();
+        Ok(message)
+    }
+
+    /// Opens one prepared template chart: its table as a tab (when the chart needs numbers the tab does
+    /// not have as columns) with the spec applied when the tab has loaded, or the spec on the active tab.
+    fn chart_open_prepared(&mut self, prepared: micro_parquet::charts::templates::Prepared) -> Result<(), String> {
+        match prepared.table {
+            Some(mut df) => {
+                std::fs::create_dir_all(&self.paths.temp_dir).map_err(|e| format!("The chart table could not be written: {}", e))?;
+                let path = self.paths.temp_dir.join(format!("chart_template_{}_{}.parquet", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+                let f = std::fs::File::create(&path).map_err(|e| format!("The chart table could not be written: {}", e))?;
+                polars::prelude::ParquetWriter::new(f).finish(&mut df).map_err(|e| format!("The chart table could not be written: {}", e))?;
+                let src = TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() };
+                // the columns that keep their name keep their display format (Crore, Lakh, …)
+                let formats: HashMap<String, ColumnFormatSpec> = self.tabs.get(self.active_tab).map(|tab| tab.col_formats.iter().filter(|(k, _)| df.get_column_names().iter().any(|n| n.as_str() == k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+                let id = self.create_tab_from_source_with(prepared.tab_title.clone(), src, Vec::new(), formats, None);
+                self.chart_pending.insert(id, prepared.spec);
+            }
+            None => {
+                self.chart_attach_tab();
+                self.chart_set_spec(prepared.spec);
+            }
+        }
+        Ok(())
     }
 
     /// The tooltip of one bar or point: the category (whole), the series, the value in the chart's
@@ -440,93 +1077,31 @@ impl MicroParquetApp {
         format!("{}: {}{}\n{}\n{} rows", spec.category, d.categories.get(i).cloned().unwrap_or_default(), series, v, format_with_commas(rows as f64, 0))
     }
 
-    /// The bars or lines. The x-axis names the categories (a long name is cut, the tooltip has it
-    /// whole), a tooltip gives the category, series, value and number of rows.
-    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> egui::Rect {
-        let divisor = scale.map(|s| s.divisor).unwrap_or(1.0);
-        let n = d.categories.len();
-        let s_n = d.series.len().max(1);
-        let spec = d.spec.clone();
-        let tip = |j: usize, i: usize| -> String { self.chart_tip(d, j, i) };
-        let labels: Vec<String> = d.categories.iter().map(|c| short_label(c, theme::CHART_LABEL_CHARS)).collect();
-        let avail_w = ui.available_width();
-        let per_label = theme::CHART_LABEL_W;
-        let every = ((n as f32 * per_label / avail_w.max(per_label)).ceil() as usize).max(1);
-        let mut plot = egui_plot::Plot::new("chart_plot")
-            .height(theme::CHART_H)
-            .show_axes([true, true])
-            .allow_zoom(false)
-            .allow_drag(false)
-            .allow_scroll(false)
-            .allow_boxed_zoom(false)
-            .include_y(0.0)
-            .x_axis_formatter(move |mark, _| {
-                let i = mark.value.round();
-                let between = (mark.value - i).abs() > 0.01; // not a size: a mark between two categories
-                if between || i < 0.0 || i as usize >= labels.len() {
-                    String::new()
-                } else {
-                    labels[i as usize].clone()
-                }
-            })
-            .x_grid_spacer(move |input| {
-                let (lo, hi) = input.bounds;
-                let mut marks = Vec::new();
-                let mut i = lo.max(0.0).ceil() as i64;
-                while (i as f64) <= hi && i < n as i64 {
-                    if i as usize % every == 0 {
-                        marks.push(egui_plot::GridMark { value: i as f64, step_size: every as f64 });
-                    }
-                    i += 1;
-                }
-                marks
-            })
-            .y_axis_formatter(|mark, _| format_with_commas(mark.value, if mark.step_size >= 1.0 { 0 } else { 2 }));
-        if let Some(sc) = scale {
-            plot = plot.y_axis_label(scale_word(&sc).to_string());
-        }
-        if spec.series.is_some() {
-            plot = plot.legend(egui_plot::Legend::default());
-        }
-        if spec.kind == ChartKind::Line {
-            let names = d.series.clone();
-            let cats = d.categories.clone();
-            let vals = d.values.clone();
-            let rows = d.rows.clone();
-            let texts: Vec<Vec<String>> = (0..s_n).map(|j| (0..n).map(|i| tip(j, i)).collect()).collect();
-            let _ = (&cats, &vals, &rows);
-            plot = plot.label_formatter(move |name, pt| {
-                let i = pt.x.round();
-                let j = names.iter().position(|s| s == name).unwrap_or(0);
-                if i < 0.0 || i as usize >= n {
-                    return String::new();
-                }
-                texts.get(j).and_then(|t| t.get(i as usize)).cloned().unwrap_or_default()
-            });
-        }
-        let out = plot.show(ui, |plot_ui| {
-            for j in 0..s_n {
-                let name = d.series.get(j).cloned().unwrap_or_default();
-                match spec.kind {
-                    ChartKind::Bar => {
-                        let w = theme::CHART_GROUP_W / s_n as f64;
-                        let bars: Vec<egui_plot::Bar> = (0..n)
-                            .filter_map(|i| {
-                                let v = d.values[j][i]?;
-                                let x = i as f64 + (j as f64 - (s_n as f64 - 1.0) / 2.0) * w;
-                                Some(egui_plot::Bar::new(x, v / divisor).width(w * theme::CHART_BAR_FILL).name(tip(j, i)))
-                            })
-                            .collect();
-                        plot_ui.bar_chart(egui_plot::BarChart::new(bars).name(name).element_formatter(Box::new(|bar, _| bar.name.clone())));
-                    }
-                    ChartKind::Line => {
-                        let pts: Vec<[f64; 2]> = (0..n).filter_map(|i| d.values[j][i].map(|v| [i as f64, v / divisor])).collect();
-                        plot_ui.line(egui_plot::Line::new(egui_plot::PlotPoints::from(pts.clone())).name(name.clone()).width(theme::CHART_LINE_W));
-                        plot_ui.points(egui_plot::Points::new(egui_plot::PlotPoints::from(pts)).name(name).radius(theme::CHART_POINT_R));
-                    }
-                }
-            }
-        });
-        out.response.rect
+    /// The chart: drawn by the Phase 7 renderer (`chart_render`) in the quick-chart layout (plot and
+    /// legend; the title line and notes above are the Phase 6 ones). Returns the chart's rectangle and
+    /// the colour map with every series in it, which the caller stores in the spec.
+    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap, bool) {
+        let opts = micro_parquet::charts::layout::LayoutOpts {
+            dark: self.dark_mode,
+            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
+            decimals: self.global_decimals,
+            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+            bare: false,
+            colours: Some(self.chart.spec.colour_map.clone()),
+        };
+        // what is drawn follows the live choices; the numbers are the calculated ones
+        let live = &self.chart.spec;
+        let shown;
+        let data = if d.spec == *live {
+            d
+        } else {
+            let mut c = d.clone();
+            c.spec = live.clone();
+            shown = c;
+            &shown
+        };
+        let out = crate::ui::chart_render::show_chart(ui, egui::Id::new("chart_plot"), data, &opts, None);
+        let plot = out.layout.panels.first().map(|p| p.plot).unwrap_or(out.rect);
+        (plot, out.layout.colour_map, out.layout.labels_dont_fit)
     }
 }

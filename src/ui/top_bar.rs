@@ -23,7 +23,7 @@ pub const BAR_ITEMS: [(CommandId, usize); 11] = [
 ];
 
 /// The menus, left to right. They never fold: only the buttons after them do.
-pub const MENUS: [&str; 6] = ["File", "Edit", "View", "Banking", "Export", "Help"];
+pub const MENUS: [&str; 7] = ["File", "Edit", "View", "Banking", "Charts", "Export", "Help"];
 
 /// How the bar is laid out: how many of the visible buttons (counted from the right) are in the
 /// overflow menu "»", and how wide the search box is. Buttons always keep their labels.
@@ -107,14 +107,6 @@ fn button_w(ui: &egui::Ui, text: &str) -> f32 {
     text_w(ui, text) + 2.0 * ui.spacing().button_padding.x + theme::BAR_WIDTH_SLACK
 }
 
-fn menu_label(icon: &str, label: &str) -> String {
-    format!("{}  {}  {}", icon, label, theme::ph::CARET_DOWN)
-}
-
-fn menu_icon_label(icon: &str) -> String {
-    format!("{}  {}", icon, theme::ph::CARET_DOWN)
-}
-
 /// The text of a button: its icon and its label.
 fn item_text(id: CommandId) -> String {
     let label = crate::ui::commands::toolbar_label(id);
@@ -123,15 +115,6 @@ fn item_text(id: CommandId) -> String {
         icon.to_string()
     } else {
         format!("{}  {}", icon, label)
-    }
-}
-
-/// The text of a menu button of the bar.
-fn menu_text(name: &str) -> String {
-    match name {
-        "Banking" => menu_label(theme::ph::BANK, "Banking"),
-        "Export" => menu_label(theme::ph::EXPORT, "Export"),
-        other => other.to_string(),
     }
 }
 
@@ -147,7 +130,7 @@ pub struct BarWidths {
 
 fn measure(ui: &egui::Ui, visible: &[(CommandId, usize)]) -> BarWidths {
     let sp = ui.spacing().item_spacing.x;
-    let fixed = theme::APP_MARK_SIZE + MENUS.iter().map(|t| sp + button_w(ui, &menu_text(t))).sum::<f32>();
+    let fixed = theme::APP_MARK_SIZE + MENUS.iter().map(|t| sp + button_w(ui, t)).sum::<f32>();
     BarWidths {
         fixed,
         label: visible.iter().map(|(id, _)| button_w(ui, &item_text(*id))).collect(),
@@ -219,19 +202,23 @@ impl MicroParquetApp {
         theme::paint_app_logo(ui.painter(), rect);
         rects.push(("Mark".to_string(), rect));
 
-        // the menus: File, Edit, View, Banking, Export, Help (they never fold)
+        // the menus: File, Edit, View, Banking, Charts, Export, Help (they never fold)
         let r = self.file_menu(ui, ctx);
         rects.push(("File".to_string(), r.rect));
         let r = self.edit_menu(ui, ctx);
         rects.push(("Edit".to_string(), r.rect));
         let r = self.view_menu(ui, ctx);
         rects.push(("View".to_string(), r.rect));
-        for group_id in [CommandGroup::Banking, CommandGroup::Export] {
-            let name = if group_id == CommandGroup::Banking { "Banking" } else { "Export" };
-            let text = menu_text(name);
+        for group_id in [CommandGroup::Banking, CommandGroup::Charts, CommandGroup::Export] {
+            let name = match group_id {
+                CommandGroup::Banking => "Banking",
+                CommandGroup::Charts => "Charts",
+                _ => "Export",
+            };
+            // (the Charts menu is always open: its items say why one cannot run)
             let r = ui
-                .add_enabled_ui(has_tab, |ui| {
-                    ui.menu_button(text, |ui| {
+                .add_enabled_ui(has_tab || group_id == CommandGroup::Charts, |ui| {
+                    ui.menu_button(name, |ui| {
                         // compact rows: the Banking menu has about twenty entries and four headings, and must
                         // fit a 686 pt window under the top bar
                         ui.spacing_mut().interact_size.y = theme::MENU_ROW_H;

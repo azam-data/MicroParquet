@@ -69,7 +69,10 @@ fn t6_the_real_list_finds_what_a_banker_would_type() {
     let top = |q: &str| COMMANDS[order(q, &entries)[0]].id;
     assert_eq!(top("filter"), CommandId::Filter);
     assert_eq!(top("sort"), CommandId::Sort);
-    assert_eq!(top("excel"), CommandId::ExportXlsx);
+    // two commands are about Excel since Phase 7: the workbook of tabs and the chart workbook
+    assert!([CommandId::ExportXlsx, CommandId::ExportChartXlsx].contains(&top("excel")));
+    let excel: Vec<CommandId> = order("excel", &entries).iter().map(|i| COMMANDS[*i].id).collect();
+    assert!(excel.contains(&CommandId::ExportXlsx), "the workbook of tabs is still found by 'excel'");
     assert_eq!(top("pdf"), CommandId::ExportPdf);
     assert_eq!(top("dark"), CommandId::ToggleTheme);
     assert_eq!(top("provision"), CommandId::Provision);
@@ -139,9 +142,9 @@ fn t6_every_toolbar_action_is_in_the_command_list() {
 
 #[test]
 fn t6_unavailable_commands_say_why() {
-    let none = CommandState { tabs: 0, can_undo: false, can_redo: false };
-    let one = CommandState { tabs: 1, can_undo: false, can_redo: false };
-    let two = CommandState { tabs: 2, can_undo: true, can_redo: true };
+    let none = CommandState { tabs: 0, can_undo: false, can_redo: false, ..Default::default() };
+    let one = CommandState { tabs: 1, can_undo: false, can_redo: false, ..Default::default() };
+    let two = CommandState { tabs: 2, can_undo: true, can_redo: true, ..Default::default() };
     let reason = |id: CommandId, s: CommandState| unavailable_reason(command(id).unwrap(), s);
     assert_eq!(reason(CommandId::OpenFile, none), None, "opening a file always works");
     assert_eq!(reason(CommandId::ToggleTheme, none), None);

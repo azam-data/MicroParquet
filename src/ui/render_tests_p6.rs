@@ -1088,11 +1088,15 @@ fn u5_the_chart_shows_the_whole_tab_with_category_names_on_the_x_axis_and_the_ti
         // (the side panel is narrow: a name is left out where two would touch, never reordered)
         assert!(is_subsequence(&labels, &["1m", "1y", "3m", "6m", "100D"]) && labels.len() >= 3, "{what}: the x-axis names the categories: {:?}", p.boxes.iter().filter(|(_, b)| b.top() >= plot.bottom() - 40.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
         // the title, with the unit of the column's format (Crore is the default scale)
-        let title = p.boxes.iter().find(|(t, _)| t.starts_with("Sum of Balance by Term Period")).map(|(t, b)| (t.clone(), *b)).unwrap_or_else(|| panic!("{what}: the title"));
+        let title = p.boxes.iter().find(|(t, _)| t.starts_with("Sum of Balance by Term Period: all")).map(|(t, b)| (t.clone(), *b)).unwrap_or_else(|| panic!("{what}: the title"));
         assert_eq!(title.0, "Sum of Balance by Term Period: all 250 rows (Crore)", "{what}");
         // the controls and the title are inside the window and the central area
         let screen_rect = rig.ctx.screen_rect();
         for (n, f) in &r.fields {
+            // (the studio sections of Phase 7 are under the chart, reached by scrolling the panel)
+            if f.top() > plot.bottom() {
+                continue;
+            }
             assert!(inside(*f, screen_rect), "{what}: '{n}' {f:?} is in the window");
             assert!(f.left() >= screen_rect.right() - rig.app.right_panel_w - 1.0, "{what}: '{n}' {f:?} is in the side panel (F2)");
         }
@@ -1881,7 +1885,7 @@ fn p2_the_pack_builder_fits_builds_a_pack_by_clicks_saves_it_and_runs_it() {
         pclick_btn(&mut rig, "New pack");
         assert!(rig.app.packs.pack.inputs.is_empty(), "{what}");
         rig.app.packs.pack.name = "monthly".into();
-        rig.app.packs.pack.items.push(PackItem { title: "x".into(), sheet: "x".into(), source: PackItemKind::Steps { slot: "A".into() }, col_formats: Default::default() });
+        rig.app.packs.pack.items.push(PackItem { title: "x".into(), sheet: "x".into(), source: PackItemKind::Steps { slot: "A".into() }, col_formats: Default::default(), chart: None });
         rig.app.packs.pack.inputs.push(PackInput { slot: "A".into(), ..Default::default() });
         rig.draw(8);
         pclick_btn(&mut rig, "Save pack");
@@ -1911,6 +1915,99 @@ fn p2_the_pack_builder_fits_builds_a_pack_by_clicks_saves_it_and_runs_it() {
         settle(&mut rig.app);
         assert!(!root.join("out.xlsx").exists(), "{what}: nothing written");
         assert!(rig.app.status_message.contains("failed") && rig.app.status_message.contains("'Deposits'"), "{what}: {}", rig.app.status_message);
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+/// Scrolls the pack dialog with the wheel until the named field or button is inside its body.
+fn pack_scroll_to(rig: &mut Rig, name: &str) -> egui::Rect {
+    rig.ctx.style_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
+    for _ in 0..40 {
+        rig.draw(3);
+        let body = assert_dialog_fits(&rig.ctx, &packs_title(), &rig.what).body;
+        let found = rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()).find(|(n, _)| n == name).map(|(_, r)| *r);
+        if let Some(r) = found {
+            if r.is_positive() && r.top() >= body.top() + 2.0 && r.bottom() <= body.bottom() - 2.0 {
+                return r;
+            }
+        }
+        let now = rig.ctx.input(|i| i.time);
+        rig.input.time = Some(now + 0.2);
+        rig.step(vec![egui::Event::PointerMoved(body.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -80.0), modifiers: egui::Modifiers::NONE }]);
+    }
+    let body = assert_dialog_fits(&rig.ctx, &packs_title(), &rig.what).body;
+    let found = rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()).find(|(n, _)| n == name).map(|(_, r)| *r);
+    panic!("{}: '{name}' {found:?} could not be scrolled into the dialog body {body:?}", rig.what);
+}
+
+#[test]
+fn c6_an_items_chart_is_chosen_from_its_drop_down_the_chart_book_is_ticked_and_the_run_writes_both_files() {
+    use micro_parquet::charts::pack::PackChart;
+    for (ppp, w, h) in SCREENS {
+        let mut rig = packs_rig("c6packs", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Packs);
+        rig.draw(6);
+        for tab in [0usize, 1] {
+            rig.app.active_tab = tab;
+            rig.draw(8);
+            let b = pack_btn(&rig, "Add input slot from open tab");
+            pclick(&mut rig, b);
+        }
+        rig.app.active_tab = 2;
+        rig.draw(8);
+        pclick_btn(&mut rig, "Add item from result tab");
+        assert_eq!(rig.app.packs.pack.items.len(), 1, "{what}: {:?}", rig.app.packs.message);
+        assert!(rig.app.packs.pack.items[0].chart.is_none(), "{what}: an item starts without a chart");
+        rig.app.packs.pack.name = "monthly".into();
+        rig.draw(8);
+        // the chart drop-down of the item: open it by a click, then click the entry (its real rect)
+        let combo = pack_scroll_to(&mut rig, "Chart 1");
+        assert!(combo.width() > 100.0, "{what}: {combo:?}");
+        pclick(&mut rig, combo);
+        let p = rig.draw(8);
+        let entry = p.boxes.iter().find(|(t, _)| t == "Template: Gap ladder").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the entry 'Template: Gap ladder' is in the list"));
+        assert!(entry.is_positive() && rig.ctx.screen_rect().contains_rect(entry), "{what}: the entry {entry:?} is in the window");
+        pclick(&mut rig, entry);
+        rig.draw(8);
+        assert_eq!(rig.app.packs.pack.items[0].chart, Some(PackChart::Template { template: "gap-ladder".into() }), "{what}");
+        assert!(rig.app.packs.rects.fields.iter().any(|(n, _)| n == "Chart 1"), "{what}");
+        // the chart book is ticked by a click
+        assert!(!rig.app.packs.pack.output.html_charts);
+        let tick = pack_scroll_to(&mut rig, "HTML chart book");
+        pclick(&mut rig, tick);
+        rig.draw(6);
+        assert!(rig.app.packs.pack.output.html_charts, "{what}");
+        // everything still fits the dialog
+        let r2 = assert_dialog_fits(&rig.ctx, &packs_title(), &what);
+        for (n, rect) in rig.app.packs.rects.fields.iter().chain(rig.app.packs.rects.buttons.iter()) {
+            if rect.is_positive() && rect.top() < r2.body.bottom() && rect.bottom() > r2.body.top() {
+                assert!(rect.left() >= r2.window.left() - 1.0 && rect.right() <= r2.window.right() + 1.0, "{what}: '{n}' {rect:?} is inside the dialog {:?}", r2.window);
+            }
+        }
+        // run it: the workbook and the chart book beside it
+        let root = rig.app.paths.root_dir.clone();
+        rig.app.packs.files.insert("Loans".into(), root.join("loans_oct.csv").display().to_string());
+        rig.app.packs.files.insert("Deposits".into(), root.join("deposits_oct.csv").display().to_string());
+        rig.app.packs.cutoff = "2026-10-31".into();
+        rig.app.packs.out_path = root.join("out.xlsx").display().to_string();
+        rig.draw(8);
+        pclick_btn(&mut rig, "Run pack"); // in the dialog's footer: always in view
+        settle(&mut rig.app);
+        assert!(root.join("out.xlsx").exists(), "{what}: {}", rig.app.status_message);
+        let book = root.join("monthly-charts.html");
+        assert!(book.exists(), "{what}: the chart book beside the workbook: {}", rig.app.status_message);
+        assert!(rig.app.status_message.contains("monthly-charts.html"), "{what}: {}", rig.app.status_message);
+        let _ = std::fs::remove_file(root.join("out.xlsx"));
+        let _ = std::fs::remove_file(&book);
+        // "No chart" takes it away again
+        let combo = pack_scroll_to(&mut rig, "Chart 1");
+        pclick(&mut rig, combo);
+        let p = rig.draw(8);
+        let none = p.boxes.iter().find(|(t, _)| t == "No chart").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: 'No chart' is in the list"));
+        pclick(&mut rig, none);
+        rig.draw(6);
+        assert!(rig.app.packs.pack.items[0].chart.is_none(), "{what}");
         micro_parquet::rules::set_data_dir_override(None);
     }
 }
@@ -2499,7 +2596,9 @@ fn f2_the_chart_tab_has_a_pop_out_button_only_where_windows_work_and_the_window_
         let screen2 = ctx2.screen_rect();
         let plot = rig.app.chart.rects.plot.unwrap_or_else(|| panic!("{what}: the chart in its window"));
         assert!(inside(plot, screen2), "{what}: the plot {plot:?} is inside the window {screen2:?}");
-        for (n, f) in &rig.app.chart.rects.fields {
+        // the Phase 6 controls are all in the window; the studio sections of Phase 7 (they scroll) are not required to be
+        let studio = ["Save chart", "Open saved chart", "Export to HTML", "Export to Excel", "Preview in browser", "Titles and look", "Reference lines", "Measures and panels", "Advanced options header", "Advanced options", "Advanced reset"];
+        for (n, f) in rig.app.chart.rects.fields.iter().filter(|(n, _)| !studio.contains(&n.as_str())) {
             assert!(inside(*f, screen2), "{what}: '{n}' {f:?} is in the window");
         }
         assert!(q.boxes.iter().any(|(t, _)| t.starts_with("Sum of Balance by Term Period")), "{what}: the title");
@@ -2526,11 +2625,12 @@ fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_th
         let mut rig = term_rig("p6f3a", ppp, w, h);
         let what = rig.what.clone();
         let p = rig.draw(4);
-        // left to right: File, Edit, View, Banking, Export, Help, then the toolbar buttons
+        // left to right: File, Edit, View, Banking, Charts, Export, Help, then the toolbar buttons
         let xs: Vec<f32> = ["File", "Edit", "View", "Help"].iter().map(|n| bar_box(&p, n).unwrap_or_else(|| panic!("{what}: {n}")).left()).collect();
         let banking = p.boxes.iter().find(|(t, b)| t.contains("Banking") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Banking");
         let export = p.boxes.iter().find(|(t, b)| t.contains("Export") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Export");
-        assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < banking && banking < export && export < xs[3], "{what}: the order of the menus: {xs:?} {banking} {export}");
+        let charts = p.boxes.iter().find(|(t, b)| t.contains("Charts") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Charts");
+        assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < banking && banking < charts && charts < export && export < xs[3], "{what}: the order of the menus: {xs:?} {banking} {charts} {export}");
         assert!(bar_box(&p, "More").is_none(), "{what}: no More menu any more");
         // Edit: Undo, Redo, the transforms, Data checks
         let p = click_menu(&mut rig, "Edit");
@@ -2602,7 +2702,7 @@ fn f3_view_toolbar_buttons_switch_each_button_off_and_on_and_are_saved() {
         // close the menu and look at the bar
         rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
         let p = rig.draw(4);
-        let has_icon = |id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.contains(crate::ui::commands::toolbar_label(id))));
+        let has_icon = |id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.trim().ends_with(&format!("  {}", crate::ui::commands::toolbar_label(id))) || t.trim() == crate::ui::commands::toolbar_label(id)));
         assert!(!has_icon(CommandId::Pivot) && !has_icon(CommandId::ToggleChart), "{what}: Pivot and Chart are off the bar");
         assert!(has_icon(CommandId::Filter) && has_icon(CommandId::ToggleSql) && has_icon(CommandId::RateProfile), "{what}: the others stay");
         let (again, _) = micro_parquet::settings::Settings::load(&rig.app.paths.root_dir);

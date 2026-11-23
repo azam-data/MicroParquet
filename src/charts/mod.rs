@@ -1,0 +1,24 @@
+//! Chart studio (Phase 7): one chart model, three renderers. `spec` describes a chart, `calc` turns a
+//! tab into `ChartData` on the worker, `data` holds the table and its transforms (shares, running sums,
+//! waterfall steps, heatmap matrices), `colours` the stored colour map and `tokens` the design system.
+
+pub mod axis;
+pub mod calc;
+pub mod catlabels;
+pub mod colours;
+pub mod data;
+pub mod echarts;
+pub mod gallery;
+pub mod labels;
+pub mod layout;
+pub mod library;
+pub mod pdf;
+pub mod pack;
+pub mod python;
+pub mod samples;
+pub mod spec;
+pub mod suggest;
+pub mod templates;
+pub mod thumbnail;
+pub mod tokens;
+pub mod xlsx;

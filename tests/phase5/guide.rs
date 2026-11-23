@@ -396,7 +396,7 @@ fn guide_ifrs9_ecl() {
     let cl = micro_parquet::banking::ProvisionConfig::load_or_create(&data).expect("cl map").cl_code_map;
     micro_parquet::rules::set_data_dir_override(None);
     let spec = EclSummarySpec { grade_col: "CL_Final".into(), provision_col: "Required_Provision_BDT".into() };
-    let summary = summary_frame(&out, &spec, &cl).expect("summary");
+    let summary = summary_frame(&out, &spec, &cl, None).expect("summary");
     assert_eq!(out.column("Stage").expect("Stage").cast(&DataType::Int64).expect("cast").i64().expect("i64").into_iter().collect::<Vec<_>>(), vec![Some(1), Some(2), Some(3), Some(3)]);
     check_guide(
         "ifrs9-ecl",

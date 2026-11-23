@@ -275,8 +275,8 @@ fn t3_pdf_report_adds_the_totals_band() {
     let cells = summary_for(&df, &HashMap::new());
     let plain = dir.join("plain.pdf");
     let with = dir.join("with.pdf");
-    export_pdf_tabs(vec![PdfTab { title: "Loans".into(), df: df.clone(), col_formats: HashMap::new(), summary: Vec::new() }], &plain, NumberDisplayFormat::BdtCrore, 2).unwrap();
-    export_pdf_tabs(vec![PdfTab { title: "Loans".into(), df, col_formats: HashMap::new(), summary: cells }], &with, NumberDisplayFormat::BdtCrore, 2).unwrap();
+    export_pdf_tabs(vec![PdfTab { title: "Loans".into(), df: df.clone(), col_formats: HashMap::new(), summary: Vec::new(), chart: None }], &plain, NumberDisplayFormat::BdtCrore, 2).unwrap();
+    export_pdf_tabs(vec![PdfTab { title: "Loans".into(), df, col_formats: HashMap::new(), summary: cells, chart: None }], &with, NumberDisplayFormat::BdtCrore, 2).unwrap();
     let (a, b) = (std::fs::metadata(&plain).unwrap().len(), std::fs::metadata(&with).unwrap().len());
     assert!(b > a, "the band adds drawing and text ({b} vs {a})");
     std::fs::remove_dir_all(&dir).ok();
@@ -311,7 +311,7 @@ fn t3_the_export_job_computes_the_summary_on_the_whole_result() {
     assert_eq!(r.cells.iter().find(|c| c.column == "Balance").unwrap().value, Some(SummaryValue::Number(7_000.0)));
     // the Excel export job writes the totals row
     let out = dir.join("job.xlsx");
-    let tab = ExportTab { title: "Loans".into(), source: src, steps: vec![], col_formats: HashMap::new(), summary: HashMap::new(), control_col: None };
+    let tab = ExportTab { title: "Loans".into(), source: src, steps: vec![], col_formats: HashMap::new(), summary: HashMap::new(), control_col: None, chart: None };
     export_tabs_xlsx(&[tab], &dir, &out, NumberDisplayFormat::StandardCommas, 2, true, None, &JobCtx::inert()).unwrap();
     let sheet = unzip_entry(&out, "xl/worksheets/sheet1.xml");
     assert_eq!(cell_value(&sheet, "C10").as_deref(), Some("10000"));

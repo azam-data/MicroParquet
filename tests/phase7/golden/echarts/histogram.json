@@ -1,0 +1,420 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "graphic": [
+    {
+      "left": 20.0,
+      "silent": true,
+      "style": {
+        "fill": "#898781",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 9.0,
+        "fontWeight": "400",
+        "text": "10 value(s) below 5.10 and 10 above 14.89 are not in the bars (the bars span the 1st to the 99th percentile)."
+      },
+      "top": 428.0,
+      "type": "text"
+    }
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 330.0,
+      "left": 12.0,
+      "right": 24.0,
+      "top": 64.0
+    }
+  ],
+  "series": [
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 5.10 to 6.08\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 6.08 to 7.06\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 7.06 to 8.04\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 8.04 to 9.02\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 9.02 to 10.00\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 10.00 to 10.97\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 10.97 to 11.95\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 11.95 to 12.93\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 12.93 to 13.91\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "98",
+            "position": "top",
+            "show": true
+          },
+          "tip": "Rate: 13.91 to 14.89\nRows by Rate: 98\n98 rows",
+          "value": 98.0
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 0,
+        "color": "#2a78d6"
+      },
+      "name": "",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Rows by Rate · BDT",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Distribution of Rate",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": false,
+        "interval": 0,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "5.10 to 6.08",
+        "6.08 to 7.06",
+        "7.06 to 8.04",
+        "8.04 to 9.02",
+        "9.02 to 10.00",
+        "10.00 to 10.97",
+        "10.97 to 11.95",
+        "11.95 to 12.93",
+        "12.93 to 13.91",
+        "13.91 to 14.89"
+      ],
+      "gridIndex": 0,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 20.0,
+      "max": 100.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    }
+  ]
+}

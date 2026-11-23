@@ -130,7 +130,7 @@ fn k2_a_pivot_sheet_keeps_its_grand_total_and_gets_no_extra_totals_row_in_excel(
     let out = d.join("pivot.xlsx");
     let mut summary: HashMap<String, SummarySpec> = HashMap::new();
     summary.insert(v.clone(), SummarySpec { agg: SummaryAgg::Sum, weight_col: None });
-    let tab = ExportTab { title: "Pivot".into(), source: src, steps, col_formats: HashMap::new(), summary, control_col: None };
+    let tab = ExportTab { title: "Pivot".into(), source: src, steps, col_formats: HashMap::new(), summary, control_col: None, chart: None };
     export_tabs_xlsx(&[tab], &d, &out, NumberDisplayFormat::StandardCommas, 2, true, None, &JobCtx::inert()).expect("export");
     let sheet = unzip_entry(&out, "xl/worksheets/sheet1.xml");
     // the header and 14 rows (the last is the Grand total): row 16 would be an extra totals row

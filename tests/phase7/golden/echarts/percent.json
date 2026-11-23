@@ -1,0 +1,590 @@
+{
+  "animation": false,
+  "backgroundColor": "#fcfcfb",
+  "color": [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948"
+  ],
+  "grid": [
+    {
+      "containLabel": true,
+      "height": 330.0,
+      "left": 12.0,
+      "right": 24.0,
+      "top": 90.0
+    }
+  ],
+  "legend": {
+    "data": [
+      {
+        "itemStyle": {
+          "color": "#2a78d6"
+        },
+        "name": "Term deposits"
+      },
+      {
+        "itemStyle": {
+          "color": "#eb6834"
+        },
+        "name": "Savings"
+      },
+      {
+        "itemStyle": {
+          "color": "#1baf7a"
+        },
+        "name": "Current"
+      },
+      {
+        "itemStyle": {
+          "color": "#eda100"
+        },
+        "name": "Foreign"
+      }
+    ],
+    "icon": "roundRect",
+    "itemGap": 18,
+    "itemHeight": 10,
+    "itemWidth": 10,
+    "left": 20.0,
+    "textStyle": {
+      "color": "#52514e",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "top": 58.0
+  },
+  "series": [
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: May\nProduct: Term deposits\nSum of Balance: 600.00\n1 row",
+          "value": 48.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Jun\nProduct: Term deposits\nSum of Balance: 617.00\n1 row",
+          "value": 46.813354
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Jul\nProduct: Term deposits\nSum of Balance: 634.00\n1 row",
+          "value": 45.743146
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Aug\nProduct: Term deposits\nSum of Balance: 651.00\n1 row",
+          "value": 44.77304
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Sep\nProduct: Term deposits\nSum of Balance: 668.00\n1 row",
+          "value": 43.889619
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Oct\nProduct: Term deposits\nSum of Balance: 685.00\n1 row",
+          "value": 43.081761
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#2a78d6"
+      },
+      "name": "Term deposits",
+      "stack": "total0",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    },
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: May\nProduct: Savings\nSum of Balance: 300.00\n1 row",
+          "value": 24.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Jun\nProduct: Savings\nSum of Balance: 317.00\n1 row",
+          "value": 24.051593
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Jul\nProduct: Savings\nSum of Balance: 334.00\n1 row",
+          "value": 24.098124
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Aug\nProduct: Savings\nSum of Balance: 351.00\n1 row",
+          "value": 24.140303
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Sep\nProduct: Savings\nSum of Balance: 368.00\n1 row",
+          "value": 24.178712
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Oct\nProduct: Savings\nSum of Balance: 385.00\n1 row",
+          "value": 24.213836
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#eb6834"
+      },
+      "name": "Savings",
+      "stack": "total0",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    },
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: May\nProduct: Current\nSum of Balance: 200.00\n1 row",
+          "value": 16.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Jun\nProduct: Current\nSum of Balance: 217.00\n1 row",
+          "value": 16.46434
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Jul\nProduct: Current\nSum of Balance: 234.00\n1 row",
+          "value": 16.883117
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Aug\nProduct: Current\nSum of Balance: 251.00\n1 row",
+          "value": 17.262724
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Sep\nProduct: Current\nSum of Balance: 268.00\n1 row",
+          "value": 17.60841
+        },
+        {
+          "itemStyle": {
+            "borderRadius": 0
+          },
+          "tip": "Month: Oct\nProduct: Current\nSum of Balance: 285.00\n1 row",
+          "value": 17.924528
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#1baf7a"
+      },
+      "name": "Current",
+      "stack": "total0",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    },
+    {
+      "barMaxWidth": 24.0,
+      "data": [
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "tip": "Month: May\nProduct: Foreign\nSum of Balance: 150.00\n1 row",
+          "value": 12.0
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "tip": "Month: Jun\nProduct: Foreign\nSum of Balance: 167.00\n1 row",
+          "value": 12.670713
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "tip": "Month: Jul\nProduct: Foreign\nSum of Balance: 184.00\n1 row",
+          "value": 13.275613
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "tip": "Month: Aug\nProduct: Foreign\nSum of Balance: 201.00\n1 row",
+          "value": 13.823934
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "tip": "Month: Sep\nProduct: Foreign\nSum of Balance: 218.00\n1 row",
+          "value": 14.323259
+        },
+        {
+          "itemStyle": {
+            "borderRadius": [
+              4.0,
+              4.0,
+              0,
+              0
+            ]
+          },
+          "tip": "Month: Oct\nProduct: Foreign\nSum of Balance: 235.00\n1 row",
+          "value": 14.779874
+        }
+      ],
+      "emphasis": {
+        "focus": "none",
+        "itemStyle": {
+          "borderColor": "#0b0b0b",
+          "borderWidth": 1
+        }
+      },
+      "itemStyle": {
+        "borderColor": "#fcfcfb",
+        "borderWidth": 1,
+        "color": "#eda100"
+      },
+      "name": "Foreign",
+      "stack": "total0",
+      "type": "bar",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0
+    },
+    {
+      "data": [
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,250.00",
+            "position": "top",
+            "show": true
+          },
+          "value": 100.0
+        },
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,318.00",
+            "position": "top",
+            "show": true
+          },
+          "value": 100.0
+        },
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,386.00",
+            "position": "top",
+            "show": true
+          },
+          "value": 100.0
+        },
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,454.00",
+            "position": "top",
+            "show": true
+          },
+          "value": 100.0
+        },
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,522.00",
+            "position": "top",
+            "show": true
+          },
+          "value": 100.0
+        },
+        {
+          "label": {
+            "color": "#0b0b0b",
+            "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+            "fontSize": 9.5,
+            "formatter": "1,590.00",
+            "position": "top",
+            "show": true
+          },
+          "value": 100.0
+        }
+      ],
+      "lineStyle": {
+        "opacity": 0
+      },
+      "name": "Total",
+      "silent": true,
+      "symbol": "circle",
+      "symbolSize": 0,
+      "tooltip": {
+        "show": false
+      },
+      "type": "line",
+      "xAxisIndex": 0,
+      "yAxisIndex": 0,
+      "z": 5
+    }
+  ],
+  "textStyle": {
+    "color": "#52514e",
+    "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
+  },
+  "title": [
+    {
+      "itemGap": 4,
+      "left": 20.0,
+      "subtext": "Sum of Balance as % of column",
+      "subtextStyle": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 11.0,
+        "fontWeight": "400"
+      },
+      "text": "Sum of Balance by Month and Product",
+      "textStyle": {
+        "color": "#0b0b0b",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 15.0,
+        "fontWeight": "600"
+      },
+      "top": 10
+    }
+  ],
+  "toolbox": {
+    "emphasis": {
+      "iconStyle": {
+        "borderColor": "#0b0b0b"
+      }
+    },
+    "feature": {
+      "dataView": {
+        "backgroundColor": "#fcfcfb",
+        "lang": [
+          "Data view",
+          "Close",
+          "Refresh"
+        ],
+        "readOnly": true,
+        "textColor": "#0b0b0b",
+        "textareaBorderColor": "#c3c2b7",
+        "textareaColor": "#fcfcfb",
+        "title": "Data view"
+      },
+      "mySvg": {
+        "icon": "path://M4 3h12l4 4v14H4z M8 3v5h8",
+        "onclick": "@saveSvg",
+        "title": "Save as SVG"
+      },
+      "saveAsImage": {
+        "backgroundColor": "#fcfcfb",
+        "name": "chart",
+        "pixelRatio": 3,
+        "title": "Save as PNG",
+        "type": "png"
+      }
+    },
+    "iconStyle": {
+      "borderColor": "#898781"
+    },
+    "itemSize": 14,
+    "right": 14,
+    "top": 8
+  },
+  "tooltip": {
+    "backgroundColor": "#fcfcfb",
+    "borderColor": "#c3c2b7",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "box-shadow:none;border-radius:4px;",
+    "formatter": "@tip",
+    "padding": [
+      6,
+      8
+    ],
+    "textStyle": {
+      "color": "#0b0b0b",
+      "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+      "fontSize": 10.0,
+      "fontWeight": "400"
+    },
+    "trigger": "item"
+  },
+  "xAxis": [
+    {
+      "axisLabel": {
+        "color": "#52514e",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "hideOverlap": false,
+        "interval": 0,
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "lineStyle": {
+          "color": "#c3c2b7",
+          "width": 1
+        },
+        "show": true
+      },
+      "axisTick": {
+        "show": false
+      },
+      "boundaryGap": true,
+      "data": [
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct"
+      ],
+      "gridIndex": 0,
+      "inverse": false,
+      "position": "bottom",
+      "splitLine": {
+        "show": false
+      },
+      "type": "category"
+    }
+  ],
+  "yAxis": [
+    {
+      "axisLabel": {
+        "color": "#898781",
+        "fontFamily": "'Source Sans 3', 'Segoe UI', system-ui, sans-serif",
+        "fontSize": 10.0,
+        "formatter": "@fmt:axis:plain",
+        "margin": 8,
+        "show": true
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "gridIndex": 0,
+      "interval": 20.0,
+      "max": 100.0,
+      "min": 0.0,
+      "position": "left",
+      "splitLine": {
+        "lineStyle": {
+          "color": "#e1e0d9",
+          "type": "solid",
+          "width": 1
+        },
+        "show": true
+      },
+      "type": "value"
+    }
+  ]
+}
