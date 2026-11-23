@@ -175,6 +175,30 @@ def _mp_date_part(d, part, fy_start, week_start):
     raise ValueError("Unknown date part: %s" % part)
 
 
+def _mp_date_key(d, part, fy_start, week_start):
+    """Where the part of a date stands in the part's own order, as a whole number (filters compare by it, never by
+    the text): the year; months and quarters counted from year 0; the month 1-12; the quarter 1-4; the day's place in
+    the week from the week start (0 = the first day). A blank date has no key."""
+    if d is None:
+        return None
+    if isinstance(d, _dt.datetime):
+        d = d.date()
+    q = (d.month - 1) // 3 + 1
+    if part == "Year":
+        return d.year
+    if part == "Year-Quarter":
+        return d.year * 4 + q - 1
+    if part == "Month-Year":
+        return d.year * 12 + d.month - 1
+    if part == "Month":
+        return d.month
+    if part == "Quarter":
+        return q
+    if part == "Day name":
+        return (d.weekday() - week_start) % 7
+    raise ValueError("No order to compare by: %s" % part)
+
+
 "#;
 
 /// The Python expression of one date part of a column (through `_mp_date_part`).
@@ -191,6 +215,17 @@ pub fn py_date_part_expr(column: &str, part: crate::dates::DatePart, cal: &crate
         cal.fy_start_month,
         cal.week_start.from_monday(),
         dtype
+    )
+}
+
+/// The Python expression of the order key of a date part of a column (through `_mp_date_key`; Phase 8 W9).
+pub fn py_date_key_expr(column: &str, part: crate::dates::DatePart, cal: &crate::dates::CalendarSettings) -> String {
+    format!(
+        "pl.col({}).map_elements(lambda d: _mp_date_key(d, {}, {}, {}), return_dtype=pl.Int64)",
+        serde_json::to_string(column).unwrap_or_default(),
+        serde_json::to_string(part.label()).unwrap_or_default(),
+        cal.fy_start_month,
+        cal.week_start.from_monday()
     )
 }
 
@@ -838,6 +873,7 @@ pub fn generate_python_polars_code(
                     // a condition on a date part (W2) tests a column of that part, made first and dropped after
                     let mut temps: Vec<String> = Vec::new();
                     let mut tested: Vec<FilterCondition> = Vec::new();
+                    let mut refused: Option<String> = None;
                     for (i, c) in conditions.iter().enumerate() {
                         match &c.part {
                             Some(p) => {
@@ -845,12 +881,34 @@ pub fn generate_python_polars_code(
                                     py.push_str(PY_DATE_PART_HELPER);
                                 }
                                 let name = format!("__mp_part{}", i);
-                                py.push_str(&format!("lf = lf.with_columns({}.alias(\"{}\"))\n", py_date_part_expr(&c.column, p.part, &p.calendar), name));
-                                tested.push(FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                                if p.part.is_ordered() {
+                                    // compared by the part's order (W9): a column of keys, and the values written as keys
+                                    match crate::dates::keyed_condition(c, &name) {
+                                        Ok(keyed) => {
+                                            py.push_str(&format!("lf = lf.with_columns({}.alias(\"{}\"))\n", py_date_key_expr(&c.column, p.part, &p.calendar), name));
+                                            tested.push(keyed);
+                                        }
+                                        Err(e) => {
+                                            refused = Some(format!("Filter: {}", e));
+                                            break;
+                                        }
+                                    }
+                                } else if let Some(why) = crate::dates::unordered_refusal(c) {
+                                    refused = Some(format!("Filter: {}", why));
+                                    break;
+                                } else {
+                                    py.push_str(&format!("lf = lf.with_columns({}.alias(\"{}\"))\n", py_date_part_expr(&c.column, p.part, &p.calendar), name));
+                                    tested.push(FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                                }
                                 temps.push(name);
                             }
                             None => tested.push(c.clone()),
                         }
+                    }
+                    if let Some(why) = refused {
+                        // the same refusal as the app, never a guessed comparison
+                        py.push_str(&format!("raise ValueError({:?})\n\n", why));
+                        continue;
                     }
                     let parts: Vec<String> = tested.iter().map(py_condition_expr).collect();
                     let sep = match join {

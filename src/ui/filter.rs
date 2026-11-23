@@ -16,6 +16,11 @@ pub struct FilterState {
     pub pick_buttons: Vec<(usize, egui::Rect)>,
     /// Where the "By" boxes of date columns were drawn (W2, tests).
     pub by_boxes: Vec<(usize, egui::Rect)>,
+    /// The value boxes of conditions by a date part, as (condition, 0 the value or 1 the upper limit, rectangle), and the buttons that open their lists (W9).
+    pub value_boxes: Vec<(usize, u8, egui::Rect)>,
+    /// The operator boxes, as (condition, rectangle).
+    pub op_boxes: Vec<(usize, egui::Rect)>,
+    pub list_buttons: Vec<(usize, u8, egui::Rect)>,
 }
 
 impl Default for FilterState {
@@ -28,6 +33,9 @@ impl Default for FilterState {
             keep: true,
             pick_buttons: Vec::new(),
             by_boxes: Vec::new(),
+            value_boxes: Vec::new(),
+            op_boxes: Vec::new(),
+            list_buttons: Vec::new(),
         }
     }
 }
@@ -50,7 +58,7 @@ pub fn condition_problem(c: &FilterCondition) -> Option<String> {
         return None;
     }
     if is_pick_op(c.op) {
-        return if c.values.is_empty() && !c.or_blank && c.value.trim().is_empty() { Some(format!("{}: pick at least one value.", c.column)) } else { None };
+        return if c.values.is_empty() && !c.or_blank && c.value.trim().is_empty() { Some(format!("{}: pick at least one value.", c.column)) } else { part_problem(c) };
     }
     if c.value.trim().is_empty() {
         return Some(format!("{}: enter a value.", c.column));
@@ -58,7 +66,34 @@ pub fn condition_problem(c: &FilterCondition) -> Option<String> {
     if c.op == CondOp::Between && c.value2.trim().is_empty() {
         return Some(format!("{}: enter the upper limit of the range.", c.column));
     }
-    None
+    part_problem(c)
+}
+
+/// Why a condition on a part of a date cannot be applied: a value that is not that part, or a range written back to front (W9).
+/// The words are the engine's, so the dialog and the step say the same thing.
+pub fn part_problem(c: &FilterCondition) -> Option<String> {
+    c.part.as_ref()?;
+    micro_parquet::dates::keyed_condition(c, "x").err()
+}
+
+/// A change of operator on a condition with a date part (W9): the values picked for a list become the one limit of a comparison and
+/// back, and the part stays. Anything else keeps what was typed.
+pub fn op_changed_with_part(c: &mut FilterCondition, before: CondOp) {
+    if c.op == before || c.part.is_none() {
+        return;
+    }
+    if !before.is_comparison() && c.op.is_comparison() {
+        c.value = picker_selection(c).into_iter().next().unwrap_or_default();
+        c.value2.clear();
+        c.values.clear();
+        c.or_blank = false;
+    } else if before.is_comparison() && !c.op.is_comparison() && !c.op.is_unary() {
+        let v = c.value.trim().to_string();
+        c.values = if v.is_empty() { Vec::new() } else { vec![v] };
+        c.or_blank = false;
+        c.value2.clear();
+        c.value = c.values.join(", ");
+    }
 }
 
 /// The operators whose value is picked from the column's list.
@@ -208,6 +243,9 @@ impl MicroParquetApp {
         let mut by_rects: Vec<(usize, egui::Rect)> = Vec::new();
         let mut ask_values: Option<(String, Option<String>)> = None;
         let mut picker_buttons_seen: Vec<(usize, egui::Rect)> = Vec::new();
+        let mut op_rects: Vec<(usize, egui::Rect)> = Vec::new();
+        let mut value_boxes: Vec<(usize, u8, egui::Rect)> = Vec::new();
+        let mut list_buttons: Vec<(usize, u8, egui::Rect)> = Vec::new();
         let title = if editing.is_some() {
             "\u{E30C}  Edit filter"
         } else {
@@ -217,7 +255,8 @@ impl MicroParquetApp {
             d.body(|ui| {
                 let mut remove: Option<usize> = None;
                 for (i, c) in self.filter.conditions.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
+                    let op_before = c.op;
+                    ui.horizontal_wrapped(|ui| {
                         if i > 0 {
                             ui.label(egui::RichText::new(self.filter.join.label()).color(theme::muted(ui)));
                         }
@@ -229,23 +268,25 @@ impl MicroParquetApp {
                                     ui.selectable_value(&mut c.column, name.clone(), name);
                                 }
                             });
-                        egui::ComboBox::from_id_salt(("flt_op", i))
+                        let r = egui::ComboBox::from_id_salt(("flt_op", i))
                             .width(theme::FIELD_W_OP)
+                            .height(theme::CHART_PICKER_POPUP_H)
                             .selected_text(c.op.label())
                             .show_ui(ui, |ui| {
                                 for op in CondOp::all() {
                                     ui.selectable_value(&mut c.op, *op, op.label());
                                 }
                             });
+                        op_rects.push((i, r.response.rect));
                         // a part of a column that is no longer the condition's column is dropped (W2)
                         if c.part.as_ref().is_some_and(|p| p.column != c.column) {
                             c.part = None;
                         }
-                        // "By": Date (the list of dates) or a part of it, for a date column (W2)
-                        if is_pick_op(c.op) && date_cols.contains(&c.column) {
+                        // "By": Date (the list of dates) or a part of it, for a date column, with every operator that compares dates (W2, W9)
+                        if c.op.supports_part() && date_cols.contains(&c.column) {
                             let shown = c.part.as_ref().map(|p| p.part.label()).unwrap_or("Date");
                             let before = c.part.clone();
-                            let r = egui::ComboBox::from_id_salt(("flt_by", i)).width(theme::FIELD_W_OP).selected_text(format!("By {}", shown)).show_ui(ui, |ui| {
+                            let r = egui::ComboBox::from_id_salt(("flt_by", i)).width(theme::FIELD_W_OP).height(theme::CHART_PICKER_POPUP_H).selected_text(format!("By {}", shown)).show_ui(ui, |ui| {
                                 if ui.selectable_label(c.part.is_none(), "Date").clicked() {
                                     c.part = None;
                                 }
@@ -261,12 +302,19 @@ impl MicroParquetApp {
                                 c.values.clear();
                                 c.or_blank = false;
                                 c.value.clear();
+                                c.value2.clear();
                                 if picker.owner == Some(i) {
                                     picker.owner = None;
                                 }
                             }
-                        } else if c.part.is_some() && !is_pick_op(c.op) {
+                        } else if c.part.is_some() {
+                            // the text tests and the blank tests have no part
                             c.part = None;
+                        }
+                        // the operator changed: the values of a list and the limit of a comparison are made one from the other
+                        op_changed_with_part(c, op_before);
+                        if c.op != op_before && picker.owner == Some(i) {
+                            picker.owner = None;
                         }
                         let pick_field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
                         if picker.owner == Some(i) && picker.field != pick_field {
@@ -281,6 +329,31 @@ impl MicroParquetApp {
                                 picker.part = c.part.clone();
                                 ask_values = Some((pick_field.clone(), None));
                             }
+                        } else if !c.op.is_unary() && c.part.is_some() {
+                            // a comparison by a part: its value is typed, or chosen from the part's values in the part's order (W9)
+                            let hint = c.part.as_ref().map(|p| p.part.example()).unwrap_or("value");
+                            for slot in 0..(if c.op == CondOp::Between { 2u8 } else { 1u8 }) {
+                                if slot == 1 {
+                                    ui.label("and");
+                                }
+                                let text = if slot == 0 { &mut c.value } else { &mut c.value2 };
+                                let e = ui.add(egui::TextEdit::singleline(text).desired_width(theme::FIELD_W_VALUE).hint_text(if slot == 0 { hint.to_string() } else { format!("{} (upper limit)", hint) }));
+                                value_boxes.push((i, slot, e.rect));
+                                let open_here = picker.owner == Some(i) && picker.slot == slot;
+                                let b = ui.add(egui::SelectableLabel::new(open_here, "\u{25be}")).on_hover_text("Choose from the values in the table");
+                                list_buttons.push((i, slot, b.rect));
+                                if b.clicked() {
+                                    if open_here {
+                                        picker.owner = None;
+                                    } else if picker.owner == Some(i) {
+                                        picker.slot = slot;
+                                    } else if picker.toggle(i, &pick_field) {
+                                        picker.part = c.part.clone();
+                                        picker.slot = slot;
+                                        ask_values = Some((pick_field.clone(), None));
+                                    }
+                                }
+                            }
                         } else if !c.op.is_unary() {
                             ui.add(egui::TextEdit::singleline(&mut c.value).desired_width(theme::FIELD_W_VALUE).hint_text("value"));
                             if c.op == CondOp::Between {
@@ -292,6 +365,23 @@ impl MicroParquetApp {
                             remove = Some(i);
                         }
                     });
+                    // the list of a comparison's value, open under its row: the part's values in the part's order (W9)
+                    if picker.owner == Some(i) && c.op.is_comparison() && c.part.is_some() {
+                        let order = c.part.as_ref().and_then(|p| p.sort_order()).unwrap_or_default();
+                        picker.calendar = calendar;
+                        let current = if picker.slot == 0 { c.value.clone() } else { c.value2.clone() };
+                        let (picked, out) = crate::ui::value_picker::picker_body_single(ui, &tk, &mut picker, &current, &order);
+                        if let Some(v) = picked {
+                            if picker.slot == 0 {
+                                c.value = v;
+                            } else {
+                                c.value2 = v;
+                            }
+                        }
+                        if let Some(req) = out.request {
+                            ask_values = Some((picker.field.clone(), req));
+                        }
+                    }
                     // the picker of this condition, open under its row
                     if picker.owner == Some(i) && is_pick_op(c.op) {
                         let mut values = picker_selection(c);
@@ -373,6 +463,9 @@ impl MicroParquetApp {
         self.picker = picker;
         self.filter.pick_buttons = picker_buttons_seen;
         self.filter.by_boxes = by_rects;
+        self.filter.op_boxes = op_rects;
+        self.filter.value_boxes = value_boxes;
+        self.filter.list_buttons = list_buttons;
         if let Some((field, search)) = ask_values {
             self.picker.field = field;
             self.picker_request(search);

@@ -12,7 +12,7 @@
 use crate::ui::chart::ChartRects;
 use crate::ui::filter::picker_selection;
 use crate::ui::prelude::*;
-use crate::ui::value_picker::{picker_body_with, picker_order, PickerPanel};
+use crate::ui::value_picker::{picker_body_single, picker_body_with, picker_order, PickerPanel};
 use micro_parquet::charts::spec::ChartSpec;
 use micro_parquet::dates::{DateFieldRef, DatePart};
 use micro_parquet::models::{CondOp, FilterCondition};
@@ -55,6 +55,12 @@ pub struct ChartFilterState {
     pub open: Option<FieldKey>,
     /// "Add a filter on …": the column chosen and, for a date column, the part its values are of.
     pub add: Option<(String, Option<DatePart>)>,
+    /// The operator of the filter being added on a date column (W9): `None` is the tick list, the others compare with a limit.
+    pub add_op: Option<CondOp>,
+    /// Its limit and, for "between", the upper limit; and which of the two the open list is for.
+    pub add_value: String,
+    pub add_value2: String,
+    pub add_list: Option<u8>,
 }
 
 impl MicroParquetApp {
@@ -125,10 +131,17 @@ impl MicroParquetApp {
         let mut panel = std::mem::take(&mut self.chart.filters_ui.panel);
         let mut open = self.chart.filters_ui.open.clone();
         let mut add = self.chart.filters_ui.add.clone();
+        let mut add_op = self.chart.filters_ui.add_op;
+        let mut add_value = std::mem::take(&mut self.chart.filters_ui.add_value);
+        let mut add_value2 = std::mem::take(&mut self.chart.filters_ui.add_value2);
+        let mut add_list = self.chart.filters_ui.add_list;
+        let mut add_done = false;
         let mut toggle: Option<FieldKey> = None;
         let mut open_now: Option<FieldKey> = None;
         let mut ask: Option<(FieldKey, Option<String>)> = None;
         let mut remove: Option<usize> = None;
+        let mut new_filter: Option<FilterCondition> = None;
+        let mut add_problem_text: Option<String> = None;
         let fields: Vec<(&str, FieldKey)> = [
             ("Category", Some(FieldKey::of(&spec.category, &spec.category_part)).filter(|k| !k.name.is_empty())),
             ("Series", spec.series.as_ref().map(|s| FieldKey::of(s, &spec.series_part))),
@@ -241,6 +254,10 @@ impl MicroParquetApp {
                         if ui.selectable_label(add.as_ref().is_some_and(|(a, _)| a == c), c).clicked() {
                             add = Some((c.clone(), None));
                             open_now = Some(FieldKey::column(c));
+                            add_op = None;
+                            add_value.clear();
+                            add_value2.clear();
+                            add_list = None;
                         }
                     }
                 });
@@ -248,23 +265,112 @@ impl MicroParquetApp {
                 // a date column: its values are dates, or a part of them
                 if let Some((col, part)) = add.clone().filter(|(c, _)| date_cols.contains(c)) {
                     let shown = part.map(|p| p.label()).unwrap_or("Date");
-                    let r = egui::ComboBox::from_id_salt("chart_filter_by").width(theme::FIELD_W_OP).selected_text(format!("By {}", shown)).show_ui(ui, |ui| {
-                        if ui.selectable_label(part.is_none(), "Date").clicked() {
+                    let r = egui::ComboBox::from_id_salt("chart_filter_by").width(theme::FIELD_W_OP).height(theme::CHART_PICKER_POPUP_H).selected_text(format!("By {}", shown)).show_ui(ui, |ui| {
+                        if ui.selectable_label(part.is_none(), "Date").clicked() && part.is_some() {
                             add = Some((col.clone(), None));
                             open_now = Some(FieldKey::column(&col));
+                            // values of one kind are not values of another
+                            add_value.clear();
+                            add_value2.clear();
+                            add_list = None;
                         }
                         for p in DatePart::FILTER_BY {
-                            if ui.selectable_label(part == Some(p), p.label()).clicked() {
+                            if ui.selectable_label(part == Some(p), p.label()).clicked() && part != Some(p) {
                                 add = Some((col.clone(), Some(p)));
                                 open_now = Some(FieldKey::of(&col, &Some(DateFieldRef::new(&col, p, calendar))));
+                                add_value.clear();
+                                add_value2.clear();
+                                add_list = None;
                             }
                         }
                     });
                     rects.fields.push(("Add by".to_string(), r.response.rect));
                 }
             });
+            // the operator (W9): the ticked values, or a comparison with a limit. By stays whichever is chosen. (Its own line: the
+            // studio's panel is narrow, and a pop-up list does not wrap with the row.)
+            if let Some((col, part)) = add.clone().filter(|(c, _)| date_cols.contains(c)) {
+                ui.horizontal(|ui| {
+                    let op_text = add_op.map(|o| o.label()).unwrap_or("is in list");
+                    let r = egui::ComboBox::from_id_salt("chart_filter_op").width(theme::FIELD_W_OP).height(theme::CHART_PICKER_POPUP_H).selected_text(op_text).show_ui(ui, |ui| {
+                        if ui.selectable_label(add_op.is_none(), "is in list").clicked() {
+                            add_op = None;
+                            add_list = None;
+                        }
+                        for op in [CondOp::Equals, CondOp::NotEquals, CondOp::Gt, CondOp::Gte, CondOp::Lt, CondOp::Lte, CondOp::Between] {
+                            if ui.selectable_label(add_op == Some(op), op.label()).clicked() && add_op != Some(op) {
+                                if op != CondOp::Between {
+                                    add_value2.clear();
+                                }
+                                add_op = Some(op);
+                                add_list = None;
+                            }
+                        }
+                    });
+                    rects.fields.push(("Add op".to_string(), r.response.rect));
+                });
+                if let Some(op) = add_op {
+                    ui.horizontal_wrapped(|ui| {
+                        let hint = part.map(|p| p.example()).unwrap_or("YYYY-MM-DD");
+                        for slot in 0..(if op == CondOp::Between { 2u8 } else { 1u8 }) {
+                            if slot == 1 {
+                                ui.label("and");
+                            }
+                            let text = if slot == 0 { &mut add_value } else { &mut add_value2 };
+                            let e = ui.add(egui::TextEdit::singleline(text).desired_width(theme::FIELD_W_VALUE_NARROW).hint_text(hint));
+                            rects.fields.push((format!("Add value {}", slot + 1), e.rect));
+                            if part.is_some() {
+                                let on = add_list == Some(slot);
+                                let b = ui.add(egui::SelectableLabel::new(on, "\u{25be}")).on_hover_text("Choose from the values in the table");
+                                rects.fields.push((format!("Add list {}", slot + 1), b.rect));
+                                if b.clicked() {
+                                    add_list = if on { None } else { Some(slot) };
+                                }
+                            }
+                        }
+                        // the filter, built from what is typed: a value that is not that part is said in words and Add stays off
+                        let c = FilterCondition { column: col.clone(), op, value: add_value.trim().to_string(), value2: add_value2.trim().to_string(), part: part.map(|p| DateFieldRef::new(&col, p, calendar)), ..Default::default() };
+                        let problem = add_problem(&c);
+                        let b = ui.add_enabled(problem.is_none(), egui::Button::new("Add filter"));
+                        rects.fields.push(("Add filter".to_string(), b.rect));
+                        if b.clicked() {
+                            new_filter = Some(c);
+                        } else if let Some(p) = problem.filter(|_| !add_value.trim().is_empty()) {
+                            add_problem_text = Some(p);
+                        }
+                    });
+                }
+            }
+            if let Some(p) = &add_problem_text {
+                ui.add(egui::Label::new(egui::RichText::new(p).size(theme::TEXT_LABEL).color(tk.danger)).wrap());
+            }
+            // the list of the value being chosen, the part's values in the part's order
+            if let (Some(slot), Some((col, Some(p)))) = (add_list.filter(|_| add_op.is_some()), add.clone()) {
+                let key = FieldKey::of(&col, &Some(DateFieldRef::new(&col, p, calendar)));
+                if open.as_ref() == Some(&key) {
+                    let current = if slot == 0 { add_value.clone() } else { add_value2.clone() };
+                    let order = p.sort_order(&calendar).unwrap_or_default();
+                    panel.part = key.part.clone();
+                    panel.calendar = calendar;
+                    let (picked, out) = picker_body_single(ui, &tk, &mut panel, &current, &order);
+                    if let Some(v) = picked {
+                        if slot == 0 {
+                            add_value = v;
+                        } else {
+                            add_value2 = v;
+                        }
+                    }
+                    if let Some(req) = out.request {
+                        ask = Some((key.clone(), req));
+                    }
+                }
+            }
+            if let Some(c) = new_filter.take() {
+                spec.filters.push(c);
+                add_done = true;
+            }
             // the tick list of the filter being added (until it has a value, it is not a filter)
-            if let Some((col, part)) = add.clone() {
+            if let Some((col, part)) = add.clone().filter(|_| add_op.is_none()) {
                 let key = FieldKey::of(&col, &part.map(|p| DateFieldRef::new(&col, p, calendar)));
                 if open.as_ref() == Some(&key) && !hosts_by_field(&key) && !spec.filters.iter().any(|c| c.op == CondOp::InList && FieldKey::of_condition(c) == key) {
                     tick_list(ui, spec, &mut panel, &key, &mut ask);
@@ -283,6 +389,20 @@ impl MicroParquetApp {
         self.chart.filters_ui.panel = panel;
         self.chart.filters_ui.open = open;
         self.chart.filters_ui.add = add;
+        self.chart.filters_ui.add_op = add_op;
+        self.chart.filters_ui.add_value = add_value;
+        self.chart.filters_ui.add_value2 = add_value2;
+        self.chart.filters_ui.add_list = add_list;
+        if add_done {
+            // the filter is in the list above now: the adding row starts again
+            let ui = &mut self.chart.filters_ui;
+            ui.add = None;
+            ui.add_op = None;
+            ui.add_value.clear();
+            ui.add_value2.clear();
+            ui.add_list = None;
+            ui.open = None;
+        }
         // the adding row is done once its filter exists: the list row takes over
         if let Some((col, part)) = self.chart.filters_ui.add.clone() {
             let key = FieldKey::of(&col, &part.map(|p| DateFieldRef::new(&col, p, calendar)));
@@ -301,4 +421,25 @@ impl MicroParquetApp {
             self.chart_picker_request(&k, search);
         }
     }
+}
+
+/// Why the filter being added cannot be added yet, in words; `None` when it can. A value by a part is checked as the part (W9);
+/// by Date it is a day written YYYY-MM-DD.
+fn add_problem(c: &FilterCondition) -> Option<String> {
+    if c.value.trim().is_empty() {
+        return Some("Enter a value.".to_string());
+    }
+    if c.op == CondOp::Between && c.value2.trim().is_empty() {
+        return Some("Enter the upper limit too.".to_string());
+    }
+    if c.part.is_some() {
+        return crate::ui::filter::part_problem(c);
+    }
+    let day = |v: &str| chrono::NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d").is_ok();
+    for v in [&c.value, &c.value2].into_iter().take(if c.op == CondOp::Between { 2 } else { 1 }) {
+        if !day(v) {
+            return Some(format!("'{}' is not a date. Write it as YYYY-MM-DD (for example 2026-10-31).", v.trim()));
+        }
+    }
+    None
 }

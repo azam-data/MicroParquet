@@ -2998,8 +2998,18 @@ pub fn with_condition_parts(lf: &mut LazyFrame, conditions: &[crate::models::Fil
                 crate::dates::check_date_column(&c.column, dt).map_err(|e| anyhow::anyhow!("Filter: {}", e))?;
                 p.calendar.validate()?;
                 let name = format!("__mp_part{}", i);
-                exprs.push(p.part.expr(&c.column, p.calendar).alias(name.as_str()));
-                out.push(crate::models::FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                if p.part.is_ordered() {
+                    // Year, Month-Year, Year-Quarter, Month, Quarter, Day name: compared by their order (W9), never by their text
+                    let keyed = crate::dates::keyed_condition(c, &name).map_err(|e| anyhow::anyhow!("Filter: {}", e))?;
+                    exprs.push(p.part.key_expr(&c.column, p.calendar).alias(name.as_str()));
+                    out.push(keyed);
+                } else {
+                    if let Some(why) = crate::dates::unordered_refusal(c) {
+                        anyhow::bail!("Filter: {}", why);
+                    }
+                    exprs.push(p.part.expr(&c.column, p.calendar).alias(name.as_str()));
+                    out.push(crate::models::FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                }
                 temps.push(name);
             }
             None => out.push(c.clone()),

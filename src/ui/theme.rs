@@ -445,6 +445,8 @@ pub const RATE_STEP_RANGE: std::ops::RangeInclusive<f64> = 0.01..=50.0;
 pub const COND_BODY_W: f32 = 720.0;
 pub const DIALOG_SCROLL_BAR_ALLOWANCE: f32 = 16.0;
 pub const FIELD_W_VALUE: f32 = 130.0;
+/// A value box in a narrow panel (the chart studio's "Add a filter" row, W9).
+pub const FIELD_W_VALUE_NARROW: f32 = 100.0;
 /// The value picker: its search box, its list's height and the button that opens it.
 pub const PICKER_SEARCH_W: f32 = 200.0;
 /// The room the picker's two buttons need beside its search box, and the least the box is narrowed to.

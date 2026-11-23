@@ -268,8 +268,8 @@ impl DatePart {
     /// The parts the Split date dialog ticks first.
     pub const DEFAULT_SPLIT: [DatePart; 5] = [DatePart::Year, DatePart::Quarter, DatePart::Month, DatePart::MonthYear, DatePart::DayName];
 
-    /// The parts the filter's "By" choice offers (besides the date itself).
-    pub const FILTER_BY: [DatePart; 5] = [DatePart::Year, DatePart::MonthYear, DatePart::Month, DatePart::Quarter, DatePart::DayName];
+    /// The parts the filter's "By" choice offers (besides the date itself): the ones with an order a filter can compare by (W9).
+    pub const FILTER_BY: [DatePart; 6] = [DatePart::Year, DatePart::MonthYear, DatePart::YearQuarter, DatePart::Month, DatePart::Quarter, DatePart::DayName];
 
     /// The words of the dialogs and of the new column names ("Open Date Month-Year").
     pub fn label(self) -> &'static str {
@@ -780,4 +780,186 @@ pub fn with_date_fields(lf: LazyFrame, fields: &[DateFieldRef], schema: &Schema,
         exprs.push(f.expr());
     }
     Ok(lf.with_columns(exprs))
+}
+
+// ------------------------------------------------------------------------------------ comparison by part (W9)
+
+/// A four-digit year.
+fn year_of(t: &str) -> Option<i64> {
+    if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
+        t.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// The runs of digits and of letters of a text, in order ("Aug-2025" gives Aug, 2025; "2026Q1" gives 2026, Q, 1).
+fn word_runs(t: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut kind = 0;
+    for c in t.chars() {
+        let k = if c.is_ascii_digit() {
+            1
+        } else if c.is_alphabetic() {
+            2
+        } else {
+            0
+        };
+        if (k != kind || k == 0) && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+        if k != 0 {
+            cur.push(c);
+        }
+        kind = k;
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// The quarter (1–4) written "Q1" to "Q4" in any case; the number alone is not a quarter.
+fn quarter_of(runs: &[String]) -> Option<i64> {
+    match runs {
+        [q, n] if q.eq_ignore_ascii_case("q") && n.len() == 1 => n.parse::<i64>().ok().filter(|n| (1..=4).contains(n)),
+        _ => None,
+    }
+}
+
+impl DatePart {
+    /// Whether a filter can compare by this part's order (W9): Year, Month-Year, Year-Quarter, Month, Quarter and Day name.
+    pub fn is_ordered(self) -> bool {
+        Self::FILTER_BY.contains(&self)
+    }
+
+    /// Where the part of a date stands in the part's own order, as a whole number: the year; months and quarters counted from
+    /// year 0 (so Dec 2025 comes before Jan 2026); the month 1–12; the quarter 1–4; the day's place in the week from the
+    /// calendar's week start (0 = the first day). `None` for a part that has no such order.
+    pub fn order_key(self, d: NaiveDate, cal: &CalendarSettings) -> Option<i64> {
+        let (y, m) = (d.year() as i64, d.month() as i64);
+        let q = (m - 1) / 3 + 1;
+        match self {
+            DatePart::Year => Some(y),
+            DatePart::YearQuarter => Some(y * 4 + q - 1),
+            DatePart::MonthYear => Some(y * 12 + m - 1),
+            DatePart::Month => Some(m),
+            DatePart::Quarter => Some(q),
+            DatePart::DayName => Some(cal.day_position(Weekday::from_chrono(d.weekday())) as i64),
+            _ => None,
+        }
+    }
+
+    /// The order key of every value of a date column (a Datetime drops its time); a blank date gives a blank key.
+    pub fn key_expr(self, column: &str, cal: CalendarSettings) -> Expr {
+        let part = self;
+        col(column).cast(DataType::Date).map(
+            move |s: Series| {
+                let days = s.cast(&DataType::Date)?.cast(&DataType::Int32)?;
+                let ca: Int64Chunked = days.i32()?.into_iter().map(|v| v.and_then(date_from_days).and_then(|d| part.order_key(d, &cal))).collect();
+                Ok(Some(ca.with_name(s.name().clone()).into_series()))
+            },
+            GetOutput::from_type(DataType::Int64),
+        )
+    }
+
+    /// The order key of a typed or picked value ("Aug 2025", "Q3", "Wed"): the part's labels in any case, and the month or
+    /// year written another common way. Anything else is refused in words, never read as something near.
+    pub fn parse_key(self, text: &str, cal: &CalendarSettings) -> std::result::Result<i64, String> {
+        let t = text.trim();
+        if t.is_empty() {
+            return Err(format!("Enter a {}, like {}.", self.label(), self.example()));
+        }
+        let runs = word_runs(t);
+        let month_of = |s: &str| -> Option<i64> {
+            parse_month(s).map(i64::from).or_else(|| if s.len() <= 2 && s.chars().all(|c| c.is_ascii_digit()) { s.parse::<i64>().ok().filter(|m| (1..=12).contains(m)) } else { None })
+        };
+        let key = match self {
+            DatePart::Year => year_of(t),
+            DatePart::Quarter => quarter_of(&runs),
+            DatePart::Month => parse_month(t).map(i64::from),
+            DatePart::DayName => Weekday::parse(t).map(|w| cal.day_position(w) as i64),
+            DatePart::MonthYear => match runs.as_slice() {
+                [a, b] => match (month_of(a), year_of(b), year_of(a), month_of(b)) {
+                    (Some(m), Some(y), _, _) | (_, _, Some(y), Some(m)) => Some(y * 12 + m - 1),
+                    _ => None,
+                },
+                _ => None,
+            },
+            DatePart::YearQuarter => match runs.as_slice() {
+                [a, b, c] => year_of(a)
+                    .zip(quarter_of(&[b.clone(), c.clone()]))
+                    .or_else(|| year_of(c).zip(quarter_of(&[a.clone(), b.clone()])))
+                    .map(|(y, q)| y * 4 + q - 1),
+                _ => None,
+            },
+            _ => return Err(format!("'{}' has no order to compare by. Choose Year, Month-Year, Year-Quarter, Month, Quarter or Day name, or By Date.", self.label())),
+        };
+        key.ok_or_else(|| format!("'{}' is not a {}. Write it like {}.", t, self.label(), self.example()))
+    }
+}
+
+/// A condition on a date part, rewritten to test the part's order key (Phase 8 W9): its column is `temp`, a column of keys
+/// (`DatePart::key_expr`), and its values are keys written as whole numbers. The comparisons (>, ≥, <, ≤, between) compare the
+/// keys, so Month-Year runs by time and Day name from the week start, never by text; a value that is not that part, a range written
+/// back to front, and a text test (contains, starts with, ends with) are refused in words. A blank date has no key, so it matches
+/// nothing (a "not in list" keeps it, as it does for every column, unless "(blank)" is picked).
+pub fn keyed_condition(c: &crate::models::FilterCondition, temp: &str) -> std::result::Result<crate::models::FilterCondition, String> {
+    use crate::models::CondOp;
+    let Some(p) = &c.part else { return Ok(c.clone()) };
+    let subject = picker_label(&c.column, p.part);
+    p.calendar.validate().map_err(|e| e.to_string())?;
+    if !c.op.supports_part() && !c.op.is_unary() {
+        return Err(format!("'{}' cannot be used on {}. Choose =, in list, >, \u{2265}, <, \u{2264} or between, or set By to Date.", c.op.label(), subject));
+    }
+    let key = |text: &str| p.part.parse_key(text, &p.calendar);
+    let mut out = crate::models::FilterCondition { column: temp.to_string(), part: None, ..c.clone() };
+    match c.op {
+        CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList => {
+            let raw: Vec<String> = if !c.values.is_empty() {
+                c.values.clone()
+            } else if c.value.trim().is_empty() {
+                Vec::new()
+            } else if matches!(c.op, CondOp::InList | CondOp::NotInList) {
+                c.value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+            } else {
+                vec![c.value.trim().to_string()]
+            };
+            if raw.is_empty() && !c.or_blank {
+                return Err(format!("{}: choose at least one value.", subject));
+            }
+            let keys = raw.iter().map(|v| key(v)).collect::<std::result::Result<Vec<i64>, String>>()?;
+            out.values = keys.iter().map(|k| k.to_string()).collect();
+            out.value = out.values.join(", ");
+            out.value2.clear();
+        }
+        CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte => {
+            out.value = key(&c.value)?.to_string();
+            out.values.clear();
+            out.or_blank = false;
+        }
+        CondOp::Between => {
+            let (lo, hi) = (key(&c.value)?, key(&c.value2)?);
+            if lo > hi {
+                return Err(format!("{}: '{}' comes after '{}'. Write the earlier one first.", subject, c.value.trim(), c.value2.trim()));
+            }
+            out.value = lo.to_string();
+            out.value2 = hi.to_string();
+            out.values.clear();
+            out.or_blank = false;
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+/// What stops a comparison by a part that has no order (Week of year, Fiscal year …): only =, in list and the blank tests work there.
+pub fn unordered_refusal(c: &crate::models::FilterCondition) -> Option<String> {
+    use crate::models::CondOp;
+    let p = c.part.as_ref()?;
+    if matches!(c.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList | CondOp::IsBlank | CondOp::IsNotBlank) {
+        return None;
+    }
+    Some(format!("'{}' cannot compare {}: that part has no order to compare by. Use =, in list, or choose Year, Month-Year, Year-Quarter, Month, Quarter or Day name.", c.op.label(), picker_label(&c.column, p.part)))
 }

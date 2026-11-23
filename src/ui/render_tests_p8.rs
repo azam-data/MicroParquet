@@ -2897,3 +2897,203 @@ fn w10_a_filtered_chart_tab_and_a_project_keep_the_filter_and_old_charts_load_as
         assert!(has_text(&rig.draw(4), "Filtered: Branch = Dhaka or Sylhet"), "{what}: and says so");
     }
 }
+
+// ================================================================================ W9: date comparisons by part
+
+/// The item `text` of the pop-up list that opened from `near`: the one whose box is nearest to it (a list opens below the box, or
+/// above it when there is no room below).
+fn popup_item(p: &Painted, text: &str, near: egui::Rect) -> Option<egui::Rect> {
+    p.boxes.iter().filter(|(t, b)| t == text && b.center().x >= near.left() - 2.0 && b.center().x <= near.right() + 40.0 && *b != near).map(|(_, b)| *b).min_by(|a, b| (a.center().y - near.center().y).abs().total_cmp(&(b.center().y - near.center().y).abs()))
+}
+
+/// Chooses `to` in the operator list of condition `i` of the filter dialog, by real clicks.
+fn filter_op_pick(rig: &mut Rig, i: usize, to: &str) -> Painted {
+    let what = rig.what.clone();
+    let op = rig.app.filter.op_boxes.iter().find(|(n, _)| *n == i).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the operator box of condition {i}"));
+    let p = click_rect(rig, op);
+    let item = popup_item(&p, to, op).unwrap_or_else(|| panic!("{what}: '{to}' is in the operator list {op:?}: {:?}", p.boxes.iter().filter(|(_, b)| b.center().x >= op.left() - 2.0 && b.center().x <= op.right() + 40.0).map(|(t, b)| (t.clone(), b.center().y)).filter(|(t, _)| t.len() < 20).collect::<Vec<_>>()));
+    click_rect(rig, item);
+    rig.draw(4)
+}
+
+#[test]
+fn w9_the_by_choice_stays_when_the_operator_changes_and_a_comparison_by_a_part_filters_the_tab_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig8("p8w9flt", ppp, w, h, book8());
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::Filter);
+        rig.app.filter.conditions = vec![FilterCondition { column: "Open Date".into(), op: CondOp::InList, ..Default::default() }];
+        let p = rig.draw(4);
+        let title = "\u{E30C}  Filter rows";
+        let r = assert_dialog_fits(&rig.ctx, title, &what);
+        assert!(p.boxes.iter().any(|(t, _)| t == "By Date"), "{what}: By Date to start with");
+        // By Month-Year, by a real click
+        let by = rig.app.filter.by_boxes.first().map(|(_, b)| *b).expect("the By box");
+        let p = click_rect(&mut rig, by);
+        let item = last_box(&p, "Month-Year", by.top()).unwrap_or_else(|| panic!("{what}: Month-Year is in the By list"));
+        click_rect(&mut rig, item);
+        assert_eq!(rig.app.filter.conditions[0].part.as_ref().map(|p| p.part), Some(DatePart::MonthYear), "{what}");
+        // the list of the By choice has Year-Quarter too, between Month-Year and Month
+        let by = rig.app.filter.by_boxes.first().map(|(_, b)| *b).expect("the By box");
+        let p = click_rect(&mut rig, by);
+        for want in ["Date", "Year", "Month-Year", "Year-Quarter", "Month", "Quarter", "Day name"] {
+            assert!(last_box(&p, want, by.top()).is_some(), "{what}: the By list has {want}");
+        }
+        click_rect(&mut rig, last_box(&p, "Month-Year", by.top()).expect("Month-Year"));
+        rig.draw(3);
+
+        // every operator that compares dates keeps the By choice, and the dialog still fits
+        for to in [">", "\u{2265}", "<", "\u{2264}", "between", "equals", "does not equal", "is in list", "\u{2265}"] {
+            let p = filter_op_pick(&mut rig, 0, to);
+            let c = &rig.app.filter.conditions[0];
+            assert_eq!(c.part.as_ref().map(|p| p.part), Some(DatePart::MonthYear), "{what}: By Month-Year stays after '{to}'");
+            assert_eq!(c.op.label(), to, "{what}");
+            assert!(p.boxes.iter().any(|(t, _)| t == "By Month-Year"), "{what}: the By box says Month-Year after '{to}'");
+            assert_eq!(rig.app.filter.by_boxes.len(), 1, "{what}");
+            let area = assert_dialog_fits(&rig.ctx, title, &what);
+            assert_no_overlap(&dialog_texts(&mut rig, &p, area.window), &what);
+            assert_not_clipped(&p, area.window, &what);
+            for (_, b) in rig.app.filter.by_boxes.iter().chain(rig.app.filter.op_boxes.iter()) {
+                assert!(inside(*b, area.window), "{what}: '{to}': {b:?} is inside the dialog {:?}", area.window);
+            }
+        }
+        let _ = r;
+        // (the last operator of the long list is below the window's fold: its By box is read from a frame with it set)
+        rig.app.filter.conditions[0].op = CondOp::NotInList;
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t == "By Month-Year"), "{what}: By Month-Year is there for \"is not in list\"");
+        rig.app.filter.conditions[0].op = CondOp::Gte;
+        rig.draw(3);
+
+        // ≥ with a value box and a list of the part's values in time order, not text order
+        assert_eq!(rig.app.filter.conditions[0].op, CondOp::Gte, "{what}");
+        let (vb, lb) = (rig.app.filter.value_boxes[0].2, rig.app.filter.list_buttons[0].2);
+        let area = assert_dialog_fits(&rig.ctx, title, &what);
+        assert!(inside(vb, area.window) && inside(lb, area.window), "{what}");
+        click_rect(&mut rig, lb);
+        settle(&mut rig.app);
+        rig.draw(4);
+        let rows: Vec<String> = rig.app.picker.rects.rows.iter().map(|(t, _)| t.clone()).collect();
+        let months: Vec<&str> = ["Jan 2026", "Feb 2026", "Mar 2026", "Apr 2026", "May 2026", "Jul 2026", "Aug 2026", "Sep 2026"].to_vec();
+        let listed: Vec<String> = rows.iter().filter(|t| t.ends_with("2026")).cloned().collect();
+        assert_eq!(listed, months.iter().map(|m| m.to_string()).collect::<Vec<_>>(), "{what}: in time order: {rows:?}");
+        // one value is chosen: Mar 2026, and then Apr 2026 (the first is let go)
+        let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == "Mar 2026").map(|(_, b)| *b).expect("Mar 2026 is listed");
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.filter.conditions[0].value, "Mar 2026", "{what}");
+        let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == "Apr 2026").map(|(_, b)| *b).expect("Apr 2026 is listed");
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.filter.conditions[0].value, "Apr 2026", "{what}: one limit, not two");
+        // a value that is not the part: said in words, and Apply is not possible
+        let lb = rig.app.filter.list_buttons[0].2;
+        click_rect(&mut rig, lb);
+        assert_eq!(rig.app.picker.owner, None, "{what}: the list is closed by its button");
+        let vb = rig.app.filter.value_boxes[0].2;
+        click_rect(&mut rig, vb);
+        type_replacing(&mut rig, "13/2026");
+        let p = rig.draw(3);
+        assert!(has_text(&p, "'13/2026' is not a Month-Year"), "{what}: the warning is in the dialog: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Month") || t.contains("2026")).collect::<Vec<_>>());
+        assert!(crate::ui::filter::condition_problem(&rig.app.filter.conditions[0]).is_some(), "{what}");
+        // between: two boxes and two lists, By still there, and the range read in time
+        let p = filter_op_pick(&mut rig, 0, "between");
+        assert_eq!(rig.app.filter.value_boxes.len(), 2, "{what}: two limits");
+        assert!(p.boxes.iter().any(|(t, _)| t == "By Month-Year"), "{what}");
+        let area = assert_dialog_fits(&rig.ctx, title, &what);
+        for (_, _, b) in rig.app.filter.value_boxes.iter().chain(rig.app.filter.list_buttons.iter()) {
+            assert!(inside(*b, area.window), "{what}: {b:?} is inside the dialog {:?}", area.window);
+        }
+        assert_no_overlap(&dialog_texts(&mut rig, &p, area.window), &what);
+        // back to ≥ and type a good value; Apply keeps Apr to Sep (5 rows) and nothing else
+        filter_op_pick(&mut rig, 0, "\u{2265}");
+        let vb = rig.app.filter.value_boxes[0].2;
+        click_rect(&mut rig, vb);
+        type_replacing(&mut rig, "apr-2026");
+        let p = rig.draw(3);
+        assert!(!has_text(&p, "is not a Month-Year"), "{what}");
+        assert_eq!(crate::ui::filter::condition_problem(&rig.app.filter.conditions[0]), None, "{what}");
+        let apply = last_box(&p, "\u{E182}  Apply to current tab", 0.0).expect("Apply");
+        click_rect(&mut rig, apply);
+        settle(&mut rig.app);
+        rig.draw(3);
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        let step = tab.steps.last().unwrap_or_else(|| panic!("{what}: a step"));
+        let TransformStep::FilterGroup { conditions, .. } = step else { panic!("{what}: {step:?}") };
+        assert_eq!((conditions[0].op, conditions[0].part.as_ref().map(|p| p.part)), (CondOp::Gte, Some(DatePart::MonthYear)), "{what}");
+        let bal: Vec<f64> = tab.cached_slice.column("Balance").expect("balance").f64().expect("f64").into_iter().flatten().collect();
+        assert_eq!(bal, vec![400.0, 500.0, 600.0, 700.0, 800.0], "{what}: Apr 2026 and after");
+    }
+}
+
+#[test]
+fn w9_the_by_choice_stays_when_the_operator_changes_in_the_charts_filters_and_a_comparison_filters_the_chart_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w9chart", ppp, w, h, false);
+        let what = rig.what.clone();
+        click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+        let r = show_field(&mut rig, "Add a filter");
+        let p = click_rect(&mut rig, r);
+        let item = last_box(&p, "Open Date", 0.0).unwrap_or_else(|| panic!("{what}: Open Date is in the list"));
+        click_rect(&mut rig, item);
+        rig.draw(3);
+        let by = show_field(&mut rig, "Add by");
+        let p = click_rect(&mut rig, by);
+        for want in ["Date", "Year", "Month-Year", "Year-Quarter", "Month", "Quarter", "Day name"] {
+            assert!(last_box(&p, want, 0.0).is_some(), "{what}: the By list has {want}");
+        }
+        click_rect(&mut rig, last_box(&p, "Month-Year", 0.0).expect("Month-Year"));
+        wait_list(&mut rig);
+        assert_eq!(rig.app.chart.filters_ui.add, Some(("Open Date".to_string(), Some(DatePart::MonthYear))), "{what}");
+
+        // every operator keeps the By choice
+        for to in [">", "\u{2265}", "<", "\u{2264}", "between", "equals", "does not equal", "is in list", ">"] {
+            let op = show_field(&mut rig, "Add op");
+            let p = click_rect(&mut rig, op);
+            let item = popup_item(&p, to, op).unwrap_or_else(|| panic!("{what}: '{to}' is in the operator list {op:?}: {:?}", p.boxes.iter().filter(|(_, b)| b.center().x >= op.left() - 2.0 && b.center().x <= op.right() + 40.0).map(|(t, b)| (t.clone(), b.center().y)).filter(|(t, _)| t.len() < 20).collect::<Vec<_>>()));
+            click_rect(&mut rig, item);
+            let p = rig.draw(4);
+            assert_eq!(rig.app.chart.filters_ui.add, Some(("Open Date".to_string(), Some(DatePart::MonthYear))), "{what}: By stays after '{to}'");
+            assert!(p.boxes.iter().any(|(t, _)| t == "By Month-Year"), "{what}: the By box still says Month-Year after '{to}'");
+            assert_eq!(rig.app.chart.filters_ui.add_op.map(|o| o.label()), if to == "is in list" { None } else { Some(to) }, "{what}");
+            let screen = rig.ctx.screen_rect();
+            for name in ["Add by", "Add op"] {
+                let b = show_field(&mut rig, name);
+                assert!(inside(b, screen), "{what}: {name} {b:?}");
+            }
+        }
+        // ">" is chosen: a bad value is said in words and Add filter does nothing
+        assert_eq!(rig.app.chart.filters_ui.add_op, Some(CondOp::Gt), "{what}");
+        let vbox = show_field(&mut rig, "Add value 1");
+        click_rect(&mut rig, vbox);
+        type_replacing(&mut rig, "Foo");
+        let p = rig.draw(3);
+        assert!(has_text(&p, "'Foo' is not a Month-Year"), "{what}: the problem is in the panel");
+        let add = show_field(&mut rig, "Add filter");
+        click_rect(&mut rig, add);
+        assert!(rig.app.chart.spec.filters.is_empty(), "{what}: a bad value adds nothing");
+        // the list of the part's values, in time order: choose Mar 2026
+        let lb = show_field(&mut rig, "Add list 1");
+        click_rect(&mut rig, lb);
+        wait_list(&mut rig);
+        let listed: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(t, _)| t.clone()).filter(|t| t.ends_with("2026")).collect();
+        assert_eq!(listed, ["Jan 2026", "Feb 2026", "Mar 2026", "Apr 2026", "May 2026", "Jul 2026", "Aug 2026", "Sep 2026"].map(String::from).to_vec(), "{what}: in time order");
+        let b = tick_box(&mut rig, "Mar 2026");
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.chart.filters_ui.add_value, "Mar 2026", "{what}");
+        let add = show_field(&mut rig, "Add filter");
+        click_rect(&mut rig, add);
+        assert_eq!(rig.app.chart.spec.filters.len(), 1, "{what}: {:?}", rig.app.chart.spec.filters);
+        let f = &rig.app.chart.spec.filters[0];
+        assert_eq!((f.op, f.value.as_str(), f.part.as_ref().map(|p| p.part)), (CondOp::Gt, "Mar 2026", Some(DatePart::MonthYear)), "{what}");
+        // the chart keeps Apr to Sep: 400 + 500 + 600 + 700 + 800
+        pump_until(&mut rig, "the chart after Mar 2026", &|r| !r.app.chart.busy && r.app.chart.error.is_none() && r.app.chart.data.as_ref().is_some_and(|d| (d.values.iter().flatten().flatten().sum::<f64>() - 3000.0).abs() < 1e-9));
+        let p = rig.draw(4);
+        assert!(has_text(&p, "Open Date \u{b7} Month-Year > Mar 2026"), "{what}: the filter is listed");
+        assert_eq!(rig.app.chart.spec.filtered_text(), "Filtered: Open Date \u{b7} Month-Year > Mar 2026", "{what}");
+        assert!(has_text(&p, "Filtered: Open Date \u{b7} Month-Year >"), "{what}: and the chart's subtitle says it");
+        // the adding row starts again, and the filter can be removed from the list
+        assert_eq!(rig.app.chart.filters_ui.add, None, "{what}");
+        let rm = show_field(&mut rig, "Filter 1 remove");
+        click_rect(&mut rig, rm);
+        assert!(rig.app.chart.spec.filters.is_empty(), "{what}");
+    }
+}

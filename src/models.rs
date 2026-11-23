@@ -728,6 +728,16 @@ impl CondOp {
         }
     }
 
+    /// The operators a date part can be compared with (Phase 8 W9): the comparisons and the lists, not the text tests.
+    pub fn supports_part(&self) -> bool {
+        matches!(self, CondOp::Equals | CondOp::NotEquals | CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte | CondOp::Between | CondOp::InList | CondOp::NotInList)
+    }
+
+    /// Compares a value with a limit rather than picking values from a list (>, ≥, <, ≤, between).
+    pub fn is_comparison(&self) -> bool {
+        matches!(self, CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte | CondOp::Between)
+    }
+
     /// Needs no value (is blank / is not blank).
     pub fn is_unary(&self) -> bool {
         matches!(self, CondOp::IsBlank | CondOp::IsNotBlank)

@@ -152,7 +152,8 @@ fn w2_a_filter_day_name_in_fri_sat_keeps_exactly_the_weekend_rows() {
     assert!(format!("{e:#}").contains("'Open Text' is text. Set it to Date"), "{e:#}");
     // the generated Python makes the part, filters on it, and drops it
     let py = micro_parquet::macros::generate_python_polars_code(std::path::Path::new("in.parquet"), true, &IngestionConfig::default(), &[TransformStep::FilterGroup { conditions: vec![cond], join: GroupJoin::And, keep_matching: true }], None).expect("python");
-    assert!(py.contains("_mp_date_part(d, \"Day name\", 1, 5)") && py.contains(".alias(\"__mp_part0\")") && py.contains("lf = lf.drop([\"__mp_part0\"])"), "{py}");
+    // (W9: a part with an order is tested by its order key, so the picked days are written as their places in the week)
+    assert!(py.contains("_mp_date_key(d, \"Day name\", 1, 5)") && py.contains(".alias(\"__mp_part0\")") && py.contains("lf = lf.drop([\"__mp_part0\"])"), "{py}");
     if have_python() {
         let d = dir("w2_py");
         let p = d.join("f.py");

@@ -822,6 +822,15 @@ impl ChartSpec {
     /// One of the chart's own filters in words: "Bank = Conventional", "Bank = Conventional or Islamic", "Bank \u{2260} Islamic".
     pub fn filter_text(c: &FilterCondition) -> String {
         let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
+        // a comparison with a limit (Phase 8 W9): "Open Date \u{b7} Month-Year \u{2265} Aug 2025"
+        match c.op {
+            CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte => return format!("{} {} {}", field, c.op.label(), c.value.trim()),
+            CondOp::Between => return format!("{} between {} and {}", field, c.value.trim(), c.value2.trim()),
+            CondOp::Equals | CondOp::NotEquals if c.values.is_empty() && !c.or_blank && !c.value.trim().is_empty() => {
+                return format!("{} {} {}", field, if c.op == CondOp::NotEquals { "\u{2260}" } else { "=" }, c.value.trim());
+            }
+            _ => {}
+        }
         let mut vals: Vec<String> = c.values.clone();
         if c.or_blank {
             vals.push(crate::pivot_table::BLANK_LABEL.to_string());
@@ -837,9 +846,12 @@ impl ChartSpec {
     /// is refused in words rather than drawn empty. (Phase 8 W10)
     pub fn check_filters(&self) -> anyhow::Result<()> {
         for c in &self.filters {
+            let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
             if matches!(c.op, CondOp::InList | CondOp::NotInList) && c.values.is_empty() && !c.or_blank {
-                let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
                 anyhow::bail!("Chart: the filter on '{}' has no value ticked, so it keeps no rows. Tick a value, or press All to keep every value.", field);
+            }
+            if c.op.is_comparison() && (c.value.trim().is_empty() || (c.op == CondOp::Between && c.value2.trim().is_empty())) {
+                anyhow::bail!("Chart: the filter on '{}' {} has no value. Enter it, or remove the filter.", field, c.op.label());
             }
         }
         Ok(())

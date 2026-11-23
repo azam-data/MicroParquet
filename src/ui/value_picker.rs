@@ -41,6 +41,8 @@ pub struct PickerPanel {
     pub calendar: micro_parquet::dates::CalendarSettings,
     /// The date part the values are of (the filter's "By" choice, W2); `field` is then the part's name.
     pub part: Option<micro_parquet::dates::DateFieldRef>,
+    /// Which value box of a comparison the open list is for: 0 the value, 1 the upper limit of "between" (W9).
+    pub slot: u8,
 }
 
 impl PickerPanel {
@@ -105,6 +107,22 @@ pub fn picker_body(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPane
 
 /// `picker_body` with the names of its two buttons (the chart's tick lists say "All" and "None").
 pub fn picker_body_with(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPanel, values: &mut Vec<String>, or_blank: &mut bool, allow_blank: bool, order: &SortOrder, buttons: (&str, &str)) -> PickerOutcome {
+    picker_body_inner(ui, tk, panel, values, or_blank, allow_blank, order, Some(buttons))
+}
+
+/// The list of a comparison's value box (W9): the values of a date part in the part's order, to choose one from. Returns the value
+/// that was just ticked (the one before it is unticked), or `None` while nothing was clicked. No "All" and "None": one value is a limit.
+pub fn picker_body_single(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPanel, current: &str, order: &SortOrder) -> (Option<String>, PickerOutcome) {
+    let before: Vec<String> = if current.trim().is_empty() { Vec::new() } else { vec![current.trim().to_string()] };
+    let mut values = before.clone();
+    let mut blank = false;
+    let out = picker_body_inner(ui, tk, panel, &mut values, &mut blank, false, order, None);
+    let picked = if out.changed { Some(values.iter().find(|v| !before.contains(v)).cloned().unwrap_or_default()) } else { None };
+    (picked, out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn picker_body_inner(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut PickerPanel, values: &mut Vec<String>, or_blank: &mut bool, allow_blank: bool, order: &SortOrder, buttons: Option<(&str, &str)>) -> PickerOutcome {
     let mut out = PickerOutcome::default();
     let mut rects = PickerRects::default();
     let frame = egui::Frame::none().stroke(theme::line(tk.border)).rounding(theme::RADIUS_CONTROL).inner_margin(theme::SPACE_S).show(ui, |ui| {
@@ -112,9 +130,10 @@ pub fn picker_body_with(ui: &mut egui::Ui, tk: &theme::Tokens, panel: &mut Picke
         let shown = shown_values(panel, order);
         ui.horizontal_wrapped(|ui| {
             // (in a narrow panel the search box gives room to the two buttons, and they wrap rather than leave the window)
-            let search_w = (ui.available_width() - theme::PICKER_BUTTONS_W).clamp(theme::PICKER_SEARCH_MIN_W, theme::PICKER_SEARCH_W);
+            let search_w = (ui.available_width() - if buttons.is_some() { theme::PICKER_BUTTONS_W } else { 0.0 }).clamp(theme::PICKER_SEARCH_MIN_W, theme::PICKER_SEARCH_W);
             let r = ui.add(egui::TextEdit::singleline(&mut panel.search).desired_width(search_w).hint_text("Search values"));
             rects.search = Some(r.rect);
+            let Some(buttons) = buttons else { return };
             let all = ui.button(buttons.0);
             rects.select_all = Some(all.rect);
             if all.clicked() {
