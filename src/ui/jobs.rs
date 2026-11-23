@@ -119,6 +119,8 @@ impl MicroParquetApp {
                             p.values = Some(Err(msg));
                         }
                     }
+                    // the field keeps today's order: auto order is only a default
+                    JobKind::AutoOrder => self.auto_order_waits.clear(),
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
                     JobKind::Dq => self.dq_failed(msg.clone()),
@@ -247,6 +249,7 @@ impl MicroParquetApp {
                 self.submit_column_stats(idx);
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
+            JobOutput::AutoOrder(r) => self.apply_auto_order(&r),
             JobOutput::PivotValues(r) => {
                 if !self.apply_sort_list_fill(&r) && !self.apply_pivot_bar_values(&r) {
                     self.apply_pivot_values(*r)

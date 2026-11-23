@@ -126,3 +126,11 @@ mod p7_g;
 mod p7_r;
 #[path = "../phase7/s.rs"]
 mod p7_s;
+
+// Phase 8 tests (tests/phase8/) are compiled into this binary too.
+#[path = "../phase8/common8.rs"]
+mod common8;
+#[path = "../phase8/p7_baseline.rs"]
+mod p7_baseline;
+#[path = "../phase8/w0.rs"]
+mod p8_w0;

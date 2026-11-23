@@ -36,6 +36,9 @@ pub struct Settings {
     pub chart: HashMap<String, serde_json::Value>,
     /// The chart tabs of the session (Phase 7): title, the key of the tab they chart, and the chart.
     pub chart_tabs: Vec<serde_json::Value>,
+    /// View ▸ Calendar… (Phase 8 W0): the fiscal year start and the week start (January and Saturday).
+    #[serde(default)]
+    pub calendar: crate::dates::CalendarSettings,
 }
 
 pub fn settings_path(root: &Path) -> PathBuf {

@@ -90,6 +90,7 @@ pub enum CommandId {
     ToggleChart,
     ToggleSummary,
     SortLists,
+    CalendarSettings,
     // Help
     About,
 }
@@ -235,6 +236,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ToggleChart, "Show or hide the chart", G::View, "graph plot bar line category series aggregation top n", N::Nothing),
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
     c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),
+    c(I::CalendarSettings, "Calendar\u{2026}", G::View, "fiscal year start month week start saturday sunday monday date parts quarter", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
 

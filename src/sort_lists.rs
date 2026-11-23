@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 /// The names a list cannot take: they are the built-in orders of the menus.
-pub const RESERVED_NAMES: [&str; 5] = ["tenor", "natural", "by value", "a\u{2192}z", "z\u{2192}a"];
+pub const RESERVED_NAMES: [&str; 7] = ["tenor", "natural", "by value", "a\u{2192}z", "z\u{2192}a", "calendar", "ranges"];
 
 fn default_true() -> bool {
     true
@@ -34,6 +34,15 @@ pub enum SortOrder {
         #[serde(default = "default_true")]
         case_insensitive: bool,
     },
+    /// Month names, day names (in week order from the copied week start), quarters, weeks,
+    /// "Aug 2026", "2026 Q1", "FY2026" and "FY2026-27" (Phase 8 W0).
+    Calendar {
+        #[serde(default)]
+        week_start: crate::dates::Weekday,
+    },
+    /// Labels of numeric ranges ("Below 0%", "0%", "8%\u{2013}9%", "> 15%", "1 Crore to 5 Crore") by their
+    /// first number and its unit; "No …" and other labels after them (Phase 8 W0).
+    Ranges,
 }
 
 impl SortOrder {
@@ -43,7 +52,14 @@ impl SortOrder {
             SortOrder::Natural => "Natural".to_string(),
             SortOrder::Tenor => "Tenor".to_string(),
             SortOrder::List { name, .. } => name.clone(),
+            SortOrder::Calendar { .. } => "Calendar".to_string(),
+            SortOrder::Ranges => "Ranges".to_string(),
         }
+    }
+
+    /// The Calendar order with the week start of a calendar.
+    pub fn calendar(cal: &crate::dates::CalendarSettings) -> SortOrder {
+        SortOrder::Calendar { week_start: cal.week_start }
     }
 
     pub fn is_natural(&self) -> bool {
@@ -59,16 +75,24 @@ impl SortOrder {
     /// term that parses as a tenor), `None` for the rest. Blank text is not ranked either, so
     /// callers test blanks first.
     pub fn rank(&self, value: &str) -> Option<f64> {
+        self.rank_key(value).map(|(r, _)| r)
+    }
+
+    /// The rank and a second key that breaks its ties (only Ranges uses it: "Below x", an exact "x",
+    /// a range from x, "Above x").
+    pub fn rank_key(&self, value: &str) -> Option<(f64, f64)> {
         match self {
             SortOrder::Natural => None,
-            SortOrder::Tenor => parse_tenor_days(value),
+            SortOrder::Tenor => parse_tenor_days(value).map(|r| (r, 0.0)),
             SortOrder::List { values, case_insensitive, .. } => {
                 let v = value.trim();
                 values
                     .iter()
                     .position(|x| if *case_insensitive { x.trim().to_lowercase() == v.to_lowercase() } else { x.trim() == v })
-                    .map(|i| i as f64)
+                    .map(|i| (i as f64, 0.0))
             }
+            SortOrder::Calendar { week_start } => crate::dates::calendar_rank(value, *week_start).map(|r| (r, 0.0)),
+            SortOrder::Ranges => crate::dates::parse_range(value).map(|k| (k.value, k.kind as f64)),
         }
     }
 
@@ -80,9 +104,14 @@ impl SortOrder {
             (None, Some(_)) => Ordering::Greater,
             (Some(_), None) => Ordering::Less,
             (Some(x), Some(y)) => {
-                let (rx, ry) = (self.rank(x), self.rank(y));
+                let (rx, ry) = (self.rank_key(x), self.rank_key(y));
                 match (rx, ry) {
-                    (Some(p), Some(q)) => p.partial_cmp(&q).unwrap_or(Ordering::Equal).then_with(|| natural_cmp(x, y)),
+                    (Some(p), Some(q)) => p
+                        .0
+                        .partial_cmp(&q.0)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| p.1.partial_cmp(&q.1).unwrap_or(Ordering::Equal))
+                        .then_with(|| natural_cmp(x, y)),
                     (Some(_), None) => Ordering::Less,
                     (None, Some(_)) => Ordering::Greater,
                     (None, None) => natural_cmp(x, y),
@@ -315,6 +344,20 @@ pub fn order_sort_keys(column: &str, order: &SortOrder, descending: bool) -> Vec
         },
         GetOutput::from_type(DataType::Float64),
     );
+    let mut keys = vec![(group, false), (rank, descending)];
+    if matches!(order, SortOrder::Ranges) {
+        // "Below x", an exact "x", a range from x, "Above x": the second key of a Ranges rank
+        let o3 = order.clone();
+        let sub = text.clone().map(
+            move |s: Series| {
+                let ca = s.str()?;
+                let out: Float64Chunked = ca.into_iter().map(|v| v.and_then(|t| o3.rank_key(t)).map(|k| k.1)).collect();
+                Ok(Some(out.with_name(s.name().clone()).into_series()))
+            },
+            GetOutput::from_type(DataType::Float64),
+        );
+        keys.push((sub, descending));
+    }
     let natural = text.map(
         |s: Series| {
             let ca = s.str()?;
@@ -323,7 +366,31 @@ pub fn order_sort_keys(column: &str, order: &SortOrder, descending: bool) -> Vec
         },
         GetOutput::from_type(DataType::String),
     );
-    vec![(group, false), (rank, descending), (natural, false)]
+    keys.push((natural, false));
+    keys
+}
+
+/// The order a field gets when it is added to a pivot, a chart or a sort (W0 "Auto order"): Calendar
+/// when every non-blank label is a Calendar label, else Ranges when every one is a range label (or a
+/// "No …" label, with at least one real range among them), else none (today's default). The caller
+/// tries the column's declared order (`engine::column_orders`) first.
+pub fn detect_order<'a>(labels: impl IntoIterator<Item = &'a str>, cal: &crate::dates::CalendarSettings) -> Option<SortOrder> {
+    let labels: Vec<&str> = labels.into_iter().map(str::trim).filter(|v| !v.is_empty()).collect();
+    if labels.is_empty() {
+        return None;
+    }
+    if labels.iter().all(|l| crate::dates::calendar_rank(l, cal.week_start).is_some()) {
+        return Some(SortOrder::calendar(cal));
+    }
+    let mut ranged = false;
+    for l in &labels {
+        match crate::dates::parse_range(l) {
+            Some(k) => ranged |= !k.plain,
+            None if crate::dates::is_no_label(l) => {}
+            None => return None,
+        }
+    }
+    ranged.then_some(SortOrder::Ranges)
 }
 
 #[cfg(test)]

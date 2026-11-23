@@ -31,6 +31,8 @@ pub enum JobOutput {
     ColumnStats(Box<ColumnStatsResult>),
     PivotPreview(Box<PivotPreviewResult>),
     PivotValues(Box<PivotValuesResult>),
+    /// The labels of a field for its auto order (Phase 8 W0).
+    AutoOrder(Box<PivotValuesResult>),
     StepCounts(Box<StepCountsResult>),
     TextCheck(Box<TextCheckResult>),
     Summary(Box<SummaryResult>),

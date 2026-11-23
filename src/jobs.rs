@@ -53,6 +53,8 @@ pub enum JobKind {
     SqlCheck,
     /// The data-quality checks of a tab (Phase 6 P4).
     Dq,
+    /// The labels of a field just added to a pivot, chart or sort, for its auto order (Phase 8 W0).
+    AutoOrder,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

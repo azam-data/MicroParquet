@@ -302,12 +302,19 @@ impl MicroParquetApp {
                     }
                 }
                 let spec = &mut self.pivot_builder.spec;
+                let added = !spec.rows.iter().chain(spec.columns.iter()).any(|f| f == field);
                 spec.rows.retain(|f| f != field);
                 spec.columns.retain(|f| f != field);
                 if area == Area::Rows {
                     spec.rows.push(field.to_string());
                 } else {
                     spec.columns.push(field.to_string());
+                }
+                // W0 auto order: the steps' order for the column, else Calendar or Ranges from its labels
+                if added && !self.pivot_builder.spec.field_orders.iter().any(|o| o.field == field) {
+                    if let Some(order) = self.auto_order(field, crate::ui::auto_order::AutoTarget::Pivot) {
+                        self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
+                    }
                 }
             }
             Area::Values => {
@@ -605,6 +612,12 @@ impl MicroParquetApp {
             if ui.selectable_label(!by_value && current == SortOrder::Tenor, "Tenor").clicked() {
                 choice = Some(SortOrder::Tenor);
                 ui.close_menu();
+            }
+            for o in self.builtin_orders() {
+                if ui.selectable_label(!by_value && current == o, o.label()).clicked() {
+                    choice = Some(o);
+                    ui.close_menu();
+                }
             }
             if is_row && !self.pivot_builder.spec.values.is_empty() && ui.selectable_label(by_value, "By value").clicked() {
                 value_sort = true;

@@ -2351,6 +2351,39 @@ pub fn dq_type_stats(source: &TabSource, rules: &crate::dq::DqRuleSet, temp_dir:
     Ok(crate::dq::TypeStats::from_source(&df, &failures))
 }
 
+/// The text order each step-made label column declares (Phase 8 W0): Split date's text parts are in the
+/// Calendar order of the step's own calendar, an unnumbered rate band column is in band order. Derived from
+/// the steps, so no tab state is needed; a column renamed later keeps its order, one dropped by a column
+/// choice loses it. Steps that are turned off declare nothing.
+pub fn column_orders(steps: &[TransformStep]) -> std::collections::HashMap<String, crate::sort_lists::SortOrder> {
+    let mut out: std::collections::HashMap<String, crate::sort_lists::SortOrder> = std::collections::HashMap::new();
+    for step in steps {
+        match step {
+            TransformStep::RenameColumn { old_name, new_name } => {
+                if let Some(o) = out.remove(old_name) {
+                    out.insert(new_name.clone(), o);
+                } else {
+                    out.remove(new_name);
+                }
+            }
+            TransformStep::SelectAndReorderColumns { cols } => out.retain(|k, _| cols.contains(k)),
+            other => {
+                for (name, order) in declared_orders(other) {
+                    out.insert(name, order);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The orders one step declares (none for most steps).
+fn declared_orders(step: &TransformStep) -> Vec<(String, crate::sort_lists::SortOrder)> {
+    match step {
+        _ => Vec::new(),
+    }
+}
+
 pub fn compile_tab_lazy(
     source: &TabSource,
     steps: &[TransformStep],

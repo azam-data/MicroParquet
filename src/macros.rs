@@ -103,13 +103,215 @@ def _mp_tenor_days(v):
         return None
 
 
-def _mp_rank_keys(e, rank_fn):
-    """Three sort keys: listed (0) before the rest (1), the rank, then the natural key."""
+def _mp_rank_keys(e, rank_fn, sub_fn=None):
+    """Three sort keys: listed (0) before the rest (1), the rank, then the natural key.
+    With sub_fn (the Ranges order) a fourth key breaks ties of the rank: Below x, x, x to y, Above x."""
     blank = e.str.strip_chars() == ""
     t = pl.when(blank).then(None).otherwise(e)
     rank = t.map_elements(rank_fn, return_dtype=pl.Float64)
     group = pl.when(t.is_null()).then(None).when(rank.is_null()).then(1).otherwise(0)
-    return [group, rank, t.map_elements(_mp_natural_key, return_dtype=pl.Utf8)]
+    keys = [group, rank]
+    if sub_fn is not None:
+        keys.append(t.map_elements(sub_fn, return_dtype=pl.Float64))
+    return keys + [t.map_elements(_mp_natural_key, return_dtype=pl.Utf8)]
+
+
+"#;
+
+/// Python mirror of `dates::calendar_rank` and `dates::parse_range` (the Calendar and Ranges orders, Phase 8
+/// W0). Plain Python, so the tests run it without Polars. Keep the two in step.
+pub const PY_CALENDAR_RANGES_HELPER: &str = r#"_MP_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+_MP_MONTHS_LONG = ["january", "february", "march", "april", "may", "june", "july", "august", "september",
+                   "october", "november", "december"]
+_MP_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+_MP_DAYS_LONG = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def _mp_month(t):
+    if t == "sept":
+        return 9
+    for i in range(12):
+        if t == _MP_MONTHS[i] or t == _MP_MONTHS_LONG[i]:
+            return i + 1
+    return None
+
+
+def _mp_day(t):
+    """Days since Monday of a day name, or None."""
+    for i in range(7):
+        if t == _MP_DAYS[i] or t == _MP_DAYS_LONG[i]:
+            return i
+    return None
+
+
+def _mp_small(t):
+    t = t.strip()
+    if 1 <= len(t) <= 2 and t.isascii() and t.isdigit():
+        return int(t)
+    return None
+
+
+def _mp_year4(t):
+    t = t.strip()
+    if len(t) == 4 and t.isascii() and t.isdigit():
+        return int(t)
+    return None
+
+
+def _mp_calendar_rank(v, week_start):
+    """Calendar order: month names, day names from the week start (days since Monday), Q1-Q4, FQ1-FQ4,
+    W01-W54, 'Aug 2026', '2026 Q1', 'FY2026', 'FY2026-27'. None for anything else."""
+    t = v.strip().lower()
+    if not t:
+        return None
+    m = _mp_month(t)
+    if m is not None:
+        return float(m)
+    d = _mp_day(t)
+    if d is not None:
+        return 100.0 + (d + 7 - week_start) % 7
+    if t.startswith("fq") and _mp_small(t[2:]) is not None:
+        n = _mp_small(t[2:])
+        return 300.0 + n if 1 <= n <= 4 else None
+    if t.startswith("q") and _mp_small(t[1:]) is not None:
+        n = _mp_small(t[1:])
+        return 200.0 + n if 1 <= n <= 4 else None
+    if t.startswith("w") and _mp_small(t[1:]) is not None:
+        n = _mp_small(t[1:])
+        return 400.0 + n if 1 <= n <= 54 else None
+    if t.startswith("fy"):
+        rest = t[2:].strip()
+        i = 0
+        while i < len(rest) and rest[i].isascii() and rest[i].isdigit():
+            i += 1
+        y = _mp_year4(rest[:i])
+        if y is None:
+            return None
+        tail = rest[i:].strip()
+        if not tail:
+            return 3000000.0 + y
+        if tail[:1] not in ("-", "–", "/"):
+            return None
+        end = tail[1:].strip()
+        ok = (len(end) == 2 and end.isascii() and end.isdigit() and int(end) == (y + 1) % 100) or \
+             (len(end) == 4 and end.isascii() and end.isdigit() and int(end) == y + 1)
+        return 3000000.0 + y if ok else None
+    w = t.split()
+    if len(w) == 2:
+        m, y = _mp_month(w[0]), _mp_year4(w[1])
+        if m is not None and y is not None:
+            return 1000000.0 + y * 100 + m
+        y = _mp_year4(w[0])
+        q = _mp_small(w[1][1:]) if w[1].startswith("q") else None
+        if y is not None and q is not None and 1 <= q <= 4:
+            return 2000000.0 + y * 10 + q
+    return None
+
+
+_MP_UNITS = {"%": 1.0, "k": 1e3, "thousand": 1e3, "thousands": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5,
+             "lac": 1e5, "lacs": 1e5, "m": 1e6, "mn": 1e6, "million": 1e6, "millions": 1e6, "cr": 1e7,
+             "crore": 1e7, "crores": 1e7, "bn": 1e9, "billion": 1e9, "billions": 1e9, "d": 1.0, "day": 1.0,
+             "days": 1.0, "w": 7.0, "wk": 7.0, "wks": 7.0, "week": 7.0, "weeks": 7.0, "mo": 365.0 / 12.0,
+             "mos": 365.0 / 12.0, "mon": 365.0 / 12.0, "month": 365.0 / 12.0, "months": 365.0 / 12.0,
+             "y": 365.0, "yr": 365.0, "yrs": 365.0, "year": 365.0, "years": 365.0}
+_MP_RANGE_PREFIX = [("below", 0), ("under", 0), ("less than", 0), ("up to", 0), ("upto", 0), ("<=", 0),
+                    ("≤", 0), ("<", 0), ("above", 3), ("over", 3), ("more than", 3), (">=", 3),
+                    ("≥", 3), (">", 3)]
+_MP_RANGE_TAIL = [("and above", 3), ("& above", 3), ("or more", 3), ("and over", 3), ("+", 3),
+                  ("and below", 0), ("& below", 0), ("or less", 0)]
+
+
+def _mp_take_number(t):
+    t = t.lstrip()
+    neg = False
+    if t[:1] in ("-", "−"):
+        neg, t = True, t[1:]
+    elif t[:1] == "+":
+        t = t[1:]
+    i = 0
+    while i < len(t) and ((t[i].isascii() and t[i].isdigit()) or t[i] in ".,"):
+        i += 1
+    digits = t[:i]
+    if not (digits[:1].isascii() and digits[:1].isdigit()):
+        return None
+    try:
+        n = float(digits.replace(",", ""))
+    except ValueError:
+        return None
+    if n != n or n in (float("inf"), float("-inf")):
+        return None
+    return (-n if neg else n, t[i:])
+
+
+def _mp_take_unit(t):
+    if t.startswith("%"):
+        return (1.0, t[1:])
+    s = t.lstrip()
+    i = 0
+    while i < len(s) and s[i].isalpha():
+        i += 1
+    if i == 0:
+        return (None, t)
+    u = _MP_UNITS.get(s[:i])
+    return (u, s[i:]) if u is not None else (None, t)
+
+
+def _mp_range_key(v):
+    """Ranges order: (first number scaled by its unit, 0 Below / 1 exact / 2 range / 3 Above), or None."""
+    t = v.strip().lower()
+    if not t:
+        return None
+    kind = None
+    for p, k in _MP_RANGE_PREFIX:
+        if t.startswith(p):
+            r = t[len(p):]
+            if all(c.isalpha() or c == " " for c in p) and r[:1].isalpha():
+                continue
+            t, kind = r, k
+            break
+    got = _mp_take_number(t)
+    if got is None:
+        return None
+    first, rest = got
+    unit, rest = _mp_take_unit(rest)
+    rest = rest.lstrip()
+    second = False
+    if kind is None:
+        after = None
+        for sep in ("–", "—", "-", "to "):
+            if rest.startswith(sep):
+                after = rest[len(sep):]
+                break
+        if after is None and rest.startswith("to") and (len(rest) == 2 or rest[2] == " "):
+            after = rest[2:]
+        if after is not None:
+            got2 = _mp_take_number(after)
+            if got2 is not None:
+                unit2, r3 = _mp_take_unit(got2[1])
+                if unit is None:
+                    unit = unit2
+                rest = r3.lstrip()
+                second = True
+    tail = None
+    if not second and kind is None:
+        for suffix, k in _MP_RANGE_TAIL:
+            if rest == suffix:
+                tail, rest = k, ""
+                break
+    if rest.strip():
+        return None
+    kv = kind if kind is not None else (tail if tail is not None else (2 if second else 1))
+    return (first * (unit if unit is not None else 1.0), float(kv))
+
+
+def _mp_range_rank(v):
+    k = _mp_range_key(v)
+    return None if k is None else k[0]
+
+
+def _mp_range_sub(v):
+    k = _mp_range_key(v)
+    return None if k is None else k[1]
 
 
 "#;
@@ -503,6 +705,11 @@ pub fn generate_python_polars_code(
                     if levels.iter().any(|l| !l.order.is_natural()) && !py.contains("def _mp_rank_keys") {
                         py.push_str(PY_ORDER_HELPER);
                     }
+                    if levels.iter().any(|l| matches!(l.order, crate::sort_lists::SortOrder::Calendar { .. } | crate::sort_lists::SortOrder::Ranges))
+                        && !py.contains("def _mp_calendar_rank")
+                    {
+                        py.push_str(PY_CALENDAR_RANGES_HELPER);
+                    }
                     let mut keys: Vec<String> = Vec::new();
                     let mut desc: Vec<&str> = Vec::new();
                     for l in levels {
@@ -527,11 +734,18 @@ pub fn generate_python_polars_code(
                                         let look = if *case_insensitive { "v.strip().lower()" } else { "v.strip()" };
                                         format!("lambda v, _r={{{}}}: _r.get({})", pairs.join(", "), look)
                                     }
+                                    crate::sort_lists::SortOrder::Calendar { week_start } => {
+                                        format!("lambda v: _mp_calendar_rank(v, {})", week_start.from_monday())
+                                    }
+                                    crate::sort_lists::SortOrder::Ranges => "_mp_range_rank, _mp_range_sub".to_string(),
                                     crate::sort_lists::SortOrder::Natural => String::new(),
                                 };
                                 keys.push(format!("*_mp_rank_keys(pl.col(\"{}\"), {})", l.column, rank_fn));
                                 desc.push("False");
                                 desc.push(if l.descending { "True" } else { "False" });
+                                if matches!(order, crate::sort_lists::SortOrder::Ranges) {
+                                    desc.push(if l.descending { "True" } else { "False" });
+                                }
                                 desc.push("False");
                             }
                         }

@@ -71,6 +71,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ExportChartXlsx => ph::FILE_XLS,
         CommandId::ToggleSummary => ph::SIGMA,
         CommandId::SortLists => ph::SORT_ASCENDING,
+        CommandId::CalendarSettings => ph::CALENDAR,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
         CommandId::Packs => ph::TABLE,
         CommandId::Mudaraba => ph::SCALES,
@@ -267,6 +268,7 @@ impl MicroParquetApp {
             }
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::SortLists => self.open_sort_lists(),
+            CommandId::CalendarSettings => self.open_calendar_settings(),
             CommandId::ChartNew => self.open_chart_gallery(),
             CommandId::ChartThis => self.chart_this_result(),
             CommandId::ChartOpenSaved => self.open_chart_open(),

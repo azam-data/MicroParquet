@@ -1,9 +1,11 @@
 //! One module per screen (Phase 3 R1). `theme` holds every colour and size token.
 
 pub mod audit;
+pub mod auto_order;
 pub mod batch;
 pub mod buckets;
 pub mod calc_column;
+pub mod calendar;
 pub mod chart;
 pub mod chart_render;
 pub mod chart_studio;
@@ -72,6 +74,8 @@ mod render_tests_p6;
 #[cfg(test)]
 mod render_tests_p7;
 #[cfg(test)]
+mod render_tests_p8;
+#[cfg(test)]
 mod render_tests_r;
 #[cfg(test)]
 mod tests;
@@ -125,6 +129,7 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::Calendar => self.render_calendar_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),
             ActiveToolModal::ChartOpen => self.render_chart_open_modal(ctx, cols),

@@ -1,0 +1,217 @@
+{
+  "app_version": "1.6.0",
+  "control_column": null,
+  "created_at": "2026-11-23 10:00:00",
+  "description": "Phase 7 baseline (goal 3)",
+  "enforce_balance_control": false,
+  "name": "phase7_rows",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "FilterGroup": {
+        "conditions": [
+          {
+            "column": "Brancd",
+            "op": "InList",
+            "or_blank": false,
+            "value": "DHK, CTG, SYL",
+            "value2": "",
+            "values": [
+              "DHK",
+              "CTG",
+              "SYL"
+            ]
+          }
+        ],
+        "join": "And",
+        "keep_matching": true
+      }
+    },
+    {
+      "ConditionalColumn": {
+        "blank_result": "FallThrough",
+        "fallback": "3M",
+        "new_col": "Tenor",
+        "output_as_float": false,
+        "rules": [
+          {
+            "col_name": "Int Rate",
+            "compare_is_col": false,
+            "compare_val": "10",
+            "op": "Gt",
+            "output_val": "1Y",
+            "values": []
+          },
+          {
+            "col_name": "Int Rate",
+            "compare_is_col": false,
+            "compare_val": "9",
+            "op": "Gt",
+            "output_val": "6M",
+            "values": []
+          }
+        ]
+      }
+    },
+    {
+      "SortRows": {
+        "levels": [
+          {
+            "column": "Tenor",
+            "descending": false,
+            "order": "Tenor"
+          },
+          {
+            "column": "Brancd",
+            "descending": false,
+            "order": {
+              "List": {
+                "case_insensitive": true,
+                "name": "Branches",
+                "values": [
+                  "SYL",
+                  "DHK",
+                  "CTG"
+                ]
+              }
+            }
+          },
+          {
+            "column": "Balance",
+            "descending": true,
+            "order": "Natural"
+          }
+        ]
+      }
+    },
+    {
+      "MathFormula": {
+        "left_col": "Balance",
+        "new_col": "Bal_Cr",
+        "op": "Div",
+        "right_is_col": false,
+        "right_val_or_col": "10000000"
+      }
+    },
+    {
+      "NormalizeEntity": {
+        "new_col": "Entity",
+        "source_col": "Acttit"
+      }
+    },
+    {
+      "MaturityBucket": {
+        "bucket_def": {
+          "name": "Bangladesh Bank SLP (9 Liquidity Buckets)",
+          "null_long_label": "09. Over 5 Years (Core)",
+          "null_sight_label": "01. Overnight / Sight (Non-Maturing)",
+          "overdue_label": "10. Overdue / Matured Unencashed",
+          "overflow_label": "09. Over 5 Years",
+          "rules": [
+            {
+              "label": "01. Overnight / 1 Day",
+              "max_days": 1
+            },
+            {
+              "label": "02. 2 to 7 Days",
+              "max_days": 7
+            },
+            {
+              "label": "03. 8 to 30 Days",
+              "max_days": 30
+            },
+            {
+              "label": "04. 1 to 3 Months (31-90d)",
+              "max_days": 90
+            },
+            {
+              "label": "05. 3 to 6 Months (91-180d)",
+              "max_days": 180
+            },
+            {
+              "label": "06. 6 to 12 Months (181-365d)",
+              "max_days": 365
+            },
+            {
+              "label": "07. 1 to 3 Years",
+              "max_days": 1095
+            },
+            {
+              "label": "08. 3 to 5 Years",
+              "max_days": 1825
+            }
+          ]
+        },
+        "cutoff_date": "2026-03-31",
+        "mat_col": "Matdat",
+        "new_col": "Bucket",
+        "null_as_sight": true
+      }
+    },
+    {
+      "RateBand": {
+        "band_def": {
+          "lower_inclusive": false,
+          "mode": {
+            "Fixed": {
+              "end_pct": 15.0,
+              "start_pct": 0.0,
+              "step_pct": 1.0
+            }
+          },
+          "name": "1pt"
+        },
+        "new_col": "Rate Band",
+        "rate_col": "Int Rate"
+      }
+    },
+    {
+      "RateShockSim": {
+        "bal_col": "Balance",
+        "beta_file": null,
+        "cutoff_date": "2026-03-31",
+        "floor_pct": null,
+        "mat_col": "Matdat",
+        "product_col": null,
+        "rate_col": "Int Rate",
+        "reprice_col": null,
+        "shock_bps": 200.0,
+        "side_col": "Side"
+      }
+    },
+    {
+      "LoanLimitUtilization": {
+        "bal_col": "Balance",
+        "ccf_pct": 20.0,
+        "limit_col": "Sanctioned_Limit"
+      }
+    },
+    {
+      "FtpCurveMap": {
+        "bal_col": "Balance",
+        "currency": "BDT",
+        "curve": [
+          {
+            "ftp_rate": 7.0,
+            "tenor_days": 90
+          },
+          {
+            "ftp_rate": 8.0,
+            "tenor_days": 365
+          },
+          {
+            "ftp_rate": 9.5,
+            "tenor_days": 1825
+          }
+        ],
+        "curve_mode": "Inline",
+        "interpolation": "Linear",
+        "is_liability": false,
+        "matdat_col": "Matdat",
+        "opndat_col": "Opndat",
+        "rate_col": "Int Rate"
+      }
+    }
+  ],
+  "summary": {}
+}

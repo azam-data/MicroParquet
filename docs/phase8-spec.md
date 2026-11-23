@@ -371,4 +371,14 @@ Reply in no more than 30 lines:
 </report>
 
 <accepted_deviations>
+Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, for the owner to accept or change.
+
+- W0-1: auto order applies to a chart's category only (the chart has one order; series stay by size, facets as they come).
+- W0-2: the filter's value picker lists the values in the Calendar or Ranges order when every label parses (display only).
+- W0-3: "Week of year" can reach W54 in a leap year whose 1 January is the last day of its week; Calendar ranks W01–W54.
+- W0-4: Ranges reads a fixed grammar (Below/Under/Up to/</≤, Above/Over/>/≥, a unit, "–"/"-"/"to", "and above"/"or more");
+  other labels follow in natural order; plain numbers alone do not make a column Ranges.
+- W0-5: `actionlint` was refused by the session's permission check and not run; a test checks the workflow step instead.
+- W0-6: the macro Python export stays Polars Python; the Calendar and Ranges mirrors are plain Python functions, run by the tests with python3.
+- W0-7: two older tests that pinned 1.6.0 now expect 1.8.0.
 </accepted_deviations>

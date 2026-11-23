@@ -11,6 +11,7 @@ pub mod batch;
 pub mod column_stats;
 pub mod commands;
 pub mod curves;
+pub mod dates;
 pub mod dq;
 pub mod ecl;
 pub mod engine;

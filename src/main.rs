@@ -126,6 +126,8 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// View ▸ Calendar… (Phase 8 W0).
+    Calendar,
     /// New chart: the chart gallery (Phase 7 C2).
     ChartGallery,
     /// Charts ▸ Save chart (Phase 7 C2).
@@ -278,6 +280,9 @@ pub struct MicroParquetApp {
     pub filter: FilterState,
     pub sort: SortState,
     pub sort_lists: SortListsState,
+    pub calendar_dialog: crate::ui::calendar::CalendarState,
+    /// Fields whose labels the worker lists for their auto order (Phase 8 W0).
+    pub auto_order_waits: Vec<crate::ui::auto_order::AutoOrderWait>,
     pub chart_gallery: crate::ui::chart_studio::ChartGalleryState,
     pub chart_save: crate::ui::chart_studio::ChartSaveState,
     pub chart_open: crate::ui::chart_studio::ChartOpenState,
@@ -412,6 +417,8 @@ impl MicroParquetApp {
             filter: FilterState::default(),
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
+            calendar_dialog: Default::default(),
+            auto_order_waits: Vec::new(),
             chart_gallery: Default::default(),
             chart_save: Default::default(),
             chart_open: Default::default(),
@@ -634,6 +641,7 @@ impl MicroParquetApp {
                 }
             });
             self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::CalendarSettings);
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response

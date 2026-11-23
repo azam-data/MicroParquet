@@ -199,6 +199,7 @@ impl MicroParquetApp {
         let mut picker = std::mem::take(&mut self.picker);
         let totals = self.picker_totals.clone();
         let sort_lists = self.sort_lists.lists.clone();
+        let calendar = self.calendar();
         let mut ask_values: Option<(String, Option<String>)> = None;
         let mut picker_buttons_seen: Vec<(usize, egui::Rect)> = Vec::new();
         let title = if editing.is_some() {
@@ -257,6 +258,7 @@ impl MicroParquetApp {
                         let mut values = picker_selection(c);
                         let mut blank = c.or_blank;
                         let order = crate::ui::value_picker::picker_order(&sort_lists, &c.column);
+                        picker.calendar = calendar;
                         let out = crate::ui::value_picker::picker_body(ui, &tk, &mut picker, &mut values, &mut blank, true, &order);
                         if out.changed {
                             c.values = values;

@@ -36,6 +36,9 @@ pub struct PickerPanel {
     pub token: u64,
     pub waiting: bool,
     pub rects: PickerRects,
+    /// The calendar of the Calendar order (W0): with no list for the column, a list whose every label is a
+    /// month, a day name, a quarter … is shown in that order, and one of ranges in the Ranges order.
+    pub calendar: micro_parquet::dates::CalendarSettings,
 }
 
 impl PickerPanel {
@@ -76,6 +79,14 @@ fn shown_values(panel: &PickerPanel, order: &SortOrder) -> Vec<(Option<String>, 
         (_, Some(l)) if panel.loaded_search.as_deref() == Some(needle.as_str()) => l.values.clone(),
         _ => Vec::new(),
     };
+    // W0 auto order: with no list chosen, Calendar or Ranges when every label parses
+    let auto = if order.is_natural() {
+        let all = panel.full.as_ref().map(|f| &f.values).unwrap_or(&v);
+        micro_parquet::sort_lists::detect_order(all.iter().filter_map(|(k, _)| k.as_deref()), &panel.calendar)
+    } else {
+        None
+    };
+    let order = auto.as_ref().unwrap_or(order);
     v.sort_by(|a, b| order.compare(&a.0, &b.0));
     v
 }

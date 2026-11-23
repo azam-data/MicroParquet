@@ -525,6 +525,7 @@ impl MicroParquetApp {
         let avail = tab.available_columns();
         let numeric: Vec<String> = tab.cached_slice.get_columns().iter().filter(|c| is_number_type(c.dtype())).map(|c| c.name().to_string()).collect();
         let order_lists = self.sort_lists.lists.clone();
+        let builtin = self.builtin_orders();
         let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
@@ -604,6 +605,12 @@ impl MicroParquetApp {
                     spec.order = SortOrder::Tenor;
                     spec.by_value = false;
                 }
+                for o in &builtin {
+                    if ui.selectable_label(!spec.by_value && spec.order == *o, o.label()).clicked() {
+                        spec.order = o.clone();
+                        spec.by_value = false;
+                    }
+                }
                 if ui.selectable_label(spec.by_value, "By value").clicked() {
                     spec.by_value = true;
                 }
@@ -665,8 +672,19 @@ impl MicroParquetApp {
         });
         rects.controls = Some(controls.response.rect);
         self.chart.show_table = show_table;
+        // W0 auto order: a category picked here with no order chosen gets the steps' order, Calendar or Ranges
+        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty();
+        let auto = new_category && spec.order.is_natural() && !spec.by_value;
         if spec != self.chart.spec {
+            let category = spec.category.clone();
             self.chart_set_spec(spec);
+            if auto {
+                if let Some(order) = self.auto_order(&category, crate::ui::auto_order::AutoTarget::ChartCategory) {
+                    let mut s = self.chart.spec.clone();
+                    s.order = order;
+                    self.chart_set_spec(s);
+                }
+            }
         }
     }
 
