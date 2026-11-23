@@ -11,6 +11,12 @@ pub enum CommandId {
     DirectConvert,
     Batch,
     Stack,
+    ProjectNew,
+    ProjectOpen,
+    ProjectRecent,
+    ProjectSave,
+    ProjectSaveAs,
+    ProjectClose,
     SaveMacro,
     LoadMacro,
     LoadMacroNewTab,
@@ -138,6 +144,8 @@ pub enum Needs {
     Undo,
     /// Something to redo on the active tab.
     Redo,
+    /// A project is open (Phase 8 W4).
+    Project,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -164,6 +172,12 @@ pub const COMMANDS: &[Command] = &[
     c(I::DirectConvert, "Convert CSV to Parquet directly\u{2026}", G::File, "converter transform file", N::Nothing),
     c(I::Batch, "Recursive batch folder mirror\u{2026}", G::File, "folder convert many files", N::Nothing),
     c(I::Stack, "Stack / merge several files\u{2026}", G::File, "append union combine vertical", N::Nothing),
+    c(I::ProjectNew, "New project", G::File, "workspace session clear start fresh mpproj", N::Nothing),
+    c(I::ProjectOpen, "Open project\u{2026}", G::File, "workspace session reopen mpproj sources files relink", N::Nothing),
+    c(I::ProjectRecent, "Open recent project\u{2026}", G::File, "workspace session last mpproj history", N::Nothing),
+    c(I::ProjectSave, "Save project", G::File, "workspace session tabs steps pivots charts mpproj", N::Nothing),
+    c(I::ProjectSaveAs, "Save project as\u{2026}", G::File, "workspace session copy rename mpproj", N::Nothing),
+    c(I::ProjectClose, "Close project", G::File, "workspace session end tabs mpproj", N::Project),
     c(I::SaveMacro, "Save steps as a macro\u{2026}", G::File, "recipe mpq json", N::Tab),
     c(I::LoadMacro, "Load and replay a macro on this tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::LoadMacroNewTab, "Load and replay a macro into a new tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
@@ -301,6 +315,8 @@ pub struct CommandState {
     pub result_tab: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// A project is open.
+    pub project: bool,
 }
 
 /// Why a command cannot run now; `None` when it can.
@@ -312,6 +328,7 @@ pub fn unavailable_reason(cmd: &Command, state: CommandState) -> Option<&'static
         Needs::ResultTab if state.tabs == 0 || !state.result_tab => Some("Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it."),
         Needs::Undo if state.tabs == 0 || !state.can_undo => Some("Nothing to undo."),
         Needs::Redo if state.tabs == 0 || !state.can_redo => Some("Nothing to redo."),
+        Needs::Project if !state.project => Some("No project is open."),
         _ => None,
     }
 }

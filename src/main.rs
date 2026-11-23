@@ -41,6 +41,12 @@ pub(crate) struct CliArgs {
     /// The cutoff date of the pack run, YYYY-MM-DD.
     #[arg(long)]
     cutoff: Option<String>,
+    /// Open this project file (no relinking) and write every tab as Parquet into --export-dir (Phase 8 W4).
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// With --project: the folder that gets one Parquet file per tab.
+    #[arg(long)]
+    export_dir: Option<PathBuf>,
 }
 
 fn main() -> eframe::Result<()> {
@@ -128,6 +134,14 @@ pub enum ActiveToolModal {
     SortLists,
     /// View ▸ Calendar… (Phase 8 W0).
     Calendar,
+    /// The Sources dialog that comes before a project opens (Phase 8 W4).
+    ProjectSources,
+    /// Save project: the tabs that are left out (Phase 8 W4).
+    ProjectSave,
+    /// "Save / Don't save / Cancel" (Phase 8 W4).
+    ProjectPrompt,
+    /// File ▸ Open recent project (Phase 8 W4).
+    ProjectRecent,
     /// Transform ▸ Split date… (Phase 8 W1).
     SplitDate,
     /// New chart: the chart gallery (Phase 7 C2).
@@ -293,6 +307,8 @@ pub struct MicroParquetApp {
     /// A template's chart for a tab that is still being opened (by tab id): taken by the studio when the tab is ready.
     pub chart_pending: HashMap<u64, micro_parquet::charts::spec::ChartSpec>,
     pub runs: RunsState,
+    /// File ▸ projects (Phase 8 W4).
+    pub project: crate::ui::project::ProjectState,
     pub packs: PacksState,
     pub mom: MomState,
     pub dq: DqState,
@@ -429,6 +445,7 @@ impl MicroParquetApp {
             chart_book: Default::default(),
             chart_pending: HashMap::new(),
             runs: RunsState::default(),
+            project: Default::default(),
             packs: PacksState::default(),
             mom: MomState::default(),
             dq: DqState::default(),
@@ -505,6 +522,7 @@ impl MicroParquetApp {
             self.status_message = note;
         }
         self.poll_jobs(ctx);
+        self.project_tick(ctx);
         if ctx.input(|i| i.viewport().close_requested()) {
             match self.close_requested() {
                 ui::jobs::CloseDecision::Ask => ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose),
@@ -534,6 +552,10 @@ impl MicroParquetApp {
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     self.render_empty_state(ui);
+                    return;
+                }
+                if self.active_is_unavailable() {
+                    self.render_unavailable_main(ui);
                     return;
                 }
                 if self.active_is_chart_tab() {
@@ -569,8 +591,25 @@ impl MicroParquetApp {
         use micro_parquet::commands::{CommandGroup, CommandId};
         ui.menu_button("File", |ui| {
             for c in micro_parquet::commands::in_group(CommandGroup::File) {
-                if matches!(c.id, CommandId::SaveMacro | CommandId::Quit) {
+                if matches!(c.id, CommandId::ProjectNew | CommandId::SaveMacro | CommandId::Quit) {
                     ui.separator();
+                }
+                if c.id == CommandId::ProjectRecent {
+                    // the last projects, newest first (the same list is in Ctrl+K as "Open recent project…")
+                    let recent = self.settings.recent_projects.clone();
+                    ui.menu_button(format!("{}  Open recent project", ui::commands::command_icon(c.id)), |ui| {
+                        if recent.is_empty() {
+                            ui.add_enabled(false, egui::Button::new("No recent projects"));
+                        }
+                        for p in &recent {
+                            let path = PathBuf::from(p);
+                            if ui.button(micro_parquet::project::project_name(&path)).on_hover_text(p).clicked() {
+                                ui.close_menu();
+                                self.project_request(ui::project::AfterPrompt::OpenPath(path));
+                            }
+                        }
+                    });
+                    continue;
                 }
                 self.command_menu_item(ui, ctx, c.id);
             }

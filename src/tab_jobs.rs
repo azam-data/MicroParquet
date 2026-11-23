@@ -45,6 +45,24 @@ pub enum JobOutput {
     Dq(Box<DqJobResult>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
+    /// A tab of a project that was opened (Phase 8 W4).
+    ProjectTab(Box<ProjectLoaded>),
+    /// The files of a project that changed since it was saved, and the hashes worked out (Phase 8 W4).
+    ProjectCheck(Box<ProjectChecked>),
+}
+
+/// A tab of a project, built on the worker.
+pub struct ProjectLoaded {
+    pub loaded: LoadedTab,
+    /// The chart's numbers, for a chart tab.
+    pub chart: Option<crate::chart::ChartData>,
+    /// The tab's place in the project's tab list.
+    pub index: usize,
+}
+
+pub struct ProjectChecked {
+    pub warnings: Vec<String>,
+    pub hashes: Vec<(PathBuf, u64, i64, String)>,
 }
 
 /// The first column named "balance", else the first whose name has balance, amount or delta.

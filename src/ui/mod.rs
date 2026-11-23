@@ -40,6 +40,7 @@ pub mod pivot;
 pub mod pivot_bar;
 pub mod pivot_builder;
 pub mod prelude;
+pub mod project;
 pub mod provision;
 pub mod rate_band;
 pub mod rate_shock;
@@ -131,6 +132,10 @@ impl MicroParquetApp {
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
             ActiveToolModal::Calendar => self.render_calendar_modal(ctx, cols),
+            ActiveToolModal::ProjectSources => self.render_project_sources_modal(ctx, cols),
+            ActiveToolModal::ProjectSave => self.render_project_save_modal(ctx, cols),
+            ActiveToolModal::ProjectPrompt => self.render_project_prompt_modal(ctx, cols),
+            ActiveToolModal::ProjectRecent => self.render_project_recent_modal(ctx, cols),
             ActiveToolModal::SplitDate => self.render_split_date_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),

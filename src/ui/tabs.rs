@@ -37,7 +37,7 @@ impl MicroParquetApp {
 
     /// Keeps the window's title bar in step with the active tab.
     pub(crate) fn update_window_title(&mut self, ctx: &egui::Context) {
-        let title = window_title(self.active_file_name().as_deref());
+        let title = self.current_window_title();
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;

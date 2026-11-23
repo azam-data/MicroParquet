@@ -495,3 +495,417 @@ fn w3_the_number_the_bands_tick_box_is_off_and_works_by_a_real_click_at_three_si
         }
     }
 }
+
+// ================================================================================ W4: project files
+
+use crate::ui::project::{PROMPT_TITLE, SAVE_TITLE, SOURCES_TITLE};
+use crate::ui::render_tests_p7::chart_rig_with;
+use micro_parquet::chart::{ChartAgg, ChartSpec};
+
+fn proj_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    chart_rig_with(name, book8(), ppp, w, h)
+}
+
+/// Frames until `done`, moving the clock on (the project's "unsaved" check runs on the clock).
+fn pump_until(rig: &mut Rig, what: &str, done: &dyn Fn(&Rig) -> bool) {
+    for _ in 0..600 {
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.draw(1);
+        if done(rig) {
+            rig.draw(2);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{}: '{what}' timed out (status: {})", rig.what, rig.app.status_message);
+}
+
+fn tick(rig: &mut Rig) {
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+    rig.draw(2);
+}
+
+/// Clicks the File menu, then its item that ends with `exact`.
+fn file_item(rig: &mut Rig, exact: &str) -> Painted {
+    let p = rig.draw(3);
+    let b = bar_box(&p, "File").unwrap_or_else(|| panic!("{}: the File menu", rig.what));
+    let p = click_rect(rig, b);
+    let it = p
+        .boxes
+        .iter()
+        .rev()
+        .find(|(t, bx)| t.trim().ends_with(exact) && bx.top() > b.bottom() - 1.0)
+        .map(|(_, r)| *r)
+        .unwrap_or_else(|| panic!("{}: '{exact}' is in the File menu: {:?}", rig.what, p.boxes.iter().filter(|(_, bx)| bx.top() > b.bottom()).map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+    assert!(inside(it, rig.ctx.screen_rect()), "{}: the menu item '{exact}' {it:?} is inside the window", rig.what);
+    click_rect(rig, it)
+}
+
+fn rows_hash_of(tab: &TabState, temp: &std::path::Path) -> String {
+    let lf = micro_parquet::engine::compile_tab_lazy(&tab.source, &tab.steps, temp).expect("compiles");
+    let mut df = lf.collect().expect("collects");
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        use polars::prelude::SerWriter;
+        polars::prelude::CsvWriter::new(&mut buf).finish(&mut df).expect("csv");
+    }
+    blake3::hash(&buf).to_hex().to_string()
+}
+
+fn titles_and_hashes(rig: &Rig) -> Vec<(String, String)> {
+    rig.app.tabs.iter().map(|t| (t.title.clone(), rows_hash_of(t, &rig.app.paths.temp_dir))).collect()
+}
+
+fn branch_pivot() -> TransformStep {
+    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() })
+}
+
+/// The file tab, a pivot tab of it and a chart tab of it.
+fn three_tabs(rig: &mut Rig) {
+    let src = rig.app.tabs[0].source.clone();
+    rig.app.create_tab_from_source("Pivot: Branch".into(), src, vec![branch_pivot()], HashMap::new());
+    settle(&mut rig.app);
+    rig.app.active_tab = 0;
+    rig.draw(4);
+    pump_until(rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+    let mut spec: ChartSpec = rig.app.chart.spec.clone();
+    spec.category = "Branch".into();
+    spec.series = None;
+    spec.value = Some("Balance".into());
+    spec.agg = ChartAgg::Sum;
+    rig.app.chart_set_spec(spec);
+    pump_until(rig, "the chart of Branch", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Branch"));
+    rig.app.chart_open_as_chart_tab();
+    pump_until(rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1 && r.app.tabs.len() == 3);
+}
+
+fn button(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.project.rects.buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the button '{name}' in {:?}", rig.what, rig.app.project.rects.buttons.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()))
+}
+
+fn click_button(rig: &mut Rig, name: &str) -> Painted {
+    let r = button(rig, name);
+    click_rect(rig, r)
+}
+
+fn sources_title() -> String {
+    format!("{}  {}", theme::ph::FOLDER_OPEN, SOURCES_TITLE)
+}
+
+#[test]
+fn w4_the_file_menu_saves_closes_and_opens_a_project_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w4a", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        three_tabs(&mut rig);
+        let pfile = root.join("proj").join("Treasury.mpproj");
+        // the six entries are in the File menu, and Ctrl+K finds them
+        let p = rig.draw(3);
+        let b = bar_box(&p, "File").expect("File");
+        let p = click_rect(&mut rig, b);
+        for item in ["New project", "Open project\u{2026}", "Open recent project", "Save project", "Save project as\u{2026}", "Close project"] {
+            assert!(p.boxes.iter().any(|(t, bx)| t.trim().ends_with(item) && inside(*bx, rig.ctx.screen_rect())), "{what}: '{item}' is in the File menu");
+        }
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(2);
+        let entries: Vec<micro_parquet::commands::Entry> = micro_parquet::commands::COMMANDS.iter().map(|c| micro_parquet::commands::Entry { label: c.title, words: c.words, recent: None }).collect();
+        for (q, id) in [("new project", CommandId::ProjectNew), ("open project", CommandId::ProjectOpen), ("recent project", CommandId::ProjectRecent), ("save project as", CommandId::ProjectSaveAs), ("close project", CommandId::ProjectClose), ("mpproj", CommandId::ProjectNew)] {
+            let hits: Vec<CommandId> = micro_parquet::commands::rank(q, &entries).iter().take(6).map(|i| micro_parquet::commands::COMMANDS[*i].id).collect();
+            assert!(hits.contains(&id), "{what}: Ctrl+K '{q}' finds {id:?}: {hits:?}");
+        }
+        let hits: Vec<CommandId> = micro_parquet::commands::rank("save project", &entries).iter().take(3).map(|i| micro_parquet::commands::COMMANDS[*i].id).collect();
+        assert!(hits.contains(&CommandId::ProjectSave), "{what}: {hits:?}");
+        assert!(rig.app.command_unavailable(CommandId::ProjectClose).is_some(), "{what}: Close project is greyed while no project is open");
+
+        // Save project as…: nothing is written until the file is chosen; then it is, with the project in the title
+        rig.app.project.test_pick = Some(pfile.clone());
+        file_item(&mut rig, "Save project as\u{2026}");
+        assert!(pfile.exists(), "{what}: the project file is written: {}", rig.app.status_message);
+        assert!(rig.app.project.active && rig.app.project.name == "Treasury", "{what}");
+        assert_eq!(rig.app.settings.recent_projects.first().map(String::as_str), Some(pfile.display().to_string().as_str()), "{what}: recent");
+        tick(&mut rig);
+        assert!(rig.app.window_title.starts_with(&format!("MicroParquet v{} \u{2014} Treasury", env!("CARGO_PKG_VERSION"))) && !rig.app.window_title.contains('\u{2022}'), "{what}: {}", rig.app.window_title);
+        let saved = micro_parquet::project::load_project(&pfile).expect("the project reads");
+        assert_eq!(saved.tabs.iter().map(|t| t.key.clone()).collect::<Vec<_>>(), vec!["t1", "t2", "t3"], "{what}");
+        assert_eq!(saved.active_tab, "t3", "{what}: the chart tab was active");
+
+        // a change to a tab puts the "•" in the title; Save project writes it and takes it away
+        rig.app.tabs[0].steps.push(TransformStep::SelectAndReorderColumns { cols: vec!["Month".into(), "Branch".into(), "Balance".into()] });
+        tick(&mut rig);
+        assert!(rig.app.window_title.contains("Treasury \u{2022}"), "{what}: {}", rig.app.window_title);
+        file_item(&mut rig, "Save project");
+        tick(&mut rig);
+        assert!(!rig.app.window_title.contains('\u{2022}'), "{what}: saved: {}", rig.app.window_title);
+        assert_eq!(micro_parquet::project::load_project(&pfile).expect("reads").tabs[0].steps.len(), 1, "{what}: the step is in the file");
+        let want = titles_and_hashes(&rig);
+        let (want_chart, want_active) = (rig.app.chart_tabs.values().next().map(|i| serde_json::to_value(&i.data.spec).expect("json")), rig.app.active_tab);
+
+        // Open project…: the Sources dialog comes first and nothing has run yet (the tabs of the session are still there)
+        let before_titles: Vec<String> = rig.app.tabs.iter().map(|t| t.title.clone()).collect();
+        rig.app.project.test_pick = Some(pfile.clone());
+        file_item(&mut rig, "Open project\u{2026}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ProjectSources, "{what}");
+        assert_eq!(rig.app.tabs.iter().map(|t| t.title.clone()).collect::<Vec<_>>(), before_titles, "{what}: no tab opens or closes before the dialog is answered");
+        let p = rig.draw(3);
+        let r = assert_dialog_fits(&rig.ctx, &sources_title(), &what);
+        let texts = dialog_texts(&mut rig, &p, r.window);
+        assert_no_overlap(&texts, &what);
+        assert_not_clipped(&p, r.window, &what);
+        assert!(texts.iter().any(|(t, _)| t == "book.parquet") && texts.iter().any(|(t, _)| t == "Found"), "{what}: {texts:?}");
+        for (n, b) in rig.app.project.rects.buttons.iter() {
+            assert!(inside(*b, r.window), "{what}: '{n}' {b:?} is inside the dialog {:?}", r.window);
+        }
+        click_button(&mut rig, "Open");
+        pump_until(&mut rig, "the project opens", &|r| r.app.project.opening.is_none() && r.app.tabs.len() == 3 && !r.app.jobs.any_busy());
+        assert_eq!(titles_and_hashes(&rig), want, "{what}: every tab has the same rows as before the project was closed");
+        assert_eq!(rig.app.active_tab, want_active, "{what}: the active tab");
+        assert_eq!(rig.app.chart_tabs.values().next().map(|i| serde_json::to_value(&i.data.spec).expect("json")), want_chart, "{what}: the chart tab's chart");
+        assert_eq!(rig.app.project.last_summary, "3 tabs opened.", "{what}");
+        assert!(rig.app.project.active && rig.app.project.name == "Treasury", "{what}");
+        tick(&mut rig);
+        assert!(!rig.app.window_title.contains('\u{2022}'), "{what}: a project that was just opened has nothing unsaved: {}", rig.app.window_title);
+        assert!(rig.app.chart_tabs.values().all(|i| i.source_tab.is_some()), "{what}: the chart tab knows its source tab");
+        // saving it again gives the same file but saved_at
+        let before = micro_parquet::project::load_project(&pfile).expect("reads");
+        file_item(&mut rig, "Save project");
+        let mut after = micro_parquet::project::load_project(&pfile).expect("reads");
+        let mut b2 = before.clone();
+        (after.saved_at, b2.saved_at) = (String::new(), String::new());
+        assert_eq!(after.to_json().expect("json"), b2.to_json().expect("json"), "{what}: save → open → save");
+        // Close project: nothing is unsaved, so the tabs close at once
+        file_item(&mut rig, "Close project");
+        assert!(rig.app.tabs.is_empty() && !rig.app.project.active && rig.app.chart_tabs.is_empty(), "{what}: closed");
+    }
+}
+
+#[test]
+fn w4_the_sources_dialog_relinks_by_browse_and_look_in_folder_and_a_tab_that_fails_is_a_placeholder() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w4b", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        three_tabs(&mut rig);
+        let pfile = root.join("proj").join("Relink.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        assert!(pfile.exists(), "{what}: {}", rig.app.status_message);
+        let original = std::fs::read_to_string(&pfile).expect("project text");
+        // this month's file: another place, one more column, other rows
+        let moved = root.join("moved");
+        std::fs::create_dir_all(&moved).expect("folder");
+        std::fs::rename(root.join("book.parquet"), moved.join("book.parquet")).expect("moved");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectOpen);
+        let p = rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, &sources_title(), &what);
+        let texts = dialog_texts(&mut rig, &p, r.window);
+        assert!(texts.iter().any(|(t, _)| t == "Missing"), "{what}: {texts:?}");
+        assert!(rig.app.project.rects.message.is_some(), "{what}: the missing file is said");
+        assert_no_overlap(&texts, &what);
+        // Look in folder…: the file is found by its name, below the folder
+        rig.app.project.test_dir = Some(root.clone());
+        let p = click_button(&mut rig, "Look in folder\u{2026}");
+        assert!(p.boxes.iter().any(|(t, _)| t == "Found"), "{what}: found by name");
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("Looked in ") && t.contains("1 file found")), "{what}");
+        // Browse…: a different file with an extra column is allowed and is "Changed" (both dates are said)
+        let other = root.join("book_next.parquet");
+        let mut df = book8();
+        df.with_column(Series::new("Extra".into(), &["x"; 8])).expect("extra");
+        df.with_column(Series::new("Balance".into(), &[1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])).expect("balance");
+        polars::prelude::ParquetWriter::new(std::fs::File::create(&other).expect("file")).finish(&mut df).expect("parquet");
+        rig.app.project.test_pick = Some(other.clone());
+        let p = click_button(&mut rig, "Browse book.parquet");
+        assert!(p.boxes.iter().any(|(t, _)| t == "Changed"), "{what}");
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("Saved ") && t.contains(", now ")), "{what}: both dates");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("relinked from")), "{what}");
+        let texts = dialog_texts(&mut rig, &p, r.window);
+        assert_no_overlap(&texts, &what);
+        assert_not_clipped(&p, r.window, &what);
+        click_button(&mut rig, "Open");
+        pump_until(&mut rig, "the project opens on the new file", &|r| r.app.project.opening.is_none() && r.app.tabs.len() == 3 && !r.app.jobs.any_busy());
+        let sum: f64 = rig.app.tabs[0].cached_slice.column("Balance").expect("balance").f64().expect("f64").into_iter().flatten().sum();
+        assert!((sum - 36.0).abs() < 1e-9, "{what}: the tab reads this month's file: {sum}");
+        assert!(rig.app.tabs.iter().all(|t| !matches!(t.source, TabSource::Unavailable { .. })), "{what}");
+
+        // a file that is not there: Open anyway; its tabs are placeholders with the reason, the project keeps them
+        std::fs::remove_file(&other).ok();
+        std::fs::remove_file(moved.join("book.parquet")).expect("removed");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectOpen);
+        rig.draw(4);
+        click_button(&mut rig, "Open");
+        pump_until(&mut rig, "the placeholders", &|r| r.app.project.opening.is_none() && r.app.tabs.len() == 3);
+        assert!(rig.app.tabs.iter().all(|t| matches!(&t.source, TabSource::Unavailable { reason } if reason.contains("missing") || reason.contains("did not open"))), "{what}: {:?}", rig.app.tabs.iter().map(|t| format!("{:?}", t.source)).collect::<Vec<_>>());
+        assert!(rig.app.project.last_summary.starts_with("0 tabs opened, 3 failed: book"), "{what}: {}", rig.app.project.last_summary);
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("could not be opened")), "{what}: the reason is in the main area");
+        assert!(rig.app.command_unavailable(CommandId::ExportParquet).is_some(), "{what}: a placeholder cannot be exported");
+        // saving the project again does not lose the three tabs
+        file_item(&mut rig, "Save project");
+        let mut after = std::fs::read_to_string(&pfile).expect("text");
+        let strip = |t: &str| -> String { t.lines().filter(|l| !l.contains("\"saved_at\"")).collect::<Vec<_>>().join("\n") };
+        after = strip(&after);
+        assert_eq!(after, strip(&original), "{what}: the project is as it was saved");
+    }
+}
+
+#[test]
+fn w4_unsaved_changes_ask_save_dont_save_or_cancel_on_a_real_close_request_and_on_new_project() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w4c", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        let pfile = root.join("proj").join("Quit.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        assert!(pfile.exists(), "{what}");
+        tick(&mut rig);
+        // a close request with nothing unsaved goes through
+        let close = |rig: &mut Rig| {
+            let mut i = rig.input.clone();
+            i.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+            i.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+            rig.input.time = i.time;
+            settle(&mut rig.app);
+            let out = rig.ctx.run(i, |c| rig.app.frame_ui(c));
+            let cmds = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default();
+            cmds.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose))
+        };
+        assert!(!close(&mut rig), "{what}: nothing is unsaved, so the window may close");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        // a change: the same request is held and the question is asked
+        rig.app.tabs[0].steps.push(TransformStep::SelectAndReorderColumns { cols: vec!["Month".into(), "Balance".into()] });
+        tick(&mut rig);
+        assert!(close(&mut rig), "{what}: the close is cancelled while the question is open");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ProjectPrompt, "{what}");
+        let p = rig.draw(3);
+        let r = assert_dialog_fits(&rig.ctx, PROMPT_TITLE, &what);
+        let texts = dialog_texts(&mut rig, &p, r.window);
+        assert_no_overlap(&texts, &what);
+        assert!(texts.iter().any(|(t, _)| t.contains("The project 'Quit' has changes that are not saved. Save them before the program closes?")), "{what}: {texts:?}");
+        // Cancel keeps the app open
+        click_button(&mut rig, "Cancel");
+        assert_eq!((rig.app.active_tool, rig.app.project.close_confirmed, rig.app.project.quit_now), (ActiveToolModal::None, false, false), "{what}: Cancel keeps the app open");
+        assert_eq!(rig.app.tabs.len(), 1, "{what}");
+        // Don't save: the window closes and the file is as it was
+        let before = std::fs::read_to_string(&pfile).expect("text");
+        close(&mut rig);
+        click_button(&mut rig, "Don't save");
+        rig.draw(2);
+        assert!(rig.app.project.close_confirmed, "{what}: Don't save lets the window close");
+        assert_eq!(std::fs::read_to_string(&pfile).expect("text"), before, "{what}: nothing was written");
+        rig.app.project.close_confirmed = false;
+        // Save: the project is written, then the window closes
+        close(&mut rig);
+        click_button(&mut rig, "Save");
+        rig.draw(2);
+        assert!(rig.app.project.close_confirmed, "{what}: Save then close");
+        assert_eq!(micro_parquet::project::load_project(&pfile).expect("reads").tabs[0].steps.len(), 1, "{what}: the change was saved");
+        rig.app.project.close_confirmed = false;
+
+        // Open recent project: the list of the File menu, and a click on a name opens its Sources dialog
+        let p = rig.draw(3);
+        let b = bar_box(&p, "File").expect("File");
+        let p = click_rect(&mut rig, b);
+        let sub = p.boxes.iter().rev().find(|(t, bx)| t.trim().ends_with("Open recent project") && bx.top() > b.bottom() - 1.0).map(|(_, r)| *r).expect("the submenu");
+        let p = click_rect(&mut rig, sub);
+        let name = p.boxes.iter().rev().find(|(t, bx)| t == "Quit" && bx.top() > b.bottom()).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the recent list names the project"));
+        click_rect(&mut rig, name);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ProjectSources, "{what}");
+        rig.draw(3);
+        assert_dialog_fits(&rig.ctx, &sources_title(), &what);
+        click_button(&mut rig, "Cancel");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        assert_eq!(rig.app.tabs.len(), 1, "{what}: Cancel opens nothing and closes nothing");
+        // the same list from Ctrl+K
+        rig.app.run_command(&rig.ctx, CommandId::ProjectRecent);
+        let p = rig.draw(3);
+        let r = assert_dialog_fits(&rig.ctx, &format!("{}  {}", theme::ph::CLOCK_COUNTER_CLOCKWISE, crate::ui::project::RECENT_TITLE), &what);
+        assert_no_overlap(&dialog_texts(&mut rig, &p, r.window), &what);
+        // New project with unsaved changes asks too; Don't save starts an empty project
+        rig.app.tabs[0].steps.clear();
+        tick(&mut rig);
+        file_item(&mut rig, "New project");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ProjectPrompt, "{what}");
+        rig.draw(3);
+        assert_dialog_fits(&rig.ctx, PROMPT_TITLE, &what);
+        click_button(&mut rig, "Don't save");
+        assert!(rig.app.tabs.is_empty() && rig.app.project.active && rig.app.project.name == "Untitled" && rig.app.project.path.is_none(), "{what}");
+        tick(&mut rig);
+        assert!(rig.app.window_title.contains("Untitled") && !rig.app.window_title.contains('\u{2022}'), "{what}: {}", rig.app.window_title);
+
+        let _ = SAVE_TITLE;
+    }
+}
+
+#[test]
+fn w4_save_lists_the_tabs_it_leaves_out_and_a_newer_project_is_refused_by_the_menu() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w4d", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        // a chart-data tab: a copy of a chart's table in a temporary file, which a project cannot rebuild
+        pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+        rig.app.chart_open_as_tab();
+        pump_until(&mut rig, "the chart data tab", &|r| r.app.tabs.len() == 2);
+        let pfile = root.join("proj").join("Left out.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        file_item(&mut rig, "Save project as\u{2026}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ProjectSave, "{what}: the tab that cannot be saved is listed first");
+        assert!(!pfile.exists(), "{what}: nothing is written before the list is answered");
+        let p = rig.draw(3);
+        let title = format!("{}  {}", theme::ph::FLOPPY_DISK, SAVE_TITLE);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        let texts = dialog_texts(&mut rig, &p, r.window);
+        assert_no_overlap(&texts, &what);
+        assert_not_clipped(&p, r.window, &what);
+        assert!(texts.iter().any(|(t, _)| t.contains("1 tab cannot be built again from a project, so it is left out of it:")), "{what}: {texts:?}");
+        assert!(texts.iter().any(|(t, _)| t.starts_with("Chart: ") && t.contains("copy of a chart's table")), "{what}: the tab and the reason: {texts:?}");
+        // Cancel writes nothing; Save the others writes the project without it
+        click_button(&mut rig, "Cancel");
+        assert!(!pfile.exists() && rig.app.active_tool == ActiveToolModal::None && !rig.app.project.active, "{what}");
+        rig.app.project.test_pick = Some(pfile.clone());
+        file_item(&mut rig, "Save project as\u{2026}");
+        rig.draw(3);
+        click_button(&mut rig, "Save the others");
+        assert!(pfile.exists(), "{what}: {}", rig.app.status_message);
+        let saved = micro_parquet::project::load_project(&pfile).expect("reads");
+        assert_eq!(saved.tabs.len(), 1, "{what}: the other tab is saved");
+        assert!(rig.app.status_message.contains("1 left out"), "{what}: {}", rig.app.status_message);
+
+        // a project saved by a newer program is refused with the version, and no dialog opens
+        let newer = root.join("proj").join("Newer.mpproj");
+        std::fs::write(&newer, r#"{"project_version": 2, "app_version": "9.9.0", "tabs": []}"#).expect("file");
+        rig.app.project.test_pick = Some(newer);
+        file_item(&mut rig, "Open project\u{2026}");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        assert_eq!(rig.app.status_message, "This project was saved by a newer MicroParquet v9.9.0. Update the app to open it.", "{what}");
+    }
+}
+
+#[test]
+fn w4_a_file_that_changed_since_the_project_was_saved_is_said_in_the_status_line_after_the_tabs_open() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w4e", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        let pfile = root.join("proj").join("Changed.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        assert!(pfile.exists(), "{what}");
+        // the same file, rewritten with other numbers (the same columns)
+        let mut df = book8();
+        df.with_column(Series::new("Balance".into(), &[9.0f64; 8])).expect("balance");
+        polars::prelude::ParquetWriter::new(std::fs::File::create(root.join("book.parquet")).expect("file")).finish(&mut df).expect("parquet");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectOpen);
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, _)| t == "Changed"), "{what}: the Sources dialog says Changed");
+        click_button(&mut rig, "Open");
+        pump_until(&mut rig, "the project opens", &|r| r.app.project.opening.is_none() && r.app.tabs.len() == 1 && !r.app.jobs.any_busy());
+        pump_until(&mut rig, "the files are compared", &|r| r.app.status_message.contains("changed since the project was saved"));
+        let s = &rig.app.status_message;
+        assert!(s.starts_with("1 tab opened. book.parquet changed since the project was saved (saved ") && s.contains(", file ") && s.ends_with(')'), "{what}: {s}");
+    }
+}

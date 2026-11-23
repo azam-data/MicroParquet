@@ -140,3 +140,5 @@ mod p8_w1;
 mod p8_w2;
 #[path = "../phase8/w3.rs"]
 mod p8_w3;
+#[path = "../phase8/w4.rs"]
+mod p8_w4;

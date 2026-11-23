@@ -39,6 +39,9 @@ pub struct Settings {
     /// View ▸ Calendar… (Phase 8 W0): the fiscal year start and the week start (January and Saturday).
     #[serde(default)]
     pub calendar: crate::dates::CalendarSettings,
+    /// File ▸ Open recent project (Phase 8 W4): the last 8 project files, newest first.
+    #[serde(default)]
+    pub recent_projects: Vec<String>,
 }
 
 pub fn settings_path(root: &Path) -> PathBuf {

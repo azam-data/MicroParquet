@@ -394,4 +394,25 @@ Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, f
 - W3-2: built-in and saved presets stay numbered; the dialog's tick box (off for a new step, the step's own when editing) decides.
 - W3-3: the Phase 3 dialog test and the Phase 4 guide example now expect the plain labels a new step makes; the guide picture uses a plain-label sample.
 - W3-4: the Phase 8 overlap checks measure texts by their laid-out rows, not egui's row-wide galley rectangle.
+
+Owner decisions on Session A (given with the Session B brief):
+- W0-1 to W3-4 are accepted.
+- Q1: `ChartSpec.series_order` and `facet_order` (`Option<SortOrder>`, serde default `None` = today's behaviour), filled by the W0 auto-order rule when a field is added; existing charts never change. Test: a new chart with series "Open Date › Year" lists 2024, 2025, 2026; a Phase 7 saved chart keeps its order. Decided, not built yet (Session B was told W4 only).
+- Q2: the Python Tenor mirror uses the app's day count (month = 365/12 days, year = 365). Test against the app on 12M, 1Y, 18M, 2Y, 30D, 1M. Decided, not built yet.
+- Q3: plain-Python date parts in the Polars export: accepted.
+
+Session B (W4) choices:
+- W4-1: a pivot tab is saved as its source's recipe plus its steps (the pivot is the last step), not as `ToolRun::PivotTab`: it opens even when the tab it was made from has changed since. Every tab on a file is a File recipe with all its steps.
+- W4-2: a tool's result tab (join, stack, reconcile, banking tools) is its `ToolRun` with the sources named by project key, plus the steps added to it afterwards. Its sources must be open tabs with the same source and steps (as for "Save run"); if not, the tab is left out with that message.
+- W4-3: the recipes are resolved on the UI thread one tab at a time (they read headers and small rule files); each tab is built on the worker, so "Opening 4 of 9: Gap ladder" follows the worker. A tab waits for the tabs it is built on.
+- W4-4: Save hashes (blake3) the files it has not hashed before on the UI thread, remembering (size, time, hash), so only a first save of a large file waits.
+- W4-5: "unsaved" is asked only when a project is open, or (for New and Open) when tabs are open outside any project. It compares the tabs' sources (settings, not the files' sizes and dates), steps, formats, summary, control column, chart tabs and the active tab, every 0.4 s and at the moment of a close. The side panel's own chart choices are saved but do not set the "•".
+- W4-6: "Open recent project" is a submenu of File and, in Ctrl+K, a small list dialog.
+- W4-7: a chart tab is saved as its `ChartSpec` and the key of the tab it draws (`ChartTabInfo.source_tab`) and is calculated again on open; W5 builds the linked chart tab on this. A chart whose source tab is closed is left out with the reason.
+- W4-8: the column check is per file: a CSV's saved names are its schema's column names, a Parquet file's are its own. One missing column refuses the file and every tab built on it. Extra columns are fine.
+- W4-9: a tab that cannot open is a placeholder with no steps; its recipe stays in memory and is written again by Save. Export, copy, macro and Python commands are greyed for it.
+- W4-10: the "changed since saved" line leaves out files that were relinked, and follows "N tabs opened.".
+- W4-11: Open closes the session's tabs only after "Open" is pressed in the Sources dialog; Cancel leaves everything as it was.
+- W4-12: `--project` writes `<tab title>.parquet` (a second title gets "(2)") through a staging folder in `--export-dir`; a step that cannot run stops the run like a failing tab.
+- W4-13: not done in W4: the guide note `projects.md` and screenshots (W8); `cargo build --release` was not run in this session (the debug `cargo test` was).
 </accepted_deviations>

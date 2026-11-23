@@ -1695,6 +1695,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => collect_masked_columns(source, out),
+        TabSource::Unavailable { .. } => {}
     }
 }
 
@@ -1714,6 +1715,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => source_masks_pii(source),
+        TabSource::Unavailable { .. } => false,
     }
 }
 
@@ -1863,6 +1865,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             }
         }
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::Unavailable { reason } => anyhow::bail!("{}", reason),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2585,6 +2588,7 @@ pub fn compile_tab_lazy(
             let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
             crate::banking::build_cl_migration(prev_lf, curr_lf, spec)?.lazy()
         }
+        TabSource::Unavailable { reason } => anyhow::bail!("This tab could not be opened: {}", reason),
     };
 
     for step in steps {

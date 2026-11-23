@@ -26,6 +26,7 @@ pub mod mom;
 pub mod overdue;
 pub mod packs;
 pub mod problems;
+pub mod project;
 pub mod paths;
 pub mod pdf_layout;
 pub mod pivot_table;

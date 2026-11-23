@@ -2318,6 +2318,9 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+    /// A tab of a project that could not be opened (Phase 8 W4): no rows, nothing to export. The reason is
+    /// shown in the main area; the project keeps the tab's recipe, so saving the project again does not lose it.
+    Unavailable { reason: String },
 }
 
 /// Which table of the data-quality run a tab shows.
@@ -2575,6 +2578,43 @@ impl JoinStatus {
 }
 
 impl TabState {
+    /// A tab of a project that could not be opened (Phase 8 W4): no rows, the reason in the main area.
+    pub fn unavailable(id: u64, title: String, reason: String, steps: Vec<TransformStep>) -> TabState {
+        let n = steps.len();
+        TabState {
+            id,
+            title,
+            source: TabSource::Unavailable { reason },
+            steps,
+            col_formats: HashMap::new(),
+            total_rows: 0,
+            control_col: None,
+            control_sum: None,
+            baseline_control_sum: None,
+            viewport_offset: 0,
+            slice_offset: 0,
+            viewport_limit: 100,
+            cached_slice: DataFrame::empty(),
+            sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
+            sql_history: Vec::new(),
+            sql_error: None,
+            parse_failures: Vec::new(),
+            join_status: None,
+            totals: Default::default(),
+            row_check: None,
+            summary: Default::default(),
+            summary_cells: Vec::new(),
+            issues: Vec::new(),
+            exec_steps: n,
+            history: Default::default(),
+            step_counts: Vec::new(),
+            step_hashes: Vec::new(),
+            column_stats: None,
+            page_error: None,
+            summary_error: None,
+        }
+    }
+
     /// True when the pipeline has a filter step that is turned on.
     pub fn has_active_filter(&self) -> bool {
         self.steps.iter().any(|s| s.is_active_filter())

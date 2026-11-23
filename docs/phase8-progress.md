@@ -1,9 +1,10 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
+| W4 | DONE | (see git log: "Phase 8 W4") | tests/phase8/w4.rs ×8 (six kinds of tab round-trip by the hash of their rows, with keys, active tab, formats, summary, control column, chart specs, and save → open → save equal but `saved_at`; moving the project and its files together opens by relative paths; a relink to a file with an extra column works and a missing column is refused with the list, and the tabs built on it fail; Found/Changed/Missing, Look in folder, the changed-since-saved line; tabs left out with the reason and their dependants; a placeholder keeps its recipe; a newer version is refused, unknown fields ignored, recent list of 8; headless writes every tab and a failing tab writes nothing); headless.rs ×1 (`--project`/`--export-dir`); render_tests_p8 ×5 (File menu entries, Ctrl+K, Save as, "•", Save, Open ▸ Sources dialog ▸ Open, Close; Browse and Look in folder, placeholders and Save keeping them; close request prompt with Cancel/Don't save/Save, New project, recent list; the left-out list; the changed-file status line, at 3 sizes) |
 | W3 | DONE | (see git log: "Phase 8 W3") | tests/phase8/w3.rs ×4 (numbered defaults to true for every saved form and the plain labels, the band order and its declared list; the owner's bands unnumbered in band order in the sorted step result, a pivot, the template's chart, the Excel workbook and the Python; a Phase 7 macro with the step replays to the numbered labels and its Phase 7 hash; the title "… sit at 8%–9%" in both forms); render_tests_p8 ×1 (the tick box off, on and off by real clicks, Add makes plain labels, a pivot takes the band order at once, at 3 sizes) |
 | W2 | DONE | (see git log: "Phase 8 W2") | tests/phase8/w2.rs ×6 (a pivot by a date field equals the pivot by the Split date column for 6 parts; every part with two calendars adds up to the total with "(blank)" last; a chart by Quarter: Q1…Q4 and the pivot's totals, series and facet by a part, stale parts ignored, missing columns, the calendar in the calculation key; a filter by Day name in Fri, Sat keeps exactly those rows, by Year, text refused, the Python; a real column of the field's name refused, the value lists of a part, a pivot filter on a part; old pivots, charts and conditions load); render_tests_p8 ×3 (the pivot expander and Add to Rows, the chart Category picker, the filter By choice, the picker and Apply, by real clicks at 3 sizes) |
 | W1 | DONE | (see git log: "Phase 8 W1") | tests/phase8/w1.rs ×6 (every part of the 1,000-row tab equals dates.rs and 3 blanks stay blank, two calendars; Datetime = its date; text column, name clash, no part, missing column, bad month refused; declared Calendar orders and a pivot by Day name Sat…Fri; label, JSON defaults, macro round trip; the generated Python parses and its part function gives the same 14 columns for all 1,000 rows); render_tests_p8 ×1 (Column panel button, ticks, text column message, Add, Edit menu, clash message, pivot order, by real clicks at 3 sizes) |
@@ -85,4 +86,12 @@ seven older macro fixtures. `tests/phase8/p7_baseline.rs` is the code that made 
 ## Found, not changed
 
 - The Python Tenor mirror counts a month as 30 days (`_MP_TENOR_DAYS`), the app as 365/12; "12M" and "1Y" tie in
-  the app and not in Python. Outside W0, so left as it is.
+  the app and not in Python. The owner decided (Q2) that the mirror uses the app's day count: **not built yet.**
+- Owner decision Q1 (`ChartSpec.series_order` and `facet_order`) is also **not built yet** (Session B was told W4 only).
+
+## Session B (W4): deviations W4-1 to W4-13
+
+They are listed in `docs/phase8-spec.md` `<accepted_deviations>`. In short: a pivot tab is its source's recipe plus its
+steps; a result tab is its run plus later steps; a chart tab is recalculated from its source tab on open (W5 links it);
+"unsaved" is asked only with a project open; Open recent project is a submenu and a Ctrl+K list; the guide note and the
+screenshots are W8; the release build was not run.

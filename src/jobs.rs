@@ -55,6 +55,10 @@ pub enum JobKind {
     Dq,
     /// The labels of a field just added to a pivot, chart or sort, for its auto order (Phase 8 W0).
     AutoOrder,
+    /// One tab of a project being opened (Phase 8 W4).
+    ProjectTab,
+    /// The files of a project compared with the hashes it saved (Phase 8 W4).
+    ProjectCheck,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

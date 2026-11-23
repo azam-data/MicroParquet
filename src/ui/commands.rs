@@ -74,6 +74,11 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::CalendarSettings => ph::CALENDAR,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
+        CommandId::ProjectNew => ph::FILE_PLUS,
+        CommandId::ProjectOpen => ph::FOLDER_OPEN,
+        CommandId::ProjectRecent => ph::CLOCK_COUNTER_CLOCKWISE,
+        CommandId::ProjectSave | CommandId::ProjectSaveAs => ph::FLOPPY_DISK,
+        CommandId::ProjectClose => ph::X_CIRCLE,
         CommandId::Packs => ph::TABLE,
         CommandId::Mudaraba => ph::SCALES,
         CommandId::DqScorecard => ph::SCALES,
@@ -120,11 +125,21 @@ impl MicroParquetApp {
             result_tab: tab.is_some_and(|t| is_result_source(&t.source) && !self.chart_tabs.contains_key(&t.id)),
             can_undo: tab.is_some_and(|t| t.history.can_undo()),
             can_redo: tab.is_some_and(|t| t.history.can_redo()),
+            project: self.project.active,
         }
     }
 
     /// Why a command cannot run now (shown greyed in the search and the menus).
     pub(crate) fn command_unavailable(&self, id: CommandId) -> Option<&'static str> {
+        // a tab of a project that did not open has no rows: nothing to export, copy or script
+        if self.active_is_unavailable()
+            && matches!(
+                id,
+                CommandId::ExportParquet | CommandId::ExportCsv | CommandId::ExportXlsx | CommandId::ExportCl1 | CommandId::ExportPdf | CommandId::ExportSplit | CommandId::CopyTable | CommandId::PythonExport | CommandId::SaveMacro
+            )
+        {
+            return Some("This tab could not be opened, so it has nothing to export. Its reason is in the main area.");
+        }
         cmds::command(id).and_then(|c| cmds::unavailable_reason(c, self.command_state()))
     }
 
@@ -168,6 +183,7 @@ impl MicroParquetApp {
             CommandId::LoadMacroNewTab => self.load_and_apply_macro_interactive(true),
             CommandId::PythonExport => self.prepare_python_preview_for_active_tab(),
             CommandId::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            CommandId::ProjectNew | CommandId::ProjectOpen | CommandId::ProjectRecent | CommandId::ProjectSave | CommandId::ProjectSaveAs | CommandId::ProjectClose => self.run_project_command(id),
             CommandId::Undo => self.undo_steps(),
             CommandId::Redo => self.redo_steps(),
             CommandId::Filter => self.open_filter_editor_default(),

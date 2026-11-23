@@ -72,6 +72,8 @@ pub struct ChartTabInfo {
     pub divisor: f64,
     pub decimals: usize,
     pub unit: String,
+    /// The id of the tab the chart draws (a project writes it as the chart's source, Phase 8 W4).
+    pub source_tab: Option<u64>,
 }
 
 impl Default for ChartState {
@@ -101,7 +103,7 @@ pub fn short_label(label: &str, max: usize) -> String {
 }
 
 /// The key a tab's chart choices are kept under: its file name, else its title.
-fn tab_key(tab: &TabState) -> String {
+pub(crate) fn tab_key(tab: &TabState) -> String {
     micro_parquet::steps_edit::source_files(&tab.source).first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| tab.title.clone())
 }
 
@@ -113,6 +115,11 @@ impl MicroParquetApp {
     /// The scale the chart shows its values in (`None` = as they are), from the value column's
     /// display format or the chart's own choice.
     pub(crate) fn chart_scale(&self, spec: &ChartSpec) -> Option<MoneyScale> {
+        self.chart_scale_of(spec, self.tabs.get(self.active_tab))
+    }
+
+    /// The same for the chart of tab `tab` (a project opens charts of tabs that are not the active one).
+    pub(crate) fn chart_scale_of(&self, spec: &ChartSpec, tab: Option<&TabState>) -> Option<MoneyScale> {
         if spec.agg == ChartAgg::Count {
             return None;
         }
@@ -120,7 +127,7 @@ impl MicroParquetApp {
             Some(s) => s,
             None => {
                 let col = spec.value.as_deref()?;
-                let fmt = self.tabs.get(self.active_tab).and_then(|t| t.col_formats.get(col));
+                let fmt = tab.and_then(|t| t.col_formats.get(col));
                 micro_parquet::models::resolved_scale(col, fmt, self.num_format)
             }
         }
@@ -358,6 +365,7 @@ impl MicroParquetApp {
             divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
             decimals: self.global_decimals,
             unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
+            source_tab: self.chart.tab_id,
         };
         let result = (|| -> anyhow::Result<TabSource> {
             let mut df = chart_table(&data)?;
