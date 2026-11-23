@@ -119,7 +119,7 @@ struct Plan<'a> {
 impl<'a> Env<'a> {
     fn colour_of(&self, name: &str, i: usize, n: usize) -> u32 {
         let base = if name.is_empty() && n == 1 {
-            t::series_colour(0, self.dark).unwrap_or(0)
+            super::colours::single_colour(self.data, &self.cm).hex(self.dark)
         } else if name.is_empty() {
             t::series_colour(i.min(t::SLOTS - 1), self.dark).unwrap_or(0)
         } else {

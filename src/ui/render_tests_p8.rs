@@ -2455,17 +2455,122 @@ fn w7_a_chart_tab_takes_the_pick_without_being_calculated_again_and_a_chart_of_o
         assert_eq!(info.data.spec.colour_map.pick_of("Ctg"), Some(&ColourPick::swatch(4, 2)), "{what}");
         assert_eq!(info.data.values, calculated, "{what}: the numbers are the ones that were calculated");
         assert!(info.next_spec.is_none(), "{what}: nothing was asked of the worker");
-        // a column chart with no series has one colour: the mark says so and no picker opens
+        // a waterfall colours by step, not by item: the mark says so and no picker opens (a column chart of one series has its
+        // measure to pick: `w7_a_chart_of_one_series_…`)
         rig.app.active_tool = ActiveToolModal::None;
         rig.app.status_message.clear();
         let mut one = rig.app.chart.spec.clone();
-        one.kind = ChartKind::Bar;
+        one.kind = ChartKind::Waterfall;
         one.series = None;
         rig.app.chart_set_spec(one);
-        pump_until(&mut rig, "the column chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.kind == ChartKind::Bar));
+        pump_until(&mut rig, "the waterfall", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.kind == ChartKind::Waterfall));
         rig.app.studio_chart_action(crate::ui::chart_render::ChartAction::Colour(micro_parquet::charts::data::MarkRef { category: "Ctg".into(), series: None, facet: None }));
         assert!(rig.app.status_message.contains("one colour for everything") && rig.app.active_tool == ActiveToolModal::None, "{what}: {}", rig.app.status_message);
         micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+/// The fills of every bar of the studio's chart (a chart of one series: they are all one colour).
+fn studio_bar_fills(rig: &Rig) -> Vec<u32> {
+    let shown = crate::ui::chart_render::last_shown(&rig.ctx, egui::Id::new(PLOT_ID)).unwrap_or_else(|| panic!("{}: the chart is drawn", rig.what));
+    let rects: Vec<egui::Rect> = shown.layout.marks.iter().filter(|m| m.kind == micro_parquet::charts::layout::MarkKind::Bar).map(|m| m.rect).collect();
+    assert!(!rects.is_empty(), "{}: the chart has bars", rig.what);
+    shown
+        .layout
+        .prims
+        .iter()
+        .filter_map(|p| if let micro_parquet::charts::layout::Prim::Rect { rect, fill, .. } = p { rects.contains(rect).then_some(((fill.r() as u32) << 16) | ((fill.g() as u32) << 8) | fill.b() as u32) } else { None })
+        .collect()
+}
+
+#[test]
+fn w7_a_chart_of_one_series_lists_its_measure_in_colours_and_a_pick_there_colours_it_by_real_clicks_at_three_sizes_light_and_dark() {
+    for dark in [false, true] {
+        for (ppp, w, h) in SIZES3 {
+            let mut rig = colour_rig("p8w7e", ppp, w, h, dark);
+            micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            // Balance by Month, no series: one colour, listed by its measure
+            let mut s = rig.app.chart.spec.clone();
+            s.series = None;
+            rig.app.chart_set_spec(s);
+            pump_until(&mut rig, "the chart of one series", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.series.iter().all(|x| x.is_empty()) && d.measure_names == ["Sum of Balance"]));
+            rig.draw(3);
+            let name = "Sum of Balance";
+            let auto = if dark { tok_dark(0) } else { tok_light(0) };
+            let fills = studio_bar_fills(&rig);
+            assert!(fills.len() >= 2 && fills.iter().all(|f| *f == auto), "{what}: automatic is the first slot: {fills:?}");
+
+            // the Colours section lists the one series by its measure, and says nothing about "one colour for everything"
+            let h = click_field(&mut rig, "Colours");
+            assert!(!has_text(&h, "This chart draws one colour for everything"), "{what}");
+            let r = show_field(&mut rig, &format!("Colour of {name}"));
+            click_rect(&mut rig, r);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}");
+            assert_eq!(rig.app.colour_picker.name, name, "{what}");
+            let p = rig.draw(4);
+            let area = assert_dialog_fits(&rig.ctx, &picker_title(name), &what);
+            assert_no_overlap(&dialog_texts(&mut rig, &p, area.window), &what);
+            assert_not_clipped(&p, area.window, &what);
+
+            // Deep Green by a real click: every bar is #037952 in both themes
+            let r = picker_field(&rig, "Deep Green");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of(name), Some(&ColourPick::swatch(2, 2)), "{what}");
+            assert!(studio_bar_fills(&rig).iter().all(|f| *f == 0x037952), "{what}: {:?}", studio_bar_fills(&rig));
+            assert!(rig.app.colour_picker.rects.warnings.is_empty(), "{what}: Deep green has no warning");
+            // Base Orange follows the theme; Deep Blue gives the dark-background warning, which fits
+            let r = picker_field(&rig, "Base Orange");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            let orange = if dark { tok_dark(1) } else { tok_light(1) };
+            assert!(studio_bar_fills(&rig).iter().all(|f| *f == orange), "{what}: a Base pick follows the theme");
+            let r = picker_field(&rig, "Deep Blue");
+            let p = click_rect(&mut rig, r);
+            let p = if has_text(&p, "Low contrast") { p } else { rig.draw(3) };
+            assert!(has_text(&p, "Low contrast on the dark background"), "{what}");
+            let area = assert_dialog_fits(&rig.ctx, &picker_title(name), &what);
+            assert_no_overlap(&dialog_texts(&mut rig, &p, area.window), &what);
+            // Done, then the list says "your pick" and the swatch is the colour
+            let r = picker_field(&rig, "Done");
+            click_rect(&mut rig, r);
+            let p = rig.draw(3);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+            assert!(has_text(&p, "your pick"), "{what}: the list says it is a pick");
+
+            // right-click a bar ▸ Colour… opens the picker for the same name
+            show_studio_chart(&mut rig);
+            let (bar, _) = first_mark(&rig);
+            let p = right_click(&mut rig, bar.center());
+            let item = text_box(&p, "Colour\u{2026}").unwrap_or_else(|| panic!("{what}: Colour… is in the mark's menu"));
+            click_rect(&mut rig, item);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}");
+            assert_eq!(rig.app.colour_picker.name, name, "{what}: the measure is the item of every bar");
+            rig.draw(4);
+            let r = picker_field(&rig, "Deep Red");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert!(studio_bar_fills(&rig).iter().all(|f| *f == 0xa31921), "{what}: {:?}", studio_bar_fills(&rig));
+            // Automatic gives the slot back
+            let r = picker_field(&rig, "Automatic");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of(name), None, "{what}");
+            assert!(studio_bar_fills(&rig).iter().all(|f| *f == auto), "{what}: Automatic is the slot again");
+            // Reset colours takes a pick away (and keeps a house colour, as for any item)
+            let r = picker_field(&rig, "Deep Green");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            let r = picker_field(&rig, "Done");
+            click_rect(&mut rig, r);
+            click_field(&mut rig, "Titles and look");
+            click_field(&mut rig, "Reset colours");
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of(name), None, "{what}: Reset colours clears the pick");
+            assert!(studio_bar_fills(&rig).iter().all(|f| *f == auto), "{what}");
+            micro_parquet::rules::set_data_dir_override(None);
+        }
     }
 }
 

@@ -72,6 +72,11 @@ impl ColourMap {
         })
     }
 
+    /// The colour a name was picked or given a house colour: never an automatic slot.
+    pub fn picked(&self, name: &str) -> Option<Colour> {
+        self.pick_of(name).copied().or_else(|| house::lookup(name)).map(|p| p.colour())
+    }
+
     /// The chart's own pick for a name, if it has one.
     pub fn pick_of(&self, name: &str) -> Option<&ColourPick> {
         self.custom.iter().find(|(n, _)| n == name).map(|(_, p)| p)
@@ -441,8 +446,24 @@ pub fn pick_warnings(pick: &ColourPick, others: &[(String, Colour)]) -> Vec<Stri
     out
 }
 
-/// The names a chart colours: its series, or its categories when it has none and each category is a mark of its own colour (a
-/// donut). A chart of one series has one colour and no names to pick.
+/// The name under which a chart of one series lists its one colour: its measure ("Sum of Balance"). `None` for a chart that has a
+/// Series, several measures or panels, or a kind that colours by step or by value (a waterfall, a heatmap).
+pub fn single_series_name(data: &super::data::ChartData) -> Option<String> {
+    use super::spec::ChartKind as K;
+    let one_colour = matches!(data.spec.kind, K::Bar | K::Line | K::Area | K::Scatter | K::Bubble | K::Histogram | K::BoxPlot);
+    if !one_colour || data.series.iter().any(|s| !s.is_empty()) || data.measure_count() != 1 || !data.spec.panels.is_empty() {
+        return None;
+    }
+    data.measure_names.first().filter(|n| !n.is_empty()).cloned()
+}
+
+/// The colour of the one series of a chart that has no Series: the pick (or house colour) on its measure's name, else the first slot.
+pub fn single_colour(data: &super::data::ChartData, cm: &ColourMap) -> Colour {
+    single_series_name(data).and_then(|n| cm.picked(&n)).unwrap_or(Colour::Slot(0))
+}
+
+/// The names a chart colours: its series, its categories when it has none and each category is a mark of its own colour (a
+/// donut), or its one measure when it is a chart of one series ("Sum of Balance").
 pub fn colour_names_of(data: &super::data::ChartData) -> Vec<String> {
     let series: Vec<String> = data.series.iter().filter(|s| !s.is_empty()).cloned().collect();
     if !series.is_empty() {
@@ -450,7 +471,7 @@ pub fn colour_names_of(data: &super::data::ChartData) -> Vec<String> {
     } else if data.spec.kind == super::spec::ChartKind::Donut {
         data.categories.clone()
     } else {
-        Vec::new()
+        single_series_name(data).into_iter().collect()
     }
 }
 

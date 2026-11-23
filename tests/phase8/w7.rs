@@ -290,3 +290,146 @@ fn w7_a_filter_or_top_n_never_repaints_a_picked_item_and_old_charts_are_written_
     let bad = json.replace("#3a2196", "#3a219");
     assert!(serde_json::from_str::<ChartSpec>(&bad).is_err());
 }
+
+// ---- a chart of one series is listed by its measure (owner decision, C2 follow-up)
+
+/// Month, Product, Balance and Rate: nine rows for the kinds that need two numbers.
+fn numbers() -> DataFrame {
+    let mut df = products();
+    let rate: Vec<f64> = (0..9).map(|i| 5.0 + (i as f64) * 0.75).collect();
+    df.with_column(Series::new("Rate".into(), rate)).expect("rate");
+    df
+}
+
+fn one_series(kind: ChartKind) -> ChartSpec {
+    let mut s = ChartSpec { category: "Month".into(), series: None, value: Some("Balance".into()), agg: ChartAgg::Sum, kind, top_n: 500, ..Default::default() };
+    match kind {
+        ChartKind::Scatter => s.category = "Rate".into(),
+        ChartKind::BoxPlot => s.category = "Product".into(),
+        _ => {}
+    }
+    s
+}
+
+/// The colours of every mark the app draws, as 0xRRGGBB.
+fn drawn(d: &ChartData, dark: bool) -> Vec<u32> {
+    let l = layout_chart(d, egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(1200.0, 700.0)), &opts(dark), &ApproxMeasure);
+    let rgb = |c: egui::Color32| ((c.r() as u32) << 16) | ((c.g() as u32) << 8) | c.b() as u32;
+    l.prims
+        .iter()
+        .flat_map(|p| match p {
+            Prim::Rect { fill, .. } | Prim::Tris { fill, .. } | Prim::Circle { fill, .. } => vec![rgb(*fill)],
+            Prim::Line { col, .. } | Prim::Outline { col, .. } => vec![rgb(*col)],
+        })
+        .collect()
+}
+
+#[test]
+fn w7_a_chart_of_one_series_lists_it_by_its_measure_and_a_pick_there_colours_it_in_all_five_renderers() {
+    use micro_parquet::charts::colours::{colour_names_of, colour_notes, single_series_name};
+    let frame = || numbers().lazy();
+    let mut s = one_series(ChartKind::Bar);
+    let d = compute(frame(), &s).expect("the chart");
+    // the list: one name, the measure's, as the owner reads it
+    assert_eq!(d.measure_names, vec!["Sum of Balance".to_string()]);
+    assert_eq!(colour_names_of(&d), vec!["Sum of Balance".to_string()]);
+    // a chart with a series lists its series and never the measure; two measures or a heatmap list nothing
+    let with_series = compute(frame(), &ChartSpec { series: Some("Product".into()), ..s.clone() }).expect("series chart");
+    assert_eq!(colour_names_of(&with_series), vec!["TD".to_string(), "Savings".to_string(), "Current".to_string()]);
+    assert_eq!(single_series_name(&with_series), None);
+    let heat = compute(frame(), &ChartSpec { series: Some("Product".into()), kind: ChartKind::Heatmap, ..s.clone() }).expect("heatmap");
+    assert_eq!(single_series_name(&heat), None, "a heatmap colours by value");
+    let mut two = s.clone();
+    two.measures = vec![
+        micro_parquet::charts::spec::MeasureSpec { column: Some("Balance".into()), agg: ChartAgg::Sum, ..Default::default() },
+        micro_parquet::charts::spec::MeasureSpec { column: Some("Rate".into()), agg: ChartAgg::Average, ..Default::default() },
+    ];
+    let two = compute(frame(), &two).expect("two measures");
+    assert_eq!(single_series_name(&two), None, "two measures are two panels, not one series");
+
+    // automatic: the first slot in each theme, as before the pick
+    for dark in [false, true] {
+        let slot0 = t::series_colour(0, dark).expect("slot 0");
+        assert!(drawn(&d, dark).contains(&slot0), "automatic, dark={dark}");
+        assert!(!drawn(&d, dark).contains(&DEEP_GREEN));
+    }
+    assert!(colour_notes(&d, &d.spec.colour_map).is_empty(), "an automatic colour has no note");
+
+    // a pick of Deep green on the measure's name, in all five renderers
+    s.colour_map.set_pick("Sum of Balance", ColourPick::swatch(2, 2));
+    let d = compute(frame(), &s).expect("picked");
+    for dark in [false, true] {
+        let bars: Vec<u32> = {
+            let l = layout_chart(&d, egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(1200.0, 700.0)), &opts(dark), &ApproxMeasure);
+            let rects: Vec<egui::Rect> = l.marks.iter().filter(|m| m.kind == MarkKind::Bar).map(|m| m.rect).collect();
+            assert_eq!(rects.len(), 3, "the three months");
+            l.prims.iter().filter_map(|p| if let Prim::Rect { rect, fill, .. } = p { rects.contains(rect).then_some(((fill.r() as u32) << 16) | ((fill.g() as u32) << 8) | fill.b() as u32) } else { None }).collect()
+        };
+        assert_eq!(bars, vec![DEEP_GREEN; 3], "the app, dark={dark}");
+    }
+    let pair = chart_pair(&d, &opts(false)).expect("html");
+    let colour_of = |v: &serde_json::Value| v["series"].as_array().expect("series").iter().filter_map(|x| x["itemStyle"]["color"].as_str().map(str::to_string)).collect::<Vec<_>>();
+    assert_eq!((colour_of(&pair.light), colour_of(&pair.dark)), (vec!["#037952".to_string()], vec!["#037952".to_string()]), "the page, both themes");
+    let py = chart_to_python(&d, &opts(false)).expect("python");
+    assert!(py.contains("\"Sum of Balance\": \"#037952\" if not DARK else \"#037952\"") || py.contains("'Sum of Balance': '#037952' if not DARK else '#037952'"), "python: {}", py.lines().filter(|l| l.contains("COLOURS")).collect::<Vec<_>>().join("\n"));
+    if python() {
+        let p = tmp("w7-one.xlsx");
+        write_chart_xlsx(&p, &d, &opts(false)).expect("xlsx");
+        let j = inspect(&p);
+        let fills: Vec<String> = j["charts"][0]["plots"][0]["series"].as_array().expect("series").iter().map(|s| s["fill"].as_str().unwrap_or("").to_uppercase()).collect();
+        assert_eq!(fills, vec!["037952".to_string()], "excel");
+    }
+    {
+        use micro_parquet::exporters::{export_pdf_tabs_with, PdfOptions, PdfTab};
+        let path = tmp("w7-one.pdf");
+        let tab = PdfTab { title: "Chart".into(), df: micro_parquet::chart::chart_table(&d).expect("table"), col_formats: Default::default(), summary: vec![], chart: Some((d.clone(), opts(false))) };
+        let o = PdfOptions { title: "pack".into(), page: micro_parquet::pdf_layout::PdfPage { landscape: true, legal: false }, chart_tables: false };
+        export_pdf_tabs_with(vec![tab], &path, micro_parquet::models::NumberDisplayFormat::BdtCrore, 2, &o).expect("pdf");
+        let text = String::from_utf8_lossy(&std::fs::read(&path).expect("pdf bytes")).to_string();
+        assert!(text.contains("0.0117") && text.contains("0.4745") && text.contains("0.3215"), "pdf: #037952");
+    }
+    assert!(chart_book_html("Book", "2026-11-23", &[BookItem { data: &d, opts: opts(false) }]).expect("book").contains("#037952"), "chart book");
+    assert!(colour_notes(&d, &d.spec.colour_map).is_empty(), "Deep green is fine in both themes");
+
+    // a Base pick follows the theme, the others of its kind take the colour too, a warning is in the notes
+    for (kind, name_of) in [(ChartKind::Bar, "Sum of Balance"), (ChartKind::Line, "Sum of Balance"), (ChartKind::Area, "Sum of Balance"), (ChartKind::Histogram, "Rows by Balance"), (ChartKind::BoxPlot, "Median of Balance"), (ChartKind::Scatter, "Sum of Balance")] {
+        let mut k = one_series(kind);
+        let plain = compute(frame(), &k).expect("kind");
+        let name = single_series_name(&plain).unwrap_or_else(|| panic!("{kind:?} has one series"));
+        assert!(name.ends_with("Balance") && name.contains(name_of.split(' ').next().unwrap_or("")), "{kind:?}: {name}");
+        for dark in [false, true] {
+            assert!(!drawn(&plain, dark).contains(&DEEP_GREEN), "{kind:?} automatic");
+        }
+        k.colour_map.set_pick(&name, ColourPick::swatch(2, 2));
+        let picked = compute(frame(), &k).expect("picked kind");
+        for dark in [false, true] {
+            assert!(drawn(&picked, dark).contains(&DEEP_GREEN), "{kind:?}: the app, dark={dark}");
+        }
+        let pair = chart_pair(&picked, &opts(false)).expect("html");
+        assert!(pair.light.to_string().contains("#037952") && pair.dark.to_string().contains("#037952"), "{kind:?}: the page");
+        assert!(!chart_pair(&plain, &opts(false)).expect("html").light.to_string().contains("#037952"), "{kind:?}: the page, automatic");
+        let py = chart_to_python(&picked, &opts(false)).expect("python");
+        assert!(py.contains("#037952"), "{kind:?}: python");
+        k.colour_map.set_pick(&name, ColourPick::swatch(3, 1));
+        let base = compute(frame(), &k).expect("base kind");
+        assert!(drawn(&base, false).contains(&t::SERIES_LIGHT[3]) && drawn(&base, true).contains(&t::SERIES_DARK[3]), "{kind:?}: a Base pick follows the theme");
+    }
+    let mut warn = one_series(ChartKind::Bar);
+    warn.colour_map.set_pick("Sum of Balance", ColourPick::swatch(3, 0));
+    let w = compute(frame(), &warn).expect("warned");
+    assert_eq!(colour_notes(&w, &w.spec.colour_map), vec!["Colour of 'Sum of Balance': low contrast on the light background.".to_string()]);
+
+    // a house colour on the measure's name colours it, the chart's own pick comes first and Automatic gives the house colour back
+    let root = crate::common::dir("w7_one_house");
+    micro_parquet::rules::set_data_dir_override(Some(root));
+    house::set("sum of balance", ColourPick::swatch(2, 2)).expect("saved");
+    let h = compute(frame(), &one_series(ChartKind::Bar)).expect("house");
+    assert!(drawn(&h, false).contains(&DEEP_GREEN), "a house colour");
+    let mut own = one_series(ChartKind::Bar);
+    own.colour_map.set_pick("Sum of Balance", ColourPick::swatch(6, 2));
+    assert!(drawn(&compute(frame(), &own).expect("own"), false).contains(&t::HUE_DEEP[6]), "the chart's own pick comes first");
+    own.colour_map.clear_pick("Sum of Balance");
+    assert!(drawn(&compute(frame(), &own).expect("cleared"), false).contains(&DEEP_GREEN), "Automatic gives the house colour back");
+    house::remove("sum of balance").expect("removed");
+    micro_parquet::rules::set_data_dir_override(None);
+}

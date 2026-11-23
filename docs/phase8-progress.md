@@ -1,6 +1,6 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: C1 = W6 (done, follow-ups done), C2 = W7 + W10 (both done), C3 = W9 + W11, C4 = W8. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: C1 = W6 (done, follow-ups done), C2 = W7 + W10 (both done, follow-ups done), C3 = W9 + W11, C4 = W8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -206,3 +206,11 @@ dropped or rewritten row field, a new grouping, SQL; the steps that leave it on)
 after it shows the rows of Dhaka by a double-click, of Sylhet by the menu and of the grand total; a rename of a row field greys the menu
 item with the reason on hover and says it in the status line on a double-click, a renamed value column greys its own cells; the Ctrl+K
 rows wrap their reason under the title at 3 sizes, and the test fails on the old layout), all at 3 sizes.
+
+## Session C2 follow-ups (W7-8)
+
+Owner decisions: W6-12, W6-13, W7-1 to W7-7 and W10-1 to W10-5 accepted; W7-3 (a Base pick gets only "Hard to tell"), W7-6 (Colour… only where the right-click menu is) accepted; the W10 spec text now reads "Filtered: Bank = Conventional". They are in
+`docs/phase8-spec.md` `<accepted_deviations>`. Built: **W7-8**, a chart of one series is listed in Colours by its measure ("Sum of Balance") and a pick there colours it
+in all five renderers. Tests: `tests/phase8/w7.rs` ×1 (the list, a Deep green pick in the app, the page, the script, the workbook, the PDF page and the chart book,
+a Base pick follows the theme, six kinds, the warning, a house colour, the chart's own pick first, Automatic); `render_tests_p8` ×1 (the Colours list shows the measure with its swatch, a real click opens the picker, Deep Green, Base Orange, Deep Blue and its warning,
+Done, right-click ▸ Colour… on a bar, Deep Red, Automatic, Reset colours; at 3 sizes, light and dark). The Phase 7 test that expected a column chart of one colour to refuse the picker now uses a waterfall.

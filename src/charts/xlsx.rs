@@ -106,9 +106,10 @@ struct Cx<'a> {
 
 impl<'a> Cx<'a> {
     fn colour(&self, name: &str, i: usize, n: usize) -> u32 {
-        let slot = if name.is_empty() && n == 1 {
-            Some(0)
-        } else if name.is_empty() {
+        if name.is_empty() && n == 1 {
+            return super::colours::single_colour(self.data, &self.cm).hex(false);
+        }
+        let slot = if name.is_empty() {
             Some(i.min(t::SLOTS - 1))
         } else {
             None

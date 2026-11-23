@@ -87,13 +87,15 @@ impl MicroParquetApp {
 
     /// Right-click ▸ Colour…: the picker for the item a mark stands for (its series, or its part of a donut).
     pub(crate) fn open_colour_picker_of_mark(&mut self, target: PickTarget, m: &micro_parquet::charts::data::MarkRef) {
-        let item = m.series.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| m.category.clone());
-        let names: Vec<String> = match target {
-            PickTarget::Studio => self.chart.data.as_ref().map(colour_names_of),
-            PickTarget::ChartTab(id) => self.chart_tabs.get(&id).map(|i| colour_names_of(&i.data)),
+        let data = match target {
+            PickTarget::Studio => self.chart.data.as_ref(),
+            PickTarget::ChartTab(id) => self.chart_tabs.get(&id).map(|i| &i.data),
             PickTarget::House => None,
-        }
-        .unwrap_or_default();
+        };
+        let names: Vec<String> = data.map(colour_names_of).unwrap_or_default();
+        // a chart of one series: every mark is that series, named by its measure
+        let single = data.and_then(micro_parquet::charts::colours::single_series_name);
+        let item = m.series.clone().filter(|s| !s.is_empty()).or(single).unwrap_or_else(|| m.category.clone());
         if item != micro_parquet::chart::OTHER_LABEL && !names.contains(&item) {
             self.status_message = "This chart draws one colour for everything. Choose a Series to colour its items one by one.".to_string();
             return;

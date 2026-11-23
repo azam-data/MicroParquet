@@ -6,7 +6,7 @@
 //! one zero baseline, horizontal-only grids, selective labels with collision checks, the legend rules.
 
 use super::axis::{padded_floor, diverging_text, fit_text, nice_ticks, tick_text, value_text, wrap_text, ValueKind, MINUS};
-use super::colours::{Colour, ColourMap};
+use super::colours::{single_colour, Colour, ColourMap};
 use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, ChartData, HeatFill, StepKind, WaterfallStep};
 use super::spec::{ChartAgg, ChartKind, ChartSpec, LabelMode, Stack, Status, Transform};
 use super::tokens as t;
@@ -733,7 +733,7 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
     cm.assign_all(&named);
     let series_colour = |name: &str, i: usize, n: usize, cm: &ColourMap| -> Color32 {
         let base = if name.is_empty() && n == 1 {
-            Colour::Slot(0)
+            single_colour(data, cm)
         } else if name.is_empty() {
             Colour::Slot(i.min(t::SLOTS - 1))
         } else {
@@ -2076,7 +2076,7 @@ fn boxes(b: &mut Builder, data: &ChartData, g: &PanelLayout, band: f32, centre: 
     let ink = b.ink;
     let surface = rgb(ink.surface);
     let ink2 = rgb(ink.ink2);
-    let colour = rgb(t::series_colour(0, opts.dark).unwrap_or(0));
+    let colour = rgb(single_colour(data, opts.colours.as_ref().unwrap_or(&data.spec.colour_map)).hex(opts.dark));
     let w = (band * BOX_FILL).min(t::BAR_MAX_PX).max(2.0);
     for (i, bx) in data.boxes.iter().enumerate() {
         let x = centre(i);
@@ -2122,7 +2122,7 @@ fn scatter_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
     let n_ser = data.series.len();
     let colour_of = |si: usize| -> Color32 {
         let name = data.series.get(si).map(String::as_str).unwrap_or("");
-        let base = if name.is_empty() { Colour::Slot(0) } else { cm.get(name).unwrap_or(Colour::Slot(si.min(t::SLOTS - 1))) };
+        let base = if name.is_empty() { single_colour(data, cm) } else { cm.get(name).unwrap_or(Colour::Slot(si.min(t::SLOTS - 1))) };
         let c = rgb(base.hex(opts.dark));
         match &spec.highlight {
             Some(h) if !h.is_empty() && name != h && n_ser > 1 => rgb(cm.dimmed(name, opts.dark)),
