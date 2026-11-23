@@ -512,3 +512,247 @@ fn r26_the_screenshots_of_the_label_and_text_size_controls_are_written() {
         let _ = std::fs::remove_file(&tmp);
     }
 }
+
+// ------------------------------------------------------------------------------------------------ small fixes: Reset colours every time
+
+/// The names the chart is drawn with, in order: the series, or the categories when there is no series.
+fn chart_names(rig: &Rig) -> Vec<String> {
+    let d = rig.app.chart.data.as_ref().expect("data");
+    if rig.app.chart.spec.series.is_some() {
+        d.series.iter().filter(|s| !s.is_empty()).cloned().collect()
+    } else {
+        d.categories.clone()
+    }
+}
+
+/// One real click on "Reset colours" (the "Titles and look" section opened, the button scrolled into view).
+fn click_reset_colours(rig: &mut Rig) {
+    use crate::ui::render_tests_p7::scroll_into_view;
+    let screen = rig.ctx.screen_rect();
+    let at = egui::pos2(screen.right() - 120.0, screen.center().y);
+    let field = |name: &'static str| move |rig: &Rig| rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+    if field("Reset colours")(rig).is_none() {
+        let r = scroll_into_view(rig, at, &field("Titles and look"), "Titles and look");
+        pclick(rig, r);
+        rig.draw(3);
+    }
+    let r = scroll_into_view(rig, at, &field("Reset colours"), "Reset colours");
+    pclick(rig, r);
+    rig.draw(2);
+}
+
+/// After a reset: the names the chart has now have the slots 1, 2, 3… in their order, in the spec and as drawn.
+fn assert_slots(rig: &mut Rig, what: &str) {
+    use crate::ui::chart_render::last_shown;
+    // the chart redraws at once: no waiting for another change
+    rig.draw(2);
+    let names = chart_names(rig);
+    assert!(!names.is_empty(), "{what}: there are names");
+    for (i, n) in names.iter().enumerate() {
+        assert_eq!(rig.app.chart.spec.colour_map.get(n), Some(Colour::Slot(i)), "{what}: '{n}' takes slot {} (the spec's map is {:?})", i + 1, rig.app.chart.spec.colour_map);
+    }
+    if rig.app.chart.spec.series.is_some() {
+        let shown = last_shown(&rig.ctx, egui::Id::new("chart_plot")).expect("the chart");
+        assert_eq!(shown.layout.legend.len(), names.len(), "{what}: the legend names every series");
+        for (i, item) in shown.layout.legend.iter().enumerate() {
+            let want = micro_parquet::charts::tokens::series_colour(i, false).unwrap_or(micro_parquet::charts::tokens::ink(false).deemph);
+            assert_eq!(item.name, names[i], "{what}: legend order");
+            let got = ((item.colour.r() as u32) << 16) | ((item.colour.g() as u32) << 8) | item.colour.b() as u32;
+            assert_eq!(got, want, "{what}: '{}' is drawn in the colour of slot {}", item.name, i + 1);
+        }
+    }
+}
+
+/// The user's route: reset, then a change, then reset again, four times, each reset by a real click.
+fn reset_route(rig: &mut Rig, tag: &str) {
+    // a map the app left in a different order
+    let mut cm = micro_parquet::charts::colours::ColourMap::default();
+    cm.assign_all(&["Savings", "Current", "Term deposits"]);
+    rig.app.chart.spec.colour_map = cm;
+    rig.draw(3);
+    click_reset_colours(rig);
+    assert_slots(rig, &format!("{tag}: first reset"));
+    // the category column changes
+    set_spec(rig, &|s| {
+        s.category = "Product".into();
+        s.series = Some("Month".into());
+        s.order = micro_parquet::sort_lists::SortOrder::Natural;
+    });
+    click_reset_colours(rig);
+    assert_slots(rig, &format!("{tag}: after the category column changed"));
+    // Top N (the categories shrink; the series are the same)
+    set_spec(rig, &|s| s.top_n = 2);
+    click_reset_colours(rig);
+    assert_slots(rig, &format!("{tag}: after Top N"));
+    // the series changes
+    set_spec(rig, &|s| {
+        s.category = "Month".into();
+        s.series = Some("Product".into());
+        s.top_n = 30;
+    });
+    click_reset_colours(rig);
+    assert_slots(rig, &format!("{tag}: after the series changed"));
+    // and the reset still works when the user has painted the map into another order meanwhile
+    let mut cm = micro_parquet::charts::colours::ColourMap::default();
+    cm.assign_all(&["Current", "Term deposits", "Savings"]);
+    rig.app.chart_set_spec(ChartSpec { colour_map: cm, ..rig.app.chart.spec.clone() });
+    rig.draw(4);
+    click_reset_colours(rig);
+    assert_slots(rig, &format!("{tag}: after a changed map"));
+}
+
+fn colour_rig(name: &str) -> Rig {
+    let mut rig = rig(name, bdt());
+    pump(&mut rig, "first chart", &chart_ready);
+    set_spec(&mut rig, &|s| {
+        s.category = "Month".into();
+        s.series = Some("Product".into());
+        s.value = Some("Balance".into());
+        s.agg = ChartAgg::Sum;
+        s.kind = ChartKind::Bar;
+        s.order = micro_parquet::sort_lists::SortOrder::Natural;
+    });
+    rig
+}
+
+#[test]
+fn r27_reset_colours_works_every_time_in_the_studio() {
+    let mut rig = colour_rig("r27studio");
+    reset_route(&mut rig, "studio");
+}
+
+#[test]
+fn r27_reset_colours_works_every_time_after_open_saved_chart() {
+    let mut rig = colour_rig("r27saved");
+    // save the chart under a name and open it again by the dialog
+    // (its colour map is saved with it and kept when it is opened: the "own colour map" rule)
+    let mut spec = rig.app.chart.spec.clone();
+    let mut cm = micro_parquet::charts::colours::ColourMap::default();
+    cm.assign_all(&["Savings", "Current", "Term deposits"]);
+    spec.colour_map = cm;
+    let dir = rig.app.charts_dir();
+    let path = micro_parquet::charts::library::save_chart(&dir, "r27 chart", &spec).expect("saved");
+    rig.app.chart_open_named(&path).expect("opened");
+    rig.draw(4);
+    pump(&mut rig, "the saved chart is calculated", &chart_ready);
+    reset_route(&mut rig, "after open saved chart");
+}
+
+#[test]
+fn r27_reset_colours_works_every_time_on_a_chart_tab() {
+    let mut rig = colour_rig("r27tab");
+    rig.app.chart_open_as_chart_tab();
+    pump(&mut rig, "chart tab", &|r| r.app.chart_tabs.len() == 1);
+    rig.draw(6);
+    pump(&mut rig, "the studio follows the chart tab", &chart_ready);
+    // on the chart tab the studio charts the tab's own table (Month, Product, Sum of Balance)
+    let cols: Vec<String> = rig.app.tabs[rig.app.active_tab].available_columns();
+    assert!(cols.iter().any(|c| c == "Month") && cols.iter().any(|c| c == "Product"), "{cols:?}");
+    reset_route(&mut rig, "chart tab");
+}
+
+#[test]
+fn r27_reset_colours_works_every_time_for_every_series_form() {
+    use micro_parquet::charts::spec::Stack;
+    for (name, kind, stack) in [("stacked", ChartKind::Bar, Stack::Stacked), ("percent", ChartKind::Bar, Stack::Percent), ("line", ChartKind::Line, Stack::Grouped), ("area", ChartKind::Area, Stack::Stacked)] {
+        let mut rig = colour_rig("r27forms");
+        set_spec(&mut rig, &|s| {
+            s.kind = kind;
+            s.stack = stack;
+        });
+        reset_route(&mut rig, name);
+    }
+}
+
+/// Changes the spec like a slow worker would answer it: the new numbers are held back while the chart is drawn
+/// (and clicked) with the old ones, and then let in.
+fn set_spec_slow(rig: &mut Rig, f: &dyn Fn(&mut ChartSpec), while_busy: &dyn Fn(&mut Rig)) {
+    let mut spec = rig.app.chart.spec.clone();
+    f(&mut spec);
+    rig.app.chart_set_spec(spec);
+    let held = std::mem::replace(&mut rig.app.jobs, micro_parquet::jobs::JobQueue::inline());
+    rig.draw(3);
+    assert!(rig.app.chart.busy, "the chart is still calculating");
+    while_busy(rig);
+    rig.app.jobs = held;
+    pump(rig, "the new numbers arrive", &chart_ready);
+    rig.draw(4);
+}
+
+#[test]
+fn r27_reset_colours_works_every_time_while_a_slow_worker_recalculates() {
+    let mut rig = colour_rig("r27slow");
+    click_reset_colours(&mut rig);
+    assert_slots(&mut rig, "first reset");
+    for (what, f) in [
+        ("series Month", (&|s: &mut ChartSpec| { s.category = "Product".into(); s.series = Some("Month".into()); }) as &dyn Fn(&mut ChartSpec)),
+        ("series Product", &|s: &mut ChartSpec| { s.category = "Month".into(); s.series = Some("Product".into()); }),
+        ("series Month again", &|s: &mut ChartSpec| { s.category = "Product".into(); s.series = Some("Month".into()); }),
+    ] {
+        // the chart shows the old numbers for a while; the old names must not take the slots of the new ones
+        set_spec_slow(&mut rig, f, &|_| {});
+        assert_slots(&mut rig, &format!("{what}: new columns, no reset yet"));
+        click_reset_colours(&mut rig);
+        assert_slots(&mut rig, &format!("{what}: reset"));
+        // a reset clicked while the numbers are still being calculated is done on the new ones
+        set_spec_slow(&mut rig, &|s| s.top_n = if s.top_n == 30 { 3 } else { 30 }, &|rig| click_reset_colours(rig));
+        assert_slots(&mut rig, &format!("{what}: reset while calculating"));
+    }
+}
+
+#[test]
+fn r27_on_a_chart_tab_the_reset_recolours_the_chart_that_is_shown() {
+    use crate::ui::chart_render::last_shown;
+    let mut rig = colour_rig("r27tabshown");
+    let mut cm = micro_parquet::charts::colours::ColourMap::default();
+    cm.assign_all(&["Savings", "Current", "Term deposits"]);
+    set_spec(&mut rig, &|s| s.colour_map = cm.clone());
+    rig.app.chart_open_as_chart_tab();
+    pump(&mut rig, "chart tab", &|r| r.app.chart_tabs.len() == 1);
+    rig.draw(6);
+    let id = *rig.app.chart_tabs.keys().next().expect("the chart tab");
+    let shown = |rig: &Rig| -> Vec<(String, u32)> {
+        last_shown(&rig.ctx, egui::Id::new(("chart_tab", id))).expect("the chart tab is drawn").layout.legend.iter().map(|l| (l.name.clone(), ((l.colour.r() as u32) << 16) | ((l.colour.g() as u32) << 8) | l.colour.b() as u32)).collect()
+    };
+    let slot = |i: usize| micro_parquet::charts::tokens::series_colour(i, false).expect("slot");
+    // the shown chart has the order the studio chart left it in; each reset gives its names 1, 2, 3 in their order
+    for round in 0..3 {
+        click_reset_colours(&mut rig);
+        let now = shown(&rig);
+        assert_eq!(now.len(), 3, "round {round}: {now:?}");
+        for (i, (name, colour)) in now.iter().enumerate() {
+            assert_eq!(*colour, slot(i), "round {round}: '{name}' is the colour of slot {} on the chart tab", i + 1);
+        }
+        // the colours are painted into another order, as an older chart or a saved one has them
+        let mut other = micro_parquet::charts::colours::ColourMap::default();
+        other.assign_all(&["Term deposits", "Current", "Savings"]);
+        rig.app.chart_tabs.get_mut(&id).expect("info").data.spec.colour_map = other;
+        rig.draw(3);
+        assert_ne!(shown(&rig).iter().map(|x| x.1).collect::<Vec<_>>(), (0..3).map(slot).collect::<Vec<_>>(), "round {round}: the map was changed");
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ small fixes: the menus are plain text
+
+#[test]
+fn r28_all_seven_menus_are_plain_text_at_the_three_window_sizes() {
+    use crate::ui::render_tests_p7::SIZES3;
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = chart_rig_with("r28menus", bdt(), ppp, w, h);
+        let what = rig.what.clone();
+        let p = rig.draw(4);
+        let bar_h = crate::theme::TOP_BAR_H;
+        let mut xs = Vec::new();
+        for name in crate::ui::top_bar::MENUS {
+            // the text of the button is the name and nothing else: no icon, no caret
+            let hit: Vec<&(String, egui::Rect)> = p.boxes.iter().filter(|(t, b)| t.trim() == name && b.bottom() <= bar_h).collect();
+            assert_eq!(hit.len(), 1, "{what}: one button reads exactly '{name}' in the bar: {:?}", p.boxes.iter().filter(|(t, b)| t.contains(name) && b.bottom() <= bar_h).collect::<Vec<_>>());
+            assert_eq!(hit[0].0, name, "{what}: '{name}' has no icon or caret around it");
+            xs.push(hit[0].1.left());
+        }
+        assert!(xs.windows(2).all(|w| w[0] < w[1]), "{what}: the menus keep their order, none overlapping: {xs:?}");
+        // none of the caret and icon glyphs the three menus used to carry is in the bar
+        let glyphs = [crate::theme::ph::CARET_DOWN, crate::theme::ph::BANK, crate::theme::ph::EXPORT];
+        assert!(!p.boxes.iter().any(|(t, b)| b.bottom() <= bar_h && b.left() < xs[xs.len() - 1] + 60.0 && glyphs.iter().any(|g| t.contains(g) && crate::ui::top_bar::MENUS.iter().any(|m| t.contains(m)))), "{what}: no menu carries an icon or a caret");
+    }
+}

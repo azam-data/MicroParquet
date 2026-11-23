@@ -835,8 +835,10 @@ impl MicroParquetApp {
                 let r = ui.button("Reset colours").on_hover_text("Clears the stored colours and gives the names the colours 1, 2, 3\u{2026} in their current order");
                 rects.fields.push(("Reset colours".to_string(), r.rect));
                 if r.clicked() {
-                    spec.colour_map = micro_parquet::charts::colours::ColourMap::default();
-                    spec.colour_map.assign_all(&names);
+                    // done on the numbers the chart has now (after the calculation in progress, if there is one), not on `spec`
+                    self.chart_reset_colours();
+                    spec.colour_map = self.chart.spec.colour_map.clone();
+                    ui.ctx().request_repaint();
                 }
                 ui.end_row();
                 // ---- data labels: which, how many decimals, which unit, and the % of share views

@@ -42,6 +42,18 @@ pub struct ChartState {
     pub no_browser: bool,
     /// The last script "Copy as Python" put on the clipboard (tests read it; the clipboard itself is not readable).
     pub copied_python: Option<String>,
+    /// "Reset colours" was clicked while the numbers were being calculated again: it is done when they arrive, on
+    /// the names they have (the names of the old numbers are about to go).
+    pub reset_colours: bool,
+}
+
+/// The names a chart's colours go to: its series, or its categories when it has no series.
+pub(crate) fn colour_names(d: &ChartData, by_series: bool) -> Vec<String> {
+    if by_series {
+        d.series.iter().filter(|s| !s.is_empty()).cloned().collect()
+    } else {
+        d.categories.clone()
+    }
 }
 
 /// What the studio's buttons asked for this frame.
@@ -64,7 +76,7 @@ pub struct ChartTabInfo {
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
     }
 }
 
@@ -187,10 +199,69 @@ impl MicroParquetApp {
             Ok(d) => {
                 self.chart.data = Some(d);
                 self.chart.error = None;
+                if self.chart.reset_colours {
+                    self.chart.reset_colours = false;
+                    self.chart_reset_colours_now();
+                }
             }
             Err(e) => {
                 self.chart.data = None;
                 self.chart.error = Some(e);
+                self.chart.reset_colours = false;
+            }
+        }
+    }
+
+    /// "Reset colours": the names of the chart as it is now take the slots 1, 2, 3 … in their order. While the numbers
+    /// are being calculated again the names are the old ones, so the reset waits for the new numbers. On a chart tab
+    /// the chart that is shown (the tab's own snapshot) is reset as well.
+    pub(crate) fn chart_reset_colours(&mut self) {
+        self.chart_tab_reset_colours();
+        if self.chart.busy {
+            self.chart.reset_colours = true;
+        } else {
+            self.chart_reset_colours_now();
+        }
+    }
+
+    fn chart_reset_colours_now(&mut self) {
+        let Some(d) = self.chart.data.as_ref() else {
+            return;
+        };
+        let mut map = micro_parquet::charts::colours::ColourMap::default();
+        map.assign_all(&colour_names(d, self.chart.spec.series.is_some()));
+        if map == self.chart.spec.colour_map {
+            return;
+        }
+        self.chart.spec.colour_map = map.clone();
+        if let Some(d) = self.chart.data.as_mut() {
+            d.spec.colour_map = map;
+        }
+        self.chart_save_choices();
+    }
+
+    /// On a chart tab the chart that is shown is the tab's own: its colours are reset on its own names.
+    fn chart_tab_reset_colours(&mut self) {
+        let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) else { return };
+        let title = self.tabs[self.active_tab].title.clone();
+        let Some(info) = self.chart_tabs.get_mut(&id) else { return };
+        let mut map = micro_parquet::charts::colours::ColourMap::default();
+        map.assign_all(&colour_names(&info.data, info.data.spec.series.is_some()));
+        if map == info.data.spec.colour_map {
+            return;
+        }
+        info.data.spec.colour_map = map;
+        // kept with the session, with the chart's other settings
+        if let Ok(spec) = serde_json::to_value(&info.data.spec) {
+            let mut changed = false;
+            for e in self.settings.chart_tabs.iter_mut() {
+                if e.get("title").and_then(|t| t.as_str()) == Some(title.as_str()) {
+                    e["spec"] = spec.clone();
+                    changed = true;
+                }
+            }
+            if changed {
+                self.save_settings();
             }
         }
     }
@@ -714,7 +785,10 @@ impl MicroParquetApp {
         if let Some(spec) = switch_horizontal {
             self.chart_set_spec(spec);
         }
-        if let Some(m) = new_map.filter(|m| *m != self.chart.spec.colour_map) {
+        // the map the drawing filled in is kept only when it was drawn from the numbers of these settings: while they
+        // are being calculated again the chart shows the old names, which must not take the slots of the new ones
+        let fresh = !self.chart.busy && self.chart.data.as_ref().is_some_and(|d| d.spec.calc_key() == self.chart.spec.calc_key());
+        if let Some(m) = new_map.filter(|m| fresh && *m != self.chart.spec.colour_map) {
             self.chart.spec.colour_map = m.clone();
             if let Some(d) = self.chart.data.as_mut() {
                 d.spec.colour_map = m;

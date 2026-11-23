@@ -107,14 +107,6 @@ fn button_w(ui: &egui::Ui, text: &str) -> f32 {
     text_w(ui, text) + 2.0 * ui.spacing().button_padding.x + theme::BAR_WIDTH_SLACK
 }
 
-fn menu_label(icon: &str, label: &str) -> String {
-    format!("{}  {}  {}", icon, label, theme::ph::CARET_DOWN)
-}
-
-fn menu_icon_label(icon: &str) -> String {
-    format!("{}  {}", icon, theme::ph::CARET_DOWN)
-}
-
 /// The text of a button: its icon and its label.
 fn item_text(id: CommandId) -> String {
     let label = crate::ui::commands::toolbar_label(id);
@@ -123,16 +115,6 @@ fn item_text(id: CommandId) -> String {
         icon.to_string()
     } else {
         format!("{}  {}", icon, label)
-    }
-}
-
-/// The text of a menu button of the bar.
-fn menu_text(name: &str) -> String {
-    match name {
-        "Banking" => menu_label(theme::ph::BANK, "Banking"),
-        "Charts" => menu_label(theme::ph::CHART_BAR, "Charts"),
-        "Export" => menu_label(theme::ph::EXPORT, "Export"),
-        other => other.to_string(),
     }
 }
 
@@ -148,7 +130,7 @@ pub struct BarWidths {
 
 fn measure(ui: &egui::Ui, visible: &[(CommandId, usize)]) -> BarWidths {
     let sp = ui.spacing().item_spacing.x;
-    let fixed = theme::APP_MARK_SIZE + MENUS.iter().map(|t| sp + button_w(ui, &menu_text(t))).sum::<f32>();
+    let fixed = theme::APP_MARK_SIZE + MENUS.iter().map(|t| sp + button_w(ui, t)).sum::<f32>();
     BarWidths {
         fixed,
         label: visible.iter().map(|(id, _)| button_w(ui, &item_text(*id))).collect(),
@@ -233,11 +215,10 @@ impl MicroParquetApp {
                 CommandGroup::Charts => "Charts",
                 _ => "Export",
             };
-            let text = menu_text(name);
             // (the Charts menu is always open: its items say why one cannot run)
             let r = ui
                 .add_enabled_ui(has_tab || group_id == CommandGroup::Charts, |ui| {
-                    ui.menu_button(text, |ui| {
+                    ui.menu_button(name, |ui| {
                         // compact rows: the Banking menu has about twenty entries and four headings, and must
                         // fit a 686 pt window under the top bar
                         ui.spacing_mut().interact_size.y = theme::MENU_ROW_H;

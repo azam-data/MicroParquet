@@ -185,3 +185,14 @@ Found by eye and fixed: on a donut with several small parts near 12 o'clock the 
 Phase 8 item: rate-profile band names: remove the serial prefix ("09. 8%–9%" becomes "8%–9%") and set the band order automatically.
 
 Part B deviations: F-4 the "All" note on the page is a standing statement, not a count. F-5 the studio-controls picture is a software rasterisation of the egui frame (numpy and Pillow), so its anti-aliasing differs a little from the app on screen.
+
+## Small fixes after final B: menu labels and Reset colours
+
+| Item | What changed | Test |
+| --- | --- | --- |
+| 1 | Banking, Charts and Export are plain text like File, Edit, View and Help; `menu_text`, `menu_label` and `menu_icon_label` removed; the bar-width plan measures the names. No guide screenshot shows the menu bar, so none was re-rendered | `r28_all_seven_menus_are_plain_text_at_the_three_window_sizes`; the bar-width tests pass unchanged |
+| 2 | "Reset colours" works every time (cause below) | `r27_…` (studio, after Open saved chart…, chart tab, four series forms, slow worker, chart tab as shown) |
+
+Cause of item 2. Two faults, both reproduced first:
+1. The studio chart is drawn from the old numbers while the new ones are calculated, and the drawing wrote its colour map back into the spec (`chart_plot_area`, the `new_map` write-back). After a change of the category or series column (which empties the map) the old names took slots 1, 2, 3 during that wait and the new names the slots after them (4, 5, 6 …; past the eighth the grey). The Reset button read its names from the same old numbers, so a click in that window assigned the old names. The render tests ran the job queue inline, so the wait never happened there; `set_spec_slow` now holds the answer back. Fix: the write-back is kept only when the numbers are the ones of the current settings (`!busy` and the same `calc_key`); "Reset colours" is `chart_reset_colours`: done at once on fresh numbers, or, while a calculation is running, when its numbers arrive (`ChartState.reset_colours`). The button also syncs the studio's local copy of the spec, which would otherwise have written the old map back at the end of the frame.
+2. On a chart tab the chart that is shown is the tab's own snapshot (`ChartTabInfo.data`); the studio's reset only changed the studio's chart of the tab's table, so nothing visible happened. The reset now also resets the snapshot's map (and its copy in `settings.chart_tabs`).
