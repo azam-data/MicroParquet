@@ -53,6 +53,8 @@ pub enum JobOutput {
     ProjectSave(Box<ProjectBuilt>),
     /// A linked chart tab's new numbers and table (Phase 8 W5).
     ChartTab(Box<ChartTabCalc>),
+    /// The tab behind a cell of a pivot (Phase 8 W6).
+    ShowRows(Box<ShowRowsResult>),
 }
 
 /// A tab of a project, built on the worker.
@@ -1184,4 +1186,41 @@ pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<Piv
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
     let values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
     Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })
+}
+
+/// "Show rows" on a cell of a pivot tab: the steps before the pivot, the pivot, and the cell that was clicked.
+pub struct ShowRowsRequest {
+    pub base: TabSource,
+    /// The steps before the pivot (the pivot is the tab's last step).
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::models::PivotSpec,
+    /// The row of the pivot's table (counted from its first row) and the heading of the column that was clicked.
+    pub row: usize,
+    pub column: String,
+    /// How many rows the table on the screen has, to refuse a pivot that has changed since.
+    pub expected_rows: usize,
+    pub temp_dir: PathBuf,
+}
+
+/// The rows of a cell as a tab: the source and the steps before the pivot, with a filter for the cell.
+pub struct ShowRowsResult {
+    pub title: String,
+    pub base: TabSource,
+    pub steps: Vec<TransformStep>,
+}
+
+/// Builds the pivot again to find which values the clicked cell stands for, and the tab that holds exactly its rows.
+pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Finding the rows of that cell\u{2026}", None);
+    ctx.check()?;
+    let lf = crate::engine::compile_tab_lazy(&req.base, &req.steps, &req.temp_dir)?;
+    let build = crate::pivot_table::build_pivot(lf, &req.spec)?;
+    ctx.check()?;
+    if build.df.height() != req.expected_rows {
+        anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
+    }
+    let cell = crate::pivot_table::cell_rows(&req.spec, &build, req.row, &req.column)?;
+    let mut steps = req.steps;
+    steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
+    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps })))
 }

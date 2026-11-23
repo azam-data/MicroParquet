@@ -1350,3 +1350,641 @@ fn w5_a_file_that_changes_under_the_source_updates_the_chart_tab_to_equal_a_new_
         assert!((sum(&info.data.values) - 2.0 * sum(&before.values)).abs() < 1e-6, "{what}: twice the rows, twice the total");
     }
 }
+
+// ================================================================================ W6: drill-down and Show rows
+
+use micro_parquet::charts::spec::{ChartKind, DrillLevel};
+use polars::prelude::IntoLazy;
+
+const PLOT_ID: &str = "chart_plot";
+
+fn right_click(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+    rig.step(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+    rig.step(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+    rig.draw(3)
+}
+
+fn key_press(rig: &mut Rig, key: egui::Key) -> Painted {
+    let ev = |pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    rig.step(vec![ev(true), ev(false)]);
+    rig.draw(3)
+}
+
+/// The rectangle of the mark of category number `category` of the chart drawn under `id`.
+fn mark_rect(rig: &Rig, id: egui::Id, category: usize) -> egui::Rect {
+    // (the caller has scrolled the chart into view with `show_studio_chart`)
+    let s = crate::ui::chart_render::last_shown(&rig.ctx, id).unwrap_or_else(|| panic!("{}: a chart is drawn under {id:?}", rig.what));
+    s.layout.marks.iter().find(|m| m.category == category && m.series == 0 && m.panel == 0).map(|m| m.rect).unwrap_or_else(|| panic!("{}: a mark for category {category}: {} marks", rig.what, s.layout.marks.len()))
+}
+
+fn category_index(categories: &[String], name: &str, what: &str) -> usize {
+    categories.iter().position(|c| c == name).unwrap_or_else(|| panic!("{what}: '{name}' is a category: {categories:?}"))
+}
+
+fn drill_spec() -> ChartSpec {
+    let mut s = ChartSpec { category: "Branch".into(), value: Some("Balance".into()), agg: ChartAgg::Sum, kind: ChartKind::Bar, top_n: 50, ..Default::default() };
+    s.set_drill(vec![DrillLevel::column("Branch"), DrillLevel::column("Month"), DrillLevel::column("Band")]);
+    s
+}
+
+/// A rig whose studio chart is the deposit book drilled Branch › Month › Band.
+fn studio_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut rig = proj_rig(name, ppp, w, h);
+    rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+    rig.draw(4);
+    pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+    rig.app.chart_set_spec(drill_spec());
+    pump_until(&mut rig, "the drill chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.drill.len() == 3));
+    rig.draw(3);
+    rig
+}
+
+/// The studio's chart is what a new chart of the book gives at its spec: the same categories and numbers.
+fn assert_studio_equals_new_chart(rig: &Rig, what: &str) {
+    let want = micro_parquet::charts::calc::compute(book8().lazy(), &rig.app.chart.spec).unwrap_or_else(|e| panic!("{what}: {e:#}"));
+    let have = rig.app.chart.data.as_ref().expect("a chart");
+    assert_eq!((&have.categories, &have.values, &have.spec.category), (&want.categories, &want.values, &want.spec.category), "{what}");
+}
+
+/// Scrolls the side panel with the mouse wheel until every mark of the studio's chart is well inside the window (the chart is
+/// under the controls, so in a small window it starts below the fold).
+fn show_studio_chart(rig: &mut Rig) {
+    let id = egui::Id::new(PLOT_ID);
+    for _ in 0..16 {
+        rig.draw(3);
+        let s = crate::ui::chart_render::last_shown(&rig.ctx, id).unwrap_or_else(|| panic!("{}: the studio's chart is drawn", rig.what));
+        let screen = rig.ctx.screen_rect();
+        let ys: Vec<f32> = s.layout.marks.iter().map(|m| m.rect.center().y).collect();
+        let (lo, hi) = (screen.top() + 90.0, screen.bottom() - 70.0);
+        let (min, max) = (ys.iter().cloned().fold(f32::MAX, f32::min), ys.iter().cloned().fold(f32::MIN, f32::max));
+        if min >= lo && max <= hi {
+            return;
+        }
+        let pos = egui::pos2(s.rect.center().x, screen.center().y);
+        let delta = if max > hi { -(max - hi).min(200.0) } else { (lo - min).min(200.0) };
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.5);
+        rig.step(vec![egui::Event::PointerMoved(pos), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE }]);
+        for _ in 0..6 {
+            rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+            rig.draw(1);
+        }
+    }
+    panic!("{}: the studio's chart could not be scrolled into view", rig.what);
+}
+
+fn mark_at(rig: &mut Rig, id: egui::Id, category: usize) -> egui::Rect {
+    show_studio_chart(rig);
+    mark_rect(rig, id, category)
+}
+
+/// The texts the last frame drew on the rows of the given rectangles, from the left edge of the first one: nothing of them
+/// may overlap (the breadcrumb, a row of drill levels).
+fn assert_row_texts_apart(p: &Painted, rects: &[egui::Rect], what: &str) {
+    let band = rects.iter().fold(egui::Rect::NOTHING, |a, r| a.union(*r));
+    let texts: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(_, b)| b.center().y >= band.top() - 1.0 && b.center().y <= band.bottom() + 1.0 && b.left() >= band.left() - 2.0 && b.right() <= band.right() + 400.0).cloned().collect();
+    assert!(!texts.is_empty(), "{what}: the row has texts");
+    assert_no_overlap(&texts, what);
+}
+
+fn breadcrumb(rig: &Rig) -> Vec<(String, egui::Rect)> {
+    rig.app.drill_rects.clone()
+}
+
+#[test]
+fn w6_a_click_drills_the_breadcrumb_and_the_back_key_go_up_and_the_right_click_menu_works_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = studio_rig("p8w6a", ppp, w, h);
+        let what = rig.what.clone();
+        let plot = egui::Id::new(PLOT_ID);
+        let cats = |r: &Rig| r.app.chart.data.as_ref().expect("data").categories.clone();
+        assert_eq!(rig.app.chart.spec.depth(), 0);
+        // the breadcrumb is there from the start: "All" is where the chart is
+        let p = rig.draw(3);
+        assert_eq!(breadcrumb(&rig).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["Level 0"], "{what}");
+        assert!(has_text(&p, "All"), "{what}");
+
+        // 1. a real click on the Dhaka bar goes one level down
+        let i = category_index(&cats(&rig), "Dhaka", &what);
+        let r = mark_at(&mut rig, plot, i);
+        // the tooltip of a mark says what a click does
+        let tip = hover_at(&mut rig, r.center());
+        assert!(has_text(&tip, "Click to drill into Month"), "{what}: {:?}", tip.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Dhaka") || t.contains("drill")).collect::<Vec<_>>());
+        click_rect(&mut rig, r);
+        assert_eq!((rig.app.chart.spec.depth(), rig.app.chart.spec.category.as_str()), (1, "Month"), "{what}");
+        pump_until(&mut rig, "the Month level", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Month"));
+        assert_studio_equals_new_chart(&rig, &what);
+        let d = rig.app.chart.data.clone().expect("data");
+        assert_eq!(d.values.iter().flatten().flatten().sum::<f64>(), 1000.0, "{what}: Dhaka's three rows");
+        let p = rig.draw(3);
+        assert!(has_text(&p, "Filtered: Branch = Dhaka"), "{what}: the subtitle says the path: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.contains("Filtered") || t.contains("Sum of")).collect::<Vec<_>>());
+        let crumbs = breadcrumb(&rig);
+        assert_eq!(crumbs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["Level 0", "Level 1"], "{what}");
+        assert!(has_text(&p, "Dhaka") && has_text(&p, "by Month"), "{what}");
+
+        // 2. a second click: the Band level, which is the last
+        let i = category_index(&cats(&rig), "Jan", &what);
+        {
+            let r = mark_at(&mut rig, plot, i);
+            click_rect(&mut rig, r);
+        }
+        assert_eq!((rig.app.chart.spec.depth(), rig.app.chart.spec.category.as_str()), (2, "Band"), "{what}");
+        pump_until(&mut rig, "the Band level", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Band"));
+        assert_studio_equals_new_chart(&rig, &what);
+        let p = rig.draw(3);
+        assert!(has_text(&p, "Filtered: Branch = Dhaka, Month = Jan"), "{what}");
+        // the breadcrumb is whole, inside the window, and its texts do not run into each other or into the subtitle
+        let crumbs: Vec<egui::Rect> = breadcrumb(&rig).iter().map(|(_, r)| *r).collect();
+        assert_eq!(crumbs.len(), 3, "{what}: All, Dhaka, Jan");
+        for c in &crumbs {
+            assert!(inside(*c, rig.ctx.screen_rect()), "{what}: the crumb {c:?} is inside the window");
+        }
+        assert_row_texts_apart(&p, &crumbs, &what);
+        for pair in crumbs.windows(2) {
+            assert!(pair[0].right() <= pair[1].left() + 0.5, "{what}: the crumbs are in order, left to right");
+        }
+        // at the last level a click does nothing and the tooltip says so
+        let r = mark_at(&mut rig, plot, 0);
+        let tip = hover_at(&mut rig, r.center());
+        assert!(has_text(&tip, "Last level: a click does nothing"), "{what}");
+        let status = rig.app.status_message.clone();
+        click_rect(&mut rig, r);
+        assert_eq!((rig.app.chart.spec.depth(), rig.app.status_message.as_str()), (2, status.as_str()), "{what}: nothing happened");
+
+        // 3. the breadcrumb goes back to any level by a real click
+        let level1 = breadcrumb(&rig).iter().find(|(n, _)| n == "Level 1").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the crumb"));
+        assert!(inside(level1, rig.ctx.screen_rect()), "{what}");
+        click_rect(&mut rig, level1);
+        assert_eq!((rig.app.chart.spec.depth(), rig.app.chart.spec.category.as_str()), (1, "Month"), "{what}");
+        pump_until(&mut rig, "back at Month", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Month"));
+        rig.draw(3);
+        let all = breadcrumb(&rig).iter().find(|(n, _)| n == "Level 0").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: All"));
+        click_rect(&mut rig, all);
+        assert_eq!((rig.app.chart.spec.depth(), rig.app.chart.spec.category.as_str()), (0, "Branch"), "{what}");
+        pump_until(&mut rig, "back at the top", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Branch"));
+        assert_studio_equals_new_chart(&rig, &what);
+
+        // 4. the Back key goes up one level while the pointer is over the chart
+        let i = category_index(&cats(&rig), "Ctg", &what);
+        {
+            let r = mark_at(&mut rig, plot, i);
+            click_rect(&mut rig, r);
+        }
+        pump_until(&mut rig, "Ctg's months", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Month"));
+        let over = crate::ui::chart_render::last_shown(&rig.ctx, plot).expect("shown").rect.center();
+        hover_at(&mut rig, over);
+        key_press(&mut rig, egui::Key::Backspace);
+        assert_eq!(rig.app.chart.spec.depth(), 0, "{what}: Backspace goes back");
+        pump_until(&mut rig, "back at the top again", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Branch"));
+
+        // 5. the right-click menu: Keep only this, Exclude this, then Show rows
+        let i = category_index(&cats(&rig), "Ctg", &what);
+        let p = {
+            let c = mark_at(&mut rig, plot, i).center();
+            right_click(&mut rig, c)
+        };
+        for item in ["Drill down", "Show rows", "Keep only this", "Exclude this"] {
+            assert!(text_box(&p, item).is_some(), "{what}: the menu has '{item}': {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.len() < 20).collect::<Vec<_>>());
+        }
+        let keep = text_box(&p, "Keep only this").expect("item");
+        assert!(inside(keep, rig.ctx.screen_rect()), "{what}: the menu is inside the window");
+        click_rect(&mut rig, keep);
+        assert_eq!(rig.app.chart.spec.filters.len(), 1, "{what}");
+        pump_until(&mut rig, "only Ctg", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories == vec!["Ctg".to_string()]));
+        assert_studio_equals_new_chart(&rig, &what);
+        assert!(has_text(&rig.draw(3), "Filtered: Branch = Ctg"), "{what}");
+        let mut s = rig.app.chart.spec.clone();
+        s.filters.clear();
+        rig.app.chart_set_spec(s);
+        pump_until(&mut rig, "all three again", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 3));
+        let i = category_index(&cats(&rig), "Dhaka", &what);
+        let p = {
+            let c = mark_at(&mut rig, plot, i).center();
+            right_click(&mut rig, c)
+        };
+        click_rect(&mut rig, text_box(&p, "Exclude this").unwrap_or_else(|| panic!("{what}: Exclude this")));
+        pump_until(&mut rig, "without Dhaka", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 2 && !d.categories.iter().any(|c| c == "Dhaka")));
+        assert_studio_equals_new_chart(&rig, &what);
+        assert!(has_text(&rig.draw(3), "Filtered: Branch \u{2260} Dhaka"), "{what}");
+        let mut s = rig.app.chart.spec.clone();
+        s.filters.clear();
+        rig.app.chart_set_spec(s);
+        pump_until(&mut rig, "all three once more", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 3));
+
+        // 6. Drill down from the menu, then Show rows of a mark at level 2: a new tab with that mark's rows and sum
+        let i = category_index(&cats(&rig), "Dhaka", &what);
+        let p = {
+            let c = mark_at(&mut rig, plot, i).center();
+            right_click(&mut rig, c)
+        };
+        click_rect(&mut rig, text_box(&p, "Drill down").unwrap_or_else(|| panic!("{what}: Drill down")));
+        pump_until(&mut rig, "Dhaka's months", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Month"));
+        let i = category_index(&cats(&rig), "Jan", &what);
+        let p = {
+            let c = mark_at(&mut rig, plot, i).center();
+            right_click(&mut rig, c)
+        };
+        let n = rig.app.tabs.len();
+        click_rect(&mut rig, text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: Show rows")));
+        pump_until(&mut rig, "the rows tab", &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+        let t = rig.app.tabs.last().expect("the new tab");
+        assert_eq!(t.title, "Rows: Branch = Dhaka, Month = Jan", "{what}");
+        let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+        let bal: f64 = df.column("Balance").expect("Balance").f64().expect("f").into_iter().flatten().sum();
+        assert_eq!((df.height(), bal), (1, 600.0), "{what}: the one row of Dhaka in January, and the mark's value");
+        // the rows tab reads the file with the source's steps and one filter more
+        assert!(matches!(t.steps.last(), Some(TransformStep::FilterGroup { keep_matching: true, .. })), "{what}");
+    }
+}
+
+/// The book's tab, a pivot tab of it, and a chart tab of the drilled chart Branch › Month › Band.
+fn drill_chart_tab(rig: &mut Rig) {
+    let src = rig.app.tabs[0].source.clone();
+    rig.app.create_tab_from_source("Pivot: Branch".into(), src, vec![branch_pivot()], HashMap::new());
+    settle(&mut rig.app);
+    rig.app.active_tab = 0;
+    rig.draw(4);
+    pump_until(rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+    rig.app.chart_set_spec(drill_spec());
+    pump_until(rig, "the drill chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.drill.len() == 3));
+    rig.app.chart_open_as_chart_tab();
+    pump_until(rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1 && r.app.tabs.len() == 3);
+}
+
+/// Waits until the chart tab has been calculated for its new level (`depth` levels down).
+fn pump_chart_tab_depth(rig: &mut Rig, depth: usize) {
+    pump_until(rig, &format!("the chart tab at level {}", depth + 1), &|r| {
+        let id = *r.app.chart_tabs.keys().next().expect("a chart tab");
+        let i = &r.app.chart_tabs[&id];
+        i.next_spec.is_none() && i.pending_sig.is_none() && i.data.spec.depth() == depth && !r.app.jobs.kind_busy(micro_parquet::jobs::JobKind::ChartTab)
+    });
+    rig.draw(3);
+}
+
+fn tab_mark(rig: &Rig, id: u64, category: &str) -> egui::Rect {
+    let i = category_index(&rig.app.chart_tabs[&id].data.categories, category, &rig.what);
+    mark_rect(rig, egui::Id::new(("chart_tab", id)), i)
+}
+
+#[test]
+fn w6_a_chart_tab_drills_by_click_goes_back_by_breadcrumb_and_key_reopens_at_its_level_and_greys_its_menu_when_its_source_is_closed() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w6b", ppp, w, h);
+        let what = rig.what.clone();
+        drill_chart_tab(&mut rig);
+        let id = chart_tab_id(&rig);
+        let idx = |r: &Rig| r.app.tabs.iter().position(|t| t.id == id).expect("the chart tab");
+        rig.app.active_tab = idx(&rig);
+        rig.draw(4);
+        assert_eq!(rig.app.chart_tabs[&id].data.spec.depth(), 0);
+        assert!(rig.app.chart_tabs[&id].data.spec.has_drill(), "{what}: the chart tab keeps the drill levels");
+        let p = rig.draw(3);
+        assert_eq!(breadcrumb(&rig).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["Level 0"], "{what}");
+        assert!(has_text(&p, "All"), "{what}");
+
+        // a click on Dhaka: the chart tab is calculated again from its source, one level down
+        let r = tab_mark(&rig, id, "Dhaka");
+        click_rect(&mut rig, r);
+        assert!(rig.app.chart_tabs[&id].next_spec.as_ref().is_some_and(|s| s.depth() == 1), "{what}: asked for the next level");
+        // until the numbers arrive the chart is drawn as it was calculated
+        assert_eq!(rig.app.chart_tabs[&id].data.spec.depth(), 0, "{what}: the numbers on the screen are still of the top level");
+        pump_chart_tab_depth(&mut rig, 1);
+        let info = &rig.app.chart_tabs[&id];
+        let want = fresh_chart(&rig, &info.data.spec);
+        assert_eq!((info.data.categories.clone(), info.data.values.clone(), info.data.spec.category.clone()), (want.categories.clone(), want.values.clone(), "Month".to_string()), "{what}: the chart tab equals a new chart at that level");
+        assert_eq!(info.data.values.iter().flatten().flatten().sum::<f64>(), 1000.0, "{what}");
+        let p = rig.draw(3);
+        assert!(has_text(&p, "Filtered: Branch = Dhaka"), "{what}: the subtitle says the path");
+        assert_eq!(breadcrumb(&rig).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["Level 0", "Level 1"], "{what}");
+        let t = rig.app.tabs[idx(&rig)].title.clone();
+        assert!(t.contains("by Month"), "{what}: the tab's title follows its chart: {t}");
+
+        // the second level, then back by the breadcrumb and by the Back key
+        let r = tab_mark(&rig, id, "Jan");
+        click_rect(&mut rig, r);
+        pump_chart_tab_depth(&mut rig, 2);
+        assert_eq!(rig.app.chart_tabs[&id].data.spec.category, "Band", "{what}");
+        let crumb = breadcrumb(&rig).iter().find(|(n, _)| n == "Level 1").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the crumb"));
+        click_rect(&mut rig, crumb);
+        pump_chart_tab_depth(&mut rig, 1);
+        key_press(&mut rig, egui::Key::Backspace);
+        pump_chart_tab_depth(&mut rig, 0);
+        assert_eq!(rig.app.chart_tabs[&id].data.spec.category, "Branch", "{what}");
+        let top = fresh_chart(&rig, &rig.app.chart_tabs[&id].data.spec);
+        assert_eq!(rig.app.chart_tabs[&id].data.values, top.values, "{what}: back at the top the numbers are the first ones");
+
+        // right-click: Show rows of a mark opens a tab with its rows
+        let n = rig.app.tabs.len();
+        let c = tab_mark(&rig, id, "Ctg").center();
+        let p = right_click(&mut rig, c);
+        click_rect(&mut rig, text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: Show rows")));
+        pump_until(&mut rig, "the rows tab", &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+        let t = rig.app.tabs.last().expect("the new tab");
+        assert_eq!(t.title, "Rows: Branch = Ctg", "{what}");
+        let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+        assert_eq!((df.height(), df.column("Balance").expect("b").f64().expect("f").into_iter().flatten().sum::<f64>()), (3, 1500.0), "{what}: the mark's rows and value");
+
+        // a chart tab saved at level 2 reopens at level 2
+        rig.app.active_tab = idx(&rig);
+        rig.draw(3);
+        let r = tab_mark(&rig, id, "Dhaka");
+        click_rect(&mut rig, r);
+        pump_chart_tab_depth(&mut rig, 1);
+        let r = tab_mark(&rig, id, "Jan");
+        click_rect(&mut rig, r);
+        pump_chart_tab_depth(&mut rig, 2);
+        let level2 = rig.app.chart_tabs[&id].data.clone();
+        let pfile = rig.app.paths.root_dir.join("proj").join("Drill.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        wait_saved(&mut rig);
+        let saved = micro_parquet::project::load_project(&pfile).expect("the project reads");
+        assert!(saved.tabs.len() >= 3, "{what}: the project holds the tabs");
+        rig.app.project.test_pick = Some(pfile.clone());
+        file_item(&mut rig, "Open project\u{2026}");
+        click_button(&mut rig, "Open");
+        pump_until(&mut rig, "the project opens", &|r| r.app.project.opening.is_none() && r.app.chart_tabs.len() == 1 && !r.app.jobs.any_busy());
+        let id2 = chart_tab_id(&rig);
+        let back = &rig.app.chart_tabs[&id2];
+        assert_eq!(back.data.spec.drill_path, level2.spec.drill_path, "{what}: the path");
+        assert_eq!((back.data.categories.clone(), back.data.values.clone(), back.data.spec.category.clone()), (level2.categories.clone(), level2.values.clone(), "Band".to_string()), "{what}: the same level, the same numbers");
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id2).expect("the chart tab");
+        let p = rig.draw(4);
+        assert!(has_text(&p, "Filtered: Branch = Dhaka, Month = Jan"), "{what}: and says so");
+
+        // the source closed: the chart cannot be calculated again, so its menu is greyed with the reason
+        let src_id = rig.app.chart_tabs[&id2].source_tab.expect("a source tab");
+        let src = rig.app.tabs.iter().position(|t| t.id == src_id).expect("the source tab");
+        rig.app.close_tab(src);
+        rig.app.active_tab = rig.app.tabs.iter().position(|t| t.id == id2).expect("the chart tab");
+        rig.draw(4);
+        let why = rig.app.chart_tab_blocked(id2).unwrap_or_else(|| panic!("{what}: blocked"));
+        assert!(why.contains("is closed"), "{what}: {why}");
+        let before = rig.app.chart_tabs[&id2].data.spec.clone();
+        let r = tab_mark(&rig, id2, "Below 0%");
+        click_rect(&mut rig, r);
+        assert!(rig.app.chart_tabs[&id2].next_spec.is_none() && rig.app.chart_tabs[&id2].data.spec == before, "{what}: a click on a closed chart does nothing");
+        let n = rig.app.tabs.len();
+        let p = right_click(&mut rig, r.center());
+        for item in ["Drill down", "Show rows", "Keep only this", "Exclude this"] {
+            // a click on a greyed item does nothing (and leaves the menu as it was)
+            click_rect(&mut rig, text_box(&p, item).unwrap_or_else(|| panic!("{what}: '{item}' is in the menu")));
+        }
+        assert_eq!(rig.app.tabs.len(), n, "{what}: nothing opened");
+        assert!(rig.app.chart_tabs[&id2].next_spec.is_none() && rig.app.chart_tabs[&id2].data.spec == before, "{what}: and nothing changed");
+    }
+}
+
+/// Scrolls the side panel with the wheel until the studio control `name` is well inside the window; its rectangle.
+fn show_field(rig: &mut Rig, name: &str) -> egui::Rect {
+    for _ in 0..30 {
+        rig.draw(3);
+        let screen = rig.ctx.screen_rect();
+        let (lo, hi) = (screen.top() + 90.0, screen.bottom() - 45.0);
+        let found = rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r);
+        let delta = match found {
+            Some(r) if r.top() >= lo && r.bottom() <= hi => return r,
+            Some(r) if r.bottom() > hi => -(r.bottom() - hi).min(200.0),
+            Some(r) => (lo - r.top()).min(200.0),
+            None => -200.0,
+        };
+        let x = rig.app.chart.rects.controls.map(|c| c.center().x).unwrap_or(screen.right() - 100.0);
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.5);
+        rig.step(vec![egui::Event::PointerMoved(egui::pos2(x, screen.center().y)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE }]);
+        for _ in 0..6 {
+            rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+            rig.draw(1);
+        }
+    }
+    panic!("{}: the control '{name}' could not be scrolled into view: {:?} in {:?}", rig.what, rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r), rig.ctx.screen_rect());
+}
+
+fn click_field(rig: &mut Rig, name: &str) -> Painted {
+    let r = show_field(rig, name);
+    click_rect(rig, r)
+}
+
+fn level_names(rig: &Rig) -> Vec<String> {
+    rig.app.chart.spec.drill.iter().map(|l| l.name.clone()).collect()
+}
+
+#[test]
+fn w6_the_drill_levels_section_adds_moves_and_removes_levels_offers_the_date_hierarchy_and_says_why_a_scatter_has_none() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w6c", ppp, w, h);
+        let what = rig.what.clone();
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+        rig.draw(4);
+        pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+        rig.app.chart_set_spec(ChartSpec { category: "Branch".into(), value: Some("Balance".into()), agg: ChartAgg::Sum, kind: ChartKind::Bar, top_n: 50, ..Default::default() });
+        pump_until(&mut rig, "the Branch chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Branch"));
+        assert!(rig.app.chart.spec.drill.is_empty(), "{what}: a new chart has no drill");
+
+        // the section opens by a click on its header, and lists the Category as level 1
+        click_field(&mut rig, "Drill levels");
+        let p = rig.draw(3);
+        assert!(has_text(&p, "1. Branch (the Category)"), "{what}");
+        // add Month, then Band, with real clicks on the picker and its list
+        for (n, level) in [(2, "Month"), (3, "Band")] {
+            let c = show_field(&mut rig, "Add a level");
+            let p = click_rect(&mut rig, c);
+            // (the list opens above the picker when it is near the bottom of the window, and is painted last)
+            let item = p.boxes.iter().rev().find(|(t, _)| t == level).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{level}' is in the list: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.len() < 14).collect::<Vec<_>>()));
+            assert!(inside(item, rig.ctx.screen_rect()), "{what}: the list is inside the window");
+            click_rect(&mut rig, item);
+            assert_eq!(rig.app.chart.spec.drill.len(), n, "{what}: {level} was added: {:?}", level_names(&rig));
+        }
+        assert_eq!(level_names(&rig), ["Branch", "Month", "Band"], "{what}");
+        // the rows of levels: the name, up, down and Remove sit side by side without touching, inside the panel
+        let last = show_field(&mut rig, "Level 3 remove");
+        let p = rig.draw(3);
+        for lvl in [2, 3] {
+            let parts: Vec<egui::Rect> = ["up", "down", "remove"].iter().map(|b| rig.app.chart.rects.fields.iter().find(|(n, _)| *n == format!("Level {lvl} {b}")).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: Level {lvl} {b}"))).collect();
+            for r in &parts {
+                assert!(inside(*r, rig.ctx.screen_rect()), "{what}: {r:?} is inside the window");
+            }
+            for pair in parts.windows(2) {
+                assert!(pair[0].right() <= pair[1].left() + 0.5, "{what}: the buttons do not overlap");
+            }
+            if lvl == 3 {
+                assert!(last.intersects(parts[2]));
+            }
+            assert_row_texts_apart(&p, &parts, &what);
+        }
+        pump_until(&mut rig, "the drilled chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.drill.len() == 3));
+        // Band moves above Month; Month is removed; then Band
+        click_field(&mut rig, "Level 3 up");
+        assert_eq!(level_names(&rig), ["Branch", "Band", "Month"], "{what}");
+        click_field(&mut rig, "Level 3 remove");
+        assert_eq!(level_names(&rig), ["Branch", "Band"], "{what}");
+        click_field(&mut rig, "Level 2 remove");
+        assert!(rig.app.chart.spec.drill.is_empty() && rig.app.chart.spec.category == "Branch", "{what}: one level is no drill: {:?}", level_names(&rig));
+
+        // a date Category: the whole hierarchy in one click
+        let mut s = rig.app.chart.spec.clone();
+        s.category = "Open Date".into();
+        rig.app.chart_set_spec(s);
+        pump_until(&mut rig, "the date chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Open Date"));
+        click_field(&mut rig, "Date drill");
+        assert_eq!(level_names(&rig), ["Open Date \u{b7} Year", "Open Date \u{b7} Quarter", "Open Date \u{b7} Month", "Open Date \u{b7} Day of month"], "{what}");
+        assert_eq!((rig.app.chart.spec.category.as_str(), rig.app.chart.spec.depth()), ("Open Date \u{b7} Year", 0), "{what}");
+        pump_until(&mut rig, "the years", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Open Date \u{b7} Year"));
+        assert!(rig.app.chart.error.is_none(), "{what}: {:?}", rig.app.chart.error);
+        // a click on a year goes to its quarters, and the quarters add up to the year
+        let years = rig.app.chart.data.clone().expect("data");
+        let year = years.categories[0].clone();
+        let year_total = years.values[0][0].expect("a value");
+        let r = mark_at(&mut rig, egui::Id::new(PLOT_ID), 0);
+        click_rect(&mut rig, r);
+        pump_until(&mut rig, "the quarters", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Open Date \u{b7} Quarter"));
+        let q = rig.app.chart.data.clone().expect("data");
+        assert!((q.values.iter().flatten().flatten().sum::<f64>() - year_total).abs() < 1e-6, "{what}: the quarters of {year} add up to the year");
+        assert!(has_text(&rig.draw(3), &format!("Filtered: Open Date \u{b7} Year = {year}")), "{what}");
+
+        // a scatter has no drill: the section is gone and the reason is shown
+        let mut s = rig.app.chart.spec.clone();
+        s.drill_to(0);
+        s.kind = ChartKind::Scatter;
+        rig.app.chart_set_spec(s);
+        rig.draw(4);
+        let r = show_field(&mut rig, "Drill levels hidden");
+        assert!(rig.app.chart.rects.fields.iter().all(|(n, _)| n != "Drill levels" && n != "Add a level"), "{what}: no section");
+        let p = rig.draw(3);
+        assert!(has_text(&p, "Drill levels: A scatter or bubble chart draws single rows"), "{what}");
+        assert!(inside(r, rig.ctx.screen_rect()), "{what}");
+    }
+}
+
+/// The value cell to the right of the row label `label` in the grid the last frame drew.
+fn value_cell_of_row(p: &Painted, label: &str, what: &str) -> egui::Rect {
+    let l = p.boxes.iter().find(|(t, b)| t == label && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the row '{label}'"));
+    p.boxes
+        .iter()
+        .filter(|(t, b)| !t.trim().is_empty() && (b.center().y - l.center().y).abs() < 4.0 && b.left() > l.right() + 4.0)
+        .map(|(_, b)| *b)
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .unwrap_or_else(|| panic!("{what}: a value cell in the row of '{label}'"))
+}
+
+/// Two real clicks at the same instant: a double-click.
+fn double_click(rig: &mut Rig, pos: egui::Pos2) {
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+    rig.click(pos);
+    rig.click(pos);
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+}
+
+fn rows_of(rig: &Rig, tab: usize) -> (usize, f64) {
+    let t = &rig.app.tabs[tab];
+    let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+    (df.height(), df.column("Balance").expect("Balance").f64().expect("f").into_iter().flatten().sum())
+}
+
+#[test]
+fn w6_a_double_click_or_right_click_on_a_pivot_value_cell_opens_its_rows_totals_included_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w6d", ppp, w, h);
+        let what = rig.what.clone();
+        // (the side panel's chart has the same labels as the pivot's rows)
+        rig.app.show_steps_sidebar = false;
+        let src = rig.app.tabs[0].source.clone();
+        rig.app.create_tab_from_source("Pivot: Branch".into(), src, vec![branch_pivot()], HashMap::new());
+        settle(&mut rig.app);
+        rig.app.active_tab = 1;
+        pump_until(&mut rig, "the pivot", &|r| r.app.tabs[1].total_rows == 4 && !r.app.jobs.any_busy());
+        let p = rig.draw(4);
+        let n = rig.app.tabs.len();
+
+        // a double-click on the label of a row does nothing: only value cells show their rows
+        let label = p.boxes.iter().find(|(t, b)| t == "Dhaka" && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Dhaka row"));
+        double_click(&mut rig, label.center());
+        for _ in 0..4 {
+            rig.draw(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(rig.app.tabs.len(), n, "{what}: a row label shows no rows");
+
+        // a double-click on Dhaka's value: the rows of Dhaka (3 rows, 1,000)
+        let cell = value_cell_of_row(&p, "Dhaka", &what);
+        assert!(inside(cell, rig.ctx.screen_rect()), "{what}");
+        double_click(&mut rig, cell.center());
+        pump_until(&mut rig, "the rows of Dhaka", &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+        assert_eq!(rig.app.tabs[n].title, "Rows: Branch = Dhaka", "{what}");
+        assert_eq!(rows_of(&rig, n), (3, 1000.0), "{what}: the rows and the sum of the cell");
+        assert!(matches!(rig.app.tabs[n].steps.last(), Some(TransformStep::FilterGroup { keep_matching: true, .. })) && rig.app.tabs[n].steps.len() == 1, "{what}: the file, and a filter");
+
+        // the Grand total by the right-click menu: all rows
+        rig.app.active_tab = 1;
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Grand total", &what);
+        let p = right_click(&mut rig, cell.center());
+        let item = text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: Show rows in the cell's menu: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.len() < 20).collect::<Vec<_>>()));
+        assert!(inside(item, rig.ctx.screen_rect()), "{what}");
+        assert!(text_box(&p, "Copy").is_some(), "{what}: the Copy items stay");
+        click_rect(&mut rig, item);
+        pump_until(&mut rig, "the rows of the grand total", &|r| r.app.tabs.len() == n + 2 && !r.app.jobs.any_busy());
+        assert_eq!(rig.app.tabs[n + 1].title, "Rows: all rows of the pivot", "{what}");
+        assert_eq!(rows_of(&rig, n + 1), (8, 3600.0), "{what}: every row, and the grand total");
+
+        // a table that is not a pivot has no Show rows in its cell menu
+        rig.app.active_tab = 0;
+        let p = rig.draw(4);
+        let cell = p.boxes.iter().find(|(t, b)| t == "Dhaka" && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: a Dhaka cell"));
+        let p = right_click(&mut rig, cell.center());
+        assert!(text_box(&p, "Show rows").is_none() && text_box(&p, "Copy").is_some(), "{what}: only a pivot's value cells show rows");
+    }
+}
+
+#[test]
+fn w6_other_is_never_drilled_into_filtered_or_shown_as_rows_and_a_drill_keeps_the_colours() {
+    let mut rig = studio_rig("p8w6e", 1.0, 1280.0, 720.0);
+    let other = micro_parquet::charts::data::MarkRef { category: "Other".into(), series: None, facet: None };
+    let before = rig.app.chart.spec.clone();
+    let tabs = rig.app.tabs.len();
+    for a in [
+        crate::ui::chart_render::ChartAction::DrillDown(other.clone()),
+        crate::ui::chart_render::ChartAction::Keep(other.clone()),
+        crate::ui::chart_render::ChartAction::Exclude(other.clone()),
+        crate::ui::chart_render::ChartAction::ShowRows(other.clone()),
+    ] {
+        rig.app.status_message.clear();
+        rig.app.studio_chart_action(a.clone());
+        assert!(rig.app.status_message.contains("Top N puts together"), "{a:?}: {}", rig.app.status_message);
+        assert_eq!(rig.app.chart.spec, before, "{a:?}: the chart is as it was");
+        assert_eq!(rig.app.tabs.len(), tabs, "{a:?}: no tab");
+    }
+    // the same on a chart tab: nothing is asked of the worker
+    let mut rig = proj_rig("p8w6f", 1.0, 1280.0, 720.0);
+    drill_chart_tab(&mut rig);
+    let id = chart_tab_id(&rig);
+    rig.app.status_message.clear();
+    rig.app.chart_tab_chart_action(id, crate::ui::chart_render::ChartAction::DrillDown(other));
+    assert!(rig.app.status_message.contains("Top N puts together") && rig.app.chart_tabs[&id].next_spec.is_none());
+
+    // a drill keeps the colours the series have: the colour map belongs to the columns, and the columns are the same
+    let mut rig = studio_rig("p8w6g", 1.0, 1280.0, 720.0);
+    let mut s = rig.app.chart.spec.clone();
+    // (a series cannot also be a level: the levels are Branch and Month)
+    s.set_drill(vec![DrillLevel::column("Branch"), DrillLevel::column("Month")]);
+    s.series = Some("Band".into());
+    rig.app.chart_set_spec(s);
+    pump_until(&mut rig, "the stacked chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.series.as_deref() == Some("Band")));
+    let mut s = rig.app.chart.spec.clone();
+    s.colour_map.assign_all(&["Below 0%".to_string(), "0%".to_string()]);
+    let picked = s.colour_map.clone();
+    assert!(picked != micro_parquet::charts::colours::ColourMap::default());
+    rig.app.chart_set_spec(s.clone());
+    let mut down = rig.app.chart.spec.clone();
+    assert!(down.drill_down("Dhaka"));
+    rig.app.chart_set_spec(down);
+    assert_eq!(rig.app.chart.spec.colour_map, picked, "going down a level keeps the colours");
+    let mut up = rig.app.chart.spec.clone();
+    up.drill_to(0);
+    rig.app.chart_set_spec(up);
+    assert_eq!(rig.app.chart.spec.colour_map, picked, "and so does going back up");
+    // another series is another set of names: the colours start again
+    let mut other_series = rig.app.chart.spec.clone();
+    other_series.series = None;
+    rig.app.chart_set_spec(other_series);
+    assert!(rig.app.chart.spec.colour_map != picked, "a different series column starts the colours again");
+}

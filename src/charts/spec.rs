@@ -3,7 +3,7 @@
 //! loads unchanged; everything new has a default (`#[serde(default)]` on the struct covers each field).
 
 use super::colours::ColourMap;
-use crate::models::{MetricFormatType, MoneyScale};
+use crate::models::{CondOp, FilterCondition, MetricFormatType, MoneyScale};
 use crate::sort_lists::SortOrder;
 use serde::{Deserialize, Serialize};
 
@@ -438,6 +438,40 @@ impl LabelSpec {
     }
 }
 
+/// One level of a chart's drill (Phase 8 W6): the field the category shows at that depth, a column or a date part.
+/// `name` is what the chart's `category` is while that level is shown ("Branch", "Open Date \u{b7} Quarter").
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct DrillLevel {
+    #[serde(default)]
+    pub name: String,
+    /// The date part, when the level is one (its calendar is the one the level was made with).
+    #[serde(default)]
+    pub part: Option<crate::dates::DateFieldRef>,
+}
+
+impl DrillLevel {
+    pub fn column(name: &str) -> Self {
+        Self { name: name.to_string(), part: None }
+    }
+
+    pub fn of_part(f: &crate::dates::DateFieldRef) -> Self {
+        Self { name: f.name.clone(), part: Some(f.clone()) }
+    }
+
+    /// The condition "this field is `value`" (the text a mark's category shows; "(blank)" is the blank rows).
+    pub fn condition(&self, value: &str, keep: bool) -> FilterCondition {
+        let blank = value == crate::pivot_table::BLANK_LABEL;
+        FilterCondition {
+            column: self.part.as_ref().map(|p| p.column.clone()).unwrap_or_else(|| self.name.clone()),
+            op: if keep { CondOp::InList } else { CondOp::NotInList },
+            values: if blank { Vec::new() } else { vec![value.to_string()] },
+            or_blank: blank,
+            part: self.part.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 /// What to draw.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -520,6 +554,15 @@ pub struct ChartSpec {
     pub series_order: Option<SortOrder>,
     /// The order of the facet panels (Q1): `None` = largest first, as before Phase 8.
     pub facet_order: Option<SortOrder>,
+
+    // ---- Phase 8 W6 ----
+    /// The drill levels, top first (empty = no drill, as before Phase 8). While it is not empty the `category` is the
+    /// level the chart is at (`drill[drill_path.len()]`): `sync_level` keeps them together.
+    pub drill: Vec<DrillLevel>,
+    /// The values clicked on the way down: (the level's name, the value). One per level left behind.
+    pub drill_path: Vec<(String, String)>,
+    /// The chart's own filters ("Keep only this", "Exclude this"): conditions on the rows the chart reads, all of them.
+    pub filters: Vec<FilterCondition>,
 }
 
 impl Default for ChartSpec {
@@ -568,6 +611,9 @@ impl Default for ChartSpec {
             facet_part: None,
             series_order: None,
             facet_order: None,
+            drill: Vec::new(),
+            drill_path: Vec::new(),
+            filters: Vec::new(),
         }
     }
 }
@@ -576,7 +622,9 @@ impl ChartSpec {
     /// The colour map is tied to the category and series columns: when either differs from `before`'s the map is
     /// emptied, so the new names take slots 1, 2, 3 …. With the same columns (a filter, Top N) it stays.
     pub fn reset_colours_if_columns_changed(&mut self, before: &ChartSpec) {
-        if self.category != before.category || self.series != before.series {
+        // a click down (or up) the same drill levels changes the category, not the columns the colours belong to (W6)
+        let along_the_levels = self.has_drill() && self.drill == before.drill;
+        if (self.category != before.category && !along_the_levels) || self.series != before.series {
             self.colour_map = ColourMap::default();
         }
     }
@@ -626,7 +674,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -647,7 +695,201 @@ impl ChartSpec {
             // the date parts (W2): their calendar changes the numbers
             self.date_fields(),
             self.series_order,
-            self.facet_order
+            self.facet_order,
+            // W6: the level, the path and the chart's own filters decide which rows are read
+            (&self.drill, &self.drill_path, &self.filters)
         )
+    }
+}
+
+// ------------------------------------------------------------------------------------------ drill (Phase 8 W6)
+
+impl ChartKind {
+    /// Why this kind of chart has no drill; `None` when it has (column, bar, stacked, grouped, line, area, donut, heatmap).
+    pub fn drill_reason(self) -> Option<&'static str> {
+        match self {
+            ChartKind::Bar | ChartKind::Line | ChartKind::Area | ChartKind::Donut | ChartKind::Heatmap => None,
+            ChartKind::Scatter | ChartKind::Bubble => Some("A scatter or bubble chart draws single rows, not groups, so there is nothing to drill into."),
+            ChartKind::Histogram => Some("A histogram draws ranges of one number, not groups, so there is nothing to drill into."),
+            ChartKind::BoxPlot => Some("A box plot draws the spread of the rows of each group, so there is nothing to drill into."),
+            ChartKind::Waterfall => Some("A waterfall draws steps that add up to a total, so a step is not a group to drill into."),
+            ChartKind::Sankey | ChartKind::Treemap => Some("This chart is drawn only in the HTML page, which has no drill."),
+        }
+    }
+}
+
+impl ChartSpec {
+    /// True when the chart has drill levels.
+    pub fn has_drill(&self) -> bool {
+        !self.drill.is_empty()
+    }
+
+    /// How many levels the chart has gone down (the clicked values on its path).
+    pub fn depth(&self) -> usize {
+        self.drill_path.len()
+    }
+
+    /// True when a click cannot go further down: the last level, or no drill at all.
+    pub fn at_last_level(&self) -> bool {
+        self.depth() + 1 >= self.drill.len()
+    }
+
+    /// The level the chart shows, when it has drill levels.
+    pub fn current_level(&self) -> Option<&DrillLevel> {
+        self.drill.get(self.depth())
+    }
+
+    /// Makes the category the level the chart is at (a chart with no drill is left alone).
+    pub fn sync_level(&mut self) {
+        if let Some(l) = self.drill.get(self.drill_path.len()).cloned() {
+            self.category = l.name;
+            self.category_part = l.part;
+        }
+    }
+
+    /// The chart as drawn at its level.
+    pub fn at_level(&self) -> ChartSpec {
+        let mut s = self.clone();
+        s.sync_level();
+        s
+    }
+
+    /// One level down on the clicked category `value`. `false` (and nothing changes) at the last level or with no drill.
+    pub fn drill_down(&mut self, value: &str) -> bool {
+        if self.drill.is_empty() || self.at_last_level() {
+            return false;
+        }
+        let name = self.drill[self.depth()].name.clone();
+        self.drill_path.push((name, value.to_string()));
+        self.sync_level();
+        true
+    }
+
+    /// Back up to `depth` levels down (0 = "All"): the path is cut there.
+    pub fn drill_to(&mut self, depth: usize) {
+        self.drill_path.truncate(depth);
+        self.sync_level();
+    }
+
+    /// Sets the drill levels (top first) and goes back to the top.
+    pub fn set_drill(&mut self, levels: Vec<DrillLevel>) {
+        self.drill = levels;
+        self.drill_path.clear();
+        self.sync_level();
+    }
+
+    /// The path and the levels must agree: one clicked value per level left behind, each at the level it was clicked in.
+    pub fn check_drill(&self) -> anyhow::Result<()> {
+        if self.drill.is_empty() {
+            if self.drill_path.is_empty() {
+                return Ok(());
+            }
+            anyhow::bail!("Chart: the drill path has values but the chart has no drill levels. Go back to All, or add the levels again.");
+        }
+        if self.drill_path.len() >= self.drill.len() {
+            anyhow::bail!("Chart: the drill path is as long as the drill levels, so there is no level left to show. Go back up one level.");
+        }
+        for (i, (name, _)) in self.drill_path.iter().enumerate() {
+            if *name != self.drill[i].name {
+                anyhow::bail!("Chart: the drill path says '{}' at level {}, but that level is '{}'. Go back to All.", name, i + 1, self.drill[i].name);
+            }
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for l in &self.drill {
+            if seen.contains(&l.name.as_str()) {
+                anyhow::bail!("Chart: '{}' is a drill level twice. Remove one of them.", l.name);
+            }
+            seen.push(l.name.as_str());
+            if self.series.as_deref() == Some(l.name.as_str()) || self.facet.as_deref() == Some(l.name.as_str()) {
+                anyhow::bail!("Chart: '{}' is a drill level and also the series or the panels. Choose another one of them.", l.name);
+            }
+        }
+        Ok(())
+    }
+
+    /// The conditions the rows must meet: the chart's own filters, then one "is this value" per level on the path.
+    /// The chart's numbers at its level, and the rows behind a mark ("Show rows"), are both read with these.
+    pub fn row_conditions(&self) -> Vec<FilterCondition> {
+        let mut out = self.filters.clone();
+        for (i, (_, value)) in self.drill_path.iter().enumerate() {
+            if let Some(l) = self.drill.get(i) {
+                out.push(l.condition(value, true));
+            }
+        }
+        out
+    }
+
+    /// "Filtered: Deposit Type = FDR, Branch = Dhaka" (the path, then the chart's own filters); empty when nothing is.
+    pub fn filtered_text(&self) -> String {
+        let mut parts: Vec<String> = self.drill_path.iter().map(|(n, v)| format!("{} = {}", n, v)).collect();
+        for c in &self.filters {
+            let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
+            let mut vals: Vec<String> = c.values.clone();
+            if c.or_blank {
+                vals.push(crate::pivot_table::BLANK_LABEL.to_string());
+            }
+            let op = if c.op == CondOp::NotInList { "\u{2260}" } else { "=" };
+            parts.push(format!("{} {} {}", field, op, vals.join(" or ")));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("Filtered: {}", parts.join(", "))
+        }
+    }
+}
+
+impl ChartSpec {
+    /// A mark called "Other" is the values Top N put together, not one value: a drill, a filter or the rows behind it would
+    /// guess. Refused in words.
+    pub fn refuse_other(value: &str) -> anyhow::Result<()> {
+        if value == crate::chart::OTHER_LABEL {
+            anyhow::bail!("'{}' is the values that Top N puts together, not one value. Raise Top N (or Group small parts) so it is shown as its own mark, or filter the table first.", value);
+        }
+        Ok(())
+    }
+
+    /// The rows behind one mark: the chart's own filters and the path, then the mark's category, and its series and panel
+    /// when it has them. "Show rows" opens a tab with exactly these conditions, "Keep only" and "Exclude" take the category's.
+    /// A mark called "Other" is the values Top N put together, so it is not one value and is refused.
+    pub fn mark_conditions(&self, category: &str, series: Option<&str>, facet: Option<&str>) -> anyhow::Result<Vec<FilterCondition>> {
+        let other = crate::chart::OTHER_LABEL;
+        let mut out = self.row_conditions();
+        Self::refuse_other(category)?;
+        let level = self.current_level().cloned().unwrap_or_else(|| DrillLevel { name: self.category.clone(), part: self.category_part.clone() });
+        out.push(level.condition(category, true));
+        for (value, name, part) in [(series, self.series.as_deref(), &self.series_part), (facet, self.facet.as_deref(), &self.facet_part)] {
+            if let (Some(v), Some(n)) = (value.filter(|v| !v.is_empty()), name) {
+                Self::refuse_other(v)?;
+                out.push(DrillLevel { name: n.to_string(), part: part.clone() }.condition(v, true));
+            }
+        }
+        Ok(out)
+    }
+
+    /// "Rows: Deposit Type = FDR, Branch = Dhaka": the title of the tab behind a mark.
+    pub fn mark_title(&self, category: &str, series: Option<&str>, facet: Option<&str>) -> String {
+        let mut parts: Vec<String> = self.drill_path.iter().map(|(n, v)| format!("{} = {}", n, v)).collect();
+        parts.push(format!("{} = {}", self.category, category));
+        if let (Some(v), Some(n)) = (series.filter(|v| !v.is_empty()), self.series.as_deref()) {
+            parts.push(format!("{} = {}", n, v));
+        }
+        if let (Some(v), Some(n)) = (facet.filter(|v| !v.is_empty()), self.facet.as_deref()) {
+            parts.push(format!("{} = {}", n, v));
+        }
+        format!("Rows: {}", parts.join(", "))
+    }
+
+    /// "Keep only this" or "Exclude this": the category `value` of the level the chart is at, added to the chart's own filters
+    /// (a filter that is already there is not added twice). `false` when it was there already.
+    pub fn add_value_filter(&mut self, value: &str, keep: bool) -> anyhow::Result<bool> {
+        Self::refuse_other(value)?;
+        let level = self.current_level().cloned().unwrap_or_else(|| DrillLevel { name: self.category.clone(), part: self.category_part.clone() });
+        let cond = level.condition(value, keep);
+        if self.filters.contains(&cond) {
+            return Ok(false);
+        }
+        self.filters.push(cond);
+        Ok(true)
     }
 }

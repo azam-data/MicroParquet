@@ -31,7 +31,7 @@ impl MicroParquetApp {
             if sig == info.source_sig || info.pending_sig.as_deref() == Some(sig.as_str()) {
                 continue;
             }
-            let req = ChartTabRequest { chart_tab: id, sig: sig.clone(), base: src.source.clone(), steps: src.steps[..exec].to_vec(), spec: info.data.spec.clone(), temp_dir: self.paths.temp_dir.clone() };
+            let req = ChartTabRequest { chart_tab: id, sig: sig.clone(), base: src.source.clone(), steps: src.steps[..exec].to_vec(), spec: info.next_spec.clone().unwrap_or_else(|| info.data.spec.clone()), temp_dir: self.paths.temp_dir.clone() };
             if let Some(info) = self.chart_tabs.get_mut(&id) {
                 info.pending_sig = Some(sig);
             }
@@ -57,6 +57,7 @@ impl MicroParquetApp {
             info.pending_sig = None;
             info.source_sig = c.sig;
             info.error = None;
+            info.next_spec = None;
             info.divisor = divisor;
             info.unit = unit;
             info.data = c.data;
@@ -89,6 +90,7 @@ impl MicroParquetApp {
             // the attempt is not made again until the source changes once more
             info.source_sig = info.pending_sig.take().unwrap_or_default();
             info.error = Some(msg.to_string());
+            info.next_spec = None;
         }
     }
 
@@ -130,7 +132,7 @@ impl MicroParquetApp {
     /// no source: the studio opens on its own table).
     pub(crate) fn edit_chart_tab(&mut self, chart_tab: u64) {
         let Some(info) = self.chart_tabs.get(&chart_tab) else { return };
-        let spec = info.data.spec.clone();
+        let spec = info.next_spec.clone().unwrap_or_else(|| info.data.spec.clone());
         let linked = info.source_tab.is_some();
         if let Some(c) = &info.closed {
             self.status_message = format!("The source tab '{}' is closed. Reopen it to edit this chart.", c.title);
@@ -226,6 +228,6 @@ impl MicroParquetApp {
 impl ChartTabInfo {
     /// A chart tab drawn from `source_tab`, which looked like `source_sig` when the numbers were calculated.
     pub fn linked(data: micro_parquet::chart::ChartData, divisor: f64, decimals: usize, unit: String, source_tab: Option<u64>, source_sig: String) -> Self {
-        Self { data, show_table: false, divisor, decimals, unit, source_tab, source_sig, pending_sig: None, closed: None, error: None }
+        Self { data, show_table: false, divisor, decimals, unit, source_tab, source_sig, pending_sig: None, closed: None, error: None, next_spec: None }
     }
 }

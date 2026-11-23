@@ -63,6 +63,8 @@ pub enum JobKind {
     ProjectSave,
     /// A linked chart tab calculated again from its source tab (Phase 8 W5).
     ChartTab,
+    /// The rows behind a cell of a pivot table, found by building the pivot again (Phase 8 W6).
+    ShowRows,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

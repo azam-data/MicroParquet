@@ -58,6 +58,12 @@ pub struct PivotBuild {
     pub df: DataFrame,
     /// Number of label columns at the left (the Rows fields, or one).
     pub label_columns: usize,
+    /// For each row of `df`: the values of the Rows fields it stands for, `None` being a blank. A detail row has one per
+    /// Rows field, a subtotal the first few, the grand total none (Phase 8 W6: Show rows).
+    pub row_keys: Vec<Vec<Option<String>>>,
+    /// For each value column of `df` (those after the label columns): the values of the Columns fields it stands for;
+    /// a Total column has none.
+    pub col_keys: Vec<Vec<Option<String>>>,
 }
 
 fn dtype_is_numeric(dt: &DataType) -> bool {
@@ -596,7 +602,85 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         }
     }
     let df = DataFrame::new(series).context("Could not arrange the pivot table")?;
-    Ok(PivotBuild { df, label_columns: label_names.len() })
+    let row_keys: Vec<Vec<Option<String>>> = out_rows
+        .iter()
+        .map(|r| match r {
+            RowKind::Detail(k) | RowKind::Subtotal(_, k) => k.clone(),
+            RowKind::Grand => Vec::new(),
+        })
+        .collect();
+    let col_keys: Vec<Vec<Option<String>>> = out_cols
+        .iter()
+        .map(|(_, c)| match c {
+            ColKind::Cell(k, _) => k.clone(),
+            ColKind::RowTotal(_) => Vec::new(),
+        })
+        .collect();
+    Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys })
+}
+
+/// The rows behind one cell of a pivot (Phase 8 W6: "Show rows").
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellRows {
+    /// The pivot's own filters, then one condition per Rows and Columns field the cell stands for.
+    pub conditions: Vec<crate::models::FilterCondition>,
+    /// "Rows: Branch = Dhaka, Term = 1Y".
+    pub title: String,
+}
+
+/// The condition "this field is `value`" for a pivot field: a date field (a part of a date column) reads its part.
+fn field_condition(spec: &PivotSpec, field: &str, value: &Option<String>, keep: bool) -> crate::models::FilterCondition {
+    use crate::charts::spec::DrillLevel;
+    let level = match spec.date_fields.iter().find(|f| f.name == field) {
+        Some(f) => DrillLevel::of_part(f),
+        None => DrillLevel::column(field),
+    };
+    level.condition(value.as_deref().unwrap_or(BLANK_LABEL), keep)
+}
+
+/// The rows a cell of the built pivot adds up: the pivot's filters and, for the cell's row and column, each field's value.
+/// A subtotal row restricts only the fields it covers, a Total column and the grand total restrict none (so "Show rows" of a
+/// total gives the rows of that total). `col_name` is the heading of the clicked value column.
+pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &str) -> Result<CellRows> {
+    let names: Vec<String> = build.df.get_column_names().iter().map(|n| n.to_string()).collect();
+    let Some(at) = names.iter().position(|n| n == col_name) else {
+        bail!("Show rows: the column '{}' is not in the pivot. Open the pivot again.", col_name);
+    };
+    if at < build.label_columns {
+        bail!("Show rows works on the value cells, not on the row labels. Double-click a number.");
+    }
+    let (Some(row_key), Some(col_key)) = (build.row_keys.get(row), build.col_keys.get(at - build.label_columns)) else {
+        bail!("Show rows: that cell is not in the pivot (row {}). Open the pivot again.", row + 1);
+    };
+    let mut conditions: Vec<crate::models::FilterCondition> = Vec::new();
+    for f in &spec.filters {
+        if f.values.is_empty() {
+            continue;
+        }
+        let level = match spec.date_fields.iter().find(|d| d.name == f.field) {
+            Some(d) => crate::charts::spec::DrillLevel::of_part(d),
+            None => crate::charts::spec::DrillLevel::column(&f.field),
+        };
+        let mut c = level.condition("", true);
+        c.values = f.values.iter().flatten().cloned().collect();
+        c.or_blank = f.values.iter().any(|v| v.is_none());
+        conditions.push(c);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (i, v) in row_key.iter().enumerate() {
+        if let Some(field) = spec.rows.get(i) {
+            conditions.push(field_condition(spec, field, v, true));
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+        }
+    }
+    for (i, v) in col_key.iter().enumerate() {
+        if let Some(field) = spec.columns.get(i) {
+            conditions.push(field_condition(spec, field, v, true));
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+        }
+    }
+    let title = if parts.is_empty() { "Rows: all rows of the pivot".to_string() } else { format!("Rows: {}", parts.join(", ")) };
+    Ok(CellRows { conditions, title })
 }
 
 /// What the steps after a pivot did to its total rows (K5).

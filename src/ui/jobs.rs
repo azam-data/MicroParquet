@@ -139,6 +139,7 @@ impl MicroParquetApp {
                             self.chart_tab_calc_failed(id, &msg);
                         }
                     }
+                    JobKind::ShowRows => self.status_message = msg.clone(),
                     JobKind::ProjectCheck => self.status_message = format!("The project's files could not be checked: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
                     JobKind::Dq => self.dq_failed(msg.clone()),
@@ -198,6 +199,7 @@ impl MicroParquetApp {
             JobOutput::ProjectCheck(c) => self.apply_project_check(*c),
             JobOutput::ProjectSave(b) => self.apply_project_built(*b),
             JobOutput::ChartTab(c) => self.apply_chart_tab_calc(*c),
+            JobOutput::ShowRows(r) => self.apply_show_rows(*r),
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
                 let status = match self.open_notes.remove(&tab.id) {

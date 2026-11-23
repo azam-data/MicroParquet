@@ -60,6 +60,12 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    // W6: the chart is drawn at its drill level, from the rows its path and its own filters leave
+    spec.check_drill()?;
+    let level = spec.at_level();
+    let spec = &level;
+    let conditions = spec.row_conditions();
+    let lf = if conditions.is_empty() { lf } else { crate::engine::filter_by_conditions(lf, &conditions).context("Chart: the drill path or the chart's filters could not be applied")? };
     // the date parts of the category, series or facet (W2) are added as columns first
     let fields = spec.date_fields();
     let lf = if fields.is_empty() {

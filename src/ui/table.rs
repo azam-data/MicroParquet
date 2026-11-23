@@ -116,6 +116,9 @@ pub enum GridAction {
     ClearSort,
     /// Right-click menu: copy the page's rows (K4).
     Copy(micro_parquet::exporters::CopyKind),
+    /// Double-click or right-click on a value cell of a pivot: the rows behind it (Phase 8 W6). The row of the whole
+    /// table (not of the page) and the heading of the column.
+    ShowRows(usize, String),
 }
 
 /// The copy entries of the grid's right-click menus (header and cells).
@@ -295,6 +298,8 @@ impl MicroParquetApp {
         let ctx = ui.ctx().clone();
         let mut action: Option<GridAction> = None;
         let weight_guess = micro_parquet::tab_jobs::guess_balance_column(df);
+        // a pivot tab: the columns from here on are value cells that can show their rows (set by the caller)
+        let show_rows_from: Option<usize> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_show_rows", tab_id))));
         let shading: Option<Vec<Vec<micro_parquet::banking::Shade>>> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_shading", tab_id))));
         let mut report = GridReport::default();
         let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
@@ -495,7 +500,20 @@ impl MicroParquetApp {
                                         };
                                         ui.with_layout(layout, |ui| {
                                             let r = ui.add(egui::Label::new(rich).truncate().sense(egui::Sense::click()));
-                                            r.context_menu(|ui| copy_menu_items(ui, &mut action));
+                                            let rows_here = show_rows_from.is_some_and(|from| c_idx >= from);
+                                            if rows_here && r.double_clicked() {
+                                                action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
+                                            }
+                                            r.context_menu(|ui| {
+                                                if rows_here {
+                                                    if ui.button("Show rows").on_hover_text("Open the rows this cell adds up in a new tab (or double-click the cell)").clicked() {
+                                                        action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
+                                                        ui.close_menu();
+                                                    }
+                                                    ui.separator();
+                                                }
+                                                copy_menu_items(ui, &mut action);
+                                            });
                                             // A cut cell shows its full text on hover.
                                             let cut = text.chars().count() > 6
                                                 && r.rect.width() >= ui.max_rect().width() - 0.5;
@@ -660,6 +678,14 @@ impl MicroParquetApp {
             }
             let stale = tab.page_error.is_some();
             migration_shading_for(ui.ctx(), tab);
+            // W6: a pivot tab's value cells can show their rows
+            let rows_key = egui::Id::new(("grid_show_rows", tab.id));
+            match self.pivot_tab_label_columns(tab) {
+                Some(n) => ui.ctx().data_mut(|d| d.insert_temp(rows_key, n)),
+                None => {
+                    ui.ctx().data_mut(|d| d.remove_temp::<usize>(rows_key));
+                }
+            }
             ui.scope(|ui| {
                 if updating || stale {
                     ui.set_opacity(theme::DISABLED_OPACITY);
@@ -685,6 +711,7 @@ impl MicroParquetApp {
             Some(GridAction::ClearSort) => self.clear_sort(),
             Some(GridAction::Copy(kind)) => self.copy_table_as(ui.ctx(), kind),
             Some(GridAction::SetSummary(col, spec)) => self.set_summary(&col, spec),
+            Some(GridAction::ShowRows(row, col)) => self.pivot_show_rows(row, &col),
             None => {}
         }
     }

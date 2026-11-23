@@ -85,6 +85,9 @@ pub struct ChartTabInfo {
     pub closed: Option<ClosedSource>,
     /// Why the chart could not be calculated again (the numbers shown are the last ones).
     pub error: Option<String>,
+    /// The spec the worker is to calculate next (a drill or a filter on the chart tab, Phase 8 W6): the numbers shown keep
+    /// the spec they were calculated with until the new ones arrive.
+    pub next_spec: Option<ChartSpec>,
 }
 
 /// A source tab that was closed.
@@ -421,6 +424,10 @@ impl MicroParquetApp {
         let mut reopen = false;
         let closed = self.chart_tabs.get(&id).and_then(|i| i.closed.clone());
         let can_reopen = closed.as_ref().is_some_and(|c| self.chart_tab_can_reopen(c));
+        let drill_ctx = self.chart_tab_drill_ctx(id);
+        let mut crumb: Option<usize> = None;
+        let mut chart_action: Option<crate::ui::chart_render::ChartAction> = None;
+        self.drill_rects.clear();
         let Some(info) = self.chart_tabs.get_mut(&id) else { return };
         let label = if info.show_table { format!("{}  Show chart", egui_phosphor::regular::CHART_BAR) } else { format!("{}  Table", egui_phosphor::regular::TABLE) };
         ui.horizontal_wrapped(|ui| {
@@ -448,6 +455,8 @@ impl MicroParquetApp {
             ui.add(egui::Label::new(egui::RichText::new(format!("The chart could not be updated from its source tab, so it shows the last numbers: {}", e)).color(tk.danger)).wrap());
         }
         let dimmed = info.closed.is_some();
+        // W6: where the chart is in its drill, and the way back
+        crumb = crate::ui::drill::drill_breadcrumb(ui, dark, &info.data.spec, &mut self.drill_rects);
         ui.add_space(theme::SPACE_S);
         let opts = micro_parquet::charts::layout::LayoutOpts { dark, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: None };
         if dimmed {
@@ -459,8 +468,14 @@ impl MicroParquetApp {
             let data = info.data.clone();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let h = ui.available_height().max(theme::CHART_MIN_H);
-                crate::ui::chart_render::show_chart(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h));
+                chart_action = crate::ui::chart_render::show_chart_with(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h), Some(&drill_ctx)).action;
             });
+        }
+        if let Some(depth) = crumb {
+            self.chart_tab_drill_to(id, Some(depth));
+        }
+        if let Some(a) = chart_action {
+            self.chart_tab_chart_action(id, a);
         }
         if edit {
             self.edit_chart_tab(id);
@@ -612,7 +627,7 @@ impl MicroParquetApp {
             let shown = spec.series.clone().unwrap_or_else(|| "(none)".to_string());
             let r = egui::ComboBox::from_id_salt("chart_series").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(shown).show_ui(ui, |ui| {
                 ui.selectable_value(&mut spec.series, None, "(none)");
-                for c in avail.iter().filter(|c| **c != spec.category) {
+                for c in avail.iter().filter(|c| **c != spec.category && !spec.drill.iter().any(|l| l.name == **c)) {
                     ui.selectable_value(&mut spec.series, Some(c.clone()), c);
                 }
                 if let Some(f) = date_part_items(ui, &parts, spec.series.as_deref()) {
@@ -747,6 +762,12 @@ impl MicroParquetApp {
         self.chart.show_table = show_table;
         // a part left behind when another column is picked is dropped (W2)
         spec.drop_stale_date_parts();
+        // W6: with drill levels the Category picker names the top level, and the chart goes back to it
+        if spec.has_drill() && (spec.category != self.chart.spec.category || spec.category_part != self.chart.spec.category_part) {
+            let mut levels = spec.drill.clone();
+            levels[0] = micro_parquet::charts::spec::DrillLevel { name: spec.category.clone(), part: spec.category_part.clone() };
+            spec.set_drill(levels);
+        }
         // W0 auto order: a category picked here with no order chosen gets the steps' order, Calendar or Ranges
         let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none();
         let auto = new_category && spec.order.is_natural() && !spec.by_value;
@@ -827,6 +848,9 @@ impl MicroParquetApp {
         let mut switch_horizontal: Option<ChartSpec> = None;
         let scale = self.chart_scale(&self.chart.spec);
         let unit = scale.as_ref().map(scale_word).filter(|u| !u.is_empty()).map(str::to_string);
+        let mut crumb: Option<usize> = None;
+        let mut chart_action: Option<crate::ui::chart_render::ChartAction> = None;
+        self.drill_rects.clear();
         match (&self.chart.data, &self.chart.error) {
             (_, Some(e)) => {
                 rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(e).color(tk.danger)).wrap()).rect);
@@ -837,11 +861,14 @@ impl MicroParquetApp {
                     title.push_str("  \u{2014} calculating\u{2026}");
                 }
                 rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(title).color(tk.ink2).size(theme::TEXT_LABEL)).wrap()).rect);
+                // W6: where the chart is in its drill, and the way back
+                crumb = crate::ui::drill::drill_breadcrumb(ui, self.dark_mode, &self.chart.spec, &mut self.drill_rects);
                 if self.chart.show_table {
                     let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: String::new(), bare: true, colours: None };
                     crate::ui::chart_render::show_table(ui, d, &opts);
                 } else {
-                    let (plot, map, dont_fit) = self.draw_chart_plot(ui, d, scale);
+                    let (plot, map, dont_fit, action) = self.draw_chart_plot(ui, d, scale);
+                    chart_action = action;
                     rects.plot = Some(plot);
                     new_map = Some(map);
                     labels_dont_fit = dont_fit;
@@ -850,6 +877,15 @@ impl MicroParquetApp {
             (None, None) => {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
             }
+        }
+        // W6: a click on the breadcrumb or on a mark, or a menu item of the right-click menu
+        if let Some(depth) = crumb {
+            let mut spec = self.chart.spec.clone();
+            spec.drill_to(depth);
+            self.chart_set_spec(spec);
+        }
+        if let Some(a) = chart_action {
+            self.studio_chart_action(a);
         }
         // a donut of many parts: one line of advice
         if let (ChartKind::Donut, Some(d)) = (self.chart.spec.kind, self.chart.data.as_ref()) {
@@ -1175,7 +1211,7 @@ impl MicroParquetApp {
     /// The chart: drawn by the Phase 7 renderer (`chart_render`) in the quick-chart layout (plot and
     /// legend; the title line and notes above are the Phase 6 ones). Returns the chart's rectangle and
     /// the colour map with every series in it, which the caller stores in the spec.
-    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap, bool) {
+    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap, bool, Option<crate::ui::chart_render::ChartAction>) {
         let opts = micro_parquet::charts::layout::LayoutOpts {
             dark: self.dark_mode,
             divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
@@ -1195,9 +1231,10 @@ impl MicroParquetApp {
             shown = c;
             &shown
         };
-        let out = crate::ui::chart_render::show_chart(ui, egui::Id::new("chart_plot"), data, &opts, None);
+        let drill = self.studio_drill_ctx();
+        let out = crate::ui::chart_render::show_chart_with(ui, egui::Id::new("chart_plot"), data, &opts, None, Some(&drill));
         let plot = out.layout.panels.first().map(|p| p.plot).unwrap_or(out.rect);
-        (plot, out.layout.colour_map, out.layout.labels_dont_fit)
+        (plot, out.layout.colour_map, out.layout.labels_dont_fit, out.action)
     }
 }
 

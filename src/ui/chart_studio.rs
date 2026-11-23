@@ -937,7 +937,7 @@ impl MicroParquetApp {
                 let parts = self.chart_date_parts();
                 let r = egui::ComboBox::from_id_salt("chart_facet").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(shown).show_ui(ui, |ui| {
                     ui.selectable_value(&mut spec.facet, None, "(none)");
-                    for c in avail.iter().filter(|c| **c != spec.category && spec.series.as_deref() != Some(c.as_str())) {
+                    for c in avail.iter().filter(|c| **c != spec.category && spec.series.as_deref() != Some(c.as_str()) && !spec.drill.iter().any(|l| l.name == **c)) {
                         ui.selectable_value(&mut spec.facet, Some(c.clone()), c);
                     }
                     // W2: a date part as the panels ("Open Date › Year")
@@ -993,6 +993,8 @@ impl MicroParquetApp {
             ui.label(egui::RichText::new("Two measures of different scale become linked panels on one shared x-axis: there is no dual axis.").size(theme::TEXT_LABEL).color(tk.muted));
         });
         rects.fields.push(("Measures and panels".to_string(), h.header_response.rect));
+        // ---- drill levels (W6)
+        self.studio_drill_section(ui, spec, avail, rects);
         // the primary measure's column, aggregation and weight stay what the controls above say
         if !spec.measures.is_empty() {
             spec.measures[0].column = spec.value.clone();
@@ -1032,4 +1034,99 @@ impl MicroParquetApp {
 /// A card by its id (tests).
 pub fn card(id: &str) -> Option<&'static Card> {
     card_by_id(id)
+}
+
+impl MicroParquetApp {
+    /// "Drill levels": the levels below the Category, in order (add, remove, move), and the one-click "Year › Quarter › Month
+    /// › Day" when the Category is a date. A chart that cannot drill shows why instead of the section.
+    fn studio_drill_section(&mut self, ui: &mut egui::Ui, spec: &mut ChartSpec, avail: &[String], rects: &mut ChartRects) {
+        use micro_parquet::charts::spec::DrillLevel;
+        use micro_parquet::dates::{DateFieldRef, DatePart};
+        let tk = *theme::tokens(self.dark_mode);
+        if let Some(why) = spec.kind.drill_reason() {
+            let l = ui.add(egui::Label::new(egui::RichText::new(format!("Drill levels: {}", why)).size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+            rects.fields.push(("Drill levels hidden".to_string(), l.rect));
+            return;
+        }
+        let parts = self.chart_date_parts();
+        let shown = |l: &DrillLevel| match &l.part {
+            Some(p) => micro_parquet::dates::picker_label(&p.column, p.part),
+            None => l.name.clone(),
+        };
+        let top = spec.drill.first().cloned().unwrap_or_else(|| DrillLevel { name: spec.category.clone(), part: spec.category_part.clone() });
+        let mut levels: Vec<DrillLevel> = if spec.drill.is_empty() { vec![top.clone()] } else { spec.drill.clone() };
+        let before = levels.clone();
+        let h = egui::CollapsingHeader::new(format!("Drill levels ({})", levels.len().saturating_sub(1))).id_salt("chart_drill").show(ui, |ui| {
+            ui.label(egui::RichText::new(format!("1. {} (the Category)", shown(&top))).color(tk.muted));
+            let (mut remove, mut up, mut down): (Option<usize>, Option<usize>, Option<usize>) = (None, None, None);
+            let n = levels.len();
+            for i in 1..n {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}. {}", i + 1, shown(&levels[i])));
+                    let b = ui.add_enabled(i > 1, egui::Button::new("\u{2191}"));
+                    rects.fields.push((format!("Level {} up", i + 1), b.rect));
+                    if b.clicked() {
+                        up = Some(i);
+                    }
+                    let b = ui.add_enabled(i + 1 < n, egui::Button::new("\u{2193}"));
+                    rects.fields.push((format!("Level {} down", i + 1), b.rect));
+                    if b.clicked() {
+                        down = Some(i);
+                    }
+                    let b = ui.button("Remove");
+                    rects.fields.push((format!("Level {} remove", i + 1), b.rect));
+                    if b.clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = up {
+                levels.swap(i, i - 1);
+            }
+            if let Some(i) = down {
+                levels.swap(i, i + 1);
+            }
+            if let Some(i) = remove {
+                levels.remove(i);
+            }
+            let used: Vec<String> = levels.iter().map(|l| l.name.clone()).collect();
+            let r = egui::ComboBox::from_id_salt("chart_drill_add").width(theme::CHART_COMBO_W).height(theme::CHART_PICKER_POPUP_H).selected_text("Add a level\u{2026}").show_ui(ui, |ui| {
+                for c in avail.iter().filter(|c| !used.contains(c) && spec.series.as_deref() != Some(c.as_str()) && spec.facet.as_deref() != Some(c.as_str())) {
+                    if ui.selectable_label(false, c).clicked() {
+                        levels.push(DrillLevel::column(c));
+                    }
+                }
+                if let Some(f) = crate::ui::chart::date_part_items(ui, &parts, None) {
+                    if !used.contains(&f.name) {
+                        levels.push(DrillLevel::of_part(&f));
+                    }
+                }
+            });
+            rects.fields.push(("Add a level".to_string(), r.response.rect));
+            // a date Category: the whole hierarchy in one click
+            let date_col = top.part.as_ref().map(|p| p.column.clone()).or_else(|| parts.iter().find(|f| f.column == top.name).map(|f| f.column.clone()));
+            if let Some(col) = date_col {
+                let b = ui.button("Year \u{203a} Quarter \u{203a} Month \u{203a} Day");
+                rects.fields.push(("Date drill".to_string(), b.rect));
+                if b.clicked() {
+                    let cal = top.part.as_ref().map(|p| p.calendar).unwrap_or_else(|| self.calendar());
+                    levels = [DatePart::Year, DatePart::Quarter, DatePart::Month, DatePart::DayOfMonth].into_iter().map(|p| DrillLevel::of_part(&DateFieldRef::new(&col, p, cal))).collect();
+                }
+            }
+            ui.label(egui::RichText::new("Click a mark to go one level down; right-click it for Show rows. The breadcrumb above the chart goes back.").size(theme::TEXT_LABEL).color(tk.muted));
+        });
+        rects.fields.push(("Drill levels".to_string(), h.header_response.rect));
+        if levels != before {
+            let top_changed = levels.first() != before.first();
+            // a single level is no drill; the Category stays what it is
+            spec.set_drill(if levels.len() <= 1 { Vec::new() } else { levels });
+            if top_changed {
+                // the Category is now the date's first part: its labels have their own order
+                if let Some(o) = spec.category_part.as_ref().and_then(|f| f.sort_order()) {
+                    spec.order = o;
+                    spec.by_value = false;
+                }
+            }
+        }
+    }
 }

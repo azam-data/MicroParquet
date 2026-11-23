@@ -266,7 +266,19 @@ pub fn shows_unit(data: &ChartData, opts: &LayoutOpts) -> bool {
     !opts.unit.is_empty() && !share_stack && spec.measure_list().iter().any(is_amount)
 }
 
+/// The subtitle with what the chart is filtered by: the drill path and its own filters ("Filtered: Deposit Type = FDR"),
+/// so every renderer and every export says which rows the numbers are of (Phase 8 W6).
 pub fn subtitle_text(data: &ChartData, opts: &LayoutOpts) -> String {
+    let base = subtitle_base(data, opts);
+    let filtered = data.spec.filtered_text();
+    match (base.is_empty(), filtered.is_empty()) {
+        (_, true) => base,
+        (true, false) => filtered,
+        (false, false) => format!("{} \u{b7} {}", base, filtered),
+    }
+}
+
+fn subtitle_base(data: &ChartData, opts: &LayoutOpts) -> String {
     use super::spec::Transform;
     let spec = &data.spec;
     let measures = spec.measure_list();
@@ -2476,6 +2488,50 @@ pub fn hit_test(l: &ChartLayout, pos: Pos2) -> Option<Hover> {
         }
     }
     near.map(|(_, c)| Hover { tip: c.tip.clone(), rect: None, cross: Some((c.x, c.y0, c.y1)) })
+}
+
+/// The mark (or the line's category) under the pointer, as indexes into the chart's panels, series and categories (Phase 8 W6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitTarget {
+    pub panel: usize,
+    /// `None` for the crosshair of a line, which stands for a category of every series.
+    pub series: Option<usize>,
+    pub category: usize,
+}
+
+/// What `hit_test` finds, as indexes: a click on a mark goes by this.
+pub fn hit_target(l: &ChartLayout, pos: Pos2) -> Option<HitTarget> {
+    if l.message.is_some() {
+        return None;
+    }
+    let mut best: Option<(f32, &Mark)> = None;
+    for m in &l.marks {
+        let hit = match &m.slice {
+            Some(s) => in_slice(s, pos),
+            None => m.rect.expand(t::HIT_SLOP_PX).contains(pos),
+        };
+        if hit {
+            let d = (m.rect.center() - pos).length();
+            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, m));
+            }
+        }
+    }
+    if let Some((_, m)) = best {
+        return Some(HitTarget { panel: m.panel, series: Some(m.series), category: m.category });
+    }
+    let mut near: Option<(f32, &Crosshair)> = None;
+    for c in &l.crosshairs {
+        let Some(panel) = l.panels.get(c.panel) else { continue };
+        if !panel.plot.expand2(vec2(t::HIT_SLOP_PX, 0.0)).contains(pos) {
+            continue;
+        }
+        let d = (c.x - pos.x).abs();
+        if near.map(|(bd, _)| d < bd).unwrap_or(true) {
+            near = Some((d, c));
+        }
+    }
+    near.map(|(_, c)| HitTarget { panel: c.panel, series: None, category: c.category })
 }
 
 /// Where to put a tooltip box of `size` for a pointer at `pos`, kept inside `bounds`.

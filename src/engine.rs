@@ -2598,6 +2598,13 @@ pub fn compile_tab_lazy(
     Ok(lf)
 }
 
+/// The rows that meet every condition, as a Filter group step "keep matching, all of these" reads them (Phase 8 W6). A chart's
+/// drill path and its own filters, and the "Show rows" tab behind a mark, both go through this one function, so the numbers of
+/// the chart at a level and the rows of that tab cannot disagree.
+pub fn filter_by_conditions(lf: LazyFrame, conditions: &[FilterCondition]) -> Result<LazyFrame> {
+    apply_single_step(lf, &TransformStep::FilterGroup { conditions: conditions.to_vec(), join: GroupJoin::And, keep_matching: true })
+}
+
 fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
     match step {
         TransformStep::Skipped { .. } => Ok(lf),

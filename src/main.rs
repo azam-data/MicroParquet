@@ -227,6 +227,8 @@ pub struct MicroParquetApp {
     chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
     /// When the linked chart tabs last looked at their source tabs (seconds on the egui clock).
     chart_tab_checked_at: f64,
+    /// The breadcrumb entries of the chart last drawn (name, rectangle), for the render tests (Phase 8 W6).
+    drill_rects: Vec<(String, egui::Rect)>,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -391,6 +393,7 @@ impl MicroParquetApp {
             chart_pop_requests: 0,
             chart_tabs: HashMap::new(),
             chart_tab_checked_at: 0.0,
+            drill_rects: Vec::new(),
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -539,6 +542,7 @@ impl MicroParquetApp {
         self.handle_zoom_keys(ctx);
         self.update_window_title(ctx);
         self.handle_step_shortcuts(ctx);
+        self.handle_drill_back_key(ctx);
         self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
         self.render_tab_strip_panel(ctx);

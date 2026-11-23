@@ -538,3 +538,30 @@ pub fn sequential_step(v: f64, lo: f64, hi: f64) -> usize {
     }
     (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * top as f64).round() as usize
 }
+
+/// One mark of a chart as the values it stands for (Phase 8 W6): the category of the level the chart is at, and the series
+/// and the panel (small multiples) when the chart has them. What a click drills into and what "Show rows" filters by.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct MarkRef {
+    pub category: String,
+    pub series: Option<String>,
+    pub facet: Option<String>,
+}
+
+impl ChartData {
+    /// The values of the mark at these indexes of the layout (`series` is `None` for a line's category). `None` when the
+    /// indexes name nothing (a panel that is not a small multiple, a category that is not there).
+    pub fn mark_ref(&self, panel: usize, series: Option<usize>, category: usize) -> Option<MarkRef> {
+        let (cats, sers, facet) = match self.facets.get(panel) {
+            Some(f) if !self.facets.is_empty() => (&f.data.categories, &f.data.series, Some(f.name.clone())),
+            _ if self.facets.is_empty() => (&self.categories, &self.series, None),
+            _ => return None,
+        };
+        let category = cats.get(category)?.clone();
+        let series = match (self.spec.series.as_ref(), series) {
+            (Some(_), Some(i)) => sers.get(i).cloned().filter(|s| !s.is_empty()),
+            _ => None,
+        };
+        Some(MarkRef { category, series, facet: facet.filter(|_| self.spec.facet.is_some()) })
+    }
+}

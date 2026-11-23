@@ -1,9 +1,10 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: W6 (this session), then W7, W8. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: W6 (done), then W7, W8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
+| W6 | DONE | (see git log: "Phase 8 W6") | tests/phase8/w6.rs ×10 (Deposit Type › Branch › Product: each level adds up to the value clicked above it, the blank branch included, the last level has nothing below; the rows behind a mark are the mark's rows and sum at every level for text, whole numbers, floats, blanks and a stacked cell, and "Other" is refused; a Year › Quarter › Month › Day drill on a Datetime column sums to the year, blanks as "(blank)", and the rows of a month through three date parts; a Phase 7 chart loads and calculates as it did and the kinds without a drill say why; a path that does not fit the levels is refused; Keep only and Exclude filter the chart and the rows behind its marks; HTML, Excel, Python, the chart book and the shared layout carry the path in the subtitle; every value cell of five pivots, totals and blank keys included, gives exactly its rows; a pivot cell's title); render_tests_p8 ×5 (a real click on a bar drills, the tooltip says what a click does and, at the last level, that it does nothing, the breadcrumb and the Back key go up, the right-click menu does Keep only, Exclude, Drill down and Show rows, the crumbs and the subtitle do not overlap; a chart tab drills, goes back by crumb and key, shows rows, is saved at level 2 and reopens there, and greys its menu when its source is closed; the Drill levels section adds, moves and removes levels, offers Year › Quarter › Month › Day for a date and shows the reason for a scatter; a double-click or right-click on a pivot value cell opens its rows, the grand total included, a row label does nothing; "Other" is refused and a drill keeps the colours); all at 3 sizes |
 | W5 | DONE | (see git log: "Phase 8 W5" and "Phase 8 W5: follow-ups") | tests/phase8/w5.rs ×4 (a Phase 7 `settings.json` with chart tabs loads and saves back unchanged, its chart reads with the Phase 8 fields at default; the owner's case is calculated from the source and reads "Sum of Balance", a filtered source gives the source's numbers; a source's signature changes with a step or a changed file and not otherwise; the step commands are greyed on a chart tab and every other command is as it was); render_tests_p8 ×7 (a filter on the source updates the chart tab to equal a new chart, table included; a file that changes under the source does the same; Edit chart by a real click opens the studio on the source with the banner, Update chart tab keeps one chart tab with the new numbers and the title rule, Open as new chart tab leaves the first as it was; closing the source dims the chart (glyph alpha 0.45) with the message, Reopen by a real click restores it, Reopen is not offered outside a project; a chart tab of an older version stays frozen and Edit chart opens it on its own table; recalculating does not set the project's "•"; the step commands are greyed in the Edit menu and Ctrl+K by real clicks, with the note as tooltip and the status line; at 3 sizes, the "•" test at one) |
 | W4 | DONE | (see git log: "Phase 8 W4") | tests/phase8/w4.rs ×10 (six kinds of tab round-trip by the hash of their rows, with keys, active tab, formats, summary, control column, chart specs, and save → open → save equal but `saved_at`; moving the project and its files together opens by relative paths; a relink to a file with an extra column works and a missing column is refused with the list, and the tabs built on it fail; Found/Changed/Missing, Look in folder, the changed-since-saved line; tabs left out with the reason and their dependants; a placeholder keeps its recipe; a newer version is refused, unknown fields ignored, recent list of 8; headless writes every tab and a failing tab writes nothing; save → open → save gives the same file bytes but the saved_at line; the save job reports each file it hashes and the cache spares the second save); src/headless.rs ×1 (`--project`/`--export-dir`); render_tests_p8 ×6 (File menu entries, Ctrl+K, Save as, "•", Save, Open ▸ Sources dialog ▸ Open, Close; Browse and Look in folder, placeholders and Save keeping them; close request prompt with Cancel/Don't save/Save, New project, recent list; the left-out list; the changed-file status line, at 3 sizes; Save is a worker job) |
 | W3 | DONE | (see git log: "Phase 8 W3") | tests/phase8/w3.rs ×4 (numbered defaults to true for every saved form and the plain labels, the band order and its declared list; the owner's bands unnumbered in band order in the sorted step result, a pivot, the template's chart, the Excel workbook and the Python; a Phase 7 macro with the step replays to the numbered labels and its Phase 7 hash; the title "… sit at 8%–9%" in both forms); render_tests_p8 ×1 (the tick box off, on and off by real clicks, Add makes plain labels, a pivot takes the band order at once, at 3 sizes) |
@@ -52,6 +53,29 @@ the bullets of task W5 and its Acceptance list in `docs/phase8-spec.md`.
 | A chart tab with no source tab is frozen, marked "Made by an older version; …", Edit chart opens it on its own table, only "Open as new chart tab" is offered | `w5_a_chart_tab_of_an_older_version_stays_as_it_was_and_edit_chart_opens_it_on_its_own_table` (UI) |
 | Recalculating a chart tab does not set the project's "•" | `w5_the_project_fingerprint_does_not_move_when_a_chart_tab_is_calculated_again` (UI, one size) |
 | Render tests by real clicks at 3 sizes | every UI test above but the last; the last runs at 1280×720 only |
+
+## W6 acceptance: item -> test
+
+Library tests are `tests/phase8/w6.rs` (`cargo test -q --test phase3 p8_w6`); UI tests are in `src/ui/render_tests_p8.rs`
+(`cargo test -q --bin MicroParquet w6_`), each at the 3 sizes. Totals: 10 library + 5 UI = 15.
+
+| Acceptance item (spec W6) | Test |
+| --- | --- |
+| On a synthetic deposit tab, drill Deposit Type › Branch › Product: the totals of each level equal the clicked parent | `w6_drill_deposit_type_branch_product_each_level_adds_up_to_the_value_clicked_above` (library) |
+| The breadcrumb goes back to each level by real clicks | `w6_a_click_drills_the_breadcrumb_and_the_back_key_go_up_and_the_right_click_menu_works_by_real_clicks_at_three_sizes` (studio chart); `w6_a_chart_tab_drills_by_click_goes_back_by_breadcrumb_and_key_reopens_at_its_level_and_greys_its_menu_when_its_source_is_closed` (chart tab) |
+| Show rows from a column gives a tab whose row count and sum equal the mark | `w6_the_rows_behind_a_mark_are_the_marks_rows_and_sum_at_every_level_for_text_numbers_blanks_and_a_stack` (library: every mark of three levels, Term, Rate, a stacked cell); the studio test and the chart tab test open the tab by the menu and compile its rows |
+| …the same from a pivot cell, a pivot total and a date-part cell (Month-Year) | `w6_every_cell_of_a_pivot_totals_and_blank_keys_included_shows_exactly_its_rows` (library: five pivots, every cell, subtotals, Total column, Grand total, a Month-Year row field, a Day name column field, the pivot's filters); `w6_a_double_click_or_right_click_on_a_pivot_value_cell_opens_its_rows_totals_included_at_three_sizes` (UI: Dhaka's cell by a double-click, the Grand total by the menu) |
+| A date drill Year › Quarter › Month › Day on a Datetime column sums to the year | `w6_a_date_drill_year_quarter_month_day_on_a_datetime_column_sums_to_the_year` (library); the Drill levels test (UI: the one click, a click on a year, its quarters add up to it) |
+| A chart tab saved at level 2 reopens at level 2 (project round trip) | the chart tab test (UI: Save project as…, Open project…, the same path, numbers and subtitle); `w6_drill_deposit_type_branch_product_…` (library: the calculated spec calculates to the same level again) |
+| Exports at a level carry the path | `w6_exports_at_a_level_carry_the_path_in_their_subtitle` (HTML, Excel, Python, typed subtitle); `w6_the_chart_book_and_the_shared_layout_of_the_app_and_the_pdf_carry_the_path` (chart book, the layout the app and the PDF draw from) |
+| Render tests by real clicks at 3 sizes: a click drills, the breadcrumb goes back, the right-click menu items, pivot Show rows | the five UI tests above and below |
+| Clicking a mark drills; the subtitle states the path ("Filtered: Deposit Type = FDR"); at the last level a click does nothing and the tooltip says so | the studio test (subtitle text, tooltip text, "nothing happened" at the last level) |
+| Scatter, bubble, histogram, box and waterfall have no drill: the section is hidden with its reason | `w6_a_chart_saved_before_phase_8_loads_…` (library: the reasons); the Drill levels test (UI: "Drill levels: A scatter or bubble chart draws single rows…") |
+| Right-click a mark: Drill down, Show rows, Keep only this, Exclude this (the last two add to the chart's own filters) | the studio test (all four by real clicks); `w6_keep_only_and_exclude_filter_the_chart_and_the_rows_behind_its_marks` (library) |
+| Old charts, packs and saved charts load unchanged | `w6_a_chart_saved_before_phase_8_loads_and_is_calculated_as_it_was_…` (library) and the Phase 7 replay test of goal 3, in the full run |
+| Drill levels in the studio: add, remove, reorder; Year › Quarter › Month › Day in one click for a date | the Drill levels test (UI) |
+| A chart that cannot be calculated again (source closed) cannot drill; its menu is greyed with the reason | the chart tab test (UI) |
+| "Other" is never drilled into, filtered or shown as rows | `w6_other_is_never_drilled_into_filtered_or_shown_as_rows_and_a_drill_keeps_the_colours` (UI) and the library test of the rows behind a mark |
 
 ## The Phase 7 baseline (goal 3)
 
@@ -136,6 +160,11 @@ seven older macro fixtures. `tests/phase8/p7_baseline.rs` is the code that made 
 - The Ctrl+K list can overlap a row's title and its reason when the reason is long: at 1219 pt "Chart this result" and
   "Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it." overlap (a Phase 7 reason).
   Not changed (not part of W5); the new test checks only the rows it is about. Worth a short reason or a tooltip-only reason.
+- Pivot "Show rows" is offered only when the pivot is the tab's last step and every step runs; a pivot followed by other
+  steps (a sort of its result, a column dropped) has its rows reordered or reshaped, so its cells are not the pivot's keys.
+  The owner may want those too (it would need the later steps' effect on rows to be tracked). Not done.
+- The side panel's chart sits under the studio controls, so in a small window its bars start below the fold and the panel
+  has to be scrolled to click them (the render tests scroll with the wheel). Not changed.
 - A project's file stamp is size and modified time in whole seconds (`project::file_stamp`): a file replaced within the same
   second by one of the same size looks unchanged to a chart tab. Not changed.
 - Owner decision Q1 (`ChartSpec.series_order` and `facet_order`) is **built** (`tests/phase8/q.rs`).
@@ -160,3 +189,12 @@ with no source (made before Phase 8) is frozen. Owner decisions (B2): all accept
 replaced by **W5-7** (the step commands are greyed on a chart tab in the Edit menu, the toolbar and Ctrl+K, with the steps
 panel's note as tooltip; `push_step_to_active_tab` refuses a step for a chart tab as a backstop). Phase 7 chart tabs: the
 current behaviour is correct, and the spec's compatibility line now says so.
+
+## Session C (W6): deviations W6-1 to W6-11
+
+They are listed in `docs/phase8-spec.md` `<accepted_deviations>`. In short: `drill` holds every level, top first, and the
+chart's `category` is the level it is at; the chart gets filters of its own (`filters`), and the drill path, "Keep only /
+Exclude" and "Show rows" are all read through one engine filter (`filter_by_conditions`) so a chart at a level and its rows
+tab cannot disagree; a heatmap drills by its category and its series is part of Show rows; "Other" is refused; a chart tab
+asks the worker for its next level and is greyed when its source is closed; a pivot cell's rows come from a worker job that
+rebuilds the pivot; the guide note and the screenshots are W8, and `cargo build --release` was not run in this session.
