@@ -223,34 +223,75 @@ impl MicroParquetApp {
     }
 }
 
-impl MicroParquetApp {
-    /// The pivot a tab ends with, when "Show rows" can read it: the pivot is the last step and every step runs.
-    fn pivot_of_tab(&self, tab: &TabState) -> Option<PivotSpec> {
-        let last = tab.steps.last()?;
-        if tab.exec_steps != tab.steps.len() {
-            return None;
-        }
-        last.as_pivot_spec()
-    }
+/// What the grid knows of a pivot tab's cells (stored for the grid for one frame): the row fields, the columns that later steps
+/// made, and why "Show rows" is off when it is.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PivotRowsUi {
+    /// The names of the pivot's row-field columns (a click on those shows no rows).
+    pub labels: Vec<String>,
+    /// Columns that steps after the pivot added, renamed or rewrote.
+    pub later_made: Vec<String>,
+    /// Why Show rows is off for the whole tab.
+    pub off: Option<String>,
+}
 
-    /// For a pivot tab: how many label columns it has at the left (the first value column is at this index).
-    pub(crate) fn pivot_tab_label_columns(&self, tab: &TabState) -> Option<usize> {
-        let spec = self.pivot_of_tab(tab)?;
-        Some(spec.rows.len().max(1))
+impl PivotRowsUi {
+    /// Why a click on the column `name` cannot show rows (`None` when it can).
+    pub fn reason_for(&self, name: &str) -> Option<String> {
+        if let Some(r) = &self.off {
+            return Some(r.clone());
+        }
+        if self.later_made.iter().any(|c| c == name) {
+            return Some(format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", name));
+        }
+        None
+    }
+}
+
+impl MicroParquetApp {
+    /// For a pivot tab: its row-field columns and whether Show rows works, with steps after the pivot read as
+    /// `pivot_table::pivot_rows_of` says. `None` when the tab is not a pivot tab.
+    pub(crate) fn pivot_rows_ui(&self, tab: &TabState) -> Option<PivotRowsUi> {
+        use micro_parquet::pivot_table::{pivot_rows_of, PivotRows, NO_ROWS_COLUMN};
+        match pivot_rows_of(&tab.steps, tab.exec_steps) {
+            PivotRows::NotAPivot => None,
+            PivotRows::Unavailable(reason) => {
+                let labels = tab.steps.iter().rev().find_map(|s| if s.is_skipped() { None } else { s.as_pivot_spec() }).map(|p| if p.rows.is_empty() { vec![NO_ROWS_COLUMN.to_string()] } else { p.rows }).unwrap_or_default();
+                Some(PivotRowsUi { labels, later_made: Vec::new(), off: Some(reason) })
+            }
+            PivotRows::Readable { spec, later_made, .. } => {
+                let labels = if spec.rows.is_empty() { vec![NO_ROWS_COLUMN.to_string()] } else { spec.rows };
+                Some(PivotRowsUi { labels, later_made, off: None })
+            }
+        }
     }
 
     /// Double-click or "Show rows" on a value cell of the active pivot tab: a worker builds the pivot again, finds the values
     /// the cell stands for, and the rows open in a new tab.
     pub(crate) fn pivot_show_rows(&mut self, row: usize, column: &str) {
+        use micro_parquet::pivot_table::{pivot_rows_of, PivotRows};
         let Some(tab) = self.tabs.get(self.active_tab) else { return };
-        let Some(spec) = self.pivot_of_tab(tab) else {
-            self.status_message = "Show rows works on a pivot tab whose last step is the pivot.".to_string();
-            return;
+        let (pivot_at, spec, later_made) = match pivot_rows_of(&tab.steps, tab.exec_steps) {
+            PivotRows::Readable { at, spec, later_made } => (at, spec, later_made),
+            PivotRows::Unavailable(reason) => {
+                self.status_message = reason;
+                return;
+            }
+            PivotRows::NotAPivot => {
+                self.status_message = "Show rows works on a pivot tab.".to_string();
+                return;
+            }
         };
+        if later_made.iter().any(|c| c == column) {
+            self.status_message = format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", column);
+            return;
+        }
         let req = micro_parquet::tab_jobs::ShowRowsRequest {
             base: tab.source.clone(),
-            steps: tab.steps[..tab.steps.len() - 1].to_vec(),
+            steps: tab.steps.clone(),
+            pivot_at,
             spec,
+            later_made,
             row,
             column: column.to_string(),
             expected_rows: tab.total_rows,

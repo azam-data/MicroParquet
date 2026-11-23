@@ -455,19 +455,22 @@ impl MicroParquetApp {
                                     .inner_margin(theme::MARGIN_PALETTE_ROW)
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
-                                        ui.horizontal(|ui| {
-                                            if let Some(id) = it.id {
-                                                ui.label(egui::RichText::new(command_icon(id)).color(tk.ink2));
-                                            } else {
-                                                ui.label(egui::RichText::new(theme::ph::TABLE).color(tk.ink2));
-                                            }
-                                            ui.label(egui::RichText::new(&it.label).color(color));
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                ui.label(theme::label_text(it.group).color(tk.muted));
-                                                if let Some(why) = it.reason {
-                                                    ui.label(theme::label_text(why).color(tk.muted));
+                                        ui.vertical(|ui| {
+                                            ui.horizontal(|ui| {
+                                                if let Some(id) = it.id {
+                                                    ui.label(egui::RichText::new(command_icon(id)).color(tk.ink2));
+                                                } else {
+                                                    ui.label(egui::RichText::new(theme::ph::TABLE).color(tk.ink2));
                                                 }
+                                                ui.label(egui::RichText::new(&it.label).color(color));
+                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                    ui.label(theme::label_text(it.group).color(tk.muted));
+                                                });
                                             });
+                                            // the reason has a line of its own and wraps: a long one never runs into the title
+                                            if let Some(why) = it.reason {
+                                                ui.add(egui::Label::new(theme::label_text(why).color(tk.muted)).wrap());
+                                            }
                                         });
                                     })
                                     .response

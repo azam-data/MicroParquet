@@ -1291,7 +1291,7 @@ fn w5_the_step_commands_are_greyed_on_a_chart_tab_in_the_edit_menu_and_ctrl_k_by
         let p = rig.draw(2);
         let same = |a: &egui::Rect, b: &egui::Rect| (a.min - b.min).length() < 0.5 && (a.max - b.max).length() < 0.5;
         // (only the Split date row: other rows of the list, such as "Chart this result" with its long Phase 7 reason, are not this test's)
-        let band = |b: &egui::Rect| b.top() >= row.top() - 3.0 && b.bottom() <= row.bottom() + 3.0;
+        let band = |b: &egui::Rect| b.top() >= row.top() - 3.0 && b.bottom() <= why.bottom() + 3.0;
         let glyphs: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(t, b)| inside(*b, area) && band(b) && !behind.glyphs.iter().any(|(u, c)| u == t && same(b, c))).cloned().collect();
         assert!(glyphs.iter().any(|(t, _)| t.contains("Split date")) && glyphs.iter().any(|(t, _)| t == short), "{what}: the search's own texts: {glyphs:?}");
         assert_no_overlap(&glyphs, &what);
@@ -1932,6 +1932,160 @@ fn w6_a_double_click_or_right_click_on_a_pivot_value_cell_opens_its_rows_totals_
         let cell = p.boxes.iter().find(|(t, b)| t == "Dhaka" && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: a Dhaka cell"));
         let p = right_click(&mut rig, cell.center());
         assert!(text_box(&p, "Show rows").is_none() && text_box(&p, "Copy").is_some(), "{what}: only a pivot's value cells show rows");
+    }
+}
+
+/// A pivot tab of Branch with `later` steps after the pivot, active and drawn.
+fn pivot_tab_with(rig: &mut Rig, later: Vec<TransformStep>) -> usize {
+    rig.app.show_steps_sidebar = false;
+    let src = rig.app.tabs[0].source.clone();
+    let mut steps = vec![branch_pivot()];
+    steps.extend(later);
+    rig.app.create_tab_from_source("Pivot: Branch".into(), src, steps, HashMap::new());
+    settle(&mut rig.app);
+    let at = rig.app.tabs.len() - 1;
+    rig.app.active_tab = at;
+    pump_until(rig, "the pivot", &|r| r.app.tabs[at].total_rows > 0 && !r.app.jobs.any_busy());
+    at
+}
+
+#[test]
+fn w6_a_pivot_followed_by_a_sort_and_a_filter_still_shows_the_rows_of_its_cell_at_three_sizes() {
+    use micro_parquet::models::{CondOp, FilterCondition, GroupJoin, SortLevel};
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w6s", ppp, w, h);
+        let what = rig.what.clone();
+        // the pivot's value column, then: sort by it (biggest first) and leave Ctg out
+        let probe = pivot_tab_with(&mut rig, vec![]);
+        let value = {
+            let t = &rig.app.tabs[probe];
+            let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+            df.get_column_names()[1].to_string()
+        };
+        let sort = TransformStep::SortRows { levels: vec![SortLevel { column: value, descending: true, ..Default::default() }] };
+        let filter = TransformStep::FilterGroup { conditions: vec![FilterCondition { column: "Branch".into(), op: CondOp::NotEquals, value: "Ctg".into(), ..Default::default() }], join: GroupJoin::And, keep_matching: true };
+        let at = pivot_tab_with(&mut rig, vec![sort, filter]);
+        assert_eq!(rig.app.tabs[at].total_rows, 3, "{what}: Grand total, Sylhet and Dhaka");
+        let n = rig.app.tabs.len();
+        // Dhaka is now the last row (the sort put Sylhet above it): its cell still gives Dhaka's rows
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Dhaka", &what);
+        double_click(&mut rig, cell.center());
+        pump_until(&mut rig, "the rows of Dhaka", &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+        assert_eq!(rig.app.tabs[n].title, "Rows: Branch = Dhaka", "{what}");
+        assert_eq!(rows_of(&rig, n), (3, 1000.0), "{what}: the same rows as the pivot alone gives");
+        // and Sylhet's, by the menu
+        rig.app.active_tab = at;
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Sylhet", &what);
+        let p = right_click(&mut rig, cell.center());
+        let item = text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: Show rows"));
+        click_rect(&mut rig, item);
+        pump_until(&mut rig, "the rows of Sylhet", &|r| r.app.tabs.len() == n + 2 && !r.app.jobs.any_busy());
+        assert_eq!(rig.app.tabs[n + 1].title, "Rows: Branch = Sylhet", "{what}");
+        assert_eq!(rows_of(&rig, n + 1), (2, 1100.0), "{what}");
+        // the Grand total of the filtered table is the pivot's grand total: every row
+        rig.app.active_tab = at;
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Grand total", &what);
+        double_click(&mut rig, cell.center());
+        pump_until(&mut rig, "the rows of the grand total", &|r| r.app.tabs.len() == n + 3 && !r.app.jobs.any_busy());
+        assert_eq!(rows_of(&rig, n + 2), (8, 3600.0), "{what}");
+    }
+}
+
+#[test]
+fn w6_a_pivot_followed_by_a_rename_of_a_row_field_greys_show_rows_with_the_reason_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w6r", ppp, w, h);
+        let what = rig.what.clone();
+        let at = pivot_tab_with(&mut rig, vec![TransformStep::RenameColumn { old_name: "Branch".into(), new_name: "Office".into() }]);
+        let n = rig.app.tabs.len();
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Dhaka", &what);
+        // the menu has the item, greyed: a click opens nothing, the hover says why
+        let p = right_click(&mut rig, cell.center());
+        let item = text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: the Show rows item is there"));
+        assert!(inside(item, rig.ctx.screen_rect()), "{what}");
+        let tip = hover_at(&mut rig, item.center());
+        assert!(has_text(&tip, "renames 'Branch', a row field of the pivot, to 'Office'"), "{what}: the reason on hover");
+        click_rect(&mut rig, item);
+        for _ in 0..4 {
+            rig.draw(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(rig.app.tabs.len(), n, "{what}: a greyed item opens nothing");
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        // a double-click says the reason in the status line and opens nothing
+        rig.app.status_message.clear();
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Dhaka", &what);
+        double_click(&mut rig, cell.center());
+        for _ in 0..4 {
+            rig.draw(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(rig.app.status_message.starts_with("Show rows is off:") && rig.app.status_message.contains("'Branch'"), "{what}: {}", rig.app.status_message);
+        assert_eq!(rig.app.tabs.len(), n, "{what}");
+        assert!(rig.app.pivot_rows_ui(&rig.app.tabs[at]).is_some_and(|p| p.off.is_some()), "{what}");
+
+        // a value column that a later step renamed: its own cells are greyed, with that reason
+        let mut rig = proj_rig("p8w6v", ppp, w, h);
+        let probe = pivot_tab_with(&mut rig, vec![]);
+        let value = {
+            let t = &rig.app.tabs[probe];
+            let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+            df.get_column_names()[1].to_string()
+        };
+        pivot_tab_with(&mut rig, vec![TransformStep::RenameColumn { old_name: value, new_name: "Balance (BDT)".into() }]);
+        let n = rig.app.tabs.len();
+        let p = rig.draw(4);
+        let cell = value_cell_of_row(&p, "Dhaka", &what);
+        let p = right_click(&mut rig, cell.center());
+        let item = text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: the Show rows item is there"));
+        let tip = hover_at(&mut rig, item.center());
+        assert!(has_text(&tip, "'Balance (BDT)': a step after the pivot added, renamed or changed it") || has_text(&tip, "a step after the pivot added, renamed or changed it"), "{what}: the reason on hover");
+        click_rect(&mut rig, item);
+        rig.draw(3);
+        assert_eq!(rig.app.tabs.len(), n, "{what}");
+    }
+}
+
+#[test]
+fn w6_ctrl_k_rows_with_a_long_reason_wrap_under_their_title_and_nothing_overlaps_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = proj_rig("p8w6k", ppp, w, h);
+        let what = rig.what.clone();
+        rig.draw(3);
+        ctrl_key(&mut rig, egui::Key::K);
+        assert!(rig.app.command_open, "{what}");
+        rig.step(vec![egui::Event::Text("chart this result".into())]);
+        let p = rig.draw(3);
+        let row = text_box(&p, "Chart this result").unwrap_or_else(|| panic!("{what}: the row: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+        let area = rig.ctx.memory(|m| m.area_rect(egui::Id::new("command_palette"))).expect("the search was drawn");
+        // the reason is the 'Needs a result tab' sentence of Phase 7, whole, below the title and inside the search
+        let lines: Vec<&(String, egui::Rect)> = p.glyphs.iter().filter(|(t, b)| inside(*b, area) && b.top() >= row.bottom() - 1.0 && b.top() < row.bottom() + 60.0 && !t.contains("Chart this result")).collect();
+        let text: String = lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("Open a tool's result tab") && text.contains("to chart it."), "{what}: the whole reason is shown: {text:?}");
+        let reason = "Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it.";
+        let own: Vec<&&(String, egui::Rect)> = lines.iter().filter(|(t, _)| reason.contains(t.trim())).collect();
+        assert!(!own.is_empty() && own.iter().all(|(t, _)| !t.ends_with('\u{2026}')), "{what}: the reason is not cut with an ellipsis: {own:?}");
+        assert_eq!(own.iter().map(|(t, _)| t.trim()).collect::<Vec<_>>().join(" "), reason, "{what}: the reason is whole");
+        let band: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(_, b)| inside(*b, area) && b.top() >= row.top() - 3.0 && b.bottom() <= row.bottom() + 80.0).cloned().collect();
+        // (the chart behind draws its own texts in this band, so only the search's own are compared)
+        rig.app.command_open = false;
+        let behind = rig.draw(2);
+        rig.app.command_open = true;
+        let p = rig.draw(2);
+        let same = |a: &egui::Rect, b: &egui::Rect| (a.min - b.min).length() < 0.5 && (a.max - b.max).length() < 0.5;
+        let mine: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(t, b)| inside(*b, area) && !behind.glyphs.iter().any(|(u, c)| u == t && same(b, c))).cloned().collect();
+        assert!(!band.is_empty() && !mine.is_empty(), "{what}");
+        assert_no_overlap(&mine, &what);
+        // the same at the first row of the list with nothing typed, where the long reasons of a fresh tab are listed
+        rig.app.command_query.clear();
+        let p = rig.draw(3);
+        let mine: Vec<(String, egui::Rect)> = p.glyphs.iter().filter(|(t, b)| inside(*b, area) && !behind.glyphs.iter().any(|(u, c)| u == t && same(b, c))).cloned().collect();
+        assert_no_overlap(&mine, &what);
     }
 }
 

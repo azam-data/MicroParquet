@@ -1,6 +1,6 @@
 # Phase 8 progress (workspace and dates)
 
-Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: W6 (done), then W7, W8. Resume from this file.
+Branch `phase8`. Session A: W0, W1, W2, W3. Session B: W4, W5 (done; follow-ups in "Phase 8 W5: follow-ups"). Session C: C1 = W6 (done, follow-ups done), C2 = W7 + W10, C3 = W9 + W11, C4 = W8. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
@@ -157,12 +157,8 @@ seven older macro fixtures. `tests/phase8/p7_baseline.rs` is the code that made 
   Follow-up (B2): the mirror must read exactly the labels the app reads. The app reads "mo"/"mos" (and "mon"/"mons"), so they
   stay; the test now puts every unit word, in four spellings, to both and found one difference (a number too big to hold:
   the app refuses it, the mirror read infinity), now fixed.
-- The Ctrl+K list can overlap a row's title and its reason when the reason is long: at 1219 pt "Chart this result" and
-  "Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it." overlap (a Phase 7 reason).
-  Not changed (not part of W5); the new test checks only the rows it is about. Worth a short reason or a tooltip-only reason.
-- Pivot "Show rows" is offered only when the pivot is the tab's last step and every step runs; a pivot followed by other
-  steps (a sort of its result, a column dropped) has its rows reordered or reshaped, so its cells are not the pivot's keys.
-  The owner may want those too (it would need the later steps' effect on rows to be tracked). Not done.
+- The Ctrl+K overlap of a row's title and its long reason: **fixed** in the C1 follow-ups (W6-13): the reason wraps on its own line.
+- Pivot "Show rows" after later steps: **built** in the C1 follow-ups (W6-12): steps that keep the row fields leave it on, others grey it with a reason.
 - The side panel's chart sits under the studio controls, so in a small window its bars start below the fold and the panel
   has to be scrolled to click them (the render tests scroll with the wheel). Not changed.
 - A project's file stamp is size and modified time in whole seconds (`project::file_stamp`): a file replaced within the same
@@ -198,3 +194,13 @@ Exclude" and "Show rows" are all read through one engine filter (`filter_by_cond
 tab cannot disagree; a heatmap drills by its category and its series is part of Show rows; "Other" is refused; a chart tab
 asks the worker for its next level and is greyed when its source is closed; a pivot cell's rows come from a worker job that
 rebuilds the pivot; the guide note and the screenshots are W8, and `cargo build --release` was not run in this session.
+
+## Session C1 follow-ups (W6-12, W6-13)
+
+Owner decisions: W5-7 and W6-1 to W6-11 accepted; the two items above built. They are in `docs/phase8-spec.md`
+`<accepted_deviations>`. Tests: `tests/phase8/w6.rs` ×2 (a pivot followed by a sort, a filter and a calculated column gives, for every
+cell of the shown table, the same rows as the pivot alone, a calculated column and a stale table are refused; the reasons for a renamed,
+dropped or rewritten row field, a new grouping, SQL; the steps that leave it on); `render_tests_p8` ×3 (a pivot with a sort and a filter
+after it shows the rows of Dhaka by a double-click, of Sylhet by the menu and of the grand total; a rename of a row field greys the menu
+item with the reason on hover and says it in the status line on a double-click, a renamed value column greys its own cells; the Ctrl+K
+rows wrap their reason under the title at 3 sizes, and the test fails on the old layout), all at 3 sizes.

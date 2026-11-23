@@ -482,3 +482,112 @@ fn w6_the_chart_book_and_the_shared_layout_of_the_app_and_the_pdf_carry_the_path
     // a place with no mark is no target
     assert!(hit_target(&l, egui::pos2(0.0, 0.0)).is_none());
 }
+
+// ---- the owner's follow-up on C1: Show rows of a pivot that steps follow ----
+
+use micro_parquet::models::{CondOp, FilterCondition, GroupJoin, IngestionConfig, SortLevel, TabSource, TransformStep};
+use micro_parquet::pivot_table::{pivot_rows_of, PivotRows};
+use micro_parquet::tab_jobs::{show_rows_job, JobOutput, ShowRowsRequest, ShowRowsResult};
+
+fn deposits_source(name: &str) -> (TabSource, std::path::PathBuf) {
+    let d = dir(name);
+    let path = d.join("deposits.parquet");
+    let mut df = deposits();
+    ParquetWriter::new(std::fs::File::create(&path).expect("file")).finish(&mut df).expect("parquet");
+    (TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, d.join("temp"))
+}
+
+fn show(source: &TabSource, temp: &std::path::Path, steps: &[TransformStep], row: usize, column: &str, expected_rows: usize) -> anyhow::Result<ShowRowsResult> {
+    let PivotRows::Readable { at, spec, later_made } = pivot_rows_of(steps, steps.len()) else { anyhow::bail!("not readable: {:?}", pivot_rows_of(steps, steps.len())) };
+    let req = ShowRowsRequest { base: source.clone(), steps: steps.to_vec(), pivot_at: at, spec, later_made, row, column: column.to_string(), expected_rows, temp_dir: temp.to_path_buf() };
+    match show_rows_job(req, &micro_parquet::jobs::JobCtx::inert())? {
+        JobOutput::ShowRows(r) => Ok(*r),
+        _ => anyhow::bail!("not the rows of a cell"),
+    }
+}
+
+fn cell_text(df: &DataFrame, name: &str, row: usize) -> String {
+    match df.column(name).expect("column").get(row).expect("cell") {
+        AnyValue::Null => String::new(),
+        AnyValue::String(s) => s.to_string(),
+        AnyValue::StringOwned(s) => s.to_string(),
+        v => format!("{v}"),
+    }
+}
+
+fn rows_of(source: &TabSource, temp: &std::path::Path, r: &ShowRowsResult) -> (String, usize, f64) {
+    let df = micro_parquet::engine::compile_tab_lazy(source, &r.steps, temp).and_then(|lf| lf.collect().map_err(Into::into)).expect("the rows tab");
+    let sum: f64 = df.column("Balance").expect("Balance").f64().expect("f").into_iter().flatten().sum();
+    (r.title.clone(), df.height(), sum)
+}
+
+#[test]
+fn w6_a_pivot_followed_by_a_sort_and_a_filter_gives_the_same_rows_for_a_cell() {
+    let (source, temp) = deposits_source("w6_pivot_later");
+    let pivot = TransformStep::from_pivot_spec(pivot_of(&["Branch", "Product"], &["Deposit Type"]));
+    let sort = TransformStep::SortRows { levels: vec![SortLevel { column: "Total".into(), descending: true, ..Default::default() }] };
+    let filter = TransformStep::FilterGroup { conditions: vec![FilterCondition { column: "Branch".into(), op: CondOp::NotEquals, value: "Ctg".into(), ..Default::default() }], join: GroupJoin::And, keep_matching: true };
+    let math = TransformStep::MathFormula { new_col: "Half".into(), left_col: "Total".into(), op: micro_parquet::models::MathOp::Div, right_is_col: false, right_val_or_col: "2".into() };
+    let plain = vec![pivot.clone()];
+    let later = vec![pivot.clone(), sort, filter, math];
+    let plain_df = micro_parquet::engine::compile_tab_lazy(&source, &plain, &temp).and_then(|lf| lf.collect().map_err(Into::into)).expect("the pivot");
+    let later_df = micro_parquet::engine::compile_tab_lazy(&source, &later, &temp).and_then(|lf| lf.collect().map_err(Into::into)).expect("the pivot, sorted and filtered");
+    assert!(later_df.height() > 0 && later_df.height() < plain_df.height(), "the filter removed rows: {} of {}", later_df.height(), plain_df.height());
+    // the rows come in another order
+    assert_ne!((0..later_df.height()).map(|r| cell_text(&later_df, "Product", r)).collect::<Vec<_>>(), (0..later_df.height()).map(|r| cell_text(&plain_df, "Product", r)).collect::<Vec<_>>());
+    let names: Vec<String> = later_df.get_column_names().iter().map(|n| n.to_string()).collect();
+    let mut checked = 0;
+    for r in 0..later_df.height() {
+        let (b, p) = (cell_text(&later_df, "Branch", r), cell_text(&later_df, "Product", r));
+        let plain_row = (0..plain_df.height()).find(|i| cell_text(&plain_df, "Branch", *i) == b && cell_text(&plain_df, "Product", *i) == p).expect("the same row in the plain pivot");
+        for name in names.iter().skip(2).filter(|n| n.as_str() != "Half") {
+            let want = show(&source, &temp, &plain, plain_row, name, plain_df.height()).unwrap_or_else(|e| panic!("plain: {e:#}"));
+            let got = show(&source, &temp, &later, r, name, later_df.height()).unwrap_or_else(|e| panic!("row {r} '{name}': {e:#}"));
+            assert_eq!(serde_json::to_string(&got.steps).expect("json"), serde_json::to_string(&want.steps).expect("json"), "row {r} '{name}'");
+            assert_eq!(rows_of(&source, &temp, &got), rows_of(&source, &temp, &want), "row {r} '{name}'");
+            checked += 1;
+        }
+    }
+    assert!(checked > 50, "{checked}");
+    // a column that a later step made has no rows of its own, and it is said in words
+    let e = show(&source, &temp, &later, 0, "Half", later_df.height()).err().expect("a calculated column");
+    assert!(e.to_string().contains("'Half' was added"), "{e}");
+    // a table that changed since it was drawn is refused
+    assert!(show(&source, &temp, &later, 0, "Total", later_df.height() + 1).is_err());
+}
+
+#[test]
+fn w6_a_pivot_followed_by_a_rename_of_a_row_field_or_a_new_grouping_has_no_show_rows_and_says_why() {
+    let pivot = TransformStep::from_pivot_spec(pivot_of(&["Branch", "Product"], &["Deposit Type"]));
+    let read = |later: Vec<TransformStep>| {
+        let mut steps = vec![pivot.clone()];
+        steps.extend(later);
+        pivot_rows_of(&steps, steps.len())
+    };
+    let off = |later: Vec<TransformStep>| match read(later) {
+        PivotRows::Unavailable(why) => why,
+        other => panic!("expected a reason, got {other:?}"),
+    };
+    let why = off(vec![TransformStep::RenameColumn { old_name: "Branch".into(), new_name: "Office".into() }]);
+    assert!(why.contains("renames 'Branch', a row field of the pivot, to 'Office'") && why.starts_with("Show rows is off:"), "{why}");
+    assert!(off(vec![TransformStep::SelectAndReorderColumns { cols: vec!["Product".into(), "Total".into()] }]).contains("leaves out 'Branch'"));
+    assert!(off(vec![TransformStep::ConvertToNumber { columns: vec!["Product".into()] }]).contains("sets 'Product'"));
+    assert!(off(vec![TransformStep::GroupByPivot { group_cols: vec!["Branch".into()], pivot_col: None, aggs: vec![], sort_by_col: None, top_n: None }]).contains("groups or pivots the table again"));
+    // a second pivot is the tab's pivot: the cells on the screen are its cells
+    assert!(matches!(read(vec![pivot.clone()]), PivotRows::Readable { at: 1, .. }));
+    assert!(off(vec![TransformStep::SqlQuery { query: "select * from t".into() }]).contains("makes a new table"));
+    // the steps that keep the row fields leave it on; a rename of another column, a hidden step and a step that is off too
+    for later in [
+        vec![TransformStep::SortRows { levels: vec![SortLevel { column: "Total".into(), ..Default::default() }] }],
+        vec![TransformStep::RenameColumn { old_name: "Total".into(), new_name: "All".into() }],
+        vec![TransformStep::SelectAndReorderColumns { cols: vec!["Branch".into(), "Product".into(), "Total".into()] }],
+        vec![TransformStep::Skipped { step: Box::new(TransformStep::RenameColumn { old_name: "Branch".into(), new_name: "Office".into() }) }],
+    ] {
+        assert!(matches!(read(later.clone()), PivotRows::Readable { .. }), "{later:?}");
+    }
+    // a rename of a value column is read, and the column it made is listed as one that has no rows of its own
+    let PivotRows::Readable { later_made, .. } = read(vec![TransformStep::RenameColumn { old_name: "Total".into(), new_name: "All".into() }]) else { panic!("readable") };
+    assert_eq!(later_made, vec!["All".to_string()]);
+    // a tab with no pivot has nothing to show
+    assert_eq!(pivot_rows_of(&[], 0), PivotRows::NotAPivot);
+}

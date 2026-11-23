@@ -298,8 +298,8 @@ impl MicroParquetApp {
         let ctx = ui.ctx().clone();
         let mut action: Option<GridAction> = None;
         let weight_guess = micro_parquet::tab_jobs::guess_balance_column(df);
-        // a pivot tab: the columns from here on are value cells that can show their rows (set by the caller)
-        let show_rows_from: Option<usize> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_show_rows", tab_id))));
+        // a pivot tab: its value cells (every column but the row fields) can show their rows, or say why they cannot (set by the caller)
+        let show_rows: Option<crate::ui::drill::PivotRowsUi> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_show_rows", tab_id))));
         let shading: Option<Vec<Vec<micro_parquet::banking::Shade>>> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_shading", tab_id))));
         let mut report = GridReport::default();
         let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
@@ -500,13 +500,19 @@ impl MicroParquetApp {
                                         };
                                         ui.with_layout(layout, |ui| {
                                             let r = ui.add(egui::Label::new(rich).truncate().sense(egui::Sense::click()));
-                                            let rows_here = show_rows_from.is_some_and(|from| c_idx >= from);
+                                            let rows_here = show_rows.as_ref().is_some_and(|p| !p.labels.iter().any(|l| l == c.name().as_str()));
+                                            let rows_off = if rows_here { show_rows.as_ref().and_then(|p| p.reason_for(c.name().as_str())) } else { None };
                                             if rows_here && r.double_clicked() {
                                                 action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
                                             }
                                             r.context_menu(|ui| {
                                                 if rows_here {
-                                                    if ui.button("Show rows").on_hover_text("Open the rows this cell adds up in a new tab (or double-click the cell)").clicked() {
+                                                    let item = ui.add_enabled(rows_off.is_none(), egui::Button::new("Show rows"));
+                                                    let item = match &rows_off {
+                                                        Some(why) => item.on_disabled_hover_text(why.as_str()),
+                                                        None => item.on_hover_text("Open the rows this cell adds up in a new tab (or double-click the cell)"),
+                                                    };
+                                                    if item.clicked() {
                                                         action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
                                                         ui.close_menu();
                                                     }
@@ -680,10 +686,10 @@ impl MicroParquetApp {
             migration_shading_for(ui.ctx(), tab);
             // W6: a pivot tab's value cells can show their rows
             let rows_key = egui::Id::new(("grid_show_rows", tab.id));
-            match self.pivot_tab_label_columns(tab) {
-                Some(n) => ui.ctx().data_mut(|d| d.insert_temp(rows_key, n)),
+            match self.pivot_rows_ui(tab) {
+                Some(p) => ui.ctx().data_mut(|d| d.insert_temp(rows_key, p)),
                 None => {
-                    ui.ctx().data_mut(|d| d.remove_temp::<usize>(rows_key));
+                    ui.ctx().data_mut(|d| d.remove_temp::<crate::ui::drill::PivotRowsUi>(rows_key));
                 }
             }
             ui.scope(|ui| {

@@ -21,8 +21,8 @@ use crate::models::{
     ParquetDialect, ParseFailure, RowCountCheck, SplitExportFormat, SummarySpec, TabSource, TabState,
     TransformStep,
 };
-use anyhow::Result;
-use polars::prelude::DataFrame;
+use anyhow::{Context, Result};
+use polars::prelude::{DataFrame, IntoLazy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -1188,13 +1188,17 @@ pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<Piv
     Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })
 }
 
-/// "Show rows" on a cell of a pivot tab: the steps before the pivot, the pivot, and the cell that was clicked.
+/// "Show rows" on a cell of a pivot tab: the tab's steps, the pivot among them, and the cell that was clicked.
 pub struct ShowRowsRequest {
     pub base: TabSource,
-    /// The steps before the pivot (the pivot is the tab's last step).
+    /// All the tab's steps. The pivot is `steps[pivot_at]`; steps after it (filter, sort, a new column...) are read through
+    /// `pivot_table::pivot_rows_of`.
     pub steps: Vec<TransformStep>,
+    pub pivot_at: usize,
     pub spec: crate::models::PivotSpec,
-    /// The row of the pivot's table (counted from its first row) and the heading of the column that was clicked.
+    /// Columns that steps after the pivot added, renamed or rewrote: a cell of those has no rows of its own.
+    pub later_made: Vec<String>,
+    /// The row of the table on the screen (counted from its first row) and the heading of the column that was clicked.
     pub row: usize,
     pub column: String,
     /// How many rows the table on the screen has, to refuse a pivot that has changed since.
@@ -1209,18 +1213,36 @@ pub struct ShowRowsResult {
     pub steps: Vec<TransformStep>,
 }
 
-/// Builds the pivot again to find which values the clicked cell stands for, and the tab that holds exactly its rows.
+/// Builds the pivot again to find which values the clicked cell stands for, and the tab that holds exactly its rows. When
+/// steps follow the pivot, they are applied to the pivot's table and the clicked row is found again in the pivot by its row
+/// fields, so a sort or a filter of the result does not move the cell.
 pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
     ctx.set_progress("Finding the rows of that cell\u{2026}", None);
     ctx.check()?;
-    let lf = crate::engine::compile_tab_lazy(&req.base, &req.steps, &req.temp_dir)?;
+    let Some((before, rest)) = req.steps.split_at_checked(req.pivot_at) else {
+        anyhow::bail!("Show rows: the pivot is no longer one of this tab's steps. Open the pivot again.");
+    };
+    let later = rest.get(1..).unwrap_or(&[]);
+    let lf = crate::engine::compile_tab_lazy(&req.base, before, &req.temp_dir)?;
     let build = crate::pivot_table::build_pivot(lf, &req.spec)?;
     ctx.check()?;
-    if build.df.height() != req.expected_rows {
-        anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
-    }
-    let cell = crate::pivot_table::cell_rows(&req.spec, &build, req.row, &req.column)?;
-    let mut steps = req.steps;
+    let pivot_row = if later.is_empty() {
+        if build.df.height() != req.expected_rows {
+            anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
+        }
+        req.row
+    } else {
+        if req.later_made.contains(&req.column) || !build.df.get_column_names().iter().any(|n| n.as_str() == req.column.as_str()) {
+            anyhow::bail!("Show rows: '{}' was added, renamed or changed by a step after the pivot, so it has no rows of its own. Double-click a number in one of the pivot's own columns.", req.column);
+        }
+        let shown = crate::engine::apply_steps_to(build.df.clone().lazy(), later)?.collect().context("Show rows could not apply the steps after the pivot")?;
+        if shown.height() != req.expected_rows {
+            anyhow::bail!("Show rows: the table now has {} rows and the one on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", shown.height(), req.expected_rows);
+        }
+        crate::pivot_table::pivot_row_of_shown(&build, &shown, req.row)?
+    };
+    let cell = crate::pivot_table::cell_rows(&req.spec, &build, pivot_row, &req.column)?;
+    let mut steps = before.to_vec();
     steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
     Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps })))
 }

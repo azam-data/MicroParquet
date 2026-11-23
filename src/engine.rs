@@ -2605,6 +2605,16 @@ pub fn filter_by_conditions(lf: LazyFrame, conditions: &[FilterCondition]) -> Re
     apply_single_step(lf, &TransformStep::FilterGroup { conditions: conditions.to_vec(), join: GroupJoin::And, keep_matching: true })
 }
 
+/// Steps applied one after another to a table that is already built (Phase 8: the steps after a pivot, applied to the
+/// pivot's own table).
+pub fn apply_steps_to(lf: LazyFrame, steps: &[TransformStep]) -> Result<LazyFrame> {
+    let mut lf = lf;
+    for step in steps {
+        lf = apply_single_step(lf, step)?;
+    }
+    Ok(lf)
+}
+
 fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
     match step {
         TransformStep::Skipped { .. } => Ok(lf),
