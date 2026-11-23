@@ -1099,14 +1099,15 @@ fn the_rate_profile_dialog_shows_its_settings_and_the_labels_and_makes_the_step(
         for t in ["Rate column", "Output column", "Preset:", "Fixed width", "Custom edges", "Start %", "End %", "Step %", "the lower band", "the upper band", "Add Rate Profile"] {
             assert!(has(t), "{what}: '{t}' is in the dialog {:?}", r.window);
         }
-        assert!(has(&format!("01. 0%{en}1%")) && has("00. 0%"), "{what}: the preview lists the labels");
+        // a new step's labels have no serial number (Phase 8 W3; the tick box adds it)
+        assert!(has(&format!("0%{en}1%")) && !has(&format!("01. 0%{en}1%")), "{what}: the preview lists the labels");
         assert!(has("15 bands"), "{what}: and counts them");
         // the dialog's step: default (a, b], 0 to 15 by 1, output Rate_Band
         match app.tool_step(&ActiveToolModal::RateBand) {
             Some(TransformStep::RateBand { band_def, new_col, .. }) => {
                 assert_eq!(new_col, "Rate_Band");
                 assert!(!band_def.lower_inclusive);
-                assert_eq!(band_def.label_for(Some(9.0)).unwrap(), format!("09. 8%{en}9%"), "{what}");
+                assert_eq!(band_def.label_for(Some(9.0)).unwrap(), format!("8%{en}9%"), "{what}");
             }
             other => panic!("{what}: {other:?}"),
         }

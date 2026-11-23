@@ -2382,6 +2382,11 @@ fn declared_orders(step: &TransformStep) -> Vec<(String, crate::sort_lists::Sort
     match step {
         // Split date: its text parts are in the Calendar order of the step's own week start
         TransformStep::SplitDate { calendar, .. } => step.split_date_names().into_iter().filter_map(|(part, name)| part.sort_order(calendar).map(|o| (name, o))).collect(),
+        // an unnumbered rate band column (W3): its labels in band order (a numbered one sorts as text)
+        TransformStep::RateBand { band_def, new_col, .. } if !band_def.numbered => match band_def.band_order() {
+            Ok(values) => vec![(new_col.clone(), crate::sort_lists::SortOrder::List { name: "Rate bands".to_string(), values, case_insensitive: false })],
+            Err(_) => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }

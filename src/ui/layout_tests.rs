@@ -508,6 +508,9 @@ pub(crate) struct Painted {
     pub(crate) shown: Vec<(String, egui::Pos2)>,
     /// The rectangle each text occupies.
     pub(crate) boxes: Vec<(String, egui::Rect)>,
+    /// The rectangle of each text's laid-out rows (a label in a wrapped row starts after the row's leading
+    /// space, which `boxes` includes): what the overlap checks of Phase 8 compare.
+    pub(crate) glyphs: Vec<(String, egui::Rect)>,
 }
 
 pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
@@ -518,6 +521,11 @@ pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted 
                 out.colors.push((t.galley.text().to_string(), t.galley.job.sections.first().map(|s| s.format.color).unwrap_or(egui::Color32::PLACEHOLDER)));
                 out.shown.push((t.galley.rows.iter().map(|r| r.text()).collect::<String>(), t.pos));
                 out.boxes.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2())));
+                let rows = t.galley.rows.iter().filter(|r| !r.glyphs.is_empty()).fold(egui::Rect::NOTHING, |a, r| {
+                    let first = r.glyphs.first().map(|g| g.pos.x).unwrap_or(r.rect.left());
+                    a.union(egui::Rect::from_min_max(egui::pos2(first, r.rect.top()), r.rect.max))
+                });
+                out.glyphs.push((t.galley.text().to_string(), if rows.is_positive() { rows.translate(t.pos.to_vec2()) } else { t.galley.rect.translate(t.pos.to_vec2()) }));
                 out.texts.push((t.galley.text().to_string(), t.pos, fam));
             }
             egui::Shape::Rect(r) => out.rects.push((r.rect, r.fill)),

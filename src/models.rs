@@ -1076,6 +1076,11 @@ pub struct RateBandDef {
     /// falls in 9%–10%.
     #[serde(default)]
     pub lower_inclusive: bool,
+    /// The labels carry a serial number ("09. 8%–9%") so that they sort in band order as text (every step,
+    /// preset and macro saved before Phase 8). The Rate profile dialog makes new steps without it
+    /// ("8%–9%"), and the step declares the band order instead (Phase 8 W3).
+    #[serde(default = "default_true")]
+    pub numbered: bool,
 }
 
 /// The most bands a profile may have.
@@ -1086,7 +1091,7 @@ pub const RATE_BANDS_MAX: usize = 500;
 pub struct RateBandLabels {
     /// The band edges in percent, starting at 0.
     pub edges: Vec<f64>,
-    /// "00. 0%": exactly zero.
+    /// "00. 0%" ("0%" unnumbered): exactly zero.
     pub zero: String,
     /// "Below 0%".
     pub below: String,
@@ -1118,11 +1123,11 @@ pub fn parse_rate_edges(text: &str) -> anyhow::Result<Vec<f64>> {
 
 impl RateBandDef {
     pub fn fixed(name: &str, start_pct: f64, end_pct: f64, step_pct: f64) -> Self {
-        Self { name: name.to_string(), mode: RateBandMode::Fixed { start_pct, end_pct, step_pct }, lower_inclusive: false }
+        Self { name: name.to_string(), mode: RateBandMode::Fixed { start_pct, end_pct, step_pct }, lower_inclusive: false, numbered: true }
     }
 
     pub fn custom(name: &str, edges: Vec<f64>) -> Self {
-        Self { name: name.to_string(), mode: RateBandMode::Custom { edges }, lower_inclusive: false }
+        Self { name: name.to_string(), mode: RateBandMode::Custom { edges }, lower_inclusive: false, numbered: true }
     }
 
     /// The default profile: 0% to 15% in steps of 1%.
@@ -1188,21 +1193,34 @@ impl RateBandDef {
         Ok(e)
     }
 
-    /// The labels of every band. They are numbered so that they sort in band order.
+    /// The labels of every band: numbered ("09. 8%–9%") so that they sort in band order as text, or plain
+    /// ("8%–9%") when `numbered` is off.
     pub fn labels(&self) -> anyhow::Result<RateBandLabels> {
         let edges = self.edges()?;
         let m = edges.len() - 1;
         let w = m.to_string().len().max(2);
-        let bands = (1..=m).map(|k| format!("{:0w$}. {}%\u{2013}{}%", k, fmt_pct(edges[k - 1]), fmt_pct(edges[k]), w = w)).collect();
+        let num = |k: usize| if self.numbered { format!("{:0w$}. ", k, w = w) } else { String::new() };
+        let bands = (1..=m).map(|k| format!("{}{}%\u{2013}{}%", num(k), fmt_pct(edges[k - 1]), fmt_pct(edges[k]))).collect();
         let last = fmt_pct(edges[m]);
         Ok(RateBandLabels {
-            zero: format!("{:0w$}. 0%", 0, w = w),
+            zero: format!("{}0%", num(0)),
             below: "Below 0%".to_string(),
             bands,
             above: if self.lower_inclusive { format!("\u{2265} {}%", last) } else { format!("> {}%", last) },
             blank: "No rate".to_string(),
             edges,
         })
+    }
+
+    /// Every label in band order: Below 0%, 0%, the bands, the top band, No rate (the order an unnumbered
+    /// band column declares).
+    pub fn band_order(&self) -> anyhow::Result<Vec<String>> {
+        let l = self.labels()?;
+        let mut v = vec![l.below, l.zero];
+        v.extend(l.bands);
+        v.push(l.above);
+        v.push(l.blank);
+        Ok(v)
     }
 
     /// The label of one rate (percent; `None` = blank).

@@ -214,6 +214,16 @@ pub fn rate_bands() -> DataFrame {
     .unwrap()
 }
 
+/// The same book with the plain labels a new Rate profile step writes (Phase 8 W3): the guide's picture and note.
+pub fn rate_bands_plain() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Actnum".into(), ["L1", "L2", "L3", "L4", "L5"]),
+        Series::new("Rate_Band".into(), ["8%\u{2013}9%", "8%\u{2013}9%", "7%\u{2013}8%", "9%\u{2013}10%", "No rate"]),
+        Series::new("Balance".into(), [500.0, 250.0, 300.0, 100.0, 50.0]),
+    ])
+    .unwrap()
+}
+
 pub fn history(n: usize) -> DataFrame {
     let ends = ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31", "2026-08-31"];
     let bal = [100.0, 104.0, 99.0, 108.0, 103.0, 111.0, 106.0, 115.0];

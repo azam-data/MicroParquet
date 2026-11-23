@@ -390,4 +390,8 @@ Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, f
 - W2-3: "By" offers Date, Year, Month-Year, Month, Quarter, Day name; changing it clears the picked values.
 - W2-4: chart picker lists are 460 pt tall; series and facet orders are unchanged from Phase 7.
 - W2-5: the pivot has no Python translation (as before); the filter "By" choice has one.
+- W3-1: the rate profile template orders plain labels by Ranges (the same order as the declared list); numbered labels keep the Natural order.
+- W3-2: built-in and saved presets stay numbered; the dialog's tick box (off for a new step, the step's own when editing) decides.
+- W3-3: the Phase 3 dialog test and the Phase 4 guide example now expect the plain labels a new step makes; the guide picture uses a plain-label sample.
+- W3-4: the Phase 8 overlap checks measure texts by their laid-out rows, not egui's row-wide galley rectangle.
 </accepted_deviations>

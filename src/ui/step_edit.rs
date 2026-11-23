@@ -269,6 +269,8 @@ impl MicroParquetApp {
             }
             TransformStep::RateBand { rate_col, band_def, new_col } => {
                 self.rate_band.load(&band_def);
+                // an edited step keeps its labels (a step saved before Phase 8 is numbered)
+                self.rate_band.numbered = band_def.numbered;
                 self.rate_band.rate_col = rate_col;
                 self.rate_band.new_col = new_col;
             }

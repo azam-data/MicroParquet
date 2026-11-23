@@ -337,7 +337,8 @@ fn template_forms() -> Vec<(&'static str, ChartData)> {
     add("tpl-lcr-nsfr", Template::LcrNsfr, sm::lcr_summary());
     add("tpl-ecl-by-stage", Template::EclByStage, sm::ecl_summary());
     add("tpl-deposit-mix", Template::DepositMix, sm::mix());
-    add("tpl-rate-profile", Template::RateProfile, sm::rate_bands());
+    // the plain labels a new step writes (Phase 8 W3)
+    add("tpl-rate-profile", Template::RateProfile, sm::rate_bands_plain());
     add("tpl-behaviour-profile", Template::BehaviourProfile, sm::history(8));
     add("tpl-data-quality", Template::DataQuality, sm::scorecard());
     let y = yield_curves(&sm::curves()).expect("curves");

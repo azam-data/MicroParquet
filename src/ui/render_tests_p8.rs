@@ -47,7 +47,7 @@ pub(crate) fn dialog_texts(rig: &mut Rig, p: &Painted, area: egui::Rect) -> Vec<
     rig.app.active_tool = tool;
     rig.draw(2);
     let same = |a: &egui::Rect, b: &egui::Rect| (a.min - b.min).length() < 0.5 && (a.max - b.max).length() < 0.5;
-    p.boxes.iter().filter(|(t, b)| inside(*b, area) && !bg.boxes.iter().any(|(u, c)| u == t && same(b, c))).cloned().collect()
+    p.glyphs.iter().filter(|(t, b)| inside(*b, area) && !bg.glyphs.iter().any(|(u, c)| u == t && same(b, c))).cloned().collect()
 }
 
 /// No two of these texts overlap (by more than a pixel each way).
@@ -444,6 +444,54 @@ fn w2_the_filter_by_choice_filters_on_day_name_by_real_clicks_at_three_sizes() {
         for d in days {
             let wd = chrono::Datelike::weekday(&micro_parquet::dates::date_from_days(d).expect("date"));
             assert!(matches!(wd, chrono::Weekday::Sat | chrono::Weekday::Sun), "{what}: {wd:?} kept");
+        }
+    }
+}
+
+// ================================================================================ W3: rate bands
+
+#[test]
+fn w3_the_number_the_bands_tick_box_is_off_and_works_by_a_real_click_at_three_sizes() {
+    let en = '\u{2013}';
+    for (ppp, w, h) in SIZES3 {
+        let df = DataFrame::new(vec![Series::new("Rate".into(), &[9.0f64, 8.5, 0.0, 10.5]).into(), Series::new("Balance".into(), &[100.0f64, 200.0, 300.0, 400.0]).into()]).expect("frame");
+        let mut rig = rig8("p8w3", ppp, w, h, df);
+        let what = rig.what.clone();
+        rig.app.run_command(&rig.ctx, CommandId::RateProfile);
+        let p = rig.draw(6);
+        let title = "\u{E0B4} Rate profile: put a rate column into bands";
+        let r = assert_dialog_fits(&rig.ctx, title, &what);
+        let tick = rig.app.rate_band.numbered_rect.unwrap_or_else(|| panic!("{what}: the tick box"));
+        assert!(inside(tick, r.window) && tick.top() < r.body.bottom(), "{what}: the tick box {tick:?} is in view in {:?}", r.body);
+        assert!(!rig.app.rate_band.numbered, "{what}: off for a new step");
+        assert!(p.boxes.iter().any(|(t, _)| t == &format!("Number the bands (09. 8%{en}9%)")), "{what}");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains(&format!("0%{en}1%")) && !t.contains("01. ")), "{what}: the preview shows plain labels");
+        assert_no_overlap(&dialog_texts(&mut rig, &p, r.window), &what);
+        // on by a real click: the preview and the step are numbered
+        let p = click_rect(&mut rig, tick);
+        assert!(rig.app.rate_band.numbered, "{what}: ticked");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains(&format!("01. 0%{en}1%"))), "{what}: the preview shows numbered labels");
+        // off again, and Add: a plain step whose column declares the band order
+        click_rect(&mut rig, tick);
+        let p = rig.draw(2);
+        let add = p.boxes.iter().rev().find(|(t, _)| t.contains("Add Rate Profile")).map(|(_, b)| *b).expect("Add");
+        click_rect(&mut rig, add);
+        settle(&mut rig.app);
+        rig.draw(3);
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        match tab.steps.last() {
+            Some(TransformStep::RateBand { band_def, .. }) => assert!(!band_def.numbered, "{what}"),
+            other => panic!("{what}: {other:?}"),
+        }
+        let labels: Vec<String> = tab.cached_slice.column("Rate_Band").expect("bands").str().expect("text").into_iter().flatten().map(str::to_string).collect();
+        assert_eq!(labels, vec![format!("8%{en}9%"), format!("8%{en}9%"), "0%".to_string(), format!("10%{en}11%")], "{what}");
+        // a pivot of the band column takes the band order at once
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(4);
+        rig.app.add_pivot_field("Rate_Band", crate::ui::pivot_builder::Area::Rows);
+        match rig.app.pivot_builder.spec.field_orders.first().map(|o| o.order.clone()) {
+            Some(SortOrder::List { values, .. }) => assert_eq!(&values[..3], ["Below 0%", "0%", &format!("0%{en}1%")], "{what}"),
+            other => panic!("{what}: the declared band order: {other:?}"),
         }
     }
 }

@@ -2,7 +2,7 @@
 
 ## 1. What it does
 
-Shows how much of a book sits at each interest-rate band: columns of balance by band, in band order, with "No rate" last.
+Shows how much of a book sits at each interest-rate band: columns of balance by band, in band order, with "No rate" last. It works with plain labels ("8%–9%") and with numbered ones ("09. 8%–9%").
 
 ## 2. When to use it
 
@@ -40,9 +40,9 @@ Balances by band (Crore):
 
 | Rate band | Balance |
 | --- | --- |
-| 08. 7%–8% | 300 |
-| 09. 8%–9% | 750 |
-| 10. 9%–10% | 100 |
+| 7%–8% | 300 |
+| 8%–9% | 750 |
+| 9%–10% | 100 |
 | No rate | 50 |
 
 750 of 1,200 is 62.5%.
@@ -59,4 +59,5 @@ The title the template writes (a fixed rule, no AI): **62.5% of balances sit at 
 
 ## 10. Limits and assumptions
 
-- The order is the band order of the tab, not by value.
+- The order is the band order, not by value. Plain labels are put in band order by the Ranges order (Below 0%, 0%, the bands, the top band, No rate); numbered labels sort by their number, as before.
+- The title reads the band without its number in both forms: "… sit at 8%–9%". Whether the labels are numbered is the "Number the bands (09. 8%–9%)" tick box of the Rate profile dialog (see [Rate profile](rate-profile.md)).
