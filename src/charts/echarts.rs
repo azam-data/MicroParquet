@@ -261,6 +261,7 @@ fn foot_lines(data: &ChartData, notes: &[String]) -> Vec<String> {
         parts.push(format!("\u{2014} {}", data.spec.limit_note.trim()));
     }
     parts.extend(data.notes.iter().cloned());
+    parts.extend(super::colours::colour_notes(data, &data.spec.colour_map));
     parts.extend(notes.iter().cloned());
     if parts.is_empty() {
         return Vec::new();

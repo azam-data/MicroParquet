@@ -22,6 +22,8 @@ thread_local! {
 /// instead (tests, headless runs). `dir` plays the role of `portable_data`.
 pub fn set_data_dir_override(dir: Option<PathBuf>) {
     RULES_DIR_OVERRIDE.with(|d| *d.borrow_mut() = dir);
+    // the house colours are read from this folder too (Phase 8 W7)
+    crate::charts::colours::house::invalidate();
 }
 
 /// A rule, curve, profile or parameter file a run read (Phase 6 P2: the report pack's cover lists them).

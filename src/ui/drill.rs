@@ -88,6 +88,7 @@ impl MicroParquetApp {
     pub(crate) fn studio_chart_action(&mut self, action: ChartAction) {
         let mut spec = self.chart.spec.clone();
         match action {
+            ChartAction::Colour(m) => self.open_colour_picker_of_mark(crate::ui::colour_picker::PickTarget::Studio, &m),
             ChartAction::DrillDown(m) => {
                 if let Err(e) = ChartSpec::refuse_other(&m.category) {
                     self.status_message = format!("{:#}", e);
@@ -115,6 +116,11 @@ impl MicroParquetApp {
 
     /// A click or a menu item on a chart tab: the chart tab is calculated again from its source with the new level or filter.
     pub(crate) fn chart_tab_chart_action(&mut self, id: u64, action: ChartAction) {
+        // a colour is not a calculation: it works on a chart that cannot be calculated again too
+        if let ChartAction::Colour(m) = &action {
+            self.open_colour_picker_of_mark(crate::ui::colour_picker::PickTarget::ChartTab(id), m);
+            return;
+        }
         if let Some(why) = self.chart_tab_blocked(id) {
             self.status_message = why;
             return;
@@ -143,6 +149,7 @@ impl MicroParquetApp {
                     self.show_rows_of_mark(source, &spec, &m);
                 }
             }
+            ChartAction::Colour(_) => {}
         }
     }
 

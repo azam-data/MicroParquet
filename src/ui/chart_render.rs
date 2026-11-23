@@ -65,6 +65,8 @@ pub enum ChartAction {
     ShowRows(MarkRef),
     Keep(MarkRef),
     Exclude(MarkRef),
+    /// The colour picker for the item the mark stands for (Phase 8 W7).
+    Colour(MarkRef),
 }
 
 /// The layout of the chart last shown under `id` (tests, and the "Open as tab" / save paths).
@@ -228,6 +230,11 @@ pub fn show_chart_with(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: 
             item(ui, "Show rows", dc.rows_unavailable.is_none(), dc.rows_unavailable.as_deref().unwrap_or(""), ChartAction::ShowRows(mark.clone()));
             item(ui, "Keep only this", true, "", ChartAction::Keep(mark.clone()));
             item(ui, "Exclude this", true, "", ChartAction::Exclude(mark.clone()));
+            // the colour of an item does not change the numbers, so it is not held back by a chart that cannot be calculated again
+            if ui.button("Colour\u{2026}").on_hover_text("Pick the colour of this item (a series, or a part of a donut)").clicked() {
+                action = Some(ChartAction::Colour(mark.clone()));
+                ui.close_menu();
+            }
         });
     }
     let shown = ChartShown { layout, rect, hover, tooltip, action };

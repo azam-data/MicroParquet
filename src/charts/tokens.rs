@@ -42,6 +42,16 @@ pub const SERIES_LIGHT: [u32; SLOTS] = [0x2a78d6, 0xeb6834, 0x1baf7a, 0xeda100, 
 pub const SERIES_DARK: [u32; SLOTS] = [0x3987e5, 0xd95926, 0x199e70, 0xc98500, 0xd55181, 0x0ca30c, 0x9085e9, 0xe66767];
 pub const SLOT_NAMES: [&str; SLOTS] = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"];
 
+/// The eight house hues of the colour picker (Phase 8 W7), in slot order: the name, the Light shade and the Deep shade. The Base
+/// shade of a hue is its palette slot (so it keeps the validated dark-mode pair); Light and Deep are fixed colours, the same in
+/// both themes.
+pub const HUE_NAMES: [&str; SLOTS] = ["Blue", "Orange", "Green", "Amber", "Pink", "Dark green", "Violet", "Red"];
+pub const HUE_LIGHT: [u32; SLOTS] = [0x6ea5ee, 0xffa889, 0x7dd6ac, 0xffd7a0, 0xffb9d0, 0x60a95a, 0x8a86eb, 0xfe8c85];
+pub const HUE_DEEP: [u32; SLOTS] = [0x014a94, 0xac3c01, 0x037952, 0xad7502, 0xac5074, 0x024e02, 0x3a2196, 0xa31921];
+
+/// The four status colours with their names (good, warning, serious, critical).
+pub const STATUS_COLOURS: [(&str, u32); 4] = [("good", STATUS_GOOD), ("warning", STATUS_WARNING), ("serious", STATUS_SERIOUS), ("critical", STATUS_CRITICAL)];
+
 pub fn series_colour(slot: usize, dark: bool) -> Option<u32> {
     let t = if dark { &SERIES_DARK } else { &SERIES_LIGHT };
     t.get(slot).copied()

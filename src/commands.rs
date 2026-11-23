@@ -98,6 +98,7 @@ pub enum CommandId {
     ToggleSummary,
     SortLists,
     CalendarSettings,
+    HouseColours,
     // Help
     About,
 }
@@ -253,6 +254,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
     c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),
     c(I::CalendarSettings, "Calendar\u{2026}", G::View, "fiscal year start month week start saturday sunday monday date parts quarter", N::Nothing),
+    c(I::HouseColours, "House colours\u{2026}", G::View, "house colour colours palette brand name item pick swatch hex", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
 

@@ -198,6 +198,7 @@ impl<'a> Cx<'a> {
             foot.push(self.data.spec.footnote.trim().to_string());
         }
         foot.extend(self.data.notes.iter().cloned());
+        foot.extend(super::colours::colour_notes(self.data, &self.data.spec.colour_map));
         foot.extend(super::labels::footnote_notes(self.data, self.opts, self.dropped.len()));
         if !foot.is_empty() {
             ws.write_string_with_format(row, 0, t::tidy(&foot.join(" \u{b7} ")), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::FOOTNOTE_PT as f64).set_font_color(rgb(self.ink.muted))).map_err(x)?;

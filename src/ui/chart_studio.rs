@@ -832,7 +832,7 @@ impl MicroParquetApp {
                 ui.end_row();
                 // ---- colours: clear the stored colour map and give the names the slots in their current order
                 ui.label("Colours");
-                let r = ui.button("Reset colours").on_hover_text("Clears the stored colours and gives the names the colours 1, 2, 3\u{2026} in their current order");
+                let r = ui.button("Reset colours").on_hover_text("Clears the stored colours and the colours you picked, and gives the names the colours 1, 2, 3\u{2026} in their current order. House colours stay.");
                 rects.fields.push(("Reset colours".to_string(), r.rect));
                 if r.clicked() {
                     // done on the numbers the chart has now (after the calculation in progress, if there is one), not on `spec`
@@ -880,6 +880,47 @@ impl MicroParquetApp {
             ui.label(egui::RichText::new("The takeaway is your sentence for the title. The rest of the chart is de-emphasised around the highlight.").size(theme::TEXT_LABEL).color(tk.muted));
         });
         rects.fields.push(("Titles and look".to_string(), h.header_response.rect));
+        // ---- the colour of each item (Phase 8 W7): a swatch opens the picker
+        {
+            use micro_parquet::charts::colours::{colour_names_of, house, Colour};
+            let item_names: Vec<String> = self.chart.data.as_ref().map(colour_names_of).unwrap_or_default();
+            let cm = self.chart.data.as_ref().map(|d| d.spec.colour_map.clone()).unwrap_or_else(|| spec.colour_map.clone());
+            let dark = self.dark_mode;
+            let mut open_for: Option<String> = None;
+            let h = egui::CollapsingHeader::new(format!("Colours ({})", item_names.len())).id_salt("chart_colours").show(ui, |ui| {
+                if item_names.is_empty() {
+                    ui.add(egui::Label::new(egui::RichText::new("This chart draws one colour for everything. Choose a Series to colour its items one by one.").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+                }
+                for (i, n) in item_names.iter().enumerate().take(24) {
+                    ui.horizontal(|ui| {
+                        let colour = cm.get(n).unwrap_or(Colour::Slot(i.min(micro_parquet::charts::tokens::SLOTS - 1)));
+                        let (rect, r) = ui.allocate_exact_size(egui::vec2(theme::SWATCH, theme::SWATCH_LIST_H), egui::Sense::click());
+                        ui.painter().rect_filled(rect, egui::Rounding::same(theme::RADIUS_CONTROL), theme::hex(colour.hex(dark)));
+                        ui.painter().rect_stroke(rect, egui::Rounding::same(theme::RADIUS_CONTROL), theme::line(tk.border));
+                        let r = r.on_hover_text("Pick the colour of this item");
+                        rects.fields.push((format!("Colour of {}", n), r.rect));
+                        if r.clicked() {
+                            open_for = Some(n.clone());
+                        }
+                        ui.label(n);
+                        let tag = if cm.pick_of(n).is_some() { "your pick" } else if house::lookup(n).is_some() { "house colour" } else { "" };
+                        if !tag.is_empty() {
+                            ui.label(egui::RichText::new(tag).size(theme::TEXT_LABEL).color(tk.muted));
+                        }
+                    });
+                }
+                if item_names.len() > 24 {
+                    ui.label(egui::RichText::new(format!("\u{2026} and {} more: right-click a mark, then Colour\u{2026}", item_names.len() - 24)).size(theme::TEXT_LABEL).color(tk.muted));
+                }
+                if !item_names.is_empty() {
+                    ui.label(egui::RichText::new("Right-click a mark and choose Colour\u{2026} to pick a colour too. Reset colours is under Titles and look.").size(theme::TEXT_LABEL).color(tk.muted));
+                }
+            });
+            rects.fields.push(("Colours".to_string(), h.header_response.rect));
+            if let Some(n) = open_for {
+                self.open_colour_picker(crate::ui::colour_picker::PickTarget::Studio, &n);
+            }
+        }
         // ---- reference lines
         let h = egui::CollapsingHeader::new(format!("Reference lines ({})", spec.ref_lines.len())).id_salt("chart_refs").show(ui, |ui| {
             let mut remove: Option<usize> = None;

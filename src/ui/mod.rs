@@ -6,6 +6,7 @@ pub mod batch;
 pub mod buckets;
 pub mod calc_column;
 pub mod calendar;
+pub mod colour_picker;
 pub mod chart;
 pub mod chart_render;
 pub mod chart_studio;
@@ -134,6 +135,8 @@ impl MicroParquetApp {
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
             ActiveToolModal::Calendar => self.render_calendar_modal(ctx, cols),
+            ActiveToolModal::ColourPicker => self.render_colour_picker_modal(ctx, cols),
+            ActiveToolModal::HouseColours => self.render_house_colours_modal(ctx, cols),
             ActiveToolModal::ProjectSources => self.render_project_sources_modal(ctx, cols),
             ActiveToolModal::ProjectSave => self.render_project_save_modal(ctx, cols),
             ActiveToolModal::ProjectPrompt => self.render_project_prompt_modal(ctx, cols),

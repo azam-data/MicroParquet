@@ -485,6 +485,12 @@ pub const CHART_MAX_H: f32 = 520.0;
 pub const CHART_BAR_W: f64 = 0.65;
 /// The chart's controls and marks.
 pub const CHART_COMBO_W: f32 = 130.0;
+/// A colour swatch of the picker, and the hex box beside it (Phase 8 W7).
+pub const SWATCH: f32 = 24.0;
+pub const SWATCH_HEX_W: f32 = 100.0;
+/// The swatch in the studio's Colours list (a little lower than wide), and the name box of House colours.
+pub const SWATCH_LIST_H: f32 = 17.0;
+pub const SWATCH_NAME_W: f32 = 160.0;
 /// The list of a chart field picker: tall enough for the columns and the parts of a date column (W2).
 pub const CHART_PICKER_POPUP_H: f32 = 460.0;
 pub const CHART_COMBO_NARROW_W: f32 = 90.0;

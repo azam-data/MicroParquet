@@ -134,6 +134,10 @@ pub enum ActiveToolModal {
     SortLists,
     /// View ▸ Calendar… (Phase 8 W0).
     Calendar,
+    /// The colour picker of a chart item (Phase 8 W7).
+    ColourPicker,
+    /// View ▸ House colours… (Phase 8 W7).
+    HouseColours,
     /// The Sources dialog that comes before a project opens (Phase 8 W4).
     ProjectSources,
     /// Save project: the tabs that are left out (Phase 8 W4).
@@ -301,6 +305,9 @@ pub struct MicroParquetApp {
     pub sort: SortState,
     pub sort_lists: SortListsState,
     pub calendar_dialog: crate::ui::calendar::CalendarState,
+    /// The colour picker and the House colours dialog (Phase 8 W7).
+    pub colour_picker: crate::ui::colour_picker::PickerState,
+    pub house_dialog: crate::ui::colour_picker::HouseState,
     pub split_date: crate::ui::split_date::SplitDateState,
     /// Fields whose labels the worker lists for their auto order (Phase 8 W0).
     pub auto_order_waits: Vec<crate::ui::auto_order::AutoOrderWait>,
@@ -443,6 +450,8 @@ impl MicroParquetApp {
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
             calendar_dialog: Default::default(),
+            colour_picker: Default::default(),
+            house_dialog: Default::default(),
             split_date: Default::default(),
             auto_order_waits: Vec::new(),
             chart_gallery: Default::default(),
@@ -496,6 +505,10 @@ impl MicroParquetApp {
         };
         if let Some(note) = settings_note {
             app.status_message = note;
+        }
+        // a broken house colours file is refused at start-up, with its line; the charts use the palette (Phase 8 W7)
+        if let Some(e) = micro_parquet::charts::colours::house::error() {
+            app.status_message = e;
         }
         app
     }
@@ -694,6 +707,7 @@ impl MicroParquetApp {
             });
             self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
             self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::CalendarSettings);
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::HouseColours);
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response

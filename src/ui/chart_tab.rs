@@ -60,7 +60,12 @@ impl MicroParquetApp {
             info.next_spec = None;
             info.divisor = divisor;
             info.unit = unit;
+            // the colours picked while the numbers were being calculated are the owner's latest word (Phase 8 W7)
+            let picks = std::mem::take(&mut info.data.spec.colour_map.custom);
             info.data = c.data;
+            if !picks.is_empty() {
+                info.data.spec.colour_map.custom = picks;
+            }
         }
         let tab = &mut self.tabs[idx];
         tab.source = c.source;

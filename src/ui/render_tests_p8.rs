@@ -1416,7 +1416,7 @@ fn show_studio_chart(rig: &mut Rig) {
         let s = crate::ui::chart_render::last_shown(&rig.ctx, id).unwrap_or_else(|| panic!("{}: the studio's chart is drawn", rig.what));
         let screen = rig.ctx.screen_rect();
         let ys: Vec<f32> = s.layout.marks.iter().map(|m| m.rect.center().y).collect();
-        let (lo, hi) = (screen.top() + 90.0, screen.bottom() - 70.0);
+        let (lo, hi) = (screen.top() + 140.0, screen.bottom() - 70.0);
         let (min, max) = (ys.iter().cloned().fold(f32::MAX, f32::min), ys.iter().cloned().fold(f32::MIN, f32::max));
         if min >= lo && max <= hi {
             return;
@@ -2141,4 +2141,330 @@ fn w6_other_is_never_drilled_into_filtered_or_shown_as_rows_and_a_drill_keeps_th
     other_series.series = None;
     rig.app.chart_set_spec(other_series);
     assert!(rig.app.chart.spec.colour_map != picked, "a different series column starts the colours again");
+}
+
+// ================================================================================ W7: colour picker and house colours
+
+use micro_parquet::charts::colours::{house, ColourPick, HexColour};
+
+/// The studio's chart: Balance by Month, one series per Branch (Dhaka, Ctg, Sylhet), no drill.
+fn colour_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> Rig {
+    let mut rig = studio_rig(name, ppp, w, h);
+    rig.app.dark_mode = dark;
+    let mut s = rig.app.chart.spec.clone();
+    s.drill_to(0);
+    s.set_drill(Vec::new());
+    s.category = "Month".into();
+    s.series = Some("Branch".into());
+    rig.app.chart_set_spec(s);
+    pump_until(&mut rig, "the chart by Branch", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.series.len() == 3));
+    rig.draw(3);
+    rig
+}
+
+/// The fill of the first bar of the series `name` in the studio's chart, as drawn.
+fn studio_bar_fill(rig: &Rig, name: &str) -> u32 {
+    let shown = crate::ui::chart_render::last_shown(&rig.ctx, egui::Id::new(PLOT_ID)).unwrap_or_else(|| panic!("{}: the chart is drawn", rig.what));
+    let d = rig.app.chart.data.as_ref().expect("data");
+    let si = d.series.iter().position(|s| s == name).unwrap_or_else(|| panic!("{}: series {name} in {:?}", rig.what, d.series));
+    let m = shown.layout.marks.iter().find(|m| m.series == si && m.kind == micro_parquet::charts::layout::MarkKind::Bar).unwrap_or_else(|| panic!("{}: a bar of {name}", rig.what));
+    shown
+        .layout
+        .prims
+        .iter()
+        .find_map(|p| if let micro_parquet::charts::layout::Prim::Rect { rect, fill, .. } = p { (*rect == m.rect).then_some(((fill.r() as u32) << 16) | ((fill.g() as u32) << 8) | fill.b() as u32) } else { None })
+        .unwrap_or_else(|| panic!("{}: the fill of the bar of {name}", rig.what))
+}
+
+fn picker_field(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.colour_picker.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the picker has '{name}': {:?}", rig.what, rig.app.colour_picker.rects.fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()))
+}
+
+fn house_field(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.house_dialog.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the house dialog has '{name}': {:?}", rig.what, rig.app.house_dialog.rects.fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()))
+}
+
+fn picker_title(name: &str) -> String {
+    format!("{}  {} of '{}'", theme::ph::PALETTE, crate::ui::colour_picker::PICKER_TITLE, name)
+}
+
+/// Types `text` into the box that was clicked: everything in it is replaced.
+fn type_replacing(rig: &mut Rig, text: &str) {
+    ctrl_key(rig, egui::Key::A);
+    rig.step(vec![egui::Event::Text(text.to_string())]);
+    rig.draw(2);
+}
+
+#[test]
+fn w7_the_studio_lists_the_names_with_their_swatch_and_the_picker_works_by_real_clicks_at_three_sizes_light_and_dark() {
+    for dark in [false, true] {
+        for (ppp, w, h) in SIZES3 {
+            let mut rig = colour_rig("p8w7a", ppp, w, h, dark);
+            micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            let auto = studio_bar_fill(&rig, "Dhaka");
+            let slot = match rig.app.chart.data.as_ref().and_then(|d| d.spec.colour_map.get("Dhaka")) {
+                Some(micro_parquet::charts::colours::Colour::Slot(i)) => i,
+                other => panic!("{what}: Dhaka has a slot: {other:?}"),
+            };
+            assert_eq!(auto, if dark { tok_dark(slot) } else { tok_light(slot) }, "{what}: the automatic colour is the name's slot");
+            // the Colours section lists the three names, each with its swatch
+            click_field(&mut rig, "Colours");
+            for n in ["Dhaka", "Ctg", "Sylhet"] {
+                show_field(&mut rig, &format!("Colour of {n}"));
+            }
+            // a real click on the swatch of Dhaka opens the picker
+            let r = show_field(&mut rig, "Colour of Dhaka");
+            click_rect(&mut rig, r);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}");
+            let p = rig.draw(4);
+            let area = assert_dialog_fits(&rig.ctx, &picker_title("Dhaka"), &what);
+            let texts = dialog_texts(&mut rig, &p, area.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, area.window, &what);
+            // Automatic, 24 swatches, the hex box, the tick box and Done are there and inside the dialog
+            let f = rig.app.colour_picker.rects.fields.clone();
+            let swatches: Vec<&(String, egui::Rect)> = f.iter().filter(|(n, _)| n.starts_with("Light ") || n.starts_with("Base ") || n.starts_with("Deep ")).collect();
+            assert_eq!(swatches.len(), 24, "{what}");
+            for (n, b) in &f {
+                assert!(inside(*b, area.window), "{what}: '{n}' {b:?} is inside the dialog {:?}", area.window);
+            }
+            for (i, (n, a)) in swatches.iter().enumerate() {
+                for (m, b) in swatches.iter().skip(i + 1) {
+                    assert!(!a.intersects(*b), "{what}: the swatches '{n}' and '{m}' overlap");
+                }
+            }
+            for n in ["Automatic", "Hex", "Use hex", "Save as house colour", "Done"] {
+                picker_field(&rig, n);
+            }
+
+            // Deep Green by a real click: the chart draws Dhaka in #037952 in both themes, the others do not move
+            let others = (studio_bar_fill(&rig, "Ctg"), studio_bar_fill(&rig, "Sylhet"));
+            let r = picker_field(&rig, "Deep Green");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of("Dhaka"), Some(&ColourPick::swatch(2, 2)), "{what}");
+            assert_eq!(rig.app.chart.data.as_ref().expect("d").spec.colour_map.pick_of("Dhaka"), Some(&ColourPick::swatch(2, 2)), "{what}");
+            assert_eq!(studio_bar_fill(&rig, "Dhaka"), 0x037952, "{what}: Dhaka is Deep green");
+            assert_eq!((studio_bar_fill(&rig, "Ctg"), studio_bar_fill(&rig, "Sylhet")), others, "{what}: the others keep their colours");
+            assert!(rig.app.colour_picker.rects.warnings.is_empty(), "{what}: Deep green has no warning in either theme");
+
+            // Base Blue follows the theme; Deep Blue says it is hard to see on the dark background, and the line fits
+            let r = picker_field(&rig, "Base Orange");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(studio_bar_fill(&rig, "Dhaka"), if dark { tok_dark(1) } else { tok_light(1) }, "{what}: a Base pick follows the theme");
+            let r = picker_field(&rig, "Deep Blue");
+            let p = click_rect(&mut rig, r);
+            let p = if has_text(&p, "Low contrast") { p } else { rig.draw(3) };
+            assert!(has_text(&p, "Low contrast on the dark background"), "{what}: the warning is under the picker");
+            assert_eq!(rig.app.colour_picker.rects.warnings.len(), 1, "{what}");
+            let area = assert_dialog_fits(&rig.ctx, &picker_title("Dhaka"), &what);
+            assert_no_overlap(&dialog_texts(&mut rig, &p, area.window), &what);
+            assert!(inside(rig.app.colour_picker.rects.warnings[0], area.window), "{what}: the warning is inside the dialog");
+            // the chart's notes carry it too
+            assert!(rig.app.chart.data.as_ref().is_some_and(|d| micro_parquet::charts::colours::colour_notes(d, &rig.app.chart.spec.colour_map).iter().any(|n| n.contains("Dhaka") && n.contains("low contrast on the dark background"))), "{what}");
+
+            // the hex box: a bad one is refused in words and changes nothing; a good one is applied
+            let r = picker_field(&rig, "Hex");
+            click_rect(&mut rig, r);
+            type_replacing(&mut rig, "#12");
+            let r = picker_field(&rig, "Use hex");
+            let p = click_rect(&mut rig, r);
+            assert!(has_text(&p, "Write it as #rrggbb"), "{what}: the refusal is in words");
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of("Dhaka"), Some(&ColourPick::swatch(0, 2)), "{what}: a bad hex changes nothing");
+            let r = picker_field(&rig, "Hex");
+            click_rect(&mut rig, r);
+            type_replacing(&mut rig, "#7a1f9c");
+            let r = picker_field(&rig, "Use hex");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of("Dhaka"), Some(&ColourPick::Hex { hex: HexColour(0x7a1f9c) }), "{what}");
+            assert_eq!(studio_bar_fill(&rig, "Dhaka"), 0x7a1f9c, "{what}");
+
+            // the tick box by a real click: the next pick is also a house colour
+            assert_eq!(house::list(), vec![], "{what}");
+            let r = picker_field(&rig, "Save as house colour");
+            click_rect(&mut rig, r);
+            assert!(rig.app.colour_picker.save_house, "{what}: the tick box is on");
+            let r = picker_field(&rig, "Deep Violet");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(house::list(), vec![house::HouseColour { name: "Dhaka".into(), pick: ColourPick::swatch(6, 2) }], "{what}: the house colour is saved");
+            assert!(rig.app.paths.root_dir.join("house_colours.json").exists(), "{what}");
+
+            // Automatic takes the pick back: the chart's own pick is gone and the house colour shows
+            let r = picker_field(&rig, "Automatic");
+            click_rect(&mut rig, r);
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.colour_map.pick_of("Dhaka"), None, "{what}");
+            assert_eq!(studio_bar_fill(&rig, "Dhaka"), 0x3a2196, "{what}: the house colour of Dhaka");
+            // Done closes it
+            let r = picker_field(&rig, "Done");
+            click_rect(&mut rig, r);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+            // Reset colours leaves the house colour and the swatch says so
+            click_field(&mut rig, "Titles and look");
+            click_field(&mut rig, "Reset colours");
+            rig.draw(3);
+            assert_eq!(studio_bar_fill(&rig, "Dhaka"), 0x3a2196, "{what}: Reset keeps the house colour");
+            micro_parquet::rules::set_data_dir_override(None);
+        }
+    }
+}
+
+fn tok_light(slot: usize) -> u32 {
+    micro_parquet::charts::tokens::SERIES_LIGHT[slot]
+}
+
+fn tok_dark(slot: usize) -> u32 {
+    micro_parquet::charts::tokens::SERIES_DARK[slot]
+}
+
+#[test]
+fn w7_right_click_on_a_mark_then_colour_opens_the_picker_for_its_series_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w7b", ppp, w, h, false);
+        micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+        let what = rig.what.clone();
+        show_studio_chart(&mut rig);
+        let shown = crate::ui::chart_render::last_shown(&rig.ctx, egui::Id::new(PLOT_ID)).expect("chart");
+        let d = rig.app.chart.data.as_ref().expect("data");
+        let si = d.series.iter().position(|s| s == "Ctg").expect("Ctg");
+        let m = shown.layout.marks.iter().find(|m| m.series == si && m.kind == micro_parquet::charts::layout::MarkKind::Bar).expect("a bar of Ctg");
+        let p = right_click(&mut rig, m.rect.center());
+        let item = text_box(&p, "Colour\u{2026}").unwrap_or_else(|| panic!("{what}: Colour… is in the mark's menu: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).filter(|t| t.len() < 24).collect::<Vec<_>>()));
+        assert!(inside(item, rig.ctx.screen_rect()), "{what}");
+        click_rect(&mut rig, item);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}");
+        assert_eq!(rig.app.colour_picker.name, "Ctg", "{what}: the series of the mark");
+        rig.draw(4);
+        assert_dialog_fits(&rig.ctx, &picker_title("Ctg"), &what);
+        let r = picker_field(&rig, "Deep Red");
+        click_rect(&mut rig, r);
+        rig.draw(3);
+        assert_eq!(rig.app.chart.spec.colour_map.pick_of("Ctg"), Some(&ColourPick::swatch(7, 2)), "{what}");
+        // "Other" is refused, in words
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.app.status_message.clear();
+        rig.app.open_colour_picker(crate::ui::colour_picker::PickTarget::Studio, "Other");
+        assert!(rig.app.status_message.contains("Top N puts together") && rig.app.active_tool == ActiveToolModal::None, "{what}: {}", rig.app.status_message);
+        micro_parquet::rules::set_data_dir_override(None);
+    }
+}
+
+#[test]
+fn w7_view_house_colours_lists_adds_edits_and_removes_by_real_clicks_at_three_sizes_light_and_dark() {
+    for dark in [false, true] {
+        for (ppp, w, h) in SIZES3 {
+            let mut rig = colour_rig("p8w7c", ppp, w, h, dark);
+            micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            menu_item(&mut rig, "View", "House colours");
+            assert_eq!(rig.app.active_tool, ActiveToolModal::HouseColours, "{what}: View ▸ House colours… opens the dialog");
+            let title = format!("{}  {}", theme::ph::PALETTE, crate::ui::colour_picker::HOUSE_TITLE);
+            let p = rig.draw(4);
+            let r = assert_dialog_fits(&rig.ctx, &title, &what);
+            assert!(has_text(&p, "No house colours yet"), "{what}: the empty list says so");
+            // Add: type a name, click Add, the picker opens for it
+            let b = house_field(&rig, "New name");
+            click_rect(&mut rig, b);
+            rig.step(vec![egui::Event::Text("TD".into())]);
+            rig.draw(2);
+            let b = house_field(&rig, "Add");
+            click_rect(&mut rig, b);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}: Add opens the picker");
+            assert_eq!(house::list(), vec![house::HouseColour { name: "TD".into(), pick: ColourPick::swatch(0, 1) }], "{what}");
+            rig.draw(4);
+            assert_dialog_fits(&rig.ctx, &format!("{}  House colour of 'TD'", theme::ph::PALETTE), &what);
+            assert!(rig.app.colour_picker.rects.fields.iter().all(|(n, _)| n != "Automatic" && n != "Save as house colour"), "{what}: no Automatic and no tick box for a house colour");
+            let b = picker_field(&rig, "Deep Green");
+            click_rect(&mut rig, b);
+            rig.draw(3);
+            assert_eq!(house::list(), vec![house::HouseColour { name: "TD".into(), pick: ColourPick::swatch(2, 2) }], "{what}");
+            // the chart of the studio draws a series called TD in it at once (no chart has TD here, so check the map)
+            assert_eq!(micro_parquet::charts::colours::ColourMap::default().get("td"), Some(micro_parquet::charts::colours::Colour::Fixed(0x037952)), "{what}: matched in any case");
+            let b = picker_field(&rig, "Done");
+            click_rect(&mut rig, b);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::HouseColours, "{what}: Done goes back to the list");
+            let p = rig.draw(4);
+            let r = assert_dialog_fits(&rig.ctx, &title, &what);
+            assert!(has_text(&p, "TD") && has_text(&p, "#037952"), "{what}: the list shows TD and its hex");
+            let texts = dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r.window, &what);
+            for (n, b) in &rig.app.house_dialog.rects.fields {
+                assert!(inside(*b, r.window), "{what}: '{n}' {b:?} is inside the dialog {:?}", r.window);
+            }
+            // the swatch changes it again
+            let b = house_field(&rig, "Swatch TD");
+            click_rect(&mut rig, b);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}");
+            rig.draw(3);
+            let b = picker_field(&rig, "Done");
+            click_rect(&mut rig, b);
+            rig.draw(3);
+            // Remove
+            let b = house_field(&rig, "Remove TD");
+            click_rect(&mut rig, b);
+            rig.draw(3);
+            assert_eq!(house::list(), vec![], "{what}: removed");
+            assert!(has_text(&rig.draw(3), "No house colours yet"), "{what}");
+            // a name that is empty or "Other" is refused in words
+            let b = house_field(&rig, "Add");
+            let p = click_rect(&mut rig, b);
+            assert!(has_text(&p, "Type the name first"), "{what}");
+            let b = house_field(&rig, "Done");
+            click_rect(&mut rig, b);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+            micro_parquet::rules::set_data_dir_override(None);
+        }
+    }
+}
+
+#[test]
+fn w7_a_chart_tab_takes_the_pick_without_being_calculated_again_and_a_chart_of_one_colour_says_so() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = colour_rig("p8w7d", ppp, w, h, false);
+        micro_parquet::rules::set_data_dir_override(Some(rig.app.paths.root_dir.clone()));
+        let what = rig.what.clone();
+        // a donut colours each part: its names are the categories
+        let mut s = rig.app.chart.spec.clone();
+        s.series = None;
+        s.category = "Branch".into();
+        s.kind = ChartKind::Donut;
+        rig.app.chart_set_spec(s);
+        pump_until(&mut rig, "the donut", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.kind == ChartKind::Donut && d.categories.len() == 3));
+        rig.app.chart_open_as_chart_tab();
+        pump_until(&mut rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1);
+        let id = chart_tab_id(&rig);
+        pump_until(&mut rig, "the chart tab is calculated", &|r| !r.app.jobs.any_busy());
+        rig.app.active_tab = 0;
+        let calculated = rig.app.chart_tabs[&id].data.values.clone();
+        rig.app.chart_tab_chart_action(id, crate::ui::chart_render::ChartAction::Colour(micro_parquet::charts::data::MarkRef { category: "Ctg".into(), series: None, facet: None }));
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ColourPicker, "{what}");
+        assert_eq!(rig.app.colour_picker.target, crate::ui::colour_picker::PickTarget::ChartTab(id), "{what}");
+        rig.draw(4);
+        assert_dialog_fits(&rig.ctx, &picker_title("Ctg"), &what);
+        let r = picker_field(&rig, "Deep Pink");
+        let before = rig.ctx.memory(|m| m.layer_id_at(r.center()));
+        rig.draw(2);
+        click_rect(&mut rig, r);
+        rig.draw(3);
+        let info = &rig.app.chart_tabs[&id];
+        assert_eq!(info.data.spec.colour_map.pick_of("Ctg"), Some(&ColourPick::swatch(4, 2)), "{what}");
+        assert_eq!(info.data.values, calculated, "{what}: the numbers are the ones that were calculated");
+        assert!(info.next_spec.is_none(), "{what}: nothing was asked of the worker");
+        // a column chart with no series has one colour: the mark says so and no picker opens
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.app.status_message.clear();
+        let mut one = rig.app.chart.spec.clone();
+        one.kind = ChartKind::Bar;
+        one.series = None;
+        rig.app.chart_set_spec(one);
+        pump_until(&mut rig, "the column chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.kind == ChartKind::Bar));
+        rig.app.studio_chart_action(crate::ui::chart_render::ChartAction::Colour(micro_parquet::charts::data::MarkRef { category: "Ctg".into(), series: None, facet: None }));
+        assert!(rig.app.status_message.contains("one colour for everything") && rig.app.active_tool == ActiveToolModal::None, "{what}: {}", rig.app.status_message);
+        micro_parquet::rules::set_data_dir_override(None);
+    }
 }

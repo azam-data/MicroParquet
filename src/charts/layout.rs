@@ -609,6 +609,9 @@ fn layout_chart_scaled(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn 
     if plan.kind_on(ValueKind::Amount) {
         notes.extend(plan.unit_note(&data.spec));
     }
+    // the colour warnings of picked items (hard to tell apart, low contrast, a status colour)
+    let cm = opts.colours.clone().unwrap_or_else(|| data.spec.colour_map.clone());
+    notes.extend(super::colours::colour_notes(data, &cm));
     let mut out = layout_chart_inner(data, rect, opts, m, &notes);
     // "All" leaves out the labels that would overlap and says how many (the note takes room, so the count is checked once more)
     if let Some(n) = super::labels::dropped_note(out.dropped.len()) {
