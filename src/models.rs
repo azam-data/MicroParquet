@@ -1866,6 +1866,20 @@ pub enum TransformStep {
     SqlQuery {
         query: String,
     },
+    /// Split date (Phase 8 W1): adds one column per date part ("Open Date Year", "Open Date Month" …) from a
+    /// Date or Datetime column, with the calendar the step was made with (a later change in View ▸ Calendar…
+    /// does not change it). A blank date gives blank parts.
+    SplitDate {
+        #[serde(default)]
+        column: String,
+        #[serde(default)]
+        parts: Vec<crate::dates::DatePart>,
+        #[serde(default)]
+        calendar: crate::dates::CalendarSettings,
+        /// The start of the new names; empty = the column's name.
+        #[serde(default)]
+        prefix: String,
+    },
 }
 
 impl TransformStep {
@@ -1914,6 +1928,7 @@ impl TransformStep {
             TransformStep::IfrsEcl { .. } => "IFRS 9 ECL",
             TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
+            TransformStep::SplitDate { .. } => "Split date",
             TransformStep::Skipped { .. } => "Off",
         }
     }
@@ -2058,6 +2073,21 @@ impl TransformStep {
                 t
             }
             TransformStep::SqlQuery { .. } => "SQL Query Transform".to_string(),
+            TransformStep::SplitDate { column, parts, .. } => {
+                format!("Split date: {} \u{2192} {} column{}", column, parts.len(), if parts.len() == 1 { "" } else { "s" })
+            }
+        }
+    }
+
+    /// The names of the columns a Split date step adds, in its part order: "<prefix> <Part>" (the prefix
+    /// defaults to the column's name). Empty for any other step.
+    pub fn split_date_names(&self) -> Vec<(crate::dates::DatePart, String)> {
+        match self {
+            TransformStep::SplitDate { column, parts, prefix, .. } => {
+                let p = if prefix.trim().is_empty() { column.trim() } else { prefix.trim() };
+                parts.iter().map(|part| (*part, format!("{} {}", p, part.label()))).collect()
+            }
+            _ => Vec::new(),
         }
     }
 }

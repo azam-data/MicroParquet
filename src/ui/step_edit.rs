@@ -30,6 +30,7 @@ pub fn step_modal(step: &TransformStep) -> Option<ActiveToolModal> {
         TransformStep::IfrsEcl { .. } => ActiveToolModal::IfrsEcl,
         TransformStep::GroupByPivot { .. } => ActiveToolModal::GroupByPivot,
         TransformStep::PivotTable { .. } => ActiveToolModal::PivotBuilder,
+        TransformStep::SplitDate { .. } => ActiveToolModal::SplitDate,
         TransformStep::FilterRows { .. }
         | TransformStep::FilterGroup { .. }
         | TransformStep::SortRows { .. }
@@ -112,6 +113,7 @@ impl MicroParquetApp {
                 new_col: self.normaliser.new_col.clone(),
             },
             ActiveToolModal::CleanLineBreaks => return self.clean_breaks_step(),
+            ActiveToolModal::SplitDate => self.split_date_step(),
             ActiveToolModal::RateBand => {
                 let band_def = self.rate_band.def().ok()?;
                 if self.rate_band.new_col.trim().is_empty() {
@@ -250,6 +252,11 @@ impl MicroParquetApp {
                 self.calc.op = op;
                 self.calc.right_is_col = right_is_col;
                 self.calc.right_val = right_val_or_col;
+            }
+            TransformStep::SplitDate { column, parts, calendar, prefix } => {
+                // the step keeps its own calendar
+                let prefix = if prefix.trim().is_empty() { column.clone() } else { prefix };
+                self.split_date = crate::ui::split_date::SplitDateState { column, parts, prefix, calendar, rects: Default::default() };
             }
             TransformStep::CleanLineBreaks { columns, trim_all } => {
                 self.clean_breaks.all = columns.is_empty();

@@ -49,6 +49,7 @@ pub mod reconcile;
 pub mod schema;
 pub mod sort;
 pub mod sort_lists;
+pub mod split_date;
 pub mod sql;
 pub mod stack;
 pub mod status;
@@ -130,6 +131,7 @@ impl MicroParquetApp {
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
             ActiveToolModal::Calendar => self.render_calendar_modal(ctx, cols),
+            ActiveToolModal::SplitDate => self.render_split_date_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),
             ActiveToolModal::ChartOpen => self.render_chart_open_modal(ctx, cols),

@@ -9,7 +9,7 @@ use crate::ui::render_tests_p4::Rig;
 use crate::ui::render_tests_p7::SIZES3;
 use crate::ui::tests::{parquet_source, settle, test_app};
 use micro_parquet::commands::CommandId;
-use micro_parquet::dates::{CalendarSettings, Weekday};
+use micro_parquet::dates::{CalendarSettings, DatePart, Weekday};
 use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::{NamedFrom, Series};
 
@@ -84,7 +84,8 @@ pub(crate) fn menu_item(rig: &mut Rig, menu: &str, item: &str) -> Painted {
     let p = rig.draw(3);
     let b = bar_box(&p, menu).unwrap_or_else(|| panic!("{}: the menu '{menu}' is in the bar", rig.what));
     let p = click_rect(rig, b);
-    let it = p.boxes.iter().find(|(t, bx)| t.contains(item) && bx.top() > b.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: '{item}' is in the {menu} menu", rig.what));
+    // the menu is painted last: its item is the last text that says it
+    let it = p.boxes.iter().rev().find(|(t, bx)| t.contains(item) && bx.top() > b.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: '{item}' is in the {menu} menu", rig.what));
     click_rect(rig, it)
 }
 
@@ -199,5 +200,102 @@ fn w0_a_field_added_to_a_pivot_a_chart_or_a_sort_takes_calendar_or_ranges() {
         rig.app.chart_set_spec(spec);
         rig.draw(4);
         assert_eq!(rig.app.chart.spec.order, SortOrder::Ranges, "{what}: the chart's category");
+    }
+}
+
+// ================================================================================ W1: Split date
+
+fn split_title() -> String {
+    format!("{}  {}", theme::ph::CALENDAR, crate::ui::split_date::SPLIT_DATE_TITLE)
+}
+
+fn split_button(rig: &Rig, starts: &str) -> egui::Rect {
+    rig.app.split_date.rects.buttons.iter().find(|(n, _)| n.starts_with(starts)).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: the button '{starts}'", rig.what))
+}
+
+fn split_part(rig: &Rig, name: &str) -> egui::Rect {
+    rig.app.split_date.rects.parts.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: the tick box '{name}'", rig.what))
+}
+
+#[test]
+fn w1_split_date_from_the_column_panel_and_the_edit_menu_by_real_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig8("p8w1", ppp, w, h, book8());
+        let what = rig.what.clone();
+        // the Column panel offers it for a date column, not for a text one
+        rig.app.selected_column = Some("Month".into());
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Column, true);
+        rig.app.right_tab = crate::ui::steps::RightTab::Column;
+        let p = rig.draw(4);
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("Split date")), "{what}: no button for a text column");
+        rig.app.selected_column = Some("Open Date".into());
+        let p = rig.draw(4);
+        let b = p.boxes.iter().find(|(t, _)| t.contains("Split date\u{2026}")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Column panel has Split date…"));
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SplitDate, "{what}");
+        assert_eq!(rig.app.split_date.column, "Open Date", "{what}: the inspected column");
+        let p = rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, &split_title(), &what);
+        let texts = dialog_texts(&mut rig, &p, r.window);
+        assert_no_overlap(&texts, &what);
+        let g = rig.app.split_date.rects.clone();
+        assert_eq!(g.parts.len(), 14, "{what}");
+        for (n, b) in g.parts.iter().chain(g.buttons.iter()) {
+            assert!(inside(*b, r.window), "{what}: '{n}' {b:?} is inside the dialog {:?}", r.window);
+        }
+        // the preview is in the scrolling middle: as wide as the dialog allows, and it starts in view
+        let pv = g.preview.expect("the preview");
+        assert!(pv.left() >= r.window.left() - 0.5 && pv.right() <= r.window.right() + 0.5 && pv.top() < r.body.bottom(), "{what}: the preview {pv:?} in {:?} / {:?}", r.window, r.body);
+        assert!(texts.iter().any(|(t, _)| t == "Week starts Saturday \u{b7} Fiscal year from January"), "{what}: the calendar line");
+        // the default ticks, the preview's columns and 5 rows
+        assert_eq!(rig.app.split_date.parts, DatePart::DEFAULT_SPLIT.to_vec(), "{what}");
+        for c in ["Open Date Year", "Open Date Quarter", "Open Date Month", "Open Date Month-Year", "Open Date Day name"] {
+            assert!(texts.iter().any(|(t, _)| t == c), "{what}: the preview has '{c}'");
+        }
+        // untick Day name, tick Fiscal year, by real clicks
+        let b = split_part(&rig, "Day name");
+        click_rect(&mut rig, b);
+        let b = split_part(&rig, "Fiscal year");
+        click_rect(&mut rig, b);
+        assert!(!rig.app.split_date.parts.contains(&DatePart::DayName) && rig.app.split_date.parts.contains(&DatePart::FiscalYear), "{what}: {:?}", rig.app.split_date.parts);
+        rig.draw(2);
+        assert!(rig.app.split_date.rects.buttons.iter().any(|(n, _)| n == "Add 5 columns"), "{what}");
+        // a text column: the message, and the button does nothing
+        let col_box = rig.app.split_date.rects.column.expect("the column box");
+        let p = click_rect(&mut rig, col_box);
+        let month = p.boxes.iter().filter(|(t, b)| t == "Month" && b.top() > col_box.top()).map(|(_, b)| *b).last().unwrap_or_else(|| panic!("{what}: Month is listed under Not dates"));
+        let p = click_rect(&mut rig, month);
+        assert_eq!(rig.app.split_date.column, "Month", "{what}");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("'Month' is text. Set it to Date in Schema & Ingestion (D/M/Y) first.")), "{what}: the message");
+        let b = split_button(&rig, "Add");
+        click_rect(&mut rig, b);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SplitDate, "{what}: nothing is added for a text column");
+        // back to the date column (the prefix follows it) and Add
+        rig.app.split_date.column = "Open Date".into();
+        rig.app.split_date.prefix = "Open Date".into();
+        rig.draw(3);
+        let b = split_button(&rig, "Add 5 columns");
+        click_rect(&mut rig, b);
+        settle(&mut rig.app);
+        rig.draw(3);
+        assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: closed");
+        let tab = &rig.app.tabs[rig.app.active_tab];
+        assert!(matches!(tab.steps.last(), Some(TransformStep::SplitDate { .. })), "{what}");
+        assert_eq!(tab.steps.last().map(|s| s.short_label()), Some("Split date: Open Date \u{2192} 5 columns".to_string()), "{what}");
+        let cols = tab.available_columns();
+        for c in ["Open Date Year", "Open Date Quarter", "Open Date Month", "Open Date Month-Year", "Open Date Fiscal year"] {
+            assert!(cols.iter().any(|x| x == c), "{what}: '{c}' in {cols:?}");
+        }
+        // the Edit menu opens it again; the same names are refused now, naming the column
+        menu_item(&mut rig, "Edit", "Split date");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::SplitDate, "{what}: Edit ▸ Split date…");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("a column 'Open Date Year' already exists. Change the prefix")), "{what}: the clash is named");
+        // a pivot of a part lists it in Calendar order without any choice (the order the step declares)
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(4);
+        rig.app.add_pivot_field("Open Date Month", crate::ui::pivot_builder::Area::Rows);
+        assert_eq!(rig.app.pivot_builder.spec.field_orders.first().map(|o| o.order.clone()), Some(SortOrder::Calendar { week_start: Weekday::Sat }), "{what}: known at once from the steps");
     }
 }

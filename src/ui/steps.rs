@@ -925,6 +925,7 @@ impl MicroParquetApp {
         let mut do_summary: Option<(String, SummarySpec)> = None;
         let mut do_format = false;
         let mut do_type = false;
+        let mut do_split: Option<String> = None;
         let (num_format, decimals) = (self.num_format, self.global_decimals);
         let self_log = self.inspector_log;
         let mut new_log = self_log;
@@ -1143,6 +1144,10 @@ impl MicroParquetApp {
                 if wide(ui, format!("{}  Add as sort level", theme::ph::SORT_ASCENDING)).clicked() {
                     do_sort = Some(name.clone());
                 }
+                // a Date or Datetime column can be split into its parts (W1)
+                if dtype.as_ref().is_some_and(micro_parquet::dates::is_date_type) && wide(ui, format!("{}  Split date\u{2026}", theme::ph::CALENDAR)).clicked() {
+                    do_split = Some(name.clone());
+                }
                 // Summary: the choice for this column, and the weight of a weighted average
                 let current = tab.summary.get(&name).cloned().unwrap_or_else(|| match dtype.as_ref() {
                     Some(d) => micro_parquet::summary::default_spec_for(d, &name, tab.control_col.as_deref()),
@@ -1213,6 +1218,9 @@ impl MicroParquetApp {
         }
         if do_type {
             self.open_schema_modal_for_active_tab();
+        }
+        if let Some(c) = do_split {
+            self.open_split_date(Some(c));
         }
     }
 }

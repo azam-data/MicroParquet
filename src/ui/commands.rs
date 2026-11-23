@@ -25,6 +25,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Conditional => ph::PLUS,
         CommandId::Normaliser => ph::BUILDINGS,
         CommandId::CleanBreaks => ph::BROOM,
+        CommandId::SplitDate => ph::CALENDAR,
         CommandId::JoinTabs => ph::LINK,
         CommandId::CopyTable => ph::CLIPBOARD_TEXT,
         CommandId::Buckets => ph::CALENDAR,
@@ -183,6 +184,12 @@ impl MicroParquetApp {
             }
             CommandId::Conditional => self.active_tool = ActiveToolModal::ConditionalCol,
             CommandId::Normaliser => self.active_tool = ActiveToolModal::NormalizeEntity,
+            CommandId::SplitDate => {
+                let inspected = self.selected_column.clone().filter(|c| {
+                    self.tabs.get(self.active_tab).and_then(|t| t.cached_slice.column(c).ok()).is_some_and(|s| micro_parquet::dates::is_date_type(s.dtype()))
+                });
+                self.open_split_date(inspected);
+            }
             CommandId::CleanBreaks => {
                 self.clean_breaks = CleanBreaksState::default();
                 self.active_tool = ActiveToolModal::CleanLineBreaks;

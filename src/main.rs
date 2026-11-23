@@ -128,6 +128,8 @@ pub enum ActiveToolModal {
     SortLists,
     /// View ▸ Calendar… (Phase 8 W0).
     Calendar,
+    /// Transform ▸ Split date… (Phase 8 W1).
+    SplitDate,
     /// New chart: the chart gallery (Phase 7 C2).
     ChartGallery,
     /// Charts ▸ Save chart (Phase 7 C2).
@@ -281,6 +283,7 @@ pub struct MicroParquetApp {
     pub sort: SortState,
     pub sort_lists: SortListsState,
     pub calendar_dialog: crate::ui::calendar::CalendarState,
+    pub split_date: crate::ui::split_date::SplitDateState,
     /// Fields whose labels the worker lists for their auto order (Phase 8 W0).
     pub auto_order_waits: Vec<crate::ui::auto_order::AutoOrderWait>,
     pub chart_gallery: crate::ui::chart_studio::ChartGalleryState,
@@ -418,6 +421,7 @@ impl MicroParquetApp {
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
             calendar_dialog: Default::default(),
+            split_date: Default::default(),
             auto_order_waits: Vec::new(),
             chart_gallery: Default::default(),
             chart_save: Default::default(),

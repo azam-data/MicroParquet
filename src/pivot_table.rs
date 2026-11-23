@@ -646,7 +646,8 @@ fn track_pivot_totals(steps: &[TransformStep]) -> PivotTracking {
         };
         match s {
             TransformStep::PivotTable { .. } => t = pivot_tracking_of(s),
-            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } | TransformStep::CleanLineBreaks { .. } => {}
+            // (Split date adds new columns and never writes one that exists)
+            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } | TransformStep::CleanLineBreaks { .. } | TransformStep::SplitDate { .. } => {}
             TransformStep::ConditionalColumn { .. }
             | TransformStep::MathFormula { .. }
             | TransformStep::NormalizeEntity { .. }

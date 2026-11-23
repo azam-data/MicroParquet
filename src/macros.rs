@@ -118,6 +118,78 @@ def _mp_rank_keys(e, rank_fn, sub_fn=None):
 
 "#;
 
+/// Python mirror of `dates::DatePart::value` (Split date, the filter "By" choice; Phase 8 W1/W2): plain Python on a
+/// `datetime.date` (a `datetime` drops its time), with the same labels and week rules. Keep the two in step.
+pub const PY_DATE_PART_HELPER: &str = r#"import datetime as _dt
+_MP_MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_MP_DAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _mp_week_starting(d, week_start):
+    """The first day of the week of d (on or before it); week_start is days since Monday."""
+    return d - _dt.timedelta(days=(d.weekday() - week_start) % 7)
+
+
+def _mp_date_part(d, part, fy_start, week_start):
+    """One part of a date, as MicroParquet writes it. Week of year: W01 is the week that contains 1 January."""
+    if d is None:
+        return None
+    if isinstance(d, _dt.datetime):
+        d = d.date()
+    q = (d.month - 1) // 3 + 1
+    fm = (d.month - fy_start) % 12 + 1
+    if part == "Year":
+        return d.year
+    if part == "Quarter":
+        return "Q%d" % q
+    if part == "Year-Quarter":
+        return "%d Q%d" % (d.year, q)
+    if part == "Month":
+        return _MP_MON_ABBR[d.month - 1]
+    if part == "Month number":
+        return d.month
+    if part == "Month-Year":
+        return "%s %d" % (_MP_MON_ABBR[d.month - 1], d.year)
+    if part == "Week of year":
+        first = _mp_week_starting(_dt.date(d.year, 1, 1), week_start)
+        return "W%02d" % ((_mp_week_starting(d, week_start) - first).days // 7 + 1)
+    if part == "Week starting":
+        return _mp_week_starting(d, week_start)
+    if part == "Day name":
+        return _MP_DAY_ABBR[d.weekday()]
+    if part == "Day of month":
+        return d.day
+    if part == "Date":
+        return d
+    if part == "Fiscal year":
+        y = d.year if d.month >= fy_start else d.year - 1
+        return "FY%d" % y if fy_start == 1 else "FY%d-%02d" % (y, (y + 1) % 100)
+    if part == "Fiscal quarter":
+        return "FQ%d" % ((fm - 1) // 3 + 1)
+    if part == "Fiscal month":
+        return fm
+    raise ValueError("Unknown date part: %s" % part)
+
+
+"#;
+
+/// The Python expression of one date part of a column (through `_mp_date_part`).
+pub fn py_date_part_expr(column: &str, part: crate::dates::DatePart, cal: &crate::dates::CalendarSettings) -> String {
+    let dtype = match part.part_type() {
+        crate::dates::PartType::Int => "pl.Int32",
+        crate::dates::PartType::Text => "pl.Utf8",
+        crate::dates::PartType::Date => "pl.Date",
+    };
+    format!(
+        "pl.col({}).map_elements(lambda d: _mp_date_part(d, {}, {}, {}), return_dtype={})",
+        serde_json::to_string(column).unwrap_or_default(),
+        serde_json::to_string(part.label()).unwrap_or_default(),
+        cal.fy_start_month,
+        cal.week_start.from_monday(),
+        dtype
+    )
+}
+
 /// Python mirror of `dates::calendar_rank` and `dates::parse_range` (the Calendar and Ranges orders, Phase 8
 /// W0). Plain Python, so the tests run it without Polars. Keep the two in step.
 pub const PY_CALENDAR_RANGES_HELPER: &str = r#"_MP_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
@@ -1059,6 +1131,21 @@ pub fn generate_python_polars_code(
                     g_str.join(", "),
                     a_strs.join(",\n    ")
                 ));
+            }
+            TransformStep::SplitDate { calendar, .. } => {
+                if !py.contains("def _mp_date_part") {
+                    py.push_str(PY_DATE_PART_HELPER);
+                }
+                let column = match step {
+                    TransformStep::SplitDate { column, .. } => column.clone(),
+                    _ => String::new(),
+                };
+                let exprs: Vec<String> = step
+                    .split_date_names()
+                    .into_iter()
+                    .map(|(part, name)| format!("{}.alias({})", py_date_part_expr(&column, part, calendar), serde_json::to_string(&name).unwrap_or_default()))
+                    .collect();
+                py.push_str(&format!("lf = lf.with_columns([\n    {},\n])\n\n", exprs.join(",\n    ")));
             }
             TransformStep::SqlQuery { query } => {
                 py.push_str(&format!(

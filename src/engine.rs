@@ -2380,6 +2380,8 @@ pub fn column_orders(steps: &[TransformStep]) -> std::collections::HashMap<Strin
 /// The orders one step declares (none for most steps).
 fn declared_orders(step: &TransformStep) -> Vec<(String, crate::sort_lists::SortOrder)> {
     match step {
+        // Split date: its text parts are in the Calendar order of the step's own week start
+        TransformStep::SplitDate { calendar, .. } => step.split_date_names().into_iter().filter_map(|(part, name)| part.sort_order(calendar).map(|o| (name, o))).collect(),
         _ => Vec::new(),
     }
 }
@@ -2931,6 +2933,14 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Some(spec) => crate::pivot_table::apply_pivot_table(lf, &spec),
             None => Ok(lf),
         },
+        TransformStep::SplitDate { column, parts, calendar, .. } => {
+            let mut lf = lf;
+            let schema = lf.collect_schema().context("Could not read the column types for Split date")?;
+            let names = step.split_date_names();
+            split_date_check(column, parts, calendar, &names, |c| schema.get(c).cloned())?;
+            let exprs: Vec<Expr> = names.iter().map(|(part, name)| part.expr(column, *calendar).alias(name.as_str())).collect();
+            Ok(lf.with_columns(exprs))
+        }
         TransformStep::SqlQuery { query } => {
             let mut ctx = SQLContext::new();
             ctx.register("self", lf);
@@ -2940,6 +2950,40 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(res_lf)
         }
     }
+}
+
+/// What stops a Split date step, in words a banker can act on: no column or part, a column that is missing
+/// or not a date, the same part twice, a calendar out of range, or a new name that is already a column.
+/// `dtype_of` gives the type of a column the step sees.
+pub fn split_date_check(
+    column: &str,
+    parts: &[crate::dates::DatePart],
+    calendar: &crate::dates::CalendarSettings,
+    names: &[(crate::dates::DatePart, String)],
+    dtype_of: impl Fn(&str) -> Option<DataType>,
+) -> Result<()> {
+    if column.trim().is_empty() {
+        anyhow::bail!("Split date: choose the date column to split.");
+    }
+    let Some(dtype) = dtype_of(column) else {
+        anyhow::bail!("Split date: the column '{}' was not found. Choose it again in the Split date dialog.", column);
+    };
+    crate::dates::check_date_column(column, &dtype)?;
+    if parts.is_empty() {
+        anyhow::bail!("Split date: tick at least one part (Year, Quarter, Month \u{2026}).");
+    }
+    for (i, p) in parts.iter().enumerate() {
+        if parts[..i].contains(p) {
+            anyhow::bail!("Split date: the part '{}' is ticked twice.", p.label());
+        }
+    }
+    calendar.validate()?;
+    for (_, name) in names {
+        if dtype_of(name).is_some() {
+            anyhow::bail!("Split date: a column '{}' already exists. Change the prefix in the Split date dialog, or rename that column first.", name);
+        }
+    }
+    Ok(())
 }
 
 /// "Clean line breaks": in each chosen text column (all text columns when `columns` is empty) a

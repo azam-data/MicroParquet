@@ -134,3 +134,5 @@ mod common8;
 mod p7_baseline;
 #[path = "../phase8/w0.rs"]
 mod p8_w0;
+#[path = "../phase8/w1.rs"]
+mod p8_w1;

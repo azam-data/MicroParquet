@@ -381,4 +381,8 @@ Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, f
 - W0-5: `actionlint` was refused by the session's permission check and not run; a test checks the workflow step instead.
 - W0-6: the macro Python export stays Polars Python; the Calendar and Ranges mirrors are plain Python functions, run by the tests with python3.
 - W0-7: two older tests that pinned 1.6.0 now expect 1.8.0.
+- W1-1: Split date is in the Edit menu with the other transforms (no Transform menu exists), the Column panel and Ctrl+K; non-date columns are listed under "Not dates" and refused with the message.
+- W1-2: a prefix equal to the column's name is stored empty (the default).
+- W1-3: the Python export is Polars with a plain-Python part function, not pandas `dt`; the test runs the function on all 1,000 rows.
+- W1-4: the preview is the first 5 rows of the page in view.
 </accepted_deviations>

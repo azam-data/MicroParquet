@@ -29,6 +29,7 @@ pub enum CommandId {
     Conditional,
     Normaliser,
     CleanBreaks,
+    SplitDate,
     JoinTabs,
     CopyTable,
     // Banking
@@ -179,6 +180,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Pivot, "Pivot table (Rows, Columns, Values)\u{2026}", G::Transform, "group by aggregate wavg weighted average summary crosstab subtotal", N::Tab),
     c(I::Conditional, "Conditional column (IF / ELSE)\u{2026}", G::Transform, "case when flag", N::Tab),
     c(I::CleanBreaks, "Clean line breaks\u{2026}", G::Transform, "newline carriage return quoted multiline cell wrap spaces replace", N::Tab),
+    c(I::SplitDate, "Split date\u{2026}", G::Transform, "date parts year quarter month month-year week day name fiscal open date calendar columns", N::Tab),
     c(I::Normaliser, "Counterparty name normaliser\u{2026}", G::Transform, "clean entity names ltd", N::Tab),
     c(I::JoinTabs, "SQL join of two open tabs\u{2026}", G::Transform, "merge lookup left right", N::TwoTabs),
     c(I::CopyTable, "Copy the table to the clipboard", G::Transform, "excel powerpoint slides paste spreadsheet", N::Tab),
@@ -266,7 +268,7 @@ pub const TOOLBAR_BUTTONS_FILE: &[CommandId] = &[I::OpenFile, I::Stack, I::Batch
 pub const TOOLBAR_BUTTONS_TRANSFORM: &[CommandId] = &[I::Filter, I::Sort, I::Columns, I::CalcColumn, I::Pivot, I::RateProfile];
 pub const TOOLBAR_BUTTONS_VIEW: &[CommandId] = &[I::ToggleChart, I::ToggleSql];
 /// The items of the Edit menu below Undo and Redo (Undo and Redo come first).
-pub const EDIT_MENU: &[CommandId] = &[I::Undo, I::Redo, I::Conditional, I::Normaliser, I::CleanBreaks, I::JoinTabs, I::CopyTable];
+pub const EDIT_MENU: &[CommandId] = &[I::Undo, I::Redo, I::Conditional, I::Normaliser, I::CleanBreaks, I::SplitDate, I::JoinTabs, I::CopyTable];
 /// Edit ▸ "Data checks".
 pub const DATA_CHECKS: &[CommandId] = &[I::Audit, I::DqScorecard];
 
