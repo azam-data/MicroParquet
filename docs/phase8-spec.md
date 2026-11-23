@@ -345,6 +345,30 @@ The Power BI date hierarchy, without adding columns.
   - render tests by real clicks at 3 sizes: the tick list, All/None, the "Filters on this chart" section
 </task>
 
+<task id="W9" name="Date comparisons by part">
+- On a Date or Datetime column the "By" choice (Date / Year / Month-Year / Year-Quarter / Month / Quarter / Day name) shows for every operator: =, ≠, in list, not in list, >, ≥, <, ≤ (and between, if the filter has it). It stays visible when the operator changes.
+- Comparison uses the part's order, never its text: Year and Month number numerically; Month-Year and Year-Quarter by time; Month, Quarter and Day name by the Calendar order (Day name from the copied week start); Date by date.
+- The value box offers the part's values in that order; a value that isn't that part is refused with a plain message. Blank dates never match. Stored in FilterCondition.part (serde default None). Works the same in the tab filter and in W10's "Filters on this chart". Python export mirrors it.
+- Acceptance:
+  - Year ≥ 2025 keeps 2025 and 2026 rows
+  - Month-Year ≥ Aug 2025 and ≤ Jan 2026 keeps exactly Aug 2025 to Jan 2026, across the year change
+  - Month < Apr keeps Jan to Mar of every year
+  - Day name ≥ Wed with Saturday start keeps Wed, Thu, Fri
+  - old filters load unchanged; Python gives the same rows when pandas is present
+  - render test by real clicks at 3 sizes: switching to > keeps the By choice, in the tab filter and in the chart's filters
+</task>
+
+<task id="W11" name="Stacked segment labels and data table">
+- Studio option for stacked and 100% stacked column and bar: "Segment labels" Off (default, today's output) / On. Each segment shows its value (percent for 100% stacked): straight if it fits, else turned 90° on column charts if it fits, else left out (still in the tooltip and table). Never clipped, never overlapping. Text is white or ink by contrast with the segment, as heatmap cells; never the series colour. "Hide below x% of the bar", default 5%. The total on top stays.
+- Honoured in-app, HTML (ECharts inside labels, rotate), Excel (dLbls per series) and PDF.
+- "Data table": Off (default) / Below the chart / Beside the chart. Chart PDF, chart book and report-pack PDF print the chart's data (categories × series, with totals, in the chart's scale and order) on the same page. Beside uses landscape. If the table doesn't fit, it continues on the next page with its header repeated; text never below 8 pt. HTML shows the table open under the chart.
+- Acceptance:
+  - a 3-series stacked column with a tall, a narrow and a tiny segment: straight, turned and left out; no label rect overlaps or leaves its segment (render tests at 3 sizes, light and dark)
+  - the Excel chart XML has dLbls on every series when On and none when Off
+  - a 12 × 3 chart PDF with the table below, and beside: the page text holds every value and total, on one page
+  - with both options Off, the output equals Phase 7's
+</task>
+
 </tasks>
 
 <guide_notes>
