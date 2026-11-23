@@ -32,3 +32,11 @@ Desktop Parquet/CSV viewer, converter and editor (Rust, eframe/egui 0.29, Polars
 
 ## Compact instructions
 When compacting, keep: the task IDs in progress, which tests pass or fail, deviations from the spec, and open questions for the owner. Drop file contents and build logs.
+
+## Working efficiently
+- One or two task IDs per session; resume from the progress file.
+- While editing: cargo check, then only the task's tests, e.g.
+  cargo test -q --test phase3 w5 2>&1 | tail -40
+- Full cargo test once before each commit, piped through tail -40.
+- Don't read src/main.rs or other large files whole; grep and read ranges.
+- Never paste build logs or test lists into the reply; summarise.
