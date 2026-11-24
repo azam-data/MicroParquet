@@ -1147,6 +1147,133 @@ fn p2_the_pop_out_builder_chooses_the_layout_too_and_apply_makes_the_step_the_do
     }
 }
 
+/// Draws until `done`, then a few more frames (the worker's jobs finished).
+fn wait_in(place: &mut Place, rig: &mut Rig, what: &str, done: &dyn Fn(&Rig) -> bool) -> Painted {
+    for _ in 0..600 {
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        place.draw(rig, 1);
+        if done(rig) && !rig.app.jobs.any_busy() {
+            return place.draw(rig, 3);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{}: '{what}' timed out", rig.what);
+}
+
+fn is_nested_preview(r: &Rig, blank: bool) -> bool {
+    let b = &r.app.pivot_builder;
+    b.preview_nested.as_ref().map(|v| v.blank_line_after_group == blank).unwrap_or(false) && b.spec.layout == PivotLayout::Nested { blank_line_after_group: blank }
+}
+
+/// The tab's Nested view, when ready.
+fn tab_view(rig: &Rig, at: usize) -> micro_parquet::pivot_view::NestedView {
+    match rig.app.nested_views.get(&rig.app.tabs[at].id).map(|c| &c.state) {
+        Some(crate::ui::pivot_layout::NestedState::Ready(v)) => v.clone(),
+        _ => panic!("the tab's Nested view"),
+    }
+}
+
+#[test]
+fn p2_the_dialogs_preview_shows_the_nested_view_the_tab_shows_docked_and_in_the_window_at_three_sizes() {
+    use micro_parquet::pivot_view::NestedView;
+    // the lines as the grid draws them: label, level, bold flag, the values
+    fn lines(v: &NestedView) -> (Vec<(String, usize, bool, bool)>, Vec<Vec<String>>) {
+        let l = v.rows.iter().map(|r| (r.label.clone(), r.level, r.is_bold(), r.is_blank())).collect();
+        let vals = (0..v.rows.len()).map(|i| v.values.get_columns().iter().map(|c| format!("{:?}", c.get(i).expect("a cell"))).collect()).collect();
+        (l, vals)
+    }
+    let places: [Option<(f32, f32)>; 3] = [None, Some(POPS[0]), Some(POPS[1])];
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            for pop in places {
+                let mut rig = rig9("p9p2_prev", ppp, w, h);
+                rig.app.dark_mode = dark;
+                let what = format!("{} {} {}", rig.what, if dark { "dark" } else { "light" }, pop.map(|p| format!("window {}x{}", p.0, p.1)).unwrap_or("docked".into()));
+                rig.app.run_command(&rig.ctx, CommandId::Pivot);
+                rig.draw(8);
+                let mut place = match pop {
+                    None => Place::Docked,
+                    Some((pw, ph)) => popped(&mut rig, pw, ph, &what),
+                };
+                for (f, a) in [("Product", "Rows"), ("Branch", "Rows"), ("Balance", "Values")] {
+                    add_to(&mut place, &mut rig, f, a, &what);
+                }
+                wait_in(&mut place, &mut rig, "the flat preview", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+                // Side by side previews the flat table
+                assert!(rig.app.pivot_builder.preview_nested.is_none(), "{what}: Side by side has no Nested preview");
+                let flat_head: Vec<String> = match &rig.app.pivot_builder.preview {
+                    Some(Ok(df)) => df.get_column_names().iter().map(|n| n.to_string()).collect(),
+                    _ => unreachable!(),
+                };
+                assert_eq!(flat_head, ["Product", "Branch", "Sum of Balance"], "{what}: the flat table's columns");
+                // Nested, by a real click: the preview becomes the Nested view, the rest is as it was
+                let spec_before = rig.app.pivot_builder.spec.clone();
+                let g = place.rects(&rig);
+                pick_in_place(&mut place, &mut rig, g.layout_combo, "Nested (Excel style)", &what);
+                let p = wait_in(&mut place, &mut rig, "the Nested preview", &|r| is_nested_preview(r, false));
+                let mut after = rig.app.pivot_builder.spec.clone();
+                after.layout = spec_before.layout;
+                assert_eq!(format!("{after:?}"), format!("{spec_before:?}"), "{what}: only the layout changed");
+                let g = place.rects(&rig);
+                // drawn: one "Row Labels" column, no column of its own for the Rows fields, the first parent bold, its child one level in
+                let pv = rig.app.pivot_builder.preview_nested.clone().expect("the preview's view");
+                let area = g.preview_scroll;
+                let in_area = |t: &str| p.texts.iter().find(|(x, pos, _)| x == t && area.contains(*pos)).cloned();
+                assert!(in_area("Row Labels").is_some(), "{what}: the preview has a Row Labels column");
+                assert!(in_area("Product").is_none() && in_area("Branch").is_none(), "{what}: no column of its own for a Rows field");
+                let (parent, child) = (pv.rows[0].label.clone(), pv.rows[1].label.clone());
+                let pt = in_area(&parent).unwrap_or_else(|| panic!("{what}: '{parent}' drawn"));
+                assert_eq!(pt.2, theme::family_bold(), "{what}: the parent is bold, as on the tab");
+                // (the docked dialog at the smaller sizes has room for one line under the heading: a child is checked where one is on show)
+                match in_area(&child) {
+                    Some(ct) => {
+                        assert_ne!(ct.2, theme::family_bold(), "{what}: a leaf is not bold");
+                        assert!((ct.1.x - pt.1.x - theme::NESTED_INDENT_PX).abs() < 1.0, "{what}: the child {:?} is one level right of its parent {:?}", ct.1, pt.1);
+                    }
+                    None => assert!(pop.is_none(), "{what}: '{child}' drawn in the window"),
+                }
+                let rows_here = if pop.is_none() { crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, area) } else { p.glyphs.iter().filter(|(_, b)| inside(*b, area)).cloned().collect::<Vec<_>>() };
+                assert_no_overlap(&rows_here, &what);
+                // the blank-line option, by a real click: it changes the preview and nothing else
+                let g = place.rects(&rig);
+                assert!(g.blank_line.is_positive(), "{what}: the option");
+                place.click(&mut rig, g.blank_line);
+                wait_in(&mut place, &mut rig, "the blank lines", &|r| is_nested_preview(r, true));
+                // Side by side again, then Nested with the option kept
+                let g = place.rects(&rig);
+                pick_in_place(&mut place, &mut rig, g.layout_combo, "Side by side", &what);
+                wait_in(&mut place, &mut rig, "the flat preview again", &|r| r.app.pivot_builder.preview_nested.is_none() && matches!(r.app.pivot_builder.preview, Some(Ok(_))) && r.app.pivot_builder.spec.layout == PivotLayout::SideBySide);
+                let g = place.rects(&rig);
+                pick_in_place(&mut place, &mut rig, g.layout_combo, "Nested (Excel style)", &what);
+                let g = place.rects(&rig);
+                place.click(&mut rig, g.blank_line);
+                wait_in(&mut place, &mut rig, "the Nested preview again", &|r| is_nested_preview(r, true));
+                let preview = rig.app.pivot_builder.preview_nested.clone().expect("the preview's view");
+                assert!(preview.rows.iter().any(|r| r.is_blank()) || preview.rows.len() < 52, "{what}: the blank line after the first group shows once 50 children are in view");
+                // Apply: the tab's Nested view has the same lines
+                let create = button(&rig, "Create pivot tab").unwrap_or_else(|| panic!("{what}: Create pivot tab"));
+                place.click(&mut rig, create);
+                rig.draw(4);
+                pump(&mut rig, "the tab's Nested view", &|r| r.app.tabs.len() == 2 && r.app.nested_views.contains_key(&r.app.tabs[1].id) && view_lines(r, 1).is_some());
+                let tab = tab_view(&rig, 1);
+                let n = preview.rows.len();
+                assert!(n >= 20 && n <= tab.rows.len(), "{what}: the preview has {n} of the tab's {} lines", tab.rows.len());
+                let (pl, pvv) = lines(&preview);
+                let (tl, tvv) = lines(&tab.head(n));
+                assert_eq!(pl, tl, "{what}: labels, levels, bold flags and blank lines are the tab's");
+                assert_eq!(pvv, tvv, "{what}: the values are the tab's");
+                assert_eq!(preview.rows.iter().map(|r| (r.kind, r.keys.clone())).collect::<Vec<_>>(), tab.rows.iter().take(n).map(|r| (r.kind, r.keys.clone())).collect::<Vec<_>>(), "{what}: kinds and keys");
+                if pop == Some(POPS[1]) {
+                    assert!(n > 20, "{what}: the big window previews more than the docked 20 lines: {n}");
+                }
+                if pop.is_none() {
+                    assert_eq!(n, 20, "{what}: docked: 20 lines");
+                }
+            }
+        }
+    }
+}
+
 /// 16 loan lines of the owner's shape: Bank (Conventional, Islami) and CL status (some blank).
 fn book_cl() -> DataFrame {
     let rows: [(&str, Option<&str>, &str, f64, f64); 16] = [

@@ -5,7 +5,8 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
 | P1 | DONE (S1), follow-ups DONE (S2) | (see git log: "Phase 9 P1", "Phase 9 P1: follow-ups") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
-| P2 | DONE (S2) | (see git log: "Phase 9 P2") | tests/phase9/p2.rs x16 (subtotals, grand total, leaves, hash of the flat table, three levels, blank lines, Columns, last-step rule, Excel XML, scale, PDF text and indent, CSV and Python, Show rows, old pivots, the sheet limit); render_tests_p9 x5 (the dialog, the tab's bar and undo, Show rows by clicks, steps after the pivot, the pop-out) |
+| P2 | DONE (S2), follow-up DONE (S3) | (see git log: "Phase 9 P2") | tests/phase9/p2.rs x16 (subtotals, grand total, leaves, hash of the flat table, three levels, blank lines, Columns, last-step rule, Excel XML, scale, PDF text and indent, CSV and Python, Show rows, old pivots, the sheet limit); render_tests_p9 x5 (the dialog, the tab's bar and undo, Show rows by clicks, steps after the pivot, the pop-out) |
+| M0 | (S3, after the follow-up) | | |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -110,3 +111,18 @@ Proved to fail without the fix (stubs, each restored; failing tests by stub):
 - Not stubbed: `p2_side_by_side_subtotals_are_calculated…` (it documents what the unchanged code does; it passes on it).
 
 Found while doing P2: the P1 test `p1_the_window_previews_as_many_rows_as_fit…` failed when the Layout box was a new row of the toggles (the window lost two preview rows), so the box is in the dialog's header row (P2-10). Also: a first click on the second field's "..." menu of a fresh dialog does not open it in the headless frames (see "Found, not changed").
+
+## P2 follow-up (S3): the owner's decisions on S2
+
+Written under "Owner decisions on S2" in `docs/phase9-spec.md` `<accepted_deviations>`: P1-9, P1-10, P2-1 to P2-10 accepted (P2-1 changed); Questions 1, 3, 4 as the owner answered; new P2-11.
+
+| Decision | Test |
+| --- | --- |
+| P2-1 changed: with Nested chosen the dialog's preview (docked and pop-out) is the Nested view (Row Labels column, bold parents, indent, blank lines, Grand total); Side by side previews the flat table; switching the layout changes only the preview | `p2_the_dialogs_preview_shows_the_nested_view_the_tab_shows_docked_and_in_the_window_at_three_sizes` (3 sizes x light/dark x docked, 900x600 and 1600x1000 windows, all by real clicks: the flat columns first, Nested by the Layout box, only the layout changed in the spec, "Row Labels" drawn and no Rows-field columns, parent in the tab's bold, child one level (16) in, no overlap, the blank-line option, back and forth between layouts, Apply; then the preview's lines equal the tab's Nested view line for line: labels, levels, bold flags, blank lines, kinds, keys and values; docked 20 lines, the 1600x1000 window more) |
+| The P1 test of more preview rows in the pop-out still passes | `p1_the_window_previews_as_many_rows_as_fit_more_than_the_docked_dialog_and_uses_its_width` (run: ok) |
+
+Proved to fail without the fix (stubs, restored): the worker not returning the Nested view (`p2_the_dialogs_preview_shows_the_nested_view…` times out waiting for it); the dialog drawing the flat table when a Nested view is there (same test: "the preview has a Row Labels column").
+
+The pictures `docs/guide/img/pivot-layout-dialog.png` and `-dark.png` changed on purpose (the dialog's preview is Nested now). The full test run also rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored.
+
+Full `cargo test` before the commit: 9 + 311 + 725 + 60 passed.

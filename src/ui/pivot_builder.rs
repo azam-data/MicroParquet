@@ -136,6 +136,8 @@ pub struct PivotBuilderState {
     /// The preview of those settings: the first rows, or why there is none.
     pub preview: Option<Result<DataFrame, String>>,
     pub preview_total_rows: usize,
+    /// The Nested view of the preview's settings, when they choose Nested (the dialog draws it instead of the flat table).
+    pub preview_nested: Option<micro_parquet::pivot_view::NestedView>,
     /// All columns of the last good preview (the label columns first), for the column formats.
     pub value_columns: Vec<String>,
     pub popup: Option<FilterPopup>,
@@ -241,6 +243,7 @@ impl MicroParquetApp {
         b.submitted = None;
         b.preview = None;
         b.preview_total_rows = 0;
+        b.preview_nested = None;
         b.value_columns.clear();
         b.popup = None;
         b.new_tab = !editing;
@@ -320,6 +323,7 @@ impl MicroParquetApp {
             }
             b.preview = Some(r.table);
             b.preview_total_rows = r.total_rows;
+            b.preview_nested = r.nested;
             b.preview_limit = r.limit;
         }
     }
@@ -593,7 +597,7 @@ impl MicroParquetApp {
             }
         });
         rects.layout_combo = combo.response.rect;
-        combo.response.on_hover_text("Nested puts all Rows fields in one column with each group's subtotal on its own line, as Excel's Compact form. The tab shows it; exports of the data stay flat. The preview below is the flat table.");
+        combo.response.on_hover_text("Nested puts all Rows fields in one column with each group's subtotal on its own line, as Excel's Compact form. The preview below and the tab show it the same way; exports of the data stay flat. Side by side previews the flat table.");
         if s.layout.is_nested() {
             let mut on = s.layout.blank_line();
             let b = ui.checkbox(&mut on, "Blank line after each group");
@@ -1271,7 +1275,10 @@ impl MicroParquetApp {
                 let left = ui.available_height().min(h);
                 let area_h = (left - theme::SPACE_XS).max(theme::DATA_ROW_H);
                 let out = egui::ScrollArea::both().id_salt("pivot_preview").max_height(area_h).auto_shrink([false, false]).show(ui, |ui| match &self.pivot_builder.preview {
-                    Some(Ok(df)) => self.pivot_preview_grid(ui, df, tk),
+                    Some(Ok(df)) => match (&self.pivot_builder.preview_nested, matches!(self.pivot_builder.spec.layout, PivotLayout::Nested { .. })) {
+                        (Some(view), true) => self.pivot_preview_nested_grid(ui, view, tk),
+                        _ => self.pivot_preview_grid(ui, df, tk),
+                    },
                     Some(Err(e)) => {
                         ui.add_space(theme::SPACE_S);
                         ui.horizontal_wrapped(|ui| {
@@ -1343,6 +1350,72 @@ impl MicroParquetApp {
             let total = has_total_row && r == last;
             let fill = if total { Some(tk.accent_soft) } else if r % 2 == 1 { Some(tk.zebra) } else { None };
             draw_row(ui, row, false, fill, total);
+        }
+    }
+
+    /// The preview of the Nested layout: one "Row Labels" column, a parent line and the Grand total in bold, the indent of each level,
+    /// the blank lines when chosen. It is the view the worker built for the tab's Nested layout, drawn the same way.
+    fn pivot_preview_nested_grid(&self, ui: &mut egui::Ui, view: &micro_parquet::pivot_view::NestedView, tk: &theme::Tokens) {
+        let spec = &self.pivot_builder.spec;
+        let names: Vec<String> = view.values.get_column_names().iter().map(|n| n.to_string()).collect();
+        let formats: HashMap<String, ColumnFormatSpec> = pivot_column_formats(spec, &names, self.global_decimals).into_iter().collect();
+        let cells: Vec<Vec<String>> = (0..view.rows.len())
+            .map(|r| {
+                if view.rows[r].is_blank() {
+                    return vec![String::new(); names.len()];
+                }
+                names.iter().enumerate().map(|(c, n)| view.values.get_columns().get(c).and_then(|s| s.get(r).ok()).map(|v| self.pivot_cell_text(n, v, formats.get(n))).unwrap_or_default()).collect()
+            })
+            .collect();
+        let mono = egui::FontId::new(theme::TEXT_MONO, egui::FontFamily::Monospace);
+        let head_font = egui::FontId::new(theme::TEXT_BASE, theme::family_semibold());
+        let deepest = view.rows.iter().map(|r| r.level).max().unwrap_or(0) as f32 * theme::NESTED_INDENT_PX;
+        let text_w = |t: &str, f: &egui::FontId| ui.fonts(|fo| fo.layout_no_wrap(t.to_string(), f.clone(), tk.ink).size().x);
+        let label_body = view.rows.iter().map(|r| text_w(&r.label, &head_font)).fold(0.0, f32::max);
+        let label_w = (text_w(&view.label_header, &head_font).max(label_body) + deepest + 2.0 * theme::SPACE_M).max(theme::PIVOT_PREVIEW_LABEL_W);
+        let mut widths = vec![label_w];
+        for (c, n) in names.iter().enumerate() {
+            let body = cells.iter().map(|row| text_w(&row[c], &mono)).fold(0.0, f32::max);
+            widths.push((text_w(n, &head_font).max(body) + 2.0 * theme::SPACE_M).max(theme::PIVOT_PREVIEW_COL_W));
+        }
+        let total_w: f32 = widths.iter().sum();
+        let draw_row = |ui: &mut egui::Ui, level: usize, label: &str, texts: &[String], head: bool, fill: Option<egui::Color32>, bold: bool| {
+            let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, theme::PIVOT_PREVIEW_ROW_H), egui::Sense::hover());
+            if let Some(f) = fill {
+                ui.painter().rect_filled(row, 0.0, f);
+            }
+            let mut x = row.left();
+            for c in 0..widths.len() {
+                let cell = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(widths[c], row.height()));
+                x += widths[c];
+                let mut inner = cell.shrink2(egui::vec2(theme::SPACE_M, 0.0));
+                let (t, layout) = if c == 0 {
+                    inner.min.x += level as f32 * theme::NESTED_INDENT_PX;
+                    (label, egui::Layout::left_to_right(egui::Align::Center))
+                } else {
+                    (texts[c - 1].as_str(), egui::Layout::right_to_left(egui::Align::Center))
+                };
+                if t.is_empty() {
+                    continue;
+                }
+                let rich = if head {
+                    egui::RichText::new(t).font(head_font.clone()).color(tk.ink)
+                } else if c > 0 {
+                    egui::RichText::new(t).font(if bold { egui::FontId::new(theme::TEXT_MONO, theme::family_mono_semibold()) } else { mono.clone() }).color(tk.ink)
+                } else if bold {
+                    egui::RichText::new(t).family(theme::family_bold()).size(theme::TEXT_BASE).color(tk.ink)
+                } else {
+                    egui::RichText::new(t).color(tk.ink)
+                };
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(layout), |ui| {
+                    ui.add(egui::Label::new(rich).truncate());
+                });
+            }
+        };
+        draw_row(ui, 0, &view.label_header, &names, true, Some(tk.zebra), true);
+        for (r, line) in view.rows.iter().enumerate() {
+            let fill = if line.is_grand_total() { Some(tk.accent_soft) } else { None };
+            draw_row(ui, line.level, &line.label, &cells[r], false, fill, line.is_bold());
         }
     }
 

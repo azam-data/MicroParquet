@@ -79,6 +79,18 @@ pub struct NestedView {
 }
 
 impl NestedView {
+    /// The first `n` lines (the pivot dialog's preview shows as many as fit).
+    pub fn head(&self, n: usize) -> NestedView {
+        NestedView {
+            label_header: self.label_header.clone(),
+            fields: self.fields.clone(),
+            rows: self.rows.iter().take(n).cloned().collect(),
+            values: self.values.head(Some(n)),
+            col_keys: self.col_keys.clone(),
+            blank_line_after_group: self.blank_line_after_group,
+        }
+    }
+
     /// The value column named `name`, or `None`.
     pub fn column_keys(&self, name: &str) -> Option<&Vec<Option<String>>> {
         let at = self.values.get_column_names().iter().position(|n| n.as_str() == name)?;

@@ -1159,6 +1159,9 @@ pub struct PivotPreviewResult {
     pub total_rows: usize,
     /// How many rows `table` was cut to.
     pub limit: usize,
+    /// The Nested view of the pivot (its first `limit` lines) when the settings choose Nested: built by the same function as the
+    /// tab's Nested view, from the same source rows (Phase 9 P2 follow-up).
+    pub nested: Option<crate::pivot_view::NestedView>,
 }
 
 /// How many rows of the pivot the docked dialog previews (the pop-out window asks for as many as fit, at least this many).
@@ -1175,18 +1178,30 @@ pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<P
     let schema = lf.collect_schema()?;
     let fields: Vec<(String, FieldKind)> = schema.iter().map(|(n, dt)| (n.to_string(), FieldKind::of(dt))).collect();
     ctx.check()?;
+    let limit = req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX);
+    let mut nested = None;
     let (table, total_rows) = if req.spec.values.is_empty() || (req.spec.rows.is_empty() && req.spec.columns.is_empty()) {
         (Err("Drag fields into Rows or Columns, and a field into Values, to see the table.".to_string()), 0)
     } else {
+        let wants_nested = matches!(req.spec.layout, crate::models::PivotLayout::Nested { .. }) && !req.spec.rows.is_empty();
+        let lf_nested = if wants_nested { Some(lf.clone()) } else { None };
         match crate::pivot_table::build_pivot(lf, &req.spec) {
             Ok(b) => {
                 let n = b.df.height();
-                (Ok(b.df.head(Some(req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX)))), n)
+                match lf_nested.map(|l| crate::pivot_view::build_nested(l, &req.spec)) {
+                    Some(Ok(v)) => {
+                        let lines = v.rows.len();
+                        nested = Some(v.head(limit));
+                        (Ok(b.df.head(Some(limit))), lines)
+                    }
+                    Some(Err(e)) => (Err(format!("{:#}", e)), 0),
+                    None => (Ok(b.df.head(Some(limit))), n),
+                }
             }
             Err(e) => (Err(format!("{:#}", e)), 0),
         }
     };
-    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows, limit: req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX) })
+    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows, limit, nested })
 }
 
 pub struct PivotValuesRequest {
