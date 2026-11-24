@@ -22,6 +22,7 @@ pub mod jobs;
 pub mod liquidity;
 pub mod macros;
 pub mod model;
+pub mod model_calendar;
 pub mod models;
 pub mod mom;
 pub mod overdue;

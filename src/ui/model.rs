@@ -78,6 +78,10 @@ pub struct ModelState {
     pub scope_fp: u64,
     /// The title each linked tab had when it was last open, by project key: a tab that is closed is still named in the messages.
     pub titles: HashMap<String, String>,
+    /// The snapshot dates of each date-linked tab, by project key (Phase 9 M2).
+    pub date_info: HashMap<String, crate::ui::model_calendar::DateInfoRuntime>,
+    /// The Calendar and As-of date dialogs (Phase 9 M2).
+    pub cal: crate::ui::model_calendar::CalUi,
 }
 
 fn fingerprint<T: Hash>(v: &T) -> u64 {
@@ -95,7 +99,7 @@ impl MicroParquetApp {
     }
 
     /// The project key of a tab; a tab that has none yet gets the next one (the same numbering a save gives).
-    fn model_ensure_key(&mut self, id: u64) -> String {
+    pub(crate) fn model_ensure_key(&mut self, id: u64) -> String {
         if let Some(k) = self.project.keys.get(&id) {
             return k.clone();
         }
@@ -168,7 +172,7 @@ impl MicroParquetApp {
             return Vec::new();
         };
         let mut out = Vec::new();
-        for l in self.project.model.links.iter().filter(|l| &l.data_tab == key) {
+        for l in self.project.model.all_links().iter().filter(|l| &l.data_tab == key) {
             let title = self.model_tab_title(&l.lookup_tab).trim_end_matches(" (not open)").to_string();
             let name = self.model_link_name(l);
             let columns = self
@@ -188,6 +192,10 @@ impl MicroParquetApp {
 
     /// The order the lookup's own steps declare for a column (Split date parts, unnumbered rate bands), when a lookup field is added.
     pub(crate) fn model_declared_order(&self, f: &model::ModelFieldRef) -> Option<micro_parquet::sort_lists::SortOrder> {
+        // a Calendar field has the order of its date part (Phase 9 M2): months in time, days from the week start
+        if let Some(c) = self.project.model.calendar.as_ref().filter(|c| c.tab == f.lookup_tab) {
+            return micro_parquet::dates::DatePart::from_label(&f.column).and_then(|p| p.sort_order(&c.settings));
+        }
         let t = self.model_worker_tab(&f.lookup_tab)?;
         micro_parquet::engine::column_orders(&t.steps).remove(&f.column)
     }
@@ -206,13 +214,13 @@ impl MicroParquetApp {
     /// Makes the model of the open project the one this thread's jobs read: the links, the lookups read after their own steps, and
     /// the reason a link can't be used. Called every frame; it rebuilds only when something it is made from changed.
     pub(crate) fn model_scope_refresh(&mut self) {
-        if !self.project.active || self.project.model.links.is_empty() {
+        if !self.project.active || self.project.model.all_links().is_empty() {
             self.project.model_ui.scope = None;
             self.project.model_ui.scope_fp = 0;
             model::set_scope(None);
             return;
         }
-        let links = self.project.model.links.clone();
+        let links = self.project.model.all_links();
         let mut parts: Vec<(Link, Option<ModelTab>, Option<String>)> = Vec::new();
         for l in &links {
             let lookup = self.model_worker_tab(&l.lookup_tab);
@@ -246,14 +254,15 @@ impl MicroParquetApp {
     pub(crate) fn model_tick(&mut self) {
         // a join that found repeated keys marks its link Broken at once; the link is then checked again for the full picture (M1-6)
         for (d, k, status) in model::take_broken_at_join() {
-            if self.project.model.links.iter().any(|l| l.data_tab == d && l.lookup_tab == k) {
+            if self.project.model.all_links().iter().any(|l| l.data_tab == d && l.lookup_tab == k) {
                 self.project.model_ui.runtime.insert((d, k), LinkRuntime { status, check: None, fingerprint: None, in_flight: false });
             }
         }
+        self.model_calendar_tick();
         if !self.project.active || self.project.opening.is_some() {
             return;
         }
-        let links = self.project.model.links.clone();
+        let links = self.project.model.all_links();
         for l in &links {
             for key in [&l.data_tab, &l.lookup_tab] {
                 if let Some(t) = self.model_tab_id(key).and_then(|id| self.tabs.iter().find(|t| t.id == id)).map(|t| t.title.clone()) {
@@ -296,7 +305,7 @@ impl MicroParquetApp {
     /// A key check came back.
     pub(crate) fn apply_model_check(&mut self, r: ModelCheckResult) {
         let ident = (r.link.data_tab.clone(), r.link.lookup_tab.clone());
-        if !self.project.model.links.iter().any(|l| (&l.data_tab, &l.lookup_tab) == (&ident.0, &ident.1)) {
+        if !self.project.model.all_links().iter().any(|l| (&l.data_tab, &l.lookup_tab) == (&ident.0, &ident.1)) {
             return;
         }
         let (status, check) = match r.check {
@@ -346,6 +355,14 @@ impl MicroParquetApp {
             if ui.button("Key check\u{2026}").clicked() {
                 ui.close_menu();
                 self.open_model_dialog(ActiveToolModal::ModelKeyCheck);
+            }
+            if ui.button("Calendar\u{2026}").clicked() {
+                ui.close_menu();
+                self.open_model_dialog(ActiveToolModal::ModelCalendar);
+            }
+            if ui.button("As-of date\u{2026}").clicked() {
+                ui.close_menu();
+                self.open_model_dialog(ActiveToolModal::ModelAsOf);
             }
         })
         .response

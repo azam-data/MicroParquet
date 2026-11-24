@@ -152,6 +152,10 @@ pub enum ActiveToolModal {
     ModelKeyCheck,
     /// A Model item with no project open (Phase 9 M0).
     ModelNoProject,
+    /// Model ▸ Calendar… (Phase 9 M2).
+    ModelCalendar,
+    /// Model ▸ As-of date… (Phase 9 M2).
+    ModelAsOf,
     /// Transform ▸ Split date… (Phase 8 W1).
     SplitDate,
     /// New chart: the chart gallery (Phase 7 C2).

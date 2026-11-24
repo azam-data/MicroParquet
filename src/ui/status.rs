@@ -133,6 +133,10 @@ impl MicroParquetApp {
                             let colour = if n_broken > 0 { tk.danger } else { tk.muted };
                             ui.label(egui::RichText::new(text).color(colour)).on_hover_text("Model \u{25b8} Links\u{2026} lists the links; Model \u{25b8} Key check\u{2026} lists what is wrong with a key");
                         }
+                        // the as-of date of the model (Phase 9 M2): "As of 24 Nov 2026 (latest data)"
+                        if let Some(text) = self.model_as_of_text().filter(|t| room_for(ui, theme::text_width(ui, t, theme::TEXT_SMALL))) {
+                            ui.label(egui::RichText::new(text).color(tk.muted)).on_hover_text("Model \u{25b8} As-of date\u{2026} chooses the latest data or another date");
+                        }
                         // (the warnings are cut with "…" before they take the line-break chip's room)
                         let warn_w = |ui: &egui::Ui| (ui.available_width() - chip_reserve - job_reserve - theme::STATUS_MESSAGE_ROOM).max(theme::STATUS_MIN_MESSAGE_W);
                         if micro_parquet::pivot_table::pivot_totals_lost(&tab.steps) {

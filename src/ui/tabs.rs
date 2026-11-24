@@ -279,6 +279,11 @@ impl MicroParquetApp {
         let Some(curr) = self.tabs.get(self.active_tab).cloned() else {
             return;
         };
+        // the model's Calendar is made by the model: it takes no steps
+        if !open_new_tab && self.is_calendar_source(self.active_tab) {
+            self.status_message = micro_parquet::model_calendar::CALENDAR_NOTE.to_string();
+            return;
+        }
         // a chart tab has no steps of its own (they are its source tab's): nothing is added to it in place
         if !open_new_tab && self.active_is_chart_tab() {
             self.status_message = self.chart_tab_steps_note().unwrap_or_else(|| "This tab draws a chart. Change the data on its source tab.".to_string());

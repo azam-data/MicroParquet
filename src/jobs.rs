@@ -73,6 +73,8 @@ pub enum JobKind {
     ModelCheck,
     /// The tab of duplicate lookup rows, or of unmatched data rows (Phase 9 M0).
     ModelRows,
+    /// The snapshot dates of a date-linked tab (Phase 9 M2).
+    DateInfo,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

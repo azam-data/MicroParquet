@@ -38,9 +38,30 @@ pub struct Link {
     pub unmatched_value: Option<String>,
 }
 
-/// Placeholder: the shared calendar (M2 fills it in).
+/// The date column of a data tab, joined to Calendar · Date (Phase 9 M2). A data tab has at most one.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-pub struct ModelCalendar {}
+pub struct DateLink {
+    /// The data tab's project key.
+    #[serde(default)]
+    pub data_tab: String,
+    /// Its date column (a Date or Datetime).
+    #[serde(default)]
+    pub column: String,
+}
+
+/// The shared calendar (Phase 9 M2): one `CalendarSettings` for the whole project, the date links of the data tabs, and the project
+/// key of the generated Calendar tab. The Calendar is saved as a recipe, not as rows.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct ModelCalendar {
+    /// Copied from `settings.json` when the model calendar is turned on, and changed here for the project.
+    #[serde(default)]
+    pub settings: crate::dates::CalendarSettings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub date_links: Vec<DateLink>,
+    /// The Calendar tab's project key.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tab: String,
+}
 
 /// Placeholder: what a column means for time intelligence, stock or flow (M3 fills it in).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -50,11 +71,13 @@ pub struct ColumnKind {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct NamedMeasure {}
 
-/// Placeholder: the as-of date (M2 fills it in). The default is the latest date in the data.
+/// The date the model reports as of (Phase 9 M2): the latest snapshot date of all date-linked tabs (the default), or a date the
+/// owner picked ("2026-10-31").
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub enum AsOf {
     #[default]
     Latest,
+    Date(String),
 }
 
 /// The model of a project. Every field is optional in the file, so a project without a model has no `model` section at all.
@@ -77,6 +100,18 @@ fn is_latest(a: &AsOf) -> bool {
 }
 
 impl Model {
+    /// The links the engine reads: the user's links, then the date link of each date-linked data tab (its date column to Calendar ·
+    /// Date). The date links are the calendar's own; the Links dialog lists only the user's.
+    pub fn all_links(&self) -> Vec<Link> {
+        let mut out = self.links.clone();
+        if let Some(c) = &self.calendar {
+            if !c.tab.is_empty() {
+                out.extend(c.date_links.iter().filter(|l| !l.data_tab.is_empty() && !l.column.is_empty()).map(|l| crate::model_calendar::date_link(&l.data_tab, &l.column, &c.tab)));
+            }
+        }
+        out
+    }
+
     /// Nothing in it: the project is written as version 1, byte for byte as Phase 8 wrote it.
     pub fn is_empty(&self) -> bool {
         *self == Model::default()
@@ -166,15 +201,16 @@ pub fn validate_link(model: &Model, link: &Link, replacing: Option<usize>, data:
         bail!("'{}' can't be linked to itself. Pick a different lookup tab.", data.title);
     }
     let others = |i: usize| Some(i) != replacing;
-    let is_lookup = model.links.iter().enumerate().any(|(i, l)| others(i) && l.lookup_tab == data.key);
+    let all = model.all_links();
+    let is_lookup = all.iter().enumerate().any(|(i, l)| others(i) && l.lookup_tab == data.key);
     if is_lookup {
         bail!("'{}' is a lookup; a lookup can't have links of its own", data.title);
     }
-    let is_data = model.links.iter().enumerate().any(|(i, l)| others(i) && l.data_tab == lookup.key);
+    let is_data = all.iter().enumerate().any(|(i, l)| others(i) && l.data_tab == lookup.key);
     if is_data {
         bail!("'{}' is a data tab with links of its own; it can't also be a lookup", lookup.title);
     }
-    if model.links.iter().enumerate().any(|(i, l)| others(i) && l.data_tab == data.key && l.lookup_tab == lookup.key) {
+    if all.iter().enumerate().any(|(i, l)| others(i) && l.data_tab == data.key && l.lookup_tab == lookup.key) {
         bail!("'{}' is already linked to '{}'. Edit that link instead.", data.title, lookup.title);
     }
     if link.keys.is_empty() {
@@ -385,6 +421,29 @@ fn keyed(lf: LazyFrame, cols: &[String], string_cols: &[bool]) -> LazyFrame {
     lf.with_columns(exprs).with_columns([blank.alias(BLANK)])
 }
 
+/// Two key columns of a link can be matched when they have the same type; a date and time is matched to the Calendar's date by its day.
+fn key_types_agree(d: &DataType, l: &DataType) -> bool {
+    d == l || (matches!(d, DataType::Datetime(..)) && *l == DataType::Date)
+}
+
+/// The data side's key columns: the column itself, or its day (`__mp_dk<i>`, added) for a date and time matched to a date.
+fn data_key_columns(lf: LazyFrame, link: &Link) -> (LazyFrame, Vec<String>) {
+    let mut lf = lf;
+    let schema = lf.collect_schema().ok();
+    let mut adds: Vec<Expr> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for (i, k) in link.keys.iter().enumerate() {
+        if schema.as_ref().and_then(|s| s.get(k.data.as_str())).is_some_and(|d| matches!(d, DataType::Datetime(..))) {
+            let n = format!("__mp_dk{}", i);
+            adds.push(col(k.data.as_str()).cast(DataType::Date).alias(n.as_str()));
+            names.push(n);
+        } else {
+            names.push(k.data.clone());
+        }
+    }
+    (if adds.is_empty() { lf } else { lf.with_columns(adds) }, names)
+}
+
 fn tab_columns(lf: &mut LazyFrame, t: &ModelTab) -> Result<Vec<(String, DataType)>> {
     let schema = lf.collect_schema().with_context(|| format!("'{}' could not be read", t.title))?;
     Ok(schema.iter().map(|(n, d)| (n.to_string(), d.clone())).collect())
@@ -400,7 +459,7 @@ fn open_pair(link: &Link, data: &ModelTab, lookup: &ModelTab, temp_dir: &Path) -
     for k in &link.keys {
         let d = dc.iter().find(|c| c.0 == k.data).ok_or_else(|| anyhow!("'{}' has no column '{}'", data.title, k.data))?;
         let l = lc.iter().find(|c| c.0 == k.lookup).ok_or_else(|| anyhow!("'{}' has no column '{}'", lookup.title, k.lookup))?;
-        if d.1 != l.1 {
+        if !key_types_agree(&d.1, &l.1) {
             bail!("'{}' is {} in '{}' and {} in '{}' now. Set both to the same type in Schema & Ingestion first", k.data, type_word(&d.1), data.title, type_word(&l.1), lookup.title);
         }
         ds.push(d.1 == DataType::String);
@@ -431,7 +490,7 @@ pub fn check_link(link: &Link, data: &ModelTab, lookup: &ModelTab, temp_dir: &Pa
     let n = link.keys.len();
     let ks = key_names(n);
     let key_exprs = || ks.iter().map(|k| col(k.as_str())).collect::<Vec<_>>();
-    let data_cols: Vec<String> = link.keys.iter().map(|k| k.data.clone()).collect();
+    let (dl, data_cols) = data_key_columns(dl, link);
     let lookup_cols: Vec<String> = link.keys.iter().map(|k| k.lookup.clone()).collect();
     let d = keyed(dl.clone(), &data_cols, &ds);
     let l = keyed(ll, &lookup_cols, &ls);
@@ -537,7 +596,7 @@ pub fn unmatched_rows(link: &Link, data: &ModelTab, lookup: &ModelTab, temp_dir:
     let (dl, ll, ds, ls) = open_pair(link, data, lookup, temp_dir)?;
     let mut probe = dl.clone();
     let names: Vec<String> = probe.collect_schema()?.iter().map(|(n, _)| n.to_string()).collect();
-    let data_cols: Vec<String> = link.keys.iter().map(|k| k.data.clone()).collect();
+    let (dl, data_cols) = data_key_columns(dl, link);
     let lookup_cols: Vec<String> = link.keys.iter().map(|k| k.lookup.clone()).collect();
     let ks = key_names(link.keys.len());
     let key_exprs = || ks.iter().map(|k| col(k.as_str())).collect::<Vec<_>>();
@@ -769,7 +828,7 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
     for k in &link.keys {
         let d = schema.get(k.data.as_str()).ok_or_else(|| anyhow!("{}: there is no column '{}' at this step, and the link '{}' needs it.", what, k.data, group[0].field.link_name))?;
         let l = lschema.get(k.lookup.as_str()).ok_or_else(|| anyhow!("{}: '{}' has no column '{}'. Open Model \u{25b8} Key check to see the link.", what, lookup.title, k.lookup))?;
-        if d != l {
+        if !key_types_agree(d, l) {
             bail!("{}: '{}' is {} in the data and {} in '{}'. Set both to the same type in Schema & Ingestion first.", what, k.data, type_word(d), type_word(l), lookup.title);
         }
         ds.push(*d == DataType::String);
@@ -783,7 +842,7 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
     let n = link.keys.len();
     let ks = key_names(n);
     let key_exprs = || ks.iter().map(|k| col(k.as_str())).collect::<Vec<_>>();
-    let data_cols: Vec<String> = link.keys.iter().map(|k| k.data.clone()).collect();
+    let (lf, data_cols) = data_key_columns(lf, link);
     let lookup_cols: Vec<String> = link.keys.iter().map(|k| k.lookup.clone()).collect();
     let d = keyed(lf, &data_cols, &ds);
     let mut pick: Vec<Expr> = key_exprs();
@@ -816,6 +875,7 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
     let mut temps: Vec<String> = ks.clone();
     temps.push(BLANK.to_string());
     temps.push(HIT.to_string());
+    temps.extend(data_cols.iter().filter(|c| c.starts_with("__mp_dk")).cloned());
     for (i, w) in group.iter().enumerate() {
         let f = format!("{}{}", FIELD, i);
         let dt = lschema.get(w.field.column.as_str()).cloned().unwrap_or(DataType::String);

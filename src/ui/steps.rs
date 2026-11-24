@@ -623,6 +623,14 @@ impl MicroParquetApp {
             });
             return;
         }
+        // the model's Calendar is made by the model (Phase 9 M2)
+        if let Some(note) = self.calendar_tab_note() {
+            egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
+                ui.label(theme::bold("Calendar").color(tk.ink));
+                ui.add(egui::Label::new(egui::RichText::new(note).color(tk.muted)).wrap());
+            });
+            return;
+        }
         let mut open_schema = false;
         let mut select: Option<usize> = None;
         let mut do_edit: Option<usize> = None;

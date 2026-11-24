@@ -2439,6 +2439,9 @@ pub enum TabSource {
     /// A tab of a project that could not be opened (Phase 8 W4): no rows, nothing to export. The reason is
     /// shown in the main area; the project keeps the tab's recipe, so saving the project again does not lose it.
     Unavailable { reason: String },
+    /// The model's Calendar (Phase 9 M2): one row per day from 1 January of `first_year` to 31 December of `last_year`, made from
+    /// the model's settings. It has no file; the project keeps this recipe, not the rows.
+    Calendar { settings: crate::dates::CalendarSettings, first_year: i32, last_year: i32 },
 }
 
 /// Which table of the data-quality run a tab shows.

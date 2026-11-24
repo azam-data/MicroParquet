@@ -63,6 +63,8 @@ pub enum JobOutput {
     ModelCheck(Box<ModelCheckResult>),
     /// A tab of the rows a key check lists (Phase 9 M0).
     ModelRows(Box<ModelRowsResult>),
+    /// The snapshot dates of a date-linked tab (Phase 9 M2).
+    DateInfo(Box<DateInfoResult>),
 }
 
 /// A tab of a project, built on the worker.
@@ -1398,6 +1400,31 @@ pub fn compute_model_check(req: ModelCheckRequest, ctx: &JobCtx) -> Result<Model
         ctx.check()?;
     }
     Ok(ModelCheckResult { link: req.link, fingerprint: req.fingerprint, check })
+}
+
+/// The snapshot dates of a date-linked tab: how many rows each distinct date has, after the tab's steps (Phase 9 M2).
+pub struct DateInfoRequest {
+    pub tab_key: String,
+    pub column: String,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub fingerprint: u64,
+    pub temp_dir: PathBuf,
+}
+
+pub struct DateInfoResult {
+    pub tab_key: String,
+    pub column: String,
+    pub fingerprint: u64,
+    pub counts: std::result::Result<Vec<(chrono::NaiveDate, usize)>, String>,
+}
+
+pub fn compute_date_info(req: DateInfoRequest, ctx: &JobCtx) -> Result<DateInfoResult> {
+    ctx.check()?;
+    ctx.set_progress("Reading the snapshot dates\u{2026}", None);
+    let counts = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir).and_then(|lf| crate::model_calendar::snapshot_counts(lf, &req.column)).map_err(|e| format!("{:#}", e));
+    ctx.check()?;
+    Ok(DateInfoResult { tab_key: req.tab_key, column: req.column, fingerprint: req.fingerprint, counts })
 }
 
 /// Which list of rows a key check opens as a tab.

@@ -2523,3 +2523,408 @@ fn m1_a_lookup_that_gets_a_repeated_key_after_the_check_is_refused_in_the_key_ch
         assert!(painted_has(&p, "Broken: 1 duplicate key"), "{what}: and Links... says so");
     }
 }
+
+// ================================================================================ M2: the shared calendar and the as-of date
+
+use crate::ui::model_calendar::{CalRects, AS_OF_DIALOG_TITLE, CALENDAR_DIALOG_TITLE};
+use micro_parquet::model::AsOf;
+
+fn m2_date_series(name: &str, dates: &[(i32, u32, u32)]) -> Series {
+    let days: Vec<i32> = dates.iter().map(|(y, m, d)| micro_parquet::dates::days_from_date(chrono::NaiveDate::from_ymd_opt(*y, *m, *d).expect("a date"))).collect();
+    Series::new(name.into(), days).cast(&polars::prelude::DataType::Date).expect("dates")
+}
+
+fn month_ends(from: (i32, u32), to: (i32, u32)) -> Vec<(i32, u32, u32)> {
+    let mut out = Vec::new();
+    let (mut y, mut m) = from;
+    while (y, m) <= to {
+        out.push((y, m, micro_parquet::model_calendar::days_in_month(y, m)));
+        if m == 12 {
+            y += 1;
+            m = 1;
+        } else {
+            m += 1;
+        }
+    }
+    out
+}
+
+/// Accounts: month-end snapshots from Jan 2025 to Oct 2026 (22 dates, 20 rows each).
+fn m2_accounts() -> DataFrame {
+    let mut dates = Vec::new();
+    for d in month_ends((2025, 1), (2026, 10)) {
+        for _ in 0..20 {
+            dates.push(d);
+        }
+    }
+    let n = dates.len();
+    DataFrame::new(vec![
+        m2_date_series("Open Date", &dates),
+        Series::new("Branch".into(), (0..n).map(|i| format!("B{:02}", i % 20)).collect::<Vec<_>>()),
+        Series::new("Balance".into(), (0..n).map(|i| 100.0 + (i % 20) as f64).collect::<Vec<_>>()),
+    ])
+    .expect("accounts")
+}
+
+/// GL TB: Jan to Oct 2026 one month-end each, then every day of November 2026 up to the 24th (10 rows a day, 2 rows on the 17th).
+fn m2_gl() -> DataFrame {
+    let mut dates = Vec::new();
+    for d in month_ends((2026, 1), (2026, 10)) {
+        dates.extend(std::iter::repeat(d).take(10));
+    }
+    for day in 1..=24u32 {
+        dates.extend(std::iter::repeat((2026, 11, day)).take(if day == 17 { 2 } else { 10 }));
+    }
+    let n = dates.len();
+    DataFrame::new(vec![
+        m2_date_series("Date", &dates),
+        Series::new("GL".into(), (0..n).map(|i| format!("GL{:02}", i % 10)).collect::<Vec<_>>()),
+        Series::new("Balance".into(), (0..n).map(|i| 1000.0 + i as f64).collect::<Vec<_>>()),
+    ])
+    .expect("gl")
+}
+
+/// The rig of M2: the book tab (t1, no date), Accounts (t2) and GL TB (t3) in an open project.
+fn m2_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {
+    let mut rig = rig9(name, ppp, w, h);
+    rig.app.dark_mode = dark;
+    let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+    rig.app.project.active = true;
+    rig.app.project.name = "Treasury".into();
+    open_table(&mut rig, "Accounts", m2_accounts());
+    open_table(&mut rig, "GL TB", m2_gl());
+    let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+    for (i, id) in ids.iter().enumerate() {
+        rig.app.project.keys.insert(*id, format!("t{}", i + 1));
+    }
+    rig.app.active_tab = 1;
+    (rig, what)
+}
+
+fn cal_rects(rig: &Rig) -> CalRects {
+    rig.app.project.model_ui.cal.rects.clone()
+}
+
+fn cal_title() -> String {
+    format!("{}  {}", theme::ph::CALENDAR, CALENDAR_DIALOG_TITLE)
+}
+
+fn as_of_title() -> String {
+    format!("{}  {}", theme::ph::CALENDAR, AS_OF_DIALOG_TITLE)
+}
+
+/// Picks `item` in the box `name` of the Calendar dialog, by real clicks (the dialog's middle is scrolled to the box first).
+fn cal_pick(rig: &mut Rig, name: &str, item: &str) {
+    let find = |r: &Rig| cal_rects(r).combos.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: the box '{name}' in {:?}", r.what, cal_rects(r).combos.iter().map(|b| b.0.clone()).collect::<Vec<_>>()));
+    let c = reveal(rig, &cal_title(), &find);
+    let p = click_rect(rig, c);
+    let it = p.boxes.iter().rev().find(|(t, b)| t == item && !inside(*b, c.expand(2.0))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: '{item}' in the list of '{name}'", rig.what));
+    click_rect(rig, it);
+    rig.draw(3);
+}
+
+fn cal_checkbox(rig: &mut Rig) {
+    let c = reveal(rig, &cal_title(), &|r| cal_rects(r).checkbox.unwrap_or_else(|| panic!("{}: the checkbox", r.what)));
+    click_rect(rig, c);
+    rig.draw(3);
+}
+
+fn calendar_tab_at(rig: &Rig) -> usize {
+    rig.app.model_calendar_tab().unwrap_or_else(|| panic!("{}: the Calendar tab is open", rig.what))
+}
+
+fn calendar_source(rig: &Rig) -> (micro_parquet::dates::CalendarSettings, i32, i32) {
+    match &rig.app.tabs[calendar_tab_at(rig)].source {
+        TabSource::Calendar { settings, first_year, last_year } => (*settings, *first_year, *last_year),
+        other => panic!("{}: the Calendar tab's source: {other:?}", rig.what),
+    }
+}
+
+/// Waits until both linked tabs' dates have been read and the Calendar covers their years.
+fn m2_wait_calendar(rig: &mut Rig, years: (i32, i32), tabs: usize) {
+    pump(rig, "the snapshot dates and the Calendar's years", &|r| {
+        r.app.project.model_ui.date_info.len() == tabs
+            && r.app.project.model_ui.date_info.values().all(|d| matches!(d.info, Some(Ok(_))))
+            && r.app.model_calendar_tab().is_some_and(|i| r.app.tabs[i].total_rows > 0 && matches!(&r.app.tabs[i].source, TabSource::Calendar { first_year, last_year, .. } if (*first_year, *last_year) == years))
+    });
+}
+
+/// Calendar on, settings left as they are, Accounts and GL TB linked by their date columns.
+fn m2_linked(rig: &mut Rig) {
+    menu_item9(rig, "Model", "Calendar");
+    cal_checkbox(rig);
+    pump(rig, "the Calendar tab", &|r| r.app.model_calendar_tab().is_some());
+    cal_pick(rig, "Date column: Accounts", "Open Date");
+    cal_pick(rig, "Date column: GL TB", "Date");
+    m2_wait_calendar(rig, (2025, 2026), 2);
+}
+
+fn menu_item9(rig: &mut Rig, menu: &str, item: &str) {
+    crate::ui::render_tests_p8::menu_item(rig, menu, item);
+}
+
+#[test]
+fn m2_the_model_menu_lists_calendar_and_as_of_date_and_says_a_project_is_needed_with_none_and_opens_them_with_one_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig9("p9m2menu", ppp, w, h);
+        let what = rig.what.clone();
+        for item in ["Calendar", "As-of date"] {
+            menu_item9(&mut rig, "Model", item);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ModelNoProject, "{what}: Model ▸ {item} with no project says a project is needed");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "The model is part of a project. Save the tabs as a project first."), "{what}");
+            rig.app.active_tool = ActiveToolModal::None;
+            rig.draw(2);
+        }
+        rig.app.project.active = true;
+        rig.app.project.name = "Treasury".into();
+        menu_item9(&mut rig, "Model", "Calendar");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ModelCalendar, "{what}");
+        let p = rig.draw(3);
+        assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+        assert!(painted_has(&p, "Use one calendar for the whole project"), "{what}");
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(2);
+        menu_item9(&mut rig, "Model", "As-of date");
+        assert_eq!(rig.app.active_tool, ActiveToolModal::ModelAsOf, "{what}");
+        let p = rig.draw(3);
+        assert_dialog_fits(&rig.ctx, &as_of_title(), &what);
+        assert!(painted_has(&p, "Turn on the model calendar"), "{what}: with no calendar the dialog says what to do first");
+    }
+}
+
+#[test]
+fn m2_the_calendar_dialog_turns_the_calendar_on_changes_its_settings_makes_date_links_and_lists_the_snapshot_dates_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m2_rig("p9m2dialog", ppp, w, h, dark);
+            menu_item9(&mut rig, "Model", "Calendar");
+            let p = rig.draw(3);
+            let r = assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+            assert!(rig.app.project.model.calendar.is_none() && painted_has(&p, "Use one calendar for the whole project"), "{what}: off at first");
+            // turn on: the settings are copied from settings.json, the Calendar tab is made
+            cal_checkbox(&mut rig);
+            let c = rig.app.project.model.calendar.clone().expect("calendar on");
+            assert_eq!(c.settings, rig.app.settings.calendar, "{what}: copied from settings.json");
+            pump(&mut rig, "the Calendar tab", &|r| r.app.model_calendar_tab().is_some());
+            assert_eq!(rig.app.tabs[calendar_tab_at(&rig)].title, "Calendar", "{what}");
+            assert_eq!(rig.app.project.model.calendar.as_ref().map(|c| c.tab.clone()), Some("t4".to_string()), "{what}: the tab has a project key");
+            rig.draw(3);
+            let status = cal_rects(&rig).status.expect("the settings line");
+            let grown = assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+            assert!(grown.window.height() >= r.window.height() && inside(status, grown.window), "{what}: the dialog grows with the settings");
+            // settings by real clicks: fiscal year from July, week from Sunday; the W0 line follows
+            cal_pick(&mut rig, "Fiscal year starts in", "July");
+            cal_pick(&mut rig, "Week starts on", "Sunday");
+            let s = rig.app.project.model.calendar.as_ref().expect("calendar").settings;
+            assert_eq!((s.fy_start_month, s.week_start), (7, micro_parquet::dates::Weekday::Sun), "{what}");
+            pump(&mut rig, "the Calendar tab rebuilt", &|r| matches!(&r.app.tabs[calendar_tab_at(r)].source, TabSource::Calendar { settings, .. } if settings.fy_start_month == 7));
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "Week starts Sunday \u{b7} Fiscal year from July"), "{what}: the W0 line");
+            assert_eq!(rig.app.settings.calendar.fy_start_month, 1, "{what}: settings.json is not changed by the project's calendar");
+            // a text column is refused with the Phase 8 message, and nothing is linked
+            let book = rig.app.tabs[0].title.clone();
+            cal_pick(&mut rig, &format!("Date column: {book}"), "Branch");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "'Branch' is text. Set it to Date in Schema & Ingestion (D/M/Y) first."), "{what}: refused in words");
+            assert!(rig.app.project.model.calendar.as_ref().expect("calendar").date_links.is_empty(), "{what}: nothing was linked");
+            // the date links of the two data tabs
+            cal_pick(&mut rig, "Date column: Accounts", "Open Date");
+            cal_pick(&mut rig, "Date column: GL TB", "Date");
+            m2_wait_calendar(&mut rig, (2025, 2026), 2);
+            let links = rig.app.project.model.calendar.as_ref().expect("calendar").date_links.clone();
+            assert_eq!(links.iter().map(|l| (l.data_tab.as_str(), l.column.as_str())).collect::<Vec<_>>(), [("t2", "Open Date"), ("t3", "Date")], "{what}");
+            assert!(rig.app.project.model_ui.cal.error.is_empty(), "{what}: the refusal is gone once a good column is picked");
+            assert_eq!(rig.app.tabs[calendar_tab_at(&rig)].total_rows, 730, "{what}: whole years, 1 Jan 2025 to 31 Dec 2026");
+            // the snapshot section
+            let p = reveal_notes(&mut rig);
+            let notes = cal_rects(&rig).notes;
+            let text_of = |title: &str, kind: &str| -> String {
+                let r = notes.iter().find(|(t, k, _)| t == title && k == kind).map(|(_, _, r)| *r).unwrap_or_else(|| panic!("{what}: the {kind} note of {title} in {:?}", notes.iter().map(|n| (n.0.clone(), n.1.clone())).collect::<Vec<_>>()));
+                p.boxes.iter().rev().find(|(_, b)| (b.center() - r.center()).length() < 3.0).map(|(t, _)| t.clone()).unwrap_or_else(|| panic!("{what}: text at {r:?}"))
+            };
+            assert_eq!(text_of("Accounts", "summary"), "Accounts: 31 Jan 2025 to 31 Oct 2026 \u{b7} 22 snapshot dates \u{b7} Month-end", "{what}");
+            assert_eq!(text_of("GL TB", "summary"), "GL TB: 31 Jan 2026 to 24 Nov 2026 \u{b7} 34 snapshot dates \u{b7} Daily", "{what}");
+            assert_eq!(text_of("GL TB", "single"), "Jan\u{2013}Oct 2026 have one date each; their average balances carry that date forward.", "{what}");
+            assert!(text_of("GL TB", "incomplete").ends_with("Looks incomplete: 17 Nov 2026 has 2 rows (the median is 10)."), "{what}");
+            assert!(!notes.iter().any(|(t, k, _)| t == "Accounts" && k != "summary"), "{what}: a Month-end tab with full dates has no warning");
+            let r = assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r.window, &what);
+            // turning a link off takes it away; the calendar goes with the checkbox
+            cal_pick(&mut rig, "Date column: GL TB", "No date link");
+            assert_eq!(rig.app.project.model.calendar.as_ref().expect("calendar").date_links.len(), 1, "{what}");
+            cal_checkbox(&mut rig);
+            assert!(rig.app.project.model.calendar.is_none() && rig.app.project.model.is_empty(), "{what}: off: no model at all, so the project is written as version 1");
+            pump(&mut rig, "the Calendar tab closed", &|r| r.app.model_calendar_tab().is_none() && !r.app.tabs.iter().any(|t| matches!(t.source, TabSource::Calendar { .. })));
+        }
+    }
+}
+
+/// Scrolls the Calendar dialog to the end of its snapshot section and draws it.
+fn reveal_notes(rig: &mut Rig) -> Painted {
+    let last = |r: &Rig| cal_rects(r).notes.last().map(|n| n.2).unwrap_or_else(|| panic!("{}: a snapshot note", r.what));
+    reveal(rig, &cal_title(), &last);
+    rig.draw(3)
+}
+
+#[test]
+fn m2_the_calendar_tab_says_who_makes_it_takes_no_steps_and_its_fields_serve_a_pivot_in_calendar_order_and_follow_the_models_settings() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m2_rig("p9m2tab", ppp, w, h, dark);
+            m2_linked(&mut rig);
+            rig.app.active_tool = ActiveToolModal::None;
+            rig.draw(3);
+            // the Calendar tab: its columns, its rows, its note in the steps panel
+            let at = calendar_tab_at(&rig);
+            rig.app.active_tab = at;
+            rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Steps, true);
+            let p = rig.draw(5);
+            assert_eq!(rig.app.tabs[at].total_rows, 730, "{what}");
+            let cols: Vec<String> = rig.app.tabs[at].cached_slice.get_columns().iter().map(|c| c.name().to_string()).collect();
+            assert_eq!(cols.first().map(String::as_str), Some("Date"), "{what}: {cols:?}");
+            assert_eq!(&cols[cols.len() - 2..], ["Month end", "Days in month"], "{what}");
+            assert!(painted_has(&p, "This tab is made by the model calendar. Change it in Model \u{25b8} Calendar\u{2026}"), "{what}: the note: {:?}", p.boxes.iter().rev().take(12).map(|b| b.0.clone()).collect::<Vec<_>>());
+            // it takes no step
+            rig.app.push_step_to_active_tab(TransformStep::FilterGroup { conditions: vec![], join: micro_parquet::models::GroupJoin::And, keep_matching: true }, false);
+            assert!(rig.app.tabs[at].steps.is_empty(), "{what}: the Calendar is read-only");
+            assert_eq!(rig.app.status_message, micro_parquet::model_calendar::CALENDAR_NOTE, "{what}");
+
+            // Accounts: a pivot by Calendar > Month-Year, by the field list's clicks
+            rig.app.active_tab = 1;
+            rig.draw(3);
+            rig.app.run_command(&rig.ctx, CommandId::Pivot);
+            rig.draw(8);
+            let mut place = Place::Docked;
+            let g = place.rects(&rig);
+            let expander = g.expanders.iter().find(|(n, _)| n == "Calendar \u{203a}").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the 'Calendar ›' expander in {:?}", g.expanders));
+            place.click(&mut rig, expander);
+            place.draw(&mut rig, 4);
+            let g = place.rects(&rig);
+            for f in ["Calendar \u{b7} Month-Year", "Calendar \u{b7} Fiscal year", "Calendar \u{b7} Month end"] {
+                assert!(g.field_rows.iter().any(|(n, _)| n == f), "{what}: '{f}' is listed under the link: {:?}", g.field_rows);
+            }
+            // (the search narrows the long list of the Calendar's fields to the one to add)
+            rig.app.pivot_builder.search = "Month-Year".into();
+            place.draw(&mut rig, 3);
+            add_to(&mut place, &mut rig, "Calendar \u{b7} Month-Year", "Rows", &what);
+            rig.app.pivot_builder.search = "Balance".into();
+            place.draw(&mut rig, 3);
+            add_to(&mut place, &mut rig, "Balance", "Values", &what);
+            rig.app.pivot_builder.search.clear();
+            wait_in(&mut place, &mut rig, "the preview", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+            let df = rig.app.pivot_builder.preview.clone().and_then(|p| p.ok()).expect("the preview");
+            let labels = first_column(&df);
+            assert_eq!(&labels[..3], ["Jan 2025", "Feb 2025", "Mar 2025"], "{what}: months in time, not in the alphabet: {labels:?}");
+            assert_eq!(labels.len(), 20, "{what}: the docked preview shows 20 lines of the 22 months and the total");
+            // the same field with the model's fiscal year: changing the model's settings changes it (the Calendar tab is rebuilt)
+            let c = rig.app.project.model.calendar.clone().expect("calendar");
+            rig.app.model_calendar_set_settings(micro_parquet::dates::CalendarSettings { fy_start_month: 7, ..c.settings });
+            pump(&mut rig, "the Calendar rebuilt", &|r| matches!(&r.app.tabs[calendar_tab_at(r)].source, TabSource::Calendar { settings, .. } if settings.fy_start_month == 7) && r.app.tabs[calendar_tab_at(r)].total_rows == 730);
+            let fy = rows_under_model_fy(&rig);
+            assert_eq!(fy, ["FY2024-25", "FY2025-26", "FY2026-27"], "{what}: Calendar > Fiscal year follows the model's July start");
+            assert_eq!(rig.app.tabs[1].total_rows, 440, "{what}: linking never changes the data tab's row count");
+        }
+    }
+}
+
+/// The distinct Calendar > Fiscal year labels of Accounts, read under the model.
+fn rows_under_model_fy(rig: &Rig) -> Vec<String> {
+    let t = &rig.app.tabs[1];
+    let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t2").expect("the date link");
+    let f = ModelFieldRef::new(&link, "Accounts \u{2192} Calendar", "Calendar", "Fiscal year");
+    let wants = [model::LookupWant { field: f.clone(), out: f.name.clone(), as_: model::LookupAs::Text, unmatched_out: None }];
+    let df = model::with_scope(rig.app.project.model_ui.scope.clone(), || {
+        let lf = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles");
+        model::with_lookup_columns(lf, &wants, "Test").expect("the join").select([polars::prelude::col(f.name.as_str())]).unique_stable(None, polars::prelude::UniqueKeepStrategy::First).collect().expect("collects")
+    });
+    first_column(&df)
+}
+
+#[test]
+fn m2_the_as_of_dialog_lists_each_tabs_last_date_says_when_they_differ_takes_latest_data_or_a_date_and_the_status_bar_follows_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m2_rig("p9m2asof", ppp, w, h, dark);
+            m2_linked(&mut rig);
+            rig.app.active_tab = 1;
+            rig.app.active_tool = ActiveToolModal::None;
+            rig.app.status_message.clear();
+            // the default: the latest date of all date-linked tabs, in the status bar
+            assert_eq!(rig.app.project.model.as_of, AsOf::Latest, "{what}");
+            assert_eq!(rig.app.model_as_of_text().as_deref(), Some("As of 24 Nov 2026 (latest data)"), "{what}");
+            let p = rig.draw(4);
+            assert!(painted_has(&p, "As of 24 Nov 2026 (latest data)"), "{what}: the status bar: {:?}", p.boxes.iter().rev().take(14).map(|b| b.0.clone()).collect::<Vec<_>>());
+            // the dialog: each tab's last date, and the note that they differ
+            menu_item9(&mut rig, "Model", "As-of date");
+            let p = rig.draw(4);
+            let r = assert_dialog_fits(&rig.ctx, &as_of_title(), &what);
+            assert!(painted_has(&p, "Accounts: 31 Oct 2026") && painted_has(&p, "GL TB: 24 Nov 2026"), "{what}: the last dates");
+            assert!(painted_has(&p, "Accounts ends 31 Oct 2026; GL TB ends 24 Nov 2026."), "{what}: the differing-ends note");
+            assert!(cal_rects(&rig).ends_note.is_some_and(|n| inside(n, r.window)), "{what}");
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r.window, &what);
+            // a date typed as the CBS writes it, then "Set date"
+            let bx = cal_rects(&rig).as_of_box.expect("the date box");
+            click_rect(&mut rig, bx);
+            rig.step(vec![egui::Event::Text("31/10/2026".to_string())]);
+            rig.draw(2);
+            let set = cal_rects(&rig).buttons.iter().find(|(n, _)| n == "Set date").map(|(_, b)| *b).expect("Set date");
+            click_rect(&mut rig, set);
+            rig.draw(3);
+            assert_eq!(rig.app.project.model.as_of, AsOf::Date("2026-10-31".to_string()), "{what}: saved in the model as ISO");
+            assert_eq!(rig.app.model_as_of_text().as_deref(), Some("As of 31 Oct 2026"), "{what}");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "As of 31 Oct 2026"), "{what}: the preview and the status bar follow");
+            // a date that is not a date is refused in words and changes nothing
+            click_rect(&mut rig, bx);
+            rig.step(vec![egui::Event::Key { key: egui::Key::A, physical_key: Some(egui::Key::A), pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }]);
+            rig.step(vec![egui::Event::Text("31/02/2026".to_string())]);
+            rig.draw(2);
+            click_rect(&mut rig, set);
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "'31/02/2026' is not a date. Type it as 24/11/2026 (day/month/year) or 2026-11-24."), "{what}: refused in words");
+            assert_eq!(rig.app.project.model.as_of, AsOf::Date("2026-10-31".to_string()), "{what}: unchanged");
+            // back to the latest data
+            let latest = cal_rects(&rig).radios.iter().find(|(n, _)| n == "Latest data").map(|(_, b)| *b).expect("the Latest data choice");
+            click_rect(&mut rig, latest);
+            rig.draw(3);
+            assert_eq!(rig.app.project.model.as_of, AsOf::Latest, "{what}");
+            assert_eq!(rig.app.model_as_of_text().as_deref(), Some("As of 24 Nov 2026 (latest data)"), "{what}");
+        }
+    }
+}
+
+#[test]
+fn m2_pictures_of_the_calendar_dialog_the_calendar_tab_and_the_as_of_dialog() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let (mut rig, what) = m2_rig("p9m2pics", SHOT_PPP, SHOT_W, SHOT_H + 200.0, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        m2_linked(&mut rig);
+        // Model > Calendar...: the settings, the date links and the snapshot section
+        reveal_notes(&mut rig);
+        let r = assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+        shoot(&mut rig, "model-calendar-dialog", dark, r.window.expand(10.0));
+        // the Calendar tab and its note in the steps panel
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.app.active_tab = calendar_tab_at(&rig);
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Steps, true);
+        rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "model-calendar-tab", dark, screen);
+        // Model > As-of date...: the last date of each tab and the note that they differ
+        rig.app.active_tab = 1;
+        menu_item9(&mut rig, "Model", "As-of date");
+        rig.draw(4);
+        let r = assert_dialog_fits(&rig.ctx, &as_of_title(), &what);
+        shoot(&mut rig, "model-as-of-dialog", dark, r.window.expand(10.0));
+    }
+}
