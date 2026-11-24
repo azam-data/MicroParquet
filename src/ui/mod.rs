@@ -31,6 +31,7 @@ pub mod irrbb;
 pub mod jobs;
 pub mod join;
 pub mod limits;
+pub mod model;
 pub mod mom;
 pub mod mudaraba;
 pub mod clean_breaks;
@@ -145,6 +146,9 @@ impl MicroParquetApp {
             ActiveToolModal::ProjectSave => self.render_project_save_modal(ctx, cols),
             ActiveToolModal::ProjectPrompt => self.render_project_prompt_modal(ctx, cols),
             ActiveToolModal::ProjectRecent => self.render_project_recent_modal(ctx, cols),
+            ActiveToolModal::ModelLinks => self.render_model_links_modal(ctx, cols),
+            ActiveToolModal::ModelKeyCheck => self.render_model_key_check_modal(ctx, cols),
+            ActiveToolModal::ModelNoProject => self.render_model_no_project_modal(ctx, cols),
             ActiveToolModal::SplitDate => self.render_split_date_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),

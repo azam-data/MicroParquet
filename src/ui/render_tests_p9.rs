@@ -1340,3 +1340,529 @@ fn p2_pictures_of_the_layout_in_the_dialog_and_of_the_nested_tab() {
         shoot(&mut rig, "pivot-nested-tab", dark, bar.union(frame).expand(10.0));
     }
 }
+
+// ================================================================================ M0: the model core
+
+use crate::ui::model::{ModelRects, KEY_CHECK_TITLE, LINKS_TITLE, MODEL_TITLE};
+use micro_parquet::model::{self, KeyPair, LinkStatus};
+
+/// A table written as a Parquet file next to the rig's temporary files, as a tab source.
+fn parquet_source(rig: &Rig, name: &str, mut df: DataFrame) -> TabSource {
+    let path = rig.app.paths.temp_dir.join(format!("{name}.parquet"));
+    std::fs::create_dir_all(&rig.app.paths.temp_dir).expect("temp");
+    polars::prelude::ParquetWriter::new(std::fs::File::create(&path).expect("file")).finish(&mut df).expect("parquet");
+    TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }
+}
+
+/// Opens a tab of this table and waits for it.
+fn open_table(rig: &mut Rig, title: &str, df: DataFrame) -> usize {
+    let n = rig.app.tabs.len();
+    let src = parquet_source(rig, &title.replace(' ', "_"), df);
+    rig.app.create_tab_from_source(title.into(), src, Vec::new(), std::collections::HashMap::new());
+    pump(rig, title, &|r| r.app.tabs.len() == n + 1);
+    n
+}
+
+/// 140 branches of the 150 (B141 to B150 are not in the master).
+fn branch_master() -> DataFrame {
+    let n = 140usize;
+    DataFrame::new(vec![
+        Series::new("Code".into(), (0..n).map(|i| format!("B{:03}", i + 1)).collect::<Vec<_>>()).into(),
+        Series::new("Region".into(), (0..n).map(|i| if i < 70 { "Dhaka" } else { "Ctg" }).collect::<Vec<_>>()).into(),
+    ])
+    .expect("master")
+}
+
+/// A product master that is wrong: Gold twice and a blank key; Classic is missing.
+fn product_master() -> DataFrame {
+    DataFrame::new(vec![
+        Series::new("Product".into(), vec![Some("Gold"), Some("Gold"), Some("Silver"), None]).into(),
+        Series::new("Group".into(), vec!["Premium", "Premium (old)", "Standard", "Unknown"]).into(),
+    ])
+    .expect("products")
+}
+
+fn model_rects(rig: &Rig) -> ModelRects {
+    rig.app.project.model_ui.rects.clone()
+}
+
+fn model_button(rig: &Rig, name: &str) -> egui::Rect {
+    let g = model_rects(rig);
+    g.buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the button '{name}' in {:?}", rig.what, g.buttons.iter().map(|b| b.0.clone()).collect::<Vec<_>>()))
+}
+
+fn model_combo(rig: &Rig, name: &str) -> egui::Rect {
+    let g = model_rects(rig);
+    g.combos.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the box '{name}' in {:?}", rig.what, g.combos.iter().map(|b| b.0.clone()).collect::<Vec<_>>()))
+}
+
+fn section_button(rig: &Rig, link: usize, name: &str) -> egui::Rect {
+    let g = model_rects(rig);
+    g.section_buttons.iter().find(|(i, n, _)| *i == link && n == name).map(|(_, _, r)| *r).unwrap_or_else(|| panic!("{}: '{name}' of link {link} in {:?}", rig.what, g.section_buttons.iter().map(|b| (b.0, b.1.clone())).collect::<Vec<_>>()))
+}
+
+/// Picks `item` in the box `name` of the Add / Edit form, by real clicks.
+fn model_pick(rig: &mut Rig, name: &str, item: &str) {
+    let c = model_combo(rig, name);
+    let p = click_rect(rig, c);
+    // (near the bottom of the window the list opens above the box)
+    let it = p.boxes.iter().rev().find(|(t, b)| t == item && !inside(*b, c.expand(2.0))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: '{item}' in the list of '{name}'", rig.what));
+    click_rect(rig, it);
+    rig.draw(3);
+}
+
+/// Scrolls the dialog's middle (by real wheel events over it) until `find`'s rectangle is inside it, and gives the rectangle.
+fn reveal(rig: &mut Rig, title: &str, find: &dyn Fn(&Rig) -> egui::Rect) -> egui::Rect {
+    for _ in 0..60 {
+        rig.draw(2);
+        let r = find(rig);
+        let body = theme::dialog_report(&rig.ctx, title).unwrap_or_else(|| panic!("{}: the dialog '{title}'", rig.what)).body;
+        if inside(r, body) {
+            return r;
+        }
+        let dy = if r.top() < body.top() { 600.0 } else { -600.0 };
+        // (the clock moves: egui scrolls smoothly, over time)
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.step(vec![egui::Event::PointerMoved(body.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, dy), modifiers: egui::Modifiers::NONE }]);
+    }
+    let body = theme::dialog_report(&rig.ctx, title).map(|r| r.body);
+    panic!("{}: {title}: the box {:?} was not scrolled into view of {body:?}", rig.what, find(rig));
+}
+
+fn links_title() -> String {
+    format!("{}  {}", theme::ph::LINK, LINKS_TITLE)
+}
+
+fn check_title() -> String {
+    format!("{}  {}", theme::ph::LINK, KEY_CHECK_TITLE)
+}
+
+fn model_status(rig: &Rig, i: usize) -> LinkStatus {
+    rig.app.model_status_of(&rig.app.project.model.links[i])
+}
+
+fn painted_has(p: &Painted, text: &str) -> bool {
+    p.boxes.iter().any(|(t, _)| t.contains(text))
+}
+
+#[test]
+fn m0_the_model_menu_says_a_project_is_needed_with_none_and_opens_links_and_key_check_with_one_at_three_sizes() {
+    use crate::ui::render_tests_p8::menu_item;
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let mut rig = rig9("p9m0menu", ppp, w, h);
+            rig.app.dark_mode = dark;
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            // the menu is in the bar after View
+            let p = rig.draw(3);
+            let bar = |t: &str| p.boxes.iter().find(|(x, b)| x.trim() == t && b.top() < theme::TOP_BAR_H).map(|(_, b)| *b);
+            let (view, model, banking) = (bar("View").expect("View"), bar("Model").unwrap_or_else(|| panic!("{what}: Model is in the bar")), bar("Banking").expect("Banking"));
+            assert!(view.right() <= model.left() && model.right() <= banking.left(), "{what}: Model {model:?} is between View {view:?} and Banking {banking:?}");
+            for item in ["Links", "Key check"] {
+                // with no project: the message, and a way to save one
+                menu_item(&mut rig, "Model", item);
+                assert_eq!(rig.app.active_tool, ActiveToolModal::ModelNoProject, "{what}: Model > {item} with no project");
+                let p = rig.draw(4);
+                let r = assert_dialog_fits(&rig.ctx, MODEL_TITLE, &what);
+                assert!(painted_has(&p, model::NO_PROJECT_MESSAGE), "{what}: the message: {:?}", p.boxes.iter().map(|b| b.0.clone()).filter(|t| t.len() > 20).collect::<Vec<_>>());
+                let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+                assert_no_overlap(&texts, &what);
+                assert_not_clipped(&p, r.window, &what);
+                let close = model_button(&rig, "Close");
+                click_rect(&mut rig, close);
+                rig.draw(3);
+                assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: Close");
+            }
+            // Save project as…: the same dialog offers it; a real click asks for the file and writes the project
+            menu_item(&mut rig, "Model", "Links");
+            rig.draw(3);
+            let pfile = rig.app.paths.root_dir.join("m0menu.mpproj");
+            rig.app.project.test_pick = Some(pfile.clone());
+            let save = model_button(&rig, "Save project as\u{2026}");
+            click_rect(&mut rig, save);
+            pump(&mut rig, "the project is saved", &|r| !r.app.project.saving && r.app.project.active);
+            assert!(pfile.exists() && rig.app.project.active, "{what}: the project is saved: {}", rig.app.status_message);
+            // with a project: Links… and Key check… open
+            menu_item(&mut rig, "Model", "Links");
+            let p = rig.draw(4);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ModelLinks, "{what}");
+            let r = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+            assert!(painted_has(&p, "No links yet"), "{what}: an empty list says so");
+            for b in ["Add", "Edit", "Remove", "Close"] {
+                assert!(inside(model_button(&rig, b), r.window), "{what}: '{b}' is in the dialog");
+            }
+            let close = model_button(&rig, "Close");
+            click_rect(&mut rig, close);
+            rig.draw(3);
+            menu_item(&mut rig, "Model", "Key check");
+            rig.draw(4);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ModelKeyCheck, "{what}");
+            assert_dialog_fits(&rig.ctx, &check_title(), &what);
+            let close = model_button(&rig, "Close");
+            click_rect(&mut rig, close);
+            rig.draw(3);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
+        }
+    }
+}
+
+#[test]
+fn m0_links_are_added_edited_and_removed_by_real_clicks_and_refusals_are_said_in_the_dialog_light_and_dark_at_three_sizes() {
+    use crate::ui::render_tests_p8::menu_item;
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let mut rig = rig9("p9m0links", ppp, w, h);
+            rig.app.dark_mode = dark;
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            rig.app.project.active = true;
+            rig.app.project.name = "Untitled".into();
+            let data_title = rig.app.tabs[0].title.clone();
+            open_table(&mut rig, "Branch master", branch_master());
+            rig.app.active_tab = 0;
+            menu_item(&mut rig, "Model", "Links");
+            rig.draw(4);
+            assert_eq!(rig.app.active_tool, ActiveToolModal::ModelLinks, "{what}");
+
+            // Add: the two tabs and a key pair, by real clicks
+            let add = model_button(&rig, "Add");
+            click_rect(&mut rig, add);
+            rig.draw(4);
+            let r = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+            model_pick(&mut rig, "Data tab", &data_title);
+            model_pick(&mut rig, "Lookup tab", "Branch master");
+            model_pick(&mut rig, "Data key 1", "Branch");
+            model_pick(&mut rig, "Lookup key 1", "Code");
+            let p = rig.draw(3);
+            let r2 = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+            assert!(inside(r2.window, r2.bounds) && r2.window.width() > 0.0 && r.window.width() > 0.0, "{what}");
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r2.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r2.window, &what);
+            for b in ["OK", "Cancel", "Add key column"] {
+                assert!(inside(model_button(&rig, b), r2.window), "{what}: '{b}' is in the dialog");
+            }
+            let ok = model_button(&rig, "OK");
+            click_rect(&mut rig, ok);
+            rig.draw(4);
+            assert_eq!(rig.app.project.model.links.len(), 1, "{what}: the link is made: {:?}", model_rects(&rig).error);
+            let l = rig.app.project.model.links[0].clone();
+            assert_eq!(l.keys, vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], "{what}");
+            assert!(rig.app.project.keys.values().any(|k| *k == l.data_tab) && rig.app.project.keys.values().any(|k| *k == l.lookup_tab), "{what}: both tabs have project keys");
+            assert!(rig.app.project.model_ui.draft.is_none(), "{what}: the form closed");
+            // the key check ran on the worker: 10 branches have no master row
+            pump(&mut rig, "the key check", &|r| model_status(r, 0) == LinkStatus::OkUnmatched(10));
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "OK \u{b7} 10 unmatched keys"), "{what}: the list says the status");
+            assert!(painted_has(&p, "Model: 1 link"), "{what}: the status bar says it");
+            assert_eq!(rig.app.model_counts(), (1, 0), "{what}");
+            // renaming a tab keeps its link (it is by key)
+            rig.app.tabs[1].title = "Branches".into();
+            rig.draw(3);
+            assert!(rig.app.model_link_name(&rig.app.project.model.links[0]).ends_with("Branches"), "{what}: the link follows the tab's new name");
+            rig.app.tabs[1].title = "Branch master".into();
+
+            // the role refusal, in the dialog: the lookup as a data tab
+            let add = model_button(&rig, "Add");
+            click_rect(&mut rig, add);
+            rig.draw(3);
+            model_pick(&mut rig, "Data tab", "Branch master");
+            model_pick(&mut rig, "Lookup tab", &data_title);
+            model_pick(&mut rig, "Data key 1", "Code");
+            model_pick(&mut rig, "Lookup key 1", "Branch");
+            let ok = model_button(&rig, "OK");
+            let p = click_rect(&mut rig, ok);
+            let p = if painted_has(&p, "a lookup can't have links of its own") { p } else { rig.draw(3) };
+            assert!(painted_has(&p, "'Branch master' is a lookup; a lookup can't have links of its own"), "{what}: the refusal is said: {:?}", p.boxes.iter().map(|b| b.0.clone()).filter(|t| t.len() > 20).collect::<Vec<_>>());
+            assert_eq!(rig.app.project.model.links.len(), 1, "{what}: nothing was made");
+            let e = model_rects(&rig).error.expect("the message's place");
+            let r3 = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+            assert!(inside(e, r3.window), "{what}: the message {e:?} is in the dialog");
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r3.window);
+            assert_no_overlap(&texts, &what);
+            // the second link between the same two tabs
+            model_pick(&mut rig, "Data tab", &data_title);
+            model_pick(&mut rig, "Lookup tab", "Branch master");
+            model_pick(&mut rig, "Data key 1", "Branch");
+            model_pick(&mut rig, "Lookup key 1", "Code");
+            let ok = model_button(&rig, "OK");
+            click_rect(&mut rig, ok);
+            let p = rig.draw(3);
+            assert!(painted_has(&p, &format!("'{data_title}' is already linked to 'Branch master'. Edit that link instead.")), "{what}: the second link is refused");
+            // a column pair of different types: Balance is a number, Code is text
+            model_pick(&mut rig, "Data key 1", "Balance");
+            let ok = model_button(&rig, "OK");
+            click_rect(&mut rig, ok);
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "already linked"), "{what}: still the same pair of tabs");
+            let cancel = model_button(&rig, "Cancel");
+            click_rect(&mut rig, cancel);
+            rig.draw(3);
+            assert!(rig.app.project.model_ui.draft.is_none(), "{what}: Cancel closes the form");
+
+            // Edit: a second key pair, then take it away again
+            let rows = model_rects(&rig).rows.clone();
+            click_rect(&mut rig, rows[0].1);
+            rig.draw(3);
+            let edit = model_button(&rig, "Edit");
+            click_rect(&mut rig, edit);
+            rig.draw(4);
+            let addk = model_button(&rig, "Add key column");
+            click_rect(&mut rig, addk);
+            rig.draw(3);
+            model_pick(&mut rig, "Data key 2", "Product");
+            model_pick(&mut rig, "Lookup key 2", "Region");
+            let ok = model_button(&rig, "OK");
+            click_rect(&mut rig, ok);
+            rig.draw(4);
+            assert_eq!(rig.app.project.model.links.len(), 1, "{what}: edited, not added");
+            assert_eq!(rig.app.project.model.links[0].keys.len(), 2, "{what}: two key pairs: {:?}", model_rects(&rig).error);
+            pump(&mut rig, "the key check of the edited link", &|r| model_status(r, 0) == LinkStatus::OkUnmatched(150));
+            let rows = model_rects(&rig).rows.clone();
+            click_rect(&mut rig, rows[0].1);
+            rig.draw(3);
+            let edit = model_button(&rig, "Edit");
+            click_rect(&mut rig, edit);
+            rig.draw(4);
+            let x = model_button(&rig, "Remove key 2");
+            click_rect(&mut rig, x);
+            rig.draw(3);
+            let ok = model_button(&rig, "OK");
+            click_rect(&mut rig, ok);
+            rig.draw(4);
+            assert_eq!(rig.app.project.model.links[0].keys, vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], "{what}: back to one pair");
+            pump(&mut rig, "the key check again", &|r| model_status(r, 0) == LinkStatus::OkUnmatched(10));
+
+            // Remove
+            let rows = model_rects(&rig).rows.clone();
+            click_rect(&mut rig, rows[0].1);
+            rig.draw(3);
+            let remove = model_button(&rig, "Remove");
+            click_rect(&mut rig, remove);
+            rig.draw(4);
+            assert!(rig.app.project.model.links.is_empty() && rig.app.project.model_ui.runtime.is_empty(), "{what}: removed");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "No links yet"), "{what}");
+            assert!(!painted_has(&p, "Model: "), "{what}: no model in the status bar with no links");
+        }
+    }
+}
+
+#[test]
+fn m0_key_check_lists_duplicates_blanks_and_unmatched_keys_and_its_three_buttons_open_and_copy_the_lists_light_and_dark_at_three_sizes() {
+    use crate::ui::render_tests_p8::menu_item;
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let mut rig = rig9("p9m0check", ppp, w, h);
+            rig.app.dark_mode = dark;
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            rig.app.project.active = true;
+            rig.app.project.name = "Untitled".into();
+            let data_title = rig.app.tabs[0].title.clone();
+            open_table(&mut rig, "Branch master", branch_master());
+            open_table(&mut rig, "Product master", product_master());
+            let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+            for (i, id) in ids.iter().enumerate() {
+                rig.app.project.keys.insert(*id, format!("t{}", i + 1));
+            }
+            rig.app.project.model.links = vec![
+                model::Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: None },
+                model::Link { data_tab: "t1".into(), lookup_tab: "t3".into(), keys: vec![KeyPair { data: "Product".into(), lookup: "Product".into() }], unmatched_value: None },
+            ];
+            rig.app.active_tab = 0;
+            pump(&mut rig, "both key checks", &|r| model_status(r, 0) == LinkStatus::OkUnmatched(10) && r.app.project.model.links.len() == 2 && model_status(r, 1).is_broken());
+            assert_eq!(model_status(&rig, 1), LinkStatus::Broken(vec!["1 duplicate key".to_string(), "1 blank lookup key".to_string()]), "{what}");
+            assert_eq!(rig.app.model_counts(), (2, 1), "{what}");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "Model: 2 links \u{b7} 1 broken"), "{what}: the status bar: {:?}", p.boxes.iter().map(|b| b.0.clone()).filter(|t| t.starts_with("Model")).collect::<Vec<_>>());
+            // the Links list shows both statuses
+            menu_item(&mut rig, "Model", "Links");
+            let p = rig.draw(4);
+            assert!(painted_has(&p, "Broken: 1 duplicate key, 1 blank lookup key") && painted_has(&p, "OK \u{b7} 10 unmatched keys"), "{what}: the Links list");
+            let r = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            let close = model_button(&rig, "Close");
+            click_rect(&mut rig, close);
+            rig.draw(3);
+
+            // Key check…
+            menu_item(&mut rig, "Model", "Key check");
+            let p = rig.draw(5);
+            let r = assert_dialog_fits(&rig.ctx, &check_title(), &what);
+            assert!(painted_has(&p, "Lookup: 140 rows \u{b7} 0 duplicate keys (0 rows) \u{b7} 0 blank keys"), "{what}: the first link's lookup line");
+            assert!(painted_has(&p, "Data: 150 rows \u{b7} 140 matched \u{b7} 10 unmatched keys (10 rows) \u{b7} 0 blank keys"), "{what}: the first link's data line");
+            let texts: Vec<(String, egui::Rect)> = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window).into_iter().filter(|(_, b)| inside(*b, r.body)).collect();
+            assert_no_overlap(&texts, &what);
+            assert!(inside(model_button(&rig, "Close"), r.window), "{what}: Close is in the dialog");
+            // the sums: choose Balance for the first link by real clicks
+            let c = reveal(&mut rig, &check_title(), &|r| section_button(r, 0, "Sum of"));
+            let p = click_rect(&mut rig, c);
+            let it = last_box(&p, "Balance", c.top()).unwrap_or_else(|| panic!("{what}: Balance in the list"));
+            click_rect(&mut rig, it);
+            pump(&mut rig, "the sums", &|r| r.app.project.model_ui.runtime.get(&("t1".to_string(), "t2".to_string())).is_some_and(|x| x.check.as_ref().is_some_and(|c| c.value_column.as_deref() == Some("Balance"))));
+            let c = rig.app.project.model_ui.runtime[&("t1".to_string(), "t2".to_string())].check.clone().expect("check");
+            let sum: f64 = (141..=150).map(|i| 1000.0 + 10.0 * (i - 1) as f64).sum();
+            assert_eq!(c.unmatched.len(), 10, "{what}");
+            assert!((c.unmatched.iter().filter_map(|u| u.sum).sum::<f64>() - sum).abs() < 1e-6, "{what}: the sums of the 10 keys add up to the rows' total");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "No match: B141 \u{2014} 1 row"), "{what}: the list of unmatched keys: {:?}", p.boxes.iter().map(|b| b.0.clone()).filter(|t| t.starts_with("No match")).collect::<Vec<_>>());
+
+            // Copy list
+            let copy = reveal(&mut rig, &check_title(), &|r| section_button(r, 0, "Copy list"));
+            click_rect(&mut rig, copy);
+            rig.draw(3);
+            let want = model::unmatched_list_text(&rig.app.project.model.links[0], &c);
+            assert_eq!(rig.app.project.model_ui.last_copied, want, "{what}: the list is on the clipboard");
+            assert!(want.starts_with("Branch\tRows\tSum of Balance\nB141\t1\t"), "{what}: {want}");
+            assert_eq!(want.lines().count(), 11, "{what}: a heading and 10 keys");
+            assert!(rig.app.status_message.starts_with("Copied 10 unmatched keys"), "{what}: {}", rig.app.status_message);
+
+            // Show unmatched rows: a new tab with exactly those rows
+            let n = rig.app.tabs.len();
+            let show = reveal(&mut rig, &check_title(), &|r| section_button(r, 0, "Show unmatched rows"));
+            click_rect(&mut rig, show);
+            pump(&mut rig, "the unmatched rows tab", &|r| r.app.tabs.len() == n + 1);
+            let t = rig.app.tabs.last().expect("tab");
+            assert!(t.title.starts_with("Unmatched rows: "), "{what}: {}", t.title);
+            let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+            let branches: Vec<String> = (0..df.height()).map(|i| df.column("Branch").expect("b").get(i).expect("v").get_str().expect("s").to_string()).collect();
+            assert_eq!(branches, (141..=150).map(|i| format!("B{i:03}")).collect::<Vec<_>>(), "{what}: exactly the unmatched rows");
+            assert_eq!(df.get_column_names().iter().map(|n| n.to_string()).collect::<Vec<_>>(), ["Branch", "Product", "Balance"], "{what}: the data tab's columns");
+            rig.app.active_tab = 0;
+            rig.draw(3);
+
+            // Show duplicates of the second link: Gold twice, with Times = 2
+            let n = rig.app.tabs.len();
+            let show = reveal(&mut rig, &check_title(), &|r| section_button(r, 1, "Show duplicates"));
+            click_rect(&mut rig, show);
+            pump(&mut rig, "the duplicates tab", &|r| r.app.tabs.len() == n + 1);
+            let t = rig.app.tabs.last().expect("tab");
+            assert!(t.title.starts_with("Duplicate keys: Product master"), "{what}: {}", t.title);
+            let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+            assert_eq!(df.height(), 2, "{what}: the two Gold rows");
+            assert_eq!(df.get_column_names().iter().map(|n| n.to_string()).collect::<Vec<_>>(), ["Product", "Group", "Times"], "{what}");
+            let times: Vec<i64> = (0..2).map(|i| df.column("Times").expect("t").get(i).expect("v").extract::<i64>().expect("n")).collect();
+            assert_eq!(times, [2, 2], "{what}");
+            // the duplicates button of the good link is greyed
+            let dup0 = reveal(&mut rig, &check_title(), &|r| section_button(r, 0, "Show duplicates"));
+            let tabs_now = rig.app.tabs.len();
+            click_rect(&mut rig, dup0);
+            rig.draw(4);
+            assert_eq!(rig.app.tabs.len(), tabs_now, "{what}: no duplicates to show, nothing opens");
+            let _ = data_title;
+        }
+    }
+}
+
+#[test]
+fn m0_a_project_with_links_saves_and_opens_and_a_lookup_file_with_a_duplicate_key_makes_its_link_broken_in_the_open_line() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig9("p9m0open", ppp, w, h);
+        let what = rig.what.clone();
+        let root = rig.app.paths.root_dir.clone();
+        let data_title = rig.app.tabs[0].title.clone();
+        // the lookup is a file next to the data (a project cannot hold a tab that reads a temporary file)
+        let write_master = |df: &mut DataFrame| polars::prelude::ParquetWriter::new(std::fs::File::create(root.join("Branches.parquet")).expect("file")).finish(df).expect("parquet");
+        let mut master = branch_master();
+        write_master(&mut master);
+        let src = TabSource::SingleFile { path: root.join("Branches.parquet"), is_parquet: true, config: IngestionConfig::default() };
+        rig.app.create_tab_from_source("Branches".into(), src, Vec::new(), std::collections::HashMap::new());
+        pump(&mut rig, "the lookup tab", &|r| r.app.tabs.len() == 2);
+        rig.app.project.active = true;
+        rig.app.project.name = "Untitled".into();
+        let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+        rig.app.project.keys.insert(ids[0], "t1".into());
+        rig.app.project.keys.insert(ids[1], "t2".into());
+        rig.app.project.model.links = vec![model::Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: Some("Balance".into()) }];
+        pump(&mut rig, "the key check", &|r| model_status(r, 0) == LinkStatus::OkUnmatched(10));
+        // a model that was changed is an unsaved change
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.draw(3);
+        assert!(rig.app.project_unsaved(), "{what}: the links are part of what the project saves");
+        let pfile = root.join("proj").join("Model.mpproj");
+        rig.app.project.test_pick = Some(pfile.clone());
+        rig.app.run_command(&rig.ctx, CommandId::ProjectSaveAs);
+        pump(&mut rig, "the project is saved", &|r| !r.app.project.saving && pfile.exists());
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pfile).expect("file")).expect("json");
+        assert_eq!(v["project_version"], 2, "{what}: a model: version 2");
+        assert_eq!(v["model"]["links"][0]["data_tab"], "t1", "{what}");
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.draw(3);
+        assert!(!rig.app.project_unsaved(), "{what}: saved");
+        // a change to the model alone (a value column for the unmatched sums) is an unsaved change, and putting it back is not
+        rig.app.project.model.links[0].unmatched_value = None;
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.draw(3);
+        assert!(rig.app.project_unsaved(), "{what}: a change to the model alone leaves the project unsaved");
+        rig.app.project.model.links[0].unmatched_value = Some("Balance".into());
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.draw(3);
+        assert!(!rig.app.project_unsaved(), "{what}: and putting it back does not");
+        // opened as it was saved: the open line has nothing to add
+        let open = |rig: &mut Rig| {
+            rig.app.project.test_pick = Some(pfile.clone());
+            rig.app.run_command(&rig.ctx, CommandId::ProjectOpen);
+            rig.draw(4);
+            let b = rig.app.project.rects.buttons.iter().find(|(n, _)| n == "Open").map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: Open in the Sources dialog", rig.what));
+            click_rect(rig, b);
+            pump(rig, "the project opens", &|r| r.app.project.opening.is_none() && r.app.tabs.len() == 2 && r.app.project.model_ui.open_base.is_none());
+        };
+        open(&mut rig);
+        assert_eq!(rig.app.project.model.links.len(), 1, "{what}: the link is back");
+        assert_eq!(rig.app.status_message, "2 tabs opened.", "{what}: nothing is broken");
+        assert_eq!(model_status(&rig, 0), LinkStatus::OkUnmatched(10), "{what}");
+        // the lookup file now has B005 twice: the link is Broken in the open line
+        let mut dup = branch_master();
+        dup = dup.vstack(&dup.slice(4, 1)).expect("one more row");
+        let five = dup.column("Code").expect("code").get(4).expect("v").get_str().expect("s").to_string();
+        assert_eq!(five, "B005");
+        write_master(&mut dup);
+        open(&mut rig);
+        let titles: Vec<String> = rig.app.tabs.iter().map(|t| t.title.clone()).collect();
+        assert_eq!(titles, vec![data_title.clone(), "Branches".to_string()], "{what}");
+        assert_eq!(rig.app.status_message, format!("2 tabs opened; link '{data_title} \u{2192} Branches' is broken: 1 duplicate key"), "{what}");
+        assert_eq!(rig.app.project.last_summary, rig.app.status_message, "{what}");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "Model: 1 link \u{b7} 1 broken"), "{what}: the status bar");
+        assert_eq!(rig.app.model_counts(), (1, 1), "{what}");
+    }
+}
+
+#[test]
+fn m0_pictures_of_the_links_and_key_check_dialogs() {
+    use crate::ui::render_tests_p8::{can_shoot, menu_item, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig8("p9m0shot", SHOT_PPP, SHOT_W, SHOT_H, book9());
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+        rig.app.project.active = true;
+        rig.app.project.name = "Treasury".into();
+        open_table(&mut rig, "Branch master", branch_master());
+        open_table(&mut rig, "Product master", product_master());
+        let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            rig.app.project.keys.insert(*id, format!("t{}", i + 1));
+        }
+        rig.app.project.model.links = vec![
+            model::Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: Some("Balance".into()) },
+            model::Link { data_tab: "t1".into(), lookup_tab: "t3".into(), keys: vec![KeyPair { data: "Product".into(), lookup: "Product".into() }], unmatched_value: None },
+        ];
+        rig.app.active_tab = 0;
+        pump(&mut rig, "both key checks", &|r| model_status(r, 0) == LinkStatus::OkUnmatched(10) && r.app.project.model.links.len() == 2 && model_status(r, 1).is_broken());
+        menu_item(&mut rig, "Model", "Links");
+        rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+        shoot(&mut rig, "model-links-dialog", dark, r.window.expand(10.0));
+        let close = model_button(&rig, "Close");
+        click_rect(&mut rig, close);
+        rig.draw(3);
+        menu_item(&mut rig, "Model", "Key check");
+        rig.draw(6);
+        let r = assert_dialog_fits(&rig.ctx, &check_title(), &what);
+        shoot(&mut rig, "model-key-check-dialog", dark, r.window.expand(10.0));
+    }
+}

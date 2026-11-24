@@ -102,6 +102,10 @@ pub struct ProjectState {
     /// The line "9 tabs opened, 1 failed: …" of the last open.
     pub last_summary: String,
     pub rects: ProjectRects,
+    /// The model of the project: its links (Phase 9 M0), saved in the `.mpproj`.
+    pub model: micro_parquet::model::Model,
+    /// What the app knows of the links: the key checks, the open Links dialog.
+    pub model_ui: crate::ui::model::ModelState,
     /// Tests: the file or folder the dialog would give, and how often a dialog was asked for.
     #[cfg(test)]
     pub test_pick: Option<PathBuf>,
@@ -169,6 +173,10 @@ impl MicroParquetApp {
             }
         }
         self.tabs.get(self.active_tab).map(|t| t.id).hash(&mut h);
+        // the model's links are part of the project (nothing is hashed with no links: a project without a model hashes as before)
+        if !self.project.model.is_empty() {
+            format!("{:?}", self.project.model).hash(&mut h);
+        }
         format!("{:016x}", h.finish())
     }
 
@@ -205,6 +213,7 @@ impl MicroParquetApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.project_advance();
+        self.model_tick();
         if self.project.active {
             let now = ctx.input(|i| i.time);
             if now - self.project.fp_checked_at > 0.4 { // not a size: seconds between two checks of the unsaved marker
@@ -297,6 +306,8 @@ impl MicroParquetApp {
         self.project.keys.clear();
         self.project.kept.clear();
         self.project.opening = None;
+        self.project.model = micro_parquet::model::Model::default();
+        self.project.model_ui = crate::ui::model::ModelState::default();
     }
 
     fn project_new(&mut self) {
@@ -374,7 +385,9 @@ impl MicroParquetApp {
     pub(crate) fn apply_project_built(&mut self, b: ProjectBuilt) {
         self.project.saving = false;
         self.project.hash_cache.extend(b.cache);
-        let draft = SaveDraft { project: b.saved.project, excluded: b.saved.excluded, keys: b.saved.keys, path: b.path };
+        let mut project = b.saved.project;
+        project.model = self.project.model.clone();
+        let draft = SaveDraft { project, excluded: b.saved.excluded, keys: b.saved.keys, path: b.path };
         if draft.excluded.is_empty() {
             self.project_commit(draft);
         } else {
@@ -440,6 +453,7 @@ impl MicroParquetApp {
     /// "Open" of the Sources dialog: the current tabs close and the project's tabs are built one by one.
     fn project_start_opening(&mut self, draft: SourcesDraft) {
         self.close_all_tabs();
+        self.project.model = draft.project.model.clone();
         self.project.active = true;
         self.project.path = Some(draft.path.clone());
         self.project.name = project_name(&draft.path);
@@ -584,7 +598,9 @@ impl MicroParquetApp {
         self.project.saved_fp = self.project_fingerprint();
         self.project.dirty = false;
         self.project.last_summary = summary.clone();
-        self.status_message = summary;
+        self.status_message = summary.clone();
+        // the broken links are added to this line when their key checks are back
+        self.project.model_ui.open_base = if self.project.model.links.is_empty() { None } else { Some(summary) };
         // the files are compared with the hashes the project saved, on the worker, once the tabs are open
         let project = op.opener.project.clone();
         let (dir, relinks) = (project_dir_of(&op.path), op.relinks.clone());

@@ -127,6 +127,12 @@ impl MicroParquetApp {
                         };
                         ui.label(egui::RichText::new("Rows").color(tk.muted));
                         ui.label(theme::mono_semibold(count(tab.totals.rows)));
+                        // the model: how many links, and how many cannot be used (Phase 9 M0)
+                        let (n_links, n_broken) = self.model_counts();
+                        if let Some(text) = micro_parquet::model::status_bar_text(n_links, n_broken).filter(|t| room_for(ui, theme::text_width(ui, t, theme::TEXT_SMALL))) {
+                            let colour = if n_broken > 0 { tk.danger } else { tk.muted };
+                            ui.label(egui::RichText::new(text).color(colour)).on_hover_text("Model \u{25b8} Links\u{2026} lists the links; Model \u{25b8} Key check\u{2026} lists what is wrong with a key");
+                        }
                         // (the warnings are cut with "…" before they take the line-break chip's room)
                         let warn_w = |ui: &egui::Ui| (ui.available_width() - chip_reserve - job_reserve - theme::STATUS_MESSAGE_ROOM).max(theme::STATUS_MIN_MESSAGE_W);
                         if micro_parquet::pivot_table::pivot_totals_lost(&tab.steps) {

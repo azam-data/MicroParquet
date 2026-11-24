@@ -69,6 +69,10 @@ pub enum JobKind {
     ChartPickerValues,
     /// The Nested view of a pivot tab, built from the pivot's source rows (Phase 9 P2).
     NestedView,
+    /// The key check of one link of the model (Phase 9 M0).
+    ModelCheck,
+    /// The tab of duplicate lookup rows, or of unmatched data rows (Phase 9 M0).
+    ModelRows,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

@@ -59,6 +59,10 @@ pub enum JobOutput {
     ChartPicker(Box<PickerResult>),
     /// The Nested view of a pivot tab (Phase 9 P2).
     NestedView(Box<NestedViewResult>),
+    /// The key check of a link (Phase 9 M0).
+    ModelCheck(Box<ModelCheckResult>),
+    /// A tab of the rows a key check lists (Phase 9 M0).
+    ModelRows(Box<ModelRowsResult>),
 }
 
 /// A tab of a project, built on the worker.
@@ -1338,4 +1342,76 @@ pub fn compute_nested_view(req: NestedViewRequest, ctx: &JobCtx) -> Result<Neste
     let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
     let view = crate::pivot_view::nested_view_of_tab(&req.source, &req.steps, &req.temp_dir).map_err(|e| format!("{:#}", e));
     Ok(NestedViewResult { tab_id: req.tab_id, pipeline, view })
+}
+
+/// The key check of one link, with the fingerprint of what it was run for: a result for tabs that have changed since is dropped.
+pub struct ModelCheckRequest {
+    pub link: crate::model::Link,
+    pub data: crate::model::ModelTab,
+    pub lookup: crate::model::ModelTab,
+    pub fingerprint: u64,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ModelCheckResult {
+    pub link: crate::model::Link,
+    pub fingerprint: u64,
+    /// The check, or why it could not run.
+    pub check: std::result::Result<crate::model::KeyCheck, String>,
+}
+
+pub fn compute_model_check(req: ModelCheckRequest, ctx: &JobCtx) -> Result<ModelCheckResult> {
+    ctx.check()?;
+    ctx.set_progress("Checking the keys\u{2026}", None);
+    let check = crate::model::check_link(&req.link, &req.data, &req.lookup, &req.temp_dir, &|| ctx.check()).map_err(|e| {
+        if e.downcast_ref::<crate::jobs::Cancelled>().is_some() {
+            return "cancelled".to_string();
+        }
+        format!("{:#}", e)
+    });
+    if check.as_ref().err().is_some_and(|e| e == "cancelled") {
+        ctx.check()?;
+    }
+    Ok(ModelCheckResult { link: req.link, fingerprint: req.fingerprint, check })
+}
+
+/// Which list of rows a key check opens as a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelList {
+    /// The lookup rows whose key repeats, with a Times column.
+    Duplicates,
+    /// The data rows whose key has no lookup row.
+    Unmatched,
+}
+
+pub struct ModelRowsRequest {
+    pub list: ModelList,
+    pub link: crate::model::Link,
+    pub data: crate::model::ModelTab,
+    pub lookup: crate::model::ModelTab,
+    pub temp_dir: PathBuf,
+    pub file_stamp: u64,
+}
+
+pub struct ModelRowsResult {
+    pub title: String,
+    pub source: TabSource,
+    pub rows: usize,
+}
+
+/// Lists the rows and writes them to a Parquet file in the temporary folder: the tab reads that file (it is a list to send back
+/// and fix at source, so it is not saved in a project).
+pub fn compute_model_rows(req: ModelRowsRequest, ctx: &JobCtx) -> Result<ModelRowsResult> {
+    ctx.check()?;
+    ctx.set_progress("Listing the rows\u{2026}", None);
+    let (mut df, title, stem) = match req.list {
+        ModelList::Duplicates => (crate::model::duplicate_rows(&req.link, &req.lookup, &req.temp_dir)?, format!("Duplicate keys: {}", req.lookup.title), "model_duplicates"),
+        ModelList::Unmatched => (crate::model::unmatched_rows(&req.link, &req.data, &req.lookup, &req.temp_dir)?, format!("Unmatched rows: {}", crate::model::link_name(&req.data.title, &req.lookup.title)), "model_unmatched"),
+    };
+    ctx.check()?;
+    std::fs::create_dir_all(&req.temp_dir).with_context(|| "The temporary folder could not be made")?;
+    let path = req.temp_dir.join(format!("{}_{}_{}.parquet", stem, std::process::id(), req.file_stamp));
+    let f = std::fs::File::create(&path).with_context(|| format!("The list could not be written to {}", path.display()))?;
+    polars::prelude::ParquetWriter::new(f).finish(&mut df).context("The list could not be written")?;
+    Ok(ModelRowsResult { title, source: TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, rows: df.height() })
 }

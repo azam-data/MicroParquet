@@ -140,6 +140,8 @@ impl MicroParquetApp {
                         }
                     }
                     JobKind::ShowRows => self.status_message = msg.clone(),
+                    JobKind::ModelCheck => self.model_check_failed(&msg),
+                    JobKind::ModelRows => self.status_message = msg.clone(),
                     JobKind::ProjectCheck => self.status_message = format!("The project's files could not be checked: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
                     JobKind::ChartPickerValues => self.chart_picker_failed(msg.clone()),
@@ -203,6 +205,8 @@ impl MicroParquetApp {
             JobOutput::ShowRows(r) => self.apply_show_rows(*r),
             JobOutput::ChartPicker(r) => self.apply_chart_picker_result(*r),
             JobOutput::NestedView(r) => self.apply_nested_view(*r),
+            JobOutput::ModelCheck(r) => self.apply_model_check(*r),
+            JobOutput::ModelRows(r) => self.apply_model_rows(*r),
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
                 let status = match self.open_notes.remove(&tab.id) {

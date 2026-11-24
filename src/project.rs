@@ -19,6 +19,8 @@ use std::path::{Component, Path, PathBuf};
 
 /// The version of the file format this build writes and reads.
 pub const PROJECT_VERSION: u32 = 1;
+/// The version of a project that has a model (Phase 9 M0). The v1.8.0 app refuses it with its "newer MicroParquet" message.
+pub const PROJECT_VERSION_MODEL: u32 = 2;
 /// The extension of a project file.
 pub const PROJECT_EXT: &str = "mpproj";
 /// How many projects "Open recent project" lists.
@@ -119,11 +121,14 @@ pub struct Project {
     /// The key of the active tab ("" = none).
     pub active_tab: String,
     pub tabs: Vec<ProjectTab>,
+    /// The model: links between tabs (Phase 9 M0). Not in the file when it is empty, and then the project is version 1.
+    #[serde(skip_serializing_if = "crate::model::Model::is_empty")]
+    pub model: crate::model::Model,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new() }
+        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new(), model: crate::model::Model::default() }
     }
 }
 
@@ -143,7 +148,11 @@ fn sorted_value(v: serde_json::Value) -> serde_json::Value {
 impl Project {
     /// The file's text: keys in alphabetical order, so saving the same project twice gives the same bytes.
     pub fn to_json(&self) -> Result<String> {
-        let v = serde_json::to_value(self).context("The project could not be written")?;
+        let mut v = serde_json::to_value(self).context("The project could not be written")?;
+        // a project with a model is version 2, one without is version 1, whatever the value in memory
+        if let Some(m) = v.as_object_mut() {
+            m.insert("project_version".to_string(), serde_json::json!(if self.model.is_empty() { PROJECT_VERSION } else { PROJECT_VERSION_MODEL }));
+        }
         let mut text = serde_json::to_string_pretty(&sorted_value(v)).context("The project could not be written")?;
         text.push('\n');
         Ok(text)
@@ -152,17 +161,24 @@ impl Project {
     /// Reads a project from its text. A newer project version is refused before anything else is read.
     pub fn from_json(text: &str, name: &str) -> Result<Project> {
         let v: serde_json::Value = serde_json::from_str(text).map_err(|e| anyhow!("The project file {} is not valid: {}.", name, e))?;
-        let ver = v.get("project_version").and_then(|x| x.as_u64()).unwrap_or(PROJECT_VERSION as u64);
-        if ver > PROJECT_VERSION as u64 {
-            let by = v.get("app_version").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| format!("v{}", s)).unwrap_or_else(|| format!("(project version {})", ver));
-            bail!("This project was saved by a newer MicroParquet {}. Update the app to open it.", by);
-        }
+        check_version(&v, PROJECT_VERSION_MODEL)?;
         serde_json::from_value::<Project>(v).map_err(|e| anyhow!("The project file {} is not valid: {}.", name, e))
     }
 
     pub fn tab(&self, key: &str) -> Option<&ProjectTab> {
         self.tabs.iter().find(|t| t.key == key)
     }
+}
+
+/// Refuses a project saved by a newer app than one that reads up to `supported`. (The v1.8.0 app reads up to version 1, so it refuses
+/// a project with a model with this message; the test of that calls this with 1.)
+pub fn check_version(v: &serde_json::Value, supported: u32) -> Result<()> {
+    let ver = v.get("project_version").and_then(|x| x.as_u64()).unwrap_or(PROJECT_VERSION as u64);
+    if ver > supported as u64 {
+        let by = v.get("app_version").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| format!("v{}", s)).unwrap_or_else(|| format!("(project version {})", ver));
+        bail!("This project was saved by a newer MicroParquet {}. Update the app to open it.", by);
+    }
+    Ok(())
 }
 
 /// Reads a project file.

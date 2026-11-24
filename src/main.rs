@@ -146,6 +146,12 @@ pub enum ActiveToolModal {
     ProjectPrompt,
     /// File ▸ Open recent project (Phase 8 W4).
     ProjectRecent,
+    /// Model ▸ Links… (Phase 9 M0).
+    ModelLinks,
+    /// Model ▸ Key check… (Phase 9 M0).
+    ModelKeyCheck,
+    /// A Model item with no project open (Phase 9 M0).
+    ModelNoProject,
     /// Transform ▸ Split date… (Phase 8 W1).
     SplitDate,
     /// New chart: the chart gallery (Phase 7 C2).

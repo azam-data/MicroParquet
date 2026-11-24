@@ -372,6 +372,10 @@ pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL
 pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
 // dialogs: widths (the schema dialog's is above) and the lists inside them
 pub const DIALOG_W_SORT: f32 = 700.0;
+/// The Links and Key check dialogs (Phase 9 M0): a share of the pivot builder's width, the width of a combo box, how many lines of a list.
+pub const MODEL_DIALOG_SHARE: f32 = 0.8;
+pub const MODEL_COMBO_W: f32 = 190.0;
+pub const MODEL_LIST_LINES: usize = 8;
 /// The width of the PDF export dialog's title box.
 pub const PDF_TITLE_FIELD_W: f32 = 320.0;
 pub const DIALOG_W_ABOUT: f32 = 560.0;

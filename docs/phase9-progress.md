@@ -6,7 +6,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | --- | --- | --- | --- |
 | P1 | DONE (S1), follow-ups DONE (S2) | (see git log: "Phase 9 P1", "Phase 9 P1: follow-ups") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
 | P2 | DONE (S2), follow-up DONE (S3) | (see git log: "Phase 9 P2") | tests/phase9/p2.rs x16 (subtotals, grand total, leaves, hash of the flat table, three levels, blank lines, Columns, last-step rule, Excel XML, scale, PDF text and indent, CSV and Python, Show rows, old pivots, the sheet limit); render_tests_p9 x5 (the dialog, the tab's bar and undo, Show rows by clicks, steps after the pivot, the pop-out) |
-| M0 | (S3, after the follow-up) | | |
+| M0 | DONE (S3) | (see git log: "Phase 9 M0") | tests/phase9/m0.rs x10 (composite key and duplicates, sorted duplicates, blank keys, unmatched keys and sums, the refusals, project v2 round trip and v1 bytes, the v1.8.0 refusal, relink to a duplicate, the open line and status texts, a tab changed since); render_tests_p9 x5 (the menu with and without a project, Links add/edit/remove and refusals, Key check and its three buttons, project save/open with the open line, pictures) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -126,3 +126,37 @@ Proved to fail without the fix (stubs, restored): the worker not returning the N
 The pictures `docs/guide/img/pivot-layout-dialog.png` and `-dark.png` changed on purpose (the dialog's preview is Nested now). The full test run also rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored.
 
 Full `cargo test` before the commit: 9 + 311 + 725 + 60 passed.
+
+## M0 acceptance: item -> test (S3)
+
+Library tests are `tests/phase9/m0.rs` (`cargo test -q --test phase3 p9_m0`); UI tests are in `src/ui/render_tests_p9.rs` (`cargo test -q --bin MicroParquet m0_`), at 1219x686, 1600x900 and 1291x700 pt, light and dark.
+
+| Acceptance item (spec M0) | Test |
+| --- | --- |
+| A product master keyed by (Wing, Product code) with SB01 in both wings links correctly; a second (Conventional, SB01) row makes it Broken, Key check lists that key with both rows; Show duplicates gives those 2 rows with Times = 2 | `m0_a_product_master_keyed_by_wing_and_product_code_links_and_a_second_row_makes_it_broken_and_lists_both_rows`; sorted by key and a "Times" column of the lookup's own kept: `m0_duplicates_are_sorted_by_key_and_a_column_called_times_is_not_overwritten` |
+| A lookup with a blank key is Broken | `m0_a_blank_key_in_the_lookup_makes_it_broken_and_a_blank_key_in_the_data_is_counted_apart` (missing and only-spaces keys) |
+| Unmatched data keys with the right row counts and sums; Show unmatched rows gives exactly those rows; Copy list | `m0_unmatched_keys_are_listed_with_their_rows_and_sums_and_show_unmatched_rows_gives_exactly_those_rows`; UI by real clicks: `m0_key_check_lists_duplicates_blanks_and_unmatched_keys_and_its_three_buttons_open_and_copy_the_lists_light_and_dark_at_three_sizes` |
+| The role, type, second-link and chart-tab refusals give their messages | `m0_the_role_type_second_link_and_chart_tab_refusals_give_their_messages`; in the dialog: `m0_links_are_added_edited_and_removed_by_real_clicks_and_refusals_are_said_in_the_dialog_light_and_dark_at_three_sizes` (role and second link) |
+| A project with a model round-trips (same bytes but `saved_at`) and is written as version 2 | `m0_a_project_with_a_model_is_version_2_and_round_trips_and_one_without_is_version_1_with_no_model_section`; through the app: `m0_a_project_with_links_saves_and_opens_and_a_lookup_file_with_a_duplicate_key_makes_its_link_broken_in_the_open_line` |
+| A project without a model is written as version 1, byte for byte as B0's baseline | the same test (no `model` section, version 1 even if memory says 2) and `b0_the_phase8_samples_replay_to_the_hashes_the_phase8_code_gave` (passes) |
+| The v1.8.0 refusal text appears for version 2 | `m0_the_v1_8_0_app_refuses_a_version_2_project_with_its_newer_app_message` (through `check_version(.., 1)`) |
+| Relinking a lookup file (W4) to a file with a duplicate key makes the link Broken in the open line | library `m0_relinking_a_lookup_file_to_one_with_a_duplicate_key_makes_the_link_broken_in_the_open_line`; in the app (real Open, "2 tabs opened; link 'Deposits -> Branches' is broken: 1 duplicate key", the status bar's "Model: 1 link · 1 broken"): the project test above |
+| Render tests at 3 sizes: the Model menu with and without a project | `m0_the_model_menu_says_a_project_is_needed_with_none_and_opens_links_and_key_check_with_one_at_three_sizes` (Model between View and Banking; the message; Save project as...; Links and Key check open) |
+| Links... add / edit / remove | the Links test above (tabs and key pairs picked by clicks, a second pair added and taken away, Remove; the status "OK · 10 unmatched keys", the status bar item, a renamed tab keeps its link) |
+| Key check and its three buttons | the Key check test above (counts, the sums box, Copy list, Show unmatched rows = exactly B141 to B150, Show duplicates = the 2 Gold rows with Times 2, a greyed button opens nothing) |
+| The open line and the status bar | the project test (open line, status bar), the Links and Key check tests (status bar), `m0_the_open_line_the_status_bar_and_the_status_texts_say_what_they_should` |
+
+Pictures to look at by eye (light and dark, written by `m0_pictures_of_the_links_and_key_check_dialogs`): `docs/guide/img/model-links-dialog.png`, `model-links-dialog-dark.png` (the list with an OK-with-unmatched link and a Broken one), `model-key-check-dialog.png`, `model-key-check-dialog-dark.png` (a link's counts, the first unmatched keys with sums, the sums box and the three buttons).
+
+Proved to fail without the fix (stubs, each restored; all 16 runs finished, none cut short):
+- duplicates not counted: `m0_a_product_master_keyed…`, `m0_relinking_a_lookup_file…`, UI `m0_a_project_with_links…`, `m0_key_check_lists…`.
+- blank lookup keys not counted: `m0_a_blank_key_in_the_lookup…`, UI `m0_key_check_lists…`.
+- unmatched rows taken as the matched ones: `m0_unmatched_keys_are_listed…`, UI `m0_key_check_lists…`. Sums wrong: `m0_unmatched_keys_are_listed…`.
+- duplicates list with every row: `m0_a_product_master_keyed…`, `m0_duplicates_are_sorted_by_key…`, UI `m0_key_check_lists…`.
+- no role refusal, no second-link refusal: `m0_the_role_type_second_link_and_chart_tab_refusals…`, UI `m0_links_are_added_edited…`. No type refusal: `m0_the_role_type_second_link_and_chart_tab_refusals…`.
+- version always 1: `m0_a_project_with_a_model_is_version_2…`, `m0_the_v1_8_0_app_refuses…`, UI `m0_a_project_with_links…`. Empty model written: `m0_a_project_with_a_model_is_version_2…` and `b0_the_phase8_samples_replay…`. Version 2 refused by this app: `m0_a_project_with_a_model…`, `m0_relinking_a_lookup_file…`, UI `m0_a_project_with_links…`.
+- open line not added, model not saved, model not opened: UI `m0_a_project_with_links…`. No status bar item: UI `m0_a_project_with_links…`, `m0_key_check_lists…`, `m0_links_are_added_edited…`.
+- Copy list not kept, a tab change not re-checked (the edited link stays at the old status): UI `m0_key_check_lists…` (copy), `m0_links_are_added_edited…` (re-check; the first run listed only the copy test, the edit step times out waiting for the new status).
+- model not part of "unsaved": the first run found no failing test (the test also added a tab, which moves the fingerprint). A model-only change was added to `m0_a_project_with_links…`; it fails with the stub and passes without.
+
+Full `cargo test` before the commit: 9 + 316 + 735 + 60 passed. The full run rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored.

@@ -83,9 +83,9 @@ fn the_top_bar_is_one_44_px_strip() {
     assert!(top >= 0.0 && bottom <= theme::TOP_BAR_H, "items lie inside the first 44 px: {top}..{bottom}");
     // order: mark, the seven menus, the buttons, then the search box at the far right
     let names: Vec<&str> = rects.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(&names[..8], &["Mark", "File", "Edit", "View", "Banking", "Charts", "Export", "Help"], "{names:?}");
+    assert_eq!(&names[..9], &["Mark", "File", "Edit", "View", "Model", "Banking", "Charts", "Export", "Help"], "{names:?}");
     assert_eq!(*names.last().unwrap_or(&""), "Search");
-    assert_eq!(names[8], "OpenFile", "the toolbar buttons follow the menus: {names:?}");
+    assert_eq!(names[9], "OpenFile", "the toolbar buttons follow the menus: {names:?}");
 }
 
 #[test]
