@@ -82,6 +82,8 @@ mod render_tests_p7;
 #[cfg(test)]
 mod render_tests_p8;
 #[cfg(test)]
+mod render_tests_p9;
+#[cfg(test)]
 mod render_tests_r;
 #[cfg(test)]
 mod tests;

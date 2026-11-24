@@ -392,4 +392,9 @@ Reply in no more than 30 lines:
 
 <accepted_deviations>
 Sessions record their choices here and in `docs/phase9-progress.md`, for the owner to accept or change.
+
+- **B0-1:** the project has 7 tabs, not 6: the six kinds the spec lists (file, file + steps, join, pivot tab, gap ladder run, chart tab at drill level 2) and the branch file the join reads, as the W4 test does (a join names its sources by tab).
+- **B0-2:** the hash of the project's text after save → open → save also leaves out `app_version`, sets the files' modified times to 0 and writes the folder as `<ROOT>`: a copy of a file has a new time, a release changes the version, and the repository can be anywhere. Everything else in the text is hashed (the spec says "except `saved_at`").
+- **B0-3:** the committed `.mpproj` holds the absolute path of the machine that made it, next to the path relative to its folder (the Phase 8 code writes both). The replay copies the fixtures to a temporary folder and opens the project with relinks to the copies of the data files, so it never reads or depends on the absolute path.
+- **B0-4:** `p8_baseline.rs` has one function, `generate`, that writes the files and then calls `replay` on them; the committed hashes are what `replay` gave the v1.8.0 code, and the test calls the same `replay` with today's code. The worktree was at v1.8.0, which is the same commit as `main` at the start of Phase 9 (8749496).
 </accepted_deviations>

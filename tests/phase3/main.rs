@@ -160,3 +160,9 @@ mod p8_w11_baseline;
 mod p8_w11;
 #[path = "../phase8/w8.rs"]
 mod p8_w8;
+
+// Phase 9 tests (tests/phase9/) are compiled into this binary too.
+#[path = "../phase9/p8_baseline.rs"]
+mod p9_p8_baseline;
+#[path = "../phase9/b0.rs"]
+mod p9_b0;

@@ -1,0 +1,37 @@
+{
+  "app_version": "1.8.0",
+  "control_column": null,
+  "created_at": "2026-11-23 10:00:00",
+  "description": "",
+  "enforce_balance_control": false,
+  "name": "phase8_filter_part_gte",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "FilterGroup": {
+        "conditions": [
+          {
+            "column": "Open Date",
+            "op": "Gte",
+            "or_blank": false,
+            "part": {
+              "calendar": {
+                "fy_start_month": 7,
+                "week_start": "Mon"
+              },
+              "column": "Open Date",
+              "name": "Open Date · Month-Year",
+              "part": "MonthYear"
+            },
+            "value": "Aug 2025",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "join": "And",
+        "keep_matching": true
+      }
+    }
+  ],
+  "summary": {}
+}
