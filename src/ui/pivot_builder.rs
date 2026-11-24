@@ -150,6 +150,11 @@ pub struct PivotBuilderState {
     pub popout_start: Option<PopoutPlacement>,
     /// How many rows the last preview was cut to (0 = not known yet: the docked count).
     pub preview_limit: usize,
+    /// At the end of the last frame a text box had the keyboard, or a list or pop-up was open. egui takes the keyboard from a text
+    /// box when Esc arrives, before the builder looks, so this is what tells that Esc was meant for the text box.
+    pub esc_busy: bool,
+    /// A field's menu was open in this frame's drawing (egui does not list its menus among the open pop-ups).
+    pub menu_open: bool,
 }
 
 /// What a frame of the builder asks for, drawn docked or in its own window.
@@ -170,39 +175,31 @@ pub struct PopoutPlacement {
     pub pos: Option<egui::Pos2>,
 }
 
-/// Where the builder's own window opens: where it was last (`saved`: x, y, width, height) when its title strip is on the monitor
-/// of the main window, else centred on the main window. The only monitor this app can see is the main window's: egui 0.29 gives its
-/// size, not a list of monitors, and a window left on another monitor, or on one that is gone, cannot be told from one that is off the
-/// screen. So a saved place on any other monitor is not used (P1-2).
+/// Where the builder's own window opens: exactly where it was last (`saved`: x, y, width, height), on whatever monitor that is, with
+/// no check of the monitor (owner decision on P1-2). If that is off every screen, the Dock button in the app window brings the builder
+/// back. Centred on the main window, at the default size, only when no rectangle is saved.
 pub fn popout_placement(saved: Option<[f32; 4]>, main: Option<egui::Rect>, monitor: Option<egui::Vec2>) -> PopoutPlacement {
     let min = egui::vec2(theme::PIVOT_POPOUT_MIN_SIZE[0], theme::PIVOT_POPOUT_MIN_SIZE[1]);
     let default = egui::vec2(theme::PIVOT_POPOUT_SIZE[0], theme::PIVOT_POPOUT_SIZE[1]);
-    let finite = |v: f32| v.is_finite();
-    let saved = saved.filter(|r| r.iter().all(|v| finite(*v)));
-    let mut size = saved.map(|r| egui::vec2(r[2], r[3])).unwrap_or(default).max(min);
+    // a damaged number is not trusted: it is as if nothing was saved
+    if let Some(r) = saved.filter(|r| r.iter().all(|v| v.is_finite())) {
+        return PopoutPlacement { size: egui::vec2(r[2], r[3]).max(min), pos: Some(egui::pos2(r[0], r[1])) };
+    }
+    let mut size = default;
     // never bigger than the monitor
     if let Some(m) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) {
         size = size.min(m * theme::PIVOT_POPOUT_MONITOR_SHARE).max(min.min(m));
     }
-    let Some(main) = main.filter(|m| finite(m.min.x) && finite(m.min.y) && finite(m.max.x) && finite(m.max.y)) else {
+    let Some(main) = main.filter(|m| m.min.x.is_finite() && m.min.y.is_finite() && m.max.x.is_finite() && m.max.y.is_finite()) else {
         return PopoutPlacement { size, pos: None };
     };
     let centred = main.center() - size / 2.0;
     let Some(monitor) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) else {
         return PopoutPlacement { size, pos: Some(centred) };
     };
-    // the monitor of the main window: monitors sit on a grid of their own size, with one corner at 0, 0
+    // centred on the main window, and on its monitor (monitors sit on a grid of their own size, with one corner at 0, 0)
     let origin = egui::pos2((main.center().x / monitor.x).floor() * monitor.x, (main.center().y / monitor.y).floor() * monitor.y);
     let screen = egui::Rect::from_min_size(origin, monitor);
-    if let Some(r) = saved {
-        let at = egui::pos2(r[0], r[1]);
-        let strip = egui::Rect::from_min_size(at, egui::vec2(size.x, theme::PIVOT_POPOUT_TITLE_STRIP_H));
-        let seen = strip.intersect(screen);
-        if seen.width() >= theme::PIVOT_POPOUT_SEEN_MIN_W && seen.height() >= theme::PIVOT_POPOUT_SEEN_MIN_H {
-            return PopoutPlacement { size, pos: Some(at) };
-        }
-    }
-    // centred on the main window, and on the screen
     let x = centred.x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
     let y = centred.y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()));
     PopoutPlacement { size, pos: Some(egui::pos2(x, y)) }
@@ -245,6 +242,7 @@ impl MicroParquetApp {
         b.popped = false;
         b.popout_start = None;
         b.preview_limit = 0;
+        b.esc_busy = false;
         b.open = true;
     }
 
@@ -630,6 +628,10 @@ impl MicroParquetApp {
 
     /// The builder as a dialog in the app window.
     fn show_pivot_docked(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        if !self.command_open && self.pivot_esc_cancels(ctx) {
+            acts.close = true;
+        }
+        self.pivot_builder.menu_open = false;
         let subtitle = self.pivot_subtitle();
         let can_pop = !ctx.embed_viewports();
         let tk = *theme::tokens(self.dark_mode);
@@ -649,6 +651,7 @@ impl MicroParquetApp {
                 d.footer(|ui| self.pivot_footer_row(ui, &mut rects, acts));
             });
         self.pivot_builder.rects = rects;
+        self.pivot_builder.esc_busy = self.pivot_esc_holders(ctx) || self.pivot_builder.menu_open;
     }
 
     /// The builder in its own native window (an immediate viewport): the same state, header, fields, preview and footer.
@@ -657,6 +660,8 @@ impl MicroParquetApp {
         if self.pivot_builder.popout_start.is_none() {
             let (main, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
             self.pivot_builder.popout_start = Some(popout_placement(self.settings.pivot_popout_rect, main, monitor));
+            // what an earlier window showed is not where this one is
+            self.pivot_builder.popout_live = None;
         }
         let start = self.pivot_builder.popout_start.unwrap_or(PopoutPlacement { size: egui::vec2(theme::PIVOT_POPOUT_SIZE[0], theme::PIVOT_POPOUT_SIZE[1]), pos: None });
         let tab = self.pivot_input().map(|i| i.tab_title).unwrap_or_default();
@@ -678,8 +683,22 @@ impl MicroParquetApp {
         });
     }
 
+    /// Esc is Cancel, docked and in the window alike (owner decision on P1-3). It does nothing to the builder while a text box has the
+    /// keyboard, the Filters list is open, or a drop-down list or pop-up is open: Esc closes that first, and the next Esc is Cancel.
+    /// Read before the builder is drawn, so what takes Esc itself does not also cancel.
+    fn pivot_esc_cancels(&self, ctx: &egui::Context) -> bool {
+        // egui lets go of a text box's keyboard when Esc arrives, so the last frame's state counts too
+        let busy = self.pivot_esc_holders(ctx) || self.pivot_builder.esc_busy;
+        !busy && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    }
+
+    /// Something that takes Esc itself is open now: a text box with the keyboard, the Filters list, a drop-down list or a pop-up.
+    fn pivot_esc_holders(&self, ctx: &egui::Context) -> bool {
+        ctx.wants_keyboard_input() || ctx.memory(|m| m.any_popup_open()) || self.pivot_builder.popup.is_some()
+    }
+
     /// What fills the builder's own window: the header, the fields and areas with a preview that takes the height that is left,
-    /// and the footer. (Tests draw it in a headless window of its size.) Esc is Cancel, unless the Filters list is open.
+    /// and the footer. (Tests draw it in a headless window of its size.) Esc is Cancel (`pivot_esc_cancels`).
     pub(crate) fn pivot_popout_ui(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
         // the window's close button docks the builder back, as its Dock button does
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -692,9 +711,10 @@ impl MicroParquetApp {
                 self.pivot_builder.popout_live = Some([o.min.x, o.min.y, inner.width(), inner.height()]);
             }
         });
-        if self.pivot_builder.popup.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if self.pivot_esc_cancels(ctx) {
             acts.close = true;
         }
+        self.pivot_builder.menu_open = false;
         let subtitle = self.pivot_subtitle();
         let mut rects = PivotRects::default();
         egui::TopBottomPanel::top("pivot_popout_header").show(ctx, |ui| self.pivot_header_row(ui, &subtitle, true, &mut rects, acts));
@@ -706,6 +726,7 @@ impl MicroParquetApp {
             });
         });
         self.pivot_builder.rects = rects;
+        self.pivot_builder.esc_busy = self.pivot_esc_holders(ctx) || self.pivot_builder.menu_open;
     }
 
     /// While the builder is in its own window, the app window says so and can take it back (the window may be on another monitor,
@@ -731,6 +752,10 @@ impl MicroParquetApp {
     /// What a frame asked for: move the builder, close it, or give back the step.
     pub(crate) fn pivot_finish(&mut self, acts: PivotActs) -> ModalOutcome {
         let was = self.pivot_builder.popped;
+        if acts.toggle_pop {
+            // the other place has its own keyboard and lists
+            self.pivot_builder.esc_busy = false;
+        }
         if acts.toggle_pop && !acts.close {
             self.pivot_builder.popped = !was;
             if !was {
@@ -885,7 +910,8 @@ impl MicroParquetApp {
             // a button as small as its cell: the default minimum size would push the row wider
             ui.spacing_mut().interact_size = egui::vec2(theme::PIVOT_CHIP_MENU_W, theme::PIVOT_FIELD_ROW_H);
             ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
-            ui.menu_button(theme::ph::DOTS_THREE, |ui| {
+            let bar_id = ui.id();
+            let menu = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
                 // a date part is a label: Rows, Columns or Filters (W2)
                 let areas_offered: &[Area] = if part.is_some() { &[Area::Rows, Area::Columns, Area::Filters] } else { &[Area::Rows, Area::Columns, Area::Values, Area::Filters] };
                 for area in areas_offered {
@@ -903,9 +929,10 @@ impl MicroParquetApp {
                     ui.separator();
                     self.pivot_order_menu(ui, name, in_rows);
                 }
-            })
-            .response
-            .on_hover_text("Add to Rows, Columns, Values or Filters");
+            });
+            // an open menu takes Esc itself (egui's menus are not in its list of pop-ups)
+            self.pivot_builder.menu_open = self.pivot_builder.menu_open || egui::menu::BarState::load(ui.ctx(), bar_id).is_some();
+            menu.response.on_hover_text("Add to Rows, Columns, Values or Filters");
         });
         rects.field_rows.push((name.to_string(), row));
         rects.field_menus.push((name.to_string(), menu_rect));

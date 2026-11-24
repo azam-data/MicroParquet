@@ -4,7 +4,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
-| P1 | DONE | (see git log: "Phase 9 P1") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
+| P1 | DONE (S1), follow-ups DONE (S2) | (see git log: "Phase 9 P1", "Phase 9 P1: follow-ups") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -43,3 +43,23 @@ always 20 rows); with the preview cut to 20 and the setting always written, the 
 `no_size_literal_is_left_outside_theme_rs` (the new sizes are in `theme.rs`; `render_tests_p9.rs` is listed with the other render tests).
 
 Deviations: P1-1 to P1-8 (in `docs/phase9-spec.md` `<accepted_deviations>`).
+
+## P1 follow-ups (S2): the owner's decisions on S1
+
+Accepted as they stand: B0-1 to B0-4, P1-1, P1-4 to P1-8. Replaced: P1-2 and P1-3. Both are written under "Owner decisions on S1" in
+`docs/phase9-spec.md` `<accepted_deviations>` (with P1-9 and P1-10, found on the way).
+
+| Decision | Test |
+| --- | --- |
+| P1-2: the pop-out opens at its saved position and size exactly as they are, on any monitor (no monitor check, no centring); centred on the main window only when no rectangle is saved | `p1_the_saved_window_is_used_as_it_is_on_any_monitor_and_it_is_centred_only_when_none_is_saved` (the rule: on the monitor, off every screen, left, above, below, right, a size bigger than the monitor, none saved, the least size, a damaged number) |
+| P1-2: an off-screen saved rectangle is used, and the Dock button of the note in the app window brings the builder back by a real click | `p1_the_window_rectangle_is_saved_in_settings_when_the_builder_docks_and_opens_there_next_time` (last part: saved at 9000, 7000 opens there; click on the note's Dock docks it; the saved rectangle is left as it was) |
+| P1-3: Esc is Cancel in the docked dialog and in the pop-out; nothing happens to the dialog while a text box has the keyboard, the Filters list is open, or a drop-down list or menu is open (Esc closes that first, the next Esc is Cancel) | `p1_esc_is_cancel_docked_and_in_the_window_unless_a_text_box_or_an_open_list_has_it`: by real key presses at 1219x686, 1600x900 and 1291x700, docked and in windows of 900x600 and 1600x1000: Esc cancels (the step is as it was); Esc in the field search box; Esc with the Filters list open; Esc with a field's menu open; Esc with the aggregation list open |
+| Old Esc test of the pop-out | `p1_cancel_in_the_window_leaves_the_edited_step_unchanged_and_esc_is_cancel_unless_a_list_is_open` (unchanged, passes) |
+
+Proved to fail without the fix (stubs, restored): with the docked dialog not reading Esc, the last frame's text-box state ignored
+(egui takes the keyboard from a text box when Esc arrives, so the builder has to remember it), and the open menu not counted, the
+new Esc test fails (`p1_esc_is_cancel_docked_and_in_the_window_unless_a_text_box_or_an_open_list_has_it`, three runs); with the old
+monitor rule put back, `p1_the_saved_window_is_used_as_it_is_on_any_monitor_and_it_is_centred_only_when_none_is_saved` and
+`p1_the_window_rectangle_is_saved_in_settings_when_the_builder_docks_and_opens_there_next_time` fail.
+
+Full `cargo test` before the commit: 9 + 304 + 709 + 60 passed.
