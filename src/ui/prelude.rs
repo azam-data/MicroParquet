@@ -21,7 +21,7 @@ pub use micro_parquet::macros::{
     python_untranslated_steps, save_macro_to_file,
 };
 pub use micro_parquet::models::{
-    FtpCurveMode, PivotAgg, PivotFilter, PivotScale, PivotShowAs, PivotSortByValue, PivotSpec, PivotValue,
+    FtpCurveMode, PivotAgg, PivotFilter, PivotLayout, PivotScale, PivotShowAs, PivotSortByValue, PivotSpec, PivotValue,
     column_name_tokens, default_active_statuses, default_bd_ftp_curve, default_rate_max_pct,
     format_metric_value, format_with_commas, resolved_scale, sort_marks, parquet_native_type, AggFunc, AggSpec, BatchDirection, BlankRule, RateBandDef, RateBandMode, fmt_pct, parse_rate_edges,
     BatchSchemaStrategy, BucketRuleItem, ColDataType, ColumnFormatSpec, CondRule, CsvTextEncoding,

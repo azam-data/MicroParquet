@@ -9,7 +9,7 @@ use crate::ui::prelude::*;
 use crate::ui::render_tests::{assert_dialog_fits, inside, screen};
 use crate::ui::render_tests_p4::Rig;
 use crate::ui::render_tests_p7::SIZES3;
-use crate::ui::render_tests_p8::{assert_no_overlap, click_rect, rig8};
+use crate::ui::render_tests_p8::{assert_no_overlap, assert_not_clipped, click_rect, rig8};
 use crate::ui::tests::settle;
 use micro_parquet::commands::CommandId;
 use polars::prelude::{DataFrame, NamedFrom, Series};
@@ -119,9 +119,13 @@ fn last_box(p: &Painted, text: &str, below: f32) -> Option<egui::Rect> {
 
 /// "Add to <area>" on a field: its menu, then the item, by real clicks.
 fn add_to(place: &mut Place, rig: &mut Rig, field: &str, area: &str, what: &str) {
-    place.draw(rig, 2);
+    place.draw(rig, 5);
     let menu = place.rects(rig).field_menus.iter().find(|(n, _)| n == field).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the menu of '{field}'"));
-    let p = place.click(rig, menu);
+    let mut p = place.click(rig, menu);
+    // (the first click on the second field's menu of a fresh dialog does not always open it in a headless frame sequence: once more)
+    if last_box(&p, &format!("Add to {area}"), menu.top()).is_none() {
+        p = place.click(rig, menu);
+    }
     let item = last_box(&p, &format!("Add to {area}"), menu.top()).unwrap_or_else(|| panic!("{what}: 'Add to {area}' in the menu of '{field}'"));
     place.click(rig, item);
 }
@@ -727,5 +731,485 @@ fn p1_esc_is_cancel_docked_and_in_the_window_unless_a_text_box_or_an_open_list_h
             assert!(!rig.app.pivot_builder.open, "{what}: the next Esc is Cancel");
             step_is(&rig, &step, &what);
         }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------
+// P2: the Nested pivot layout. A pivot of Product › Branch (3 parents, 150 leaves) is made by real clicks, switched on its tab, drawn
+// with bold parents and indent, and its parent lines give their rows.
+// ------------------------------------------------------------------------------------------------------------------------------
+
+use crate::ui::table::nested_grid::{nested_grid_report, NestedGridReport};
+use micro_parquet::models::{PivotAgg, PivotLayout, PivotSpec, PivotValue};
+
+/// Runs frames until `done` holds and no job is busy (the worker finishes between frames).
+fn pump(rig: &mut Rig, what: &str, done: &dyn Fn(&Rig) -> bool) {
+    for _ in 0..600 {
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.draw(1);
+        if done(rig) && !rig.app.jobs.any_busy() {
+            rig.draw(2);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{}: '{what}' timed out (status: {})", rig.what, rig.app.status_message);
+}
+
+/// Two real clicks at the same instant: a double-click.
+fn dbl(rig: &mut Rig, pos: egui::Pos2) {
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+    rig.click(pos);
+    rig.click(pos);
+    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+}
+
+fn nested_spec(layout: PivotLayout) -> PivotSpec {
+    PivotSpec { rows: vec!["Product".into(), "Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, layout, ..Default::default() }
+}
+
+/// A pivot tab of Product › Branch with `layout` and `later` steps after it, made the active tab and drawn.
+fn nested_tab(rig: &mut Rig, layout: PivotLayout, later: Vec<TransformStep>) -> usize {
+    rig.app.show_steps_sidebar = false;
+    let src = rig.app.tabs[0].source.clone();
+    let mut steps = vec![TransformStep::from_pivot_spec(nested_spec(layout))];
+    steps.extend(later);
+    rig.app.create_tab_from_source("Pivot: Product".into(), src, steps, std::collections::HashMap::new());
+    settle(&mut rig.app);
+    let at = rig.app.tabs.len() - 1;
+    rig.app.active_tab = at;
+    pump(rig, "the pivot", &|r| r.app.tabs[at].total_rows > 0);
+    at
+}
+
+fn report_of(rig: &Rig, at: usize) -> Option<NestedGridReport> {
+    nested_grid_report(&rig.ctx, rig.app.tabs[at].id)
+}
+
+/// The family a text was painted in.
+fn family_of(p: &Painted, text: &str, inside_rect: egui::Rect) -> egui::FontFamily {
+    p.texts.iter().find(|(t, pos, _)| t == text && inside_rect.contains(*pos)).map(|(_, _, f)| f.clone()).unwrap_or_else(|| panic!("'{text}' is painted in {inside_rect:?}"))
+}
+
+/// Picks `item` in the combo box whose box is `combo`, by real clicks.
+fn pick_in_combo(rig: &mut Rig, combo: egui::Rect, item: &str, what: &str) -> Painted {
+    let p = click_rect(rig, combo);
+    let at = last_box(&p, item, combo.top()).unwrap_or_else(|| panic!("{what}: '{item}' in the list: {:?}", p.boxes.iter().filter(|(_, b)| b.top() > combo.top() - 1.0).map(|b| b.0.clone()).filter(|t| t.len() < 30).collect::<Vec<_>>()));
+    click_rect(rig, at);
+    rig.draw(3)
+}
+
+#[test]
+fn p2_the_dialog_chooses_the_layout_and_the_blank_line_and_the_tab_draws_bold_parents_and_the_indent_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let mut rig = rig9("p9p2_dialog", ppp, w, h);
+            rig.app.dark_mode = dark;
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            rig.app.run_command(&rig.ctx, CommandId::Pivot);
+            rig.draw(8);
+            let mut place = Place::Docked;
+            add_to(&mut place, &mut rig, "Product", "Rows", &what);
+            add_to(&mut place, &mut rig, "Branch", "Rows", &what);
+            add_to(&mut place, &mut rig, "Balance", "Values", &what);
+            place.draw(&mut rig, 4);
+            // the Layout box is in the dialog, Side by side, and no blank-line option yet
+            let title = format!("{}  Pivot table", theme::ph::TABLE);
+            let r = assert_dialog_fits(&rig.ctx, &title, &what);
+            let g = rig.app.pivot_builder.rects.clone();
+            assert!(g.layout_combo.is_positive() && inside(g.layout_combo, r.window), "{what}: the Layout box {:?} is in the dialog {:?}", g.layout_combo, r.window);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::SideBySide, "{what}: the default is today's layout");
+            assert!(!g.blank_line.is_positive(), "{what}: no blank-line option for Side by side");
+            // Nested (Excel style), by real clicks
+            pick_in_combo(&mut rig, g.layout_combo, "Nested (Excel style)", &what);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::Nested { blank_line_after_group: false }, "{what}");
+            let p = rig.draw(4);
+            let r = assert_dialog_fits(&rig.ctx, &title, &what);
+            let g = rig.app.pivot_builder.rects.clone();
+            assert!(g.blank_line.is_positive() && inside(g.blank_line, r.window), "{what}: the blank-line option {:?} is in the dialog {:?}", g.blank_line, r.window);
+            // no two labels overlap in the toggles, and nothing is cut
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r.window, &what);
+            // the option, by a real click
+            click_rect(&mut rig, g.blank_line);
+            rig.draw(3);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::Nested { blank_line_after_group: true }, "{what}: the blank-line option is on");
+            // back to Side by side: the option goes; then Nested again with the option off, then on
+            let g = rig.app.pivot_builder.rects.clone();
+            pick_in_combo(&mut rig, g.layout_combo, "Side by side", &what);
+            rig.draw(3);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::SideBySide, "{what}");
+            assert!(!rig.app.pivot_builder.rects.blank_line.is_positive(), "{what}: the option is gone with Side by side");
+            let g = rig.app.pivot_builder.rects.clone();
+            pick_in_combo(&mut rig, g.layout_combo, "Nested (Excel style)", &what);
+            rig.draw(3);
+            let g = rig.app.pivot_builder.rects.clone();
+            click_rect(&mut rig, g.blank_line);
+            rig.draw(3);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::Nested { blank_line_after_group: true }, "{what}");
+
+            // Create pivot tab: the step has the layout, the tab draws the Nested view
+            let create = button(&rig, "Create pivot tab").unwrap_or_else(|| panic!("{what}: Create pivot tab"));
+            click_rect(&mut rig, create);
+            let at = rig.app.tabs.len() - 1;
+            pump(&mut rig, "the nested view", &|r| r.app.tabs.len() == 2 && r.app.nested_views.contains_key(&r.app.tabs[1].id));
+            let at = at.max(1);
+            let step = serde_json::to_value(rig.app.tabs[at].steps.last().expect("a step")).expect("json");
+            assert_eq!(step["PivotTable"]["layout"], serde_json::json!({"Nested": {"blank_line_after_group": true}}), "{what}: the step has the layout: {step}");
+            let p = rig.draw(4);
+            let rep = report_of(&rig, at).unwrap_or_else(|| panic!("{what}: the Nested grid was drawn"));
+            let frame = rep.frame.expect("the frame");
+            assert!(inside(frame, rig.ctx.screen_rect()), "{what}: the grid {frame:?} is on the screen");
+            assert_eq!(rep.header.first().map(|h| h.0.as_str()), Some("Row Labels"), "{what}: one label column");
+            assert!(!rep.header.iter().any(|h| h.0 == "Product" || h.0 == "Branch"), "{what}: the Rows fields are not columns of their own: {:?}", rep.header);
+            // the first line: a parent (Classic), bold, with its subtotal on the line, bold too; its first child indented one level, not bold
+            let l0 = &rep.lines[0];
+            let parent = l0.label_text.expect("the parent's label");
+            let fam = family_of(&p, "Classic", frame);
+            assert_eq!(fam, theme::family_bold(), "{what}: the parent is bold");
+            let l1 = &rep.lines[1];
+            let child = l1.label_text.expect("the child's label");
+            assert!((child.left() - parent.left() - theme::NESTED_INDENT_PX).abs() < 1.0, "{what}: the child {child:?} is one level ({}) right of its parent {parent:?}", theme::NESTED_INDENT_PX);
+            assert_ne!(family_of(&p, "B003", frame), theme::family_bold(), "{what}: a leaf is not bold");
+            let (v0, v1) = (&l0.cells[0].1, &l1.cells[0].1);  // the numbers' own rectangles
+            assert!(p.texts.iter().any(|(t, pos, f)| v0.contains(*pos) && !t.is_empty() && *f == theme::family_mono_semibold()), "{what}: the parent's subtotal is bold");
+            assert!(p.texts.iter().any(|(t, pos, f)| v1.contains(*pos) && !t.is_empty() && *f == egui::FontFamily::Monospace), "{what}: the leaf's number is not");
+            // no two labels overlap, and nothing is cut
+            let area = |a: egui::Rect| p.glyphs.iter().filter(|(_, b)| inside(*b, a)).cloned().collect::<Vec<_>>();
+            assert_no_overlap(&area(frame), &what);
+            assert_not_clipped(&p, frame, &what);
+            // the end of the table: a blank line, then the Grand total, bold, at level 0
+            rig.ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid_scroll_y", rig.app.tabs[at].id)), 1.0e6f32));
+            rig.draw(4);
+            let p = rig.draw(2);
+            let rep = report_of(&rig, at).expect("the grid");
+            let last = rep.lines.last().expect("lines");
+            assert_eq!(last.index, 3 + 150 + 3, "{what}: 3 parents, 150 children, 3 blank lines and the Grand total: the last line is index 156");
+            let gt = last.label_text.expect("the Grand total's label");
+            assert_eq!(family_of(&p, "Grand total", frame), theme::family_bold(), "{what}: the Grand total is bold");
+            assert!((gt.left() - parent.left()).abs() < 1.0, "{what}: the Grand total {gt:?} is at level 0, like the parent {parent:?}");
+            let before = &rep.lines[rep.lines.len() - 2];
+            assert!(before.label_text.is_none(), "{what}: the line before the Grand total is the blank line after the last group");
+        }
+    }
+}
+
+fn tab_layout(rig: &Rig, at: usize) -> PivotLayout {
+    rig.app.tabs[at].steps.last().and_then(|s| s.as_pivot_spec()).expect("a pivot step").layout
+}
+
+fn view_lines(rig: &Rig, at: usize) -> Option<usize> {
+    match rig.app.nested_views.get(&rig.app.tabs[at].id).map(|c| &c.state) {
+        Some(crate::ui::pivot_layout::NestedState::Ready(v)) => Some(v.rows.len()),
+        _ => None,
+    }
+}
+
+#[test]
+fn p2_a_pivot_tab_switches_its_layout_from_the_bar_without_rebuilding_the_flat_table_and_undo_takes_it_back_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let mut rig = rig9("p9p2_bar", ppp, w, h);
+            rig.app.dark_mode = dark;
+            let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+            let at = nested_tab(&mut rig, PivotLayout::SideBySide, vec![]);
+            let p = rig.draw(4);
+            // an old pivot is Side by side: the flat grid, the bar says so and offers the layout
+            assert!(report_of(&rig, at).is_none() && crate::ui::table::grid_report(&rig.ctx, rig.app.tabs[at].id).is_some(), "{what}: Side by side draws the flat grid");
+            let bar = rig.app.pivot_bar.rects.clone();
+            assert!(bar.layout.is_positive() && inside(bar.layout, bar.bar), "{what}: the Layout box {:?} is in the bar {:?}", bar.layout, bar.bar);
+            assert!(!bar.blank_line.is_positive(), "{what}: no blank-line option for Side by side");
+            assert!(p.boxes.iter().any(|(t, b)| t == "Side by side" && inside(*b, bar.bar)), "{what}: it says Side by side");
+            // a marker no refresh would leave: the switch does not rebuild the flat table
+            rig.app.tabs[at].total_rows = 777_777;
+            pick_in_combo(&mut rig, bar.layout, "Nested (Excel style)", &what);
+            pump(&mut rig, "the nested view", &|r| r.app.nested_views.contains_key(&r.app.tabs[at].id));
+            assert_eq!(tab_layout(&rig, at), PivotLayout::Nested { blank_line_after_group: false }, "{what}: the step has the layout");
+            assert_eq!(rig.app.tabs[at].total_rows, 777_777, "{what}: the flat table was not rebuilt");
+            assert_eq!(view_lines(&rig, at), Some(3 + 150 + 1), "{what}: 3 parents, 150 children and the Grand total");
+            let rep = report_of(&rig, at).unwrap_or_else(|| panic!("{what}: the Nested grid is drawn"));
+            assert_eq!(rep.header.first().map(|h| h.0.as_str()), Some("Row Labels"), "{what}");
+            let bar = rig.app.pivot_bar.rects.clone();
+            assert!(bar.blank_line.is_positive() && inside(bar.blank_line, bar.bar), "{what}: the blank-line option {:?} is in the bar {:?}", bar.blank_line, bar.bar);
+            // the blank-line option, by a real click: 3 more lines, still no rebuild
+            click_rect(&mut rig, bar.blank_line);
+            pump(&mut rig, "the view with blank lines", &|r| view_lines(r, at) == Some(3 + 150 + 3 + 1));
+            assert_eq!(tab_layout(&rig, at), PivotLayout::Nested { blank_line_after_group: true }, "{what}");
+            assert_eq!(rig.app.tabs[at].total_rows, 777_777, "{what}: still not rebuilt");
+            // nothing overlaps or is cut in the bar and the grid
+            let p = rig.draw(3);
+            let bar = rig.app.pivot_bar.rects.clone();
+            let area = |a: egui::Rect| p.glyphs.iter().filter(|(_, b)| inside(*b, a)).cloned().collect::<Vec<_>>();
+            assert_no_overlap(&area(bar.bar), &what);
+            assert_not_clipped(&p, bar.bar, &what);
+            let frame = report_of(&rig, at).and_then(|r| r.frame).expect("the frame");
+            assert_no_overlap(&area(frame), &what);
+            assert_not_clipped(&p, frame, &what);
+            // back to Side by side by the box
+            let bar = rig.app.pivot_bar.rects.clone();
+            pick_in_combo(&mut rig, bar.layout, "Side by side", &what);
+            pump(&mut rig, "the flat grid", &|r| !r.app.nested_views.contains_key(&r.app.tabs[at].id));
+            assert_eq!(tab_layout(&rig, at), PivotLayout::SideBySide, "{what}");
+            assert!(report_of(&rig, at).is_none() && !rig.app.pivot_bar.rects.blank_line.is_positive(), "{what}: the flat grid again, and no blank-line option");
+            assert_eq!(rig.app.tabs[at].total_rows, 777_777, "{what}: never rebuilt by the three switches");
+            // undo takes the switches back one at a time (an undo rebuilds the tab, as every undo does)
+            rig.app.undo_steps();
+            pump(&mut rig, "undo 1", &|r| tab_layout(r, at) == PivotLayout::Nested { blank_line_after_group: true } && view_lines(r, at).is_some());
+            rig.app.undo_steps();
+            pump(&mut rig, "undo 2", &|r| tab_layout(r, at) == PivotLayout::Nested { blank_line_after_group: false } && view_lines(r, at) == Some(154));
+            rig.app.undo_steps();
+            pump(&mut rig, "undo 3", &|r| tab_layout(r, at) == PivotLayout::SideBySide && !r.app.nested_views.contains_key(&r.app.tabs[at].id));
+            assert!(report_of(&rig, at).is_none(), "{what}: Side by side after the third undo");
+        }
+    }
+}
+
+/// The value of a numeric cell of the first line of the view's first value column.
+fn view_value(rig: &Rig, at: usize, line: usize) -> f64 {
+    match rig.app.nested_views.get(&rig.app.tabs[at].id).map(|c| &c.state) {
+        Some(crate::ui::pivot_layout::NestedState::Ready(v)) => v.values.get_columns()[0].get(line).expect("a cell").try_extract::<f64>().expect("a number"),
+        _ => panic!("a Nested view"),
+    }
+}
+
+fn rows_sum(rig: &Rig, at: usize) -> (usize, f64) {
+    let t = &rig.app.tabs[at];
+    let df = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects");
+    (df.height(), df.column("Balance").expect("Balance").f64().expect("f").into_iter().flatten().sum())
+}
+
+#[test]
+fn p2_show_rows_on_a_parent_line_gives_every_row_of_its_group_a_leaf_and_the_grand_total_work_as_before_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig9("p9p2_rows", ppp, w, h);
+        let what = rig.what.clone();
+        let at = nested_tab(&mut rig, PivotLayout::Nested { blank_line_after_group: false }, vec![]);
+        pump(&mut rig, "the nested view", &|r| r.app.nested_views.contains_key(&r.app.tabs[at].id));
+        rig.draw(3);
+        let n = rig.app.tabs.len();
+        let rep = report_of(&rig, at).unwrap_or_else(|| panic!("{what}: the Nested grid"));
+        // Classic's parent line: its 50 branches and their sum, which is the subtotal on the line
+        let subtotal = view_value(&rig, at, 0);
+        let cell = rep.lines[0].cells[0].1;
+        assert!(inside(cell, rig.ctx.screen_rect()), "{what}: the cell {cell:?}");
+        dbl(&mut rig, cell.center());
+        pump(&mut rig, "the rows of Classic", &|r| r.app.tabs.len() == n + 1);
+        assert_eq!(rig.app.tabs[n].title, "Rows: Product = Classic", "{what}");
+        let (rows, sum) = rows_sum(&rig, n);
+        assert_eq!(rows, 50, "{what}: every row of the group");
+        assert_eq!(sum, subtotal, "{what}: their sum is the subtotal on the line");
+        assert_eq!(sum, 87_750.0, "{what}");
+        // a leaf gives its own rows, as before
+        rig.app.active_tab = at;
+        rig.draw(4);
+        let rep = report_of(&rig, at).expect("the grid");
+        let cell = rep.lines[1].cells[0].1;
+        dbl(&mut rig, cell.center());
+        pump(&mut rig, "the rows of a leaf", &|r| r.app.tabs.len() == n + 2);
+        assert_eq!(rig.app.tabs[n + 1].title, "Rows: Product = Classic, Branch = B003", "{what}");
+        assert_eq!(rows_sum(&rig, n + 1).0, 1, "{what}");
+        // the Grand total by the cell's menu: every row
+        rig.app.active_tab = at;
+        rig.draw(3);
+        rig.ctx.data_mut(|d| d.insert_temp(egui::Id::new(("grid_scroll_y", rig.app.tabs[at].id)), 1.0e6f32));
+        rig.draw(5);
+        let rep = report_of(&rig, at).expect("the grid");
+        let last = rep.lines.last().expect("lines");
+        assert!(last.label_text.is_some(), "{what}: the Grand total is on the screen");
+        let cell = last.cells[0].1;
+        let pos = cell.center();
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.step(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+        rig.step(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE }]);
+        let p = rig.draw(3);
+        let item = p.boxes.iter().rev().find(|(t, _)| t.trim() == "Show rows").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Show rows in the cell's menu"));
+        assert!(inside(item, rig.ctx.screen_rect()), "{what}");
+        click_rect(&mut rig, item);
+        pump(&mut rig, "the rows of the Grand total", &|r| r.app.tabs.len() == n + 3);
+        assert_eq!(rig.app.tabs[n + 2].title, "Rows: all rows of the pivot", "{what}");
+        assert_eq!(rows_sum(&rig, n + 2).0, 150, "{what}");
+        // a double-click on a label shows no rows
+        rig.app.active_tab = at;
+        rig.draw(4);
+        let rep = report_of(&rig, at).expect("the grid");
+        let label = rep.lines[0].label_text.expect("a label");
+        dbl(&mut rig, label.center());
+        for _ in 0..4 {
+            rig.draw(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(rig.app.tabs.len(), n + 3, "{what}: a label shows no rows");
+    }
+}
+
+#[test]
+fn p2_with_steps_after_the_pivot_the_tab_shows_the_flat_table_and_says_so_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig9("p9p2_after", ppp, w, h);
+        let what = rig.what.clone();
+        let sort = TransformStep::SortRows { levels: vec![micro_parquet::models::SortLevel { column: "Product".into(), descending: false, ..Default::default() }] };
+        let at = nested_tab(&mut rig, PivotLayout::Nested { blank_line_after_group: false }, vec![sort]);
+        for _ in 0..6 {
+            rig.draw(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let p = rig.draw(3);
+        assert!(report_of(&rig, at).is_none() && rig.app.nested_views.is_empty(), "{what}: no Nested view when a step follows the pivot");
+        assert!(crate::ui::table::grid_report(&rig.ctx, rig.app.tabs[at].id).is_some(), "{what}: the flat grid is drawn");
+        let note = p.boxes.iter().find(|(t, _)| t == "Nested layout shows when the pivot is the tab's last step").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the note is on the screen"));
+        assert!(inside(note, rig.ctx.screen_rect()), "{what}: {note:?}");
+        // the flat table is the pivot's own: Product, Branch and the value, then the Grand total
+        let t = &rig.app.tabs[at];
+        assert_eq!(t.cached_slice.get_column_names().iter().map(|n| n.to_string()).collect::<Vec<_>>(), vec!["Product", "Branch", "Sum of Balance"], "{what}");
+        // taking the step off puts the Nested view back
+        rig.app.tabs[at].steps.pop();
+        rig.app.refresh_tab_at(at, false, None);
+        pump(&mut rig, "the nested view", &|r| r.app.nested_views.contains_key(&r.app.tabs[at].id));
+        let p = rig.draw(3);
+        assert!(report_of(&rig, at).is_some(), "{what}: the Nested grid is back");
+        assert!(!p.boxes.iter().any(|(t, _)| t.contains("Nested layout shows when")), "{what}: and the note is gone");
+    }
+}
+
+/// Picks `item` in the combo box `combo` of the place the builder is drawn in, by real clicks.
+fn pick_in_place(place: &mut Place, rig: &mut Rig, combo: egui::Rect, item: &str, what: &str) {
+    let p = place.click(rig, combo);
+    let at = last_box(&p, item, combo.top()).unwrap_or_else(|| panic!("{what}: '{item}' in the list"));
+    place.click(rig, at);
+    place.draw(rig, 3);
+}
+
+#[test]
+fn p2_the_pop_out_builder_chooses_the_layout_too_and_apply_makes_the_step_the_docked_dialog_makes() {
+    for (ppp, w, h) in SIZES3 {
+        // the docked dialog's step
+        let mut docked = rig9("p9p2_pop_d", ppp, w, h);
+        let what = docked.what.clone();
+        docked.app.run_command(&docked.ctx, CommandId::Pivot);
+        docked.draw(8);
+        let mut pl = Place::Docked;
+        for (f, a) in [("Product", "Rows"), ("Branch", "Rows"), ("Balance", "Values")] {
+            add_to(&mut pl, &mut docked, f, a, &what);
+        }
+        let combo = docked.app.pivot_builder.rects.layout_combo;
+        pick_in_place(&mut pl, &mut docked, combo, "Nested (Excel style)", &what);
+        let blank = docked.app.pivot_builder.rects.blank_line;
+        click_rect(&mut docked, blank);
+        docked.draw(3);
+        let create = button(&docked, "Create pivot tab").expect("Create pivot tab");
+        click_rect(&mut docked, create);
+        docked.draw(6);
+        let want = last_step(&docked);
+        assert_eq!(want["PivotTable"]["layout"], serde_json::json!({"Nested": {"blank_line_after_group": true}}), "{what}: {want}");
+
+        for (pw, ph) in POPS {
+            let what = format!("{what}, window {pw}x{ph}");
+            let mut rig = rig9("p9p2_pop_w", ppp, w, h);
+            rig.app.run_command(&rig.ctx, CommandId::Pivot);
+            rig.draw(8);
+            let mut place = popped(&mut rig, pw, ph, &what);
+            for (f, a) in [("Product", "Rows"), ("Branch", "Rows"), ("Balance", "Values")] {
+                add_to(&mut place, &mut rig, f, a, &what);
+            }
+            place.draw(&mut rig, 4);
+            let screen2 = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pw, ph));
+            let g = rig.app.pivot_builder.rects.clone();
+            assert!(g.layout_combo.is_positive() && inside(g.layout_combo, screen2), "{what}: the Layout box {:?} is in the window", g.layout_combo);
+            pick_in_place(&mut place, &mut rig, g.layout_combo, "Nested (Excel style)", &what);
+            let g = rig.app.pivot_builder.rects.clone();
+            assert!(g.blank_line.is_positive() && inside(g.blank_line, screen2), "{what}: the blank-line option {:?} is in the window", g.blank_line);
+            place.click(&mut rig, g.blank_line);
+            place.draw(&mut rig, 3);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::Nested { blank_line_after_group: true }, "{what}");
+            // the header: the layout controls, the tab's name and Dock, none over another
+            let p = place.draw(&mut rig, 3);
+            let g = rig.app.pivot_builder.rects.clone();
+            let dock = button(&rig, "Dock").expect("Dock");
+            assert!(g.blank_line.right() <= dock.left() + 0.5, "{what}: the controls {:?} are left of Dock {dock:?}", g.blank_line);
+            let header = egui::Rect::from_min_max(screen2.min, egui::pos2(screen2.right(), g.body.top()));
+            let area = p.glyphs.iter().filter(|(_, b)| inside(*b, header)).cloned().collect::<Vec<_>>();
+            assert_no_overlap(&area, &what);
+            // docking back keeps the choice; popping out again too
+            place.click(&mut rig, dock);
+            rig.draw(6);
+            assert_eq!(rig.app.pivot_builder.spec.layout, PivotLayout::Nested { blank_line_after_group: true }, "{what}: docked back with it");
+            assert!(rig.app.pivot_builder.rects.blank_line.is_positive(), "{what}: and the docked dialog shows the option");
+            pop_out(&mut rig, &what);
+            rig.draw(3);
+            let mut place = Place::Window(Pop::new(pw, ph));
+            place.draw(&mut rig, 6);
+            let create = button(&rig, "Create pivot tab").unwrap_or_else(|| panic!("{what}: Create pivot tab in the window"));
+            place.click(&mut rig, create);
+            rig.draw(6);
+            assert_eq!(last_step(&rig), want, "{what}: the step the docked dialog makes, layout included");
+        }
+    }
+}
+
+/// 16 loan lines of the owner's shape: Bank (Conventional, Islami) and CL status (some blank).
+fn book_cl() -> DataFrame {
+    let rows: [(&str, Option<&str>, &str, f64, f64); 16] = [
+        ("Conventional", Some("HC"), "A1", 100.0, 9.0),
+        ("Conventional", Some("HC"), "A2", 200.0, 10.0),
+        ("Conventional", Some("LC"), "A1", 50.0, 12.0),
+        ("Conventional", Some("LC"), "A3", 150.0, 11.0),
+        ("Conventional", Some("NC"), "A2", 80.0, 14.0),
+        ("Conventional", None, "A4", 300.0, 8.0),
+        ("Conventional", Some("HC"), "A5", 120.0, 9.5),
+        ("Conventional", Some("NC"), "A12", 60.0, 15.0),
+        ("Islami", Some("HC"), "A6", 400.0, 7.0),
+        ("Islami", Some("HC"), "A7", 100.0, 8.0),
+        ("Islami", Some("LC"), "A6", 60.0, 10.0),
+        ("Islami", Some("NC"), "A8", 90.0, 13.0),
+        ("Islami", None, "A9", 40.0, 6.0),
+        ("Islami", None, "A10", 70.0, 6.5),
+        ("Islami", Some("HC"), "A11", 30.0, 7.5),
+        ("Islami", Some("HC"), "A11", 25.0, 7.0),
+    ];
+    DataFrame::new(vec![
+        Series::new("Bank".into(), rows.iter().map(|r| r.0).collect::<Vec<_>>()).into(),
+        Series::new("CL status".into(), rows.iter().map(|r| r.1).collect::<Vec<_>>()).into(),
+        Series::new("AC Number".into(), rows.iter().map(|r| r.2).collect::<Vec<_>>()).into(),
+        Series::new("Balance".into(), rows.iter().map(|r| r.3 * 10_000_000.0).collect::<Vec<_>>()).into(),
+        Series::new("Rate".into(), rows.iter().map(|r| r.4).collect::<Vec<_>>()).into(),
+    ])
+    .expect("book_cl")
+}
+
+#[test]
+fn p2_pictures_of_the_layout_in_the_dialog_and_of_the_nested_tab() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig8("p9p2shot", SHOT_PPP, SHOT_W, SHOT_H, book_cl());
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(8);
+        let mut place = Place::Docked;
+        for (f, a) in [("Bank", "Rows"), ("CL status", "Rows"), ("Balance", "Values")] {
+            add_to(&mut place, &mut rig, f, a, &what);
+        }
+        let combo = rig.app.pivot_builder.rects.layout_combo;
+        pick_in_place(&mut place, &mut rig, combo, "Nested (Excel style)", &what);
+        let blank = rig.app.pivot_builder.rects.blank_line;
+        click_rect(&mut rig, blank);
+        rig.draw(6);
+        let title = format!("{}  Pivot table", theme::ph::TABLE);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        shoot(&mut rig, "pivot-layout-dialog", dark, r.window.expand(10.0));
+        // the tab
+        let create = button(&rig, "Create pivot tab").expect("Create pivot tab");
+        click_rect(&mut rig, create);
+        pump(&mut rig, "the nested view", &|r| r.app.tabs.len() == 2 && r.app.nested_views.contains_key(&r.app.tabs[1].id));
+        rig.app.show_steps_sidebar = false;
+        rig.draw(6);
+        let frame = report_of(&rig, 1).and_then(|r| r.frame).expect("the Nested grid");
+        let bar = rig.app.pivot_bar.rects.bar;
+        shoot(&mut rig, "pivot-nested-tab", dark, bar.union(frame).expand(10.0));
     }
 }

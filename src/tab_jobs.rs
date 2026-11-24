@@ -12,7 +12,7 @@ use crate::engine::{
     weighted_mixed_sign_notes, write_parse_failures_csv, NumericLookingColumn,
 };
 use crate::exporters::{
-    export_pdf_tabs, export_pdf_tabs_with, export_selected_tabs_to_xlsx_scaled, PdfOptions, split_and_export_by_column_ctx, PdfTab,
+    export_pdf_tabs, export_selected_tabs_to_xlsx_scaled, PdfOptions, split_and_export_by_column_ctx, PdfTab,
     ScaledTabToExport, XlsxScale, PDF_MAX_ROWS_PER_TAB,
 };
 use crate::jobs::{write_atomic, JobCtx};
@@ -57,6 +57,8 @@ pub enum JobOutput {
     ShowRows(Box<ShowRowsResult>),
     /// The values a chart's tick list lists (Phase 8 W10).
     ChartPicker(Box<PickerResult>),
+    /// The Nested view of a pivot tab (Phase 9 P2).
+    NestedView(Box<NestedViewResult>),
 }
 
 /// A tab of a project, built on the worker.
@@ -829,12 +831,27 @@ pub fn export_tabs_pdf_with(
 ) -> Result<ExportOutcome> {
     let mut collected = Vec::new();
     let mut failed = Vec::new();
+    // the tabs whose last step is a pivot in the Nested layout: their lines' styles (P2)
+    let mut nested_styles: Vec<(String, Vec<crate::pdf_layout::RowStyle>)> = Vec::new();
     for (i, tab) in tabs.iter().enumerate() {
         ctx.check()?;
         ctx.set_progress(
             format!("Reading '{}' ({} of {})…", tab.title, i + 1, tabs.len()),
             Some(i as f32 / tabs.len().max(1) as f32),
         );
+        // a pivot in the Nested layout is printed as its Nested view
+        match crate::pivot_view::nested_view_of_tab(&tab.source, &tab.steps, temp_dir).and_then(|v| v.map(|v| crate::pivot_view::pdf_table(&v, PDF_MAX_ROWS_PER_TAB + 1)).transpose()) {
+            Ok(Some((df, styles))) => {
+                nested_styles.push((tab.title.clone(), styles));
+                collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary: Vec::new(), chart: tab.chart.clone() });
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                failed.push(format!("'{}' ({:#})", tab.title, e));
+                continue;
+            }
+        }
         // The summary is of the whole result; the page shows only the first rows (one past the
         // limit, so the export can say the tab was cut).
         match compile_tab_lazy(&tab.source, &tab.steps, temp_dir).and_then(|lf| {
@@ -853,7 +870,7 @@ pub fn export_tabs_pdf_with(
     }
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
     let rep = write_atomic(out_path, ctx, |tmp| {
-        export_pdf_tabs_with(collected, tmp, num_format, global_decimals, opts)
+        crate::exporters::export_pdf_tabs_nested(collected, &nested_styles, tmp, num_format, global_decimals, opts)
     })?;
     let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
     let s = rep.summary();
@@ -1221,10 +1238,27 @@ pub struct ShowRowsResult {
     pub steps: Vec<TransformStep>,
 }
 
+/// "Show rows" on a line of a Nested pivot (Phase 9 P2): the request of a cell, with the Rows values of the line that was clicked
+/// (a parent line has the first few, the Grand total none). The Nested layout is only drawn when the pivot is the tab's last step, so
+/// `request.row` is not used and no step follows the pivot.
+pub struct NestedShowRowsRequest {
+    pub request: ShowRowsRequest,
+    pub row_key: Vec<Option<String>>,
+}
+
 /// Builds the pivot again to find which values the clicked cell stands for, and the tab that holds exactly its rows. When
 /// steps follow the pivot, they are applied to the pivot's table and the clicked row is found again in the pivot by its row
 /// fields, so a sort or a filter of the result does not move the cell.
 pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    show_rows_inner(req, None, ctx)
+}
+
+/// `show_rows_job` for a line of the Nested layout: the rows of that line's group (all of them for the Grand total) and column.
+pub fn show_rows_nested_job(req: NestedShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    show_rows_inner(req.request, Some(req.row_key), ctx)
+}
+
+fn show_rows_inner(req: ShowRowsRequest, nested_row: Option<Vec<Option<String>>>, ctx: &JobCtx) -> Result<JobOutput> {
     ctx.set_progress("Finding the rows of that cell\u{2026}", None);
     ctx.check()?;
     let Some((before, rest)) = req.steps.split_at_checked(req.pivot_at) else {
@@ -1234,23 +1268,59 @@ pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
     let lf = crate::engine::compile_tab_lazy(&req.base, before, &req.temp_dir)?;
     let build = crate::pivot_table::build_pivot(lf, &req.spec)?;
     ctx.check()?;
-    let pivot_row = if later.is_empty() {
+    let cell = if let Some(row_key) = nested_row {
+        if !later.is_empty() {
+            anyhow::bail!("Show rows: steps follow the pivot, so the table on the screen is the flat one. Double-click a number in it.");
+        }
         if build.df.height() != req.expected_rows {
             anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
         }
-        req.row
+        crate::pivot_table::cell_rows_at(&req.spec, &build, &row_key, &req.column)?
     } else {
-        if req.later_made.contains(&req.column) || !build.df.get_column_names().iter().any(|n| n.as_str() == req.column.as_str()) {
-            anyhow::bail!("Show rows: '{}' was added, renamed or changed by a step after the pivot, so it has no rows of its own. Double-click a number in one of the pivot's own columns.", req.column);
-        }
-        let shown = crate::engine::apply_steps_to(build.df.clone().lazy(), later)?.collect().context("Show rows could not apply the steps after the pivot")?;
-        if shown.height() != req.expected_rows {
-            anyhow::bail!("Show rows: the table now has {} rows and the one on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", shown.height(), req.expected_rows);
-        }
-        crate::pivot_table::pivot_row_of_shown(&build, &shown, req.row)?
+        let pivot_row = if later.is_empty() {
+            if build.df.height() != req.expected_rows {
+                anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
+            }
+            req.row
+        } else {
+            if req.later_made.contains(&req.column) || !build.df.get_column_names().iter().any(|n| n.as_str() == req.column.as_str()) {
+                anyhow::bail!("Show rows: '{}' was added, renamed or changed by a step after the pivot, so it has no rows of its own. Double-click a number in one of the pivot's own columns.", req.column);
+            }
+            let shown = crate::engine::apply_steps_to(build.df.clone().lazy(), later)?.collect().context("Show rows could not apply the steps after the pivot")?;
+            if shown.height() != req.expected_rows {
+                anyhow::bail!("Show rows: the table now has {} rows and the one on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", shown.height(), req.expected_rows);
+            }
+            crate::pivot_table::pivot_row_of_shown(&build, &shown, req.row)?
+        };
+        crate::pivot_table::cell_rows(&req.spec, &build, pivot_row, &req.column)?
     };
-    let cell = crate::pivot_table::cell_rows(&req.spec, &build, pivot_row, &req.column)?;
     let mut steps = before.to_vec();
     steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
     Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps })))
+}
+
+/// The Nested view of a pivot tab: the tab's steps up to the pivot, which must be the last one run (Phase 9 P2).
+pub struct NestedViewRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    /// The steps the tab runs (up to `exec_steps`).
+    pub steps: Vec<TransformStep>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct NestedViewResult {
+    pub tab_id: u64,
+    /// `steps_edit::pipeline_hash` of what the view was built for: a result for steps that have changed since is dropped.
+    pub pipeline: u64,
+    /// The view, or why it could not be built (the tab then shows the flat table and says why).
+    pub view: std::result::Result<Option<crate::pivot_view::NestedView>, String>,
+}
+
+/// Builds the Nested view on the worker: the pivot's source rows grouped once for every level, never added up from the flat table.
+pub fn compute_nested_view(req: NestedViewRequest, ctx: &JobCtx) -> Result<NestedViewResult> {
+    ctx.check()?;
+    ctx.set_progress("Nested pivot\u{2026}", None);
+    let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
+    let view = crate::pivot_view::nested_view_of_tab(&req.source, &req.steps, &req.temp_dir).map_err(|e| format!("{:#}", e));
+    Ok(NestedViewResult { tab_id: req.tab_id, pipeline, view })
 }

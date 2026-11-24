@@ -3,6 +3,9 @@
 use crate::ui::prelude::*;
 use micro_parquet::summary::{default_spec_for, format_summary_value};
 
+#[path = "nested_grid.rs"]
+pub(crate) mod nested_grid;
+
 /// Text widths measured with the fonts egui has loaded.
 struct EguiMetrics<'a> {
     ctx: &'a egui::Context,
@@ -692,22 +695,36 @@ impl MicroParquetApp {
                     ui.ctx().data_mut(|d| d.remove_temp::<crate::ui::drill::PivotRowsUi>(rows_key));
                 }
             }
+            // P2: a pivot in the Nested layout that is the tab's last step is drawn as its Nested view; with steps after it the tab shows
+            // the flat table and says so
+            let nested = self.nested_for_display(tab);
+            if let Some(note) = self.nested_note(tab) {
+                ui.label(egui::RichText::new(note).size(theme::TEXT_LABEL).color(theme::tokens(self.dark_mode).muted));
+            }
+            if nested.is_none() {
+                // the flat grid is drawn: what the Nested grid drew earlier is out of date
+                ui.ctx().data_mut(|d| d.remove_temp::<nested_grid::NestedGridReport>(egui::Id::new(("nested_grid_report", tab.id))));
+            }
+            let rows_off = self.pivot_rows_ui(tab).and_then(|p| p.off);
             ui.scope(|ui| {
-                if updating || stale {
+                if updating || stale || nested.is_some_and(|(_, fresh)| !fresh) {
                     ui.set_opacity(theme::DISABLED_OPACITY);
                 }
-                action = Self::render_data_grid(
-                    ui,
-                    &tab.cached_slice,
-                    &tab.col_formats,
-                    tab.slice_offset,
-                    self.num_format,
-                    self.global_decimals,
-                    tab.id,
-                    self.selected_column.as_deref(),
-                    &marks,
-                    if self.show_summary_row { Some(&view) } else { None },
-                );
+                action = match nested {
+                    Some((nv, _)) => nested_grid::render_nested_grid(ui, nv, &tab.col_formats, self.num_format, self.global_decimals, tab.id, rows_off.as_deref()),
+                    None => Self::render_data_grid(
+                        ui,
+                        &tab.cached_slice,
+                        &tab.col_formats,
+                        tab.slice_offset,
+                        self.num_format,
+                        self.global_decimals,
+                        tab.id,
+                        self.selected_column.as_deref(),
+                        &marks,
+                        if self.show_summary_row { Some(&view) } else { None },
+                    ),
+                };
             });
         }
         match action {

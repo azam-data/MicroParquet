@@ -202,6 +202,7 @@ impl MicroParquetApp {
             JobOutput::ChartTab(c) => self.apply_chart_tab_calc(*c),
             JobOutput::ShowRows(r) => self.apply_show_rows(*r),
             JobOutput::ChartPicker(r) => self.apply_chart_picker_result(*r),
+            JobOutput::NestedView(r) => self.apply_nested_view(*r),
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
                 let status = match self.open_notes.remove(&tab.id) {
@@ -222,6 +223,7 @@ impl MicroParquetApp {
                 }
                 self.submit_summary(self.active_tab);
                 self.submit_step_counts(self.active_tab);
+                self.submit_nested(self.active_tab);
             }
             JobOutput::Refreshed(r) => {
                 let Some(idx) = self.tab_position(r.tab_id) else {
@@ -273,6 +275,7 @@ impl MicroParquetApp {
                 self.submit_summary(idx);
                 self.submit_step_counts(idx);
                 self.submit_column_stats(idx);
+                self.submit_nested(idx);
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
             JobOutput::AutoOrder(r) => self.apply_auto_order(&r),

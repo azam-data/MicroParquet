@@ -5,6 +5,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | Task | Status | Commit | Tests |
 | --- | --- | --- | --- |
 | P1 | DONE (S1), follow-ups DONE (S2) | (see git log: "Phase 9 P1", "Phase 9 P1: follow-ups") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
+| P2 | DONE (S2) | (see git log: "Phase 9 P2") | tests/phase9/p2.rs x16 (subtotals, grand total, leaves, hash of the flat table, three levels, blank lines, Columns, last-step rule, Excel XML, scale, PDF text and indent, CSV and Python, Show rows, old pivots, the sheet limit); render_tests_p9 x5 (the dialog, the tab's bar and undo, Show rows by clicks, steps after the pivot, the pop-out) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -63,3 +64,49 @@ monitor rule put back, `p1_the_saved_window_is_used_as_it_is_on_any_monitor_and_
 `p1_the_window_rectangle_is_saved_in_settings_when_the_builder_docks_and_opens_there_next_time` fail.
 
 Full `cargo test` before the commit: 9 + 304 + 709 + 60 passed.
+
+## P2 acceptance: item -> test (S2)
+
+Library and file tests are `tests/phase9/p2.rs` (`cargo test -q --test phase3 p9_p2`); UI tests are in `src/ui/render_tests_p9.rs`
+(`cargo test -q --bin MicroParquet p2_`), at the 3 main-window sizes (1219x686, 1600x900, 1291x700 pt), light and dark where the
+tab or dialog is drawn. The synthetic tab for the library tests has the owner's shape: Bank (Conventional, Islami) › CL status
+((blank), HC, LC, NC) with Sum of Balance, Count of AC Number, W.Avg of Rate by Balance (and Count distinct, Average, Min, Max);
+A1 and A2 are under two CL statuses of Conventional, A6 under two of Islami, A11 under two Branches. The UI tests use 150 branches
+in 3 products (Product › Branch).
+
+| Acceptance item (spec P2) | Test |
+| --- | --- |
+| Every subtotal row equals a pivot by Bank alone (Sum, Count, W.Avg rate), and a Count distinct that is not the sum of its children | `p2_every_subtotal_row_equals_a_pivot_by_bank_alone_and_a_distinct_count_is_not_the_sum_of_its_children` (all seven aggregations; Conventional counts 6 distinct accounts, its children add up to 8; the Average is over its 8 rows) |
+| (the check behind "Found, not changed") Side by side subtotals are calculated, not added up | `p2_side_by_side_subtotals_are_calculated_from_the_group_s_rows_not_added_up` |
+| The Grand Total equals Side by side's; the leaves equal the flat table row for row; order and labels | `p2_the_grand_total_equals_side_by_sides_and_the_leaves_equal_the_flat_tables_rows_one_for_one` |
+| Switching layout never changes a number: the flat table's hash is the same in both layouts | `p2_switching_layout_never_changes_a_number_the_flat_tables_hash_is_the_same` (3 row sets, with and without the Subtotals box; the step's result and through the tab's compiler from a file) |
+| A three-level Nested pivot (Bank › CL status › Branch) has correct subtotals at both parent levels | `p2_a_three_level_pivot_has_correct_subtotals_at_both_parent_levels` |
+| The optional blank line after each top-level group | `p2_blank_lines_follow_each_top_level_group_when_chosen_and_never_carry_numbers`; Excel: `p2_the_excel_export_has_one_row_labels_column_with_indent_0_1_2_bold_parents_and_grand_total_and_the_blank_rows` (both settings) |
+| Columns fields spread across the columns as in Side by side; one Rows field; refusals in words | `p2_columns_fields_spread_across_the_columns_and_a_single_rows_field_has_leaves_and_a_grand_total` |
+| The Excel export: indent 0/1/2 on the label cells, bold on subtotal and Grand Total rows, a blank row after each group (from the workbook XML) | `p2_the_excel_export_has_one_row_labels_column_with_indent_0_1_2_bold_parents_and_grand_total_and_the_blank_rows` (cell styles read from `styles.xml`: the alignment indent equals the level, no spaces; numbers of a bold line are bold); the pivot's number scale: `p2_the_excel_export_keeps_the_pivots_scale_and_says_it_in_the_heading` |
+| The PDF page text lists the rows in Nested order; 10 pt per level | `p2_the_pdf_lists_the_rows_in_nested_order_with_the_indent` (pdftotext of the exported file); `p2_the_pdf_indents_ten_points_a_level_and_sets_parents_and_the_grand_total_in_bold` |
+| CSV and Parquet exports, later steps, charts, macros and Python see the flat table | `p2_csv_exports_and_python_see_the_flat_table_whatever_the_layout`, and the hash test above (the step's result is the flat table, which is all that charts, macros and exports read) |
+| With steps after the pivot: the flat table and the note, exports flat | `p2_a_pivot_that_is_the_tabs_last_step_has_a_nested_view_and_one_that_steps_follow_has_the_flat_table_and_a_note`; UI: `p2_with_steps_after_the_pivot_the_tab_shows_the_flat_table_and_says_so_at_three_sizes` (the note on the screen, the flat grid, and the view is back when the step is taken off) |
+| Show rows on "Conventional" gives exactly its rows and its sum equals the subtotal | `p2_show_rows_on_a_parent_row_gives_exactly_the_group_s_rows_and_their_sum_is_the_subtotal` (8 rows, 1,060; a leaf; the Grand total: 16 rows); UI by real double-clicks and the cell menu: `p2_show_rows_on_a_parent_line_gives_every_row_of_its_group_a_leaf_and_the_grand_total_work_as_before_at_three_sizes` |
+| An old pivot loads as Side by side, unchanged | `p2_an_old_pivot_loads_as_side_by_side_unchanged_and_writes_no_layout`; and B0's replay (`b0_the_phase8_samples_replay_to_the_hashes_the_phase8_code_gave`, project and macros with pivots) still passes |
+| Render tests by real clicks at 3 sizes, light and dark: the layout choice in the dialog, the blank-line option, bold and indent drawn, Show rows from a parent row | `p2_the_dialog_chooses_the_layout_and_the_blank_line_and_the_tab_draws_bold_parents_and_the_indent_light_and_dark_at_three_sizes` (the Layout box and the blank-line option by real clicks, the dialog fits, no two labels overlap, nothing cut, the step carries the layout; the tab draws one "Row Labels" column, a bold parent with a bold subtotal, its child indented 16 px, a leaf not bold, blank lines, the bold Grand total at level 0); the pop-out: `p2_the_pop_out_builder_chooses_the_layout_too_and_apply_makes_the_step_the_docked_dialog_makes`; Show rows: above |
+| The layout "can be switched on a pivot tab without rebuilding the flat table" | `p2_a_pivot_tab_switches_its_layout_from_the_bar_without_rebuilding_the_flat_table_and_undo_takes_it_back_light_and_dark_at_three_sizes` (a marker in the tab that a rebuild would overwrite is still there after the switches; three undos) |
+| Nested lines that don't fit an Excel sheet are refused in words, not cut | `p2_a_nested_pivot_with_more_lines_than_a_sheet_holds_is_listed_on_export_errors_not_cut` |
+
+Deviations: P2-1 to P2-10 and "Found, not changed" (in `docs/phase9-spec.md` `<accepted_deviations>`).
+
+Pictures to look at by eye (light and dark, written by `p2_pictures_of_the_layout_in_the_dialog_and_of_the_nested_tab`):
+`docs/guide/img/pivot-layout-dialog.png`, `pivot-layout-dialog-dark.png` (the dialog with the Layout box and the blank-line option in its header), `pivot-nested-tab.png`, `pivot-nested-tab-dark.png` (the tab with its bar).
+
+Proved to fail without the fix (stubs, each restored; failing tests by stub):
+- Parents taking the first child's numbers: `p2_every_subtotal_row_equals…`, `p2_a_three_level_pivot_has_correct_subtotals…`, `p2_show_rows_on_a_parent_row_gives_exactly…`, `p2_the_excel_export_keeps_the_pivots_scale…`.
+- Grand total blank: `p2_the_grand_total_equals_side_by_sides…`, `p2_the_excel_export_has_one_row_labels_column…`.
+- The layout changing the flat table (subtotals forced on): `p2_switching_layout_never_changes_a_number…`, `p2_csv_exports_and_python_see_the_flat_table…`, `p2_a_pivot_that_is_the_tabs_last_step…`.
+- Excel indent 0, and not bold: `p2_the_excel_export_has_one_row_labels_column…` (each alone). Excel scale ignored: `p2_the_excel_export_keeps_the_pivots_scale…`.
+- PDF indent ignored: `p2_the_pdf_indents_ten_points_a_level…`, `p2_the_pdf_lists_the_rows_in_nested_order_with_the_indent`.
+- Show rows ignoring the line's values: `p2_show_rows_on_a_parent_row_gives_exactly…`. Layout always written: `p2_an_old_pivot_loads_as_side_by_side…`.
+- No blank lines: `p2_blank_lines_follow_each_top_level_group…`, the Excel test. Followed pivot never noted: `p2_a_pivot_that_is_the_tabs_last_step…`. Column keys lost: `p2_columns_fields_spread_across_the_columns…`. Sheet limit removed: `p2_a_nested_pivot_with_more_lines_than_a_sheet_holds…`.
+- UI: Nested grid never shown: `p2_the_dialog_chooses…`, `p2_a_pivot_tab_switches_its_layout…`, `p2_show_rows_on_a_parent_line…`, `p2_with_steps_after_the_pivot…`. Switch rebuilding the flat table: `p2_a_pivot_tab_switches_its_layout…`. No note: `p2_with_steps_after_the_pivot…`. Show rows reading the flat row: `p2_show_rows_on_a_parent_line…`. Indent not drawn, bold not drawn: `p2_the_dialog_chooses…`. The dialog unable to choose Nested, or the blank-line option doing nothing: `p2_the_dialog_chooses…`, `p2_the_pop_out_builder_chooses_the_layout_too…`. The stale Nested report kept after switching back: `p2_a_pivot_tab_switches_its_layout…`.
+- Not stubbed: `p2_side_by_side_subtotals_are_calculated…` (it documents what the unchanged code does; it passes on it).
+
+Found while doing P2: the P1 test `p1_the_window_previews_as_many_rows_as_fit…` failed when the Layout box was a new row of the toggles (the window lost two preview rows), so the box is in the dialog's header row (P2-10). Also: a first click on the second field's "..." menu of a fresh dialog does not open it in the headless frames (see "Found, not changed").

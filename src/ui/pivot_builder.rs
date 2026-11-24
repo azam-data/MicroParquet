@@ -84,6 +84,9 @@ pub struct PivotRects {
     pub buttons: Vec<(String, egui::Rect)>,
     /// The "Dock" button the app window shows while the builder is in its own window.
     pub note_dock: egui::Rect,
+    /// The Layout box, and the "Blank line after each group" box of the Nested layout (Phase 9 P2).
+    pub layout_combo: egui::Rect,
+    pub blank_line: egui::Rect,
 }
 
 impl Default for PivotRects {
@@ -106,6 +109,8 @@ impl Default for PivotRects {
             footer_text: n,
             buttons: Vec::new(),
             note_dock: n,
+            layout_combo: n,
+            blank_line: n,
         }
     }
 }
@@ -554,6 +559,8 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         let popped = self.pivot_builder.popped;
         ui.horizontal(|ui| {
+            // the layout of the pivot (Phase 9 P2), at the left of the row: it is how the tab shows the pivot, not a setting of its numbers
+            self.pivot_layout_controls(ui, rects);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if can_pop || popped {
                     let (name, label, tip) = if popped {
@@ -570,6 +577,31 @@ impl MicroParquetApp {
                 ui.add(egui::Label::new(egui::RichText::new(subtitle).color(tk.muted)).truncate());
             });
         });
+    }
+
+    /// "Layout" with its box (Side by side, Nested (Excel style)) and, for Nested, "Blank line after each group" (Phase 9 P2).
+    fn pivot_layout_controls(&mut self, ui: &mut egui::Ui, rects: &mut PivotRects) {
+        let s = &mut self.pivot_builder.spec;
+        ui.label("Layout");
+        let nested_now = s.layout.is_nested();
+        let combo = egui::ComboBox::from_id_salt("pivot_layout").width(theme::PIVOT_COMBO_LAYOUT_W).selected_text(s.layout.label()).show_ui(ui, |ui| {
+            if ui.selectable_label(!nested_now, PivotLayout::SideBySide.label()).clicked() {
+                s.layout = PivotLayout::SideBySide;
+            }
+            if ui.selectable_label(nested_now, PivotLayout::Nested { blank_line_after_group: false }.label()).clicked() && !nested_now {
+                s.layout = PivotLayout::Nested { blank_line_after_group: false };
+            }
+        });
+        rects.layout_combo = combo.response.rect;
+        combo.response.on_hover_text("Nested puts all Rows fields in one column with each group's subtotal on its own line, as Excel's Compact form. The tab shows it; exports of the data stay flat. The preview below is the flat table.");
+        if s.layout.is_nested() {
+            let mut on = s.layout.blank_line();
+            let b = ui.checkbox(&mut on, "Blank line after each group");
+            rects.blank_line = b.rect;
+            if b.changed() {
+                s.layout = PivotLayout::Nested { blank_line_after_group: on };
+            }
+        }
     }
 
     /// The footer: the hint, Cancel and Create pivot tab (Save changes). The same docked and in its own window.

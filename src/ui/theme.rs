@@ -216,6 +216,8 @@ pub const HEADER_ROW_H: f32 = 38.0;
 pub const SELECTOR_ROW_H: f32 = 30.0;
 pub const SUMMARY_BAND_H: f32 = 38.0;
 pub const DATA_ROW_H: f32 = 32.0;
+/// One level of a Nested pivot's "Row Labels" is indented this far on the screen (Phase 9 P2).
+pub const NESTED_INDENT_PX: f32 = 16.0;
 pub const RADIUS_CONTROL: f32 = 6.0;
 pub const RADIUS_PANEL: f32 = 8.0;
 pub const SPACE_XS: f32 = 4.0;
@@ -396,6 +398,8 @@ pub const PIVOT_PREVIEW_LABEL_W: f32 = 190.0;
 pub const PIVOT_POPUP_W: f32 = 300.0;
 pub const PIVOT_POPUP_LIST_H: f32 = 220.0;
 pub const PIVOT_COMBO_W: f32 = 130.0;
+/// The pivot's Layout box ("Nested (Excel style)").
+pub const PIVOT_COMBO_LAYOUT_W: f32 = 160.0;
 pub const PIVOT_COMBO_AGG_W: f32 = 104.0;
 pub const PIVOT_COMBO_WEIGHT_W: f32 = 120.0;
 pub const PIVOT_COMBO_SORT_W: f32 = 210.0;

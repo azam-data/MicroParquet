@@ -67,6 +67,8 @@ pub enum JobKind {
     ShowRows,
     /// The values of a field of the chart studio's "Filters on this chart" tick lists (Phase 8 W10).
     ChartPickerValues,
+    /// The Nested view of a pivot tab, built from the pivot's source rows (Phase 9 P2).
+    NestedView,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

@@ -1494,6 +1494,43 @@ pub struct PivotSortByValue {
     pub descending: bool,
 }
 
+/// How a pivot is shown (Phase 9 P2). The pivot step's result is the flat table in both; this only chooses how the screen, the Excel
+/// export and the PDF export draw it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotLayout {
+    /// One column for each Rows field, subtotals (when ticked) on rows of their own: the layout of every pivot made before Phase 9.
+    #[default]
+    SideBySide,
+    /// Excel's Compact form: all Rows fields in one "Row Labels" column, each parent row carrying its subtotal, children indented.
+    Nested {
+        /// An empty line after each top-level group.
+        #[serde(default)]
+        blank_line_after_group: bool,
+    },
+}
+
+impl PivotLayout {
+    pub fn is_default(&self) -> bool {
+        *self == PivotLayout::SideBySide
+    }
+
+    pub fn is_nested(&self) -> bool {
+        matches!(self, PivotLayout::Nested { .. })
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotLayout::SideBySide => "Side by side",
+            PivotLayout::Nested { .. } => "Nested (Excel style)",
+        }
+    }
+
+    /// "Blank line after each group" (false for Side by side).
+    pub fn blank_line(&self) -> bool {
+        matches!(self, PivotLayout::Nested { blank_line_after_group: true })
+    }
+}
+
 /// Everything a pivot table is made of (the step `PivotTable`, the builder dialog and the engine share it).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PivotSpec {
@@ -1523,6 +1560,9 @@ pub struct PivotSpec {
     /// Date parts used as fields ("Open Date · Month", Phase 8 W2): added as columns before grouping.
     #[serde(default)]
     pub date_fields: Vec<crate::dates::DateFieldRef>,
+    /// How the pivot is shown (Phase 9 P2). Side by side is not written, so pivots made before keep their bytes.
+    #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
+    pub layout: PivotLayout,
 }
 
 /// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
@@ -1909,6 +1949,9 @@ pub enum TransformStep {
         /// Date parts used as fields (Phase 8 W2).
         #[serde(default)]
         date_fields: Vec<crate::dates::DateFieldRef>,
+        /// How the pivot is shown (Phase 9 P2); the table the step gives is the same.
+        #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
+        layout: PivotLayout,
     },
     SqlQuery {
         query: String,
@@ -2151,7 +2194,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields, layout } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -2164,6 +2207,7 @@ impl TransformStep {
                 sort_by_value: *sort_by_value,
                 field_orders: field_orders.clone(),
                 date_fields: date_fields.clone(),
+                layout: *layout,
             }),
             _ => None,
         }
@@ -2184,6 +2228,7 @@ impl TransformStep {
             sort_by_value: spec.sort_by_value,
             field_orders: spec.field_orders,
             date_fields: spec.date_fields,
+            layout: spec.layout,
         }
     }
 }

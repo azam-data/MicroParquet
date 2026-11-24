@@ -642,6 +642,16 @@ fn field_condition(spec: &PivotSpec, field: &str, value: &Option<String>, keep: 
 /// A subtotal row restricts only the fields it covers, a Total column and the grand total restrict none (so "Show rows" of a
 /// total gives the rows of that total). `col_name` is the heading of the clicked value column.
 pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &str) -> Result<CellRows> {
+    let Some(row_key) = build.row_keys.get(row) else {
+        bail!("Show rows: that cell is not in the pivot (row {}). Open the pivot again.", row + 1);
+    };
+    cell_rows_at(spec, build, row_key, col_name)
+}
+
+/// `cell_rows` for the Rows values a line stands for instead of a row of the table: a line of the Nested layout (Phase 9 P2). A
+/// parent line has the first few Rows fields' values and gives every source row of that group, the Grand total none and gives all
+/// of them; either way the pivot's own filters apply.
+pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String>], col_name: &str) -> Result<CellRows> {
     let names: Vec<String> = build.df.get_column_names().iter().map(|n| n.to_string()).collect();
     let Some(at) = names.iter().position(|n| n == col_name) else {
         bail!("Show rows: the column '{}' is not in the pivot. Open the pivot again.", col_name);
@@ -649,9 +659,12 @@ pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &st
     if at < build.label_columns {
         bail!("Show rows works on the value cells, not on the row labels. Double-click a number.");
     }
-    let (Some(row_key), Some(col_key)) = (build.row_keys.get(row), build.col_keys.get(at - build.label_columns)) else {
-        bail!("Show rows: that cell is not in the pivot (row {}). Open the pivot again.", row + 1);
+    let Some(col_key) = build.col_keys.get(at - build.label_columns) else {
+        bail!("Show rows: the column '{}' is not in the pivot. Open the pivot again.", col_name);
     };
+    if row_key.len() > spec.rows.len() {
+        bail!("Show rows: that line has more values than the pivot has Rows fields. Open the pivot again.");
+    }
     let mut conditions: Vec<crate::models::FilterCondition> = Vec::new();
     for f in &spec.filters {
         if f.values.is_empty() {
@@ -1145,6 +1158,7 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
             sort_by_value,
             field_orders: Vec::new(),
             date_fields: Vec::new(),
+            layout: PivotLayout::SideBySide,
         },
         renames,
         notes,

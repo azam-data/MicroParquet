@@ -340,6 +340,8 @@ pub struct MicroParquetApp {
     pub pivot: PivotState,
     pub pivot_builder: PivotBuilderState,
     pub pivot_bar: PivotBarState,
+    /// The Nested view of each pivot tab that is in the Nested layout, by tab id (Phase 9 P2).
+    pub nested_views: HashMap<u64, crate::ui::pivot_layout::NestedCache>,
     pub cl_migration: ClMigrationState,
     pub gap: GapState,
     pub cf: CfLadderState,
@@ -477,6 +479,7 @@ impl MicroParquetApp {
             pivot: PivotState::default(),
             pivot_builder: PivotBuilderState::default(),
             pivot_bar: PivotBarState::default(),
+            nested_views: HashMap::new(),
             cl_migration: ClMigrationState::default(),
             gap: GapState::default(),
             cf: CfLadderState::default(),

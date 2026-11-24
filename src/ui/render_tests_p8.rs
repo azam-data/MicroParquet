@@ -3246,12 +3246,12 @@ fn w11_the_studio_options_are_clicked_on_and_the_stacked_chart_labels_its_segmen
 // Each test drives the app to the state a guide note shows, by the same real clicks the tests above use, and writes the
 // picture under docs/guide/img/ (light, and dark where the app draws both), when python3 with numpy and Pillow is there.
 
-const SHOT_W: f32 = 1291.0;
-const SHOT_H: f32 = 700.0;
+pub(crate) const SHOT_W: f32 = 1291.0;
+pub(crate) const SHOT_H: f32 = 700.0;
 /// The pictures are made at two pixels to the point.
-const SHOT_PPP: f32 = 2.0;
+pub(crate) const SHOT_PPP: f32 = 2.0;
 
-fn can_shoot() -> bool {
+pub(crate) fn can_shoot() -> bool {
     let ok = crate::ui::render_tests_r::python_with_numpy_and_pillow();
     if !ok {
         eprintln!("skipped: python3 with numpy and Pillow is not available, so no guide pictures were written");
@@ -3260,7 +3260,7 @@ fn can_shoot() -> bool {
 }
 
 /// Makes the rig draw in the theme asked for, at the picture's scale.
-fn styled(rig: &mut Rig, dark: bool) {
+pub(crate) fn styled(rig: &mut Rig, dark: bool) {
     rig.app.ui_zoom = SHOT_PPP;
     rig.app.dark_mode = dark;
     crate::theme::apply_ui_theme(&rig.ctx, dark, SHOT_PPP);
@@ -3268,7 +3268,7 @@ fn styled(rig: &mut Rig, dark: bool) {
 }
 
 /// Writes `docs/guide/img/<name>[-dark].png`: the part `crop` (in points) of the frame as it is drawn now.
-fn shoot(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
+pub(crate) fn shoot(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
     rig.step(vec![egui::Event::PointerMoved(egui::pos2(2.0, 2.0))]);
     rig.draw(3);
     let screen = rig.ctx.screen_rect();

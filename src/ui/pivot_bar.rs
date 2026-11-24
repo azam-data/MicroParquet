@@ -52,12 +52,15 @@ pub struct PivotBarRects {
     pub edit: egui::Rect,
     pub chips: Vec<(String, egui::Rect)>,
     pub popup: egui::Rect,
+    /// The Layout box and the "Blank line after each group" box (Phase 9 P2).
+    pub layout: egui::Rect,
+    pub blank_line: egui::Rect,
 }
 
 impl Default for PivotBarRects {
     fn default() -> Self {
         let n = egui::Rect::NOTHING;
-        Self { bar: n, edit: n, chips: Vec::new(), popup: n }
+        Self { bar: n, edit: n, chips: Vec::new(), popup: n, layout: n, blank_line: n }
     }
 }
 
@@ -155,6 +158,7 @@ impl MicroParquetApp {
         let mut rects = PivotBarRects::default();
         let mut edit = false;
         let mut open_field: Option<String> = None;
+        let mut new_layout: Option<PivotLayout> = None;
         let bar = egui::Frame::none().fill(tk.surface).stroke(theme::line(tk.border)).rounding(theme::RADIUS_PANEL).inner_margin(theme::SPACE_S).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
@@ -179,6 +183,26 @@ impl MicroParquetApp {
                         open_field = Some(f.field.clone());
                     }
                 }
+                // the layout (Phase 9 P2): switched here without rebuilding the table
+                ui.label(egui::RichText::new("Layout").size(theme::TEXT_LABEL).color(tk.muted));
+                let nested_now = spec.layout.is_nested();
+                let combo = egui::ComboBox::from_id_salt("pivot_bar_layout").width(theme::PIVOT_COMBO_LAYOUT_W).selected_text(spec.layout.label()).show_ui(ui, |ui| {
+                    if ui.selectable_label(!nested_now, PivotLayout::SideBySide.label()).clicked() {
+                        new_layout = Some(PivotLayout::SideBySide);
+                    }
+                    if ui.selectable_label(nested_now, PivotLayout::Nested { blank_line_after_group: false }.label()).clicked() && !nested_now {
+                        new_layout = Some(PivotLayout::Nested { blank_line_after_group: false });
+                    }
+                });
+                rects.layout = combo.response.rect;
+                if nested_now {
+                    let mut on = spec.layout.blank_line();
+                    let b = ui.checkbox(&mut on, "Blank line after each group");
+                    rects.blank_line = b.rect;
+                    if b.changed() {
+                        new_layout = Some(PivotLayout::Nested { blank_line_after_group: on });
+                    }
+                }
             });
         });
         rects.bar = bar.response.rect;
@@ -186,6 +210,9 @@ impl MicroParquetApp {
         self.pivot_bar.rects = rects;
         if edit {
             self.open_step_editor(idx);
+        }
+        if let Some(l) = new_layout {
+            self.set_pivot_layout(l);
         }
         if let Some(f) = open_field {
             if self.pivot_bar.popup.as_ref().is_some_and(|p| p.field == f) {

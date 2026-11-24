@@ -293,6 +293,14 @@ impl MicroParquetApp {
             self.status_message = format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", column);
             return;
         }
+        // P2: on a Nested pivot the clicked line is a line of its view: a parent line gives every source row of its group
+        let nested_key = match self.nested_for_display(tab) {
+            Some((view, _)) => match view.rows.get(row) {
+                Some(line) if !line.is_blank() => Some(line.keys.clone()),
+                _ => return,
+            },
+            None => None,
+        };
         let req = micro_parquet::tab_jobs::ShowRowsRequest {
             base: tab.source.clone(),
             steps: tab.steps.clone(),
@@ -305,7 +313,15 @@ impl MicroParquetApp {
             temp_dir: self.paths.temp_dir.clone(),
         };
         let tab_id = tab.id;
-        self.jobs.submit(JobKey::tab(JobKind::ShowRows, tab_id), "Finding the rows of that cell", false, move |ctx| micro_parquet::tab_jobs::show_rows_job(req, ctx));
+        match nested_key {
+            Some(row_key) => {
+                let req = micro_parquet::tab_jobs::NestedShowRowsRequest { request: req, row_key };
+                self.jobs.submit(JobKey::tab(JobKind::ShowRows, tab_id), "Finding the rows of that cell", false, move |ctx| micro_parquet::tab_jobs::show_rows_nested_job(req, ctx));
+            }
+            None => {
+                self.jobs.submit(JobKey::tab(JobKind::ShowRows, tab_id), "Finding the rows of that cell", false, move |ctx| micro_parquet::tab_jobs::show_rows_job(req, ctx));
+            }
+        }
     }
 
     /// The worker found the rows of a pivot cell: they open in a new tab.

@@ -168,3 +168,5 @@ mod p9_p8_baseline;
 mod p9_b0;
 #[path = "../phase9/p1.rs"]
 mod p9_p1;
+#[path = "../phase9/p2.rs"]
+mod p9_p2;

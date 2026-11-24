@@ -43,6 +43,7 @@ pub mod normaliser;
 pub mod pivot;
 pub mod pivot_bar;
 pub mod pivot_builder;
+pub mod pivot_layout;
 pub mod prelude;
 pub mod project;
 pub mod provision;
