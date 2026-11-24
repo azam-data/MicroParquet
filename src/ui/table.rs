@@ -507,8 +507,9 @@ impl MicroParquetApp {
                                         ui.with_layout(layout, |ui| {
                                             let r = ui.add(egui::Label::new(rich).truncate().sense(egui::Sense::click()));
                                             let rows_here = show_rows.as_ref().is_some_and(|p| !p.labels.iter().any(|l| l == c.name().as_str()));
-                                            let rows_off = if rows_here { show_rows.as_ref().and_then(|p| p.reason_for(c.name().as_str())) } else { None };
-                                            if rows_here && r.double_clicked() {
+                                            let blank_why = if is_null { blank_notes.iter().find(|n| n.row == row_offset + r_idx && n.column == c.name().as_str()).map(|n| n.text.clone()) } else { None };
+                                            let rows_off = if rows_here { show_rows.as_ref().and_then(|p| p.reason_for(c.name().as_str())).or(blank_why.clone()) } else { None };
+                                            if rows_here && r.double_clicked() && blank_why.is_none() {
                                                 action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
                                             }
                                             if is_null {
@@ -710,6 +711,10 @@ impl MicroParquetApp {
                 }
             }
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("pivot_banner", tab.id)), banner_rects));
+            // the rows of an average say so under the tab's title
+            if let Some(n) = self.tab_notes.get(&tab.id) {
+                ui.add(egui::Label::new(egui::RichText::new(n.as_str()).size(theme::TEXT_LABEL).color(theme::tokens(self.dark_mode).muted)).wrap());
+            }
             // W6: a pivot tab's value cells can show their rows
             let rows_key = egui::Id::new(("grid_show_rows", tab.id));
             match self.pivot_rows_ui(tab) {

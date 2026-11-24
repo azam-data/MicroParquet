@@ -491,3 +491,120 @@ fn m3_a_chart_of_a_sum_of_a_tagged_balance_over_many_dates_says_so_in_its_notes_
     };
     assert_eq!(value_of(&chart("Balance", "t1"), balance_kinds()), value_of(&chart("Balance", ""), vec![]));
 }
+
+// ------------------------------------------------------------------------------------------------ Show rows on a time cell (S7)
+
+/// The rows tab Show rows opens for the cell (row label, column heading): the tab's source, the filter and the steps that follow.
+fn rows_tab(dd: &std::path::Path, df: &DataFrame, sc: Option<Arc<ModelContext>>, s: &PivotSpec, b: &PivotBuild, row: &str, column: &str) -> (DataFrame, Option<String>) {
+    let src = parquet(dd, "accounts", df);
+    let r = labels(b).iter().position(|l| l == row).unwrap_or_else(|| panic!("no row '{row}'"));
+    with_scope(sc, || {
+        let cell = micro_parquet::pivot_table::cell_rows(s, b, r, column).unwrap_or_else(|e| panic!("show rows of {row} / {column}: {e:#}"));
+        let mut steps = vec![TransformStep::FilterGroup { conditions: cell.conditions.clone(), join: GroupJoin::And, keep_matching: true }];
+        steps.extend(cell.extra_steps.clone());
+        let lf = micro_parquet::engine::compile_tab_lazy(&src, &[], dd).expect("source");
+        let out = micro_parquet::engine::apply_steps_to(lf, &steps).expect("steps").collect().expect("rows");
+        (out, cell.note)
+    })
+}
+
+fn date_texts(df: &DataFrame, column: &str) -> Vec<Option<String>> {
+    let c = df.column(column).expect("date column").cast(&DataType::String).expect("as text");
+    c.str().expect("text").into_iter().map(|v| v.map(str::to_string)).collect()
+}
+
+fn sum_of(df: &DataFrame, column: &str) -> f64 {
+    floats(df, column).into_iter().flatten().sum()
+}
+
+fn accounts_by_day() -> DataFrame {
+    // two branches; 31 Oct, 1 Nov and 3 Nov (2 Nov missing); each row an account and an interest amount
+    DataFrame::new(vec![
+        dates("Date", &["2026-10-31", "2026-10-31", "2026-11-01", "2026-11-01", "2026-11-03", "2026-11-03", "2026-11-03"]).into(),
+        strs("Branch", &["B1", "B2", "B1", "B2", "B1", "B1", "B2"]).into(),
+        nums("Balance", &[100.0, 50.0, 110.0, 60.0, 130.0, 20.0, 70.0]),
+        nums("Interest", &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]),
+        strs("AC Number", &["A1", "A2", "A1", "A2", "A1", "A3", "A2"]).into(),
+    ])
+    .expect("data")
+}
+
+#[test]
+fn m3_show_rows_of_a_closing_opening_total_or_count_cell_gives_the_rows_whose_sum_or_count_is_the_cell() {
+    let dd = dir("p9m3_rows_basic");
+    let df = accounts_by_day();
+    let sc = scope(&dd, settings(1), "2026-11-03", balance_kinds());
+    let s = spec(&["Branch"], &[&month_year()], vec![time("Balance", TimeAgg::ClosingBalance), time("Balance", TimeAgg::OpeningBalance), time("Interest", TimeAgg::TotalFlow), time("AC Number", TimeAgg::CountAtClosing)], &["Month-Year"]);
+    let b = run(&dd, &df, sc.clone(), &s);
+    let h = |agg: &str, what: &str| format!("Nov 2026 | {agg} of {what}");
+    let (closing, opening, total, count) = (h("Closing balance", "Balance"), h("Opening balance", "Balance"), h("Total", "Interest"), h("Count at closing", "AC Number"));
+    for branch in ["B1", "B2"] {
+        // Closing: the rows of the closing date (3 Nov), whose sum is the cell
+        let (rows, note) = rows_tab(&dd, &df, sc.clone(), &s, &b, branch, &closing);
+        assert!(close(at(&b, branch, &closing), sum_of(&rows, "Balance")), "{branch}: the closing rows add up to the cell");
+        assert!(date_texts(&rows, "Date").iter().all(|d| d.as_deref() == Some("2026-11-03")), "{branch}: only the closing date");
+        assert_eq!(note, None);
+        // Opening: the rows of the opening date (31 Oct)
+        let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, branch, &opening);
+        assert!(close(at(&b, branch, &opening), sum_of(&rows, "Balance")), "{branch}: the opening rows add up to the cell");
+        assert!(date_texts(&rows, "Date").iter().all(|d| d.as_deref() == Some("2026-10-31")), "{branch}: only the opening date");
+        // Total (flow): the rows dated in the period (not 31 Oct)
+        let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, branch, &total);
+        assert!(close(at(&b, branch, &total), sum_of(&rows, "Interest")), "{branch}: the flow rows add up to the cell");
+        assert!(date_texts(&rows, "Date").iter().all(|d| d.as_deref().is_some_and(|d| d.starts_with("2026-11"))), "{branch}: only rows dated in November");
+        // Count at closing: the number of rows of the closing date
+        let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, branch, &count);
+        assert!(close(at(&b, branch, &count), rows.height() as f64), "{branch}: the count of the closing rows is the cell");
+    }
+    // B1 closes at 130 + 20 on 3 Nov: two rows, 150; a Total column cell reads its own rows
+    let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, "B1", &closing);
+    assert_eq!((rows.height(), sum_of(&rows, "Balance")), (2, 150.0));
+}
+
+#[test]
+fn m3_show_rows_of_a_period_amount_gives_the_rows_of_its_two_dates_with_a_part_column_and_end_minus_start_is_the_cell() {
+    let dd = dir("p9m3_rows_ytd");
+    let df = DataFrame::new(vec![dates("Date", &["2026-01-31", "2026-02-28", "2026-03-31"]).into(), nums("Income", &[10.0, 25.0, 45.0])]).expect("data");
+    let sc = scope(&dd, settings(1), "2026-03-31", vec![]);
+    let s = spec(&[&month_year()], &[], vec![time("Income", TimeAgg::PeriodAmount)], &["Month-Year"]);
+    let h = "Period amount of Income (YTD)";
+    let b = run(&dd, &df, sc.clone(), &s);
+    for (month, cell) in [("Feb 2026", 15.0), ("Mar 2026", 20.0)] {
+        let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, month, h);
+        let parts = strings(&rows, "Part");
+        let inc = floats(&rows, "Income");
+        let part_sum = |p: &str| -> f64 { parts.iter().zip(inc.iter()).filter(|(x, _)| x.as_deref() == Some(p)).map(|(_, v)| v.unwrap_or(0.0)).sum() };
+        assert_eq!(rows.height(), 2, "{month}: one row for each of the two dates");
+        assert!(close(at(&b, month, h), cell) && close(Some(part_sum("End") - part_sum("Start")), cell), "{month}: End minus Start is the cell");
+    }
+    // January has no earlier date in the fiscal year: only the End row, and End is the cell
+    let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, "Jan 2026", h);
+    assert_eq!((rows.height(), strings(&rows, "Part")[0].clone()), (1, Some("End".to_string())));
+}
+
+#[test]
+fn m3_show_rows_of_an_average_gives_the_rows_dated_in_the_period_and_the_date_carried_in_with_a_note_and_a_blank_cell_has_none() {
+    let dd = dir("p9m3_rows_avg");
+    // the daily example: 1 Nov = 100, 3 Nov = 130, as of 3 Nov
+    let df = DataFrame::new(vec![dates("Date", &["2026-11-01", "2026-11-03"]).into(), nums("Balance", &[100.0, 130.0])]).expect("data");
+    let sc = scope(&dd, settings(1), "2026-11-03", vec![]);
+    let s = spec(&[&month_year()], &[], vec![time("Balance", TimeAgg::AverageBalance), time("Balance", TimeAgg::OpeningBalance)], &["Month-Year"]);
+    let b = run(&dd, &df, sc.clone(), &s);
+    let (rows, note) = rows_tab(&dd, &df, sc.clone(), &s, &b, "Nov 2026", "Average balance of Balance");
+    let got: Vec<String> = date_texts(&rows, "Date").into_iter().flatten().collect();
+    assert_eq!(got, ["2026-11-01", "2026-11-03"], "1 Nov and 3 Nov");
+    assert_eq!(note.as_deref(), Some("These rows make up an average; their sum is not the cell."));
+    // a period that starts after the first snapshot carries the earlier date in
+    let df = DataFrame::new(vec![dates("Date", &["2026-10-29", "2026-10-30", "2026-11-03"]).into(), nums("Balance", &[90.0, 100.0, 130.0])]).expect("data");
+    let b = run(&dd, &df, sc.clone(), &s);
+    let (rows, _) = rows_tab(&dd, &df, sc.clone(), &s, &b, "Nov 2026", "Average balance of Balance");
+    let got: Vec<String> = date_texts(&rows, "Date").into_iter().flatten().collect();
+    assert_eq!(got, ["2026-10-30", "2026-11-03"], "the date carried in (30 Oct, the last one before 1 Nov), then the rows of the period");
+    // a blank cell (Opening before the first date) has no rows
+    let df = DataFrame::new(vec![dates("Date", &["2026-11-01", "2026-11-03"]).into(), nums("Balance", &[100.0, 130.0])]).expect("data");
+    let b = run(&dd, &df, sc.clone(), &s);
+    assert_eq!(at(&b, "Nov 2026", "Opening balance of Balance"), None);
+    let r = labels(&b).iter().position(|l| l == "Nov 2026").expect("row");
+    let e = with_scope(sc, || micro_parquet::pivot_table::cell_rows(&s, &b, r, "Opening balance of Balance")).err().map(|e| format!("{e:#}")).expect("a refusal");
+    assert!(e.contains("blank"), "{e}");
+}

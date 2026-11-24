@@ -68,6 +68,14 @@ pub struct PivotBuild {
     pub notes: Vec<CellNote>,
     /// What to tell the owner about the pivot (Phase 9 M3): "Sum of Balance adds 23 dates of balances. ...".
     pub warnings: Vec<String>,
+    /// The dates behind each time cell (Phase 9 M3 follow-up): (row key, column key, value index) → rows. Blank cells have none.
+    pub time_rows: HashMap<(Key, Key, usize), crate::measures::TimeRows>,
+    /// For each value column of `df`: the index of its value in the pivot's Values.
+    pub col_values: Vec<usize>,
+    /// The tab's date column when the pivot has time values.
+    pub date_column: String,
+    /// The date column is a Date and time column.
+    pub date_is_datetime: bool,
 }
 
 /// Why one cell of a pivot is blank: its row in `df`, its column's heading and the reason.
@@ -717,16 +725,25 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
             ColKind::RowTotal(_) => Vec::new(),
         })
         .collect();
-    Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys, notes, warnings })
+    let col_values: Vec<usize> = out_cols.iter().map(|(_, c)| match c { ColKind::Cell(_, j) | ColKind::RowTotal(j) => *j }).collect();
+    let (time_rows, date_column, date_is_datetime) = match time_result {
+        Some(t) => (t.rows, t.date_column, t.date_is_datetime),
+        None => (HashMap::new(), String::new(), false),
+    };
+    Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys, notes, warnings, time_rows, col_values, date_column, date_is_datetime })
 }
 
 /// The rows behind one cell of a pivot (Phase 8 W6: "Show rows").
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct CellRows {
     /// The pivot's own filters, then one condition per Rows and Columns field the cell stands for.
     pub conditions: Vec<crate::models::FilterCondition>,
     /// "Rows: Branch = Dhaka, Term = 1Y".
     pub title: String,
+    /// Steps that follow the filter (a time cell's "Part" column).
+    pub extra_steps: Vec<crate::models::TransformStep>,
+    /// Said under the tab's title.
+    pub note: Option<String>,
 }
 
 /// The drill level a pivot field stands for: a date part, a lookup field or a column.
@@ -774,6 +791,11 @@ pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<Stri
     if row_key.len() > spec.rows.len() {
         bail!("Show rows: that line has more values than the pivot has Rows fields. Open the pivot again.");
     }
+    let value_at = build.col_values.get(at - build.label_columns).copied().unwrap_or(0);
+    let time_cell = spec.values.get(value_at).is_some_and(|v| v.time.is_some());
+    if time_cell {
+        return time_cell_rows(spec, build, row_key, col_key, value_at);
+    }
     let mut conditions: Vec<crate::models::FilterCondition> = Vec::new();
     for f in &spec.filters {
         if f.values.is_empty() {
@@ -799,7 +821,75 @@ pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<Stri
         }
     }
     let title = if parts.is_empty() { "Rows: all rows of the pivot".to_string() } else { format!("Rows: {}", parts.join(", ")) };
-    Ok(CellRows { conditions, title })
+    Ok(CellRows { conditions, title, extra_steps: Vec::new(), note: None })
+}
+
+/// The rows behind a time cell (M3 follow-up): the cell's keys and filters on the other fields, and the dates its number is made
+/// of. A Calendar field only picks the period, so it is not a condition: the rows are those of the dates the number reads.
+fn time_cell_rows(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String>], col_key: &[Option<String>], j: usize) -> Result<CellRows> {
+    use crate::models::{CondOp, FilterCondition};
+    let value = &spec.values[j];
+    let calendar: HashSet<String> = match crate::model::scope().and_then(|c| c.calendar.clone()) {
+        Some(cal) => crate::pivot_time::calendar_fields(spec, &cal.tab),
+        None => HashSet::new(),
+    };
+    let Some(tr) = build.time_rows.get(&(row_key.to_vec(), col_key.to_vec(), j)) else {
+        bail!("Show rows: this cell is blank, so it has no rows. Point at it to see why.");
+    };
+    let mut conditions: Vec<FilterCondition> = Vec::new();
+    for f in &spec.filters {
+        if f.values.is_empty() || calendar.contains(&f.field) {
+            continue;
+        }
+        let mut c = level_of(spec, &f.field).condition("", true);
+        c.set_picked(f.values.iter().flatten().cloned().collect());
+        c.or_blank = f.values.iter().any(|v| v.is_none());
+        conditions.push(c);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (i, v) in row_key.iter().enumerate() {
+        if let Some(field) = spec.rows.get(i) {
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+            if !calendar.contains(field) {
+                conditions.push(field_condition(spec, field, v, true));
+            }
+        }
+    }
+    for (i, v) in col_key.iter().enumerate() {
+        if let Some(field) = spec.columns.get(i) {
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+            if !calendar.contains(field) {
+                conditions.push(field_condition(spec, field, v, true));
+            }
+        }
+    }
+    let column = build.date_column.clone();
+    if build.date_is_datetime {
+        bail!("Show rows: '{}' is a Date and time column, so the rows of a day can't be picked from it. Convert it to a Date (Convert column type) in the data tab first.", column);
+    }
+    if column.is_empty() {
+        bail!("Show rows: the date column of this pivot's tab is not known. Open the pivot again.");
+    }
+    let mut dates: Vec<String> = tr.dates.iter().map(|(d, _)| d.format("%Y-%m-%d").to_string()).collect();
+    dates.sort();
+    dates.dedup();
+    conditions.push(FilterCondition { column: column.clone(), op: CondOp::InList, values: dates, ..Default::default() });
+    let mut extra_steps = Vec::new();
+    if tr.dates.iter().any(|(_, p)| p.is_some()) {
+        // Period amount: the rows of the two dates it subtracts, told apart
+        let end = tr.dates.iter().find(|(_, p)| *p == Some("End")).map(|(d, _)| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+        extra_steps.push(crate::models::TransformStep::ConditionalColumn {
+            new_col: "Part".to_string(),
+            rules: vec![crate::models::CondRule { col_name: column, op: crate::models::FilterOp::Eq, compare_val: end, output_val: "End".to_string(), compare_is_col: false, values: Vec::new() }],
+            fallback: "Start".to_string(),
+            output_as_float: false,
+            blank_result: Default::default(),
+        });
+    }
+    let what = spec.values[j].label();
+    let _ = value;
+    let title = if parts.is_empty() { format!("Rows: {}", what) } else { format!("Rows: {} \u{b7} {}", parts.join(", "), what) };
+    Ok(CellRows { conditions, title, extra_steps, note: tr.note.map(str::to_string) })
 }
 
 /// Whether "Show rows" can read the cells of a tab (Phase 8 W6 follow-up): the tab's last pivot, and the steps that come

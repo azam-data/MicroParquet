@@ -10,6 +10,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | M1 | DONE (S4), follow-ups DONE (S5), three labels DONE (S6) | (see git log: "Phase 9 M1") | tests/phase9/m1.rs x12; render_tests_p9 x7 (field list, chart pickers, filter dialog and value picker, chart filters, Show rows, broken links, closed tab) + 1 picture test |
 | M2 | DONE (S5) | (see git log: "Phase 9 M2") | tests/phase9/m2.rs x11; render_tests_p9 x5 (menu, Calendar dialog, Calendar tab and fields, As-of dialog, pictures) |
 | M3 | DONE (S6) | (see git log: "Phase 9 M3") | tests/phase9/m3.rs x15; render_tests_p9 x4 (Measures dialog, aggregation choice, banner and tooltip, pictures) |
+| M3 follow-up | DONE (S7) | (see git log: "Phase 9 M3: follow-ups") | tests/phase9/m3.rs x3 (Show rows on a time cell); render_tests_p9 x2 |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -313,3 +314,16 @@ Proved to fail without the fix (stubs, each restored, run one at a time; every r
 - UI: no time aggregations in the list: `m3_the_aggregation_choice_in_values...`; a suggestion click doing nothing: `m3_the_measures_dialog_tags_columns...`; no tooltip: `m3_a_pivot_tab_shows_the_stock_warning...` and the pictures test.
 
 Found on the way: the aggregation list used to open below the window's edge at 1219x686 (its last items could not be clicked); it is now as tall as the room under it (M3-10). The Calendar dialog stayed open over a later test's tab until closed; the M3 rig closes it.
+
+## S7: owner decisions on S6 and the M3 follow-up
+
+Owner decisions on S6 (24 Nov 2026), also in `<accepted_deviations>` of the spec ("Owner decisions on S6"): M1-15 to M1-17 and M3-1 to M3-10 accepted except M3-8, which is replaced by Show rows on a time cell as below; Q2 (M3-3, the extra 30 Apr row) accepted; Q1 (M3-7): charts get the time aggregations in M4 through the value type shared with the pivot (done in M4). The lean-session rules are in the spec's `<workflow>` and in CLAUDE.md. Deviations M3-11 to M3-14 (spec).
+
+| Acceptance item (S6 decision, replaces M3-8) | Test |
+| --- | --- |
+| Closing, Opening and Total: the sum of the rows equals the cell; Count at closing: the count of the rows equals the cell | `m3_show_rows_of_a_closing_opening_total_or_count_cell_gives_the_rows_whose_sum_or_count_is_the_cell` (B1, B2; closing rows are the closing date only, opening rows the opening date only, flow rows dated in November only) |
+| Period amount: the rows of the two dates with a Part column; End minus Start equals the cell | `m3_show_rows_of_a_period_amount_gives_the_rows_of_its_two_dates_with_a_part_column_and_end_minus_start_is_the_cell` (Feb 15, Mar 20; Jan has only End) |
+| Average balance: on the M3 daily example the rows are 1 Nov and 3 Nov with the note; a carried-in date is added; a blank cell has no rows | `m3_show_rows_of_an_average_gives_the_rows_dated_in_the_period_and_the_date_carried_in_with_a_note_and_a_blank_cell_has_none` |
+| Render test by a real click at 3 sizes | UI `m3_show_rows_on_a_time_cell_by_a_real_double_click_gives_the_rows_of_its_closing_date_and_a_blank_cell_gives_its_reason_at_three_sizes` (double-click on the Nov closing cell: 10 rows of 24 Nov, their sum is the cell, no note) and `m3_a_blank_time_cell_has_no_show_rows_and_its_menu_item_gives_the_reason_at_three_sizes` (right-click, the item opens nothing and says why) |
+
+Proved to fail without the fix (two stubs, each restored, run one at a time): Closing rows returning every date of the period: `m3_show_rows_of_a_closing_opening_total_or_count_cell...`; Period amount without its Start date: `m3_show_rows_of_a_period_amount...`.

@@ -3373,3 +3373,42 @@ fn m3_pictures_of_the_columns_tags_the_aggregation_choice_the_stock_warning_and_
         shoot_held(&mut rig, "pivot-blank-measure-reason", dark, screen);
     }
 }
+
+#[test]
+fn m3_show_rows_on_a_time_cell_by_a_real_double_click_gives_the_rows_of_its_closing_date_and_a_blank_cell_gives_its_reason_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m3rows", ppp, w, h, false);
+        let at = m3_pivot_tab(&mut rig, None);
+        let p = rig.draw(4);
+        // Nov 2026 closes on 24 Nov: its 10 rows, whose sum is the cell
+        let cell = value_cell_of_row(&p, "Nov 2026", &what);
+        let shown = rig.app.tabs[at].cached_slice.column("Closing balance of Balance").expect("closing").f64().expect("f").get(1).expect("Nov 2026 is the second row");
+        let n = rig.app.tabs.len();
+        double_click(&mut rig, cell.center());
+        pump_until(&mut rig, "the rows of the Nov closing cell", &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+        let df = rows_under_model(&rig, n);
+        assert_eq!(df.height(), 10, "{what}: the 10 rows of 24 Nov");
+        assert!((sum_balance_of(&df) - shown).abs() < 1e-6, "{what}: the rows add up to the closing cell ({} against {shown})", sum_balance_of(&df));
+        assert!(rig.app.tab_notes.get(&rig.app.tabs[n].id).is_none(), "{what}: a closing cell has no note");
+        assert!(rig.app.tabs[n].title.starts_with("Rows: "), "{what}: {}", rig.app.tabs[n].title);
+    }
+}
+
+#[test]
+fn m3_a_blank_time_cell_has_no_show_rows_and_its_menu_item_gives_the_reason_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m3blankrows", ppp, w, h, false);
+        let at = m3_pivot_tab(&mut rig, Some("2026-10-31"));
+        rig.draw(4);
+        let (reason, rect) = noted_cells(&rig, at).first().cloned().expect("a blank cell");
+        assert!(reason.starts_with("No balance in Nov 2026"), "{what}: {reason}");
+        let n = rig.app.tabs.len();
+        let p = right_click(&mut rig, rect.center());
+        let item = text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: the menu has Show rows"));
+        click_rect(&mut rig, item);
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), n, "{what}: the disabled item opens nothing");
+        let p = crate::ui::render_tests_p8::hover_at(&mut rig, item.center());
+        assert!(painted_has(&p, "No balance in Nov 2026"), "{what}: the item says why");
+    }
+}

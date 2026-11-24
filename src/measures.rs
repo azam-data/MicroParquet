@@ -320,6 +320,62 @@ pub fn evaluate(agg: TimeAgg, series: &BTreeMap<NaiveDate, DayStats>, period: &[
     }
 }
 
+// ------------------------------------------------------------------------------------------------ the rows behind a number
+
+/// The rows behind a time cell (M3 follow-up): the dates whose rows make up its number, and whether the rows get a "Part" column.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TimeRows {
+    /// The dates, each with its part ("End" / "Start") when the cell subtracts two dates.
+    pub dates: Vec<(NaiveDate, Option<&'static str>)>,
+    /// Said under the tab's title: "These rows make up an average; their sum is not the cell."
+    pub note: Option<&'static str>,
+}
+
+/// The note of the rows of an average.
+pub const AVERAGE_ROWS_NOTE: &str = "These rows make up an average; their sum is not the cell.";
+
+/// The dates of the rows behind the number `evaluate` gives for the same arguments (`None` when the cell is blank).
+pub fn rows_of(agg: TimeAgg, period: &[NaiveDate], tl: &Timeline, month_end: bool) -> Option<TimeRows> {
+    let start = period.first().copied()?;
+    let in_p = snapshots_in(&tl.snapshots, period);
+    let closing = in_p.last().copied();
+    let plain = |dates: Vec<NaiveDate>| Some(TimeRows { dates: dates.into_iter().map(|d| (d, None)).collect(), note: None });
+    match agg {
+        TimeAgg::ClosingBalance | TimeAgg::CountAtClosing | TimeAgg::DistinctCountAtClosing | TimeAgg::WAvgAtClosing => plain(vec![closing?]),
+        TimeAgg::OpeningBalance => plain(vec![last_before(&tl.snapshots, start)?]),
+        TimeAgg::TotalFlow => {
+            if in_p.is_empty() {
+                None
+            } else {
+                plain(in_p)
+            }
+        }
+        TimeAgg::PeriodAmount => {
+            let c = closing?;
+            let mut dates = vec![(c, Some("End"))];
+            if let Some(p) = last_before(&tl.snapshots, start) {
+                if tl.fiscal.fiscal_start_year(p) == tl.fiscal.fiscal_start_year(c) {
+                    dates.push((p, Some("Start")));
+                }
+            }
+            Some(TimeRows { dates, note: None })
+        }
+        TimeAgg::AverageBalance => {
+            let mut dates = in_p;
+            if !month_end {
+                // the date carried in: the last snapshot date on or before the first day, when it is not a day of the period
+                let carried = last_on_or_before(&tl.snapshots, start)?;
+                if !dates.contains(&carried) {
+                    dates.insert(0, carried);
+                }
+            } else if dates.is_empty() {
+                return None;
+            }
+            Some(TimeRows { dates: dates.into_iter().map(|d| (d, None)).collect(), note: Some(AVERAGE_ROWS_NOTE) })
+        }
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ the stock warning
 
 /// "Sum of Balance adds 23 dates of balances. Use Closing balance or Average balance."

@@ -327,7 +327,10 @@ impl MicroParquetApp {
     /// The worker found the rows of a pivot cell: they open in a new tab.
     pub(crate) fn apply_show_rows(&mut self, r: micro_parquet::tab_jobs::ShowRowsResult) {
         let formats = self.tabs.get(self.active_tab).map(|t| t.col_formats.clone()).unwrap_or_default();
-        self.create_tab_from_source(r.title.clone(), r.base, r.steps, formats);
+        let id = self.create_tab_from_source_with(r.title.clone(), r.base, r.steps, formats, None);
+        if let Some(n) = r.note {
+            self.tab_notes.insert(id, n);
+        }
         self.status_message = format!("Opening '{}'.", r.title);
     }
 }

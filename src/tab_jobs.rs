@@ -1285,6 +1285,8 @@ pub struct ShowRowsResult {
     pub title: String,
     pub base: TabSource,
     pub steps: Vec<TransformStep>,
+    /// Said under the tab's title (the rows of an average).
+    pub note: Option<String>,
 }
 
 /// "Show rows" on a line of a Nested pivot (Phase 9 P2): the request of a cell, with the Rows values of the line that was clicked
@@ -1345,7 +1347,8 @@ fn show_rows_inner(req: ShowRowsRequest, nested_row: Option<Vec<Option<String>>>
     };
     let mut steps = before.to_vec();
     steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
-    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps })))
+    steps.extend(cell.extra_steps);
+    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps, note: cell.note })))
 }
 
 /// The Nested view of a pivot tab: the tab's steps up to the pivot, which must be the last one run (Phase 9 P2).

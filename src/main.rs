@@ -356,6 +356,8 @@ pub struct MicroParquetApp {
     pub nested_views: HashMap<u64, crate::ui::pivot_layout::NestedCache>,
     /// Why a cell of a pivot tab is blank, and its warnings (Phase 9 M3), by tab id.
     pub pivot_reports: HashMap<u64, crate::ui::pivot_layout::ReportCache>,
+    /// A note said under a tab's title (the rows of an average): tab id → text. Not saved.
+    pub tab_notes: HashMap<u64, String>,
     /// The key each tab's report job in flight was made for.
     pub pivot_report_key: HashMap<u64, (u64, u64)>,
     pub cl_migration: ClMigrationState,
@@ -497,6 +499,7 @@ impl MicroParquetApp {
             pivot_bar: PivotBarState::default(),
             nested_views: HashMap::new(),
             pivot_reports: HashMap::new(),
+            tab_notes: HashMap::new(),
             pivot_report_key: HashMap::new(),
             cl_migration: ClMigrationState::default(),
             gap: GapState::default(),

@@ -379,6 +379,12 @@ Every new note has these sections, in this order: What it does · When to use it
   - M6 runs last.
 - Sessions: S1 = B0 + P1, S2 = P2, S3 = M0, S4 = M1, S5 = M2, S6 = M3, S7 = M4, S8 = M5, S9 = M6 (with `cargo build --release`).
 - One PR from `phase9` to main, draft until S9, then ready for review. Wait for Tests, and don't merge. Don't commit to main while `phase9` is open.
+
+Lean sessions (from S7), an owner decision of 24 Nov 2026. These replace the stricter rules above where the two differ:
+- Stub proofs: prove one or two key tests per task (the ones that pin the task's main numbers or rules), one stub at a time, restored after each. Name them in the progress file. Not every new test needs a proof.
+- Pictures: write the light and dark versions, but open only the light one to check it. The owner checks the dark ones.
+- Read only what the task needs: the named spec sections, grep for the rest, never a whole large file.
+- Keep the report to the `<report>` format, with no narration of the work.
 </workflow>
 
 <report>
@@ -509,6 +515,25 @@ Sessions record their choices here and in `docs/phase9-progress.md`, for the own
 - **M3-8:** why a cell is blank and the warnings reach a pivot tab through a worker report (`PivotReport`, made again when the steps or the model change), drawn as a banner above the grid and as the tooltip of the blank cell. They are in the flat grid and the dialog's flat preview; the Nested view and its preview show the numbers without the tooltip. Show rows of a time cell gives the rows of its keys (as for any cell), not only the rows of the closing date.
 - **M3-9:** tags are in `Model.column_kinds` as `{ tab, column, kind }`; Model > Measures... lists the numeric columns of date-linked tabs. A name is matched by whole words (Balance, Outstanding, Bal, OS; Interest, Income, Expense, Disbursed, Recovery, in any case, also in CamelCase); a name with words of both kinds, or neither, gets no suggestion.
 - **M3-10:** the aggregation list of a value is as tall as the room under it in the window (it scrolls), so no item is below the window's edge.
+
+**Owner decisions on S6** (given at the start of S7):
+- **Accepted:** M1-15 to M1-17 and M3-1 to M3-10, except M3-8 as changed below.
+- **Q2 (M3-3):** the extra 30 Apr = 150 row for "Q2 Opening = 140" is accepted.
+- **Q1 (M3-7):** charts get the time aggregations in M4, through one value type shared by the pivot and the chart (`ValueSpec` with its time value), so a chart shows exactly the pivot's number. Part of M4's acceptance: a chart of Closing balance and of Average balance by Calendar · Month-Year equals the pivot, and a chart of Closing balance · vs SPLY % by Month-Year equals the pivot.
+- **M3-8 is replaced:** Show rows on a time cell gives the rows behind its number, with the cell's keys and filters:
+  - Closing balance, Count at closing, Distinct count at closing, W.Avg at closing: the rows of the closing date
+  - Opening balance: the rows of the opening date
+  - Total (flow): the rows dated in the period
+  - Period amount (YTD balance): the rows of the two dates it subtracts, with a "Part" column ("End" / "Start")
+  - Average balance: the rows dated in the period plus the rows of the date carried in, and a note in the tab title area: "These rows make up an average; their sum is not the cell."
+  - A blank cell has no Show rows, and its menu item gives the cell's reason.
+  - Tests: the sum of the rows equals the cell for Closing, Opening and Total; the count equals Count at closing; End minus Start equals Period amount; on the M3 daily example, the Average balance rows are 1 Nov and 3 Nov with the note; one render test by a real click at 3 sizes.
+
+**M3 follow-up choices (S7):**
+- **M3-11:** Show rows on a time cell keeps the cell's keys and filters on every field except Calendar fields (a Calendar key or filter only picks the period) and picks the rows by the dates the number reads (`measures::rows_of`, an "in list" on the tab's date column). A pivot's Total column, subtotal and Grand total give the rows of their own number the same way. The Nested view's lines use the same code.
+- **M3-12:** a data tab whose date column is Date and time is refused for Show rows on a time cell, in words ("Convert it to a Date ... first"), because the days can't be picked by value from it without guessing; the pivot's numbers are not affected.
+- **M3-13:** the note of an average ("These rows make up an average; their sum is not the cell.") is drawn in a muted line under the tab bar of the rows tab (`tab_notes`, never saved) and goes when the tab closes. A month-end average has the note too, because its rows are the month-ends.
+- **M3-14:** the tab title of a time cell's rows is "Rows: <keys> · <heading of the value>", for example "Rows: Branch = B1 · Closing balance of Balance". A blank cell's "Show rows" item is disabled with the cell's reason as its hover text, and a double-click on it does nothing.
 
 **Found, not changed (S2):**
 - The Side by side layout's Subtotals box was checked for Average, W.Avg, Count distinct, Min and Max: each subtotal is calculated from the group's own rows (one group-by per level), not added up from the cells (`p2_side_by_side_subtotals_are_calculated_from_the_group_s_rows_not_added_up`). So there is nothing to record here, and nothing was changed.

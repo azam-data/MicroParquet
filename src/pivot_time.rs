@@ -26,10 +26,16 @@ pub struct TimeResult {
     pub month_end: bool,
     /// Why a time cell is blank: (row part, column part, value index) → the reason.
     pub notes: HashMap<(Key, Key, usize), String>,
+    /// The dates whose rows make up a time cell's number: (row part, column part, value index) → rows. A blank cell has none.
+    pub rows: HashMap<(Key, Key, usize), crate::measures::TimeRows>,
+    /// The tab's date column, for Show rows.
+    pub date_column: String,
+    /// The date column is a Date and time column (Show rows can't pick its days by value).
+    pub date_is_datetime: bool,
 }
 
 /// The pivot's own Calendar fields: the fields of the date link of its data tab.
-fn calendar_fields(spec: &PivotSpec, calendar_tab: &str) -> HashSet<String> {
+pub(crate) fn calendar_fields(spec: &PivotSpec, calendar_tab: &str) -> HashSet<String> {
     spec.model_fields.iter().filter(|f| f.data_tab == spec.data_tab && f.lookup_tab == calendar_tab).map(|f| f.name.clone()).collect()
 }
 
@@ -258,7 +264,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         .collect();
     let first_snap = timeline.snapshots.first().copied();
     let mut periods: HashMap<Vec<Option<Option<String>>>, (Vec<NaiveDate>, String)> = HashMap::new();
-    let mut out = TimeResult { month_end, notes: HashMap::new() };
+    let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))) };
     for (rk, ck) in targets {
         let level_len = (rk.len(), ck.len());
         // the cell's non-Calendar key, in field order
@@ -347,6 +353,11 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 None => empty.clone(),
             };
             let m = evaluate(agg, &per_date, period, text, &timeline, month_end);
+            if m.value().is_some() {
+                if let Some(r) = crate::measures::rows_of(agg, period, &timeline, month_end) {
+                    out.rows.insert((rk.clone(), ck.clone(), j), r);
+                }
+            }
             let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
             if slot.len() < spec.values.len() {
                 slot.resize(spec.values.len(), None);
