@@ -711,6 +711,9 @@ pub struct LookupWant {
     pub field: ModelFieldRef,
     pub out: String,
     pub as_: LookupAs,
+    /// A column of true/false that is true for a data row whose key is not blank and has no row in the lookup (a filter's
+    /// "(no match)", which is never a value).
+    pub unmatched_out: Option<String>,
 }
 
 const HIT: &str = "__mp_hit";
@@ -790,6 +793,22 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
     pick.push(lit(true).alias(HIT));
     // a blank lookup key never matches (M0-3), so those rows are left out of the join
     let l = keyed(ll, &lookup_cols, &ls).filter(col(BLANK).not()).select(pick);
+    // a lookup whose keys repeat at the time of the join (the file or the lookup's steps changed after the check): refuse in the Key
+    // check's words and tell the app, which re-checks the link and marks it Broken at once (M1-6)
+    let repeated = keyed(compile_tab_lazy(&lookup.source, &lookup.steps, &ctx.temp_dir).with_context(|| format!("{}: '{}' could not be read", what, lookup.title))?, &lookup_cols, &ls)
+        .filter(col(BLANK).not())
+        .group_by(key_exprs())
+        .agg([len().alias(ROWS)])
+        .filter(col(ROWS).gt(lit(1)))
+        .select([len()])
+        .collect()
+        .with_context(|| format!("{}: the keys of '{}' could not be checked", what, lookup.title))?;
+    let repeated = first_count(&repeated);
+    if repeated > 0 {
+        let status = LinkStatus::Broken(vec![plural(repeated, "duplicate key", "duplicate keys")]);
+        note_broken_at_join(&link.data_tab, &link.lookup_tab, status.clone());
+        bail!("{}", broken_message(&lookup.title, &status));
+    }
     let mut args = JoinArgs::new(JoinType::Left);
     args.validation = JoinValidation::ManyToOne;
     let joined = d.join(l, key_exprs(), key_exprs(), args);
@@ -815,9 +834,26 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
             col(f.as_str())
         };
         exprs.push(e.alias(w.out.as_str()));
+        if let Some(u) = &w.unmatched_out {
+            exprs.push(col(BLANK).not().and(col(HIT).is_null()).alias(u.as_str()));
+        }
         temps.push(f);
     }
     Ok(joined.with_columns(exprs).drop(temps.iter().map(|t| t.as_str()).collect::<Vec<_>>()))
+}
+
+static BROKEN_AT_JOIN: std::sync::Mutex<Vec<(String, String, LinkStatus)>> = std::sync::Mutex::new(Vec::new());
+
+/// A join found repeated lookup keys: the link is to be marked Broken at once and checked again (taken by the app each frame).
+fn note_broken_at_join(data_tab: &str, lookup_tab: &str, status: LinkStatus) {
+    if let Ok(mut q) = BROKEN_AT_JOIN.lock() {
+        q.push((data_tab.to_string(), lookup_tab.to_string(), status));
+    }
+}
+
+/// The links joins found broken since the last call: (data tab key, lookup tab key, status).
+pub fn take_broken_at_join() -> Vec<(String, String, LinkStatus)> {
+    BROKEN_AT_JOIN.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
 }
 
 /// The links a step needs when it reads a lookup field ("Accounts → Branch master"); empty for every other step.

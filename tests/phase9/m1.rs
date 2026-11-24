@@ -117,7 +117,10 @@ fn keep(conditions: Vec<FilterCondition>) -> TransformStep {
 }
 
 fn picked(r: &ModelFieldRef, values: &[&str], blank: bool) -> FilterCondition {
-    FilterCondition { column: r.name.clone(), op: CondOp::InList, values: values.iter().map(|v| v.to_string()).collect(), or_blank: blank, lookup: Some(r.clone()), ..Default::default() }
+    // as the pickers store it (M1-4): "(no match)" is the condition's own flag, never a value
+    let mut c = FilterCondition { column: r.name.clone(), op: CondOp::InList, or_blank: blank, lookup: Some(r.clone()), ..Default::default() };
+    c.set_picked(values.iter().map(|v| v.to_string()).collect());
+    c
 }
 
 fn ids(df: &DataFrame) -> Vec<String> {
@@ -162,7 +165,7 @@ fn m1_a_pivot_by_a_lookup_field_equals_the_join_tools_pivot_with_no_match_holdin
 #[test]
 fn m1_linking_never_changes_the_data_tabs_row_count_on_any_fixture() {
     let f = fx("p9m1_rows");
-    let wants = |names: &[&str]| -> Vec<LookupWant> { names.iter().map(|n| LookupWant { field: field(&f, n), out: field(&f, n).name, as_: LookupAs::Text }).collect() };
+    let wants = |names: &[&str]| -> Vec<LookupWant> { names.iter().map(|n| LookupWant { unmatched_out: None, field: field(&f, n), out: field(&f, n).name, as_: LookupAs::Text }).collect() };
     let rows = |lf: LazyFrame| lf.collect().expect("collect").height();
     let base = rows(lazy(&f));
     assert_eq!(base, 9);
@@ -179,7 +182,7 @@ fn m1_linking_never_changes_the_data_tabs_row_count_on_any_fixture() {
     }
     // a composite key
     let g = composite();
-    let n = with_scope(scope_of(&g, None), || rows(with_lookup_columns(lazy(&g), &[LookupWant { field: field(&g, "Group"), out: field(&g, "Group").name, as_: LookupAs::Text }], "Pivot").expect("joined")));
+    let n = with_scope(scope_of(&g, None), || rows(with_lookup_columns(lazy(&g), &[LookupWant { unmatched_out: None, field: field(&g, "Group"), out: field(&g, "Group").name, as_: LookupAs::Text }], "Pivot").expect("joined")));
     assert_eq!(n, base, "a composite key");
     // a filter step on a lookup field leaves its rows, never more
     let step = keep(vec![picked(&field(&f, "Region"), &["Dhaka"], false)]);
@@ -491,4 +494,165 @@ fn m1_the_scope_is_taken_by_a_job_when_it_is_submitted_and_left_alone_after() {
         micro_parquet::jobs::Outcome::Failed(m) => assert!(m.contains("Open the project to run it"), "{m}"),
         _ => panic!("expected a refusal outside a project"),
     }
+}
+
+
+// ------------------------------------------------------------------------------------------------ follow-ups of S4 (S5)
+
+fn dates(name: &str, v: &[Option<&str>]) -> Series {
+    let days: Vec<Option<i32>> = v.iter().map(|d| d.map(|d| (chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").expect("date") - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch")).num_days() as i32)).collect();
+    Series::new(name.into(), days).cast(&DataType::Date).expect("dates")
+}
+
+/// A fixture with number and date lookup columns that have a blank cell on a matched row. Eight accounts: B2 (A3 200, A7 10) has a
+/// lookup row with a blank Limit and Opened; B9 (A6 50, A8 7) has no lookup row; B5 (A9 3) has a Region that reads "(no match)".
+fn typed_fx(name: &str) -> Fx {
+    let d = dir(name);
+    let data = DataFrame::new(vec![
+        strs("Branch", &["B1", "B1", "B2", "B3", "B4", "B9", "B2", "B9", "B5"]),
+        nums("Balance", &[100.0, 300.0, 200.0, 400.0, 800.0, 50.0, 10.0, 7.0, 3.0]),
+        strs("AC Number", &["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9"]),
+    ])
+    .expect("data");
+    let lookup = DataFrame::new(vec![
+        strs("Code", &["B1", "B2", "B3", "B4", "B5"]),
+        strs("Region", &["Dhaka", "Dhaka", "Khulna", "Chattogram", "(no match)"]),
+        Series::new("Limit".into(), [Some(1000.0), None, Some(3000.0), Some(4000.0), Some(5000.0)]),
+        dates("Opened", &[Some("2020-01-31"), None, Some("2021-06-30"), Some("2022-12-31"), Some("2023-03-31")]),
+    ])
+    .expect("lookup");
+    let link = Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: None };
+    Fx { d: d.clone(), data: tab("t1", "Accounts", parquet(&d, "accounts_t", &data)), lookup: tab("t2", "Branch master", parquet(&d, "master_t", &lookup)), link }
+}
+
+fn run_filter(f: &Fx, c: FilterCondition) -> Vec<String> {
+    let out = in_scope(f, || compile_tab_lazy(&f.data.source, &[keep(vec![c])], &f.d).and_then(|lf| Ok(lf.collect()?))).expect("filter");
+    ids(&out)
+}
+
+#[test]
+fn m1_no_match_and_blank_are_two_separate_filters_on_a_number_and_a_date_lookup_column() {
+    let f = typed_fx("p9m1_typed_filter");
+    for column in ["Limit", "Opened"] {
+        let r = field(&f, column);
+        let unmatched = run_filter(&f, picked(&r, &["(no match)"], false));
+        let blank = run_filter(&f, picked(&r, &[], true));
+        assert_eq!(unmatched, ["A6", "A8"], "{column}: (no match) keeps exactly the rows whose key has no lookup row");
+        assert_eq!(blank, ["A3", "A7"], "{column}: (blank) keeps exactly the matched rows whose cell is blank, never an unmatched row");
+        assert!(unmatched.iter().all(|u| !blank.contains(u)), "{column}: the two sets don't overlap");
+        let both = run_filter(&f, picked(&r, &[], true).tap_no_match());
+        assert_eq!(both, ["A3", "A6", "A7", "A8"], "{column}: both together are the union");
+        // everything else: neither blank nor unmatched
+        let rest = run_filter(&f, FilterCondition { op: CondOp::NotInList, ..picked(&r, &[], true).tap_no_match() });
+        assert_eq!(rest, ["A1", "A2", "A4", "A5", "A9"], "{column}: not in (blank, no match)");
+        // "does not equal" a value keeps an unmatched row unless (no match) is picked too
+        let not_a_value = run_filter(&f, FilterCondition { op: CondOp::NotInList, ..picked(&r, &[if column == "Limit" { "1000" } else { "2020-01-31" }], false) });
+        assert!(not_a_value.contains(&"A6".to_string()) && !not_a_value.contains(&"A1".to_string()), "{column}: an unmatched row is not that value");
+    }
+}
+
+trait TapNoMatch {
+    fn tap_no_match(self) -> Self;
+}
+impl TapNoMatch for FilterCondition {
+    fn tap_no_match(mut self) -> Self {
+        self.no_match = true;
+        self
+    }
+}
+
+#[test]
+fn m1_no_match_is_a_flag_of_its_own_so_a_real_value_called_no_match_never_collides_with_it() {
+    let f = typed_fx("p9m1_flag");
+    let r = field(&f, "Region");
+    // B5's Region is literally "(no match)": the value finds A9, the flag finds the unmatched rows
+    let mut by_value = picked(&r, &[], false);
+    by_value.values = vec!["(no match)".to_string()];
+    assert_eq!(run_filter(&f, by_value.clone()), ["A9"], "the value");
+    assert_eq!(run_filter(&f, picked(&r, &["(no match)"], false)), ["A6", "A8"], "the flag");
+    assert!(by_value.no_match.eq(&false));
+    // the flag is a field of the condition, saved only when on
+    let on = picked(&r, &["(no match)"], false);
+    assert!(on.no_match && on.values.is_empty(), "the picker's '(no match)' became the flag, not a value");
+    let json = serde_json::to_string(&on).expect("json");
+    assert!(json.contains("\"no_match\":true"), "{json}");
+    assert!(!serde_json::to_string(&by_value).expect("json").contains("no_match"), "an old condition is written as it was");
+    let back: FilterCondition = serde_json::from_str(&json).expect("back");
+    assert_eq!(back, on);
+    // an old file without the flag loads with it off
+    let old: FilterCondition = serde_json::from_str(r#"{"column":"Region","op":"InList","values":["Dhaka"]}"#).expect("old");
+    assert!(!old.no_match);
+}
+
+#[test]
+fn m1_a_pivot_by_a_number_or_a_date_lookup_column_shows_blank_and_no_match_as_two_rows_blank_first_and_the_total_is_the_ungrouped_total() {
+    let f = typed_fx("p9m1_typed_pivot");
+    for column in ["Limit", "Opened"] {
+        let r = field(&f, column);
+        let ours = run_pivot(&f, &pivot_of(&[&r]));
+        let labels: Vec<&str> = ours.iter().map(|p| p.0.as_str()).collect();
+        let n = labels.len();
+        assert_eq!(&labels[n - 3..], ["(blank)", "(no match)", "Grand total"], "{column}: two rows, (blank) before (no match): {labels:?}");
+        let at = |l: &str| ours.iter().find(|p| p.0 == l).expect(l).1;
+        assert_eq!(at("(blank)"), 210.0, "{column}: the matched row B2 with a blank cell (200 + 10)");
+        assert_eq!(at("(no match)"), 57.0, "{column}: the unmatched key B9 (50 + 7)");
+        let total: f64 = ours.iter().filter(|p| p.0 != "Grand total").map(|p| p.1).sum();
+        assert_eq!(at("Grand total"), 1870.0, "{column}");
+        assert_eq!(total, 1870.0, "{column}: the rows add up to the total");
+        assert_eq!(at("Grand total"), sum_of(&typed_accounts_df(&f), "Balance"), "{column}: equals the ungrouped total");
+    }
+}
+
+fn typed_accounts_df(f: &Fx) -> DataFrame {
+    lazy(f).collect().expect("accounts")
+}
+
+#[test]
+fn m1_show_rows_of_the_no_match_and_blank_rows_of_a_number_pivot_give_the_cells_rows() {
+    let f = typed_fx("p9m1_typed_show");
+    let r = field(&f, "Limit");
+    let spec = pivot_of(&[&r]);
+    let b = in_scope(&f, || build_pivot(lazy(&f), &spec)).expect("pivot");
+    let names: Vec<String> = b.df.get_column_names().iter().map(|n| n.to_string()).collect();
+    let labels: Vec<String> = pairs(&b.df).into_iter().map(|p| p.0).collect();
+    for (label, rows, sum) in [("(no match)", vec!["A6", "A8"], 57.0), ("(blank)", vec!["A3", "A7"], 210.0)] {
+        let row = labels.iter().position(|l| l == label).expect(label);
+        let c = cell_rows(&spec, &b, row, &names[1]).expect("show rows");
+        assert!(c.conditions.iter().all(|c| c.values.iter().all(|v| v != "(no match)")), "the flag, never a value");
+        let out = in_scope(&f, || filter_by_conditions(lazy(&f), &c.conditions).and_then(|lf| Ok(lf.collect()?))).expect("rows");
+        assert_eq!(ids(&out), rows, "{label}");
+        assert_eq!(sum_of(&out, "Balance"), sum, "{label}: the control total equals the cell");
+    }
+}
+
+#[test]
+fn m1_repeated_keys_at_the_time_of_a_join_are_refused_in_the_key_checks_words_and_the_link_is_reported_broken() {
+    let f = typed_fx("p9m1_dup_at_join");
+    let r = field(&f, "Region");
+    let spec = pivot_of(&[&r]);
+    assert!(in_scope(&f, || build_pivot(lazy(&f), &spec)).is_ok(), "fine before the file changes");
+    let _ = take_broken_at_join();
+    // the lookup file changes after the check: B1 now appears twice and B2 twice
+    let d2 = DataFrame::new(vec![
+        strs("Code", &["B1", "B1", "B2", "B2", "B3"]),
+        strs("Region", &["Dhaka", "Dhaka", "Dhaka", "Barishal", "Khulna"]),
+        Series::new("Limit".into(), [Some(1.0), Some(1.0), Some(2.0), Some(3.0), Some(4.0)]),
+        dates("Opened", &[Some("2020-01-31"), Some("2020-01-31"), None, None, None]),
+    ])
+    .expect("changed");
+    let path = match &f.lookup.source {
+        TabSource::SingleFile { path, .. } => path.clone(),
+        _ => panic!("a file"),
+    };
+    let mut d2 = d2;
+    ParquetWriter::new(std::fs::File::create(&path).expect("file")).finish(&mut d2).expect("write");
+    let e = in_scope(&f, || build_pivot(lazy(&f), &spec)).err().expect("refused");
+    assert_eq!(format!("{:#}", e), "'Branch master' has 2 duplicate keys. Open Model \u{25b8} Key check to see them.");
+    let broken = take_broken_at_join();
+    assert_eq!(broken.len(), 1);
+    assert_eq!((broken[0].0.as_str(), broken[0].1.as_str()), ("t1", "t2"));
+    assert_eq!(broken[0].2, LinkStatus::Broken(vec!["2 duplicate keys".to_string()]));
+    // a filter takes the same way
+    let e = in_scope(&f, || compile_tab_lazy(&f.data.source, &[keep(vec![picked(&r, &["Dhaka"], false)])], &f.d).and_then(|lf| Ok(lf.collect()?))).err().expect("refused");
+    assert!(format!("{:#}", e).starts_with("'Branch master' has 2 duplicate keys."), "{e:#}");
 }

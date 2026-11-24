@@ -493,11 +493,14 @@ impl DrillLevel {
     /// The condition "this field is `value`" (the text a mark's category shows; "(blank)" is the blank rows).
     pub fn condition(&self, value: &str, keep: bool) -> FilterCondition {
         let blank = value == crate::pivot_table::BLANK_LABEL;
+        // a lookup field's "(no match)" is the flag, never a value (M1-4)
+        let no_match = self.model.is_some() && value == crate::model::NO_MATCH_LABEL;
         FilterCondition {
             column: self.part.as_ref().map(|p| p.column.clone()).unwrap_or_else(|| self.name.clone()),
             op: if keep { CondOp::InList } else { CondOp::NotInList },
-            values: if blank { Vec::new() } else { vec![value.to_string()] },
+            values: if blank || no_match { Vec::new() } else { vec![value.to_string()] },
             or_blank: blank,
+            no_match,
             part: self.part.clone(),
             lookup: self.model.clone(),
             ..Default::default()
@@ -909,7 +912,7 @@ impl ChartSpec {
         match c.op {
             CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte => return format!("{} {} {}", field, c.op.label(), c.value.trim()),
             CondOp::Between => return format!("{} between {} and {}", field, c.value.trim(), c.value2.trim()),
-            CondOp::Equals | CondOp::NotEquals if c.values.is_empty() && !c.or_blank && !c.value.trim().is_empty() => {
+            CondOp::Equals | CondOp::NotEquals if c.values.is_empty() && !c.or_blank && !c.no_match && !c.value.trim().is_empty() => {
                 return format!("{} {} {}", field, if c.op == CondOp::NotEquals { "\u{2260}" } else { "=" }, c.value.trim());
             }
             _ => {}
@@ -917,6 +920,9 @@ impl ChartSpec {
         let mut vals: Vec<String> = c.values.clone();
         if c.or_blank {
             vals.push(crate::pivot_table::BLANK_LABEL.to_string());
+        }
+        if c.no_match {
+            vals.push(crate::model::NO_MATCH_LABEL.to_string());
         }
         let op = if c.op == CondOp::NotInList { "\u{2260}" } else { "=" };
         if vals.is_empty() {
@@ -930,7 +936,7 @@ impl ChartSpec {
     pub fn check_filters(&self) -> anyhow::Result<()> {
         for c in &self.filters {
             let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
-            if matches!(c.op, CondOp::InList | CondOp::NotInList) && c.values.is_empty() && !c.or_blank {
+            if matches!(c.op, CondOp::InList | CondOp::NotInList) && c.values.is_empty() && !c.or_blank && !c.no_match {
                 anyhow::bail!("Chart: the filter on '{}' has no value ticked, so it keeps no rows. Tick a value, or press All to keep every value.", field);
             }
             if c.op.is_comparison() && (c.value.trim().is_empty() || (c.op == CondOp::Between && c.value2.trim().is_empty())) {

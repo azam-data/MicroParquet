@@ -788,10 +788,23 @@ pub struct FilterCondition {
     /// the rows are kept (or left out) by the lookup row their key matches. `None`: a column of the table (every condition before M1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lookup: Option<crate::model::ModelFieldRef>,
+    /// "(no match)" was picked on a lookup field (Phase 9 M1-4): the data rows whose key has no row in the lookup match (or, for "not
+    /// in list", are left out). A flag of its own, never a value, so a real value can't collide with it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_match: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
 pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
+    values_summary_nm(values, blank, false, n)
+}
+
+/// `values_summary` with "(no match)" (a lookup field's flag) after "(blank)".
+pub fn values_summary_nm(values: &[String], blank: bool, no_match: bool, n: usize) -> String {
     let mut s = values.iter().take(n).cloned().collect::<Vec<_>>().join("; ");
     let more = values.len().saturating_sub(n);
     if more > 0 {
@@ -803,20 +816,43 @@ pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
         }
         s.push_str("(blank)");
     }
+    if no_match {
+        if !s.is_empty() {
+            s.push_str("; ");
+        }
+        s.push_str(crate::model::NO_MATCH_LABEL);
+    }
     s
 }
 
 impl FilterCondition {
+    /// What the value picker shows ticked: the picked values and, on a lookup field, "(no match)" when its flag is on.
+    pub fn picked_with_no_match(&self, mut picked: Vec<String>) -> Vec<String> {
+        if self.no_match && self.lookup.is_some() {
+            picked.push(crate::model::NO_MATCH_LABEL.to_string());
+        }
+        picked
+    }
+
+    /// Takes what the picker returned: on a lookup field "(no match)" becomes the flag and is not kept as a value.
+    pub fn set_picked(&mut self, mut values: Vec<String>) {
+        if self.lookup.is_some() {
+            self.no_match = values.iter().any(|v| v == crate::model::NO_MATCH_LABEL);
+            values.retain(|v| v != crate::model::NO_MATCH_LABEL);
+        }
+        self.values = values;
+    }
+
     /// True when the condition compares with picked values rather than a typed text.
     pub fn uses_values(&self) -> bool {
-        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank)
+        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank || self.no_match)
     }
 
     /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000", "Open Date › Day name in list Fri; Sat".
     pub fn describe(&self) -> String {
         let subject = self.subject();
         if self.uses_values() {
-            return format!("{} {} {}", subject, self.op.label(), values_summary(&self.values, self.or_blank, 3));
+            return format!("{} {} {}", subject, self.op.label(), values_summary_nm(&self.values, self.or_blank, self.no_match, 3));
         }
         match self.op {
             CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", subject, self.op.label()),

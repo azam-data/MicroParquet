@@ -180,7 +180,7 @@ impl MicroParquetApp {
             let listed: Vec<String> = full.as_ref().map(|f| f.values.iter().filter_map(|(k, _)| k.clone()).collect()).unwrap_or_default();
             let has_blank = full.as_ref().is_some_and(|f| f.values.iter().any(|(k, _)| k.is_none()));
             let (mut values, mut blank) = match existing {
-                Some(i) => (picker_selection(&spec.filters[i]), spec.filters[i].or_blank),
+                Some(i) => (spec.filters[i].picked_with_no_match(picker_selection(&spec.filters[i])), spec.filters[i].or_blank),
                 // no filter: every value is kept, so every one is ticked (when they are all listed)
                 None if complete => (listed.clone(), has_blank),
                 None => (Vec::new(), false),
@@ -201,7 +201,9 @@ impl MicroParquetApp {
                         spec.filters.remove(i);
                     }
                 } else {
-                    let c = FilterCondition { column: key.column.clone(), op: CondOp::InList, values: values.clone(), or_blank: blank, part: key.part.clone(), lookup: key.lookup.clone(), value: values.join(", "), ..Default::default() };
+                    let mut c = FilterCondition { column: key.column.clone(), op: CondOp::InList, or_blank: blank, part: key.part.clone(), lookup: key.lookup.clone(), ..Default::default() };
+                    c.set_picked(values.clone());
+                    c.value = c.values.join(", ");
                     match existing {
                         Some(i) => spec.filters[i] = c,
                         None => spec.filters.push(c),
@@ -220,7 +222,7 @@ impl MicroParquetApp {
             for (label, key) in &fields {
                 let existing = spec.filters.iter().find(|c| c.op == CondOp::InList && FieldKey::of_condition(c) == *key);
                 let summary = match existing {
-                    Some(c) => format!("{} kept", c.values.len() + usize::from(c.or_blank)),
+                    Some(c) => format!("{} kept", c.values.len() + usize::from(c.or_blank) + usize::from(c.no_match)),
                     None => "all values".to_string(),
                 };
                 ui.horizontal(|ui| {

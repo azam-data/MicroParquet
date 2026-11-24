@@ -244,6 +244,12 @@ impl MicroParquetApp {
     /// Called every frame: sends a link to the worker when it was never checked or when either tab or the link changed since, and
     /// writes the open line once every check is back.
     pub(crate) fn model_tick(&mut self) {
+        // a join that found repeated keys marks its link Broken at once; the link is then checked again for the full picture (M1-6)
+        for (d, k, status) in model::take_broken_at_join() {
+            if self.project.model.links.iter().any(|l| l.data_tab == d && l.lookup_tab == k) {
+                self.project.model_ui.runtime.insert((d, k), LinkRuntime { status, check: None, fingerprint: None, in_flight: false });
+            }
+        }
         if !self.project.active || self.project.opening.is_some() {
             return;
         }

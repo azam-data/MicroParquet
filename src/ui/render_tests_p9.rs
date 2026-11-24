@@ -2070,6 +2070,10 @@ fn m1_the_chart_pickers_list_the_lookup_fields_and_the_chart_equals_the_pivots_t
 /// Opens the tab's Filter dialog with one list condition on `Product` and picks the lookup field "Branch master › Region" for it by
 /// real clicks. Returns the dialog's title.
 fn m1_filter_on_region(rig: &mut Rig, what: &str) -> String {
+    m1_filter_on(rig, what, "Region")
+}
+
+fn m1_filter_on(rig: &mut Rig, what: &str, column: &str) -> String {
     rig.app.run_command(&rig.ctx, CommandId::Filter);
     rig.app.filter.conditions = vec![FilterCondition { column: "Product".into(), op: CondOp::InList, ..Default::default() }];
     rig.draw(4);
@@ -2077,10 +2081,10 @@ fn m1_filter_on_region(rig: &mut Rig, what: &str) -> String {
     assert_dialog_fits(&rig.ctx, &title, what);
     let col = rig.app.filter.col_boxes.first().map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the column box"));
     let p = click_rect(rig, col);
-    for item in ["Product", "Branch master \u{203a} Region", "Branch master \u{203a} Code"] {
-        assert!(last_box(&p, item, 0.0).is_some(), "{what}: the column list has '{item}': {:?}", p.boxes.iter().rev().take(30).map(|b| b.0.clone()).collect::<Vec<_>>());
+    for item in ["Product".to_string(), format!("Branch master \u{203a} {column}"), "Branch master \u{203a} Code".to_string()] {
+        assert!(last_box(&p, &item, 0.0).is_some(), "{what}: the column list has '{item}': {:?}", p.boxes.iter().rev().take(30).map(|b| b.0.clone()).collect::<Vec<_>>());
     }
-    let region = last_box(&p, "Branch master \u{203a} Region", 0.0).expect("Region");
+    let region = last_box(&p, &format!("Branch master \u{203a} {column}"), 0.0).expect("the column");
     assert!(inside(region, rig.ctx.screen_rect()), "{what}: the item {region:?} is in the window");
     click_rect(rig, region);
     rig.draw(4);
@@ -2116,7 +2120,8 @@ fn m1_the_filter_dialog_takes_a_lookup_field_its_value_picker_lists_no_match_las
             // (no match) is ticked like a value
             let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == "(no match)").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the (no match) box"));
             click_rect(&mut rig, b);
-            assert_eq!(rig.app.filter.conditions[0].values, vec!["(no match)".to_string()], "{what}");
+            let c = &rig.app.filter.conditions[0];
+            assert!(c.no_match && c.values.is_empty(), "{what}: (no match) is the condition's own flag, never a value: {c:?}");
             // Apply: the tab keeps exactly the 10 unmatched rows (B141 to B150); the branch master tab is unchanged
             let p = rig.draw(2);
             let apply = last_box(&p, "\u{E182}  Apply to current tab", 0.0).unwrap_or_else(|| panic!("{what}: Apply"));
@@ -2431,5 +2436,90 @@ fn m1_pictures_of_the_pivot_field_list_the_chart_picker_and_the_filter_value_pic
         rig.draw(5);
         let r = assert_dialog_fits(&rig.ctx, &title, &what);
         shoot(&mut rig, "filter-lookup-values", dark, r.window.expand(10.0));
+    }
+}
+
+
+// ------------------------------------------------------------------------------------------------ M1 follow-ups (S5)
+
+/// The 140-branch master with a number column: Limit is 1000 for Dhaka, 2000 for Ctg and blank for B001 (a matched branch, no limit).
+fn master_with_limit() -> DataFrame {
+    let master = branch_master();
+    let limit: Vec<Option<f64>> = (0..140).map(|i| if i == 0 { None } else if i < 70 { Some(1000.0) } else { Some(2000.0) }).collect();
+    // Limit comes second, so its item is in the first rows of the column list
+    DataFrame::new(vec![master.column("Code").expect("Code").clone(), Series::new("Limit".into(), limit).into(), master.column("Region").expect("Region").clone()]).expect("master")
+}
+
+#[test]
+fn m1_the_value_picker_of_a_number_lookup_column_lists_blank_and_no_match_last_and_ticking_no_match_keeps_exactly_the_unmatched_rows_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_rig_with("p9m1number", ppp, w, h, dark, master_with_limit(), &|s| *s == LinkStatus::OkUnmatched(10));
+            let _ = m1_filter_on(&mut rig, &what, "Limit");
+            let c = rig.app.filter.conditions[0].clone();
+            assert_eq!(c.lookup.as_ref().map(|l| l.column.as_str()), Some("Limit"), "{what}: {c:?}");
+            let pick = rig.app.filter.pick_buttons.first().map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the picker button"));
+            click_rect(&mut rig, pick);
+            for _ in 0..200 {
+                settle(&mut rig.app);
+                rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+                rig.draw(2);
+                if rig.app.picker.rects.rows.iter().any(|(t, _)| t == "(no match)") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            rig.draw(3);
+            let rows: Vec<String> = rig.app.picker.rects.rows.iter().map(|(t, _)| t.clone()).collect();
+            assert_eq!(rows.len(), 4, "{what}: two limits, (blank) and (no match): {rows:?}");
+            assert_eq!(&rows[2..], ["(blank)", "(no match)"], "{what}: a number column lists (blank), then (no match), last: {rows:?}");
+            // a real click on (no match)
+            let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == "(no match)").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the (no match) box"));
+            click_rect(&mut rig, b);
+            let c = &rig.app.filter.conditions[0];
+            assert!(c.no_match && c.values.is_empty() && !c.or_blank, "{what}: the flag, not a value and not (blank): {c:?}");
+            let p = rig.draw(2);
+            let apply = last_box(&p, "\u{E182}  Apply to current tab", 0.0).unwrap_or_else(|| panic!("{what}: Apply"));
+            click_rect(&mut rig, apply);
+            settle(&mut rig.app);
+            pump_until(&mut rig, "the filtered tab", &|r| r.app.tabs[0].total_rows == 10);
+            let df = rows_under_model(&rig, 0);
+            assert_eq!(df.height(), 10, "{what}: exactly the unmatched rows, and not the matched row with a blank limit");
+            assert_eq!(sum_balance_of(&df), M1_NO_MATCH, "{what}");
+        }
+    }
+}
+
+#[test]
+fn m1_a_lookup_that_gets_a_repeated_key_after_the_check_is_refused_in_the_key_checks_words_and_its_link_shows_broken_without_reopening_the_project() {
+    use crate::ui::render_tests_p8::menu_item;
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m1_rig("p9m1dupjoin", ppp, w, h, false);
+        assert_eq!(model_status(&rig, 0), LinkStatus::OkUnmatched(10), "{what}: fine before the file changes");
+        // the lookup's file changes under the open project: B001 now appears twice
+        let path = match &rig.app.tabs[1].source {
+            TabSource::SingleFile { path, .. } => path.clone(),
+            other => panic!("{what}: the master is a file: {other:?}"),
+        };
+        let mut df = broken_master();
+        polars::prelude::ParquetWriter::new(std::fs::File::create(&path).expect("file")).finish(&mut df).expect("write");
+        let region = region_ref(&rig);
+        let spec = PivotSpec { rows: vec![region.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, model_fields: vec![region.clone()], ..Default::default() };
+        let src = rig.app.tabs[0].source.clone();
+        rig.app.create_tab_from_source("Pivot: Region".into(), src, vec![TransformStep::from_pivot_spec(spec)], std::collections::HashMap::new());
+        settle(&mut rig.app);
+        let at = rig.app.tabs.len() - 1;
+        rig.app.active_tab = at;
+        pump(&mut rig, "the refusal", &|r| !r.app.tabs[at].issues.is_empty());
+        let issue = rig.app.tabs[at].issues[0].clone();
+        assert_eq!((issue.index, issue.reason.as_str()), (0, M1_REASON), "{what}: the pivot refuses in the Key check's words, naming the link");
+        // the link is Broken, in the status bar and in Links..., without reopening the project
+        pump(&mut rig, "the link marked broken", &|r| matches!(model_status(r, 0), LinkStatus::Broken(_)));
+        assert_eq!(model_status(&rig, 0).text(), "Broken: 1 duplicate key", "{what}");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "Model: 1 link \u{b7} 1 broken"), "{what}: the status bar says so: {:?}", p.boxes.iter().rev().take(12).map(|b| b.0.clone()).collect::<Vec<_>>());
+        menu_item(&mut rig, "Model", "Links");
+        let p = rig.draw(4);
+        assert!(painted_has(&p, "Broken: 1 duplicate key"), "{what}: and Links... says so");
     }
 }

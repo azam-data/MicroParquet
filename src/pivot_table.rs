@@ -707,7 +707,7 @@ pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<Stri
         }
         let level = level_of(spec, &f.field);
         let mut c = level.condition("", true);
-        c.values = f.values.iter().flatten().cloned().collect();
+        c.set_picked(f.values.iter().flatten().cloned().collect());
         c.or_blank = f.values.iter().any(|v| v.is_none());
         conditions.push(c);
     }
@@ -989,6 +989,7 @@ pub fn pivot_input(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
         field: f.clone(),
         out: f.name.clone(),
         as_: if spec.labels_with(&f.name) { crate::model::LookupAs::Text } else { crate::model::LookupAs::Raw },
+        unmatched_out: None,
     });
     crate::model::with_lookup_columns(lf, &wants.collect::<Vec<_>>(), "Pivot")
 }
