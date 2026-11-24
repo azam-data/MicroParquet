@@ -639,6 +639,10 @@ pub fn pairs_text(l: &Link) -> String {
 /// The value of every lookup field for a data row whose key has no row in the lookup.
 pub const NO_MATCH_LABEL: &str = "(no match)";
 
+/// The value of every lookup field for a data row whose key is blank (missing, empty or only spaces), apart from "(blank)" (a matched
+/// lookup row whose cell is blank) and "(no match)" (M1-12).
+pub const BLANK_KEY_LABEL: &str = "(blank key)";
+
 /// "Branch master · Region": the stored name of a lookup field.
 pub fn field_name(lookup_title: &str, column: &str) -> String {
     format!("{} \u{b7} {}", lookup_title, column)
@@ -682,14 +686,24 @@ impl ModelFieldRef {
     }
 }
 
-/// Where a label of a lookup field sorts (M1): the values first (0), then "(blank)" (1), then "(no match)" (2), whatever the order.
+/// Where a label of a lookup field sorts (M1): the values first (0), then "(blank)" (1), "(blank key)" (2), "(no match)" (3), whatever the order.
 pub fn label_rank(label: &str) -> u8 {
     if label == crate::pivot_table::BLANK_LABEL {
         1
-    } else if label == NO_MATCH_LABEL {
+    } else if label == BLANK_KEY_LABEL {
         2
+    } else if label == NO_MATCH_LABEL {
+        3
     } else {
         0
+    }
+}
+
+/// `label_rank` of a key as the pivot and the pickers hold it: a missing label is "(blank)".
+pub fn key_rank(k: &Option<String>) -> u8 {
+    match k {
+        None => 1,
+        Some(t) => label_rank(t),
     }
 }
 
@@ -773,6 +787,8 @@ pub struct LookupWant {
     /// A column of true/false that is true for a data row whose key is not blank and has no row in the lookup (a filter's
     /// "(no match)", which is never a value).
     pub unmatched_out: Option<String>,
+    /// A column of true/false that is true for a data row whose key is blank (a filter's "(blank key)", never a value).
+    pub blank_key_out: Option<String>,
 }
 
 const HIT: &str = "__mp_hit";
@@ -886,7 +902,7 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
         };
         let e = if as_text {
             when(col(BLANK))
-                .then(lit(NULL).cast(DataType::String))
+                .then(lit(BLANK_KEY_LABEL))
                 .when(col(HIT).is_null())
                 .then(lit(NO_MATCH_LABEL))
                 .otherwise(crate::pivot_table::key_text_expr(&f, &dt))
@@ -896,6 +912,9 @@ fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab
         exprs.push(e.alias(w.out.as_str()));
         if let Some(u) = &w.unmatched_out {
             exprs.push(col(BLANK).not().and(col(HIT).is_null()).alias(u.as_str()));
+        }
+        if let Some(b) = &w.blank_key_out {
+            exprs.push(col(BLANK).alias(b.as_str()));
         }
         temps.push(f);
     }

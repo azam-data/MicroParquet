@@ -83,7 +83,7 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
 
 /// The lookup fields of a chart as columns to add.
 pub fn chart_lookup_wants(spec: &ChartSpec) -> Vec<crate::model::LookupWant> {
-    spec.model_fields().into_iter().map(|f| crate::model::LookupWant { out: f.name.clone(), field: f, as_: crate::model::LookupAs::Text, unmatched_out: None }).collect()
+    spec.model_fields().into_iter().map(|f| crate::model::LookupWant { out: f.name.clone(), field: f, as_: crate::model::LookupAs::Text, unmatched_out: None, blank_key_out: None }).collect()
 }
 
 /// The chart of a table that already has the chart's date parts as columns (a facet's panel).

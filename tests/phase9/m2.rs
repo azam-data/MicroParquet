@@ -412,7 +412,7 @@ fn m2_a_date_link_joins_a_date_and_time_column_to_the_calendar_by_its_day_and_a_
     // 23 Nov 2026 is a Monday and 24 Nov a Tuesday; the blank date is "(blank)"
     assert_eq!(got.iter().find(|p| p.0 == "Mon").map(|p| p.1), Some(3.0), "both times of 23 Nov count on the day: {got:?}");
     assert_eq!(got.iter().find(|p| p.0 == "Tue").map(|p| p.1), Some(4.0));
-    assert_eq!(got.iter().find(|p| p.0 == "(blank)").map(|p| p.1), Some(8.0), "a blank date is not a match");
+    assert_eq!(got.iter().find(|p| p.0 == "(blank key)").map(|p| p.1), Some(8.0), "a blank date is not a match");
     assert!(got.iter().all(|p| p.0 != "(no match)"), "no date is outside the Calendar: {got:?}");
     assert_eq!(got.last().map(|p| p.1), Some(15.0));
     // the join never changes the row count

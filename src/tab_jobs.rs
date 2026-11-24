@@ -473,7 +473,7 @@ pub fn compute_picker_values(req: PickerRequest, ctx: &JobCtx) -> Result<PickerR
     let PickerRequest { tab_id, token, source, steps, field, search, temp_dir, lookup } = req;
     let values = compile_tab_lazy(&source, &steps, &temp_dir)
         .and_then(|lf| match &lookup {
-            Some(f) => crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: field.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None }], "Filter"),
+            Some(f) => crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: field.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None, blank_key_out: None }], "Filter"),
             None => Ok(lf),
         })
         .and_then(|lf| crate::value_picker::picker_values(lf, &field, search.as_deref(), crate::value_picker::PICKER_LIMIT))
@@ -1239,7 +1239,7 @@ pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<Piv
     ctx.check()?;
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
     let lf = match &req.lookup {
-        Some(f) => match crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: req.field.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None }], "Filter") {
+        Some(f) => match crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: req.field.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None, blank_key_out: None }], "Filter") {
             Ok(lf) => lf,
             Err(e) => return Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values: Err(format!("{:#}", e)) }),
         },
@@ -1249,11 +1249,7 @@ pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<Piv
     if req.lookup.is_some() {
         // the lookup's "(blank)" and "(no match)" come last, in that order
         if let Ok((v, _)) = &mut values {
-            v.sort_by_key(|x| match x {
-                None => 1,
-                Some(t) if t == crate::model::NO_MATCH_LABEL => 2,
-                Some(_) => 0,
-            });
+            v.sort_by_key(crate::model::key_rank);
         }
     }
     Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })

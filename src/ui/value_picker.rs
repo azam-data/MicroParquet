@@ -41,7 +41,7 @@ pub struct PickerPanel {
     pub calendar: micro_parquet::dates::CalendarSettings,
     /// The date part the values are of (the filter's "By" choice, W2); `field` is then the part's name.
     pub part: Option<micro_parquet::dates::DateFieldRef>,
-    /// The lookup field the values are of (Phase 9 M1); `field` is then its name. "(blank)" and "(no match)" are listed last.
+    /// The lookup field the values are of (Phase 9 M1); `field` is then its name. "(blank)", "(blank key)" and "(no match)" are listed last, in that order.
     pub lookup: Option<micro_parquet::model::ModelFieldRef>,
     /// Which value box of a comparison the open list is for: 0 the value, 1 the upper limit of "between" (W9).
     pub slot: u8,
@@ -94,13 +94,9 @@ fn shown_values(panel: &PickerPanel, order: &SortOrder) -> Vec<(Option<String>, 
     };
     let order = auto.as_ref().unwrap_or(order);
     v.sort_by(|a, b| order.compare(&a.0, &b.0));
-    // a lookup field's "(blank)", then "(no match)", come last whatever the order (M1)
+    // a lookup field's "(blank)", "(blank key)", then "(no match)", come last whatever the order (M1)
     if panel.lookup.is_some() {
-        v.sort_by_key(|(k, _)| match k {
-            None => 1,
-            Some(t) if t == micro_parquet::model::NO_MATCH_LABEL => 2,
-            Some(_) => 0,
-        });
+        v.sort_by_key(|(k, _)| micro_parquet::model::key_rank(k));
     }
     v
 }

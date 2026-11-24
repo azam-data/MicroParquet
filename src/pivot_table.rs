@@ -318,13 +318,9 @@ fn cmp_label(orders: &HashMap<Option<String>, f64>, numeric: bool, order: &SortO
     cmp_label_in(orders, numeric, false, order, a, b)
 }
 
-/// Where a label of a lookup field sorts (M1): the values first, then "(blank)", then "(no match)", whatever the order chosen.
+/// Where a label of a lookup field sorts (M1): the values first, then "(blank)", "(blank key)", "(no match)", whatever the order chosen.
 fn lookup_rank(k: &Option<String>) -> u8 {
-    match k {
-        None => 1,
-        Some(t) if t == crate::model::NO_MATCH_LABEL => 2,
-        Some(_) => 0,
-    }
+    crate::model::key_rank(k)
 }
 
 fn cmp_label_in(orders: &HashMap<Option<String>, f64>, numeric: bool, lookup: bool, order: &SortOrder, a: &Option<String>, b: &Option<String>) -> Ordering {
@@ -990,6 +986,7 @@ pub fn pivot_input(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
         out: f.name.clone(),
         as_: if spec.labels_with(&f.name) { crate::model::LookupAs::Text } else { crate::model::LookupAs::Raw },
         unmatched_out: None,
+        blank_key_out: None,
     });
     crate::model::with_lookup_columns(lf, &wants.collect::<Vec<_>>(), "Pivot")
 }

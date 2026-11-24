@@ -360,8 +360,13 @@ impl MicroParquetApp {
                 for (id, title, columns) in &candidates {
                     let key = key_of(*id, self);
                     let current = key.as_ref().and_then(|k| links.iter().find(|l| &l.data_tab == k)).map(|l| l.column.clone());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new(title).color(tk.ink));
+                    ui.horizontal(|ui| {
+                        // the title has a cell of one width, so every box starts at the same place and is as wide as the others
+                        ui.allocate_ui_with_layout(egui::vec2(theme::MODEL_LINK_TITLE_W, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(theme::MODEL_LINK_TITLE_W);
+                            ui.set_max_width(theme::MODEL_LINK_TITLE_W);
+                            ui.add(egui::Label::new(egui::RichText::new(title).color(tk.ink)).truncate()).on_hover_text(title);
+                        });
                         let name = format!("Date column: {}", title);
                         let c = egui::ComboBox::from_id_salt(("model_cal_link", *id)).width(theme::MODEL_COMBO_W).height(theme::CHART_PICKER_POPUP_H).selected_text(current.clone().unwrap_or_else(|| "No date link".to_string())).show_ui(ui, |ui| {
                             if ui.selectable_label(current.is_none(), "No date link").clicked() {

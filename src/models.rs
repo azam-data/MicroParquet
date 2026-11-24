@@ -792,6 +792,10 @@ pub struct FilterCondition {
     /// in list", are left out). A flag of its own, never a value, so a real value can't collide with it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_match: bool,
+    /// "(blank key)" was picked on a lookup field (Phase 9 M1-12): the data rows whose key is blank (missing, empty or only spaces)
+    /// match. A flag of its own, apart from "(blank)" (a matched lookup row with a blank cell) and "(no match)".
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blank_key: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -805,6 +809,11 @@ pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
 
 /// `values_summary` with "(no match)" (a lookup field's flag) after "(blank)".
 pub fn values_summary_nm(values: &[String], blank: bool, no_match: bool, n: usize) -> String {
+    values_summary_flags(values, blank, false, no_match, n)
+}
+
+/// `values_summary` with a lookup field's three labels in their order: "(blank)", "(blank key)", "(no match)".
+pub fn values_summary_flags(values: &[String], blank: bool, blank_key: bool, no_match: bool, n: usize) -> String {
     let mut s = values.iter().take(n).cloned().collect::<Vec<_>>().join("; ");
     let more = values.len().saturating_sub(n);
     if more > 0 {
@@ -815,6 +824,12 @@ pub fn values_summary_nm(values: &[String], blank: bool, no_match: bool, n: usiz
             s.push_str("; ");
         }
         s.push_str("(blank)");
+    }
+    if blank_key {
+        if !s.is_empty() {
+            s.push_str("; ");
+        }
+        s.push_str(crate::model::BLANK_KEY_LABEL);
     }
     if no_match {
         if !s.is_empty() {
@@ -828,6 +843,9 @@ pub fn values_summary_nm(values: &[String], blank: bool, no_match: bool, n: usiz
 impl FilterCondition {
     /// What the value picker shows ticked: the picked values and, on a lookup field, "(no match)" when its flag is on.
     pub fn picked_with_no_match(&self, mut picked: Vec<String>) -> Vec<String> {
+        if self.blank_key && self.lookup.is_some() {
+            picked.push(crate::model::BLANK_KEY_LABEL.to_string());
+        }
         if self.no_match && self.lookup.is_some() {
             picked.push(crate::model::NO_MATCH_LABEL.to_string());
         }
@@ -838,21 +856,22 @@ impl FilterCondition {
     pub fn set_picked(&mut self, mut values: Vec<String>) {
         if self.lookup.is_some() {
             self.no_match = values.iter().any(|v| v == crate::model::NO_MATCH_LABEL);
-            values.retain(|v| v != crate::model::NO_MATCH_LABEL);
+            self.blank_key = values.iter().any(|v| v == crate::model::BLANK_KEY_LABEL);
+            values.retain(|v| v != crate::model::NO_MATCH_LABEL && v != crate::model::BLANK_KEY_LABEL);
         }
         self.values = values;
     }
 
     /// True when the condition compares with picked values rather than a typed text.
     pub fn uses_values(&self) -> bool {
-        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank || self.no_match)
+        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank || self.no_match || self.blank_key)
     }
 
     /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000", "Open Date › Day name in list Fri; Sat".
     pub fn describe(&self) -> String {
         let subject = self.subject();
         if self.uses_values() {
-            return format!("{} {} {}", subject, self.op.label(), values_summary_nm(&self.values, self.or_blank, self.no_match, 3));
+            return format!("{} {} {}", subject, self.op.label(), values_summary_flags(&self.values, self.or_blank, self.blank_key, self.no_match, 3));
         }
         match self.op {
             CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", subject, self.op.label()),

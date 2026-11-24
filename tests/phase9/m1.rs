@@ -1,6 +1,6 @@
 //! M1: lookup fields. A lookup column seen from a data tab (a pivot's Rows, Columns, Filters and Values, a chart's category, series,
 //! facet and drill level, a filter condition) is added by a left join on the worker and dropped after, so the data tab's row count
-//! never changes. A key with no lookup row is "(no match)", a blank key "(blank)"; both sort last.
+//! never changes. A key with no lookup row is "(no match)", a blank key "(blank key)", and a matched lookup row with a blank cell "(blank)"; all three sort last.
 
 use crate::common::{dir, floats, parquet, strings};
 use micro_parquet::charts::spec::{ChartSpec, DrillLevel};
@@ -133,10 +133,10 @@ fn m1_a_pivot_by_a_lookup_field_equals_the_join_tools_pivot_with_no_match_holdin
     let region = field(&f, "Region");
     let ours = run_pivot(&f, &pivot_of(&[&region]));
     let labels: Vec<&str> = ours.iter().map(|p| p.0.as_str()).collect();
-    assert_eq!(labels, ["Chattogram", "Dhaka", "Khulna", "(blank)", "(no match)", "Grand total"], "values in order, then (blank), then (no match)");
+    assert_eq!(labels, ["Chattogram", "Dhaka", "Khulna", "(blank key)", "(no match)", "Grand total"], "values in order, then (blank key), then (no match)");
     let at = |l: &str| ours.iter().find(|p| p.0 == l).expect(l).1;
     assert_eq!((at("Chattogram"), at("Dhaka"), at("Khulna")), (800.0, 610.0, 400.0));
-    assert_eq!((at("(blank)"), at("(no match)")), (30.0, 50.0), "the two blank keys and the unmatched key B9 are told apart");
+    assert_eq!((at("(blank key)"), at("(no match)")), (30.0, 50.0), "the two blank keys and the unmatched key B9 are told apart");
     assert_eq!(at("Grand total"), sum_of(&accounts(), "Balance"), "the total equals the ungrouped total");
     assert_eq!(at("Grand total"), 1890.0);
 
@@ -158,14 +158,14 @@ fn m1_a_pivot_by_a_lookup_field_equals_the_join_tools_pivot_with_no_match_holdin
         assert_eq!(theirs.iter().find(|p| p.0 == region).map(|p| p.1), Some(at(region)), "{region}: row for row");
     }
     let their_blank = theirs.iter().find(|p| p.0 == "(blank)").expect("the join leaves the unmatched and blank keys blank").1;
-    assert_eq!(their_blank, at("(blank)") + at("(no match)"), "what the Join tool leaves blank is (blank) and (no match) together");
+    assert_eq!(their_blank, at("(blank key)") + at("(no match)"), "what the Join tool leaves blank is (blank key) and (no match) together");
     assert_eq!(theirs.last().map(|p| p.1), Some(at("Grand total")));
 }
 
 #[test]
 fn m1_linking_never_changes_the_data_tabs_row_count_on_any_fixture() {
     let f = fx("p9m1_rows");
-    let wants = |names: &[&str]| -> Vec<LookupWant> { names.iter().map(|n| LookupWant { unmatched_out: None, field: field(&f, n), out: field(&f, n).name, as_: LookupAs::Text }).collect() };
+    let wants = |names: &[&str]| -> Vec<LookupWant> { names.iter().map(|n| LookupWant { unmatched_out: None, blank_key_out: None, field: field(&f, n), out: field(&f, n).name, as_: LookupAs::Text }).collect() };
     let rows = |lf: LazyFrame| lf.collect().expect("collect").height();
     let base = rows(lazy(&f));
     assert_eq!(base, 9);
@@ -182,7 +182,7 @@ fn m1_linking_never_changes_the_data_tabs_row_count_on_any_fixture() {
     }
     // a composite key
     let g = composite();
-    let n = with_scope(scope_of(&g, None), || rows(with_lookup_columns(lazy(&g), &[LookupWant { unmatched_out: None, field: field(&g, "Group"), out: field(&g, "Group").name, as_: LookupAs::Text }], "Pivot").expect("joined")));
+    let n = with_scope(scope_of(&g, None), || rows(with_lookup_columns(lazy(&g), &[LookupWant { unmatched_out: None, blank_key_out: None, field: field(&g, "Group"), out: field(&g, "Group").name, as_: LookupAs::Text }], "Pivot").expect("joined")));
     assert_eq!(n, base, "a composite key");
     // a filter step on a lookup field leaves its rows, never more
     let step = keep(vec![picked(&field(&f, "Region"), &["Dhaka"], false)]);
@@ -258,16 +258,17 @@ fn m1_a_filter_on_no_match_keeps_exactly_the_unmatched_rows_and_blank_keys_are_p
         ids(&out)
     };
     assert_eq!(run(picked(&region, &["(no match)"], false)), ["A6"], "B9 has no branch row: exactly that row");
-    assert_eq!(run(picked(&region, &[], true)), ["A7", "A8"], "(blank) is the two blank keys, not the unmatched one");
-    assert_eq!(run(picked(&region, &["(no match)"], true)), ["A6", "A7", "A8"], "both can be picked together");
-    let not = FilterCondition { op: CondOp::NotInList, ..picked(&region, &["(no match)"], true) };
+    assert_eq!(run(picked(&region, &["(blank key)"], false)), ["A7", "A8"], "(blank key) is the two blank keys, not the unmatched one");
+    assert_eq!(run(picked(&region, &[], true)), Vec::<String>::new(), "(blank) is a matched row with a blank cell: there is none here");
+    assert_eq!(run(picked(&region, &["(no match)", "(blank key)"], false)), ["A6", "A7", "A8"], "both can be picked together");
+    let not = FilterCondition { op: CondOp::NotInList, ..picked(&region, &["(no match)", "(blank key)"], false) };
     assert_eq!(run(not), ["A1", "A2", "A3", "A4", "A5", "A9"], "everything else");
     // the same two as the pivot's cells: Show rows of the (no match) and (blank) rows
     let spec = pivot_of(&[&region]);
     let b = in_scope(&f, || build_pivot(lazy(&f), &spec)).expect("pivot");
     let names: Vec<String> = b.df.get_column_names().iter().map(|n| n.to_string()).collect();
     let labels: Vec<String> = pairs(&b.df).into_iter().map(|p| p.0).collect();
-    for (label, rows, sum) in [("(no match)", vec!["A6"], 50.0), ("(blank)", vec!["A7", "A8"], 30.0), ("Dhaka", vec!["A1", "A2", "A3", "A9"], 610.0)] {
+    for (label, rows, sum) in [("(no match)", vec!["A6"], 50.0), ("(blank key)", vec!["A7", "A8"], 30.0), ("Dhaka", vec!["A1", "A2", "A3", "A9"], 610.0)] {
         let row = labels.iter().position(|l| l == label).expect(label);
         let c = cell_rows(&spec, &b, row, &names[1]).expect("show rows");
         let out = in_scope(&f, || filter_by_conditions(lazy(&f), &c.conditions).and_then(|lf| Ok(lf.collect()?))).expect("rows");
@@ -283,7 +284,7 @@ fn m1_a_chart_by_a_lookup_field_equals_the_pivot_and_a_drill_region_to_branch_na
     let name = field(&f, "Branch name");
     let spec = ChartSpec { category: region.name.clone(), category_model: Some(region.clone()), value: Some("Balance".into()), agg: micro_parquet::charts::spec::ChartAgg::Sum, ..Default::default() };
     let d = in_scope(&f, || micro_parquet::charts::calc::compute(lazy(&f), &spec)).expect("the chart");
-    assert_eq!(d.categories, ["Chattogram", "Dhaka", "Khulna", "(blank)", "(no match)"], "(blank) then (no match), last");
+    assert_eq!(d.categories, ["Chattogram", "Dhaka", "Khulna", "(blank key)", "(no match)"], "(blank key) then (no match), last");
     let pivot = run_pivot(&f, &pivot_of(&[&region]));
     for (i, c) in d.categories.iter().enumerate() {
         assert_eq!(d.values[0][i], pivot.iter().find(|p| &p.0 == c).map(|p| p.1), "{c}: the chart shows the pivot's number");
@@ -304,7 +305,7 @@ fn m1_a_chart_by_a_lookup_field_equals_the_pivot_and_a_drill_region_to_branch_na
     assert_eq!(drill.category, region.name);
     assert_eq!(drill.category_model.as_ref(), Some(&region), "the level's lookup field is the chart's category");
     let top = in_scope(&f, || micro_parquet::charts::calc::compute(lazy(&f), &drill)).expect("level 1");
-    assert_eq!(top.categories, ["Chattogram", "Dhaka", "Khulna", "(blank)", "(no match)"]);
+    assert_eq!(top.categories, ["Chattogram", "Dhaka", "Khulna", "(blank key)", "(no match)"]);
     assert!(drill.drill_down("Dhaka"));
     assert_eq!(drill.category, name.name, "one level down");
     let low = in_scope(&f, || micro_parquet::charts::calc::compute(lazy(&f), &drill)).expect("level 2");
@@ -323,7 +324,7 @@ fn m1_a_chart_by_a_lookup_field_equals_the_pivot_and_a_drill_region_to_branch_na
     let faceted = ChartSpec { facet: Some(region.name.clone()), facet_model: Some(region.clone()), category: "Wing".into(), value: Some("Balance".into()), agg: micro_parquet::charts::spec::ChartAgg::Sum, ..Default::default() };
     let d = in_scope(&f, || micro_parquet::charts::calc::compute(lazy(&f), &faceted)).expect("lookup panels");
     let panels: Vec<String> = d.facets.iter().map(|p| p.name.clone()).collect();
-    assert_eq!(panels.iter().rev().take(2).rev().cloned().collect::<Vec<_>>(), ["(blank)", "(no match)"], "{panels:?}");
+    assert_eq!(panels.iter().rev().take(2).rev().cloned().collect::<Vec<_>>(), ["(blank key)", "(no match)"], "{panels:?}");
     let mut stale = both.clone();
     stale.series = Some("Product code".into());
     stale.drop_stale_date_parts();
@@ -359,7 +360,7 @@ fn m1_a_numeric_lookup_field_in_values_sums_and_counts_and_leaves_the_unmatched_
     // a numeric field as a label is text
     let by_limit = PivotSpec { rows: vec![limit.name.clone()], values: vec![sum_balance()], model_fields: vec![limit.clone()], row_totals: true, column_totals: true, ..Default::default() };
     let p = run_pivot(&f, &by_limit);
-    assert_eq!(p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["1000", "2000", "3000", "4000", "(blank)", "(no match)", "Grand total"]);
+    assert_eq!(p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["1000", "2000", "3000", "4000", "(blank key)", "(no match)", "Grand total"]);
 }
 
 #[test]
@@ -655,4 +656,135 @@ fn m1_repeated_keys_at_the_time_of_a_join_are_refused_in_the_key_checks_words_an
     // a filter takes the same way
     let e = in_scope(&f, || compile_tab_lazy(&f.data.source, &[keep(vec![picked(&r, &["Dhaka"], false)])], &f.d).and_then(|lf| Ok(lf.collect()?))).err().expect("refused");
     assert!(format!("{:#}", e).starts_with("'Branch master' has 2 duplicate keys."), "{e:#}");
+}
+
+
+// ------------------------------------------------------------------------------------------------ S6: three labels (M1-12 replaced)
+
+/// Accounts with every kind of row a lookup field can meet: B2 has a lookup row whose Region, Limit and Opened are blank (A3 200,
+/// A7 10), B9 has no lookup row (A6 50, A8 7), and two keys are blank (A10 25 is missing, A11 5 is only spaces). All 1,900.
+fn three_fx(name: &str) -> Fx {
+    let d = dir(name);
+    let data = DataFrame::new(vec![
+        opt_strs("Branch", &[Some("B1"), Some("B1"), Some("B2"), Some("B3"), Some("B4"), Some("B9"), Some("B2"), Some("B9"), Some("B5"), None, Some("  ")]),
+        nums("Balance", &[100.0, 300.0, 200.0, 400.0, 800.0, 50.0, 10.0, 7.0, 3.0, 25.0, 5.0]),
+        strs("AC Number", &["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11"]),
+    ])
+    .expect("data");
+    let lookup = DataFrame::new(vec![
+        strs("Code", &["B1", "B2", "B3", "B4", "B5"]),
+        opt_strs("Region", &[Some("Dhaka"), None, Some("Khulna"), Some("Chattogram"), Some("Sylhet")]),
+        Series::new("Limit".into(), [Some(1000.0), None, Some(3000.0), Some(4000.0), Some(5000.0)]),
+        dates("Opened", &[Some("2020-01-31"), None, Some("2021-06-30"), Some("2022-12-31"), Some("2023-03-31")]),
+    ])
+    .expect("lookup");
+    let link = Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: None };
+    Fx { d: d.clone(), data: tab("t1", "Accounts", parquet(&d, "accounts_3", &data)), lookup: tab("t2", "Branch master", parquet(&d, "master_3", &lookup)), link }
+}
+
+fn flag_blank_key(mut c: FilterCondition) -> FilterCondition {
+    c.blank_key = true;
+    c
+}
+
+#[test]
+fn m1_a_pivot_by_a_text_a_number_and_a_date_lookup_column_has_three_separate_rows_blank_blank_key_no_match_in_that_order_and_the_total_is_the_ungrouped_total() {
+    let f = three_fx("p9m1_three_pivot");
+    for column in ["Region", "Limit", "Opened"] {
+        let r = field(&f, column);
+        let spec = PivotSpec {
+            rows: vec![r.name.clone()],
+            values: vec![sum_balance(), PivotValue { field: "AC Number".into(), agg: PivotAgg::Count, weight_col: None }],
+            row_totals: true,
+            column_totals: true,
+            model_fields: vec![r.clone()],
+            ..Default::default()
+        };
+        let b = in_scope(&f, || build_pivot(lazy(&f), &spec)).expect("pivot");
+        let names: Vec<String> = b.df.get_column_names().iter().map(|n| n.to_string()).collect();
+        let labels: Vec<String> = strings(&b.df, &names[0]).into_iter().map(|l| l.unwrap_or_default()).collect();
+        let n = labels.len();
+        assert_eq!(labels[n - 4..], ["(blank)", "(blank key)", "(no match)", "Grand total"], "{column}: three rows, in that order, last: {labels:?}");
+        let sums = floats(&b.df, &names[1]);
+        let counts = floats(&b.df, &names[2]);
+        let at = |l: &str| labels.iter().position(|x| x == l).expect(l);
+        assert_eq!((sums[at("(blank)")], counts[at("(blank)")]), (Some(210.0), Some(2.0)), "{column}: the matched row B2 with a blank cell (200 + 10)");
+        assert_eq!((sums[at("(blank key)")], counts[at("(blank key)")]), (Some(30.0), Some(2.0)), "{column}: the missing and the only-spaces keys (25 + 5)");
+        assert_eq!((sums[at("(no match)")], counts[at("(no match)")]), (Some(57.0), Some(2.0)), "{column}: the unmatched key B9 (50 + 7)");
+        let total = sum_of(&lazy(&f).collect().expect("accounts"), "Balance");
+        assert_eq!(sums[at("Grand total")], Some(total), "{column}: the total equals the ungrouped total");
+        assert_eq!(sums.iter().take(n - 1).flatten().sum::<f64>(), total, "{column}: the rows add up to it");
+        assert_eq!(counts[at("Grand total")], Some(11.0), "{column}: and so does the count");
+    }
+}
+
+#[test]
+fn m1_a_filter_on_blank_blank_key_and_no_match_keeps_exactly_each_ones_rows_the_three_sets_never_overlap_and_the_flag_is_its_own_field() {
+    let f = three_fx("p9m1_three_filter");
+    for column in ["Region", "Limit", "Opened"] {
+        let r = field(&f, column);
+        let blank = run_filter(&f, picked(&r, &[], true));
+        let blank_key = run_filter(&f, picked(&r, &["(blank key)"], false));
+        let no_match = run_filter(&f, picked(&r, &["(no match)"], false));
+        assert_eq!(blank, ["A3", "A7"], "{column}: (blank) is the matched row with a blank cell");
+        assert_eq!(blank_key, ["A10", "A11"], "{column}: (blank key) is the missing and the only-spaces keys");
+        assert_eq!(no_match, ["A6", "A8"], "{column}: (no match) is the key with no lookup row");
+        for (a, b) in [(&blank, &blank_key), (&blank, &no_match), (&blank_key, &no_match)] {
+            assert!(a.iter().all(|x| !b.contains(x)), "{column}: the sets don't overlap");
+        }
+        let all_three = run_filter(&f, flag_blank_key(picked(&r, &["(no match)"], true)));
+        assert_eq!(all_three, ["A3", "A6", "A7", "A8", "A10", "A11"], "{column}: all three together");
+        let rest = run_filter(&f, FilterCondition { op: CondOp::NotInList, ..flag_blank_key(picked(&r, &["(no match)"], true)) });
+        assert_eq!(rest, ["A1", "A2", "A4", "A5", "A9"], "{column}: not in the three keeps the rest");
+        // leaving one out keeps the others, the matched rows too
+        let not_blank_key = run_filter(&f, FilterCondition { op: CondOp::NotInList, ..picked(&r, &["(blank key)"], false) });
+        assert_eq!(not_blank_key, ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9"], "{column}: not in (blank key)");
+    }
+    // the flag is a field of its own, written only when on, and an old condition loads with it off
+    let r = field(&f, "Region");
+    let on = picked(&r, &["(blank key)"], false);
+    assert!(on.blank_key && !on.no_match && !on.or_blank && on.values.is_empty(), "the picker's '(blank key)' became the flag, not a value");
+    let json = serde_json::to_string(&on).expect("json");
+    assert!(json.contains("\"blank_key\":true") && !json.contains("no_match"), "{json}");
+    assert!(!serde_json::to_string(&picked(&r, &["Dhaka"], false)).expect("json").contains("blank_key"), "an old condition is written as it was");
+    let back: FilterCondition = serde_json::from_str(&json).expect("back");
+    assert_eq!(back, on);
+    let old: FilterCondition = serde_json::from_str(r#"{"column":"Region","op":"InList","values":["Dhaka"],"no_match":true}"#).expect("old");
+    assert!(!old.blank_key && old.no_match);
+    assert_eq!(on.describe(), "Branch master \u{203a} Region is in list (blank key)");
+}
+
+#[test]
+fn m1_show_rows_from_each_of_the_three_rows_gives_exactly_that_cells_rows_and_a_chart_shows_the_same_three() {
+    let f = three_fx("p9m1_three_show");
+    for column in ["Region", "Limit"] {
+        let r = field(&f, column);
+        let spec = pivot_of(&[&r]);
+        let b = in_scope(&f, || build_pivot(lazy(&f), &spec)).expect("pivot");
+        let names: Vec<String> = b.df.get_column_names().iter().map(|n| n.to_string()).collect();
+        let labels: Vec<String> = pairs(&b.df).into_iter().map(|p| p.0).collect();
+        for (label, rows, sum) in [("(blank)", vec!["A3", "A7"], 210.0), ("(blank key)", vec!["A10", "A11"], 30.0), ("(no match)", vec!["A6", "A8"], 57.0)] {
+            let row = labels.iter().position(|l| l == label).expect(label);
+            let c = cell_rows(&spec, &b, row, &names[1]).expect("show rows");
+            assert!(c.conditions.iter().all(|c| c.values.iter().all(|v| v != "(no match)" && v != "(blank key)")), "{label}: the flags, never values");
+            let out = in_scope(&f, || filter_by_conditions(lazy(&f), &c.conditions).and_then(|lf| Ok(lf.collect()?))).expect("rows");
+            assert_eq!(ids(&out), rows, "{column} {label}: the rows tab has the cell's rows");
+            assert_eq!(sum_of(&out, "Balance"), sum, "{column} {label}: its control total equals the cell");
+        }
+    }
+    // the chart's categories are the pivot's labels, in the same order, with the same numbers, and a mark's rows are the cell's
+    let r = field(&f, "Region");
+    let spec = ChartSpec { category: r.name.clone(), category_model: Some(r.clone()), value: Some("Balance".into()), agg: micro_parquet::charts::spec::ChartAgg::Sum, ..Default::default() };
+    let d = in_scope(&f, || micro_parquet::charts::calc::compute(lazy(&f), &spec)).expect("the chart");
+    assert_eq!(d.categories, ["Chattogram", "Dhaka"].iter().chain(["Khulna", "Sylhet"].iter()).chain(["(blank)", "(blank key)", "(no match)"].iter()).map(|s| s.to_string()).collect::<Vec<_>>());
+    let pivot = run_pivot(&f, &pivot_of(&[&r]));
+    for (i, c) in d.categories.iter().enumerate() {
+        assert_eq!(d.values[0][i], pivot.iter().find(|p| &p.0 == c).map(|p| p.1), "{c}: the chart shows the pivot's number");
+    }
+    let level = DrillLevel::of_model(&r);
+    for (label, rows) in [("(blank)", vec!["A3", "A7"]), ("(blank key)", vec!["A10", "A11"]), ("(no match)", vec!["A6", "A8"])] {
+        let c = level.condition(label, true);
+        let out = in_scope(&f, || filter_by_conditions(lazy(&f), &[c]).and_then(|lf| Ok(lf.collect()?))).expect("rows");
+        assert_eq!(ids(&out), rows, "a mark of {label}");
+    }
 }

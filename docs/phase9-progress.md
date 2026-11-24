@@ -7,7 +7,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | P1 | DONE (S1), follow-ups DONE (S2) | (see git log: "Phase 9 P1", "Phase 9 P1: follow-ups") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
 | P2 | DONE (S2), follow-up DONE (S3) | (see git log: "Phase 9 P2") | tests/phase9/p2.rs x16 (subtotals, grand total, leaves, hash of the flat table, three levels, blank lines, Columns, last-step rule, Excel XML, scale, PDF text and indent, CSV and Python, Show rows, old pivots, the sheet limit); render_tests_p9 x5 (the dialog, the tab's bar and undo, Show rows by clicks, steps after the pivot, the pop-out) |
 | M0 | DONE (S3) | (see git log: "Phase 9 M0") | tests/phase9/m0.rs x10 (composite key and duplicates, sorted duplicates, blank keys, unmatched keys and sums, the refusals, project v2 round trip and v1 bytes, the v1.8.0 refusal, relink to a duplicate, the open line and status texts, a tab changed since); render_tests_p9 x5 (the menu with and without a project, Links add/edit/remove and refusals, Key check and its three buttons, project save/open with the open line, pictures) |
-| M1 | DONE (S4), follow-ups DONE (S5) | (see git log: "Phase 9 M1") | tests/phase9/m1.rs x12; render_tests_p9 x7 (field list, chart pickers, filter dialog and value picker, chart filters, Show rows, broken links, closed tab) + 1 picture test |
+| M1 | DONE (S4), follow-ups DONE (S5), three labels DONE (S6) | (see git log: "Phase 9 M1") | tests/phase9/m1.rs x12; render_tests_p9 x7 (field list, chart pickers, filter dialog and value picker, chart filters, Show rows, broken links, closed tab) + 1 picture test |
 | M2 | DONE (S5) | (see git log: "Phase 9 M2") | tests/phase9/m2.rs x11; render_tests_p9 x5 (menu, Calendar dialog, Calendar tab and fields, As-of dialog, pictures) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
@@ -252,3 +252,27 @@ Proved to fail without the fix (stubs, each restored, run one at a time, every r
 - UI: the Calendar tab taking steps: `m2_the_calendar_tab_says_who_makes_it...`. Calendar fields not in Calendar order: the same test. No "As of" in the status bar: `m2_the_as_of_dialog_lists...`. The Calendar not made again for new years: `m2_the_calendar_dialog_turns_the_calendar_on...`, `m2_the_calendar_tab_says_who_makes_it...`, `m2_the_as_of_dialog_lists...`. A change of settings not applied: `m2_the_calendar_dialog_turns_the_calendar_on...`, `m2_the_calendar_tab_says_who_makes_it...`. A text date column accepted in the dialog: `m2_the_calendar_dialog_turns_the_calendar_on...`.
 
 Found on the way: Polars 0.43 `DataFrame::new` takes `Vec<Series>` (no `Column` type). The docked pivot preview shows 20 lines, so the tab test checks the first three months and the count of 20.
+
+
+## S6: the owner's decisions on S5, recorded and done
+
+Written under "Owner decisions on S5" in `docs/phase9-spec.md` `<accepted_deviations>`: M1-13, M1-14, M2-1 to M2-9 accepted; the M1-6 UI test relying on the library test for the wording accepted; date links not counted in "Model: n links" and the Calendar and As-of dialogs applying each change at once accepted. **M1-12 replaced** (three labels), and the date-link rows aligned. `<conventions>` now says "(blank key)".
+
+| Decision | Test |
+| --- | --- |
+| M1-12: a pivot by a text, a number and a date lookup column has three separate rows, (blank) then (blank key) then (no match), with the right sums and counts; the total equals the ungrouped total | `m1_a_pivot_by_a_text_a_number_and_a_date_lookup_column_has_three_separate_rows_blank_blank_key_no_match_in_that_order_and_the_total_is_the_ungrouped_total` (Region, Limit, Opened; 210 / 30 / 57, counts 2 / 2 / 2, total 1,900, 11 rows) |
+| M1-12: a filter on each keeps exactly its rows; the three sets don't overlap; the flag is its own field (`FilterCondition.blank_key`, written only when on, old files load with it off) | `m1_a_filter_on_blank_blank_key_and_no_match_keeps_exactly_each_ones_rows_the_three_sets_never_overlap_and_the_flag_is_its_own_field` (A3 A7 / A10 A11 / A6 A8 for a text, a number and a date column; all three together; not in; JSON) |
+| M1-12: Show rows from each pivot row matches the cell; chart marks and categories match the pivot | `m1_show_rows_from_each_of_the_three_rows_gives_exactly_that_cells_rows_and_a_chart_shows_the_same_three` |
+| M1-12: the picker lists all three by a real click at 3 sizes (the tab's filter) | UI `m1_the_value_picker_lists_blank_blank_key_and_no_match_last_in_that_order_for_a_text_and_a_number_lookup_column_and_a_real_click_on_each_keeps_exactly_its_rows_at_three_sizes` (light and dark; Region: each of the three clicked, its own flag only, Apply keeps 1 / 2 / 8 rows with sums 1,000 / 4,970 / 19,480; Limit: (blank key)) |
+| M1-12: "Filters on this chart" lists each one that occurs | UI `m1_filters_on_this_chart_list_blank_blank_key_and_no_match_each_with_its_own_flag_and_the_chart_shows_the_three_light_and_dark_at_three_sizes` (the chart's five categories, the tick list, un-ticking (blank key) then (no match) moves one flag each) |
+| Older tests that said "(blank)" for a blank key | updated to "(blank key)" in `tests/phase9/m1.rs` (five assertions) |
+| Date-link rows aligned: the same box width on every row | UI `m2_the_date_link_rows_have_the_same_box_width_and_left_edge_at_three_sizes` (four rows, one with a 70-character title; same width and same left edge, inside the dialog; light and dark) |
+
+Proved to fail without the fix (stubs, each restored, run one at a time, every run finished):
+- blank keys shown as "(blank)" again: lib `m1_a_pivot_by_a_text_a_number...`, `m1_show_rows_from_each...`, and the five older tests.
+- the "(blank key)" flag ignored in the filter: lib `m1_a_filter_on_blank_blank_key_and_no_match...`, `m1_show_rows_from_each...`, `m1_a_filter_on_no_match_keeps_exactly...`.
+- "(blank key)" sorted before "(blank)": lib `m1_a_pivot_by_a_text_a_number...`, `m1_show_rows_from_each...`.
+- the picker not storing the "(blank key)" flag: lib `m1_a_filter_on_blank_blank_key...`, `m1_a_filter_on_no_match_keeps_exactly...`; UI `m1_filters_on_this_chart_list...`, `m1_the_value_picker_lists...`.
+- date-link rows sized by their title (the old code, `horizontal_wrapped`): `m2_the_date_link_rows_have_the_same_box_width_and_left_edge_at_three_sizes` failed with "'Date column: Accounts' starts at 411.43, the first row's box at 407.62" before the fix.
+
+Choices M1-15 to M1-17 are in `<accepted_deviations>`.

@@ -1879,7 +1879,13 @@ fn m1_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {
 
 /// `m1_rig` with another branch master, and what the key check must say before the test goes on.
 fn m1_rig_with(name: &str, ppp: f32, w: f32, h: f32, dark: bool, master: DataFrame, status: &dyn Fn(&LinkStatus) -> bool) -> (Rig, String) {
-    let mut rig = rig9(name, ppp, w, h);
+    m1_rig_book(name, ppp, w, h, dark, book9(), master, status)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn m1_rig_book(name: &str, ppp: f32, w: f32, h: f32, dark: bool, book: DataFrame, master: DataFrame, status: &dyn Fn(&LinkStatus) -> bool) -> (Rig, String) {
+    let mut rig = rig8(name, ppp, w, h, book);
+    rig.ctx.set_embed_viewports(false);
     rig.app.dark_mode = dark;
     let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
     rig.app.project.active = true;
@@ -2200,6 +2206,50 @@ fn m1_filters_on_this_chart_take_a_lookup_field_and_its_tick_list_has_no_match_l
 }
 
 #[test]
+fn m1_filters_on_this_chart_list_blank_blank_key_and_no_match_each_with_its_own_flag_and_the_chart_shows_the_three_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_rig_book("p9m1cflt3", ppp, w, h, dark, book_with_blank_keys(), master_with_blank_cells(false), &|s| *s == LinkStatus::OkUnmatched(8));
+            rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+            rig.draw(4);
+            pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+            let want = region_ref(&rig);
+            let spec = micro_parquet::charts::spec::ChartSpec { category: want.name.clone(), category_model: Some(want), value: Some("Balance".into()), agg: micro_parquet::charts::spec::ChartAgg::Sum, kind: micro_parquet::charts::spec::ChartKind::Bar, top_n: 50, ..Default::default() };
+            rig.app.chart_set_spec(spec);
+            pump_until(&mut rig, &what, &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 5));
+            let d = rig.app.chart.data.clone().expect("data");
+            assert_eq!(d.categories, ["Ctg", "Dhaka", "(blank)", "(blank key)", "(no match)"], "{what}: the chart shows the three, last, in that order");
+            let by: Vec<f64> = d.values[0].iter().flatten().copied().collect();
+            assert_eq!(&by[2..], [M1_BLANK_CELL, M1_BLANK_KEY, M1_UNMATCHED], "{what}: their sums");
+            click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+            click_field(&mut rig, "Values: Category");
+            wait_list(&mut rig);
+            let rows: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+            assert_eq!(rows, ["Ctg", "Dhaka", "(blank)", "(blank key)", "(no match)"], "{what}: the tick list has each, last");
+            // untick (blank key) by a real click: the others stay, and it is the condition's own flag
+            let b = crate::ui::render_tests_p8::tick_box(&mut rig, "(blank key)");
+            click_rect(&mut rig, b);
+            rig.draw(4);
+            let c = rig.app.chart.spec.filters[0].clone();
+            assert_eq!((c.or_blank, c.blank_key, c.no_match, c.values.clone()), (true, false, true, vec!["Ctg".to_string(), "Dhaka".to_string()]), "{what}: {c:?}");
+            pump_until(&mut rig, "the filtered chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 4));
+            let d = rig.app.chart.data.clone().expect("data");
+            assert_eq!(d.categories, ["Ctg", "Dhaka", "(blank)", "(no match)"], "{what}");
+            assert_eq!(micro_parquet::charts::spec::ChartSpec::filter_text(&c), "Branch master \u{203a} Region = Ctg or Dhaka or (blank) or (no match)", "{what}");
+            // tick it again and untick (no match): each flag moves alone
+            click_rect(&mut rig, b);
+            rig.draw(4);
+            let b2 = crate::ui::render_tests_p8::tick_box(&mut rig, "(no match)");
+            click_rect(&mut rig, b2);
+            rig.draw(4);
+            let c = rig.app.chart.spec.filters.first().cloned();
+            assert!(c.as_ref().is_some_and(|c| c.or_blank && c.blank_key && !c.no_match), "{what}: {c:?}");
+            assert_eq!(rig.app.tabs[0].total_rows, 150, "{what}: the tab is not changed");
+        }
+    }
+}
+
+#[test]
 fn m1_show_rows_from_a_pivot_cell_and_a_chart_mark_grouped_by_a_lookup_field_give_the_cells_rows_and_sum_at_three_sizes() {
     for (ppp, w, h) in SIZES3 {
         let (mut rig, what) = m1_rig("p9m1rows", ppp, w, h, false);
@@ -2490,6 +2540,85 @@ fn m1_the_value_picker_of_a_number_lookup_column_lists_blank_and_no_match_last_a
     }
 }
 
+/// The 150 accounts of `book9`, but B149 and B150 have a blank key (a missing one and one of spaces).
+fn book_with_blank_keys() -> DataFrame {
+    let mut keys: Vec<Option<String>> = (0..150).map(|i| Some(format!("B{:03}", i + 1))).collect();
+    keys[148] = None;
+    keys[149] = Some("  ".to_string());
+    let book = book9();
+    DataFrame::new(vec![Series::new("Branch".into(), keys).into(), book.column("Product").expect("Product").clone(), book.column("Balance").expect("Balance").clone()]).expect("book")
+}
+
+/// The master of 140 branches whose first row (B001) has a blank Region and a blank Limit.
+fn master_with_blank_cells(limit_first: bool) -> DataFrame {
+    let n = 140usize;
+    let df = DataFrame::new(vec![
+        Series::new("Code".into(), (0..n).map(|i| format!("B{:03}", i + 1)).collect::<Vec<_>>()).into(),
+        Series::new("Region".into(), (0..n).map(|i| if i == 0 { None } else if i < 70 { Some("Dhaka") } else { Some("Ctg") }).collect::<Vec<Option<&str>>>()).into(),
+        Series::new("Limit".into(), (0..n).map(|i| if i == 0 { None } else if i < 70 { Some(1000.0) } else { Some(2000.0) }).collect::<Vec<Option<f64>>>()).into(),
+    ])
+    .expect("master");
+    // the column list shows its first rows only, so the column under test comes second
+    if limit_first {
+        df.select(["Code", "Limit", "Region"]).expect("columns")
+    } else {
+        df
+    }
+}
+
+/// B001 (1,000), B149 and B150 (blank keys: 2,480 + 2,490), B141 to B148 (no match: 2,400 to 2,470, 19,480).
+const M1_BLANK_CELL: f64 = 1000.0;
+const M1_BLANK_KEY: f64 = 4970.0;
+const M1_UNMATCHED: f64 = 19_480.0;
+
+#[test]
+fn m1_the_value_picker_lists_blank_blank_key_and_no_match_last_in_that_order_for_a_text_and_a_number_lookup_column_and_a_real_click_on_each_keeps_exactly_its_rows_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            for (column, which) in [("Region", 0usize), ("Region", 1), ("Region", 2), ("Limit", 1)] {
+                let (mut rig, what) = m1_rig_book("p9m1three", ppp, w, h, dark, book_with_blank_keys(), master_with_blank_cells(column == "Limit"), &|s| *s == LinkStatus::OkUnmatched(8));
+                let what = format!("{what} {column} #{which}");
+                let _ = m1_filter_on(&mut rig, &what, column);
+                assert!(rig.app.filter.conditions[0].lookup.is_some(), "{what}: the lookup column was picked: {:?} status {:?}", rig.app.filter.conditions[0], model_status(&rig, 0));
+                let pick = rig.app.filter.pick_buttons.first().map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the picker button"));
+                click_rect(&mut rig, pick);
+                for _ in 0..200 {
+                    settle(&mut rig.app);
+                    rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+                    rig.draw(2);
+                    if rig.app.picker.rects.rows.iter().any(|(t, _)| t == "(no match)") {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                rig.draw(3);
+                let rows: Vec<String> = rig.app.picker.rects.rows.iter().map(|(t, _)| t.clone()).collect();
+                let n = rows.len();
+                assert!(n >= 5, "{what}: the values and the three labels: {rows:?} field={} error={:?} lookup={:?} cond={:?}", rig.app.picker.field, rig.app.picker.error, rig.app.picker.lookup.is_some(), rig.app.filter.conditions);
+                assert_eq!(&rows[n - 3..], ["(blank)", "(blank key)", "(no match)"], "{what}: three entries of their own, in that order, last: {rows:?}");
+                // the three boxes do not overlap and are all in the window
+                let boxes: Vec<egui::Rect> = ["(blank)", "(blank key)", "(no match)"].iter().map(|l| rig.app.picker.rects.boxes.iter().find(|(t, _)| t == l).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the {l} box"))).collect();
+                assert!(boxes[0].bottom() <= boxes[1].top() + 0.5 && boxes[1].bottom() <= boxes[2].top() + 0.5, "{what}: one under the other: {boxes:?}");
+                // a real click on one of them stores its own flag and nothing else
+                let label = ["(blank)", "(blank key)", "(no match)"][which];
+                click_rect(&mut rig, boxes[which]);
+                let c = rig.app.filter.conditions[0].clone();
+                assert_eq!((c.or_blank, c.blank_key, c.no_match), (which == 0, which == 1, which == 2), "{what}: only the flag of {label}: {c:?}");
+                assert!(c.values.is_empty(), "{what}: a flag, never a value: {c:?}");
+                let p = rig.draw(2);
+                let apply = last_box(&p, "\u{E182}  Apply to current tab", 0.0).unwrap_or_else(|| panic!("{what}: Apply"));
+                click_rect(&mut rig, apply);
+                settle(&mut rig.app);
+                let (want_rows, want_sum) = [(1usize, M1_BLANK_CELL), (2, M1_BLANK_KEY), (8, M1_UNMATCHED)][which];
+                pump_until(&mut rig, "the filtered tab", &|r| r.app.tabs[0].total_rows == want_rows);
+                let df = rows_under_model(&rig, 0);
+                assert_eq!(df.height(), want_rows, "{what}: exactly the rows of {label}");
+                assert_eq!(sum_balance_of(&df), want_sum, "{what}: {label}");
+            }
+        }
+    }
+}
+
 #[test]
 fn m1_a_lookup_that_gets_a_repeated_key_after_the_check_is_refused_in_the_key_checks_words_and_its_link_shows_broken_without_reopening_the_project() {
     use crate::ui::render_tests_p8::menu_item;
@@ -2762,6 +2891,33 @@ fn m2_the_calendar_dialog_turns_the_calendar_on_changes_its_settings_makes_date_
     }
 }
 
+/// The date-link rows of Model > Calendar... have one box width and one left edge, whatever the tab's title (S6).
+#[test]
+fn m2_the_date_link_rows_have_the_same_box_width_and_left_edge_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m2_rig("p9m2aligned", ppp, w, h, dark);
+            // a title much longer than the others, so a row that sizes itself by its title would show it
+            open_table(&mut rig, "Quarterly deposits trial balance extract of the Islamic wing 2026", m2_gl());
+            let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+            rig.app.project.keys.insert(ids[3], "t4".into());
+            menu_item9(&mut rig, "Model", "Calendar");
+            cal_checkbox(&mut rig);
+            pump(&mut rig, "the Calendar tab", &|r| r.app.model_calendar_tab().is_some());
+            rig.draw(3);
+            let boxes: Vec<(String, egui::Rect)> = cal_rects(&rig).combos.iter().filter(|(n, _)| n.starts_with("Date column: ")).cloned().collect();
+            assert!(boxes.len() >= 4, "{what}: one row for each data tab: {:?}", boxes.iter().map(|b| b.0.clone()).collect::<Vec<_>>());
+            let first = boxes[0].1;
+            for (n, b) in &boxes {
+                assert!((b.width() - first.width()).abs() < 0.5, "{what}: '{n}' is {} wide, the first row's box {}", b.width(), first.width());
+                assert!((b.left() - first.left()).abs() < 0.5, "{what}: '{n}' starts at {}, the first row's box at {}", b.left(), first.left());
+            }
+            let r = assert_dialog_fits(&rig.ctx, &cal_title(), &what);
+            assert!(boxes.iter().all(|(_, b)| b.right() <= r.window.right() + 0.5), "{what}: every box is inside the dialog");
+        }
+    }
+}
+
 /// Scrolls the Calendar dialog to the end of its snapshot section and draws it.
 fn reveal_notes(rig: &mut Rig) -> Painted {
     let last = |r: &Rig| cal_rects(r).notes.last().map(|n| n.2).unwrap_or_else(|| panic!("{}: a snapshot note", r.what));
@@ -2835,7 +2991,7 @@ fn rows_under_model_fy(rig: &Rig) -> Vec<String> {
     let t = &rig.app.tabs[1];
     let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t2").expect("the date link");
     let f = ModelFieldRef::new(&link, "Accounts \u{2192} Calendar", "Calendar", "Fiscal year");
-    let wants = [model::LookupWant { field: f.clone(), out: f.name.clone(), as_: model::LookupAs::Text, unmatched_out: None }];
+    let wants = [model::LookupWant { field: f.clone(), out: f.name.clone(), as_: model::LookupAs::Text, unmatched_out: None, blank_key_out: None }];
     let df = model::with_scope(rig.app.project.model_ui.scope.clone(), || {
         let lf = micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles");
         model::with_lookup_columns(lf, &wants, "Test").expect("the join").select([polars::prelude::col(f.name.as_str())]).unique_stable(None, polars::prelude::UniqueKeepStrategy::First).collect().expect("collects")

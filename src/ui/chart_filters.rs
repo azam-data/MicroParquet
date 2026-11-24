@@ -222,7 +222,7 @@ impl MicroParquetApp {
             for (label, key) in &fields {
                 let existing = spec.filters.iter().find(|c| c.op == CondOp::InList && FieldKey::of_condition(c) == *key);
                 let summary = match existing {
-                    Some(c) => format!("{} kept", c.values.len() + usize::from(c.or_blank) + usize::from(c.no_match)),
+                    Some(c) => format!("{} kept", c.values.len() + usize::from(c.or_blank) + usize::from(c.no_match) + usize::from(c.blank_key)),
                     None => "all values".to_string(),
                 };
                 ui.horizontal(|ui| {

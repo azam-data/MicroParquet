@@ -61,7 +61,7 @@ pub fn condition_problem(c: &FilterCondition) -> Option<String> {
         return None;
     }
     if is_pick_op(c.op) {
-        return if c.values.is_empty() && !c.or_blank && !c.no_match && c.value.trim().is_empty() { Some(format!("{}: pick at least one value.", c.column)) } else { part_problem(c) };
+        return if c.values.is_empty() && !c.or_blank && !c.no_match && !c.blank_key && c.value.trim().is_empty() { Some(format!("{}: pick at least one value.", c.column)) } else { part_problem(c) };
     }
     if c.value.trim().is_empty() {
         return Some(format!("{}: enter a value.", c.column));
@@ -336,7 +336,7 @@ impl MicroParquetApp {
                             picker.owner = None;
                         }
                         if is_pick_op(c.op) {
-                            let n = picker_selection(c).len() + usize::from(c.no_match && c.lookup.is_some());
+                            let n = picker_selection(c).len() + usize::from(c.no_match && c.lookup.is_some()) + usize::from(c.blank_key && c.lookup.is_some());
                             let label = format!("{}  \u{25be}", micro_parquet::value_picker::picker_summary(n, c.or_blank, totals.get(&pick_field).copied()));
                             let b = ui.add(egui::Button::new(label).min_size(egui::vec2(theme::FIELD_W_PICK, 0.0)));
                             picker_buttons_seen.push((i, b.rect));
