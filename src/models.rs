@@ -1472,11 +1472,163 @@ pub enum TimeAgg {
     WAvgAtClosing,
 }
 
-/// The time part of a value (`PivotValue.time`). A struct so that M4 can add its window and shift without changing the file.
+/// The window of a time value (Phase 9 M4): the days its aggregation reads.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeWindow {
+    /// The cell's own period (a Calendar field of Rows or Columns).
+    #[default]
+    Period,
+    /// The month of the anchor, up to the anchor.
+    Mtd,
+    /// The fiscal quarter of the anchor, up to the anchor.
+    Qtd,
+    /// The fiscal year of the anchor, up to the anchor.
+    Ytd,
+}
+
+impl TimeWindow {
+    pub fn all() -> &'static [TimeWindow] {
+        &[TimeWindow::Period, TimeWindow::Mtd, TimeWindow::Qtd, TimeWindow::Ytd]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeWindow::Period => "Period",
+            TimeWindow::Mtd => "MTD",
+            TimeWindow::Qtd => "QTD",
+            TimeWindow::Ytd => "YTD",
+        }
+    }
+}
+
+/// Which earlier window a time value is set against.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeShift {
+    #[default]
+    None,
+    /// The window one of its own units back (a month, a quarter, a year; a Period by its field's unit).
+    PriorPeriod,
+    /// The window one year back (same period last year).
+    Sply,
+}
+
+impl TimeShift {
+    pub fn all() -> &'static [TimeShift] {
+        &[TimeShift::None, TimeShift::PriorPeriod, TimeShift::Sply]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeShift::None => "None",
+            TimeShift::PriorPeriod => "Prior period",
+            TimeShift::Sply => "Same period last year",
+        }
+    }
+    /// How a heading names it.
+    pub fn short(self) -> &'static str {
+        match self {
+            TimeShift::None => "",
+            TimeShift::PriorPeriod => "Prior period",
+            TimeShift::Sply => "SPLY",
+        }
+    }
+}
+
+/// What a time value shows once it has its window and shift.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeShow {
+    /// The value of the window (of the shifted window, when there is a shift).
+    #[default]
+    Value,
+    /// This window's value minus the shifted window's.
+    Difference,
+    /// (this - earlier) / |earlier| in percent.
+    PercentChange,
+}
+
+impl TimeShow {
+    pub fn all() -> &'static [TimeShow] {
+        &[TimeShow::Value, TimeShow::Difference, TimeShow::PercentChange]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeShow::Value => "Value",
+            TimeShow::Difference => "Difference",
+            TimeShow::PercentChange => "% change",
+        }
+    }
+}
+
+/// What the shifted window covers when the current window is cut by the as-of date.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimePartial {
+    /// The same day numbers (1-24 Nov 2026 against 1-24 Nov 2025).
+    #[default]
+    SameDays,
+    /// The whole shifted period (all of Nov 2025).
+    FullPeriod,
+}
+
+impl TimePartial {
+    pub fn all() -> &'static [TimePartial] {
+        &[TimePartial::SameDays, TimePartial::FullPeriod]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimePartial::SameDays => "Same days",
+            TimePartial::FullPeriod => "Full period",
+        }
+    }
+}
+
+fn is_default_choice<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// The time part of a value (`PivotValue.time`, `MeasureSpec.time`): its aggregation (M3) and, from M4, its window, shift, what it
+/// shows and how a partial period is shifted. The M4 choices are not written while they are the defaults, so M3 files keep their bytes.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct TimeValue {
     #[serde(default)]
     pub agg: TimeAgg,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub window: TimeWindow,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub shift: TimeShift,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub show: TimeShow,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub partial: TimePartial,
+}
+
+impl TimeValue {
+    /// A value with the aggregation and every M4 choice at its default.
+    pub fn of(agg: TimeAgg) -> TimeValue {
+        TimeValue { agg, ..Default::default() }
+    }
+
+    /// True when the value uses a window, shift or show of M4 (the M3 numbers are those of the other values).
+    pub fn is_m4(&self) -> bool {
+        self.window != TimeWindow::Period || self.shift != TimeShift::None || self.show != TimeShow::Value
+    }
+
+    /// The heading: "Closing balance of Balance", "Average balance of Balance \u{b7} YTD \u{b7} vs SPLY %". `month_end` is true on a
+    /// Month-end tab, where the average is of the month-ends.
+    pub fn heading(&self, field: &str, weight: Option<&str>, month_end: bool) -> String {
+        let mut h = self.agg.heading(field, weight, month_end);
+        if self.window != TimeWindow::Period {
+            h.push_str(&format!(" \u{b7} {}", self.window.label()));
+        }
+        if self.shift != TimeShift::None {
+            match self.show {
+                TimeShow::Value => h.push_str(&format!(" \u{b7} {}", self.shift.short())),
+                TimeShow::Difference => h.push_str(&format!(" \u{b7} vs {}", self.shift.short())),
+                TimeShow::PercentChange => h.push_str(&format!(" \u{b7} vs {} %", self.shift.short())),
+            }
+            if self.partial == TimePartial::FullPeriod {
+                h.push_str(" \u{b7} full period");
+            }
+        }
+        h
+    }
 }
 
 /// One value field of a pivot table.
@@ -1498,7 +1650,7 @@ impl PivotValue {
     /// "Sum of Balance", "W.Avg of Rate by Balance", "Closing balance of Balance".
     pub fn label(&self) -> String {
         if let Some(t) = &self.time {
-            return t.agg.heading(&self.field, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), false);
+            return t.heading(&self.field, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), false);
         }
         match (&self.agg, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty())) {
             (PivotAgg::WeightedAvg, Some(w)) => format!("W.Avg of {} by {}", self.field, w),

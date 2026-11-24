@@ -189,6 +189,70 @@ impl CalendarSettings {
     }
 }
 
+/// The length of a period a Calendar field names (Phase 9 M4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PeriodUnit {
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+}
+
+/// The last day of a month.
+fn days_in_month(year: i32, month: u32) -> u32 {
+    let (y, m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    NaiveDate::from_ymd_opt(y, m, 1).and_then(|d| d.pred_opt()).map(|d| d.day()).unwrap_or(28)
+}
+
+/// The first day of the date's month.
+pub fn month_start(d: NaiveDate) -> NaiveDate {
+    NaiveDate::from_ymd_opt(d.year(), d.month(), 1).unwrap_or(d)
+}
+
+/// The last day of the date's month.
+pub fn month_end(d: NaiveDate) -> NaiveDate {
+    NaiveDate::from_ymd_opt(d.year(), d.month(), days_in_month(d.year(), d.month())).unwrap_or(d)
+}
+
+/// The date `n` months later (earlier when negative), the day number clamped to the month's last day: 31 Mar - 1 month = 28 Feb,
+/// 29 Feb 2028 - 12 months = 28 Feb 2027.
+pub fn add_months(d: NaiveDate, n: i32) -> NaiveDate {
+    let total = d.year() * 12 + d.month() as i32 - 1 + n;
+    let (y, m) = (total.div_euclid(12), total.rem_euclid(12) as u32 + 1);
+    NaiveDate::from_ymd_opt(y, m, d.day().min(days_in_month(y, m))).unwrap_or(d)
+}
+
+/// `add_months` for the end of a period: the last day of a month stays the last day of the month it moves to (30 Apr - 1 month = 31
+/// Mar), any other day is clamped.
+pub fn add_months_end(d: NaiveDate, n: i32) -> NaiveDate {
+    if d == month_end(d) {
+        month_end(add_months(month_start(d), n))
+    } else {
+        add_months(d, n)
+    }
+}
+
+impl CalendarSettings {
+    /// The first day of the fiscal quarter the date is in.
+    pub fn fiscal_quarter_start(&self, d: NaiveDate) -> NaiveDate {
+        add_months(month_start(d), -(((self.fiscal_month(d) - 1) % 3) as i32))
+    }
+
+    pub fn fiscal_quarter_end(&self, d: NaiveDate) -> NaiveDate {
+        month_end(add_months(self.fiscal_quarter_start(d), 2))
+    }
+
+    /// The first day of the fiscal year the date is in.
+    pub fn fiscal_year_start(&self, d: NaiveDate) -> NaiveDate {
+        add_months(month_start(d), -((self.fiscal_month(d) - 1) as i32))
+    }
+
+    pub fn fiscal_year_end(&self, d: NaiveDate) -> NaiveDate {
+        month_end(add_months(self.fiscal_year_start(d), 11))
+    }
+}
+
 /// The type of the column a date part writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartType {
@@ -314,6 +378,19 @@ impl DatePart {
     pub fn from_label(text: &str) -> Option<DatePart> {
         let t = text.trim().to_lowercase();
         DatePart::ALL.into_iter().find(|p| p.label().to_lowercase() == t)
+    }
+
+    /// The length of the one period a part names (Year, Year-Quarter, Month-Year, Week starting, Date, Fiscal year), or `None` for a
+    /// part that mixes years (Month, Quarter, Day name, Week of year, Fiscal quarter, Fiscal month ...).
+    pub fn period_unit(self) -> Option<PeriodUnit> {
+        match self {
+            DatePart::Year | DatePart::FiscalYear => Some(PeriodUnit::Year),
+            DatePart::YearQuarter => Some(PeriodUnit::Quarter),
+            DatePart::MonthYear => Some(PeriodUnit::Month),
+            DatePart::WeekStarting => Some(PeriodUnit::Week),
+            DatePart::Date => Some(PeriodUnit::Day),
+            _ => None,
+        }
     }
 
     pub fn part_type(self) -> PartType {

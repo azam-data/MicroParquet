@@ -432,6 +432,10 @@ def lab(v, kind="amount", signed=False):
 
 /// The script for a chart.
 pub fn chart_to_python(data: &ChartData, opts: &LayoutOpts) -> Result<String> {
+    // a time value (Phase 9 M4) needs the model of a project: a script has no links or calendar to follow
+    if data.spec.measure_list().iter().any(|m| m.time.is_some()) {
+        anyhow::bail!("{}", crate::model::PYTHON_REFUSAL);
+    }
     t::with_text_scale(data.spec.text_size.factor(), || chart_to_python_scaled(data, opts))
 }
 

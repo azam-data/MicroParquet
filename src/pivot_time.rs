@@ -263,10 +263,47 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         })
         .collect();
     let first_snap = timeline.snapshots.first().copied();
-    let mut periods: HashMap<Vec<Option<Option<String>>>, (Vec<NaiveDate>, String)> = HashMap::new();
+
+    // M4: what the Calendar fields of Rows and Columns name. A field that names one period (Year, Year-Quarter, Month-Year, Week
+    // starting, Date, Fiscal year) gives the cell its period and its unit; one that mixes years (Month, Quarter, Day name ...) gives none.
+    let mut period_unit: Option<crate::dates::PeriodUnit> = None;
+    let mut mixing: Option<String> = None;
+    for &i in &cal_at {
+        let column = spec.model_fields.iter().find(|f| &f.name == fields[i]).map(|f| f.column.clone()).unwrap_or_default();
+        match crate::dates::DatePart::from_label(&column).and_then(|p| p.period_unit()) {
+            Some(u) => period_unit = Some(period_unit.map_or(u, |x| x.min(u))),
+            None => {
+                if mixing.is_none() {
+                    mixing = Some(fields[i].replacen(" \u{b7} ", " \u{203a} ", 1));
+                }
+            }
+        }
+    }
+    // the refusals of the M4 choices that need no data
+    for &j in &time_js {
+        let v = &spec.values[j];
+        let Some(t) = v.time else { continue };
+        if t.show != TimeShow::Value && t.shift == TimeShift::None {
+            bail!("Pivot: '{}' shows a difference or a % change, which needs a shift. Choose Prior period or Same period last year, or show the Value.", v.label());
+        }
+        if t.is_m4() {
+            if let Some(m) = &mixing {
+                bail!("Pivot: '{}' mixes years. Use Month-Year (or Year, Year-Quarter, Week starting, Date, Fiscal year) for the period of '{}'.", m, v.label());
+            }
+            if t.window == TimeWindow::Period && period_unit.is_none() {
+                bail!("Pivot: '{}': Add a Calendar field that names a period (Calendar \u{203a} Month-Year, for example) to Rows or Columns, or choose MTD, QTD or YTD.", v.label());
+            }
+        }
+    }
+
+    struct PeriodInfo {
+        days: Vec<NaiveDate>,
+        text: String,
+        base: Option<crate::measures::Base>,
+    }
+    let mut periods: HashMap<Vec<Option<Option<String>>>, PeriodInfo> = HashMap::new();
     let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))) };
     for (rk, ck) in targets {
-        let level_len = (rk.len(), ck.len());
         // the cell's non-Calendar key, in field order
         let mut nc_key: Vec<Option<String>> = Vec::new();
         let mut want_keys: Vec<usize> = Vec::new();
@@ -287,74 +324,100 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 if present { cell_texts(&rk, &ck, nr, i) } else { None }
             })
             .collect();
-        let entry = periods
-            .entry(cal_key.clone())
-            .or_insert_with(|| {
-                if cal_at.is_empty() {
-                    // no Calendar field: the whole span, from the first snapshot date to the as-of date
-                    let mut days = Vec::new();
-                    if let Some(first) = first_snap {
-                        let mut d = first;
-                        while d <= as_of {
-                            days.push(d);
-                            match d.succ_opt() {
-                                Some(n) => d = n,
-                                None => break,
-                            }
-                        }
-                    }
-                    let text = match (days.first(), days.last()) {
-                        (Some(a), Some(b)) => format!("{} to {}", long_date(*a), long_date(*b)),
-                        _ => format!("the period up to {}", long_date(as_of)),
-                    };
-                    return (days, text);
+        let entry = periods.entry(cal_key.clone()).or_insert_with(|| {
+            if cal_at.is_empty() {
+                // no Calendar field: the whole span, from the first snapshot date to the as-of date
+                let mut days = Vec::new();
+                if let Some(first) = first_snap {
+                    days = crate::measures::days_between(first, as_of);
                 }
-                let mut days: Vec<NaiveDate> = Vec::new();
-                for (idx, d) in cal_days.iter().enumerate() {
-                    if *d > as_of {
-                        continue;
-                    }
-                    let mut ok = true;
-                    for n in 0..cal_at.len() {
-                        let label = &cal_labels[n][idx];
-                        let fits = match &cal_key[n] {
-                            Some(Some(t)) => label == t,
-                            Some(None) => false,
-                            None => shown[n].contains(label),
-                        };
-                        if !fits || (cal_filtered[n] && !cal_filters[n].contains(label)) {
-                            ok = false;
-                            break;
-                        }
-                    }
-                    if ok {
-                        days.push(*d);
-                    }
-                }
-                days.sort();
-                days.dedup();
-                let labels: Vec<String> = cal_key.iter().filter_map(|k| k.as_ref().map(|t| t.clone().unwrap_or_else(|| crate::pivot_table::BLANK_LABEL.to_string()))).collect();
-                let text = if labels.len() == cal_at.len() && !labels.is_empty() {
-                    labels.join(" \u{b7} ")
-                } else {
-                    match (days.first(), days.last()) {
-                        (Some(a), Some(b)) => format!("{} to {}", long_date(*a), long_date(*b)),
-                        _ => "the period".to_string(),
-                    }
+                let text = match (days.first(), days.last()) {
+                    (Some(a), Some(b)) => format!("{} to {}", long_date(*a), long_date(*b)),
+                    _ => format!("the period up to {}", long_date(as_of)),
                 };
-                (days, text)
-            });
-        let (period, text) = (&entry.0, &entry.1);
+                return PeriodInfo { days, text, base: None };
+            }
+            let mut days: Vec<NaiveDate> = Vec::new();
+            let (mut first_day, mut last_day): (Option<NaiveDate>, Option<NaiveDate>) = (None, None);
+            for (idx, d) in cal_days.iter().enumerate() {
+                let mut ok = true;
+                for n in 0..cal_at.len() {
+                    let label = &cal_labels[n][idx];
+                    let fits = match &cal_key[n] {
+                        Some(Some(t)) => label == t,
+                        Some(None) => false,
+                        None => shown[n].contains(label),
+                    };
+                    if !fits || (cal_filtered[n] && !cal_filters[n].contains(label)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                first_day = Some(first_day.map_or(*d, |x| x.min(*d)));
+                last_day = Some(last_day.map_or(*d, |x| x.max(*d)));
+                if *d <= as_of {
+                    days.push(*d);
+                }
+            }
+            days.sort();
+            days.dedup();
+            let labels: Vec<String> = cal_key.iter().filter_map(|k| k.as_ref().map(|t| t.clone().unwrap_or_else(|| crate::pivot_table::BLANK_LABEL.to_string()))).collect();
+            let text = if labels.len() == cal_at.len() && !labels.is_empty() {
+                labels.join(" \u{b7} ")
+            } else {
+                match (days.first(), days.last()) {
+                    (Some(a), Some(b)) => format!("{} to {}", long_date(*a), long_date(*b)),
+                    _ => "the period".to_string(),
+                }
+            };
+            let base = match (first_day, last_day, period_unit) {
+                (Some(start), Some(end), Some(unit)) => Some(crate::measures::Base { start, end, unit }),
+                _ => None,
+            };
+            PeriodInfo { days, text, base }
+        });
+        let (period, text) = (&entry.days, &entry.text);
         let empty: BTreeMap<NaiveDate, DayStats> = BTreeMap::new();
         for (n, &j) in time_js.iter().enumerate() {
-            let agg = spec.values[j].time.map(|t| t.agg).unwrap_or_default();
+            let tv = spec.values[j].time.unwrap_or_default();
+            let agg = tv.agg;
             let per_date: BTreeMap<NaiveDate, DayStats> = match series[which].get(&nc_key) {
                 Some(m) => m.iter().map(|(d, s)| (*d, s.get(n).copied().unwrap_or_default())).collect(),
                 None => empty.clone(),
             };
-            let m = evaluate(agg, &per_date, period, text, &timeline, month_end);
+            let (m, rows_days): (Measured, Vec<NaiveDate>) = if !tv.is_m4() {
+                (evaluate(agg, &per_date, period, text, &timeline, month_end), period.clone())
+            } else {
+                let plan = match crate::measures::plan(&tv, entry.base, as_of, &timeline.fiscal) {
+                    Ok(p) => p,
+                    Err(e) => bail!("Pivot: '{}': {}", spec.values[j].label(), e),
+                };
+                let (cur_days, cur_text): (Vec<NaiveDate>, String) = match plan.current {
+                    None => (Vec::new(), text.clone()),
+                    Some((a, b)) if tv.window == TimeWindow::Period => {
+                        let _ = (a, b);
+                        (period.clone(), text.clone())
+                    }
+                    Some((a, b)) => (crate::measures::days_between(a, b), format!("{} to {}", long_date(a), long_date(b))),
+                };
+                let current = evaluate(agg, &per_date, &cur_days, &cur_text, &timeline, month_end);
+                match plan.earlier.filter(|_| plan.current.is_some()) {
+                    None => (current, cur_days),
+                    Some((a, b)) => {
+                        let e_days = crate::measures::days_between(a, b);
+                        let e_text = format!("{} to {}", long_date(a), long_date(b));
+                        let earlier = evaluate(agg, &per_date, &e_days, &e_text, &timeline, month_end);
+                        let shows_earlier = tv.show == TimeShow::Value;
+                        let rows_days = if shows_earlier { e_days } else { cur_days };
+                        (crate::measures::combine(tv.show, true, current, Some((earlier, e_text))), rows_days)
+                    }
+                }
+            };
             if m.value().is_some() {
-                if let Some(r) = crate::measures::rows_of(agg, period, &timeline, month_end) {
+                if let Some(r) = crate::measures::rows_of(agg, &rows_days, &timeline, month_end) {
                     out.rows.insert((rk.clone(), ck.clone(), j), r);
                 }
             }
@@ -370,7 +433,6 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 }
             }
         }
-        let _ = level_len;
     }
     Ok(out)
 }

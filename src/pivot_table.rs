@@ -184,7 +184,7 @@ pub fn validate_pivot(schema: &Schema, spec: &PivotSpec) -> Result<()> {
         }
     }
     if spec.show_as != PivotShowAs::NoCalculation {
-        if let Some(v) = spec.values.iter().find(|v| if let Some(t) = &v.time { !t.agg.is_additive() } else { !v.agg.is_additive() }) {
+        if let Some(v) = spec.values.iter().find(|v| if let Some(t) = &v.time { !t.agg.is_additive() || t.is_m4() } else { !v.agg.is_additive() }) {
             bail!(
                 "Pivot: '{}' cannot be shown as a share ({}): parts of an {} do not add up to its total. Use Sum or Count, or choose No calculation.",
                 v.label(),
@@ -487,7 +487,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     let month_end = time_result.as_ref().is_some_and(|t| t.month_end);
     let heading = |v: &PivotValue| -> String {
         match &v.time {
-            Some(t) => t.agg.heading(&v.field, v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), month_end),
+            Some(t) => t.heading(&v.field, v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), month_end),
             None => v.label(),
         }
     };
@@ -679,7 +679,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
             })
             .collect();
         let is_count = match &spec.values[j].time {
-            Some(t) => t.agg.is_count(),
+            Some(t) => t.agg.is_count() && t.show != TimeShow::PercentChange,
             None => matches!(spec.values[j].agg, PivotAgg::Count | PivotAgg::CountDistinct),
         } && spec.show_as == PivotShowAs::NoCalculation;
         // why a time cell is blank: its reason is the cell's tooltip
@@ -1239,6 +1239,9 @@ pub fn distinct_field_values(lf: LazyFrame, field: &str, limit: usize) -> Result
 /// in the pivot's scale (or the global one).
 pub fn pivot_value_format(v: &PivotValue, spec: &PivotSpec, decimals: usize) -> ColumnFormatSpec {
     if spec.show_as != PivotShowAs::NoCalculation {
+        return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 };
+    }
+    if v.time.is_some_and(|t| t.show == TimeShow::PercentChange) {
         return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 };
     }
     if matches!(v.agg, PivotAgg::Count | PivotAgg::CountDistinct) && v.time.is_none() || v.time.is_some_and(|t| t.agg.is_count()) {

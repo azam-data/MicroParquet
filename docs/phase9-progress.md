@@ -11,6 +11,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | M2 | DONE (S5) | (see git log: "Phase 9 M2") | tests/phase9/m2.rs x11; render_tests_p9 x5 (menu, Calendar dialog, Calendar tab and fields, As-of dialog, pictures) |
 | M3 | DONE (S6) | (see git log: "Phase 9 M3") | tests/phase9/m3.rs x15; render_tests_p9 x4 (Measures dialog, aggregation choice, banner and tooltip, pictures) |
 | M3 follow-up | DONE (S7) | (see git log: "Phase 9 M3: follow-ups") | tests/phase9/m3.rs x3 (Show rows on a time cell); render_tests_p9 x2 |
+| M4 | DONE (S7) | (see git log: "Phase 9 M4") | tests/phase9/m4.rs x9; render_tests_p9 x5 (Values choices by clicks, the refusal, a Month-Year pivot, the chart studio, pictures) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -327,3 +328,28 @@ Owner decisions on S6 (24 Nov 2026), also in `<accepted_deviations>` of the spec
 | Render test by a real click at 3 sizes | UI `m3_show_rows_on_a_time_cell_by_a_real_double_click_gives_the_rows_of_its_closing_date_and_a_blank_cell_gives_its_reason_at_three_sizes` (double-click on the Nov closing cell: 10 rows of 24 Nov, their sum is the cell, no note) and `m3_a_blank_time_cell_has_no_show_rows_and_its_menu_item_gives_the_reason_at_three_sizes` (right-click, the item opens nothing and says why) |
 
 Proved to fail without the fix (two stubs, each restored, run one at a time): Closing rows returning every date of the period: `m3_show_rows_of_a_closing_opening_total_or_count_cell...`; Period amount without its Start date: `m3_show_rows_of_a_period_amount...`.
+
+## M4 acceptance: item -> test (S7)
+
+Library: `cargo test -q --test phase3 p9_m4` (9 tests, hand-worked from a daily tab: Balance = days since 31 Dec 2024, so 24 Nov 2025 = 328, 30 Nov 2025 = 334, 24 Nov 2026 = 693; Interest 2 a day in 2025, 1 a day after). UI: `cargo test -q --bin MicroParquet m4_` (5 tests, 3 sizes, light). Deviations M4-1 to M4-11 (spec).
+
+| Acceptance item (spec M4) | Test |
+| --- | --- |
+| as of 24 Nov 2026, MTD Total = 1-24 Nov 2026 (24); SPLY Same days = 1-24 Nov 2025 (48); SPLY Full = all of Nov 2025 (60); closing 328 / 334; difference 365; % (693-328)/328 | `m4_mtd_and_sply_use_the_same_days_by_default_and_the_whole_period_when_asked` (also the seven headings) |
+| as of 31 Mar 2026, Prior period of MTD with Same days = 1-28 Feb (28 against 31), the same with Full | `m4_prior_period_of_mtd_as_of_31_mar_is_1_to_28_feb_and_a_leap_day_goes_to_28_feb_the_next_year` |
+| leap day: as of 29 Feb 2028, SPLY = up to 28 Feb 2027 (29 against 28); 1-30 Mar against 1-28 Feb | same test |
+| YTD with fiscal start July as of 15 Jan 2026 covers 1 Jul 2025-15 Jan 2026 (184 x 2 + 15) | `m4_ytd_with_a_july_fiscal_year_as_of_15_jan_covers_1_jul_to_15_jan` (QTD 15; a January year 15) |
+| pivot by Month-Year: Closing vs Prior period % = (this - last) / abs(last), January against December, 0 -> blank | `m4_a_pivot_by_month_year_shows_each_months_change_against_the_month_before_and_blank_where_that_is_zero` (Dec 2025, Jan 2026, the cut Nov 2026 against 1-24 Oct, Jan 2025 blank with its reason, month-ends 0 / 10 / 20: Feb blank, Mar 100) |
+| Window Period without a period field refused with its message; Calendar > Month refused | `m4_a_period_window_needs_a_period_field_and_a_field_that_mixes_years_is_refused_in_words` (also: MTD needs none, a difference needs a shift, M3 pivots unchanged) |
+| periods after the as-of date blank; the as-of override changes MTD | `m4_a_period_after_the_as_of_date_is_blank_and_the_as_of_date_moves_the_mtd_window` (24 / 10 / 31) |
+| chart of Closing and of Average balance by Month-Year equals the pivot; chart of Closing . vs SPLY % equals the pivot | `m4_a_chart_of_closing_average_and_closing_vs_sply_percent_by_month_year_equals_the_pivot` (also YTD, Prior period, Difference, Full period); UI: the chart's marks equal the pivot tab's cells (`m4_the_chart_studio_lists...`) |
+| files: M3 bytes unchanged, round trip | `m4_the_new_choices_are_written_only_when_used_and_an_m3_file_loads_unchanged`; series: `m4_a_chart_with_a_series_gives_one_line_per_key_and_a_chart_that_mixes_time_and_plain_values_is_refused` |
+| render tests by real clicks at 3 sizes: window, shift, show and partial choices in Values | UI `m4_the_time_button_opens_the_window_shift_show_and_partial_choices_and_each_click_sets_the_value_at_three_sizes` (12 choices, inside the window, no overlap, % change greyed with no shift) |
+| the refusal message | UI `m4_a_shift_without_a_period_field_shows_the_refusal_in_the_preview_and_a_field_that_mixes_years_is_refused_at_three_sizes` |
+| headings at 1219 pt without overlap | UI `m4_a_pivot_by_month_year_of_closing_vs_prior_period_percent_has_its_heading_and_numbers_and_no_overlap_at_three_sizes` |
+
+Not tested by a real click: picking a time aggregation from the chart studio's Aggregation list (the headless click did not open that list in the chart panel; the studio's four rows are asserted to exist and not overlap, and the list is the pivot's pattern). Recorded for the owner to check by eye.
+
+Pictures (light and dark, written by `m4_pictures_...`): `docs/guide/img/pivot-time-choices.png`, `pivot-time-needs-period.png`, `pivot-time-prior-period.png`, `chart-time-sply.png` (each with `-dark`). Found by looking at them: the % columns first showed in Crore (the test helper had no column formats; fixed by passing them) and the chart showed a % divided into Crore (the chart's scale is chosen in the app from the value column; a % change is now never scaled, its tooltip says "%"). In `chart-time-sply` the side panel's own small chart is the chart tab's data, not the M4 chart.
+
+Proved to fail without the fix (two stubs, each restored, run one at a time): Same days ignored (always the full shifted period): `m4_mtd_and_sply...` and `m4_a_pivot_by_month_year...`; a zero earlier value shown as 0 instead of blank: `m4_a_pivot_by_month_year...`.

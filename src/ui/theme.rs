@@ -413,6 +413,10 @@ pub const PIVOT_COMBO_LAYOUT_W: f32 = 160.0;
 pub const PIVOT_COMBO_AGG_W: f32 = 104.0;
 /// The aggregation box of a value that has a time aggregation ("Period amount (YTD balance)").
 pub const PIVOT_COMBO_TIME_W: f32 = 196.0;
+/// The "Time" button of a value that has a time aggregation (window, shift, show, partial period), and its popup.
+pub const PIVOT_TIME_BTN_W: f32 = 54.0;
+pub const PIVOT_TIME_BTN_H: f32 = PIVOT_CHIP_H - 4.0;
+pub const PIVOT_TIME_POPUP_W: f32 = 430.0;
 /// The most height the aggregation list of a value has before it scrolls (7 aggregations, a rule and 8 over time).
 pub const PIVOT_AGG_LIST_H: f32 = 460.0;
 /// The room the aggregation list leaves below it, and the least height it has.

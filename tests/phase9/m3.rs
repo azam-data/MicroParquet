@@ -14,29 +14,29 @@ use micro_parquet::pivot_table::{build_pivot, PivotBuild};
 use polars::prelude::*;
 use std::sync::Arc;
 
-fn d(text: &str) -> NaiveDate {
+pub fn d(text: &str) -> NaiveDate {
     NaiveDate::parse_from_str(text, "%Y-%m-%d").expect("a date")
 }
 
-fn dates(name: &str, v: &[&str]) -> Series {
+pub fn dates(name: &str, v: &[&str]) -> Series {
     let days: Vec<i32> = v.iter().map(|t| micro_parquet::dates::days_from_date(d(t))).collect();
     Series::new(name.into(), days).cast(&DataType::Date).expect("dates")
 }
 
-fn nums(name: &str, v: &[f64]) -> Series {
+pub fn nums(name: &str, v: &[f64]) -> Series {
     Series::new(name.into(), v.to_vec())
 }
 
-fn strs(name: &str, v: &[&str]) -> Series {
+pub fn strs(name: &str, v: &[&str]) -> Series {
     Series::new(name.into(), v.to_vec())
 }
 
-fn settings(fy_start_month: u32) -> CalendarSettings {
+pub fn settings(fy_start_month: u32) -> CalendarSettings {
     CalendarSettings { fy_start_month, week_start: Weekday::Sat }
 }
 
 /// The model the worker reads: the data tab t1 "Accounts" (date column "Date") linked to the Calendar t2, as of `as_of`.
-fn scope(dd: &std::path::Path, cal: CalendarSettings, as_of: &str, kinds: Vec<ColumnKind>) -> Option<Arc<ModelContext>> {
+pub fn scope(dd: &std::path::Path, cal: CalendarSettings, as_of: &str, kinds: Vec<ColumnKind>) -> Option<Arc<ModelContext>> {
     let calendar = ModelTab { key: "t2".into(), title: "Calendar".into(), source: TabSource::Calendar { settings: cal, first_year: 2025, last_year: 2027 }, steps: vec![] };
     Some(Arc::new(ModelContext {
         links: vec![ScopeLink { link: date_link("t1", "Date", "t2"), lookup: Some(calendar), refusal: None }],
@@ -52,19 +52,19 @@ fn scope(dd: &std::path::Path, cal: CalendarSettings, as_of: &str, kinds: Vec<Co
     }))
 }
 
-fn cal_field(column: &str) -> ModelFieldRef {
+pub fn cal_field(column: &str) -> ModelFieldRef {
     ModelFieldRef::new(&date_link("t1", "Date", "t2"), "Accounts \u{2192} Calendar", "Calendar", column)
 }
 
-fn time(field: &str, agg: TimeAgg) -> PivotValue {
-    PivotValue { field: field.into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg }) }
+pub fn time(field: &str, agg: TimeAgg) -> PivotValue {
+    PivotValue { field: field.into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(agg)) }
 }
 
-fn plain(field: &str, agg: PivotAgg) -> PivotValue {
+pub fn plain(field: &str, agg: PivotAgg) -> PivotValue {
     PivotValue { field: field.into(), agg, weight_col: None, time: None }
 }
 
-fn spec(rows: &[&str], columns: &[&str], values: Vec<PivotValue>, calendar: &[&str]) -> PivotSpec {
+pub fn spec(rows: &[&str], columns: &[&str], values: Vec<PivotValue>, calendar: &[&str]) -> PivotSpec {
     PivotSpec {
         rows: rows.iter().map(|r| r.to_string()).collect(),
         columns: columns.iter().map(|r| r.to_string()).collect(),
@@ -82,40 +82,40 @@ fn spec(rows: &[&str], columns: &[&str], values: Vec<PivotValue>, calendar: &[&s
     }
 }
 
-fn month_year() -> String {
+pub fn month_year() -> String {
     cal_field("Month-Year").name
 }
 
-fn run(dd: &std::path::Path, df: &DataFrame, sc: Option<Arc<ModelContext>>, s: &PivotSpec) -> PivotBuild {
+pub fn run(dd: &std::path::Path, df: &DataFrame, sc: Option<Arc<ModelContext>>, s: &PivotSpec) -> PivotBuild {
     let src = parquet(dd, "accounts", df);
     with_scope(sc, || build_pivot(micro_parquet::engine::compile_tab_lazy(&src, &[], dd).expect("accounts"), s)).unwrap_or_else(|e| panic!("the pivot: {e:#}"))
 }
 
-fn run_err(dd: &std::path::Path, df: &DataFrame, sc: Option<Arc<ModelContext>>, s: &PivotSpec) -> String {
+pub fn run_err(dd: &std::path::Path, df: &DataFrame, sc: Option<Arc<ModelContext>>, s: &PivotSpec) -> String {
     let src = parquet(dd, "accounts", df);
     with_scope(sc, || build_pivot(micro_parquet::engine::compile_tab_lazy(&src, &[], dd).expect("accounts"), s)).err().map(|e| format!("{e:#}")).expect("a refusal")
 }
 
-fn names(b: &PivotBuild) -> Vec<String> {
+pub fn names(b: &PivotBuild) -> Vec<String> {
     b.df.get_column_names().iter().map(|n| n.to_string()).collect()
 }
 
-fn labels(b: &PivotBuild) -> Vec<String> {
+pub fn labels(b: &PivotBuild) -> Vec<String> {
     strings(&b.df, &names(b)[0]).into_iter().map(|l| l.unwrap_or_default()).collect()
 }
 
 /// The number of a row (by its label) in a column (by its heading).
-fn at(b: &PivotBuild, row: &str, column: &str) -> Option<f64> {
+pub fn at(b: &PivotBuild, row: &str, column: &str) -> Option<f64> {
     let r = labels(b).iter().position(|l| l == row).unwrap_or_else(|| panic!("no row '{row}' in {:?}", labels(b)));
     assert!(names(b).iter().any(|n| n == column), "no column '{column}' in {:?}", names(b));
     floats(&b.df, column)[r]
 }
 
-fn close(a: Option<f64>, b: f64) -> bool {
+pub fn close(a: Option<f64>, b: f64) -> bool {
     a.is_some_and(|a| (a - b).abs() < 1e-9)
 }
 
-fn balance_kinds() -> Vec<ColumnKind> {
+pub fn balance_kinds() -> Vec<ColumnKind> {
     vec![ColumnKind { tab: "t1".into(), column: "Balance".into(), kind: ColumnTag::Balance }]
 }
 
@@ -238,7 +238,7 @@ fn m3_counts_at_closing_count_each_account_once_whatever_the_number_of_snapshot_
     bal.push(50.0);
     rate.push(40.0);
     let df = DataFrame::new(vec![dates("Date", &d_).into(), strs("AC Number", &ac).into(), nums("Balance", &bal), nums("Rate", &rate)]).expect("data");
-    let w = PivotValue { field: "Rate".into(), agg: PivotAgg::Sum, weight_col: Some("Balance".into()), time: Some(TimeValue { agg: TimeAgg::WAvgAtClosing }) };
+    let w = PivotValue { field: "Rate".into(), agg: PivotAgg::Sum, weight_col: Some("Balance".into()), time: Some(TimeValue::of(TimeAgg::WAvgAtClosing)) };
     let s = spec(&[&month_year()], &[], vec![time("AC Number", TimeAgg::CountAtClosing), time("AC Number", TimeAgg::DistinctCountAtClosing), plain("AC Number", PivotAgg::Count), w], &["Month-Year"]);
     let b = run(&dd, &df, scope(&dd, settings(1), "2026-11-03", vec![]), &s);
     assert_eq!(at(&b, "Nov 2026", "Count at closing of AC Number"), Some(3.0), "the three accounts on 3 Nov, once each");

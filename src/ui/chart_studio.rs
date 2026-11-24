@@ -158,7 +158,7 @@ impl MicroParquetApp {
         spec.measures.clear();
         spec.size = None;
         if s.kind == ChartKind::Heatmap {
-            spec.measures = vec![MeasureSpec { column: spec.value.clone(), agg: spec.agg, weight: None, label: String::new(), transform: Transform::ShareOfSeries, pct: false }];
+            spec.measures = vec![MeasureSpec { column: spec.value.clone(), agg: spec.agg, weight: None, label: String::new(), transform: Transform::ShareOfSeries, pct: false, time: None }];
         }
         if s.keep_order && !s.by_value && spec.order.is_natural() {
             // dates, months and the like sort naturally; an ordered text column keeps its natural order too
@@ -1085,6 +1085,7 @@ impl MicroParquetApp {
         if !spec.measures.is_empty() {
             spec.measures[0].column = spec.value.clone();
             spec.measures[0].agg = spec.agg;
+            spec.measures[0].time = spec.time;
             spec.measures[0].weight = spec.weight.clone();
         }
         // ---- advanced options: JSON merged over the ECharts option of the HTML page

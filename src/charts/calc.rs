@@ -15,6 +15,9 @@ pub fn measure_name(m: &MeasureSpec) -> String {
     if !m.label.trim().is_empty() {
         return m.label.clone();
     }
+    if let (Some(t), Some(c)) = (&m.time, &m.column) {
+        return t.heading(c, m.weight.as_deref().map(str::trim).filter(|w| !w.is_empty()), false);
+    }
     match (&m.column, m.agg) {
         (_, crate::chart::ChartAgg::Count) | (None, _) => "Count of rows".to_string(),
         (Some(v), a) => format!("{} of {}", a.title_word(), v),
@@ -76,6 +79,10 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         let schema = lf.collect_schema().context("Could not read the column types for the chart")?;
         crate::dates::with_date_fields(lf, &fields, &schema, "Chart")?
     };
+    // time values (M4): the pivot's own calculation, so a chart shows the pivot's number
+    if spec.measure_list().iter().any(|m| m.time.is_some()) {
+        return compute_time_chart(lf, spec);
+    }
     // the stock warning (M3): a Sum or Count of a column tagged Balance over rows of more than one date
     let warnings = if spec.data_tab.is_empty() {
         Vec::new()
@@ -93,6 +100,140 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let lf = crate::model::with_lookup_columns(lf, &chart_lookup_wants(spec), "Chart")?;
     let mut data = compute_on(lf, spec)?;
     data.notes.extend(warnings);
+    Ok(data)
+}
+
+/// A chart whose measures are time values (Phase 9 M4): the same value type as the pivot, worked out by the pivot's own code
+/// (`build_pivot`) for the chart's category (rows) and series (columns), so a mark is exactly the pivot's cell. The categories come
+/// in the pivot's order (Calendar order for a Calendar field). A chart filter or a drill level has already taken its rows away, so
+/// the tab's snapshot dates are those of the rows left.
+fn compute_time_chart(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    use crate::models::{PivotAgg, PivotFieldOrder, PivotSpec, PivotValue};
+    let measures = spec.measure_list();
+    if measures.iter().any(|m| m.time.is_none()) {
+        bail!("Chart: a time value (Closing balance, Average balance, a shift ...) can't share a chart with an ordinary aggregation yet. Use time values for every measure of this chart, or none.");
+    }
+    if matches!(spec.kind, ChartKind::Scatter | ChartKind::Bubble | ChartKind::Histogram | ChartKind::BoxPlot) {
+        bail!("Chart: time values are drawn as columns, bars, lines or areas by a category. Choose one of those forms, or an ordinary aggregation.");
+    }
+    if spec.facet.as_deref().is_some_and(|f| !f.trim().is_empty()) || spec.size.is_some() {
+        bail!("Chart: time values can't be split into small multiples or sized yet. Remove the facet and the size, or use an ordinary aggregation.");
+    }
+    if !spec.date_fields().is_empty() {
+        bail!("Chart: a time value takes its period from a Calendar field (Model \u{25b8} Calendar\u{2026}), and '{}' is a date part of the tab's own column. Use the Calendar field instead.", spec.date_fields().first().map(|f| f.name.clone()).unwrap_or_default());
+    }
+    if spec.data_tab.is_empty() {
+        bail!("Chart: a time value needs a date-linked data tab in a project. Save the tabs as a project, turn on the calendar and link this tab's date column (Model \u{25b8} Calendar\u{2026}).");
+    }
+    if spec.category.trim().is_empty() {
+        bail!("Chart: choose a category (a Calendar field such as Calendar \u{203a} Month-Year) for the time values.");
+    }
+    let settings = crate::model::scope().and_then(|c| c.calendar.as_ref().map(|c| c.settings)).unwrap_or_default();
+    let mut model_fields = spec.model_fields();
+    model_fields.retain(|f| Some(f.name.as_str()) == Some(spec.category.as_str()) || spec.series.as_deref() == Some(f.name.as_str()));
+    let field_orders: Vec<PivotFieldOrder> = model_fields
+        .iter()
+        .filter_map(|f| crate::dates::DatePart::from_label(&f.column).and_then(|p| p.sort_order(&settings)).map(|order| PivotFieldOrder { field: f.name.clone(), order }))
+        .collect();
+    let series_field = spec.series.clone().filter(|s| !s.trim().is_empty());
+    let pivot = PivotSpec {
+        rows: vec![spec.category.clone()],
+        columns: series_field.iter().cloned().collect(),
+        values: measures.iter().map(|m| PivotValue { field: m.column.clone().unwrap_or_default(), agg: PivotAgg::Sum, weight_col: m.weight.clone(), time: m.time }).collect(),
+        row_totals: false,
+        column_totals: false,
+        model_fields,
+        field_orders,
+        data_tab: spec.data_tab.clone(),
+        ..Default::default()
+    };
+    let total_rows = lf.clone().select([len().alias("__n")]).collect().context("Chart: the rows could not be counted")?.column("__n")?.cast(&DataType::UInt64)?.u64()?.get(0).unwrap_or(0);
+    let build = crate::pivot_table::build_pivot(lf, &pivot).context("Chart")?;
+    let df = &build.df;
+    let categories: Vec<String> = df.column(df.get_column_names().first().map(|n| n.as_str()).unwrap_or(""))?.str()?.into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+    let n = categories.len();
+    // the series: the Columns keys in the pivot's order (one unnamed series with no series field)
+    let mut series: Vec<String> = Vec::new();
+    let mut keys: Vec<Vec<Option<String>>> = Vec::new();
+    for k in &build.col_keys {
+        if !keys.contains(k) {
+            keys.push(k.clone());
+            series.push(k.first().cloned().flatten().unwrap_or_default());
+        }
+    }
+    let mut grids: Vec<Vec<Vec<Option<f64>>>> = vec![vec![vec![None; n]; series.len()]; measures.len()];
+    let mut heads: Vec<String> = measures.iter().map(measure_name).collect();
+    for (c, name) in df.get_column_names().iter().enumerate().skip(build.label_columns) {
+        let (Some(&j), Some(key)) = (build.col_values.get(c - build.label_columns), build.col_keys.get(c - build.label_columns)) else { continue };
+        let Some(si) = keys.iter().position(|k| k == key) else { continue };
+        let vals: Vec<Option<f64>> = df.column(name.as_str())?.cast(&DataType::Float64)?.f64()?.into_iter().collect();
+        for (ci, v) in vals.into_iter().enumerate().take(n) {
+            grids[j][si][ci] = v;
+        }
+        // the pivot's heading names the value (a Month-end tab says "Average of month-ends")
+        if measures[j].label.trim().is_empty() {
+            heads[j] = if measures.len() > 1 && series_field.is_some() { name.as_str().split_once(" | ").map(|x| x.1.to_string()).unwrap_or_else(|| name.to_string()) } else if series_field.is_some() { heads[j].clone() } else { name.to_string() };
+        }
+    }
+    let rows_of = |g: &Vec<Vec<Option<f64>>>| -> Vec<Vec<u64>> { g.iter().map(|r| r.iter().map(|v| v.is_some() as u64).collect()).collect() };
+    let limit = match spec.kind {
+        ChartKind::Bar => Some((MAX_BARS, "bars or columns")),
+        ChartKind::Heatmap => Some((MAX_HEAT_COLUMNS, "heatmap columns")),
+        _ => None,
+    };
+    if let Some((limit, what)) = limit {
+        if n > limit {
+            bail!("Chart: '{}' would give {} {}, and more than {} cannot be read side by side. Use a filter to show fewer.", spec.category, n, what, limit);
+        }
+    }
+    // a % change is already a percent: its measure says so (no Crore scale on it)
+    let mut shown_spec = spec.clone();
+    if measures.iter().any(|m| m.time.is_some_and(|t| t.show == crate::models::TimeShow::PercentChange)) {
+        shown_spec.measures = measures.iter().cloned().map(|mut m| { m.pct = m.time.is_some_and(|t| t.show == crate::models::TimeShow::PercentChange); m }).collect();
+    }
+    let mut data = ChartData {
+        spec: shown_spec,
+        categories: categories.clone(),
+        series: series.clone(),
+        values: grids[0].clone(),
+        rows: rows_of(&grids[0]),
+        total_rows,
+        distinct_categories: n,
+        folded_categories: 0,
+        notes: build.warnings.clone(),
+        kept_categories: categories.clone(),
+        kept_series: series.clone(),
+        measure_names: heads.clone(),
+        ..Default::default()
+    };
+    for (k, g) in grids.iter().enumerate().skip(1) {
+        data.extra.push(MeasureData { name: heads[k].clone(), values: g.clone(), rows: rows_of(g) });
+    }
+    // why a mark is missing: the reason of the first few blank cells
+    let mut why: Vec<String> = Vec::new();
+    for cell in build.notes.iter().take(4) {
+        if let Some(label) = categories.get(cell.row) {
+            why.push(format!("{}: {}", label, cell.text));
+        }
+    }
+    if build.notes.len() > 4 {
+        why.push(format!("and {} more blank values", build.notes.len() - 4));
+    }
+    data.notes.extend(why);
+    finite_or_stop(&data.values, &data.categories, &data.series, measures[0].column.as_deref().unwrap_or("Count of rows"))?;
+    for (k, m) in measures.iter().enumerate() {
+        if m.transform == Transform::None {
+            continue;
+        }
+        let src = if k == 0 { &data.values } else { &data.extra[k - 1].values };
+        let (out, notes) = apply_transform(src, m.transform);
+        data.notes.extend(notes);
+        if k == 0 {
+            data.values = out;
+        } else {
+            data.extra[k - 1].values = out;
+        }
+    }
     Ok(data)
 }
 

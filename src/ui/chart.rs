@@ -147,7 +147,7 @@ impl MicroParquetApp {
 
     /// The same for the chart of tab `tab` (a project opens charts of tabs that are not the active one).
     pub(crate) fn chart_scale_of(&self, spec: &ChartSpec, tab: Option<&TabState>) -> Option<MoneyScale> {
-        if spec.agg == ChartAgg::Count {
+        if spec.agg == ChartAgg::Count || Self::chart_is_percent_change(spec) {
             return None;
         }
         match spec.scale.fixed() {
@@ -160,10 +160,18 @@ impl MicroParquetApp {
         }
     }
 
+    /// The chart's first measure is a time value shown as a % change (Phase 9 M4): a percent, never divided into Crore.
+    pub(crate) fn chart_is_percent_change(spec: &ChartSpec) -> bool {
+        spec.measure_list().first().and_then(|m| m.time).is_some_and(|t| t.show == micro_parquet::models::TimeShow::PercentChange)
+    }
+
     /// One value as the tooltip writes it: in the chart's scale, or in the column's own format.
     pub(crate) fn chart_value_text(&self, spec: &ChartSpec, v: f64) -> String {
         if spec.agg == ChartAgg::Count {
             return format_with_commas(v, 0);
+        }
+        if Self::chart_is_percent_change(spec) {
+            return format!("{}%", format_with_commas(v, 2));
         }
         if let Some(s) = spec.scale.fixed() {
             return match s {
@@ -609,6 +617,8 @@ impl MicroParquetApp {
         let parts = self.chart_date_parts();
         let groups = self.chart_model_groups();
         let warning = theme::tokens(self.dark_mode).warning;
+        // a date-linked data tab of a project: the values can have a time aggregation (Phase 9 M4, one value type with the pivot)
+        let time_choices = !self.pivot_data_tab(tab.id).is_empty();
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
@@ -653,14 +663,26 @@ impl MicroParquetApp {
             add(ui, "Series", rects, r.response.rect);
             ui.end_row();
             ui.label("Aggregation");
-            let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.agg.label()).show_ui(ui, |ui| {
+            let agg_text = spec.time.map(|t| t.agg.label()).unwrap_or(spec.agg.label());
+            let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(agg_text).show_ui(ui, |ui| {
                 for a in ChartAgg::all() {
-                    ui.selectable_value(&mut spec.agg, *a, a.label());
+                    if ui.selectable_label(spec.time.is_none() && spec.agg == *a, a.label()).clicked() {
+                        spec.agg = *a;
+                        spec.time = None;
+                    }
+                }
+                if time_choices {
+                    ui.separator();
+                    for t in micro_parquet::models::TimeAgg::all() {
+                        if ui.selectable_label(spec.time.map(|x| x.agg) == Some(*t), t.label()).clicked() {
+                            spec.time = Some(micro_parquet::models::TimeValue { agg: *t, ..spec.time.unwrap_or_default() });
+                        }
+                    }
                 }
             });
             add(ui, "Aggregation", rects, r.response.rect);
             ui.end_row();
-            if spec.agg.needs_value() {
+            if spec.time.is_some() || spec.agg.needs_value() {
                 ui.label("Value");
                 let shown = spec.value.clone().unwrap_or_else(|| "(choose)".to_string());
                 let r = egui::ComboBox::from_id_salt("chart_value").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
@@ -671,7 +693,7 @@ impl MicroParquetApp {
                 add(ui, "Value", rects, r.response.rect);
                 ui.end_row();
             }
-            if spec.agg == ChartAgg::WeightedAvg {
+            if spec.time.map(|t| t.agg == micro_parquet::models::TimeAgg::WAvgAtClosing).unwrap_or(spec.agg == ChartAgg::WeightedAvg) {
                 ui.label("by");
                 let shown = spec.weight.clone().unwrap_or_else(|| "(choose)".to_string());
                 let r = egui::ComboBox::from_id_salt("chart_weight").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
@@ -681,6 +703,51 @@ impl MicroParquetApp {
                 });
                 add(ui, "Weight", rects, r.response.rect);
                 ui.end_row();
+            }
+            // window, shift, what it shows and the partial period of a time value
+            if let Some(mut t) = spec.time {
+                use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+                ui.label("Window");
+                let r = egui::ComboBox::from_id_salt("chart_t_window").width(theme::CHART_COMBO_NARROW_W).selected_text(t.window.label()).show_ui(ui, |ui| {
+                    for w in TimeWindow::all() {
+                        ui.selectable_value(&mut t.window, *w, w.label());
+                    }
+                });
+                add(ui, "Window", rects, r.response.rect);
+                ui.end_row();
+                ui.label("Shift");
+                let r = egui::ComboBox::from_id_salt("chart_t_shift").width(theme::CHART_COMBO_NARROW_W).selected_text(t.shift.label()).show_ui(ui, |ui| {
+                    for x in TimeShift::all() {
+                        ui.selectable_value(&mut t.shift, *x, x.label());
+                    }
+                });
+                add(ui, "Shift", rects, r.response.rect);
+                ui.end_row();
+                ui.label("Show");
+                let r = egui::ComboBox::from_id_salt("chart_t_show").width(theme::CHART_COMBO_NARROW_W).selected_text(t.show.label()).show_ui(ui, |ui| {
+                    for x in TimeShow::all() {
+                        // a difference or a % change is against the shifted window
+                        if ui.add_enabled(*x == TimeShow::Value || t.shift != TimeShift::None, egui::SelectableLabel::new(t.show == *x, x.label())).clicked() {
+                            t.show = *x;
+                        }
+                    }
+                });
+                add(ui, "Show", rects, r.response.rect);
+                ui.end_row();
+                ui.label("Partial period");
+                let r = ui.add_enabled_ui(t.shift != TimeShift::None, |ui| {
+                    egui::ComboBox::from_id_salt("chart_t_partial").width(theme::CHART_COMBO_NARROW_W).selected_text(t.partial.label()).show_ui(ui, |ui| {
+                        for x in TimePartial::all() {
+                            ui.selectable_value(&mut t.partial, *x, x.label());
+                        }
+                    })
+                });
+                add(ui, "Partial period", rects, r.inner.response.rect);
+                ui.end_row();
+                if t.shift == TimeShift::None && t.show != TimeShow::Value {
+                    t.show = TimeShow::Value;
+                }
+                spec.time = Some(t);
             }
             ui.label("Type");
             let r = egui::ComboBox::from_id_salt("chart_kind").width(combo_w).selected_text(spec.kind.label()).show_ui(ui, |ui| {

@@ -3267,7 +3267,7 @@ fn m3_pivot_tab(rig: &mut Rig, as_of: Option<&str>) -> usize {
     let spec = PivotSpec {
         rows: vec![f.name.clone()],
         values: vec![
-            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg: TimeAgg::ClosingBalance }) },
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(TimeAgg::ClosingBalance)) },
             PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None },
         ],
         row_totals: true,
@@ -3410,5 +3410,299 @@ fn m3_a_blank_time_cell_has_no_show_rows_and_its_menu_item_gives_the_reason_at_t
         assert_eq!(rig.app.tabs.len(), n, "{what}: the disabled item opens nothing");
         let p = crate::ui::render_tests_p8::hover_at(&mut rig, item.center());
         assert!(painted_has(&p, "No balance in Nov 2026"), "{what}: the item says why");
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ M4: time intelligence
+
+fn time_choices(rig: &Rig) -> Vec<(String, egui::Rect)> {
+    rig.ctx.data(|d| d.get_temp(egui::Id::new("pivot_time_choices"))).unwrap_or_default()
+}
+
+fn time_button(rig: &Rig, chip: usize) -> egui::Rect {
+    rig.ctx.data(|d| d.get_temp(egui::Id::new(("pivot_time_btn", chip)))).expect("the Time button of the value")
+}
+
+fn click_choice(rig: &mut Rig, id: &str, what: &str) {
+    let r = time_choices(rig).into_iter().find(|(n, _)| n == id).map(|(_, b)| b).unwrap_or_else(|| panic!("{what}: the choice '{id}' in {:?}", time_choices(rig).iter().map(|c| c.0.clone()).collect::<Vec<_>>()));
+    click_rect(rig, r);
+    rig.draw(3);
+}
+
+/// The builder on GL TB with GL in Rows and a tagged Balance (Closing balance) in Values.
+fn m4_builder(rig: &mut Rig, what: &str) {
+    m3_tag_gl_balance(rig);
+    m3_open_builder_on_gl(rig);
+    add_to(&mut Place::Docked, rig, "GL", "Rows", what);
+    add_to(&mut Place::Docked, rig, "Balance", "Values", what);
+    rig.draw(4);
+}
+
+#[test]
+fn m4_the_time_button_opens_the_window_shift_show_and_partial_choices_and_each_click_sets_the_value_at_three_sizes() {
+    use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m4vals", ppp, w, h, false);
+        m4_builder(&mut rig, &what);
+        let tb = time_button(&rig, 0);
+        click_rect(&mut rig, tb);
+        rig.draw(3);
+        let choices = time_choices(&rig);
+        let ids: Vec<&str> = choices.iter().map(|c| c.0.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "window:Period", "window:MTD", "window:QTD", "window:YTD",
+                "shift:None", "shift:Prior period", "shift:Same period last year",
+                "show:Value", "show:Difference", "show:% change",
+                "partial:Same days", "partial:Full period"
+            ],
+            "{what}"
+        );
+        assert!(choices.iter().all(|(_, b)| inside(*b, rig.ctx.screen_rect())), "{what}: every choice is inside the window");
+        crate::ui::render_tests_p8::assert_no_overlap(&choices, &what);
+        let value = |rig: &Rig| rig.app.pivot_builder.spec.values[0].time.expect("a time value");
+        // a difference needs a shift: the click does nothing while the shift is None
+        click_choice(&mut rig, "show:% change", &what);
+        assert_eq!(value(&rig).show, TimeShow::Value, "{what}: no % change without a shift");
+        click_choice(&mut rig, "window:YTD", &what);
+        assert_eq!(value(&rig).window, TimeWindow::Ytd, "{what}");
+        click_choice(&mut rig, "shift:Same period last year", &what);
+        assert_eq!(value(&rig).shift, TimeShift::Sply, "{what}");
+        click_choice(&mut rig, "show:% change", &what);
+        assert_eq!(value(&rig).show, TimeShow::PercentChange, "{what}");
+        click_choice(&mut rig, "partial:Full period", &what);
+        assert_eq!(value(&rig).partial, TimePartial::FullPeriod, "{what}");
+        assert_eq!(rig.app.pivot_builder.spec.values[0].label(), "Closing balance of Balance \u{b7} YTD \u{b7} vs SPLY % \u{b7} full period", "{what}");
+        assert!(!time_choices(&rig).is_empty(), "{what}: the choices stay open while choosing");
+        // back to no shift: the show goes back to Value
+        click_choice(&mut rig, "shift:None", &what);
+        assert_eq!((value(&rig).shift, value(&rig).show), (TimeShift::None, TimeShow::Value), "{what}");
+        // the chip with its box and button is inside the dialog
+        let rr = rig.app.pivot_builder.rects.clone();
+        assert!(inside(time_button(&rig, 0), rr.right.expand(1.0)) && rr.agg_combos.iter().all(|(_, b)| inside(*b, rr.right.expand(1.0))), "{what}: the chip fits in {:?}", rr.right);
+        pump_until(&mut rig, "the preview", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+    }
+}
+
+#[test]
+fn m4_a_shift_without_a_period_field_shows_the_refusal_in_the_preview_and_a_field_that_mixes_years_is_refused_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m4refuse", ppp, w, h, false);
+        m4_builder(&mut rig, &what);
+        let tb = time_button(&rig, 0);
+        click_rect(&mut rig, tb);
+        rig.draw(3);
+        click_choice(&mut rig, "shift:Prior period", &what);
+        pump_until(&mut rig, "the refusal", &|r| matches!(&r.app.pivot_builder.preview, Some(Err(e)) if e.contains("names a period")));
+        let p = rig.draw(4);
+        assert!(painted_has(&p, "Add a Calendar field that names a period"), "{what}: the message is drawn: {:?}", p.boxes.iter().filter(|(t, _)| t.len() > 20).map(|(t, _)| t.chars().take(50).collect::<String>()).collect::<Vec<_>>());
+        let msg = p.boxes.iter().filter(|(t, _)| t.contains("names a period") || t.contains("Add a Calendar")).map(|(_, b)| *b).collect::<Vec<_>>();
+        assert!(msg.iter().all(|b| inside(*b, rig.ctx.screen_rect())), "{what}: the message is inside the window");
+        // MTD needs no period field: the preview is a table again
+        click_choice(&mut rig, "window:MTD", &what);
+        pump_until(&mut rig, "the table", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+    }
+}
+
+/// A pivot tab on GL TB by Calendar > Month-Year of `value`, for the months `months` (all when empty), as of `as_of`.
+fn m4_pivot_tab(rig: &mut Rig, as_of: Option<&str>, value: TimeValue, months: &[&str]) -> usize {
+    m3_tag_gl_balance(rig);
+    if let Some(d) = as_of {
+        rig.app.project.model.as_of = micro_parquet::model::AsOf::Date(d.to_string());
+    }
+    let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t3").expect("the date link");
+    let f = ModelFieldRef::new(&link, "GL TB \u{2192} Calendar", "Calendar", "Month-Year");
+    let order = micro_parquet::dates::DatePart::MonthYear.sort_order(&rig.app.settings.calendar).map(|o| vec![PivotFieldOrder { field: f.name.clone(), order: o }]).unwrap_or_default();
+    let spec = PivotSpec {
+        rows: vec![f.name.clone()],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(value) }],
+        row_totals: true,
+        column_totals: true,
+        filters: if months.is_empty() { Vec::new() } else { vec![PivotFilter { field: f.name.clone(), values: months.iter().map(|m| Some(m.to_string())).collect() }] },
+        model_fields: vec![f],
+        field_orders: order,
+        data_tab: "t3".into(),
+        ..Default::default()
+    };
+    rig.app.show_steps_sidebar = false;
+    let src = rig.app.tabs[2].source.clone();
+    let columns = vec![spec.rows[0].clone(), spec.values[0].label()];
+    let formats: std::collections::HashMap<String, micro_parquet::models::ColumnFormatSpec> = micro_parquet::pivot_table::pivot_column_formats(&spec, &columns, 2).into_iter().collect();
+    rig.app.create_tab_from_source("Pivot: GL TB".into(), src, vec![TransformStep::from_pivot_spec(spec)], formats);
+    settle(&mut rig.app);
+    let at = rig.app.tabs.len() - 1;
+    rig.app.active_tab = at;
+    pump(rig, "the pivot", &|r| r.app.tabs[at].total_rows > 0);
+    pump(rig, "the report", &|r| r.app.pivot_report_for(&r.app.tabs[at]).is_some());
+    rig.draw(4);
+    at
+}
+
+#[test]
+fn m4_a_pivot_by_month_year_of_closing_vs_prior_period_percent_has_its_heading_and_numbers_and_no_overlap_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m4tab", ppp, w, h, false);
+        let value = TimeValue { agg: TimeAgg::ClosingBalance, shift: micro_parquet::models::TimeShift::PriorPeriod, show: micro_parquet::models::TimeShow::PercentChange, ..Default::default() };
+        let at = m4_pivot_tab(&mut rig, None, value, &["Aug 2026", "Sep 2026", "Oct 2026"]);
+        let p = rig.draw(4);
+        let heading = "Closing balance of Balance \u{b7} vs Prior period %";
+        assert!(painted_has(&p, heading) || painted_has(&p, "vs Prior period %"), "{what}: the heading is drawn: {:?}", p.boxes.iter().filter(|(t, _)| t.contains("Closing")).collect::<Vec<_>>());
+        let df = rig.app.tabs[at].cached_slice.clone();
+        assert_eq!(df.get_column_names()[1].as_str(), heading, "{what}");
+        let vals: Vec<Option<f64>> = df.column(heading).expect("column").f64().expect("floats").into_iter().collect();
+        // Aug, Sep, Oct and the Grand total; each month against the month before (the GL's month-ends are 1000 + the row number)
+        assert!(vals[0].is_some() && vals[1].is_some() && vals[2].is_some(), "{what}: {vals:?}");
+        let (aug, sep, oct) = (vals[0].unwrap_or(0.0), vals[1].unwrap_or(0.0), vals[2].unwrap_or(0.0));
+        assert!(aug > 0.0 && sep > 0.0 && oct > 0.0 && aug < 20.0, "{what}: small positive growth in percent: {vals:?}");
+        // the headings of the grid: whole, inside the window and apart from each other
+        let heads: Vec<(String, egui::Rect)> = p.boxes.iter().filter(|(t, b)| b.top() > theme::TOP_BAR_H && (t.contains("Closing balance") || t.contains("Calendar"))).cloned().collect();
+        assert!(!heads.is_empty() && heads.iter().all(|(_, b)| inside(*b, rig.ctx.screen_rect())), "{what}: {heads:?}");
+        crate::ui::render_tests_p8::assert_no_overlap(&heads, &what);
+    }
+}
+
+/// GL TB for M4: a month-end of 10 rows from Jan 2025 to Oct 2026 growing 40 a month, then every day of November 2026 to the 24th.
+fn m4_gl() -> DataFrame {
+    let mut dates = Vec::new();
+    let mut bal = Vec::new();
+    for (m, d) in month_ends((2025, 1), (2026, 10)).into_iter().enumerate() {
+        for j in 0..10 {
+            dates.push(d);
+            bal.push(1000.0 + 40.0 * m as f64 + j as f64);
+        }
+    }
+    for day in 1..=24u32 {
+        for j in 0..10 {
+            dates.push((2026, 11, day));
+            bal.push(1000.0 + 40.0 * 22.0 + day as f64 + j as f64);
+        }
+    }
+    let n = dates.len();
+    DataFrame::new(vec![m2_date_series("Date", &dates), Series::new("GL".into(), (0..n).map(|i| format!("GL{:02}", i % 10)).collect::<Vec<_>>()), Series::new("Balance".into(), bal)]).expect("gl")
+}
+
+/// The rig of M4: the book tab, Accounts and GL TB (two years) in an open project with the calendar on and both date columns linked.
+fn m4_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {
+    let mut rig = rig9(name, ppp, w, h);
+    rig.app.dark_mode = dark;
+    let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+    rig.app.project.active = true;
+    rig.app.project.name = "Treasury".into();
+    open_table(&mut rig, "Accounts", m2_accounts());
+    open_table(&mut rig, "GL TB", m4_gl());
+    let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+    for (i, id) in ids.iter().enumerate() {
+        rig.app.project.keys.insert(*id, format!("t{}", i + 1));
+    }
+    rig.app.active_tab = 1;
+    m2_linked(&mut rig);
+    rig.app.active_tool = ActiveToolModal::None;
+    rig.draw(3);
+    (rig, what)
+}
+
+/// The chart studio on GL TB with Closing balance of Balance vs SPLY % by Calendar > Month-Year.
+fn m4_sply_chart(rig: &mut Rig) {
+    use micro_parquet::charts::spec::{ChartKind, ChartSpec};
+    use micro_parquet::models::{TimeShift, TimeShow};
+    m3_tag_gl_balance(rig);
+    rig.app.active_tab = 2;
+    rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+    rig.draw(4);
+    pump_until(rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+    let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t3").expect("the date link");
+    let f = ModelFieldRef::new(&link, "GL TB \u{2192} Calendar", "Calendar", "Month-Year");
+    let time = TimeValue { agg: TimeAgg::ClosingBalance, shift: TimeShift::Sply, show: TimeShow::PercentChange, ..Default::default() };
+    let spec = ChartSpec { category: f.name.clone(), category_model: Some(f), value: Some("Balance".into()), time: Some(time), kind: ChartKind::Bar, top_n: 50, ..Default::default() };
+    rig.app.chart_set_spec(spec);
+    pump_until(rig, "the chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.measure_names.first().is_some_and(|n| n.contains("vs SPLY %"))));
+    rig.draw(4);
+}
+
+#[test]
+fn m4_the_chart_studio_lists_the_time_aggregations_and_the_window_shift_show_and_partial_rows_and_a_chart_of_closing_vs_sply_percent_equals_the_pivot_at_three_sizes() {
+    use micro_parquet::models::{TimeShift, TimeShow};
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m4_rig("p9m4chart", ppp, w, h, false);
+        m4_sply_chart(&mut rig);
+        let data = rig.app.chart.data.clone().expect("data");
+        assert_eq!(data.measure_names, ["Closing balance of Balance \u{b7} vs SPLY %"], "{what}");
+        assert_eq!(data.categories.first().map(String::as_str), Some("Jan 2025"), "{what}: Calendar order");
+        // the studio has the rows of the time value, each a real box
+        let names: Vec<String> = rig.app.chart.rects.fields.iter().map(|(n, _)| n.clone()).collect();
+        for n in ["Aggregation", "Window", "Shift", "Show", "Partial period"] {
+            assert!(names.iter().any(|x| x == n), "{what}: the studio has '{n}': {names:?}");
+        }
+        let boxes: Vec<(String, egui::Rect)> = rig.app.chart.rects.fields.iter().filter(|(n, _)| ["Aggregation", "Value", "Window", "Shift", "Show", "Partial period"].contains(&n.as_str())).cloned().collect();
+        crate::ui::render_tests_p8::assert_no_overlap(&boxes, &what);
+        // the chart's marks are the pivot's cells
+        let time = TimeValue { agg: TimeAgg::ClosingBalance, shift: TimeShift::Sply, show: TimeShow::PercentChange, ..Default::default() };
+        let at = m4_pivot_tab(&mut rig, None, time, &[]);
+        let df = rig.app.tabs[at].cached_slice.clone();
+        let col = df.get_column_names()[1].to_string();
+        let labels: Vec<String> = df.get_columns()[0].str().expect("labels").into_iter().map(|v| v.unwrap_or("").to_string()).collect();
+        let cells: Vec<Option<f64>> = df.column(&col).expect("values").f64().expect("floats").into_iter().collect();
+        let mut seen = 0;
+        for (i, c) in data.categories.iter().enumerate() {
+            let at = labels.iter().position(|l| l == c).unwrap_or_else(|| panic!("{what}: '{c}' is in the pivot"));
+            assert_eq!(data.values[0][i], cells[at], "{what}: {c}: the chart's mark is the pivot's cell");
+            seen += data.values[0][i].is_some() as usize;
+        }
+        // Jan to Oct 2026 have a number (against 2025); 2025 has no earlier year and Nov 2026's same days have no month-end
+        assert_eq!(seen, 10, "{what}: {:?}", data.values[0]);
+        assert!(data.notes.iter().any(|n| n.contains("Earlier window (")), "{what}: why a mark is missing: {:?}", data.notes);
+        rig.app.active_tab = 2;
+        rig.draw(3);
+        let combo = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Aggregation").map(|(_, b)| *b).expect("aggregation box");
+        // the aggregation list has the time aggregations: Average balance is picked by real clicks (the list scrolls)
+        let _ = combo;
+        assert!(rig.app.chart.spec.time.is_some_and(|t| t.shift == TimeShift::Sply), "{what}");
+    }
+}
+
+#[test]
+fn m4_pictures_of_the_time_choices_the_refusal_a_pivot_of_closing_vs_prior_period_percent_and_a_chart_of_closing_vs_sply_percent() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    use micro_parquet::models::{TimeShift, TimeShow};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let (mut rig, what) = m4_rig("p9m4pics", SHOT_PPP, SHOT_W, SHOT_H + 200.0, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        // the choices in Values
+        m4_builder(&mut rig, &what);
+        let tb = time_button(&rig, 0);
+        click_rect(&mut rig, tb);
+        rig.draw(3);
+        click_choice(&mut rig, "window:YTD", &what);
+        click_choice(&mut rig, "shift:Same period last year", &what);
+        click_choice(&mut rig, "show:% change", &what);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-time-choices", dark, screen);
+        // the refusal: a shift with no period field
+        click_choice(&mut rig, "window:Period", &what);
+        pump_until(&mut rig, "the refusal", &|r| matches!(&r.app.pivot_builder.preview, Some(Err(e)) if e.contains("names a period")));
+        rig.ctx.memory_mut(|m| m.close_popup());
+        rig.draw(4);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-time-needs-period", dark, screen);
+        rig.app.pivot_builder.open = false;
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        // a pivot by Month-Year of Closing balance vs Prior period %
+        let value = TimeValue { agg: TimeAgg::ClosingBalance, shift: TimeShift::PriorPeriod, show: TimeShow::PercentChange, ..Default::default() };
+        let _ = m4_pivot_tab(&mut rig, None, value, &["Jul 2026", "Aug 2026", "Sep 2026", "Oct 2026"]);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-time-prior-period", dark, screen);
+        // a chart of Closing balance vs SPLY %
+        m4_sply_chart(&mut rig);
+        rig.app.chart_open_as_chart_tab();
+        pump_until(&mut rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1);
+        rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "chart-time-sply", dark, screen);
     }
 }

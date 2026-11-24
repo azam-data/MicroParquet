@@ -201,6 +201,10 @@ pub struct MeasureSpec {
     pub transform: Transform,
     /// The numbers are already percentages (a cumulative gap in % of assets, a rate): written with "%".
     pub pct: bool,
+    /// A time aggregation with its window, shift and show (Phase 9 M4): the value type the pivot uses, so a chart shows the pivot's
+    /// number. When set, `agg` is not used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<crate::models::TimeValue>,
 }
 
 /// One panel of linked panels: a form and the measures (by position in the measure list) it draws.
@@ -522,6 +526,9 @@ pub struct ChartSpec {
     pub value: Option<String>,
     pub weight: Option<String>,
     pub agg: ChartAgg,
+    /// The one measure's time aggregation (Phase 9 M4), as `MeasureSpec.time`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<crate::models::TimeValue>,
     pub kind: ChartKind,
     /// Natural, a custom list or Tenor (U3).
     pub order: SortOrder,
@@ -635,6 +642,7 @@ impl Default for ChartSpec {
             value: None,
             weight: None,
             agg: ChartAgg::Sum,
+            time: None,
             kind: ChartKind::Bar,
             order: SortOrder::Natural,
             by_value: false,
@@ -750,7 +758,7 @@ impl ChartSpec {
     /// The measures to calculate: `measures`, or the Phase 6 value/agg/weight as the only one.
     pub fn measure_list(&self) -> Vec<MeasureSpec> {
         if self.measures.is_empty() {
-            vec![MeasureSpec { column: self.value.clone(), agg: self.agg, weight: self.weight.clone(), label: String::new(), transform: Transform::None, pct: false }]
+            vec![MeasureSpec { column: self.value.clone(), agg: self.agg, weight: self.weight.clone(), label: String::new(), transform: Transform::None, pct: false, time: self.time }]
         } else {
             self.measures.clone()
         }
@@ -759,7 +767,7 @@ impl ChartSpec {
     /// The Phase 6 shape of measure `i` (its column, aggregation and weight in the old fields), which is
     /// what the single-measure engine takes.
     pub fn for_measure(&self, m: &MeasureSpec) -> ChartSpec {
-        ChartSpec { value: m.column.clone(), agg: m.agg, weight: m.weight.clone(), measures: Vec::new(), size: None, facet: None, ..self.clone() }
+        ChartSpec { value: m.column.clone(), agg: m.agg, weight: m.weight.clone(), time: m.time, measures: Vec::new(), size: None, facet: None, ..self.clone() }
     }
 
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
@@ -770,7 +778,7 @@ impl ChartSpec {
             self.series,
             self.value,
             self.weight,
-            self.agg,
+            (self.agg, self.time),
             self.order,
             self.by_value,
             self.top_n,

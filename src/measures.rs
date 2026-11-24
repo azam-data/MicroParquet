@@ -376,6 +376,122 @@ pub fn rows_of(agg: TimeAgg, period: &[NaiveDate], tl: &Timeline, month_end: boo
     }
 }
 
+// ------------------------------------------------------------------------------------------------ time intelligence (M4)
+
+/// The period a cell stands for before the as-of date cuts it: its first and last day, and what it is a period of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base {
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+    pub unit: crate::dates::PeriodUnit,
+}
+
+/// The days a time value reads, and the days of its earlier window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// The window's first day and its last day cut at the as-of date; `None` when the window starts after the as-of date.
+    pub current: Option<(NaiveDate, NaiveDate)>,
+    /// The earlier window (a shift), when there is one.
+    pub earlier: Option<(NaiveDate, NaiveDate)>,
+}
+
+enum Back {
+    Months(i32),
+    Days(i64),
+}
+
+/// The window of a time value (`t`) for a cell whose period is `base` (`None` for a cell with no period: its anchor is the as-of
+/// date), and the earlier window the shift gives. The anchor is the period's end, never later than the as-of date.
+pub fn plan(t: &crate::models::TimeValue, base: Option<Base>, as_of: NaiveDate, fiscal: &CalendarSettings) -> std::result::Result<Plan, String> {
+    use crate::dates::{add_months, add_months_end, month_end, month_start, PeriodUnit};
+    use crate::models::{TimePartial, TimeShift, TimeWindow};
+    let (ws, ne, unit) = match t.window {
+        TimeWindow::Period => match base {
+            Some(b) => (b.start, b.end, b.unit),
+            None => return Err("Add a Calendar field that names a period (Calendar \u{203a} Month-Year, for example) to Rows or Columns, or choose MTD, QTD or YTD.".to_string()),
+        },
+        w => {
+            let a = base.map(|b| b.end.min(as_of)).unwrap_or(as_of);
+            match w {
+                TimeWindow::Mtd => (month_start(a), month_end(a), PeriodUnit::Month),
+                TimeWindow::Qtd => (fiscal.fiscal_quarter_start(a), fiscal.fiscal_quarter_end(a), PeriodUnit::Quarter),
+                _ => (fiscal.fiscal_year_start(a), fiscal.fiscal_year_end(a), PeriodUnit::Year),
+            }
+        }
+    };
+    let starts_late = base.is_some_and(|b| b.start > as_of) || ws > as_of;
+    let we = ne.min(as_of);
+    let current = if starts_late { None } else { Some((ws, we)) };
+    let back = match (t.shift, unit) {
+        (TimeShift::None, _) => None,
+        (TimeShift::Sply, PeriodUnit::Week) => Some(Back::Days(364)),
+        (TimeShift::Sply, _) => Some(Back::Months(12)),
+        (TimeShift::PriorPeriod, PeriodUnit::Day) => Some(Back::Days(1)),
+        (TimeShift::PriorPeriod, PeriodUnit::Week) => Some(Back::Days(7)),
+        (TimeShift::PriorPeriod, PeriodUnit::Month) => Some(Back::Months(1)),
+        (TimeShift::PriorPeriod, PeriodUnit::Quarter) => Some(Back::Months(3)),
+        (TimeShift::PriorPeriod, PeriodUnit::Year) => Some(Back::Months(12)),
+    };
+    let earlier = back.map(|b| {
+        let cut = we < ne;
+        let same_days = cut && t.partial == TimePartial::SameDays;
+        match b {
+            Back::Months(n) => (add_months(ws, -n), if same_days { add_months(we, -n) } else { add_months_end(ne, -n) }),
+            Back::Days(n) => {
+                let d = chrono::Duration::days(n);
+                (ws - d, if same_days { we - d } else { ne - d })
+            }
+        }
+    });
+    Ok(Plan { current, earlier })
+}
+
+/// The days from `a` to `b`, both included.
+pub fn days_between(a: NaiveDate, b: NaiveDate) -> Vec<NaiveDate> {
+    let mut out = Vec::new();
+    let mut d = a;
+    while d <= b {
+        out.push(d);
+        match d.succ_opt() {
+            Some(n) => d = n,
+            None => break,
+        }
+    }
+    out
+}
+
+/// What a time value shows from its window's number and its earlier window's: the value of the shifted window, the difference
+/// (this - earlier) or the % change ((this - earlier) / |earlier|, blank when the earlier value is 0).
+pub fn combine(show: crate::models::TimeShow, shifted: bool, current: Measured, earlier: Option<(Measured, String)>) -> Measured {
+    use crate::models::TimeShow;
+    if !shifted {
+        return current;
+    }
+    let Some((earlier, text)) = earlier else {
+        return Measured::Blank("The earlier window could not be worked out.".to_string());
+    };
+    let earlier_value = match earlier {
+        Measured::Value(v) => v,
+        Measured::Blank(why) => return Measured::Blank(format!("Earlier window ({}): {}", text, why)),
+    };
+    match show {
+        TimeShow::Value => Measured::Value(earlier_value),
+        TimeShow::Difference | TimeShow::PercentChange => {
+            let now = match current {
+                Measured::Value(v) => v,
+                blank => return blank,
+            };
+            if show == TimeShow::Difference {
+                Measured::Value(now - earlier_value)
+            } else if earlier_value == 0.0 {
+                Measured::Blank(format!("The earlier window ({}) is 0, so a % change can't be worked out.", text))
+            } else {
+                Measured::Value((now - earlier_value) / earlier_value.abs() * 100.0)
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ the stock warning
 
 /// "Sum of Balance adds 23 dates of balances. Use Closing balance or Average balance."

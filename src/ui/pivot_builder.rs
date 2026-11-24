@@ -423,7 +423,7 @@ impl MicroParquetApp {
                 if let Some(tag) = (!key.is_empty()).then(|| self.column_tag(&key, field)).flatten() {
                     let agg = tag.default_agg();
                     if !self.pivot_builder.spec.values.iter().any(|v| v.field == field && v.time.is_some_and(|t| t.agg == agg)) {
-                        return PivotValue { field: field.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg }) };
+                        return PivotValue { field: field.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(agg)) };
                     }
                 }
             }
@@ -1364,12 +1364,83 @@ impl MicroParquetApp {
                     ui.separator();
                     for t in TimeAgg::all() {
                         if (numeric || !t.needs_number()) && ui.selectable_label(time.map(|x| x.agg) == Some(*t), t.label()).clicked() {
-                            time = Some(TimeValue { agg: *t });
+                            time = Some(TimeValue { agg: *t, ..time.unwrap_or_default() });
                         }
                     }
                 }
             });
             agg_rect = combo.response.rect;
+            if let Some(mut t) = time {
+                let label = if t.is_m4() { "Time \u{2022}" } else { "Time" };
+                let btn = ui.add_sized(egui::vec2(theme::PIVOT_TIME_BTN_W, theme::PIVOT_TIME_BTN_H), egui::Button::new(egui::RichText::new(label).size(theme::TEXT_LABEL)));
+                btn.clone().on_hover_text("Window, shift and what the value shows (MTD, QTD, YTD, prior period, same period last year)");
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("pivot_time_btn", i)), btn.rect));
+                let pid = egui::Id::new(("pivot_time_popup", i));
+                if btn.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(pid));
+                }
+                let mut choices: Vec<(String, egui::Rect)> = Vec::new();
+                egui::popup::popup_below_widget(ui, pid, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                    use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+                    ui.set_min_width(theme::PIVOT_TIME_POPUP_W);
+                    let mut pick = |ui: &mut egui::Ui, group: &str, label: &str, on: bool, enabled: bool, choices: &mut Vec<(String, egui::Rect)>| -> bool {
+                        let r = ui.add_enabled(enabled, egui::SelectableLabel::new(on, label));
+                        choices.push((format!("{group}:{label}"), r.rect));
+                        r.clicked()
+                    };
+                    egui::Grid::new(("pivot_time_grid", i)).num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
+                        ui.label(egui::RichText::new("Window").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for w in TimeWindow::all() {
+                                if pick(ui, "window", w.label(), t.window == *w, true, &mut choices) {
+                                    t.window = *w;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Shift").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for x in TimeShift::all() {
+                                if pick(ui, "shift", x.label(), t.shift == *x, true, &mut choices) {
+                                    t.shift = *x;
+                                    if *x == TimeShift::None {
+                                        t.show = TimeShow::Value;
+                                    }
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Show").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for x in TimeShow::all() {
+                                if pick(ui, "show", x.label(), t.show == *x, *x == TimeShow::Value || t.shift != TimeShift::None, &mut choices) {
+                                    t.show = *x;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Partial period").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for x in TimePartial::all() {
+                                if pick(ui, "partial", x.label(), t.partial == *x, t.shift != TimeShift::None, &mut choices) {
+                                    t.partial = *x;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                    });
+                    ui.label(egui::RichText::new(if t.shift == TimeShift::None { "A difference or % change needs a shift." } else { "Same days: the shifted window has the same day numbers; Full period: all of it." }).size(theme::TEXT_LABEL).color(tk.muted));
+                });
+                let open = ui.memory(|m| m.is_popup_open(pid));
+                ui.ctx().data_mut(|d| {
+                    if open {
+                        d.insert_temp(egui::Id::new("pivot_time_choices"), choices);
+                    } else {
+                        d.remove_temp::<Vec<(String, egui::Rect)>>(egui::Id::new("pivot_time_choices"));
+                    }
+                });
+                time = Some(t);
+            }
             let wavg = time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg);
             if wavg {
                 ui.label(egui::RichText::new("by").color(tk.muted));
@@ -1789,6 +1860,9 @@ fn chip_text_w(ui: &egui::Ui, text: &str, size: f32, family: egui::FontFamily) -
 fn value_chip_fixed_width(agg: PivotAgg, time: Option<TimeValue>) -> f32 {
     let box_w = if time.is_some() { theme::PIVOT_COMBO_TIME_W } else { theme::PIVOT_COMBO_AGG_W };
     let mut w = theme::SPACE_S + box_w + theme::SPACE_S + theme::PIVOT_CHIP_MENU_W;
+    if time.is_some() {
+        w += theme::SPACE_S + theme::PIVOT_TIME_BTN_W;
+    }
     if time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg) {
         w += theme::SPACE_S + theme::PIVOT_BADGE_W + theme::SPACE_S + theme::PIVOT_COMBO_WEIGHT_W;
     }
