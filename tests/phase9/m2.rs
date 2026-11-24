@@ -101,7 +101,7 @@ fn accounts_with_dates() -> DataFrame {
 }
 
 fn scope_with(links: Vec<(Link, ModelTab)>, dir: &std::path::Path) -> Option<Arc<ModelContext>> {
-    Some(Arc::new(ModelContext { links: links.into_iter().map(|(link, lookup)| ScopeLink { link, lookup: Some(lookup), refusal: None }).collect(), temp_dir: dir.to_path_buf() }))
+    Some(Arc::new(ModelContext { links: links.into_iter().map(|(link, lookup)| ScopeLink { link, lookup: Some(lookup), refusal: None }).collect(), temp_dir: dir.to_path_buf(), ..Default::default() }))
 }
 
 fn pairs(df: &DataFrame) -> Vec<(String, f64)> {
@@ -117,7 +117,7 @@ fn calendar_field(settings: CalendarSettings, column: &str) -> ModelFieldRef {
 fn pivot_by(field: &ModelFieldRef, order: Option<micro_parquet::sort_lists::SortOrder>) -> PivotSpec {
     PivotSpec {
         rows: vec![field.name.clone()],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         row_totals: true,
         column_totals: true,
         model_fields: vec![field.clone()],
@@ -140,7 +140,7 @@ fn m2_a_pivot_by_calendar_month_year_equals_a_pivot_by_the_w2_date_field_made_wi
     let field = DateFieldRef::new("Open Date", DatePart::MonthYear, settings);
     let w2_spec = PivotSpec {
         rows: vec![field.name.clone()],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         row_totals: true,
         column_totals: true,
         date_fields: vec![field.clone()],

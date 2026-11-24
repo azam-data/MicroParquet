@@ -9,6 +9,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | M0 | DONE (S3) | (see git log: "Phase 9 M0") | tests/phase9/m0.rs x10 (composite key and duplicates, sorted duplicates, blank keys, unmatched keys and sums, the refusals, project v2 round trip and v1 bytes, the v1.8.0 refusal, relink to a duplicate, the open line and status texts, a tab changed since); render_tests_p9 x5 (the menu with and without a project, Links add/edit/remove and refusals, Key check and its three buttons, project save/open with the open line, pictures) |
 | M1 | DONE (S4), follow-ups DONE (S5), three labels DONE (S6) | (see git log: "Phase 9 M1") | tests/phase9/m1.rs x12; render_tests_p9 x7 (field list, chart pickers, filter dialog and value picker, chart filters, Show rows, broken links, closed tab) + 1 picture test |
 | M2 | DONE (S5) | (see git log: "Phase 9 M2") | tests/phase9/m2.rs x11; render_tests_p9 x5 (menu, Calendar dialog, Calendar tab and fields, As-of dialog, pictures) |
+| M3 | DONE (S6) | (see git log: "Phase 9 M3") | tests/phase9/m3.rs x15; render_tests_p9 x4 (Measures dialog, aggregation choice, banner and tooltip, pictures) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -276,3 +277,39 @@ Proved to fail without the fix (stubs, each restored, run one at a time, every r
 - date-link rows sized by their title (the old code, `horizontal_wrapped`): `m2_the_date_link_rows_have_the_same_box_width_and_left_edge_at_three_sizes` failed with "'Date column: Accounts' starts at 411.43, the first row's box at 407.62" before the fix.
 
 Choices M1-15 to M1-17 are in `<accepted_deviations>`.
+
+
+## M3 acceptance: item -> test (S6)
+
+Library: `cargo test -q --test phase3 p9_m3` (15 tests, every number worked by hand in the test); UI: `cargo test -q --bin MicroParquet m3_` (4 tests, 3 sizes: 1219x686, 1600x900, 1291x700 pt, light and dark). Deviations: M3-1 to M3-10 (in `docs/phase9-spec.md`).
+
+| Acceptance item (spec M3) | Test |
+| --- | --- |
+| Daily tab 1 Nov = 100, 3 Nov = 130, as of 3 Nov: Closing 130, Average for Nov to date (100 + 100 + 130) / 3 = 110 | `m3_a_daily_tab_closes_at_the_last_balance_and_the_average_carries_the_balance_over_the_missing_day` (also the Grand total, and Opening blank with its reason) |
+| No snapshot on or before 1 Nov: Average blank with the message | `m3_with_no_snapshot_on_or_before_the_start_the_average_is_blank_with_the_message_and_never_zero` ("No balance on or before 1 Nov 2026. Add that date's data or start later."); blank period: `m3_a_period_with_no_snapshot_before_the_as_of_date_is_blank_and_says_when_the_tab_ended` ("No balance in Nov 2026 for 'Accounts' (last date 31 Oct 2026)") |
+| Month-end tab 31 Jan 100, 28 Feb 120, 31 Mar 140: Q1 Average 120 headed "Average of month-ends of Balance"; Q1 Closing 140; Q1 Opening blank; Q2 Opening 140 | `m3_a_month_end_tab_averages_its_month_ends_and_says_so_in_the_heading` (M3-3: a 30 Apr row gives Q2) |
+| YTD balance income 10, 25, 45: Period amount Jan 10, Feb 15, Mar 20, Q1 45; fiscal start February: Feb 25 | `m3_a_ytd_balance_gives_the_movement_of_each_period_and_a_new_fiscal_year_starts_from_nothing` |
+| Flow tab: Total for a month equals the sum of its rows | `m3_a_flow_total_is_the_sum_of_the_rows_dated_in_the_period` (also equals a plain Sum, and the as-of date cuts it) |
+| Count at closing counts each account once whatever the number of dates (and Distinct, W.Avg at closing) | `m3_counts_at_closing_count_each_account_once_whatever_the_number_of_snapshot_dates` (3 accounts on 3 dates: 3, not 9; W.Avg 14,000 / 600) |
+| Branch x Calendar Month-Year of Average balance: the Total column is the average over the whole span, not the sum of the months; a branch subtotal equals the measure of its own rows | `m3_the_total_column_is_the_average_over_the_whole_span_and_not_the_sum_of_the_months` (B1: Oct 154.84, Nov 310, Total 5730 / 34); `m3_a_subtotal_is_the_measure_of_its_own_rows_and_equals_a_pivot_by_the_parent_field_alone` |
+| Stock warning on Sum of a tagged Balance over 23 dates, not on an untagged column; old pivot unchanged | `m3_a_plain_sum_of_a_tagged_balance_over_many_dates_warns_and_an_untagged_column_or_an_old_pivot_does_not` ("Sum of Balance adds 23 dates of balances. Use Closing balance or Average balance."; Count too; a warning, the number is the sum); chart note: `m3_a_chart_of_a_sum_of_a_tagged_balance_over_many_dates_says_so_in_its_notes_and_an_untagged_column_or_closing_does_not` |
+| Nested (P2) shows measure subtotals equal to a pivot by the parent field alone | `m3_nested_subtotals_of_a_measure_equal_a_pivot_by_the_parent_field_alone` |
+| Suggestions from the column name; old files unchanged | `m3_the_name_of_a_column_suggests_a_tag_and_a_name_that_says_both_or_neither_suggests_nothing`, `m3_old_files_load_unchanged_and_the_new_fields_are_written_only_when_used`; refusals in words: `m3_a_time_aggregation_outside_a_project_or_without_a_date_link_or_on_a_date_part_is_refused_in_words` |
+| Render tests by real clicks at 3 sizes: the Columns tags and suggestions | UI `m3_the_measures_dialog_tags_columns_and_applies_a_suggestion_by_a_click_light_and_dark_at_three_sizes` (no tab yet; suggestion click tags; tag box Flow, Not tagged; dialog fits, no overlap, nothing clipped) |
+| the aggregation choice in Values | UI `m3_the_aggregation_choice_in_values_lists_the_time_aggregations_on_a_date_linked_tab_and_a_tagged_column_starts_with_its_default_light_and_dark_at_three_sizes` (no time choices on a tab with no date link; a tagged column starts as Closing balance; the 8 time aggregations in the list; Average, back to Sum) |
+| the warning banner, a blank cell's reason tooltip | UI `m3_a_pivot_tab_shows_the_stock_warning_and_a_blank_measure_cell_says_why_on_hover_light_and_dark_at_three_sizes` and the dialog's banner in the aggregation test (as of 31 Oct 2026, November is blank, never 0) |
+
+Pictures looked at by eye (light and dark, written by `m3_pictures_of_the_columns_tags_the_aggregation_choice_the_stock_warning_and_a_blank_cell_with_its_reason`): `docs/guide/img/model-measures-columns.png`, `pivot-time-aggregations.png`, `pivot-stock-warning.png`, `pivot-blank-measure-reason.png` (each with `-dark`). `pivot-stock-warning` shows the banner on the pivot tab.
+
+Proved to fail without the fix (stubs, each restored, run one at a time; every run finished):
+- average not carried forward over a missing day: `m3_a_daily_tab_closes...`, `m3_nested_subtotals...`, `m3_the_total_column...`.
+- Period amount ignoring the fiscal year: `m3_a_ytd_balance...`.
+- Count at closing adding every date: `m3_counts_at_closing...`.
+- no stock warning: `m3_a_plain_sum_of_a_tagged_balance...`, `m3_a_chart_of_a_sum...`.
+- month-end average treated as daily (heading and number): `m3_a_month_end_tab...`.
+- a blank measure shown as 0: `m3_a_daily_tab_closes...`, `m3_a_month_end_tab...`, `m3_a_period_with_no_snapshot...`, `m3_with_no_snapshot_on_or_before...`.
+- the as-of date not cutting the period: `m3_a_daily_tab_closes...`, `m3_a_flow_total...`, `m3_a_period_with_no_snapshot...`, `m3_counts_at_closing...`, `m3_the_total_column...`.
+- a total using every calendar day instead of the shown periods: `m3_a_daily_tab_closes...`, `m3_the_total_column...`.
+- UI: no time aggregations in the list: `m3_the_aggregation_choice_in_values...`; a suggestion click doing nothing: `m3_the_measures_dialog_tags_columns...`; no tooltip: `m3_a_pivot_tab_shows_the_stock_warning...` and the pictures test.
+
+Found on the way: the aggregation list used to open below the window's edge at 1219x686 (its last items could not be clicked); it is now as tall as the room under it (M3-10). The Calendar dialog stayed open over a later test's tab until closed; the M3 rig closes it.

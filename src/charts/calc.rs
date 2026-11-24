@@ -76,9 +76,24 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         let schema = lf.collect_schema().context("Could not read the column types for the chart")?;
         crate::dates::with_date_fields(lf, &fields, &schema, "Chart")?
     };
+    // the stock warning (M3): a Sum or Count of a column tagged Balance over rows of more than one date
+    let warnings = if spec.data_tab.is_empty() {
+        Vec::new()
+    } else {
+        use crate::charts::spec::ChartAgg;
+        let plain: Vec<(String, String)> = spec
+            .measure_list()
+            .iter()
+            .filter(|m| matches!(m.agg, ChartAgg::Sum | ChartAgg::Count))
+            .filter_map(|m| m.column.as_ref().map(|c| ((if m.agg == ChartAgg::Sum { "Sum" } else { "Count" }).to_string(), c.clone())))
+            .collect();
+        crate::pivot_time::stock_warnings_for(lf.clone(), &spec.data_tab, &plain)?
+    };
     // lookup fields (M1) are text, with "(no match)" for a key with no lookup row
     let lf = crate::model::with_lookup_columns(lf, &chart_lookup_wants(spec), "Chart")?;
-    compute_on(lf, spec)
+    let mut data = compute_on(lf, spec)?;
+    data.notes.extend(warnings);
+    Ok(data)
 }
 
 /// The lookup fields of a chart as columns to add.

@@ -65,7 +65,7 @@ pub fn fx(name: &str) -> Fx {
 }
 
 pub fn scope_of(f: &Fx, refusal: Option<String>) -> Option<Arc<ModelContext>> {
-    Some(Arc::new(ModelContext { links: vec![ScopeLink { link: f.link.clone(), lookup: Some(f.lookup.clone()), refusal }], temp_dir: f.d.clone() }))
+    Some(Arc::new(ModelContext { links: vec![ScopeLink { link: f.link.clone(), lookup: Some(f.lookup.clone()), refusal }], temp_dir: f.d.clone(), ..Default::default() }))
 }
 
 pub fn field(f: &Fx, column: &str) -> ModelFieldRef {
@@ -77,7 +77,7 @@ pub fn lazy(f: &Fx) -> LazyFrame {
 }
 
 fn sum_balance() -> PivotValue {
-    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }
+    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }
 }
 
 fn pivot_of(rows: &[&ModelFieldRef]) -> PivotSpec {
@@ -340,9 +340,9 @@ fn m1_a_numeric_lookup_field_in_values_sums_and_counts_and_leaves_the_unmatched_
     let spec = PivotSpec {
         rows: vec!["Wing".into()],
         values: vec![
-            PivotValue { field: limit.name.clone(), agg: PivotAgg::Sum, weight_col: None },
-            PivotValue { field: limit.name.clone(), agg: PivotAgg::Count, weight_col: None },
-            PivotValue { field: region.name.clone(), agg: PivotAgg::CountDistinct, weight_col: None },
+            PivotValue { field: limit.name.clone(), agg: PivotAgg::Sum, weight_col: None, time: None },
+            PivotValue { field: limit.name.clone(), agg: PivotAgg::Count, weight_col: None, time: None },
+            PivotValue { field: region.name.clone(), agg: PivotAgg::CountDistinct, weight_col: None, time: None },
         ],
         model_fields: vec![limit.clone(), region.clone()],
         row_totals: false,
@@ -419,7 +419,7 @@ fn m1_outside_a_project_a_step_with_a_lookup_filter_gives_the_conventions_messag
     let e = compile_tab_lazy(&f.data.source, &[pivot.clone()], &f.d).and_then(|lf| Ok(lf.collect()?)).err().expect("a pivot too");
     assert_eq!(format!("{e:#}"), "This step uses the model of a project (link 'Accounts \u{2192} Branch master'). Open the project to run it.");
     // a project whose model lacks the link says so
-    let none = Some(Arc::new(ModelContext { links: vec![], temp_dir: f.d.clone() }));
+    let none = Some(Arc::new(ModelContext { links: vec![], temp_dir: f.d.clone(), ..Default::default() }));
     let e = with_scope(none, || compile_tab_lazy(&f.data.source, &[step.clone()], &f.d).and_then(|lf| Ok(lf.collect()?))).err().expect("no such link");
     assert!(format!("{e:#}").contains("is not in this project's model"), "{e:#}");
     // the scope is left as it was
@@ -694,7 +694,7 @@ fn m1_a_pivot_by_a_text_a_number_and_a_date_lookup_column_has_three_separate_row
         let r = field(&f, column);
         let spec = PivotSpec {
             rows: vec![r.name.clone()],
-            values: vec![sum_balance(), PivotValue { field: "AC Number".into(), agg: PivotAgg::Count, weight_col: None }],
+            values: vec![sum_balance(), PivotValue { field: "AC Number".into(), agg: PivotAgg::Count, weight_col: None, time: None }],
             row_totals: true,
             column_totals: true,
             model_fields: vec![r.clone()],

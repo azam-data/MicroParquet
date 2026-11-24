@@ -33,6 +33,7 @@ pub mod join;
 pub mod limits;
 pub mod model;
 pub mod model_calendar;
+pub mod model_measures;
 pub mod mom;
 pub mod mudaraba;
 pub mod clean_breaks;
@@ -152,6 +153,7 @@ impl MicroParquetApp {
             ActiveToolModal::ModelNoProject => self.render_model_no_project_modal(ctx, cols),
             ActiveToolModal::ModelCalendar => self.render_model_calendar_modal(ctx, cols),
             ActiveToolModal::ModelAsOf => self.render_model_as_of_modal(ctx, cols),
+            ActiveToolModal::ModelMeasures => self.render_model_measures_modal(ctx, cols),
             ActiveToolModal::SplitDate => self.render_split_date_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),

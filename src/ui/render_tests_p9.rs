@@ -765,7 +765,7 @@ fn dbl(rig: &mut Rig, pos: egui::Pos2) {
 }
 
 fn nested_spec(layout: PivotLayout) -> PivotSpec {
-    PivotSpec { rows: vec!["Product".into(), "Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, layout, ..Default::default() }
+    PivotSpec { rows: vec!["Product".into(), "Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, layout, ..Default::default() }
 }
 
 /// A pivot tab of Product › Branch with `layout` and `later` steps after it, made the active tab and drawn.
@@ -2049,7 +2049,7 @@ fn m1_the_chart_pickers_list_the_lookup_fields_and_the_chart_equals_the_pivots_t
             let v: Vec<f64> = d.values[0].iter().map(|x| x.expect("a value")).collect();
             assert_eq!(v, [M1_CTG, M1_DHAKA, M1_NO_MATCH], "{what}: the chart shows the pivot's numbers");
             // the same numbers as a pivot of the same field
-            let pivot = micro_parquet::models::PivotSpec { rows: vec![want.name.clone()], values: vec![micro_parquet::models::PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], model_fields: vec![want.clone()], row_totals: true, column_totals: true, ..Default::default() };
+            let pivot = micro_parquet::models::PivotSpec { rows: vec![want.name.clone()], values: vec![micro_parquet::models::PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None, time: None }], model_fields: vec![want.clone()], row_totals: true, column_totals: true, ..Default::default() };
             let lf = micro_parquet::engine::compile_tab_lazy(&rig.app.tabs[0].source, &[], &rig.app.paths.temp_dir).expect("lf");
             let b = model::with_scope(rig.app.project.model_ui.scope.clone(), || micro_parquet::pivot_table::build_pivot(lf, &pivot)).expect("pivot");
             assert_eq!([number_of(&b.df, "Ctg"), number_of(&b.df, "Dhaka"), number_of(&b.df, "(no match)")], [M1_CTG, M1_DHAKA, M1_NO_MATCH], "{what}");
@@ -2256,7 +2256,7 @@ fn m1_show_rows_from_a_pivot_cell_and_a_chart_mark_grouped_by_a_lookup_field_giv
         rig.app.show_steps_sidebar = false;
         // a pivot tab by Region
         let region = region_ref(&rig);
-        let spec = PivotSpec { rows: vec![region.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, model_fields: vec![region.clone()], ..Default::default() };
+        let spec = PivotSpec { rows: vec![region.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, model_fields: vec![region.clone()], ..Default::default() };
         let src = rig.app.tabs[0].source.clone();
         rig.app.create_tab_from_source("Pivot: Region".into(), src, vec![TransformStep::from_pivot_spec(spec)], std::collections::HashMap::new());
         settle(&mut rig.app);
@@ -2349,7 +2349,7 @@ fn m1_a_broken_links_fields_are_greyed_with_the_reason_in_the_pivot_list_the_cha
             assert_no_overlap(&crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window), &what);
             // a saved pivot that uses one shows the reason instead of numbers (the dialog's preview, and the tab)
             let region_field = { let g = rig.app.model_groups_for(rig.app.tabs[0].id); g[0].columns.iter().find(|(r, _)| r.column == "Region").map(|(r, _)| r.clone()).expect("Region") };
-            let spec = PivotSpec { rows: vec![region_field.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, model_fields: vec![region_field.clone()], ..Default::default() };
+            let spec = PivotSpec { rows: vec![region_field.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, model_fields: vec![region_field.clone()], ..Default::default() };
             rig.app.pivot_builder.spec = spec.clone();
             wait_in(&mut place, &mut rig, "the preview", &|r| r.app.pivot_builder.preview.is_some());
             match &rig.app.pivot_builder.preview {
@@ -2633,7 +2633,7 @@ fn m1_a_lookup_that_gets_a_repeated_key_after_the_check_is_refused_in_the_key_ch
         let mut df = broken_master();
         polars::prelude::ParquetWriter::new(std::fs::File::create(&path).expect("file")).finish(&mut df).expect("write");
         let region = region_ref(&rig);
-        let spec = PivotSpec { rows: vec![region.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, model_fields: vec![region.clone()], ..Default::default() };
+        let spec = PivotSpec { rows: vec![region.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, model_fields: vec![region.clone()], ..Default::default() };
         let src = rig.app.tabs[0].source.clone();
         rig.app.create_tab_from_source("Pivot: Region".into(), src, vec![TransformStep::from_pivot_spec(spec)], std::collections::HashMap::new());
         settle(&mut rig.app);
@@ -3082,5 +3082,294 @@ fn m2_pictures_of_the_calendar_dialog_the_calendar_tab_and_the_as_of_dialog() {
         rig.draw(4);
         let r = assert_dialog_fits(&rig.ctx, &as_of_title(), &what);
         shoot(&mut rig, "model-as-of-dialog", dark, r.window.expand(10.0));
+    }
+}
+
+
+// ------------------------------------------------------------------------------------------------ M3: balances and flows
+
+use crate::ui::model_measures::MEASURES_DIALOG_TITLE;
+use micro_parquet::measures::ColumnTag;
+use micro_parquet::models::{TimeAgg, TimeValue};
+
+fn measures_title() -> String {
+    format!("{}  {}", theme::ph::CALENDAR, MEASURES_DIALOG_TITLE)
+}
+
+fn m3_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {
+    let (mut rig, what) = m2_rig(name, ppp, w, h, dark);
+    m2_linked(&mut rig);
+    rig.app.active_tool = ActiveToolModal::None;
+    rig.draw(3);
+    (rig, what)
+}
+
+fn measure_rect(rig: &Rig, kind: &str, id: &str) -> egui::Rect {
+    let r = &rig.app.project.model_ui.measures.rects;
+    let list = if kind == "tag" { &r.tags } else { &r.suggestions };
+    list.iter().find(|(n, _)| n == id).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: the {kind} of '{id}' in {:?}", rig.what, list.iter().map(|b| b.0.clone()).collect::<Vec<_>>()))
+}
+
+#[test]
+fn m3_the_measures_dialog_tags_columns_and_applies_a_suggestion_by_a_click_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m2_rig("p9m3tags", ppp, w, h, dark);
+            // no date link yet: the dialog says what to do first
+            menu_item9(&mut rig, "Model", "Measures");
+            let p = rig.draw(3);
+            assert!(painted_has(&p, "No data tab has a date link yet"), "{what}: nothing to tag yet");
+            let close = rig.app.project.model_ui.measures.rects.buttons.iter().find(|(n, _)| n == "Close").map(|(_, b)| *b).expect("Close");
+            click_rect(&mut rig, close);
+            m2_linked(&mut rig);
+            menu_item9(&mut rig, "Model", "Measures");
+            rig.draw(4);
+            assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+            for id in ["Accounts \u{b7} Balance", "GL TB \u{b7} Balance"] {
+                let b = reveal(&mut rig, &measures_title(), &|r| measure_rect(r, "suggestion", id));
+                assert!(inside(b, rig.ctx.screen_rect()), "{what}: {id}");
+            }
+            assert!(rig.app.project.model.column_kinds.is_empty(), "{what}: a suggestion is not applied by itself");
+            // a click on the suggestion tags the column
+            let b = reveal(&mut rig, &measures_title(), &|r| measure_rect(r, "suggestion", "GL TB \u{b7} Balance"));
+            click_rect(&mut rig, b);
+            rig.draw(3);
+            assert_eq!(rig.app.project.model.column_kinds.iter().map(|k| (k.tab.as_str(), k.column.as_str(), k.kind)).collect::<Vec<_>>(), [("t3", "Balance", ColumnTag::Balance)], "{what}");
+            assert!(!rig.app.project.model_ui.measures.rects.suggestions.iter().any(|(n, _)| n == "GL TB \u{b7} Balance"), "{what}: the suggestion is gone once applied");
+            // the tag box: Flow, then Not tagged
+            let tag = reveal(&mut rig, &measures_title(), &|r| measure_rect(r, "tag", "Accounts \u{b7} Balance"));
+            pick_in_combo(&mut rig, tag, "Flow", &what);
+            assert_eq!(rig.app.column_tag("t2", "Balance"), Some(ColumnTag::Flow), "{what}");
+            let tag = reveal(&mut rig, &measures_title(), &|r| measure_rect(r, "tag", "Accounts \u{b7} Balance"));
+            pick_in_combo(&mut rig, tag, "Not tagged", &what);
+            assert_eq!(rig.app.column_tag("t2", "Balance"), None, "{what}");
+            let p = rig.draw(3);
+            let r = assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r.window, &what);
+            // the model changed, so the project is unsaved
+            assert!(!rig.app.project.model.is_empty(), "{what}");
+        }
+    }
+}
+
+/// Picks `item` in a value's aggregation list, scrolling the list by the wheel when the room under the box is short.
+fn pick_agg(rig: &mut Rig, combo: egui::Rect, item: &str, what: &str) {
+    let mut p = click_rect(rig, combo);
+    for n in 0..16 {
+        let dy = if n < 8 { -300.0 } else { 300.0 };
+        if let Some(b) = last_box(&p, item, combo.bottom()).filter(|b| inside(*b, rig.ctx.screen_rect())) {
+            click_rect(rig, b);
+            rig.draw(3);
+            return;
+        }
+        let at = ["Max", "Closing balance", "W.Avg at closing", "Count"].iter().find_map(|t| last_box(&p, t, combo.top())).map(|b| b.center()).unwrap_or(combo.center());
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        rig.step(vec![egui::Event::PointerMoved(at)]);
+        rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, dy), modifiers: egui::Modifiers::NONE }]);
+        // (egui scrolls smoothly, over time)
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        p = rig.draw(3);
+    }
+    panic!("{what}: '{item}' is not in the aggregation list: combo {combo:?} {:?}", p.boxes.iter().filter(|(_, b)| b.top() > combo.top() - 1.0 && b.left() > combo.left() - 40.0 && b.left() < combo.right() + 40.0).take(30).collect::<Vec<_>>());
+}
+
+fn m3_tag_gl_balance(rig: &mut Rig) {
+    rig.app.set_column_tag("t3", "Balance", Some(ColumnTag::Balance));
+    rig.draw(3);
+}
+
+fn m3_open_builder_on_gl(rig: &mut Rig) {
+    rig.app.active_tab = 2;
+    rig.app.run_command(&rig.ctx, CommandId::Pivot);
+    rig.draw(8);
+}
+
+#[test]
+fn m3_the_aggregation_choice_in_values_lists_the_time_aggregations_on_a_date_linked_tab_and_a_tagged_column_starts_with_its_default_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m3_rig("p9m3agg", ppp, w, h, dark);
+            // a tab with no date link has the old choice only
+            rig.app.active_tab = 0;
+            rig.app.run_command(&rig.ctx, CommandId::Pivot);
+            rig.draw(8);
+            add_to(&mut Place::Docked, &mut rig, "Branch", "Rows", &what);
+            add_to(&mut Place::Docked, &mut rig, "Balance", "Values", &what);
+            rig.draw(4);
+            let combo = rig.app.pivot_builder.rects.agg_combos.first().map(|(_, b)| *b).expect("the aggregation box");
+            let p = click_rect(&mut rig, combo);
+            assert!(last_box(&p, "Count distinct", 0.0).is_some() && last_box(&p, "Closing balance", 0.0).is_none(), "{what}: no time aggregation without a date link");
+            rig.app.pivot_builder.open = false;
+            rig.app.active_tool = ActiveToolModal::None;
+            rig.draw(3);
+            // the date-linked GL TB with Balance tagged as a balance
+            m3_tag_gl_balance(&mut rig);
+            m3_open_builder_on_gl(&mut rig);
+            add_to(&mut Place::Docked, &mut rig, "GL", "Rows", &what);
+            add_to(&mut Place::Docked, &mut rig, "Balance", "Values", &what);
+            rig.draw(4);
+            let v = rig.app.pivot_builder.spec.values[0].clone();
+            assert_eq!(v.time.map(|t| t.agg), Some(TimeAgg::ClosingBalance), "{what}: a column tagged Balance starts as Closing balance: {v:?}");
+            assert_eq!(rig.app.pivot_builder.spec.data_tab, "t3", "{what}: the pivot knows its data tab");
+            let combo = rig.app.pivot_builder.rects.agg_combos[0].1;
+            let mut p = click_rect(&mut rig, combo);
+            // the list is taller than the room under the box: it scrolls, by the wheel
+            for _ in 0..12 {
+                if last_box(&p, "W.Avg at closing", 0.0).is_some() {
+                    break;
+                }
+                let at = last_box(&p, "Max", 0.0).map(|b| b.center()).unwrap_or(combo.center());
+                rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+                rig.step(vec![egui::Event::PointerMoved(at)]);
+        rig.step(vec![egui::Event::PointerMoved(at)]);
+                rig.step(vec![egui::Event::PointerMoved(at), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -300.0), modifiers: egui::Modifiers::NONE }]);
+                p = rig.draw(3);
+            }
+            for item in ["Closing balance","Opening balance","Average balance","Total (flow)","Period amount (YTD balance)","Count at closing","Distinct count at closing","W.Avg at closing"] {
+                assert!(last_box(&p, item, 0.0).is_some(), "{what}: '{item}' is in the list");
+            }
+            let item = last_box(&p, "Average balance", 0.0).expect("item");
+            click_rect(&mut rig, item);
+            rig.draw(3);
+            assert_eq!(rig.app.pivot_builder.spec.values[0].time.map(|t| t.agg), Some(TimeAgg::AverageBalance), "{what}");
+            // the box and the chip fit in the dialog
+            let rr = rig.app.pivot_builder.rects.clone();
+            assert!(rr.agg_combos.iter().all(|(_, b)| inside(*b, rr.right.expand(1.0))), "{what}: the box {:?} is inside {:?}", rr.agg_combos, rr.right);
+            // back to a plain Sum: the stock warning shows (34 dates of a balance added)
+            let combo = rig.app.pivot_builder.rects.agg_combos[0].1;
+            pick_agg(&mut rig, combo, "Sum", &what);
+            assert!(rig.app.pivot_builder.spec.values[0].time.is_none(), "{what}");
+            pump_until(&mut rig, "the warning", &|r| !r.app.pivot_builder.preview_warnings.is_empty());
+            let p = rig.draw(3);
+            assert_eq!(rig.app.pivot_builder.preview_warnings, ["Sum of Balance adds 34 dates of balances. Use Closing balance or Average balance."], "{what}");
+            assert!(painted_has(&p, "Sum of Balance adds 34 dates of balances."), "{what}: the banner is drawn");
+            assert!(!rig.app.pivot_builder.rects.warnings.is_empty(), "{what}");
+            // Closing balance again: no warning
+            let combo = rig.app.pivot_builder.rects.agg_combos[0].1;
+            pick_agg(&mut rig, combo, "Closing balance", &what);
+            pump_until(&mut rig, "no warning", &|r| r.app.pivot_builder.preview_warnings.is_empty() && matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+            assert!(rig.app.pivot_builder.rects.warnings.is_empty(), "{what}");
+        }
+    }
+}
+
+/// A pivot tab on GL TB by Calendar > Month-Year with a Closing balance and a plain Sum of Balance, as of `as_of`.
+fn m3_pivot_tab(rig: &mut Rig, as_of: Option<&str>) -> usize {
+    m3_tag_gl_balance(rig);
+    if let Some(d) = as_of {
+        rig.app.project.model.as_of = micro_parquet::model::AsOf::Date(d.to_string());
+    }
+    let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t3").expect("the date link");
+    let f = ModelFieldRef::new(&link, "GL TB \u{2192} Calendar", "Calendar", "Month-Year");
+    let order = micro_parquet::dates::DatePart::MonthYear.sort_order(&rig.app.settings.calendar).map(|o| vec![PivotFieldOrder { field: f.name.clone(), order: o }]).unwrap_or_default();
+    let spec = PivotSpec {
+        rows: vec![f.name.clone()],
+        values: vec![
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg: TimeAgg::ClosingBalance }) },
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None },
+        ],
+        row_totals: true,
+        column_totals: true,
+        filters: vec![PivotFilter { field: f.name.clone(), values: vec![Some("Oct 2026".into()), Some("Nov 2026".into())] }],
+        model_fields: vec![f],
+        field_orders: order,
+        data_tab: "t3".into(),
+        ..Default::default()
+    };
+    rig.app.show_steps_sidebar = false;
+    let src = rig.app.tabs[2].source.clone();
+    rig.app.create_tab_from_source("Pivot: GL TB".into(), src, vec![TransformStep::from_pivot_spec(spec)], std::collections::HashMap::new());
+    settle(&mut rig.app);
+    let at = rig.app.tabs.len() - 1;
+    rig.app.active_tab = at;
+    pump(rig, "the pivot", &|r| r.app.tabs[at].total_rows > 0);
+    pump(rig, "the report", &|r| r.app.pivot_report_for(&r.app.tabs[at]).is_some());
+    if as_of.is_some() {
+        // the as-of date reaches the workers a frame later and the tab is worked out again
+        pump(rig, "the blank cell", &|r| r.app.pivot_report_for(&r.app.tabs[at]).is_some_and(|p| !p.notes.is_empty()));
+        pump(rig, "the table with its blank cell", &|r| r.app.tabs[at].cached_slice.column("Closing balance of Balance").is_ok_and(|c| c.is_null().any()));
+        rig.draw(4);
+    }
+    at
+}
+
+fn banner_rects(rig: &Rig, at: usize) -> Vec<egui::Rect> {
+    rig.ctx.data(|d| d.get_temp(egui::Id::new(("pivot_banner", rig.app.tabs[at].id)))).unwrap_or_default()
+}
+
+fn noted_cells(rig: &Rig, at: usize) -> Vec<(String, egui::Rect)> {
+    rig.ctx.data(|d| d.get_temp(egui::Id::new(("grid_notes_drawn", rig.app.tabs[at].id)))).unwrap_or_default()
+}
+
+#[test]
+fn m3_a_pivot_tab_shows_the_stock_warning_and_a_blank_measure_cell_says_why_on_hover_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m3_rig("p9m3tab", ppp, w, h, dark);
+            // as of 31 Oct 2026 the Nov rows (to 24 Nov) are after the as-of date: November has no balance yet
+            let at = m3_pivot_tab(&mut rig, Some("2026-10-31"));
+            let p = rig.draw(4);
+            let banner = banner_rects(&rig, at);
+            assert_eq!(banner.len(), 1, "{what}: one warning");
+            assert!(painted_has(&p, "Sum of Balance adds 25 dates of balances. Use Closing balance or Average balance."), "{what}: the banner text");
+            assert!(banner.iter().all(|b| inside(*b, rig.ctx.screen_rect())), "{what}: inside the window");
+            let cells = noted_cells(&rig, at);
+            assert!(!cells.is_empty(), "{what}: a blank cell with a reason is drawn: report {:?}, columns {:?}, slice {:?}", rig.app.pivot_report_for(&rig.app.tabs[at]).map(|r| r.notes.clone()), rig.app.tabs[at].cached_slice.get_column_names(), rig.app.tabs[at].cached_slice.head(Some(3)));
+            let (text, rect) = cells[0].clone();
+            assert_eq!(text, "No balance in Nov 2026 for 'GL TB' (last date 31 Oct 2026)", "{what}");
+            // hovering the cell shows the reason
+            let p = crate::ui::render_tests_p8::hover_at(&mut rig, rect.center());
+            assert!(painted_has(&p, "No balance in Nov 2026 for"), "{what}: the tooltip is drawn at {rect:?}: {:?}", p.boxes.iter().filter(|(t, _)| t.len() > 12).map(|(t, b)| (t.chars().take(40).collect::<String>(), *b)).collect::<Vec<_>>());
+            // the same cell is blank, never 0
+            let df = rig.app.tabs[at].cached_slice.clone();
+            let col = df.get_column_names()[1].to_string();
+            assert!(df.column(&col).expect("closing").is_null().any(), "{what}: a blank, not 0");
+            assert_eq!(col, "Closing balance of Balance", "{what}");
+        }
+    }
+}
+
+#[test]
+fn m3_pictures_of_the_columns_tags_the_aggregation_choice_the_stock_warning_and_a_blank_cell_with_its_reason() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, shoot_held, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let (mut rig, what) = m3_rig("p9m3pics", SHOT_PPP, SHOT_W, SHOT_H + 200.0, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        // Model > Measures...: one column tagged, one with its suggestion
+        rig.app.set_column_tag("t3", "Balance", Some(ColumnTag::Balance));
+        menu_item9(&mut rig, "Model", "Measures");
+        rig.draw(5);
+        let r = assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+        shoot(&mut rig, "model-measures-columns", dark, r.window.expand(10.0));
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        // the aggregation list in Values
+        m3_open_builder_on_gl(&mut rig);
+        add_to(&mut Place::Docked, &mut rig, "GL", "Rows", &what);
+        add_to(&mut Place::Docked, &mut rig, "Balance", "Values", &what);
+        rig.draw(4);
+        let combo = rig.app.pivot_builder.rects.agg_combos[0].1;
+        click_rect(&mut rig, combo);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-time-aggregations", dark, screen);
+        rig.app.pivot_builder.open = false;
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        // the pivot tab: the warning banner, and a blank cell with its reason
+        let at = m3_pivot_tab(&mut rig, Some("2026-10-31"));
+        rig.draw(4);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-stock-warning", dark, screen);
+        let rect = noted_cells(&rig, at).first().map(|c| c.1).expect("a blank cell");
+        let p = crate::ui::render_tests_p8::hover_at(&mut rig, rect.center());
+        assert!(painted_has(&p, "No balance in Nov 2026 for"), "{what}: the tooltip is in the picture");
+        let screen = rig.ctx.screen_rect();
+        shoot_held(&mut rig, "pivot-blank-measure-reason", dark, screen);
     }
 }

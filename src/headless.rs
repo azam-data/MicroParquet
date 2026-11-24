@@ -241,7 +241,7 @@ mod tests {
             spec: micro_parquet::cl1::Cl1Spec { category_col: Some("CAT".into()), fixed_category: String::new(), grade_col: "GRADE".into(), measure_cols: vec![("outstanding".into(), "BAL".into()), ("base".into(), "BASE".into()), ("provision".into(), "PROV".into())] },
             template_file: String::new(),
         });
-        let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() });
+        let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() });
         let pack = ReportPack {
             name: "mini".into(),
             inputs: vec![

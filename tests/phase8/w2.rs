@@ -12,7 +12,7 @@ use micro_parquet::sort_lists::SortOrder;
 use polars::prelude::*;
 
 fn sum_balance() -> PivotValue {
-    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }
+    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }
 }
 
 fn pivot_by(field: &str, order: Option<SortOrder>, date_fields: Vec<DateFieldRef>) -> TransformStep {

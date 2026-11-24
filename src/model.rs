@@ -63,9 +63,7 @@ pub struct ModelCalendar {
     pub tab: String,
 }
 
-/// Placeholder: what a column means for time intelligence, stock or flow (M3 fills it in).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-pub struct ColumnKind {}
+pub use crate::measures::ColumnKind;
 
 /// Placeholder: a named measure (M3 to M5 fill it in).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -730,6 +728,30 @@ pub struct ScopeLink {
 pub struct ModelContext {
     pub links: Vec<ScopeLink>,
     pub temp_dir: std::path::PathBuf,
+    /// The model calendar, the date links and the as-of date (Phase 9 M3): what the time aggregations read.
+    pub calendar: Option<CalendarScope>,
+    /// The tags of the numeric columns (Phase 9 M3), for the stock warning.
+    pub kinds: Vec<ColumnKind>,
+}
+
+/// The model calendar as a worker needs it.
+#[derive(Clone, Debug, Default)]
+pub struct CalendarScope {
+    pub settings: crate::dates::CalendarSettings,
+    /// The Calendar tab's project key.
+    pub tab: String,
+    pub date_links: Vec<DateLink>,
+    /// The as-of date in force; `None` while the tabs' dates are still being read.
+    pub as_of: Option<chrono::NaiveDate>,
+    /// Each data tab's title by its project key, for the messages.
+    pub titles: Vec<(String, String)>,
+}
+
+impl CalendarScope {
+    /// The title of a data tab, or its key when it has none.
+    pub fn title_of(&self, key: &str) -> String {
+        self.titles.iter().find(|t| t.0 == key).map(|t| t.1.clone()).unwrap_or_else(|| key.to_string())
+    }
 }
 
 thread_local! {

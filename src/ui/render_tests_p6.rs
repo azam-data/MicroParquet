@@ -1760,7 +1760,7 @@ fn p1_every_tool_dialog_takes_its_inputs_from_a_saved_run() {
     rig.app.prefill_run(&ToolRun::Stack(StackRun { files, include_source_col: false })).expect("stack");
     assert_eq!(rig.app.active_tool, ActiveToolModal::StackFiles);
     assert_eq!((rig.app.stack.files_list.len(), rig.app.stack.include_source), (2, false));
-    let spec = PivotSpec { rows: vec!["SIDE".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], ..Default::default() };
+    let spec = PivotSpec { rows: vec!["SIDE".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], ..Default::default() };
     rig.app.prefill_run(&ToolRun::PivotTab(PivotTabRun { source: names("Sept"), pivot: Some(TransformStep::from_pivot_spec(spec)) })).expect("pivot");
     assert_eq!(rig.app.active_tool, ActiveToolModal::PivotBuilder);
     assert_eq!((rig.app.active_tab, rig.app.pivot_builder.spec.rows.clone(), rig.app.pivot_builder.new_tab), (sept, vec!["SIDE".to_string()], true));

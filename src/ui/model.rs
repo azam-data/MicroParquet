@@ -82,6 +82,8 @@ pub struct ModelState {
     pub date_info: HashMap<String, crate::ui::model_calendar::DateInfoRuntime>,
     /// The Calendar and As-of date dialogs (Phase 9 M2).
     pub cal: crate::ui::model_calendar::CalUi,
+    /// The Measures dialog (Phase 9 M3).
+    pub measures: crate::ui::model_measures::MeasuresUi,
 }
 
 fn fingerprint<T: Hash>(v: &T) -> u64 {
@@ -228,17 +230,37 @@ impl MicroParquetApp {
             let refusal = self.model_status_of(l).refusal(&title);
             parts.push((l.clone(), lookup, refusal));
         }
+        // the model calendar, the as-of date and the column tags: what the time aggregations and the stock warning read (M3)
+        let calendar = self.project.model.calendar.as_ref().filter(|c| !c.tab.is_empty()).map(|c| model::CalendarScope {
+            settings: c.settings,
+            tab: c.tab.clone(),
+            date_links: c.date_links.clone(),
+            as_of: self.model_as_of().map(|(d, _)| d),
+            titles: c.date_links.iter().map(|l| (l.data_tab.clone(), self.model_tab_title(&l.data_tab).trim_end_matches(" (not open)").to_string())).collect(),
+        });
+        let kinds = self.project.model.column_kinds.clone();
         let fp = fingerprint(&(
             parts.iter().map(|(l, k, r)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)), r.clone())).collect::<Vec<_>>(),
             self.paths.temp_dir.clone(),
+            format!("{:?}", (&calendar, &kinds)),
         ));
         if self.project.model_ui.scope.is_none() || self.project.model_ui.scope_fp != fp {
             let ctx = model::ModelContext {
                 links: parts.into_iter().map(|(link, lookup, refusal)| model::ScopeLink { link, lookup, refusal }).collect(),
                 temp_dir: self.paths.temp_dir.clone(),
+                calendar,
+                kinds,
             };
             self.project.model_ui.scope = Some(std::sync::Arc::new(ctx));
             self.project.model_ui.scope_fp = fp;
+            // the model changed (the as-of date, a tag, the calendar): a pivot made on a data tab is worked out again (M3)
+            let stale: Vec<usize> = (0..self.tabs.len()).filter(|i| self.tabs[*i].steps.iter().any(|s| s.as_pivot_spec().is_some_and(|p| p.has_time_values()))).collect();
+            if !stale.is_empty() {
+                model::set_scope(self.project.model_ui.scope.clone());
+                for i in stale {
+                    self.refresh_tab_at(i, false, None);
+                }
+            }
         }
         model::set_scope(self.project.model_ui.scope.clone());
     }
@@ -363,6 +385,10 @@ impl MicroParquetApp {
             if ui.button("As-of date\u{2026}").clicked() {
                 ui.close_menu();
                 self.open_model_dialog(ActiveToolModal::ModelAsOf);
+            }
+            if ui.button("Measures\u{2026}").clicked() {
+                ui.close_menu();
+                self.open_model_dialog(ActiveToolModal::ModelMeasures);
             }
         })
         .response

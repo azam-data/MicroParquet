@@ -354,7 +354,7 @@ fn p1_the_join_stack_and_pivot_tab_runs() {
     // a pivot made into a new tab: the tab it came from and the pivot step
     let book = ccy_book();
     let src = env.open("Book", &book);
-    let spec = PivotSpec { rows: vec!["SIDE".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() };
+    let spec = PivotSpec { rows: vec!["SIDE".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() };
     let step = TransformStep::from_pivot_spec(spec);
     let (run, df) = roundtrip(&env, &src, std::slice::from_ref(&step), "pivot tab");
     assert_eq!(df.height(), 3, "A, L and the grand total");

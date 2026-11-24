@@ -59,6 +59,7 @@ pub enum JobOutput {
     ChartPicker(Box<PickerResult>),
     /// The Nested view of a pivot tab (Phase 9 P2).
     NestedView(Box<NestedViewResult>),
+    PivotReport(Box<PivotReportResult>),
     /// The key check of a link (Phase 9 M0).
     ModelCheck(Box<ModelCheckResult>),
     /// A tab of the rows a key check lists (Phase 9 M0).
@@ -1174,6 +1175,9 @@ pub struct PivotPreviewResult {
     /// The Nested view of the pivot (its first `limit` lines) when the settings choose Nested: built by the same function as the
     /// tab's Nested view, from the same source rows (Phase 9 P2 follow-up).
     pub nested: Option<crate::pivot_view::NestedView>,
+    /// Why a cell of the preview is blank, and the warnings about the pivot (Phase 9 M3).
+    pub notes: Vec<crate::pivot_table::CellNote>,
+    pub warnings: Vec<String>,
 }
 
 /// How many rows of the pivot the docked dialog previews (the pop-out window asks for as many as fit, at least this many).
@@ -1192,6 +1196,7 @@ pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<P
     ctx.check()?;
     let limit = req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX);
     let mut nested = None;
+    let (mut notes, mut warnings) = (Vec::new(), Vec::new());
     let (table, total_rows) = if req.spec.values.is_empty() || (req.spec.rows.is_empty() && req.spec.columns.is_empty()) {
         (Err("Drag fields into Rows or Columns, and a field into Values, to see the table.".to_string()), 0)
     } else {
@@ -1200,6 +1205,8 @@ pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<P
         match crate::pivot_table::build_pivot(lf, &req.spec) {
             Ok(b) => {
                 let n = b.df.height();
+                notes = b.notes.clone();
+                warnings = b.warnings.clone();
                 match lf_nested.map(|l| crate::pivot_view::build_nested(l, &req.spec)) {
                     Some(Ok(v)) => {
                         let lines = v.rows.len();
@@ -1213,7 +1220,7 @@ pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<P
             Err(e) => (Err(format!("{:#}", e)), 0),
         }
     };
-    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows, limit, nested })
+    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows, limit, nested, notes, warnings })
 }
 
 pub struct PivotValuesRequest {
@@ -1365,6 +1372,54 @@ pub fn compute_nested_view(req: NestedViewRequest, ctx: &JobCtx) -> Result<Neste
     let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
     let view = crate::pivot_view::nested_view_of_tab(&req.source, &req.steps, &req.temp_dir).map_err(|e| format!("{:#}", e));
     Ok(NestedViewResult { tab_id: req.tab_id, pipeline, view })
+}
+
+/// What a pivot tab says about its numbers (Phase 9 M3): why a cell is blank, and the warnings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PivotReport {
+    pub warnings: Vec<String>,
+    pub notes: Vec<crate::pivot_table::CellNote>,
+}
+
+pub struct PivotReportRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    /// The steps the tab runs (up to `exec_steps`).
+    pub steps: Vec<TransformStep>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct PivotReportResult {
+    pub tab_id: u64,
+    /// `steps_edit::pipeline_hash` of what the report was made for: a result for steps that have changed since is dropped.
+    pub pipeline: u64,
+    /// The report, `None` when the tab's last step is not a pivot with a data tab, or why it could not be made.
+    pub report: std::result::Result<Option<PivotReport>, String>,
+}
+
+/// The report of a tab whose last step that is on is a pivot made on a data tab (a pivot with none has nothing to say).
+pub fn pivot_report_of_tab(source: &TabSource, steps: &[TransformStep], temp_dir: &Path) -> Result<Option<PivotReport>> {
+    let Some(at) = steps.iter().rposition(|s| !s.is_skipped()) else {
+        return Ok(None);
+    };
+    let Some(spec) = steps[at].as_pivot_spec() else {
+        return Ok(None);
+    };
+    if spec.data_tab.is_empty() || spec.values.is_empty() || (spec.rows.is_empty() && spec.columns.is_empty()) {
+        return Ok(None);
+    }
+    let lf = compile_tab_lazy(source, &steps[..at], temp_dir)?;
+    let b = crate::pivot_table::build_pivot(lf, &spec)?;
+    Ok(Some(PivotReport { warnings: b.warnings, notes: b.notes }))
+}
+
+/// Makes the report of a pivot tab on the worker.
+pub fn compute_pivot_report(req: PivotReportRequest, ctx: &JobCtx) -> Result<PivotReportResult> {
+    ctx.check()?;
+    ctx.set_progress("Pivot notes\u{2026}", None);
+    let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
+    let report = pivot_report_of_tab(&req.source, &req.steps, &req.temp_dir).map_err(|e| format!("{:#}", e));
+    Ok(PivotReportResult { tab_id: req.tab_id, pipeline, report })
 }
 
 /// The key check of one link, with the fingerprint of what it was run for: a result for tabs that have changed since is dropped.

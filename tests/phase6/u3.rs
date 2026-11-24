@@ -85,7 +85,7 @@ fn u3_a_pivot_with_a_list_on_its_row_field_lists_the_rows_in_list_order() {
     let pv = |orders: Vec<PivotFieldOrder>| {
         let spec = PivotSpec {
             rows: vec!["Term Period".into()],
-            values: vec![PivotValue { field: "Id".into(), agg: PivotAgg::Sum, weight_col: None }],
+            values: vec![PivotValue { field: "Id".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
             row_totals: true,
             column_totals: true,
             field_orders: orders,
@@ -111,7 +111,7 @@ fn u3_pivot_columns_follow_a_tenor_order_too() {
     let spec = PivotSpec {
         rows: vec!["Bank".into()],
         columns: vec!["Tenor".into()],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         row_totals: false,
         column_totals: false,
         field_orders: vec![PivotFieldOrder { field: "Tenor".into(), order: SortOrder::Tenor }],

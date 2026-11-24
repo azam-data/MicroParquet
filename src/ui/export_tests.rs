@@ -23,7 +23,7 @@ fn frame() -> DataFrame {
 fn pivot_step() -> TransformStep {
     TransformStep::from_pivot_spec(micro_parquet::models::PivotSpec {
         rows: vec!["Branch".into()],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         column_totals: true,
         ..Default::default()
     })

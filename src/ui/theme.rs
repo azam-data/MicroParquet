@@ -377,6 +377,10 @@ pub const MODEL_DIALOG_SHARE: f32 = 0.8;
 pub const MODEL_COMBO_W: f32 = 190.0;
 /// The cell of a data tab's title in the date-link rows of Model > Calendar..., so every box has one width and one left edge.
 pub const MODEL_LINK_TITLE_W: f32 = 170.0;
+/// Model > Measures...: the dialog, a column name's cell and the tag box.
+pub const DIALOG_W_MEASURES: f32 = 640.0;
+pub const MEASURE_NAME_W: f32 = 170.0;
+pub const MEASURE_TAG_W: f32 = 150.0;
 pub const MODEL_LIST_LINES: usize = 8;
 /// The width of the PDF export dialog's title box.
 pub const PDF_TITLE_FIELD_W: f32 = 320.0;
@@ -407,6 +411,13 @@ pub const PIVOT_COMBO_W: f32 = 130.0;
 /// The pivot's Layout box ("Nested (Excel style)").
 pub const PIVOT_COMBO_LAYOUT_W: f32 = 160.0;
 pub const PIVOT_COMBO_AGG_W: f32 = 104.0;
+/// The aggregation box of a value that has a time aggregation ("Period amount (YTD balance)").
+pub const PIVOT_COMBO_TIME_W: f32 = 196.0;
+/// The most height the aggregation list of a value has before it scrolls (7 aggregations, a rule and 8 over time).
+pub const PIVOT_AGG_LIST_H: f32 = 460.0;
+/// The room the aggregation list leaves below it, and the least height it has.
+pub const PIVOT_AGG_LIST_MARGIN: f32 = 24.0;
+pub const PIVOT_AGG_LIST_MIN_H: f32 = 120.0;
 pub const PIVOT_COMBO_WEIGHT_W: f32 = 120.0;
 pub const PIVOT_COMBO_SORT_W: f32 = 210.0;
 pub const PIVOT_FOOTER_BUTTONS_W: f32 = 250.0;

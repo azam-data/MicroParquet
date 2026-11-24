@@ -394,7 +394,7 @@ fn pivot_of(rows: &[&str], columns: &[&str]) -> PivotSpec {
     PivotSpec {
         rows: rows.iter().map(|s| s.to_string()).collect(),
         columns: columns.iter().map(|s| s.to_string()).collect(),
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         row_totals: true,
         column_totals: true,
         subtotals: true,

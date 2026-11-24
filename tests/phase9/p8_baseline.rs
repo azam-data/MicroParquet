@@ -77,7 +77,7 @@ fn month_year() -> DateFieldRef {
 }
 
 fn sum_balance() -> PivotValue {
-    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }
+    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }
 }
 
 /// A pivot of the balance by Open Date · Month-Year (a date field).

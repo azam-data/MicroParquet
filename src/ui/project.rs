@@ -216,6 +216,7 @@ impl MicroParquetApp {
         self.project_advance();
         self.model_tick();
         self.model_scope_refresh();
+        self.pivot_report_tick();
         if self.project.active {
             let now = ctx.input(|i| i.time);
             if now - self.project.fp_checked_at > 0.4 { // not a size: seconds between two checks of the unsaved marker

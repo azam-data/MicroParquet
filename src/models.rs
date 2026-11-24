@@ -1449,20 +1449,57 @@ impl PivotAgg {
     }
 }
 
+/// A time aggregation of a value on a date-linked data tab (Phase 9 M3). The period of the cell is the Calendar fields of its row
+/// and column (M4 adds windows and shifts), its end cut at the as-of date; see `measures.rs`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeAgg {
+    /// The value at the last snapshot date in the period.
+    #[default]
+    ClosingBalance,
+    /// The value at the last snapshot date before the period.
+    OpeningBalance,
+    /// The mean of the value over every calendar day of the period, carried forward over days without data (Daily tabs); on a
+    /// Month-end tab the mean of the month-ends.
+    AverageBalance,
+    /// The sum of the rows dated in the period.
+    TotalFlow,
+    /// A YTD balance's movement in the period.
+    PeriodAmount,
+    /// Rows at the last snapshot date in the period.
+    CountAtClosing,
+    DistinctCountAtClosing,
+    /// The weighted average of the rows at the last snapshot date in the period.
+    WAvgAtClosing,
+}
+
+/// The time part of a value (`PivotValue.time`). A struct so that M4 can add its window and shift without changing the file.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct TimeValue {
+    #[serde(default)]
+    pub agg: TimeAgg,
+}
+
 /// One value field of a pivot table.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct PivotValue {
     pub field: String,
     #[serde(default)]
     pub agg: PivotAgg,
-    /// The weight column of a weighted average.
+    /// The weight column of a weighted average (also of "W.Avg at closing").
     #[serde(default)]
     pub weight_col: Option<String>,
+    /// A time aggregation (Phase 9 M3): when set it is the aggregation and `agg` is not used. Not written when none, so old pivots
+    /// keep their bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<TimeValue>,
 }
 
 impl PivotValue {
-    /// "Sum of Balance", "W.Avg of Rate by Balance".
+    /// "Sum of Balance", "W.Avg of Rate by Balance", "Closing balance of Balance".
     pub fn label(&self) -> String {
+        if let Some(t) = &self.time {
+            return t.agg.heading(&self.field, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), false);
+        }
         match (&self.agg, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty())) {
             (PivotAgg::WeightedAvg, Some(w)) => format!("W.Avg of {} by {}", self.field, w),
             (a, _) => format!("{} of {}", a.label(), self.field),
@@ -1628,9 +1665,18 @@ pub struct PivotSpec {
     /// How the pivot is shown (Phase 9 P2). Side by side is not written, so pivots made before keep their bytes.
     #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
     pub layout: PivotLayout,
+    /// The data tab the pivot was made on, by its project key (Phase 9 M3): its date link gives the time aggregations their dates and
+    /// its column tags give the stock warning. Empty (not written) outside a project and on every pivot made before M3.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data_tab: String,
 }
 
 impl PivotSpec {
+    /// True when a value is a time aggregation.
+    pub fn has_time_values(&self) -> bool {
+        self.values.iter().any(|v| v.time.is_some())
+    }
+
     /// True when the field is in Rows, Columns, Filters or Values.
     pub fn uses_field(&self, name: &str) -> bool {
         self.labels_with(name) || self.values.iter().any(|v| v.field == name || v.weight_col.as_deref() == Some(name))
@@ -2032,6 +2078,9 @@ pub enum TransformStep {
         /// How the pivot is shown (Phase 9 P2); the table the step gives is the same.
         #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
         layout: PivotLayout,
+        /// The data tab the pivot was made on, by project key (Phase 9 M3); see `PivotSpec.data_tab`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_tab: String,
     },
     SqlQuery {
         query: String,
@@ -2274,7 +2323,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields, model_fields, layout } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields, model_fields, layout, data_tab } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -2289,6 +2338,7 @@ impl TransformStep {
                 date_fields: date_fields.clone(),
                 model_fields: model_fields.clone(),
                 layout: *layout,
+                data_tab: data_tab.clone(),
             }),
             _ => None,
         }
@@ -2311,6 +2361,7 @@ impl TransformStep {
             date_fields: spec.date_fields,
             model_fields: spec.model_fields,
             layout: spec.layout,
+            data_tab: spec.data_tab,
         }
     }
 }

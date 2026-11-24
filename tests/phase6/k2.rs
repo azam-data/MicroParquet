@@ -29,7 +29,7 @@ fn book() -> DataFrame {
 fn pivot_step(rows: &[&str], subtotals: bool, column_totals: bool) -> TransformStep {
     TransformStep::from_pivot_spec(PivotSpec {
         rows: rows.iter().map(|s| s.to_string()).collect(),
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         column_totals,
         subtotals,
         ..Default::default()

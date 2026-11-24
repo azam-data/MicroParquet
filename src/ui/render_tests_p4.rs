@@ -33,7 +33,7 @@ fn book(extra: usize) -> DataFrame {
 }
 
 fn sum_balance() -> PivotValue {
-    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }
+    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }
 }
 
 fn title() -> String {
@@ -184,7 +184,7 @@ fn a_full_pivot_with_long_names_and_two_values_has_its_chips_toggles_and_preview
             let s = &mut rig.app.pivot_builder.spec;
             s.rows = vec!["Bucket".into(), "A_very_long_column_name_that_keeps_going_and_going_and_going_until_it_must_be_cut".into()];
             s.columns = vec!["Bank".into()];
-            s.values = vec![sum_balance(), PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }];
+            s.values = vec![sum_balance(), PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None }];
             s.filters = vec![PivotFilter { field: "Bank".into(), values: vec![Some("Islami".into()), Some("Conventional".into())] }];
             s.subtotals = true;
         }
@@ -349,7 +349,7 @@ fn create_pivot_tab_makes_the_tab_with_the_step_and_formats_that_never_scale_a_r
             let s = &mut rig.app.pivot_builder.spec;
             s.rows = vec!["Bucket".into()];
             s.columns = vec!["Bank".into()];
-            s.values = vec![sum_balance(), PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }];
+            s.values = vec![sum_balance(), PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None }];
             s.scale = PivotScale::Crore;
         }
         let p = rig.draw(8);
@@ -410,7 +410,7 @@ fn a_pivot_that_cannot_be_built_says_why_in_the_footer_and_the_button_stays_off(
             let s = &mut rig.app.pivot_builder.spec;
             s.rows = vec!["Bucket".into()];
             // a sum of text is refused
-            s.values = vec![PivotValue { field: "Bank".into(), agg: PivotAgg::Sum, weight_col: None }];
+            s.values = vec![PivotValue { field: "Bank".into(), agg: PivotAgg::Sum, weight_col: None, time: None }];
         }
         let p = rig.draw(8);
         assert!(matches!(rig.app.pivot_builder.preview, Some(Err(_))), "{what}");

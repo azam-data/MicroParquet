@@ -218,7 +218,7 @@ impl MicroParquetApp {
         self.chart.submitted = Some(key);
         self.chart.token += 1;
         self.chart.busy = true;
-        let req = ChartRequest { tab_id: tab.id, token: self.chart.token, source: tab.source.clone(), steps: tab.steps[..exec].to_vec(), spec: self.chart.spec.clone(), temp_dir: self.paths.temp_dir.clone() };
+        let req = ChartRequest { tab_id: tab.id, token: self.chart.token, source: tab.source.clone(), steps: tab.steps[..exec].to_vec(), spec: ChartSpec { data_tab: self.pivot_data_tab(tab.id), ..self.chart.spec.clone() }, temp_dir: self.paths.temp_dir.clone() };
         let jkey = JobKey::tab(JobKind::Chart, tab.id);
         self.jobs.submit(jkey, "Calculating the chart", false, move |ctx| micro_parquet::tab_jobs::compute_chart_job(req, ctx).map(|r| JobOutput::Chart(Box::new(r))));
     }

@@ -562,7 +562,7 @@ fn titles_and_hashes(rig: &Rig) -> Vec<(String, String)> {
 }
 
 fn branch_pivot() -> TransformStep {
-    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() })
+    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() })
 }
 
 /// The file tab, a pivot tab of it and a chart tab of it.
@@ -1197,7 +1197,7 @@ fn count_text(p: &Painted, text: &str) -> usize {
 
 /// Moves the pointer onto `pos` the way a hand does (egui counts a movement only when it sees three positions over more
 /// than 10 ms, and shows no tooltip while the pointer rests where it clicked), then holds it there while the clock runs.
-fn hover_at(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+pub(crate) fn hover_at(rig: &mut Rig, pos: egui::Pos2) -> Painted {
     let t0 = rig.input.time.unwrap_or(0.0) + 1.0;
     for (dt, dx) in [(0.0, 30.0), (0.03, 20.0), (0.06, 10.0), (0.09, 0.0)] {
         rig.input.time = Some(t0 + dt);
@@ -3271,6 +3271,11 @@ pub(crate) fn styled(rig: &mut Rig, dark: bool) {
 pub(crate) fn shoot(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
     rig.step(vec![egui::Event::PointerMoved(egui::pos2(2.0, 2.0))]);
     rig.draw(3);
+    shoot_held(rig, name, dark, crop);
+}
+
+/// `shoot` with the pointer left where it is (a picture of a tooltip).
+pub(crate) fn shoot_held(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
     let screen = rig.ctx.screen_rect();
     let c = crop.intersect(screen);
     assert!(c.width() > 100.0 && c.height() > 40.0, "{name}: the part to draw {c:?} of {screen:?}");

@@ -78,7 +78,7 @@ fn w3_the_owners_bands_unnumbered_come_out_in_band_order_everywhere() {
     // a pivot (the builder gives the field the declared order)
     let pivot = TransformStep::from_pivot_spec(PivotSpec {
         rows: vec!["Rate Band".into()],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         row_totals: true,
         column_totals: true,
         field_orders: vec![PivotFieldOrder { field: "Rate Band".into(), order: order.clone() }],

@@ -4,6 +4,7 @@
 //! worker thread computes.
 
 use crate::ui::prelude::*;
+use micro_parquet::models::{TimeAgg, TimeValue};
 use micro_parquet::pivot_table::{pivot_column_formats, BLANK_LABEL};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -89,6 +90,10 @@ pub struct PivotRects {
     /// The Layout box, and the "Blank line after each group" box of the Nested layout (Phase 9 P2).
     pub layout_combo: egui::Rect,
     pub blank_line: egui::Rect,
+    /// The aggregation box of each chip of Values, by its position (Phase 9 M3).
+    pub agg_combos: Vec<(usize, egui::Rect)>,
+    /// The warnings above the preview (Phase 9 M3).
+    pub warnings: Vec<egui::Rect>,
 }
 
 impl Default for PivotRects {
@@ -114,6 +119,8 @@ impl Default for PivotRects {
             note_dock: n,
             layout_combo: n,
             blank_line: n,
+            agg_combos: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 }
@@ -141,6 +148,11 @@ pub struct PivotBuilderState {
     pub preview_total_rows: usize,
     /// The Nested view of the preview's settings, when they choose Nested (the dialog draws it instead of the flat table).
     pub preview_nested: Option<micro_parquet::pivot_view::NestedView>,
+    /// Why a cell of the preview is blank, and what to warn about (Phase 9 M3).
+    pub preview_notes: Vec<micro_parquet::pivot_table::CellNote>,
+    pub preview_warnings: Vec<String>,
+    /// The blank cells with a reason drawn in the last frame: (reason, rect). The render tests read it.
+    pub notes_drawn: std::cell::RefCell<Vec<(String, egui::Rect)>>,
     /// All columns of the last good preview (the label columns first), for the column formats.
     pub value_columns: Vec<String>,
     pub popup: Option<FilterPopup>,
@@ -293,6 +305,7 @@ impl MicroParquetApp {
             return;
         };
         let rows = self.pivot_preview_rows_wanted();
+        self.pivot_builder.spec.data_tab = self.pivot_data_tab(input.tab_id);
         let token = fingerprint(&(&self.pivot_builder.spec, micro_parquet::steps_edit::pipeline_hash(&input.source, &input.steps), rows));
         if self.pivot_builder.submitted == Some(token) {
             return;
@@ -327,6 +340,8 @@ impl MicroParquetApp {
             b.preview = Some(r.table);
             b.preview_total_rows = r.total_rows;
             b.preview_nested = r.nested;
+            b.preview_notes = r.notes;
+            b.preview_warnings = r.warnings;
             b.preview_limit = r.limit;
         }
     }
@@ -381,8 +396,38 @@ impl MicroParquetApp {
 
     /// The value a field gets when it is added to Values: a sum of a number, a count of anything
     /// else; a rate is averaged by the pinned control column (a sum of rates means nothing).
+    /// The project key of the tab the builder is for when it is a date-linked data tab (what its time aggregations and the stock
+    /// warning read); empty otherwise (Phase 9 M3).
+    pub(crate) fn pivot_data_tab(&self, tab_id: u64) -> String {
+        let Some(key) = self.project.keys.get(&tab_id) else {
+            return String::new();
+        };
+        if self.project.active && self.project.model.calendar.as_ref().is_some_and(|c| c.date_links.iter().any(|l| &l.data_tab == key)) {
+            key.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    /// True when the builder's tab is a date-linked data tab, so a value can have a time aggregation.
+    fn pivot_has_time_choices(&self) -> bool {
+        self.pivot_input().is_some_and(|i| !self.pivot_data_tab(i.tab_id).is_empty())
+    }
+
     fn default_value_for(&self, field: &str) -> PivotValue {
         let kind = self.kind_of(field);
+        // a column tagged as a balance, a flow or a YTD balance gets the aggregation its tag sets (Phase 9 M3)
+        if kind == FieldKind::Number {
+            if let Some(input) = self.pivot_input() {
+                let key = self.pivot_data_tab(input.tab_id);
+                if let Some(tag) = (!key.is_empty()).then(|| self.column_tag(&key, field)).flatten() {
+                    let agg = tag.default_agg();
+                    if !self.pivot_builder.spec.values.iter().any(|v| v.field == field && v.time.is_some_and(|t| t.agg == agg)) {
+                        return PivotValue { field: field.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg }) };
+                    }
+                }
+            }
+        }
         let numbers: Vec<&String> = self.pivot_builder.fields.iter().filter(|(_, k)| *k == FieldKind::Number).map(|(n, _)| n).collect();
         let control = self.tabs.get(self.active_tab).and_then(|t| t.control_col.clone()).filter(|c| numbers.contains(&c) && c != field);
         let (mut agg, mut weight) = match kind {
@@ -406,7 +451,7 @@ impl MicroParquetApp {
                 weight = None;
             }
         }
-        PivotValue { field: field.to_string(), agg, weight_col: weight }
+        PivotValue { field: field.to_string(), agg, weight_col: weight, time: None }
     }
 
     /// Puts a date part into Rows, Columns or Filters (W2): the field "Open Date · Month", with its calendar.
@@ -1248,7 +1293,8 @@ impl MicroParquetApp {
                             }
                             Chip::Value(j) => {
                                 let v = spec_snapshot.values[*j].clone();
-                                let (rect, rm) = self.value_chip(ui, *j, &v, widths[i], tk);
+                                let (rect, rm, agg_rect) = self.value_chip(ui, *j, &v, widths[i], tk);
+                                rects.agg_combos.push((*j, agg_rect));
                                 rects.chips.push((area, v.field.clone(), rect));
                                 if rm {
                                     remove = Some(*j);
@@ -1277,16 +1323,19 @@ impl MicroParquetApp {
 
     /// A chip of Values of exactly width `w`: the field (cut when the room is short), its
     /// aggregation (and weight), and a remove button.
-    fn value_chip(&mut self, ui: &mut egui::Ui, i: usize, v: &PivotValue, w: f32, tk: &theme::Tokens) -> (egui::Rect, bool) {
+    fn value_chip(&mut self, ui: &mut egui::Ui, i: usize, v: &PivotValue, w: f32, tk: &theme::Tokens) -> (egui::Rect, bool, egui::Rect) {
         let numeric = self.kind_of(&v.field) == FieldKind::Number;
         let numbers: Vec<String> = self.pivot_builder.fields.iter().filter(|(_, k)| *k == FieldKind::Number).map(|(n, _)| n.clone()).collect();
         let mut agg = v.agg;
+        let mut time = v.time;
+        let time_choices = self.pivot_has_time_choices();
+        let mut agg_rect = egui::Rect::NOTHING;
         let mut weight = v.weight_col.clone();
         let mut removed = false;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(w, theme::PIVOT_CHIP_H), egui::Sense::hover());
         ui.painter().rect(rect, theme::RADIUS_CONTROL, tk.surface, theme::line(tk.accent_soft_border));
         let inner = egui::Rect::from_min_max(egui::pos2(rect.left() + theme::SPACE_S, rect.top()), egui::pos2(rect.right() - theme::SPACE_XS, rect.bottom()));
-        let fixed = value_chip_fixed_width(agg);
+        let fixed = value_chip_fixed_width(agg, time);
         let label_w = (inner.width() - fixed).max(0.0);
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
             ui.spacing_mut().item_spacing.x = theme::SPACE_S;
@@ -1294,14 +1343,35 @@ impl MicroParquetApp {
             ui.allocate_ui_with_layout(egui::vec2(label_w, theme::PIVOT_CHIP_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(&v.field).font(egui::FontId::new(theme::TEXT_BASE, theme::family_semibold())).color(tk.accent_dark)).truncate());
             });
-            egui::ComboBox::from_id_salt(("pivot_agg", i)).width(theme::PIVOT_COMBO_AGG_W - ui.spacing().interact_size.y).selected_text(agg.label()).show_ui(ui, |ui| {
+            // the list opens under the box and must end inside the window: it scrolls when the room is short
+            let list_h = (ui.ctx().screen_rect().bottom() - ui.cursor().top() - theme::PIVOT_AGG_LIST_MARGIN).clamp(theme::PIVOT_AGG_LIST_MIN_H, theme::PIVOT_AGG_LIST_H);
+            let box_w = if time.is_some() { theme::PIVOT_COMBO_TIME_W } else { theme::PIVOT_COMBO_AGG_W };
+            let shown = match time {
+                Some(t) => t.agg.label(),
+                None => agg.label(),
+            };
+            let combo = egui::ComboBox::from_id_salt(("pivot_agg", i)).width(box_w - ui.spacing().interact_size.y).height(list_h).selected_text(shown).show_ui(ui, |ui| {
                 for a in PivotAgg::all() {
                     if numeric || matches!(a, PivotAgg::Count | PivotAgg::CountDistinct) {
-                        ui.selectable_value(&mut agg, *a, a.label());
+                        if ui.selectable_label(time.is_none() && agg == *a, a.label()).clicked() {
+                            agg = *a;
+                            time = None;
+                        }
+                    }
+                }
+                // on a date-linked data tab: the aggregations over time (Phase 9 M3)
+                if time_choices {
+                    ui.separator();
+                    for t in TimeAgg::all() {
+                        if (numeric || !t.needs_number()) && ui.selectable_label(time.map(|x| x.agg) == Some(*t), t.label()).clicked() {
+                            time = Some(TimeValue { agg: *t });
+                        }
                     }
                 }
             });
-            if agg == PivotAgg::WeightedAvg {
+            agg_rect = combo.response.rect;
+            let wavg = time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg);
+            if wavg {
                 ui.label(egui::RichText::new("by").color(tk.muted));
                 let shown = weight.clone().unwrap_or_else(|| "choose".to_string());
                 egui::ComboBox::from_id_salt(("pivot_weight", i)).width(theme::PIVOT_COMBO_WEIGHT_W - ui.spacing().interact_size.y).selected_text(shown).show_ui(ui, |ui| {
@@ -1318,16 +1388,18 @@ impl MicroParquetApp {
                 removed = true;
             }
         });
-        if agg != v.agg || weight != v.weight_col {
+        if agg != v.agg || weight != v.weight_col || time != v.time {
             if let Some(slot) = self.pivot_builder.spec.values.get_mut(i) {
                 slot.agg = agg;
-                if agg == PivotAgg::WeightedAvg && weight.is_none() {
+                slot.time = time;
+                let wavg = time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg);
+                if wavg && weight.is_none() {
                     weight = numbers.iter().find(|n| **n != slot.field).cloned();
                 }
-                slot.weight_col = if agg == PivotAgg::WeightedAvg { weight } else { None };
+                slot.weight_col = if wavg { weight } else { None };
             }
         }
-        (rect, removed)
+        (rect, removed, agg_rect)
     }
 
     fn pivot_preview(&mut self, ui: &mut egui::Ui, h: f32, tk: &theme::Tokens, rects: &mut PivotRects) {
@@ -1357,6 +1429,11 @@ impl MicroParquetApp {
                     });
                 });
                 ui.separator();
+                // what the numbers need to be read with: the stock warning (Phase 9 M3)
+                for w in self.pivot_builder.preview_warnings.clone() {
+                    let r = ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", theme::ph::WARNING, w)).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                    rects.warnings.push(r.rect);
+                }
                 let left = ui.available_height().min(h);
                 let area_h = (left - theme::SPACE_XS).max(theme::DATA_ROW_H);
                 let out = egui::ScrollArea::both().id_salt("pivot_preview").max_height(area_h).auto_shrink([false, false]).show(ui, |ui| match &self.pivot_builder.preview {
@@ -1405,7 +1482,8 @@ impl MicroParquetApp {
         let total_w: f32 = widths.iter().sum();
         let last = cells.len().saturating_sub(1);
         let has_total_row = spec.column_totals && spec.rows.len() > 0 && self.pivot_builder.preview_total_rows <= self.pivot_preview_limit();
-        let draw_row = |ui: &mut egui::Ui, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
+        self.pivot_builder.notes_drawn.borrow_mut().clear();
+        let draw_row = |ui: &mut egui::Ui, row_at: Option<usize>, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
             let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, theme::PIVOT_PREVIEW_ROW_H), egui::Sense::hover());
             if let Some(f) = fill {
                 ui.painter().rect_filled(row, 0.0, f);
@@ -1416,6 +1494,13 @@ impl MicroParquetApp {
                 x += widths[c];
                 let inner = cell.shrink2(egui::vec2(theme::SPACE_M, 0.0));
                 let value = c >= label_n;
+                // a blank cell of a time aggregation says why on hover (Phase 9 M3)
+                if let (Some(r), true, true) = (row_at, value, t == "\u{2014}") {
+                    if let Some(n) = self.pivot_builder.preview_notes.iter().find(|n| n.row == r && n.column == names[c]) {
+                        ui.interact(cell, ui.id().with(("pivot_note", r, c)), egui::Sense::hover()).on_hover_text(&n.text);
+                        self.pivot_builder.notes_drawn.borrow_mut().push((n.text.clone(), cell));
+                    }
+                }
                 let rich = if head {
                     egui::RichText::new(t).font(head_font.clone()).color(tk.ink)
                 } else if value {
@@ -1430,11 +1515,11 @@ impl MicroParquetApp {
                 });
             }
         };
-        draw_row(ui, &names, true, Some(tk.zebra), true);
+        draw_row(ui, None, &names, true, Some(tk.zebra), true);
         for (r, row) in cells.iter().enumerate() {
             let total = has_total_row && r == last;
             let fill = if total { Some(tk.accent_soft) } else if r % 2 == 1 { Some(tk.zebra) } else { None };
-            draw_row(ui, row, false, fill, total);
+            draw_row(ui, Some(r), row, false, fill, total);
         }
     }
 
@@ -1701,9 +1786,10 @@ fn chip_text_w(ui: &egui::Ui, text: &str, size: f32, family: egui::FontFamily) -
 }
 
 /// The width of what a chip of Values needs besides the field's name.
-fn value_chip_fixed_width(agg: PivotAgg) -> f32 {
-    let mut w = theme::SPACE_S + theme::PIVOT_COMBO_AGG_W + theme::SPACE_S + theme::PIVOT_CHIP_MENU_W;
-    if agg == PivotAgg::WeightedAvg {
+fn value_chip_fixed_width(agg: PivotAgg, time: Option<TimeValue>) -> f32 {
+    let box_w = if time.is_some() { theme::PIVOT_COMBO_TIME_W } else { theme::PIVOT_COMBO_AGG_W };
+    let mut w = theme::SPACE_S + box_w + theme::SPACE_S + theme::PIVOT_CHIP_MENU_W;
+    if time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg) {
         w += theme::SPACE_S + theme::PIVOT_BADGE_W + theme::SPACE_S + theme::PIVOT_COMBO_WEIGHT_W;
     }
     w
@@ -1711,7 +1797,7 @@ fn value_chip_fixed_width(agg: PivotAgg) -> f32 {
 
 /// The natural width of a chip of Values.
 fn value_chip_width(ui: &egui::Ui, v: &PivotValue, _extra: f32) -> f32 {
-    2.0 * theme::SPACE_S + chip_text_w(ui, &v.field, theme::TEXT_BASE, theme::family_semibold()) + value_chip_fixed_width(v.agg)
+    2.0 * theme::SPACE_S + chip_text_w(ui, &v.field, theme::TEXT_BASE, theme::family_semibold()) + value_chip_fixed_width(v.agg, v.time)
 }
 
 /// The natural width of a chip of Rows, Columns or Filters.

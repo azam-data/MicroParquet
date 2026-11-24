@@ -141,7 +141,7 @@ fn guide_report_packs() {
     let file = d.join("deposits.csv");
     std::fs::write(&file, "ACNO,BAL,PROD\nD1,100,SB\nD2,50,TD\nD3,25,TD\n").expect("csv");
     let deposits = DataFrame::new(vec![Series::new("ACNO".into(), &["D1", "D2", "D3"]), Series::new("BAL".into(), &[100.0, 50.0, 25.0]), Series::new("PROD".into(), &["SB", "TD", "TD"])]).expect("frame");
-    let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() });
+    let pivot = TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() });
     let pack = ReportPack {
         name: "mini".into(),
         inputs: vec![PackInput { slot: "Deposits".into(), required_columns: vec!["ACNO".into(), "BAL".into(), "PROD".into()], ..Default::default() }],

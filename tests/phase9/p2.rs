@@ -49,7 +49,7 @@ fn book() -> DataFrame {
 }
 
 fn value(field: &str, agg: PivotAgg, weight: Option<&str>) -> PivotValue {
-    PivotValue { field: field.into(), agg, weight_col: weight.map(str::to_string) }
+    PivotValue { field: field.into(), agg, weight_col: weight.map(str::to_string), time: None }
 }
 
 /// Sum, Count, W.Avg of Rate by Balance (the owner's three), and the four that are not sums of their children.

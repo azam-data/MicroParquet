@@ -44,7 +44,7 @@ fn book(groups: usize) -> DataFrame {
 
 fn preview(d: &std::path::Path, groups: usize, rows: usize) -> PivotPreviewResult {
     let source = parquet(d, "book", &book(groups));
-    let spec = PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() };
+    let spec = PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() };
     let req = PivotPreviewRequest { tab_id: 1, token: 7, source, steps: vec![], spec, temp_dir: d.to_path_buf(), rows };
     compute_pivot_preview(req, &JobCtx::inert()).expect("the preview")
 }

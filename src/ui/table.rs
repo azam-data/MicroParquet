@@ -304,6 +304,9 @@ impl MicroParquetApp {
         // a pivot tab: its value cells (every column but the row fields) can show their rows, or say why they cannot (set by the caller)
         let show_rows: Option<crate::ui::drill::PivotRowsUi> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_show_rows", tab_id))));
         let shading: Option<Vec<Vec<micro_parquet::banking::Shade>>> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_shading", tab_id))));
+        // why a cell of a time aggregation is blank (Phase 9 M3), set by the caller; the cells drawn with a reason are noted for the tests
+        let blank_notes: Vec<micro_parquet::pivot_table::CellNote> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_notes", tab_id)))).unwrap_or_default();
+        let mut noted_cells: Vec<(String, egui::Rect)> = Vec::new();
         let mut report = GridReport::default();
         let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
         let want_y = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_y", tab_id))));
@@ -508,6 +511,12 @@ impl MicroParquetApp {
                                             if rows_here && r.double_clicked() {
                                                 action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
                                             }
+                                            if is_null {
+                                                if let Some(n) = blank_notes.iter().find(|n| n.row == row_offset + r_idx && n.column == c.name().as_str()) {
+                                                    r.clone().on_hover_text(n.text.as_str());
+                                                    noted_cells.push((n.text.clone(), r.rect));
+                                                }
+                                            }
                                             r.context_menu(|ui| {
                                                 if rows_here {
                                                     let item = ui.add_enabled(rows_off.is_none(), egui::Button::new("Show rows"));
@@ -537,7 +546,10 @@ impl MicroParquetApp {
                 });
             });
         report.frame = Some(framed.response.rect);
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("grid_report", tab_id)), report));
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new(("grid_report", tab_id)), report);
+            d.insert_temp(egui::Id::new(("grid_notes_drawn", tab_id)), noted_cells);
+        });
         action
     }
 
@@ -687,6 +699,17 @@ impl MicroParquetApp {
             }
             let stale = tab.page_error.is_some();
             migration_shading_for(ui.ctx(), tab);
+            // M3: the warnings of a pivot made on a data tab, and why its blank cells are blank
+            let report = self.pivot_report_for(tab).cloned();
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("grid_notes", tab.id)), report.as_ref().map(|r| r.notes.clone()).unwrap_or_default()));
+            let mut banner_rects: Vec<egui::Rect> = Vec::new();
+            if let Some(r) = &report {
+                for w in &r.warnings {
+                    let resp = ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", theme::ph::WARNING, w)).size(theme::TEXT_LABEL).color(theme::tokens(self.dark_mode).warning)).wrap());
+                    banner_rects.push(resp.rect);
+                }
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("pivot_banner", tab.id)), banner_rects));
             // W6: a pivot tab's value cells can show their rows
             let rows_key = egui::Id::new(("grid_show_rows", tab.id));
             match self.pivot_rows_ui(tab) {

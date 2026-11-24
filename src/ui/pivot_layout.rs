@@ -14,6 +14,14 @@ pub struct NestedCache {
     pub state: NestedState,
 }
 
+/// What the app holds for a pivot tab's notes and warnings (Phase 9 M3).
+pub struct ReportCache {
+    /// The steps and the model the report was made for: `steps_edit::pipeline_hash` and the model scope's fingerprint.
+    pub key: (u64, u64),
+    pub report: Option<micro_parquet::tab_jobs::PivotReport>,
+    pub error: Option<String>,
+}
+
 pub enum NestedState {
     Ready(NestedView),
     /// The view could not be built: the reason (the tab shows the flat table and says so).
@@ -24,6 +32,58 @@ impl MicroParquetApp {
     /// Whether the tab's pivot is the last step it runs, in the Nested layout, and so has a view.
     fn wants_nested(tab: &TabState) -> bool {
         tab.exec_steps == tab.steps.len() && nested_pivot_of(&tab.steps).is_some()
+    }
+
+    /// The key a tab's report is made for: its steps and the model the workers read.
+    fn report_key(&self, tab: &TabState) -> (u64, u64) {
+        (micro_parquet::steps_edit::pipeline_hash(&tab.source, &tab.steps[..tab.exec_steps.min(tab.steps.len())]), self.project.model_ui.scope_fp)
+    }
+
+    /// Called every frame for the active tab: its report is made again when its steps or the model changed (a pivot made on a data
+    /// tab has notes and warnings; any other tab has none).
+    pub(crate) fn pivot_report_tick(&mut self) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let id = tab.id;
+        let steps = &tab.steps[..tab.exec_steps.min(tab.steps.len())];
+        let wants = steps.iter().rposition(|s| !s.is_skipped()).and_then(|i| steps[i].as_pivot_spec()).is_some_and(|s| !s.data_tab.is_empty());
+        if !wants {
+            self.pivot_reports.remove(&id);
+            return;
+        }
+        let key = self.report_key(tab);
+        if self.pivot_reports.get(&id).is_some_and(|c| c.key == key) || self.jobs.is_busy(JobKey::tab(JobKind::PivotReport, id)) {
+            return;
+        }
+        let req = micro_parquet::tab_jobs::PivotReportRequest { tab_id: id, source: tab.source.clone(), steps: steps.to_vec(), temp_dir: self.paths.temp_dir.clone() };
+        self.pivot_report_key.insert(id, key);
+        self.jobs.submit(JobKey::tab(JobKind::PivotReport, id), "Pivot notes", false, move |ctx| micro_parquet::tab_jobs::compute_pivot_report(req, ctx).map(|r| JobOutput::PivotReport(Box::new(r))));
+    }
+
+    /// The worker made a report: it is kept when the tab still has the steps (and the model) it was made for.
+    pub(crate) fn apply_pivot_report(&mut self, r: micro_parquet::tab_jobs::PivotReportResult) {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == r.tab_id) else {
+            return;
+        };
+        if micro_parquet::steps_edit::pipeline_hash(&tab.source, &tab.steps[..tab.exec_steps.min(tab.steps.len())]) != r.pipeline {
+            return;
+        }
+        let key = (r.pipeline, self.pivot_report_key.get(&r.tab_id).map(|k| k.1).unwrap_or_default());
+        let cache = match r.report {
+            Ok(report) => ReportCache { key, report, error: None },
+            Err(e) => ReportCache { key, report: None, error: Some(e) },
+        };
+        self.pivot_reports.insert(r.tab_id, cache);
+    }
+
+    /// The report the tab shows now: its warnings and why its blank cells are blank.
+    pub(crate) fn pivot_report_for(&self, tab: &TabState) -> Option<&micro_parquet::tab_jobs::PivotReport> {
+        let c = self.pivot_reports.get(&tab.id)?;
+        if c.key != self.report_key(tab) {
+            return None;
+        }
+        c.report.as_ref()
     }
 
     /// Builds the Nested view of tab `idx` on the worker, or drops the one it has when the tab no longer has one.

@@ -609,6 +609,10 @@ pub struct ChartSpec {
     pub drill_path: Vec<(String, String)>,
     /// The chart's own filters ("Keep only this", "Exclude this"): conditions on the rows the chart reads, all of them.
     pub filters: Vec<FilterCondition>,
+    /// The data tab the chart is drawn from, by project key, when it is date-linked (Phase 9 M3): the stock warning reads its column
+    /// tags. Filled by the app when it asks for the chart, never saved.
+    #[serde(skip)]
+    pub data_tab: String,
 
     // ---- Phase 8 W11 ----
     /// Stacked and 100% stacked column and bar: each segment says its value inside it (percent for 100% stacked), straight
@@ -675,6 +679,7 @@ impl Default for ChartSpec {
             drill: Vec::new(),
             drill_path: Vec::new(),
             filters: Vec::new(),
+            data_tab: String::new(),
             inside_labels: false,
             inside_min_pct: INSIDE_MIN_PCT_DEFAULT,
             data_table: DataTable::Off,

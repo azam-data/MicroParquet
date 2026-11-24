@@ -206,6 +206,7 @@ impl MicroParquetApp {
             JobOutput::ShowRows(r) => self.apply_show_rows(*r),
             JobOutput::ChartPicker(r) => self.apply_chart_picker_result(*r),
             JobOutput::NestedView(r) => self.apply_nested_view(*r),
+            JobOutput::PivotReport(r) => self.apply_pivot_report(*r),
             JobOutput::ModelCheck(r) => self.apply_model_check(*r),
             JobOutput::DateInfo(r) => self.apply_date_info(*r),
             JobOutput::ModelRows(r) => self.apply_model_rows(*r),

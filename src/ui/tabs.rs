@@ -534,6 +534,7 @@ impl MicroParquetApp {
         if let Some(id) = closed_id {
             self.chart_tabs.remove(&id);
             self.nested_views.remove(&id);
+            self.pivot_reports.remove(&id);
         }
         self.tabs.remove(idx);
         let new_len = self.tabs.len();

@@ -101,7 +101,7 @@ fn w1_the_step_declares_calendar_orders_and_a_pivot_by_day_name_lists_sat_to_fri
     let pivot = TransformStep::PivotTable {
         rows: vec![day.clone()],
         columns: vec![],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }],
         filters: vec![],
         row_totals: true,
         column_totals: true,
@@ -113,6 +113,7 @@ fn w1_the_step_declares_calendar_orders_and_a_pivot_by_day_name_lists_sat_to_fri
         date_fields: vec![],
         model_fields: vec![],
         layout: PivotLayout::SideBySide,
+        data_tab: String::new(),
     };
     let out = run_steps("w1_pivot", &date_tab(), &[steps[0].clone(), pivot]).expect("pivots");
     let labels: Vec<Option<String>> = out.column(&day).expect("labels").str().expect("text").into_iter().map(|v| v.map(str::to_string)).collect();

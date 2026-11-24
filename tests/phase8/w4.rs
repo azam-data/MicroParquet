@@ -52,7 +52,7 @@ fn snap(id: u64, title: &str, source: TabSource, steps: Vec<TransformStep>) -> T
 }
 
 fn pivot_step() -> TransformStep {
-    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["CAT".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() })
+    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["CAT".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() })
 }
 
 fn chart_spec() -> ChartSpec {

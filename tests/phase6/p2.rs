@@ -49,7 +49,7 @@ fn slot(name: &str, required: &[&str]) -> PackInput {
 }
 
 fn pivot_step() -> TransformStep {
-    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() })
+    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() })
 }
 
 /// Loans and Deposits, with a gap ladder, the CL-1 summary and a pivot.
@@ -216,7 +216,7 @@ fn p2_a_missing_slot_file_an_unknown_slot_and_a_missing_column_are_refused_with_
 fn p2_an_item_that_fails_stops_the_run_with_its_name_and_the_reason_and_writes_nothing() {
     let rig = Rig::new("p2_d");
     let mut pack = monthly_pack();
-    pack.items[2].source = PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(TransformStep::from_pivot_spec(PivotSpec { rows: vec!["NoSuchField".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], ..Default::default() })) };
+    pack.items[2].source = PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(TransformStep::from_pivot_spec(PivotSpec { rows: vec!["NoSuchField".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], ..Default::default() })) };
     let out = rig.root.join("never.xlsx");
     let e = format!("{:#}", run_pack(&pack, &rig.spec(), &rig.paths, "t", &JobCtx::inert()).expect_err("the pivot fails"));
     assert!(e.contains("'Deposits by product'") && e.contains("failed") && e.contains("NoSuchField"), "{e}");
@@ -337,7 +337,7 @@ fn e2_a_parse_failure_stops_the_run_only_in_a_column_an_item_or_step_uses_else_i
     assert!(e.contains("'JUNK' has 2"), "{e}");
     // a pivot that does use the column stops too
     let mut uses = pivot_only.clone();
-    uses.items[0].source = PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "JUNK".into(), agg: PivotAgg::Sum, weight_col: None }], ..Default::default() })) };
+    uses.items[0].source = PackItemKind::Pivot { slot: "Deposits".into(), pivot: Some(TransformStep::from_pivot_spec(PivotSpec { rows: vec!["PROD".into()], values: vec![PivotValue { field: "JUNK".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], ..Default::default() })) };
     assert!(format!("{:#}", run_pack(&uses, &spec, &rig.paths, "t", &JobCtx::inert()).expect_err("pivot uses it")).contains("'JUNK' has 2"));
     // a step of the slot that names it counts as use
     let mut stepped = pivot_only.clone();

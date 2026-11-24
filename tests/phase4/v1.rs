@@ -28,7 +28,7 @@ fn book() -> DataFrame {
 }
 
 fn sum_balance() -> PivotValue {
-    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }
+    PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }
 }
 
 fn spec(rows: &[&str], cols: &[&str], values: Vec<PivotValue>) -> PivotSpec {
@@ -76,7 +76,7 @@ fn v1_rows_bucket_columns_bank_sum_balance_has_natural_row_order_and_true_totals
 
 #[test]
 fn v1_weighted_average_per_cell_follows_the_phase_2_rule_and_mixed_signs_are_null() {
-    let w = PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) };
+    let w = PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None };
     let out = build(&book(), &spec(&["Bucket"], &["Bank"], vec![w.clone()]));
     // 02 / Conventional: (100 x 5 + 100 x 7) / 200 = 6, 02 / Islami: 8
     close(cell(&out, "Conventional", 0), 6.0, 1e-9, "02 Conventional");
@@ -111,7 +111,7 @@ fn v1_the_status_bar_note_counts_pivot_cells_whose_weights_mix_signs() {
     .expect("frame");
     let d = dir("v1_note");
     let src = parquet(&d, "in", &df);
-    let w = PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) };
+    let w = PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None };
     let step = TransformStep::from_pivot_spec(spec(&["Bucket"], &[], vec![w]));
     let notes = micro_parquet::engine::weighted_mixed_sign_notes(&src, &[step], &d).expect("notes");
     assert_eq!(notes.len(), 1, "{notes:?}");
@@ -175,7 +175,7 @@ fn v1_totals_toggles_subtotals_and_several_values() {
     assert_eq!(out.height(), 3, "no totals row");
 
     // two values: columns are named by label | value; Count is a whole number column
-    let count = PivotValue { field: "Bucket".into(), agg: PivotAgg::Count, weight_col: None };
+    let count = PivotValue { field: "Bucket".into(), agg: PivotAgg::Count, weight_col: None, time: None };
     let s = spec(&["Bucket"], &["Bank"], vec![sum_balance(), count]);
     let out = build(&book(), &s);
     assert_eq!(
@@ -242,14 +242,14 @@ fn v1_every_aggregation_and_the_messages_when_a_choice_does_not_fit() {
         Series::new("Balance".into(), &[Some(10.0), None, Some(30.0), Some(5.0)]),
     ])
     .expect("frame");
-    let v = |agg| PivotValue { field: "Balance".into(), agg, weight_col: None };
+    let v = |agg| PivotValue { field: "Balance".into(), agg, weight_col: None, time: None };
     let one = |agg: PivotAgg| build(&df, &spec(&["Bank"], &[], vec![v(agg)]));
     assert_eq!(floats(&one(PivotAgg::Sum), "Sum of Balance"), vec![Some(40.0), Some(5.0), Some(45.0)]);
     assert_eq!(floats(&one(PivotAgg::Average), "Average of Balance"), vec![Some(20.0), Some(5.0), Some(15.0)], "the blank is skipped, the total is a true average");
     assert_eq!(floats(&one(PivotAgg::Min), "Min of Balance"), vec![Some(10.0), Some(5.0), Some(5.0)]);
     assert_eq!(floats(&one(PivotAgg::Max), "Max of Balance"), vec![Some(30.0), Some(5.0), Some(30.0)]);
     assert_eq!(floats(&one(PivotAgg::Count), "Count of Balance"), vec![Some(2.0), Some(1.0), Some(3.0)], "the blank balance is not counted");
-    let cd = PivotValue { field: "Branch".into(), agg: PivotAgg::CountDistinct, weight_col: None };
+    let cd = PivotValue { field: "Branch".into(), agg: PivotAgg::CountDistinct, weight_col: None, time: None };
     let out = build(&df, &spec(&["Bank"], &[], vec![cd]));
     assert_eq!(floats(&out, "Count distinct of Branch"), vec![Some(2.0), Some(0.0), Some(2.0)], "x and y; a blank is not a value; the total counts distinct values of all rows");
 
@@ -258,10 +258,10 @@ fn v1_every_aggregation_and_the_messages_when_a_choice_does_not_fit() {
     assert!(err(spec(&[], &[], vec![v(PivotAgg::Sum)])).contains("add a field to Rows or to Columns"));
     assert!(err(spec(&["Nope"], &[], vec![v(PivotAgg::Sum)])).contains("'Nope'"));
     assert!(err(spec(&["Bank"], &["Bank"], vec![v(PivotAgg::Sum)])).contains("used twice"));
-    let text_sum = PivotValue { field: "Branch".into(), agg: PivotAgg::Sum, weight_col: None };
+    let text_sum = PivotValue { field: "Branch".into(), agg: PivotAgg::Sum, weight_col: None, time: None };
     let m = err(spec(&["Bank"], &[], vec![text_sum]));
     assert!(m.contains("needs a number column") && m.contains("'Branch' is text"), "{m}");
-    let no_weight = PivotValue { field: "Balance".into(), agg: PivotAgg::WeightedAvg, weight_col: None };
+    let no_weight = PivotValue { field: "Balance".into(), agg: PivotAgg::WeightedAvg, weight_col: None, time: None };
     assert!(err(spec(&["Bank"], &[], vec![no_weight])).contains("needs a weight column"));
     let mut s = spec(&["Bank"], &[], vec![v(PivotAgg::Average)]);
     s.show_as = PivotShowAs::PctOfGrandTotal;
