@@ -552,7 +552,7 @@ impl ToolRun {
                 no_extra_steps(tab_steps)?;
                 Ok(ToolRun::Stack(StackRun { files: files.iter().map(|(p, q, c)| StackFileRun { path: p.clone(), is_parquet: *q, config: c.clone() }).collect(), include_source_col: *include_source_col }))
             }
-            TabSource::SingleFile { .. } => bail!("{}", NOT_A_TOOL),
+            TabSource::SingleFile { .. } | TabSource::Unavailable { .. } => bail!("{}", NOT_A_TOOL),
         }
     }
 

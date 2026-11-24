@@ -6,8 +6,8 @@
 //! specs (rounded data-ends, 2 px gaps, collision-checked labels).
 
 use crate::ui::prelude::*;
-use micro_parquet::charts::data::ChartData;
-use micro_parquet::charts::layout::{hit_test, layout_chart, tooltip_rect, ChartLayout, Face, Hover, LayoutOpts, Measure, Prim, TOOLTIP_PADDING};
+use micro_parquet::charts::data::{ChartData, MarkRef};
+use micro_parquet::charts::layout::{hit_target, hit_test, layout_chart, tooltip_rect, ChartLayout, Face, Hover, LayoutOpts, Measure, Prim, TOOLTIP_PADDING};
 use micro_parquet::charts::tokens as ct;
 
 /// Measures text with the real fonts (Source Sans 3 regular and semibold).
@@ -36,6 +36,37 @@ pub struct ChartShown {
     pub hover: Option<Hover>,
     /// The tooltip box, when one is shown.
     pub tooltip: Option<egui::Rect>,
+    /// What a click or the right-click menu asked for this frame (W6); the caller carries it out.
+    pub action: Option<ChartAction>,
+}
+
+/// What a click on a mark may do where a chart is drawn (Phase 8 W6). `None` passed to `show_chart_with` means the chart is
+/// only looked at, as before.
+#[derive(Clone, Debug, Default)]
+pub struct DrillCtx {
+    /// The kind of chart can be clicked (a scatter, a histogram, a box plot and a waterfall cannot).
+    pub kind_ok: bool,
+    /// The chart has drill levels, so its tooltip says what a click does.
+    pub has_drill: bool,
+    /// A click goes one level down: there is a level below.
+    pub can_down: bool,
+    /// The level below, for the tooltip.
+    pub next_level: String,
+    /// Why "Show rows" cannot open a tab (shown on the greyed menu item); `None` when it can.
+    pub rows_unavailable: Option<String>,
+    /// Why nothing here can change the chart (a chart tab that cannot be calculated again): every menu item is greyed with it.
+    pub blocked: Option<String>,
+}
+
+/// What a click or a menu item asked for, with the mark it was on.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChartAction {
+    DrillDown(MarkRef),
+    ShowRows(MarkRef),
+    Keep(MarkRef),
+    Exclude(MarkRef),
+    /// The colour picker for the item the mark stands for (Phase 8 W7).
+    Colour(MarkRef),
 }
 
 /// The layout of the chart last shown under `id` (tests, and the "Open as tab" / save paths).
@@ -123,6 +154,12 @@ fn paint_hover(ctx: &egui::Context, id: egui::Id, l: &ChartLayout, h: &Hover, po
 /// Draws the chart in the space the ui has (`height` if given), with hover. Facet charts that need more
 /// height than there is make the ui taller (put the chart in a vertical scroll area).
 pub fn show_chart(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: &LayoutOpts, height: Option<f32>) -> ChartShown {
+    show_chart_with(ui, id, data, opts, height, None)
+}
+
+/// `show_chart` with clicks: a click on a mark drills one level down, a right-click opens the menu (Drill down, Show rows,
+/// Keep only this, Exclude this). What was asked for comes back in `ChartShown::action`.
+pub fn show_chart_with(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: &LayoutOpts, height: Option<f32>, drill: Option<&DrillCtx>) -> ChartShown {
     let ctx = ui.ctx().clone();
     let m = EguiMeasure(&ctx);
     let width = ui.available_width().max(theme::CHART_MIN_W);
@@ -130,18 +167,77 @@ pub fn show_chart(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: &Layo
     // small multiples can need more height than they were given
     let probe = layout_chart(data, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, h)), opts, &m);
     let h = probe.needed_height.max(h);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+    let live = drill.filter(|d| d.kind_ok);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), if live.is_some() { egui::Sense::click() } else { egui::Sense::hover() });
     let layout = layout_chart(data, rect, opts, &m);
     paint_layout(&ui.painter_at(rect), &layout);
     let mut hover = None;
     let mut tooltip = None;
+    let mut action: Option<ChartAction> = None;
+    let target_at = |pos: egui::Pos2| hit_target(&layout, pos).and_then(|t| data.mark_ref(t.panel, t.series, t.category));
     if let Some(pos) = ui.input(|i| i.pointer.hover_pos()).filter(|p| resp.hovered() && rect.contains(*p)) {
         hover = hit_test(&layout, pos);
         if let Some(hv) = &hover {
-            tooltip = Some(paint_hover(ui.ctx(), id, &layout, hv, pos));
+            // a chart with drill levels says what a click does (or that it does nothing at the last level)
+            let mut hv = hv.clone();
+            if let Some(dc) = live.filter(|d| d.has_drill) {
+                hv.tip.push_str(&if dc.can_down { format!("\n\u{2192} Click to drill into {}", dc.next_level) } else { "\n\u{2192} Last level: a click does nothing".to_string() });
+            }
+            if live.is_some_and(|d| d.can_down) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            tooltip = Some(paint_hover(ui.ctx(), id, &layout, &hv, pos));
         }
     }
-    let shown = ChartShown { layout, rect, hover, tooltip };
+    if let Some(dc) = live {
+        if resp.clicked_by(egui::PointerButton::Primary) && dc.can_down {
+            if let Some(mark) = resp.interact_pointer_pos().and_then(&target_at) {
+                action = Some(ChartAction::DrillDown(mark));
+            }
+        }
+        // the mark under the pointer when the menu was asked for stays the menu's mark while the pointer moves over it
+        let menu_id = id.with("drill_menu_mark");
+        if resp.secondary_clicked() {
+            let at = resp.interact_pointer_pos().and_then(&target_at);
+            ui.ctx().data_mut(|d| d.insert_temp(menu_id, at));
+        }
+        resp.context_menu(|ui| {
+            let Some(mark) = ui.ctx().data(|d| d.get_temp::<Option<MarkRef>>(menu_id)).flatten() else {
+                ui.close_menu();
+                return;
+            };
+            let (down_ok, down_why) = if dc.can_down {
+                (true, String::new())
+            } else if dc.has_drill {
+                (false, "This is the last level: there is nothing below it.".to_string())
+            } else {
+                (false, "This chart has no drill levels. Add them under Drill levels in the chart studio.".to_string())
+            };
+            let blocked = dc.blocked.clone();
+            let mut item = |ui: &mut egui::Ui, label: &str, enabled: bool, why: &str, what: ChartAction| {
+                let (enabled, why) = match &blocked {
+                    Some(b) => (false, b.as_str()),
+                    None => (enabled, why),
+                };
+                let b = ui.add_enabled(enabled, egui::Button::new(label));
+                let b = if enabled { b } else { b.on_disabled_hover_text(why) };
+                if b.clicked() {
+                    action = Some(what);
+                    ui.close_menu();
+                }
+            };
+            item(ui, "Drill down", down_ok, &down_why, ChartAction::DrillDown(mark.clone()));
+            item(ui, "Show rows", dc.rows_unavailable.is_none(), dc.rows_unavailable.as_deref().unwrap_or(""), ChartAction::ShowRows(mark.clone()));
+            item(ui, "Keep only this", true, "", ChartAction::Keep(mark.clone()));
+            item(ui, "Exclude this", true, "", ChartAction::Exclude(mark.clone()));
+            // the colour of an item does not change the numbers, so it is not held back by a chart that cannot be calculated again
+            if ui.button("Colour\u{2026}").on_hover_text("Pick the colour of this item (a series, or a part of a donut)").clicked() {
+                action = Some(ChartAction::Colour(mark.clone()));
+                ui.close_menu();
+            }
+        });
+    }
+    let shown = ChartShown { layout, rect, hover, tooltip, action };
     ui.ctx().data_mut(|d| d.insert_temp(id, shown.clone()));
     shown
 }

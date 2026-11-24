@@ -59,6 +59,20 @@ def main():
             dr.ellipse([c[0] - r, c[1] - r, c[0] + r, c[1] + r], outline=tuple(p["col"]), width=max(1, int(round(p["w"] * k))))
     for t in d["texts"]:
         a = P((t["r"][0], t["r"][1]))
+        ang = t.get("angle", 0.0)
+        if abs(ang) > 1.2:
+            # a turned text: drawn level on its own layer, turned about its centre, put in the middle of its rectangle
+            f = font(t["pt"], t["semibold"])
+            l, tp, r, b = t["r"]
+            wl = int(dr.textlength(t["text"], font=f)) + 8
+            hl = int(t["pt"] * k * 1.6) + 8
+            layer = Image.new("RGBA", (wl, hl), (0, 0, 0, 0))
+            ImageDraw.Draw(layer).text((4, 4), t["text"], font=f, fill=tuple(t["col"]) + ((255,) if len(t["col"]) == 3 else ()), anchor="la")
+            import math
+            layer = layer.rotate(-math.degrees(ang), expand=True, resample=Image.BICUBIC)
+            cx, cy = P(((l + r) / 2, (tp + b) / 2))
+            img.paste(layer, (int(cx - layer.width / 2), int(cy - layer.height / 2)), layer)
+            continue
         dr.text(a, t["text"], font=font(t["pt"], t["semibold"]), fill=tuple(t["col"]), anchor="la")
     img = img.resize((int(w / SS), int(h / SS)), Image.LANCZOS)
     img.save(out)

@@ -313,6 +313,29 @@ pub fn file_hash(path: &Path) -> Result<String> {
     Ok(h.finalize().to_hex().to_string())
 }
 
+/// The same hash, read in 1 MiB steps that report `(bytes read, file size)` to `on`; `on` returns true to stop
+/// (the job was cancelled), which is an error.
+pub fn file_hash_progress(path: &Path, on: &dyn Fn(u64, u64) -> bool) -> Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).with_context(|| format!("Could not open {}", path.display()))?;
+    let total = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut h = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut read = 0u64;
+    loop {
+        let n = f.read(&mut buf).with_context(|| format!("Could not read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        read += n as u64;
+        if on(read, total) {
+            anyhow::bail!("Stopped while reading {}", path.display());
+        }
+    }
+    Ok(h.finalize().to_hex().to_string())
+}
+
 fn key_of(name: &str) -> String {
     name.trim().to_lowercase()
 }
@@ -613,7 +636,13 @@ pub fn write_pack_with_charts(result: &PackResult, xlsx: &Path, pdf: Option<&Pat
     let mut pdf_tmp = None;
     if let Some(p) = pdf {
         let mut ptabs: Vec<PdfTab> = vec![PdfTab { title: COVER_SHEET.to_string(), df: result.cover.clone(), col_formats: HashMap::new(), summary: Vec::new(), chart: None }];
-        ptabs.extend(result.sheets.iter().map(|s| PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new(), chart: None }));
+        for s in &result.sheets {
+            ptabs.push(PdfTab { title: s.title.clone(), df: s.df.clone(), col_formats: s.col_formats.clone(), summary: Vec::new(), chart: None });
+            // a chart whose Data table is on gets its page, with its data below or beside it (Phase 8 W11); the others are not in the PDF
+            for c in s.charts.iter().filter(|c| c.data.spec.data_table != crate::charts::spec::DataTable::Off) {
+                ptabs.push(PdfTab { title: format!("{} chart", s.title), df: DataFrame::default(), col_formats: HashMap::new(), summary: Vec::new(), chart: Some((c.data.clone(), c.opts.clone())) });
+            }
+        }
         let tmp = crate::jobs::TempOutput::new(p);
         let prep = crate::exporters::export_pdf_tabs(ptabs, tmp.path(), result.output.scale, result.output.decimals)?;
         msg.push_str(&format!("; wrote {}", p.display()));

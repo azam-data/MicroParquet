@@ -19,6 +19,10 @@ pub struct RateBandState {
     pub presets: Vec<RateBandDef>,
     /// The name a saved preset gets (empty: the profile is not named).
     pub preset_name: String,
+    /// "Number the bands (09. 8%–9%)": off for new steps (W3); an edited step keeps its own.
+    pub numbered: bool,
+    /// Where the tick box was drawn (tests).
+    pub numbered_rect: Option<egui::Rect>,
 }
 
 impl Default for RateBandState {
@@ -35,6 +39,8 @@ impl Default for RateBandState {
             new_col: "Rate_Band".to_string(),
             presets: RateBandDef::default_presets(),
             preset_name: String::new(),
+            numbered: false,
+            numbered_rect: None,
         };
         s.load(&d);
         s.preset_name.clear();
@@ -51,7 +57,7 @@ impl RateBandState {
         } else {
             RateBandMode::Fixed { start_pct: self.start, end_pct: self.end, step_pct: self.step }
         };
-        let def = RateBandDef { name, mode, lower_inclusive: self.lower_inclusive };
+        let def = RateBandDef { name, mode, lower_inclusive: self.lower_inclusive, numbered: self.numbered };
         def.edges()?;
         Ok(def)
     }
@@ -179,6 +185,11 @@ impl MicroParquetApp {
                     ui.label("A rate on a band's edge goes to:");
                     ui.radio_value(&mut self.rate_band.lower_inclusive, false, "the lower band: (a, b], so 9.00 falls in 8%\u{2013}9%");
                     ui.radio_value(&mut self.rate_band.lower_inclusive, true, "the upper band: [a, b), so 9.00 falls in 9%\u{2013}10%");
+                    ui.add_space(theme::SPACE_S);
+                    let r = ui
+                        .checkbox(&mut self.rate_band.numbered, "Number the bands (09. 8%\u{2013}9%)")
+                        .on_hover_text("Off: the labels read 8%\u{2013}9% and pivots, charts and sorts put them in band order. On: the labels start with a number, as before Phase 8, so they also sort in band order as plain text.");
+                    self.rate_band.numbered_rect = Some(r.rect);
                     ui.separator();
 
                     match &current {

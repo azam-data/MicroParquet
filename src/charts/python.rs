@@ -146,17 +146,32 @@ fn colours_of(data: &ChartData, opts: &LayoutOpts) -> (ColourMap, Vec<String>) {
 }
 
 fn colour_dict(data: &ChartData, cm: &ColourMap) -> String {
-    let items: Vec<String> = data
-        .series
-        .iter()
-        .filter(|n| !n.is_empty())
-        .map(|n| {
-            let l = cm.get(n).map(|c| c.hex(false)).unwrap_or(t::SERIES_LIGHT[0]);
-            let d = cm.get(n).map(|c| c.hex(true)).unwrap_or(t::SERIES_DARK[0]);
-            format!("{}: {} if not DARK else {}", s(n), hexs(l), hexs(d))
-        })
-        .collect();
+    let item = |n: &str, c: Option<super::colours::Colour>| {
+        let l = c.map(|c| c.hex(false)).unwrap_or(t::SERIES_LIGHT[0]);
+        let d = c.map(|c| c.hex(true)).unwrap_or(t::SERIES_DARK[0]);
+        format!("{}: {} if not DARK else {}", s(n), hexs(l), hexs(d))
+    };
+    let mut items: Vec<String> = data.series.iter().filter(|n| !n.is_empty()).map(|n| item(n, cm.get(n))).collect();
+    // a chart of one series: its pick is on its measure's name (the column of its frame); a scatter's one series has no name
+    // (written only for a pick or a house colour: an automatic colour is the script's first slot, as it always was)
+    if let Some(m) = super::colours::single_series_name(data).filter(|m| cm.picked(m).is_some()) {
+        let one = Some(super::colours::single_colour(data, cm));
+        items.push(item(&m, one));
+        if matches!(data.spec.kind, ChartKind::Scatter | ChartKind::Bubble) {
+            items.push(item("", one));
+        }
+    }
     format!("{{{}}}", items.join(", "))
+}
+
+/// The Python expression of the one colour of a histogram or box plot (the first slot unless it was picked).
+fn one_colour_expr(data: &ChartData, cm: &ColourMap) -> String {
+    let c = super::colours::single_colour(data, cm);
+    if c == super::colours::Colour::Slot(0) {
+        "SERIES[0]".to_string()
+    } else {
+        format!("{} if not DARK else {}", hexs(c.hex(false)), hexs(c.hex(true)))
+    }
 }
 
 fn status_colour(st: Status) -> String {
@@ -457,11 +472,11 @@ fn chart_to_python_scaled(data: &ChartData, opts: &LayoutOpts) -> Result<String>
         ChartKind::Sankey => sankey(&mut w, data, opts),
         ChartKind::Treemap => treemap(&mut w, data, opts),
         ChartKind::Scatter | ChartKind::Bubble => scatter(&mut w, data, &cm),
-        ChartKind::BoxPlot => boxes(&mut w, data),
+        ChartKind::BoxPlot => boxes(&mut w, data, &cm),
         ChartKind::Heatmap => heat(&mut w, data, opts)?,
         ChartKind::Donut => donut(&mut w, data, opts, &cm)?,
         ChartKind::Waterfall => waterfall(&mut w, data, opts)?,
-        ChartKind::Histogram => histogram(&mut w, data),
+        ChartKind::Histogram => histogram(&mut w, data, &cm),
         _ => cartesian(&mut w, data, opts, &cm, vk0),
     }
     Ok(w)
@@ -562,12 +577,13 @@ fn cartesian(w: &mut String, data: &ChartData, opts: &LayoutOpts, cm: &ColourMap
     let _ = writeln!(w, "if len(names) > 1:\n    fig.legend(handles=[Patch(color=COLOURS.get(n, SERIES[i % len(SERIES)]), label=n) for i, n in enumerate(names)], loc=\"upper left\", bbox_to_anchor=(0.015, 0.89), ncol=min(len(names), 6))\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()");
 }
 
-fn histogram(w: &mut String, data: &ChartData) {
+fn histogram(w: &mut String, data: &ChartData, cm: &ColourMap) {
+    let one = format!("({})", one_colour_expr(data, cm));
     let counts: Vec<Option<f64>> = data.values.first().map(|r| r.clone()).unwrap_or_default();
     let _ = writeln!(w, "\nhist = pd.DataFrame({{\"Bin\": {}, \"Count\": {}}})", list_s(&data.categories), list_f(&counts));
     let _ = writeln!(
         w,
-        "\nfig, ax = plt.subplots(figsize=(10, 4.8))\nfig.subplots_adjust(top=0.80, bottom=0.2)\nax.bar(range(len(hist)), hist[\"Count\"], width=0.9, color=SERIES[0], edgecolor=SURFACE, linewidth=2)\nax.set_xticks(range(len(hist)), hist[\"Bin\"], rotation=45, ha=\"right\")\nstyle_axes(ax)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()"
+        "\nfig, ax = plt.subplots(figsize=(10, 4.8))\nfig.subplots_adjust(top=0.80, bottom=0.2)\nax.bar(range(len(hist)), hist[\"Count\"], width=0.9, color={one}, edgecolor=SURFACE, linewidth=2)\nax.set_xticks(range(len(hist)), hist[\"Bin\"], rotation=45, ha=\"right\")\nstyle_axes(ax)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()"
     );
 }
 
@@ -594,7 +610,8 @@ fn scatter(w: &mut String, data: &ChartData, cm: &ColourMap) {
     );
 }
 
-fn boxes(w: &mut String, data: &ChartData) {
+fn boxes(w: &mut String, data: &ChartData, cm: &ColourMap) {
+    let one = format!("({})", one_colour_expr(data, cm));
     let mut rows = Vec::new();
     for b in &data.boxes {
         rows.push(format!(
@@ -612,7 +629,7 @@ fn boxes(w: &mut String, data: &ChartData) {
     let _ = writeln!(w, "\nbox_table = pd.DataFrame([\n{}\n])  # q1, median, q3, the whiskers (1.5 x the interquartile range) and the outliers\nstats = box_table.to_dict(\"records\")", rows.join(",\n"));
     let _ = writeln!(
         w,
-        "\nfig, ax = plt.subplots(figsize=(10, 5.2))\nfig.subplots_adjust(top=0.80, bottom=0.12)\nax.bxp(stats, patch_artist=True, widths=0.4, showfliers=True,\n       boxprops=dict(facecolor=SERIES[0], edgecolor=SURFACE), medianprops=dict(color=SURFACE, linewidth=2),\n       whiskerprops=dict(color=INK2, linewidth=1.5), capprops=dict(color=INK2, linewidth=1.5),\n       flierprops=dict(marker=\"o\", markerfacecolor=SERIES[0], markeredgecolor=SURFACE, markersize=6))\nstyle_axes(ax)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()"
+        "\nfig, ax = plt.subplots(figsize=(10, 5.2))\nfig.subplots_adjust(top=0.80, bottom=0.12)\nax.bxp(stats, patch_artist=True, widths=0.4, showfliers=True,\n       boxprops=dict(facecolor={one}, edgecolor=SURFACE), medianprops=dict(color=SURFACE, linewidth=2),\n       whiskerprops=dict(color=INK2, linewidth=1.5), capprops=dict(color=INK2, linewidth=1.5),\n       flierprops=dict(marker=\"o\", markerfacecolor={one}, markeredgecolor=SURFACE, markersize=6))\nstyle_axes(ax)\ntitles(fig, TITLE, SUBTITLE, FOOTNOTE)\nplt.show()"
     );
 }
 

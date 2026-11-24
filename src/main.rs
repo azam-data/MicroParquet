@@ -41,6 +41,12 @@ pub(crate) struct CliArgs {
     /// The cutoff date of the pack run, YYYY-MM-DD.
     #[arg(long)]
     cutoff: Option<String>,
+    /// Open this project file (no relinking) and write every tab as Parquet into --export-dir (Phase 8 W4).
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// With --project: the folder that gets one Parquet file per tab.
+    #[arg(long)]
+    export_dir: Option<PathBuf>,
 }
 
 fn main() -> eframe::Result<()> {
@@ -126,6 +132,22 @@ pub enum ActiveToolModal {
     SortRows,
     /// The custom sort-list manager (Phase 6 U3).
     SortLists,
+    /// View ▸ Calendar… (Phase 8 W0).
+    Calendar,
+    /// The colour picker of a chart item (Phase 8 W7).
+    ColourPicker,
+    /// View ▸ House colours… (Phase 8 W7).
+    HouseColours,
+    /// The Sources dialog that comes before a project opens (Phase 8 W4).
+    ProjectSources,
+    /// Save project: the tabs that are left out (Phase 8 W4).
+    ProjectSave,
+    /// "Save / Don't save / Cancel" (Phase 8 W4).
+    ProjectPrompt,
+    /// File ▸ Open recent project (Phase 8 W4).
+    ProjectRecent,
+    /// Transform ▸ Split date… (Phase 8 W1).
+    SplitDate,
     /// New chart: the chart gallery (Phase 7 C2).
     ChartGallery,
     /// Charts ▸ Save chart (Phase 7 C2).
@@ -207,6 +229,10 @@ pub struct MicroParquetApp {
     chart_pop_requests: u32,
     /// The tabs that are charts (Phase 7: "Open as tab"), by tab id: they fill the main area with the chart.
     chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
+    /// When the linked chart tabs last looked at their source tabs (seconds on the egui clock).
+    chart_tab_checked_at: f64,
+    /// The breadcrumb entries of the chart last drawn (name, rectangle), for the render tests (Phase 8 W6).
+    drill_rects: Vec<(String, egui::Rect)>,
     /// The summary row (selectors and values) under the column names; shown by default.
     show_summary_row: bool,
     /// Right panel: which tab is shown, and the column the Column tab describes.
@@ -278,6 +304,13 @@ pub struct MicroParquetApp {
     pub filter: FilterState,
     pub sort: SortState,
     pub sort_lists: SortListsState,
+    pub calendar_dialog: crate::ui::calendar::CalendarState,
+    /// The colour picker and the House colours dialog (Phase 8 W7).
+    pub colour_picker: crate::ui::colour_picker::PickerState,
+    pub house_dialog: crate::ui::colour_picker::HouseState,
+    pub split_date: crate::ui::split_date::SplitDateState,
+    /// Fields whose labels the worker lists for their auto order (Phase 8 W0).
+    pub auto_order_waits: Vec<crate::ui::auto_order::AutoOrderWait>,
     pub chart_gallery: crate::ui::chart_studio::ChartGalleryState,
     pub chart_save: crate::ui::chart_studio::ChartSaveState,
     pub chart_open: crate::ui::chart_studio::ChartOpenState,
@@ -285,6 +318,8 @@ pub struct MicroParquetApp {
     /// A template's chart for a tab that is still being opened (by tab id): taken by the studio when the tab is ready.
     pub chart_pending: HashMap<u64, micro_parquet::charts::spec::ChartSpec>,
     pub runs: RunsState,
+    /// File ▸ projects (Phase 8 W4).
+    pub project: crate::ui::project::ProjectState,
     pub packs: PacksState,
     pub mom: MomState,
     pub dq: DqState,
@@ -364,6 +399,8 @@ impl MicroParquetApp {
             chart_popped: false,
             chart_pop_requests: 0,
             chart_tabs: HashMap::new(),
+            chart_tab_checked_at: 0.0,
+            drill_rects: Vec::new(),
             show_summary_row: true,
             right_tab: RightTab::Steps,
             selected_column: None,
@@ -412,12 +449,18 @@ impl MicroParquetApp {
             filter: FilterState::default(),
             sort: SortState::default(),
             sort_lists: SortListsState::default(),
+            calendar_dialog: Default::default(),
+            colour_picker: Default::default(),
+            house_dialog: Default::default(),
+            split_date: Default::default(),
+            auto_order_waits: Vec::new(),
             chart_gallery: Default::default(),
             chart_save: Default::default(),
             chart_open: Default::default(),
             chart_book: Default::default(),
             chart_pending: HashMap::new(),
             runs: RunsState::default(),
+            project: Default::default(),
             packs: PacksState::default(),
             mom: MomState::default(),
             dq: DqState::default(),
@@ -463,6 +506,10 @@ impl MicroParquetApp {
         if let Some(note) = settings_note {
             app.status_message = note;
         }
+        // a broken house colours file is refused at start-up, with its line; the charts use the palette (Phase 8 W7)
+        if let Some(e) = micro_parquet::charts::colours::house::error() {
+            app.status_message = e;
+        }
         app
     }
 
@@ -494,6 +541,9 @@ impl MicroParquetApp {
             self.status_message = note;
         }
         self.poll_jobs(ctx);
+        self.project_tick(ctx);
+        let now = ctx.input(|i| i.time);
+        self.chart_tab_links_tick(now);
         if ctx.input(|i| i.viewport().close_requested()) {
             match self.close_requested() {
                 ui::jobs::CloseDecision::Ask => ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose),
@@ -505,6 +555,7 @@ impl MicroParquetApp {
         self.handle_zoom_keys(ctx);
         self.update_window_title(ctx);
         self.handle_step_shortcuts(ctx);
+        self.handle_drill_back_key(ctx);
         self.handle_tab_shortcuts(ctx);
         self.render_top_bar(ctx);
         self.render_tab_strip_panel(ctx);
@@ -523,6 +574,10 @@ impl MicroParquetApp {
             .show(ctx, |ui| {
                 if self.tabs.is_empty() {
                     self.render_empty_state(ui);
+                    return;
+                }
+                if self.active_is_unavailable() {
+                    self.render_unavailable_main(ui);
                     return;
                 }
                 if self.active_is_chart_tab() {
@@ -558,8 +613,25 @@ impl MicroParquetApp {
         use micro_parquet::commands::{CommandGroup, CommandId};
         ui.menu_button("File", |ui| {
             for c in micro_parquet::commands::in_group(CommandGroup::File) {
-                if matches!(c.id, CommandId::SaveMacro | CommandId::Quit) {
+                if matches!(c.id, CommandId::ProjectNew | CommandId::SaveMacro | CommandId::Quit) {
                     ui.separator();
+                }
+                if c.id == CommandId::ProjectRecent {
+                    // the last projects, newest first (the same list is in Ctrl+K as "Open recent project…")
+                    let recent = self.settings.recent_projects.clone();
+                    ui.menu_button(format!("{}  Open recent project", ui::commands::command_icon(c.id)), |ui| {
+                        if recent.is_empty() {
+                            ui.add_enabled(false, egui::Button::new("No recent projects"));
+                        }
+                        for p in &recent {
+                            let path = PathBuf::from(p);
+                            if ui.button(micro_parquet::project::project_name(&path)).on_hover_text(p).clicked() {
+                                ui.close_menu();
+                                self.project_request(ui::project::AfterPrompt::OpenPath(path));
+                            }
+                        }
+                    });
+                    continue;
                 }
                 self.command_menu_item(ui, ctx, c.id);
             }
@@ -634,6 +706,8 @@ impl MicroParquetApp {
                 }
             });
             self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::CalendarSettings);
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::HouseColours);
             ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response

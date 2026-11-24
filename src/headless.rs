@@ -37,7 +37,27 @@ pub(crate) fn run_pack_cli(args: &crate::CliArgs, paths: &PortablePaths) -> anyh
     Ok(())
 }
 
+/// `--project <file> --export-dir <folder>`: opens the project (no relinking: a missing file or a file without
+/// the saved columns stops the run with its name) and writes every tab as Parquet. A tab that fails stops the
+/// run, and nothing is written (Phase 8 W4).
+pub(crate) fn run_project_cli(args: &crate::CliArgs, paths: &PortablePaths) -> anyhow::Result<()> {
+    let project = args.project.as_ref().ok_or_else(|| anyhow::anyhow!("--project <file> is required"))?;
+    let dir = args.export_dir.as_ref().ok_or_else(|| anyhow::anyhow!("--export-dir <folder> is required with --project"))?;
+    let written = micro_parquet::project::export_project_headless(project, dir, paths)?;
+    for w in &written {
+        println!("Exported Parquet: {:?}", w);
+    }
+    println!("{} tab{} written to {}.", written.len(), if written.len() == 1 { "" } else { "s" }, dir.display());
+    Ok(())
+}
+
 pub(crate) fn run_headless_cli(args: &crate::CliArgs, paths: &PortablePaths) -> anyhow::Result<()> {
+    if args.project.is_some() {
+        return run_project_cli(args, paths);
+    }
+    if args.export_dir.is_some() {
+        anyhow::bail!("--export-dir writes the tabs of a project: add --project <file>.");
+    }
     if args.pack.is_some() {
         return run_pack_cli(args, paths);
     }
@@ -288,6 +308,52 @@ mod tests {
         let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--pack", "mini", "--slot", &format!("Deposits={}", deposits.display()), "--export-xlsx", "x.xlsx"]);
         assert!(format!("{:#}", run_headless_cli(&bad, &paths).expect_err("no cutoff")).contains("--cutoff"));
         assert!(!root.join("x.xlsx").exists());
+        micro_parquet::rules::set_data_dir_override(None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// W4: `--project <file> --export-dir <folder>` writes every tab of the project as Parquet, the same rows as
+    /// the tabs; the two options go together, and a failing tab writes nothing.
+    #[test]
+    fn w4_headless_project_writes_every_tab_and_the_two_options_go_together() {
+        let root = std::env::temp_dir().join(format!("mp_w4_headless_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("temp")).expect("folder");
+        micro_parquet::rules::set_data_dir_override(Some(root.clone()));
+        let paths = PortablePaths { root_dir: root.clone(), macros_dir: root.join("m"), schemas_dir: root.join("s"), curves_dir: root.join("c"), buckets_file: root.join("b.json"), temp_dir: root.join("temp") };
+        let loans = root.join("loans.csv");
+        std::fs::write(&loans, "ACNO,BAL,PROD\nL1,100,SB\nL2,50,TD\nL3,25,TD\n").expect("csv");
+        let source = TabSource::SingleFile { path: loans.clone(), is_parquet: false, config: micro_parquet::engine::auto_detect_smart_schema(&loans).expect("schema") };
+        let snaps = vec![
+            micro_parquet::project::TabSnapshot { id: 1, key: None, title: "Loans".into(), source: source.clone(), steps: vec![], exec_steps: 0, col_formats: Default::default(), summary: Default::default(), control_col: None, chart: None, chart_tab: None, kept: None },
+            micro_parquet::project::TabSnapshot { id: 2, key: None, title: "Loans 2".into(), source, steps: vec![TransformStep::SelectAndReorderColumns { cols: vec!["ACNO".into(), "BAL".into()] }], exec_steps: 1, col_formats: Default::default(), summary: Default::default(), control_col: None, chart: None, chart_tab: None, kept: None },
+        ];
+        let pfile = root.join("work.mpproj");
+        let saved = micro_parquet::project::build_project(&snaps, Some(1), &root, &paths, &mut Default::default()).expect("builds");
+        micro_parquet::project::write_project(&pfile, &saved.project).expect("writes");
+        let out = root.join("out");
+        let args = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--project", &pfile.display().to_string(), "--export-dir", &out.display().to_string()]);
+        run_headless_cli(&args, &paths).expect("headless runs");
+        let widths: Vec<(String, usize, usize)> = ["Loans.parquet", "Loans 2.parquet"]
+            .iter()
+            .map(|n| {
+                let df = polars::prelude::LazyFrame::scan_parquet(out.join(n), Default::default()).expect("scan").collect().expect("collect");
+                (n.to_string(), df.height(), df.width())
+            })
+            .collect();
+        assert_eq!(widths, vec![("Loans.parquet".to_string(), 3, 3), ("Loans 2.parquet".to_string(), 3, 2)]);
+        // the options go together
+        let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--project", &pfile.display().to_string()]);
+        assert!(format!("{:#}", run_headless_cli(&bad, &paths).expect_err("no folder")).contains("--export-dir"));
+        let bad = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--export-dir", &out.display().to_string()]);
+        assert!(format!("{:#}", run_headless_cli(&bad, &paths).expect_err("no project")).contains("--project"));
+        // a missing file stops the run and writes nothing
+        std::fs::remove_file(&loans).expect("removed");
+        let out2 = root.join("out2");
+        let args = crate::CliArgs::parse_from(["MicroParquet", "--headless", "--project", &pfile.display().to_string(), "--export-dir", &out2.display().to_string()]);
+        let e = format!("{:#}", run_headless_cli(&args, &paths).expect_err("a missing file"));
+        assert!(e.contains("loans.csv"), "{e}");
+        assert!(std::fs::read_dir(&out2).map(|d| d.count()).unwrap_or(0) == 0, "nothing is written");
         micro_parquet::rules::set_data_dir_override(None);
         let _ = std::fs::remove_dir_all(&root);
     }

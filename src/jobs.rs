@@ -53,6 +53,20 @@ pub enum JobKind {
     SqlCheck,
     /// The data-quality checks of a tab (Phase 6 P4).
     Dq,
+    /// The labels of a field just added to a pivot, chart or sort, for its auto order (Phase 8 W0).
+    AutoOrder,
+    /// One tab of a project being opened (Phase 8 W4).
+    ProjectTab,
+    /// The files of a project compared with the hashes it saved (Phase 8 W4).
+    ProjectCheck,
+    /// Builds the project from the open tabs, hashing the files (Phase 8 W4 follow-up).
+    ProjectSave,
+    /// A linked chart tab calculated again from its source tab (Phase 8 W5).
+    ChartTab,
+    /// The rows behind a cell of a pivot table, found by building the pivot again (Phase 8 W6).
+    ShowRows,
+    /// The values of a field of the chart studio's "Filters on this chart" tick lists (Phase 8 W10).
+    ChartPickerValues,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

@@ -6,7 +6,7 @@
 //! one zero baseline, horizontal-only grids, selective labels with collision checks, the legend rules.
 
 use super::axis::{padded_floor, diverging_text, fit_text, nice_ticks, tick_text, value_text, wrap_text, ValueKind, MINUS};
-use super::colours::{Colour, ColourMap};
+use super::colours::{single_colour, Colour, ColourMap};
 use super::data::{collapse_series, heatmap, sequential_step, waterfall_from_data, ChartData, HeatFill, StepKind, WaterfallStep};
 use super::spec::{ChartAgg, ChartKind, ChartSpec, LabelMode, Stack, Status, Transform};
 use super::tokens as t;
@@ -89,6 +89,20 @@ pub struct LText {
     /// Radians, 0 = level; angled category labels run up to the right (negative, counter-clockwise).
     /// `rect` is then the box around the turned text.
     pub angle: f32,
+}
+
+/// A label inside a stacked segment (Phase 8 W11), as the layout decided it: the renderers that cannot measure text (the HTML page,
+/// the workbook) read these decisions. A segment with no entry has no label (too small, or below the share asked for).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SegmentLabel {
+    pub panel: usize,
+    pub series: usize,
+    pub category: usize,
+    pub text: String,
+    /// Turned 90° (reads upward): the segment is narrower than the text but long enough for it.
+    pub turned: bool,
+    /// White or ink, by contrast with the segment's fill.
+    pub colour: Color32,
 }
 
 /// Something to paint, in screen coordinates.
@@ -201,6 +215,8 @@ pub struct ChartLayout {
     pub colour_map: ColourMap,
     /// Labels of "All" that were left out because they would overlap (panel, series, category).
     pub dropped: Vec<super::labels::LabelKey>,
+    /// The labels inside stacked segments (Phase 8 W11); empty with "Segment labels" off.
+    pub segment_labels: Vec<SegmentLabel>,
     /// Category labels that run into each other even angled, or bars too thin for their names: the studio offers
     /// horizontal bars.
     pub labels_dont_fit: bool,
@@ -226,6 +242,7 @@ impl ChartLayout {
             message: None,
             colour_map: ColourMap::default(),
             dropped: Vec::new(),
+            segment_labels: Vec::new(),
             labels_dont_fit: false,
             needed_height: rect.height(),
             surface,
@@ -266,7 +283,19 @@ pub fn shows_unit(data: &ChartData, opts: &LayoutOpts) -> bool {
     !opts.unit.is_empty() && !share_stack && spec.measure_list().iter().any(is_amount)
 }
 
+/// The subtitle with what the chart is filtered by: the drill path and its own filters ("Filtered: Deposit Type = FDR"),
+/// so every renderer and every export says which rows the numbers are of (Phase 8 W6).
 pub fn subtitle_text(data: &ChartData, opts: &LayoutOpts) -> String {
+    let base = subtitle_base(data, opts);
+    let filtered = data.spec.filtered_text();
+    match (base.is_empty(), filtered.is_empty()) {
+        (_, true) => base,
+        (true, false) => filtered,
+        (false, false) => format!("{} \u{b7} {}", base, filtered),
+    }
+}
+
+fn subtitle_base(data: &ChartData, opts: &LayoutOpts) -> String {
     use super::spec::Transform;
     let spec = &data.spec;
     let measures = spec.measure_list();
@@ -374,6 +403,14 @@ impl<'a> Builder<'a> {
     fn put(&mut self, role: Role, s: &str, anchor: Anchor, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
         let rect = self.rect_for(s, pt, face, anchor, at);
         self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role, angle: 0.0 });
+        rect
+    }
+
+    /// A text turned 90° (it reads upward) and centred on `at`, written without any check: `rect` is the box around the turned text.
+    fn put_turned(&mut self, role: Role, s: &str, at: Pos2, pt: f32, face: Face, colour: Color32) -> Rect {
+        let sz = self.size(s, pt, face);
+        let rect = Rect::from_center_size(at, egui::vec2(sz.y, sz.x));
+        self.out.texts.push(LText { text: t::tidy(s), rect, pt, face, colour, role, angle: -std::f32::consts::FRAC_PI_2 });
         rect
     }
 
@@ -578,7 +615,7 @@ impl ChartLayout {
         let texts: Vec<serde_json::Value> = self
             .texts
             .iter()
-            .map(|t| json!({"text": t.text, "r": rc(t.rect), "pt": t.pt, "semibold": t.face == Face::Semibold, "col": col(t.colour)}))
+            .map(|t| json!({"text": t.text, "r": rc(t.rect), "pt": t.pt, "semibold": t.face == Face::Semibold, "col": col(t.colour), "angle": t.angle}))
             .collect();
         json!({"rect": rc(self.rect), "height": self.needed_height.max(self.rect.height()), "surface": col(self.surface), "prims": prims, "texts": texts})
     }
@@ -597,6 +634,9 @@ fn layout_chart_scaled(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn 
     if plan.kind_on(ValueKind::Amount) {
         notes.extend(plan.unit_note(&data.spec));
     }
+    // the colour warnings of picked items (hard to tell apart, low contrast, a status colour)
+    let cm = opts.colours.clone().unwrap_or_else(|| data.spec.colour_map.clone());
+    notes.extend(super::colours::colour_notes(data, &cm));
     let mut out = layout_chart_inner(data, rect, opts, m, &notes);
     // "All" leaves out the labels that would overlap and says how many (the note takes room, so the count is checked once more)
     if let Some(n) = super::labels::dropped_note(out.dropped.len()) {
@@ -718,7 +758,7 @@ fn layout_chart_inner(data: &ChartData, rect: Rect, opts: &LayoutOpts, m: &dyn M
     cm.assign_all(&named);
     let series_colour = |name: &str, i: usize, n: usize, cm: &ColourMap| -> Color32 {
         let base = if name.is_empty() && n == 1 {
-            Colour::Slot(0)
+            single_colour(data, cm)
         } else if name.is_empty() {
             Colour::Slot(i.min(t::SLOTS - 1))
         } else {
@@ -1518,16 +1558,21 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     let thick = if touching {
         (band - gap).max(1.0)
     } else if stacked || one {
-        (band * BAND_FILL).min(t::BAR_MAX_PX).max(1.0)
+        // (a stack whose segments carry their values inside them is wider: the labels need the room)
+        (band * BAND_FILL).min(if spec.inside_labels && stacked { t::BAR_MAX_PX_LABELLED } else { t::BAR_MAX_PX }).max(1.0)
     } else {
         ((band * BAND_FILL - gap * (n_ser as f32 - 1.0)) / n_ser as f32).min(t::BAR_MAX_PX).max(1.0)
     };
     let labels_ok = n_cat <= LABEL_MAX_BARS && !touching || (touching && n_cat <= LABEL_MAX_BARS);
     let mut totals: Vec<Option<(f64, f64)>> = vec![None; n_cat]; // (positive top, negative bottom) of each category
+    // Phase 8 W11: each stacked segment says its value inside it, when asked
+    let inside_on = spec.inside_labels && stacked;
 
     for c in 0..n_cat {
         let mid = centre(c);
         let (mut pos_acc, mut neg_acc) = (0.0f64, 0.0f64);
+        // what the bar adds up to (a segment's share of it decides whether it is labelled)
+        let abs_total: f64 = p.series.iter().filter_map(|x| x.vals.get(c).copied().flatten()).map(f64::abs).sum();
         for (si, s) in p.series.iter().enumerate() {
             let Some(Some(v0)) = s.vals.get(c) else { continue };
             let v = if spec.stack == Stack::Percent && stacked { *v0 } else { *v0 };
@@ -1612,6 +1657,13 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
             let _ = surface;
             let tip = tip_text(data, p, si, c, Some(*v0), p.vk, opts);
             b.out.marks.push(Mark { rect: r, kind: if stacked { MarkKind::Segment } else { MarkKind::Bar }, panel: pidx, series: si, category: c, value: Some(*v0), tip, slice: None });
+            if inside_on && abs_total > 0.0 {
+                let share = v0.abs() / abs_total * 100.0;
+                if share > 0.0 && share >= spec.inside_min_pct.max(0.0) {
+                    let text = if spec.stack == Stack::Percent { format!("{}%", crate::models::format_with_commas(share, 1)) } else { b.lp.text(*v0, p.vk, false) };
+                    segment_label(b, (pidx, si, c), r, &text, colour, horizontal);
+                }
+            }
         }
         if stacked {
             totals[c] = Some((pos_acc, neg_acc));
@@ -1693,7 +1745,8 @@ fn bars(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, band: f32,
     }
     let ink_c = rgb(ink.ink);
     let label_pt = t::data_label_pt();
-    if b.lp.mode == LabelMode::All && !one {
+    // ("All" says each segment inside it as well; with segment labels on, those are the ones that say it)
+    if b.lp.mode == LabelMode::All && !one && !inside_on {
         bar_labels_every_mark(b, p, pidx, horizontal, stacked, n_cat);
     }
     for c in 0..n_cat {
@@ -1804,6 +1857,30 @@ fn bar_labels_every_mark(b: &mut Builder, p: &Plan, pidx: usize, horizontal: boo
         }
     }
     let _ = n_cat;
+}
+
+/// Room a label keeps clear of the edge of its segment: along the text, and across it.
+const SEGMENT_PAD_ALONG: f32 = 3.0;
+const SEGMENT_PAD_ACROSS: f32 = 2.0;
+
+/// The label inside a stacked segment (Phase 8 W11): straight when the segment is wide and tall enough for it, else turned 90° on a
+/// column when it is long enough for the text and wide enough for its height, else left out (the tooltip and the table still have it).
+/// It is written centred in the segment, so it never leaves it, and a segment holds one label, so two never touch. The text is white
+/// or ink by contrast with the segment's fill, never the series colour.
+fn segment_label(b: &mut Builder, key: (usize, usize, usize), r: Rect, text: &str, fill: Color32, horizontal: bool) {
+    let pt = t::data_label_pt();
+    let sz = b.size(text, pt, Face::Regular);
+    let col = contrast_text(fill);
+    let fits_straight = r.width() >= sz.x + 2.0 * SEGMENT_PAD_ALONG && r.height() >= sz.y + 2.0 * SEGMENT_PAD_ACROSS;
+    let fits_turned = !horizontal && r.height() >= sz.x + 2.0 * SEGMENT_PAD_ALONG && r.width() >= sz.y + 2.0 * SEGMENT_PAD_ACROSS;
+    if fits_straight {
+        b.put(Role::Cell, text, Anchor::Centre, r.center(), pt, Face::Regular, col);
+    } else if fits_turned {
+        b.put_turned(Role::Cell, text, r.center(), pt, Face::Regular, col);
+    } else {
+        return;
+    }
+    b.out.segment_labels.push(SegmentLabel { panel: key.0, series: key.1, category: key.2, text: t::tidy(text), turned: !fits_straight, colour: col });
 }
 
 /// White text on a dark fill, the light theme's ink on a pale one.
@@ -2061,7 +2138,7 @@ fn boxes(b: &mut Builder, data: &ChartData, g: &PanelLayout, band: f32, centre: 
     let ink = b.ink;
     let surface = rgb(ink.surface);
     let ink2 = rgb(ink.ink2);
-    let colour = rgb(t::series_colour(0, opts.dark).unwrap_or(0));
+    let colour = rgb(single_colour(data, opts.colours.as_ref().unwrap_or(&data.spec.colour_map)).hex(opts.dark));
     let w = (band * BOX_FILL).min(t::BAR_MAX_PX).max(2.0);
     for (i, bx) in data.boxes.iter().enumerate() {
         let x = centre(i);
@@ -2107,7 +2184,7 @@ fn scatter_form(b: &mut Builder, data: &ChartData, body: Rect, opts: &LayoutOpts
     let n_ser = data.series.len();
     let colour_of = |si: usize| -> Color32 {
         let name = data.series.get(si).map(String::as_str).unwrap_or("");
-        let base = if name.is_empty() { Colour::Slot(0) } else { cm.get(name).unwrap_or(Colour::Slot(si.min(t::SLOTS - 1))) };
+        let base = if name.is_empty() { single_colour(data, cm) } else { cm.get(name).unwrap_or(Colour::Slot(si.min(t::SLOTS - 1))) };
         let c = rgb(base.hex(opts.dark));
         match &spec.highlight {
             Some(h) if !h.is_empty() && name != h && n_ser > 1 => rgb(cm.dimmed(name, opts.dark)),
@@ -2476,6 +2553,50 @@ pub fn hit_test(l: &ChartLayout, pos: Pos2) -> Option<Hover> {
         }
     }
     near.map(|(_, c)| Hover { tip: c.tip.clone(), rect: None, cross: Some((c.x, c.y0, c.y1)) })
+}
+
+/// The mark (or the line's category) under the pointer, as indexes into the chart's panels, series and categories (Phase 8 W6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitTarget {
+    pub panel: usize,
+    /// `None` for the crosshair of a line, which stands for a category of every series.
+    pub series: Option<usize>,
+    pub category: usize,
+}
+
+/// What `hit_test` finds, as indexes: a click on a mark goes by this.
+pub fn hit_target(l: &ChartLayout, pos: Pos2) -> Option<HitTarget> {
+    if l.message.is_some() {
+        return None;
+    }
+    let mut best: Option<(f32, &Mark)> = None;
+    for m in &l.marks {
+        let hit = match &m.slice {
+            Some(s) => in_slice(s, pos),
+            None => m.rect.expand(t::HIT_SLOP_PX).contains(pos),
+        };
+        if hit {
+            let d = (m.rect.center() - pos).length();
+            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, m));
+            }
+        }
+    }
+    if let Some((_, m)) = best {
+        return Some(HitTarget { panel: m.panel, series: Some(m.series), category: m.category });
+    }
+    let mut near: Option<(f32, &Crosshair)> = None;
+    for c in &l.crosshairs {
+        let Some(panel) = l.panels.get(c.panel) else { continue };
+        if !panel.plot.expand2(vec2(t::HIT_SLOP_PX, 0.0)).contains(pos) {
+            continue;
+        }
+        let d = (c.x - pos.x).abs();
+        if near.map(|(bd, _)| d < bd).unwrap_or(true) {
+            near = Some((d, c));
+        }
+    }
+    near.map(|(_, c)| HitTarget { panel: c.panel, series: None, category: c.category })
 }
 
 /// Where to put a tooltip box of `size` for a pointer at `pos`, kept inside `bounds`.

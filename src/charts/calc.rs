@@ -60,6 +60,27 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    // W6: the chart is drawn at its drill level, from the rows its path and its own filters leave
+    spec.check_drill()?;
+    spec.check_filters()?;
+    let level = spec.at_level();
+    let spec = &level;
+    let conditions = spec.row_conditions();
+    let lf = if conditions.is_empty() { lf } else { crate::engine::filter_by_conditions(lf, &conditions).context("Chart: the drill path or the chart's filters could not be applied")? };
+    // the date parts of the category, series or facet (W2) are added as columns first
+    let fields = spec.date_fields();
+    let lf = if fields.is_empty() {
+        lf
+    } else {
+        let mut lf = lf;
+        let schema = lf.collect_schema().context("Could not read the column types for the chart")?;
+        crate::dates::with_date_fields(lf, &fields, &schema, "Chart")?
+    };
+    compute_on(lf, spec)
+}
+
+/// The chart of a table that already has the chart's date parts as columns (a facet's panel).
+fn compute_on(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     let mut data = match spec.kind {
         ChartKind::Scatter | ChartKind::Bubble => compute_points(lf.clone(), spec)?,
         ChartKind::Histogram => compute_histogram(lf.clone(), spec)?,
@@ -182,12 +203,19 @@ fn compute_facets(lf: LazyFrame, spec: &ChartSpec, facet: &str) -> Result<Vec<Fa
         );
     }
     let mut order: Vec<usize> = (0..names.len()).collect();
-    order.sort_by(|&a, &b| ns[b].cmp(&ns[a]).then_with(|| names[a].cmp(&names[b])));
+    match spec.facet_order.as_ref() {
+        // Q1: the panels in the order chosen for the facet
+        Some(o) => {
+            let key = |i: usize| -> Option<String> { if names[i] == BLANK_LABEL { None } else { Some(names[i].clone()) } };
+            order.sort_by(|&a, &b| o.compare(&key(a), &key(b)));
+        }
+        None => order.sort_by(|&a, &b| ns[b].cmp(&ns[a]).then_with(|| names[a].cmp(&names[b]))),
+    }
     let inner = ChartSpec { facet: None, ..spec.clone() };
     let mut out = Vec::new();
     for i in order {
         let part = lf.clone().filter(key.clone().eq(lit(names[i].clone())));
-        let d = compute(part, &inner).with_context(|| format!("Chart: the panel '{}'", names[i]))?;
+        let d = compute_on(part, &inner).with_context(|| format!("Chart: the panel '{}'", names[i]))?;
         out.push(FacetData { name: names[i].clone(), data: Box::new(d) });
     }
     Ok(out)

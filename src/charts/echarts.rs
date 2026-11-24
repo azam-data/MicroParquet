@@ -52,6 +52,8 @@ pub struct ChartOut {
     pub height: u32,
     /// The chart's numbers as an HTML table (the page's "Table" toggle).
     pub table: String,
+    /// The table is shown open under the chart (the Data table option, Phase 8 W11), and the toggle leaves it alone.
+    pub table_open: bool,
 }
 
 fn r6(v: f64) -> f64 {
@@ -97,6 +99,9 @@ struct Env<'a> {
     lp: LabelPlan,
     /// Labels of "All" left out because they would overlap (the app's layout decides, at the page's size).
     dropped: std::collections::HashSet<(usize, usize, usize)>,
+    /// The labels inside stacked segments (Phase 8 W11), as the app's layout decided them at a nominal size: a segment with no entry
+    /// has no label. Empty with "Segment labels" off.
+    segs: std::collections::HashMap<(usize, usize, usize), super::layout::SegmentLabel>,
 }
 
 struct SerD {
@@ -119,7 +124,7 @@ struct Plan<'a> {
 impl<'a> Env<'a> {
     fn colour_of(&self, name: &str, i: usize, n: usize) -> u32 {
         let base = if name.is_empty() && n == 1 {
-            t::series_colour(0, self.dark).unwrap_or(0)
+            super::colours::single_colour(self.data, &self.cm).hex(self.dark)
         } else if name.is_empty() {
             t::series_colour(i.min(t::SLOTS - 1), self.dark).unwrap_or(0)
         } else {
@@ -261,6 +266,7 @@ fn foot_lines(data: &ChartData, notes: &[String]) -> Vec<String> {
         parts.push(format!("\u{2014} {}", data.spec.limit_note.trim()));
     }
     parts.extend(data.notes.iter().cloned());
+    parts.extend(super::colours::colour_notes(data, &data.spec.colour_map));
     parts.extend(notes.iter().cloned());
     if parts.is_empty() {
         return Vec::new();
@@ -491,6 +497,10 @@ fn text_on(fill: u32) -> String {
     if l > 0.30 { hx(t::INK_LIGHT.ink) } else { "#ffffff".to_string() }
 }
 
+/// The size the page's segment labels are decided at (the book's half-width card; the one-chart page is larger).
+const SEGMENT_NOMINAL_W: f32 = 640.0;
+const SEGMENT_NOMINAL_H: f32 = 420.0;
+
 fn label_style(env: &Env, text: &str, position: &str) -> Value {
     json!({"show": true, "formatter": lit(text), "position": position, "color": hx(env.ink.ink), "fontFamily": t::FONT_HTML, "fontSize": t::data_label_pt()})
 }
@@ -552,7 +562,20 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                     let body = if (x - x.round()).abs() < 1e-9 { value_text(x, p.vk, 0, false) } else { value_text(x, p.vk, env.opts.decimals, false) };
                     item["label"] = label_style(env, &format!("{} \u{b7} {}%", body, crate::models::format_with_commas(raw.abs() / totals[c].abs() * 100.0, 1)), "right");
                 }
-                if label_all && env.lp.shows(c, n_cat, true) && !env.left_out(p.idx, si, c) {
+                // Phase 8 W11: a label inside the segment, straight or turned, in white or ink; none where it has no room
+                if spec.inside_labels && stacked {
+                    match env.segs.get(&(p.idx, si, c)) {
+                        Some(sl) => {
+                            item["label"] = label_style(env, &sl.text, "inside");
+                            item["label"]["color"] = json!(hx(((sl.colour.r() as u32) << 16) | ((sl.colour.g() as u32) << 8) | sl.colour.b() as u32));
+                            if sl.turned {
+                                item["label"]["rotate"] = json!(90);
+                            }
+                        }
+                        None => item["label"] = json!({"show": false}),
+                    }
+                }
+                if label_all && !(spec.inside_labels && stacked) && env.lp.shows(c, n_cat, true) && !env.left_out(p.idx, si, c) {
                     let pos = match (horizontal, raw >= 0.0) {
                         (false, true) => "top",
                         (false, false) => "bottom",
@@ -566,7 +589,8 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                     }
                     if stacked {
                         // "All" on a stack: each segment says its value inside it, in the colour its fill asks for
-                        if !spec.segment_labels {
+                        // (with segment labels on, those say it)
+                        if !spec.segment_labels && !(spec.inside_labels && stacked) {
                             item["label"] = label_style(env, &text, "inside");
                             item["label"]["color"] = json!(text_on(s.colour));
                         }
@@ -578,7 +602,7 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
             })
             .collect();
         let mut ser = json!({
-            "name": lit(&s.name), "type": "bar", "xAxisIndex": grid, "yAxisIndex": grid, "data": data, "barMaxWidth": t::BAR_MAX_PX,
+            "name": lit(&s.name), "type": "bar", "xAxisIndex": grid, "yAxisIndex": grid, "data": data, "barMaxWidth": if spec.inside_labels && stacked { t::BAR_MAX_PX_LABELLED } else { t::BAR_MAX_PX },
             "itemStyle": {"color": hx(s.colour), "borderColor": surface, "borderWidth": if stacked || p.series.len() > 1 { 1 } else { 0 }},
             "emphasis": {"focus": "none", "itemStyle": {"borderColor": hx(env.ink.ink), "borderWidth": 1}}
         });
@@ -591,8 +615,9 @@ fn bar_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> 
                 ser["labelLayout"] = json!({"moveOverlap": "shiftY"});
             }
         }
-        if env.lp.mode == LabelMode::All {
-            // "All" never prints a label that collides: ECharts hides the ones that would overlap
+        if env.lp.mode == LabelMode::All || (spec.inside_labels && stacked) {
+            // "All" never prints a label that collides: ECharts hides the ones that would overlap. The same goes for the
+            // labels inside segments (W11): they are decided at a nominal size, and on a smaller page the ones that collide drop out
             ser["labelLayout"]["hideOverlap"] = json!(true);
         }
         if si == 0 {
@@ -1283,7 +1308,16 @@ fn build_one(data: &ChartData, opts: &LayoutOpts, dark: bool) -> Result<(Value, 
     // "All" on the page: every label is in the option and ECharts hides the ones that really overlap at the size the
     // page is shown in (`labelLayout.hideOverlap`); the nominal rule of the app, the workbook and the script is not used
     let dropped: std::collections::HashSet<(usize, usize, usize)> = std::collections::HashSet::new();
-    let env = Env { data, opts, dark, ink, cm, lp, dropped };
+    // "Segment labels" (W11): which segments say their value, and whether it is turned, is the app's layout at a size a page chart
+    // is about as big as (a segment that has no room there has none here either)
+    let segs = if spec.inside_labels && spec.stack != Stack::Grouped {
+        let nominal = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(SEGMENT_NOMINAL_W, SEGMENT_NOMINAL_H));
+        let l = super::layout::layout_chart(data, nominal, &LayoutOpts { dark, ..opts.clone() }, &super::layout::ApproxMeasure);
+        l.segment_labels.into_iter().map(|x| ((x.panel, x.series, x.category), x)).collect()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let env = Env { data, opts, dark, ink, cm, lp, dropped, segs };
     if let Some(r) = data.empty_reason() {
         bail!("No data to chart: {}.", r);
     }
@@ -1404,7 +1438,13 @@ fn chart_pair_scaled(data: &ChartData, opts: &LayoutOpts) -> Result<ChartOut> {
     }
     let (light, h) = build_one(data, opts, false)?;
     let (dark, _) = build_one(data, opts, true)?;
-    Ok(ChartOut { title: t::tidy(&chart_title(data)), light, dark, height: h.ceil() as u32, table: table_html(data, opts) })
+    // the Data table option (W11): the chart's categories x series with totals, open under the chart; off = the page's own table behind its toggle
+    let printed = if data.spec.data_table == super::spec::DataTable::Off { None } else { super::data_table::data_table(data, opts) };
+    let (table, table_open) = match &printed {
+        Some(tbl) => (super::data_table::data_table_html(tbl), true),
+        None => (table_html(data, opts), false),
+    };
+    Ok(ChartOut { title: t::tidy(&chart_title(data)), light, dark, height: h.ceil() as u32, table, table_open })
 }
 
 // -------------------------------------------------------------------------------- advanced options
@@ -1653,6 +1693,11 @@ const PAGE_JS: &str = r#"
 })();
 "#;
 
+/// What a page needs when a chart has its data table open under it (Phase 8 W11): the table's own look, and the "Table" toggle leaving
+/// that table (and its chart) shown. A page with no open table does not carry them.
+const OPEN_TABLE_CSS: &str = ".mp-table caption{caption-side:top;text-align:left;font-weight:600;color:var(--ink2);padding:4px 12px}\n.mp-table tr.mp-total th{border-top:1px solid var(--base);border-bottom:0;color:var(--ink)}\n.mp-note{margin:4px 12px;color:var(--ink2);font-size:12px}\n.mp-tablewrap.open{max-height:none;padding-top:0}\n";
+const OPEN_TABLE_JS: &str = "(function(){var tt=document.getElementById('mp-table');if(!tt)return;var D=JSON.parse(document.getElementById('mp-data').textContent);tt.addEventListener('click',function(){D.charts.forEach(function(c){if(!c.open)return;var w=document.getElementById(c.id+'-table'),e=document.getElementById(c.id);if(w)w.hidden=false;if(e)e.hidden=false;});window.dispatchEvent(new Event('resize'));});})();\n";
+
 /// One chart of a page: its option pair, a name for saved files, the table.
 #[derive(Clone, Debug)]
 pub struct PageChart {
@@ -1668,7 +1713,8 @@ fn script_json(v: &Value) -> String {
 fn page(title: &str, intro: Option<(&str, &str)>, charts: &[PageChart], grid: bool) -> String {
     let mut s = String::with_capacity(ECHARTS_JS.len() + 64 * 1024);
     s.push_str("<!doctype html>\n<html lang=\"en\" data-theme=\"light\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
-    s.push_str(&format!("<title>{}</title><style>{}</style></head><body><div class=\"mp-page\">", esc(title), PAGE_CSS));
+    let any_open = charts.iter().any(|c| c.out.table_open);
+    s.push_str(&format!("<title>{}</title><style>{}{}</style></head><body><div class=\"mp-page\">", esc(title), PAGE_CSS, if any_open { OPEN_TABLE_CSS } else { "" }));
     s.push_str("<div class=\"mp-bar\"><button class=\"mp-btn\" id=\"mp-table\" type=\"button\">Table</button><button class=\"mp-btn\" id=\"mp-theme\" type=\"button\">Dark</button></div>");
     if let Some((h, sub)) = intro {
         s.push_str(&format!("<div class=\"mp-head\"><h1>{}</h1><p>{}</p></div>", esc(h), esc(sub)));
@@ -1679,8 +1725,12 @@ fn page(title: &str, intro: Option<(&str, &str)>, charts: &[PageChart], grid: bo
     let mut list: Vec<Value> = Vec::new();
     for (i, c) in charts.iter().enumerate() {
         let id = format!("mp-c{}", i);
-        s.push_str(&format!("<div class=\"mp-card\"><div class=\"mp-chart\" id=\"{id}\" role=\"img\" aria-label=\"{}\"></div><div class=\"mp-tablewrap\" id=\"{id}-table\" hidden>{}</div></div>", esc(&c.out.title), c.out.table));
-        list.push(json!({"id": id, "name": c.name, "height": c.out.height, "light": c.out.light, "dark": c.out.dark}));
+        s.push_str(&format!("<div class=\"mp-card\"><div class=\"mp-chart\" id=\"{id}\" role=\"img\" aria-label=\"{}\"></div><div class=\"mp-tablewrap{}\" id=\"{id}-table\"{}>{}</div></div>", esc(&c.out.title), if c.out.table_open { " open" } else { "" }, if c.out.table_open { "" } else { " hidden" }, c.out.table));
+        let mut entry = json!({"id": id, "name": c.name, "height": c.out.height, "light": c.out.light, "dark": c.out.dark});
+        if c.out.table_open {
+            entry["open"] = json!(true);
+        }
+        list.push(entry);
     }
     s.push_str("</div></div>");
     let data = json!({"charts": list, "themes": {"light": theme_json(false), "dark": theme_json(true)}, "followSystem": false});
@@ -1689,6 +1739,9 @@ fn page(title: &str, intro: Option<(&str, &str)>, charts: &[PageChart], grid: bo
     s.push_str(ECHARTS_JS);
     s.push_str("</script><script>");
     s.push_str(PAGE_JS);
+    if any_open {
+        s.push_str(OPEN_TABLE_JS);
+    }
     s.push_str("</script></body></html>\n");
     s
 }

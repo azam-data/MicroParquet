@@ -127,6 +127,8 @@ impl MicroParquetApp {
         let mut remove_sort = false;
         let editing = self.sort.editing;
         let saved_lists = self.sort_lists.lists.clone();
+        let builtin = self.builtin_orders();
+        let before: Vec<String> = self.sort.levels.iter().map(|l| l.column.clone()).collect();
         theme::modal(if editing.is_some() { "\u{E444}  Edit sort" } else { "\u{E444}  Sort rows" })
             .default_width(theme::DIALOG_W_SORT)
             .show(ctx, |d| {
@@ -155,6 +157,9 @@ impl MicroParquetApp {
                                     ui.selectable_value(&mut l.order, o, &list.name);
                                 }
                                 ui.selectable_value(&mut l.order, SortOrder::Tenor, "Tenor");
+                                for o in &builtin {
+                                    ui.selectable_value(&mut l.order, o.clone(), o.label());
+                                }
                             });
                             ui.radio_value(&mut l.descending, false, "Lowest first");
                             ui.radio_value(&mut l.descending, true, "Highest first");
@@ -205,6 +210,22 @@ impl MicroParquetApp {
                     });
                 });
             });
+        // W0 auto order: a level whose column was just picked (or added) and has no order chosen
+        let changed: Vec<(usize, String)> = self
+            .sort
+            .levels
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| before.get(*i) != Some(&l.column) && !before.contains(&l.column) && l.order.is_natural())
+            .map(|(i, l)| (i, l.column.clone()))
+            .collect();
+        for (i, column) in changed {
+            if let Some(order) = self.auto_order(&column, crate::ui::auto_order::AutoTarget::SortLevel(i)) {
+                if let Some(l) = self.sort.levels.get_mut(i) {
+                    l.order = order;
+                }
+            }
+        }
         if apply {
             let levels = self.sort.levels.clone();
             self.apply_sort_levels(editing, levels);

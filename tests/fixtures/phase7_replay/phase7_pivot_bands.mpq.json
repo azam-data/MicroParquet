@@ -1,0 +1,70 @@
+{
+  "app_version": "1.6.0",
+  "control_column": null,
+  "created_at": "2026-11-23 10:00:00",
+  "description": "Phase 7 baseline (goal 3)",
+  "enforce_balance_control": false,
+  "name": "phase7_pivot_bands",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "RateBand": {
+        "band_def": {
+          "lower_inclusive": false,
+          "mode": {
+            "Fixed": {
+              "end_pct": 15.0,
+              "start_pct": 0.0,
+              "step_pct": 1.0
+            }
+          },
+          "name": "1pt"
+        },
+        "new_col": "Rate Band",
+        "rate_col": "Int Rate"
+      }
+    },
+    {
+      "PivotTable": {
+        "column_totals": true,
+        "columns": [
+          "Brancd"
+        ],
+        "field_orders": [
+          {
+            "field": "Brancd",
+            "order": {
+              "List": {
+                "case_insensitive": true,
+                "name": "Branches",
+                "values": [
+                  "SYL",
+                  "DHK",
+                  "CTG",
+                  "XXX"
+                ]
+              }
+            }
+          }
+        ],
+        "filters": [],
+        "row_totals": true,
+        "rows": [
+          "Rate Band"
+        ],
+        "scale": "Global",
+        "show_as": "NoCalculation",
+        "sort_by_value": null,
+        "subtotals": false,
+        "values": [
+          {
+            "agg": "Sum",
+            "field": "Balance",
+            "weight_col": null
+          }
+        ]
+      }
+    }
+  ],
+  "summary": {}
+}

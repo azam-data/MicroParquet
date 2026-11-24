@@ -1,0 +1,152 @@
+{
+  "name": "p7replay",
+  "inputs": [
+    {
+      "slot": "Loans",
+      "schema_template": null,
+      "schema": null,
+      "steps": [
+        {
+          "SortRows": {
+            "levels": [
+              {
+                "column": "TENOR",
+                "descending": false,
+                "order": "Tenor"
+              }
+            ]
+          }
+        }
+      ],
+      "required_columns": [
+        "ACNO",
+        "BAL",
+        "RATE",
+        "MAT",
+        "TENOR"
+      ],
+      "captured_from": "",
+      "captured_path": "",
+      "captured_hash": ""
+    },
+    {
+      "slot": "Deposits",
+      "schema_template": null,
+      "schema": null,
+      "steps": [],
+      "required_columns": [
+        "ACNO",
+        "BAL",
+        "MAT",
+        "PROD"
+      ],
+      "captured_from": "",
+      "captured_path": "",
+      "captured_hash": ""
+    }
+  ],
+  "items": [
+    {
+      "title": "Loans by tenor",
+      "sheet": "Loans",
+      "source": {
+        "kind": "steps",
+        "slot": "Loans"
+      },
+      "col_formats": {},
+      "chart": null
+    },
+    {
+      "title": "Deposits by product",
+      "sheet": "Dep",
+      "source": {
+        "kind": "pivot",
+        "slot": "Deposits",
+        "pivot": {
+          "PivotTable": {
+            "rows": [
+              "PROD"
+            ],
+            "columns": [],
+            "values": [
+              {
+                "field": "BAL",
+                "agg": "Sum",
+                "weight_col": null
+              }
+            ],
+            "filters": [],
+            "row_totals": true,
+            "column_totals": true,
+            "subtotals": false,
+            "show_as": "NoCalculation",
+            "scale": "Global",
+            "sort_by_value": null,
+            "field_orders": [
+              {
+                "field": "PROD",
+                "order": {
+                  "List": {
+                    "name": "Products",
+                    "values": [
+                      "TD",
+                      "SB",
+                      "CD"
+                    ],
+                    "case_insensitive": true
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "col_formats": {},
+      "chart": null
+    },
+    {
+      "title": "Gap",
+      "sheet": "Gap",
+      "source": {
+        "kind": "run",
+        "run": {
+          "tool": "gap_ladder",
+          "inputs": [
+            {
+              "source": "Loans",
+              "spec": {
+                "role": "Asset",
+                "amount_col": "BAL",
+                "maturity_col": "MAT"
+              },
+              "product_col": ""
+            },
+            {
+              "source": "Deposits",
+              "spec": {
+                "role": "Liability",
+                "amount_col": "BAL",
+                "maturity_col": "MAT"
+              },
+              "product_col": ""
+            }
+          ],
+          "preset": "Bangladesh Bank SLP (9 Liquidity Buckets)",
+          "preset_def": null,
+          "cutoff": "2026-10-31",
+          "null_as_sight": true,
+          "behaviour_file": "",
+          "stress_tdrr": false
+        }
+      },
+      "col_formats": {},
+      "chart": null
+    }
+  ],
+  "output": {
+    "pdf": false,
+    "scale": "BdtCrore",
+    "decimals": 2,
+    "html_charts": false
+  }
+}

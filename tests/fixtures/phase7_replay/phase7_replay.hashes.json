@@ -1,0 +1,16 @@
+{
+  "chart:Deposits by product": "692e167e31c6a6f500710b64c62c1a1f95723bbe8bfc7b56f0bbc12becc4e805",
+  "macro:phase1_every_step": "1893632666d207c4fc830f0ba86384fa6d829b398eb00871eca98647e3babd2d",
+  "macro:phase2_every_step": "1893632666d207c4fc830f0ba86384fa6d829b398eb00871eca98647e3babd2d",
+  "macro:phase4_pivot_main": "67a448cf4b3b2c6675d33833da05f8634c9704f674f18d2f8bacf473e9cd806b",
+  "macro:phase4_rate_shock_main": "10eba90829509b499cec950c2dfcc5aa5028183e73ab02528d34a239085d8bcf",
+  "macro:phase4_rate_shock_side_main": "d81c997c4424f2ef15e14ed587a6a7606020e65127755b5068a018a706b3bd82",
+  "macro:phase6_filter_inlist_old": "b98ef22ac38e6110449b49c78be278bb50adcf887b2ae8cecf94377894a7fe71",
+  "macro:phase6_sort_pivot_unset": "eba2367198ccea5fe0abde1ac9c79c474c4c24b394bbf239ef138200621a01f6",
+  "macro:phase7_pivot_bands": "f7dacb14d99f7f7b2495e879407093525b7e4c4cb54f2c71ecd482f5cd308209",
+  "macro:phase7_pivot_tenor": "550aef84d37fc2569be9648247d32d2bf80c0548a1d55d3b81f77d4436cab23d",
+  "macro:phase7_rows": "46a14631d39eaa246b7106a86acde031bb159c4527ae7ecf6e960b851d1d532d",
+  "pack:Dep": "f408464d3f5c37fa1beca0e5e8282bacd9337490c8d697d110da4194800b867b",
+  "pack:Gap": "8fe958ab33b870d3c8bb4865740f4058989752d65953cd96049796a12959c138",
+  "pack:Loans": "15e83830b9561e975b009dbfdfc1948cdb4f71c811c6c073e2cfa210ceb460cc"
+}

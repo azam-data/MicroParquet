@@ -126,3 +126,37 @@ mod p7_g;
 mod p7_r;
 #[path = "../phase7/s.rs"]
 mod p7_s;
+
+// Phase 8 tests (tests/phase8/) are compiled into this binary too.
+#[path = "../phase8/common8.rs"]
+mod common8;
+#[path = "../phase8/p7_baseline.rs"]
+mod p7_baseline;
+#[path = "../phase8/w0.rs"]
+mod p8_w0;
+#[path = "../phase8/w1.rs"]
+mod p8_w1;
+#[path = "../phase8/w2.rs"]
+mod p8_w2;
+#[path = "../phase8/q.rs"]
+mod p8_q;
+#[path = "../phase8/w3.rs"]
+mod p8_w3;
+#[path = "../phase8/w5.rs"]
+mod p8_w5;
+#[path = "../phase8/w6.rs"]
+mod p8_w6;
+#[path = "../phase8/w4.rs"]
+mod p8_w4;
+#[path = "../phase8/w7.rs"]
+mod p8_w7;
+#[path = "../phase8/w10.rs"]
+mod p8_w10;
+#[path = "../phase8/w9.rs"]
+mod p8_w9;
+#[path = "../phase8/w11_baseline.rs"]
+mod p8_w11_baseline;
+#[path = "../phase8/w11.rs"]
+mod p8_w11;
+#[path = "../phase8/w8.rs"]
+mod p8_w8;

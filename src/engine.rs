@@ -1695,6 +1695,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => collect_masked_columns(source, out),
+        TabSource::Unavailable { .. } => {}
     }
 }
 
@@ -1714,6 +1715,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => source_masks_pii(source),
+        TabSource::Unavailable { .. } => false,
     }
 }
 
@@ -1863,6 +1865,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             }
         }
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::Unavailable { reason } => anyhow::bail!("{}", reason),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
     for f in parts {
@@ -2351,6 +2354,46 @@ pub fn dq_type_stats(source: &TabSource, rules: &crate::dq::DqRuleSet, temp_dir:
     Ok(crate::dq::TypeStats::from_source(&df, &failures))
 }
 
+/// The text order each step-made label column declares (Phase 8 W0): Split date's text parts are in the
+/// Calendar order of the step's own calendar, an unnumbered rate band column is in band order. Derived from
+/// the steps, so no tab state is needed; a column renamed later keeps its order, one dropped by a column
+/// choice loses it. Steps that are turned off declare nothing.
+pub fn column_orders(steps: &[TransformStep]) -> std::collections::HashMap<String, crate::sort_lists::SortOrder> {
+    let mut out: std::collections::HashMap<String, crate::sort_lists::SortOrder> = std::collections::HashMap::new();
+    for step in steps {
+        match step {
+            TransformStep::RenameColumn { old_name, new_name } => {
+                if let Some(o) = out.remove(old_name) {
+                    out.insert(new_name.clone(), o);
+                } else {
+                    out.remove(new_name);
+                }
+            }
+            TransformStep::SelectAndReorderColumns { cols } => out.retain(|k, _| cols.contains(k)),
+            other => {
+                for (name, order) in declared_orders(other) {
+                    out.insert(name, order);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The orders one step declares (none for most steps).
+fn declared_orders(step: &TransformStep) -> Vec<(String, crate::sort_lists::SortOrder)> {
+    match step {
+        // Split date: its text parts are in the Calendar order of the step's own week start
+        TransformStep::SplitDate { calendar, .. } => step.split_date_names().into_iter().filter_map(|(part, name)| part.sort_order(calendar).map(|o| (name, o))).collect(),
+        // an unnumbered rate band column (W3): its labels in band order (a numbered one sorts as text)
+        TransformStep::RateBand { band_def, new_col, .. } if !band_def.numbered => match band_def.band_order() {
+            Ok(values) => vec![(new_col.clone(), crate::sort_lists::SortOrder::List { name: "Rate bands".to_string(), values, case_insensitive: false })],
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
 pub fn compile_tab_lazy(
     source: &TabSource,
     steps: &[TransformStep],
@@ -2545,12 +2588,30 @@ pub fn compile_tab_lazy(
             let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
             crate::banking::build_cl_migration(prev_lf, curr_lf, spec)?.lazy()
         }
+        TabSource::Unavailable { reason } => anyhow::bail!("This tab could not be opened: {}", reason),
     };
 
     for step in steps {
         lf = apply_single_step(lf, step)?;
     }
 
+    Ok(lf)
+}
+
+/// The rows that meet every condition, as a Filter group step "keep matching, all of these" reads them (Phase 8 W6). A chart's
+/// drill path and its own filters, and the "Show rows" tab behind a mark, both go through this one function, so the numbers of
+/// the chart at a level and the rows of that tab cannot disagree.
+pub fn filter_by_conditions(lf: LazyFrame, conditions: &[FilterCondition]) -> Result<LazyFrame> {
+    apply_single_step(lf, &TransformStep::FilterGroup { conditions: conditions.to_vec(), join: GroupJoin::And, keep_matching: true })
+}
+
+/// Steps applied one after another to a table that is already built (Phase 8: the steps after a pivot, applied to the
+/// pivot's own table).
+pub fn apply_steps_to(lf: LazyFrame, steps: &[TransformStep]) -> Result<LazyFrame> {
+    let mut lf = lf;
+    for step in steps {
+        lf = apply_single_step(lf, step)?;
+    }
     Ok(lf)
 }
 
@@ -2664,11 +2725,16 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
                 return Ok(lf);
             }
             let mut lf = lf;
-            let schema = lf
+            let mut schema = lf
                 .collect_schema()
                 .context("Could not read the column types for this filter")?;
+            // a condition on a date part (W2) tests a column of that part, added here and dropped after
+            let (conditions, temps) = with_condition_parts(&mut lf, conditions, &schema)?;
+            if !temps.is_empty() {
+                schema = lf.collect_schema().context("Could not read the column types for this filter")?;
+            }
             let mut exprs = Vec::with_capacity(conditions.len());
-            for c in conditions {
+            for c in &conditions {
                 exprs.push(build_condition_expr(c, &schema)?);
             }
             let mut it = exprs.into_iter();
@@ -2681,7 +2747,8 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             }
             // An unknown test (a null against a value) is "does not match".
             let matches = combined.fill_null(lit(false));
-            Ok(lf.filter(if *keep_matching { matches } else { matches.not() }))
+            let out = lf.filter(if *keep_matching { matches } else { matches.not() });
+            Ok(if temps.is_empty() { out } else { out.drop(temps.iter().map(|t| t.as_str()).collect::<Vec<_>>()) })
         }
         TransformStep::FilterRows {
             column,
@@ -2898,6 +2965,14 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Some(spec) => crate::pivot_table::apply_pivot_table(lf, &spec),
             None => Ok(lf),
         },
+        TransformStep::SplitDate { column, parts, calendar, .. } => {
+            let mut lf = lf;
+            let schema = lf.collect_schema().context("Could not read the column types for Split date")?;
+            let names = step.split_date_names();
+            split_date_check(column, parts, calendar, &names, |c| schema.get(c).cloned())?;
+            let exprs: Vec<Expr> = names.iter().map(|(part, name)| part.expr(column, *calendar).alias(name.as_str())).collect();
+            Ok(lf.with_columns(exprs))
+        }
         TransformStep::SqlQuery { query } => {
             let mut ctx = SQLContext::new();
             ctx.register("self", lf);
@@ -2907,6 +2982,77 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(res_lf)
         }
     }
+}
+
+/// The conditions of a filter with their date parts (W2) made columns: each condition with a part reads a
+/// column `__mp_part<i>` holding that part of its date column (added to `lf`); returns the conditions to test
+/// and the names to drop after. A part of a column that is missing or not a date is refused.
+pub fn with_condition_parts(lf: &mut LazyFrame, conditions: &[crate::models::FilterCondition], schema: &Schema) -> Result<(Vec<crate::models::FilterCondition>, Vec<String>)> {
+    let mut out = Vec::with_capacity(conditions.len());
+    let mut temps = Vec::new();
+    let mut exprs = Vec::new();
+    for (i, c) in conditions.iter().enumerate() {
+        match &c.part {
+            Some(p) => {
+                let dt = schema.get(c.column.as_str()).ok_or_else(|| anyhow::anyhow!("Filter: column '{}' was not found. Pick it again in the filter editor.", c.column))?;
+                crate::dates::check_date_column(&c.column, dt).map_err(|e| anyhow::anyhow!("Filter: {}", e))?;
+                p.calendar.validate()?;
+                let name = format!("__mp_part{}", i);
+                if p.part.is_ordered() {
+                    // Year, Month-Year, Year-Quarter, Month, Quarter, Day name: compared by their order (W9), never by their text
+                    let keyed = crate::dates::keyed_condition(c, &name).map_err(|e| anyhow::anyhow!("Filter: {}", e))?;
+                    exprs.push(p.part.key_expr(&c.column, p.calendar).alias(name.as_str()));
+                    out.push(keyed);
+                } else {
+                    if let Some(why) = crate::dates::unordered_refusal(c) {
+                        anyhow::bail!("Filter: {}", why);
+                    }
+                    exprs.push(p.part.expr(&c.column, p.calendar).alias(name.as_str()));
+                    out.push(crate::models::FilterCondition { column: name.clone(), part: None, ..c.clone() });
+                }
+                temps.push(name);
+            }
+            None => out.push(c.clone()),
+        }
+    }
+    if !exprs.is_empty() {
+        *lf = lf.clone().with_columns(exprs);
+    }
+    Ok((out, temps))
+}
+
+/// What stops a Split date step, in words a banker can act on: no column or part, a column that is missing
+/// or not a date, the same part twice, a calendar out of range, or a new name that is already a column.
+/// `dtype_of` gives the type of a column the step sees.
+pub fn split_date_check(
+    column: &str,
+    parts: &[crate::dates::DatePart],
+    calendar: &crate::dates::CalendarSettings,
+    names: &[(crate::dates::DatePart, String)],
+    dtype_of: impl Fn(&str) -> Option<DataType>,
+) -> Result<()> {
+    if column.trim().is_empty() {
+        anyhow::bail!("Split date: choose the date column to split.");
+    }
+    let Some(dtype) = dtype_of(column) else {
+        anyhow::bail!("Split date: the column '{}' was not found. Choose it again in the Split date dialog.", column);
+    };
+    crate::dates::check_date_column(column, &dtype)?;
+    if parts.is_empty() {
+        anyhow::bail!("Split date: tick at least one part (Year, Quarter, Month \u{2026}).");
+    }
+    for (i, p) in parts.iter().enumerate() {
+        if parts[..i].contains(p) {
+            anyhow::bail!("Split date: the part '{}' is ticked twice.", p.label());
+        }
+    }
+    calendar.validate()?;
+    for (_, name) in names {
+        if dtype_of(name).is_some() {
+            anyhow::bail!("Split date: a column '{}' already exists. Change the prefix in the Split date dialog, or rename that column first.", name);
+        }
+    }
+    Ok(())
 }
 
 /// "Clean line breaks": in each chosen text column (all text columns when `columns` is empty) a

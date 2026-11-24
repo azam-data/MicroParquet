@@ -671,7 +671,13 @@ pub fn export_pdf_tabs_with(
     let (page_w, page_h) = (opts.page.width_mm(), opts.page.height_mm());
     let heading: Vec<String> = wrap_text_mm(opts.title.trim(), opts.page.usable_w_mm(), TITLE_PT, FontKind::Bold);
     let doc_title = if heading.is_empty() { "Report".to_string() } else { heading.join(" ") };
-    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(page_w), Mm(page_h), "Layer 1");
+    // a chart with its data table beside it is on a landscape page (Phase 8 W11); when the first page is one, the document starts so
+    let chart_page = |t: &PdfTab| -> crate::pdf_layout::PdfPage {
+        let beside = t.chart.as_ref().is_some_and(|(d, o)| d.spec.data_table == crate::charts::spec::DataTable::Beside && crate::charts::data_table::data_table(d, o).is_some());
+        if beside { crate::pdf_layout::PdfPage { landscape: true, ..opts.page } } else { opts.page }
+    };
+    let first_page_size = tabs.first().map(|t| chart_page(t)).unwrap_or(opts.page);
+    let (doc, page1, layer1) = PdfDocument::new(doc_title, Mm(first_page_size.width_mm()), Mm(first_page_size.height_mm()), "Layer 1");
 
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_reg = doc.add_builtin_font(BuiltinFont::Helvetica)?;
@@ -695,8 +701,11 @@ pub fn export_pdf_tabs_with(
     for PdfTab { title, df, col_formats, summary, chart } in tabs {
         // a chart tab: the chart on its own page (the heading of the export dialog above it); the table only when asked for
         if let Some((cdata, copts)) = chart {
+            // the chart's data printed with it (Phase 8 W11); a chart with the option off is written exactly as before
+            let table = if cdata.spec.data_table == crate::charts::spec::DataTable::Off { None } else { crate::charts::data_table::data_table(&cdata, &copts) };
+            let pg = if table.is_some() && cdata.spec.data_table == crate::charts::spec::DataTable::Beside { crate::pdf_layout::PdfPage { landscape: true, ..opts.page } } else { opts.page };
             if !first_page {
-                let (p, l) = doc.add_page(Mm(page_w), Mm(page_h), "Layer");
+                let (p, l) = doc.add_page(Mm(pg.width_mm()), Mm(pg.height_mm()), "Layer");
                 current_page = p;
                 current_layer = l;
             }
@@ -705,15 +714,73 @@ pub fn export_pdf_tabs_with(
                 chart_fonts = Some(crate::charts::pdf::add_fonts(&doc)?);
             }
             let layer = doc.get_page(current_page).get_layer(current_layer);
-            let mut y = opts.page.top_mm();
+            let mut y = pg.top_mm();
             for line in &heading {
                 layer.use_text(line.clone(), TITLE_PT, Mm(LEFT_MM), Mm(y), &font_bold);
                 y -= 5.5;
             }
             let top = y + 2.0;
-            let area = crate::charts::pdf::ChartArea { left_mm: LEFT_MM, top_mm: top, width_mm: opts.page.usable_w_mm(), height_mm: (top - 12.0).max(40.0) };
-            if let Some(f) = chart_fonts.as_ref() {
-                crate::charts::pdf::draw_chart(&layer, f, &cdata, &copts, area).with_context(|| format!("Chart '{}' could not be drawn on the page", title))?;
+            match (&table, chart_fonts.as_ref()) {
+                (Some(tbl), Some(f)) => {
+                    let m = crate::charts::pdf::PdfMeasure::new();
+                    let widths = crate::charts::pdf::table_col_widths_mm(tbl, &m);
+                    let table_w: f32 = widths.iter().sum();
+                    let usable = pg.usable_w_mm();
+                    if table_w > usable {
+                        anyhow::bail!("Chart '{}': its data table needs {:.0} mm at 8 pt and the page has {:.0} mm. Show fewer series (Top N or a filter), or turn the Data table off.", title, table_w, usable);
+                    }
+                    // beside: the chart takes the left of the page and the table the right; when the table is too wide for that, it goes below
+                    let chart_w = usable * 0.58;
+                    let beside = cdata.spec.data_table == crate::charts::spec::DataTable::Beside && table_w <= usable - chart_w - 6.0;
+                    let (area, table_left, table_top) = if beside {
+                        (crate::charts::pdf::ChartArea { left_mm: LEFT_MM, top_mm: top, width_mm: chart_w, height_mm: (top - 12.0).max(40.0) }, LEFT_MM + chart_w + 6.0, top)
+                    } else {
+                        let h = ((top - 12.0) * 0.55).max(40.0);
+                        (crate::charts::pdf::ChartArea { left_mm: LEFT_MM, top_mm: top, width_mm: usable, height_mm: h }, LEFT_MM, top - h - 3.0)
+                    };
+                    crate::charts::pdf::draw_chart(&layer, f, &cdata, &copts, area).with_context(|| format!("Chart '{}' could not be drawn on the page", title))?;
+                    // the rows: as many as fit under the chart (or beside it), the rest on the next pages with the header repeated;
+                    // the total row stays with the last rows
+                    let n = tbl.rows.len();
+                    let has_total = usize::from(tbl.total.is_some());
+                    let mut start = 0usize;
+                    let (mut left, mut top_y, mut first_part) = (table_left, table_top, true);
+                    loop {
+                        let cap = crate::charts::pdf::table_rows_fit(top_y - 12.0, true, false).max(1);
+                        let remaining = n - start;
+                        let (take, with_total) = if remaining + has_total <= cap { (remaining, has_total == 1) } else { (cap.min(remaining).min(remaining.saturating_sub(has_total)).max(remaining.min(1)), false) };
+                        let layer = doc.get_page(current_page).get_layer(current_layer);
+                        let caption = if first_part { tbl.caption.clone() } else { format!("{} (continued)", tbl.caption) };
+                        let y_end = crate::charts::pdf::draw_table_part(&layer, f, &m, tbl, &widths, left, top_y, &tbl.rows[start..start + take], if with_total { tbl.total.as_ref() } else { None }, Some(&caption));
+                        start += take;
+                        if start >= n && (with_total || has_total == 0) {
+                            if let Some(note) = &tbl.no_total_note {
+                                layer.set_fill_color(Color::Rgb(Rgb::new(0.3, 0.3, 0.3, None)));
+                                layer.use_text(note.clone(), crate::charts::pdf::TABLE_PT, Mm(left), Mm((y_end - crate::charts::pdf::TABLE_ROW_MM * 0.6).max(8.0)), &f.regular);
+                            }
+                            break;
+                        }
+                        // the next page: the heading again, then the table from the left margin with its header
+                        let (p, l) = doc.add_page(Mm(pg.width_mm()), Mm(pg.height_mm()), "Layer");
+                        current_page = p;
+                        current_layer = l;
+                        let layer = doc.get_page(current_page).get_layer(current_layer);
+                        let mut yy = pg.top_mm();
+                        for line in &heading {
+                            layer.use_text(line.clone(), TITLE_PT, Mm(LEFT_MM), Mm(yy), &font_bold);
+                            yy -= 5.5;
+                        }
+                        left = LEFT_MM;
+                        top_y = yy + 2.0;
+                        first_part = false;
+                    }
+                }
+                (_, fonts) => {
+                    let area = crate::charts::pdf::ChartArea { left_mm: LEFT_MM, top_mm: top, width_mm: opts.page.usable_w_mm(), height_mm: (top - 12.0).max(40.0) };
+                    if let Some(f) = fonts {
+                        crate::charts::pdf::draw_chart(&layer, f, &cdata, &copts, area).with_context(|| format!("Chart '{}' could not be drawn on the page", title))?;
+                    }
+                }
             }
             if !opts.chart_tables {
                 continue;

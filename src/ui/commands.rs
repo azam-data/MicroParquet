@@ -25,6 +25,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Conditional => ph::PLUS,
         CommandId::Normaliser => ph::BUILDINGS,
         CommandId::CleanBreaks => ph::BROOM,
+        CommandId::SplitDate => ph::CALENDAR,
         CommandId::JoinTabs => ph::LINK,
         CommandId::CopyTable => ph::CLIPBOARD_TEXT,
         CommandId::Buckets => ph::CALENDAR,
@@ -71,7 +72,14 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::ExportChartXlsx => ph::FILE_XLS,
         CommandId::ToggleSummary => ph::SIGMA,
         CommandId::SortLists => ph::SORT_ASCENDING,
+        CommandId::CalendarSettings => ph::CALENDAR,
+        CommandId::HouseColours => ph::PALETTE,
         CommandId::SavedRuns => ph::CLOCK_COUNTER_CLOCKWISE,
+        CommandId::ProjectNew => ph::FILE_PLUS,
+        CommandId::ProjectOpen => ph::FOLDER_OPEN,
+        CommandId::ProjectRecent => ph::CLOCK_COUNTER_CLOCKWISE,
+        CommandId::ProjectSave | CommandId::ProjectSaveAs => ph::FLOPPY_DISK,
+        CommandId::ProjectClose => ph::X_CIRCLE,
         CommandId::Packs => ph::TABLE,
         CommandId::Mudaraba => ph::SCALES,
         CommandId::DqScorecard => ph::SCALES,
@@ -107,6 +115,8 @@ struct Item {
     words: String,
     group: &'static str,
     reason: Option<&'static str>,
+    /// The whole reason, when the short one is not all of it (a chart tab names its source tab): the hover and the status line.
+    full_reason: Option<String>,
     recent: Option<usize>,
 }
 
@@ -118,12 +128,33 @@ impl MicroParquetApp {
             result_tab: tab.is_some_and(|t| is_result_source(&t.source) && !self.chart_tabs.contains_key(&t.id)),
             can_undo: tab.is_some_and(|t| t.history.can_undo()),
             can_redo: tab.is_some_and(|t| t.history.can_redo()),
+            project: self.project.active,
+            chart_tab: self.active_is_chart_tab(),
         }
     }
 
+    /// The whole text of a short reason: on a chart tab the note of the steps panel, which names the source tab.
+    fn full_reason_of(&self, short: &'static str) -> String {
+        if short == cmds::CHART_TAB_STEP_REASON {
+            if let Some(note) = self.chart_tab_steps_note() {
+                return note;
+            }
+        }
+        short.to_string()
+    }
+
     /// Why a command cannot run now (shown greyed in the search and the menus).
-    pub(crate) fn command_unavailable(&self, id: CommandId) -> Option<&'static str> {
-        cmds::command(id).and_then(|c| cmds::unavailable_reason(c, self.command_state()))
+    pub(crate) fn command_unavailable(&self, id: CommandId) -> Option<String> {
+        // a tab of a project that did not open has no rows: nothing to export, copy or script
+        if self.active_is_unavailable()
+            && matches!(
+                id,
+                CommandId::ExportParquet | CommandId::ExportCsv | CommandId::ExportXlsx | CommandId::ExportCl1 | CommandId::ExportPdf | CommandId::ExportSplit | CommandId::CopyTable | CommandId::PythonExport | CommandId::SaveMacro
+            )
+        {
+            return Some("This tab could not be opened, so it has nothing to export. Its reason is in the main area.".to_string());
+        }
+        cmds::command(id).and_then(|c| cmds::unavailable_reason(c, self.command_state())).map(|r| self.full_reason_of(r))
     }
 
     /// A menu or toolbar item for a command: disabled with the reason when it cannot run.
@@ -166,6 +197,7 @@ impl MicroParquetApp {
             CommandId::LoadMacroNewTab => self.load_and_apply_macro_interactive(true),
             CommandId::PythonExport => self.prepare_python_preview_for_active_tab(),
             CommandId::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            CommandId::ProjectNew | CommandId::ProjectOpen | CommandId::ProjectRecent | CommandId::ProjectSave | CommandId::ProjectSaveAs | CommandId::ProjectClose => self.run_project_command(id),
             CommandId::Undo => self.undo_steps(),
             CommandId::Redo => self.redo_steps(),
             CommandId::Filter => self.open_filter_editor_default(),
@@ -182,6 +214,12 @@ impl MicroParquetApp {
             }
             CommandId::Conditional => self.active_tool = ActiveToolModal::ConditionalCol,
             CommandId::Normaliser => self.active_tool = ActiveToolModal::NormalizeEntity,
+            CommandId::SplitDate => {
+                let inspected = self.selected_column.clone().filter(|c| {
+                    self.tabs.get(self.active_tab).and_then(|t| t.cached_slice.column(c).ok()).is_some_and(|s| micro_parquet::dates::is_date_type(s.dtype()))
+                });
+                self.open_split_date(inspected);
+            }
             CommandId::CleanBreaks => {
                 self.clean_breaks = CleanBreaksState::default();
                 self.active_tool = ActiveToolModal::CleanLineBreaks;
@@ -267,6 +305,8 @@ impl MicroParquetApp {
             }
             CommandId::ToggleSummary => self.show_summary_row = !self.show_summary_row,
             CommandId::SortLists => self.open_sort_lists(),
+            CommandId::CalendarSettings => self.open_calendar_settings(),
+            CommandId::HouseColours => self.open_house_colours(),
             CommandId::ChartNew => self.open_chart_gallery(),
             CommandId::ChartThis => self.chart_this_result(),
             CommandId::ChartOpenSaved => self.open_chart_open(),
@@ -314,6 +354,7 @@ impl MicroParquetApp {
                 words: format!("{} {}", c.words, c.group.label()),
                 group: c.group.label(),
                 reason: cmds::unavailable_reason(c, state),
+                full_reason: cmds::unavailable_reason(c, state).map(|r| self.full_reason_of(r)),
                 recent: self.recent_commands.iter().position(|r| *r == c.id),
             })
             .collect();
@@ -325,6 +366,7 @@ impl MicroParquetApp {
                     words: "column field inspector statistics".to_string(),
                     group: "Column",
                     reason: None,
+                    full_reason: None,
                     recent: None,
                     column: Some(name),
                 });
@@ -415,23 +457,31 @@ impl MicroParquetApp {
                                     .inner_margin(theme::MARGIN_PALETTE_ROW)
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
-                                        ui.horizontal(|ui| {
-                                            if let Some(id) = it.id {
-                                                ui.label(egui::RichText::new(command_icon(id)).color(tk.ink2));
-                                            } else {
-                                                ui.label(egui::RichText::new(theme::ph::TABLE).color(tk.ink2));
-                                            }
-                                            ui.label(egui::RichText::new(&it.label).color(color));
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                ui.label(theme::label_text(it.group).color(tk.muted));
-                                                if let Some(why) = it.reason {
-                                                    ui.label(theme::label_text(why).color(tk.muted));
+                                        ui.vertical(|ui| {
+                                            ui.horizontal(|ui| {
+                                                if let Some(id) = it.id {
+                                                    ui.label(egui::RichText::new(command_icon(id)).color(tk.ink2));
+                                                } else {
+                                                    ui.label(egui::RichText::new(theme::ph::TABLE).color(tk.ink2));
                                                 }
+                                                ui.label(egui::RichText::new(&it.label).color(color));
+                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                    ui.label(theme::label_text(it.group).color(tk.muted));
+                                                });
                                             });
+                                            // the reason has a line of its own and wraps: a long one never runs into the title
+                                            if let Some(why) = it.reason {
+                                                ui.add(egui::Label::new(theme::label_text(why).color(tk.muted)).wrap());
+                                            }
                                         });
                                     })
                                     .response
                                     .interact(egui::Sense::click());
+                                // the whole reason on hover, as on the greyed menu items
+                                let r = match &it.full_reason {
+                                    Some(full) => r.on_hover_text(full),
+                                    None => r,
+                                };
                                 if on_cursor && (down || up) {
                                     r.scroll_to_me(None);
                                 }
@@ -453,7 +503,7 @@ impl MicroParquetApp {
         if let Some(idx) = run {
             let it = &items[idx];
             if let Some(why) = it.reason {
-                self.status_message = why.to_string();
+                self.status_message = it.full_reason.clone().unwrap_or_else(|| why.to_string());
             } else {
                 close = true;
                 match (&it.id, &it.column) {

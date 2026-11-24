@@ -21,8 +21,8 @@ use crate::models::{
     ParquetDialect, ParseFailure, RowCountCheck, SplitExportFormat, SummarySpec, TabSource, TabState,
     TransformStep,
 };
-use anyhow::Result;
-use polars::prelude::DataFrame;
+use anyhow::{Context, Result};
+use polars::prelude::{DataFrame, IntoLazy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +31,8 @@ pub enum JobOutput {
     ColumnStats(Box<ColumnStatsResult>),
     PivotPreview(Box<PivotPreviewResult>),
     PivotValues(Box<PivotValuesResult>),
+    /// The labels of a field for its auto order (Phase 8 W0).
+    AutoOrder(Box<PivotValuesResult>),
     StepCounts(Box<StepCountsResult>),
     TextCheck(Box<TextCheckResult>),
     Summary(Box<SummaryResult>),
@@ -43,6 +45,75 @@ pub enum JobOutput {
     Dq(Box<DqJobResult>),
     Exported(ExportOutcome),
     Batch(Box<BatchReport>),
+    /// A tab of a project that was opened (Phase 8 W4).
+    ProjectTab(Box<ProjectLoaded>),
+    /// The files of a project that changed since it was saved, and the hashes worked out (Phase 8 W4).
+    ProjectCheck(Box<ProjectChecked>),
+    /// The project built from the open tabs, and the hashes worked out on the way.
+    ProjectSave(Box<ProjectBuilt>),
+    /// A linked chart tab's new numbers and table (Phase 8 W5).
+    ChartTab(Box<ChartTabCalc>),
+    /// The tab behind a cell of a pivot (Phase 8 W6).
+    ShowRows(Box<ShowRowsResult>),
+    /// The values a chart's tick list lists (Phase 8 W10).
+    ChartPicker(Box<PickerResult>),
+}
+
+/// A tab of a project, built on the worker.
+pub struct ProjectLoaded {
+    pub loaded: LoadedTab,
+    /// The chart's numbers, for a chart tab.
+    pub chart: Option<crate::chart::ChartData>,
+    /// The tab's place in the project's tab list.
+    pub index: usize,
+}
+
+/// A linked chart tab to calculate again from its source tab.
+pub struct ChartTabRequest {
+    pub chart_tab: u64,
+    /// What the source tab looked like (`source_signature`) when the request was made.
+    pub sig: String,
+    pub base: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub spec: crate::chart::ChartSpec,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ChartTabCalc {
+    pub chart_tab: u64,
+    pub sig: String,
+    pub data: crate::chart::ChartData,
+    /// The chart's table, a Parquet file the program made.
+    pub source: TabSource,
+}
+
+/// The chart over the source tab's table, and the table of its numbers (what the chart tab shows and exports).
+pub fn chart_tab_job(req: ChartTabRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Calculating the chart tab\u{2026}", None);
+    ctx.check()?;
+    let (data, source) = crate::project::chart_tab_source(&req.base, &req.steps, &req.spec, &req.temp_dir)?;
+    Ok(JobOutput::ChartTab(Box::new(ChartTabCalc { chart_tab: req.chart_tab, sig: req.sig, data, source })))
+}
+
+/// What a chart tab compares to find out that its source changed: the source, the steps that run and, for a file,
+/// its size and time.
+pub fn source_signature(source: &TabSource, steps: &[TransformStep]) -> String {
+    let stamp = match source {
+        TabSource::SingleFile { path, .. } => crate::project::file_stamp(path).map(|(s, m)| format!("{s}|{m}")).unwrap_or_default(),
+        _ => String::new(),
+    };
+    format!("{:?}|{:?}|{}", source, steps, stamp)
+}
+
+pub struct ProjectBuilt {
+    pub saved: crate::project::SavedProject,
+    pub cache: crate::project::HashCache,
+    pub path: PathBuf,
+}
+
+pub struct ProjectChecked {
+    pub warnings: Vec<String>,
+    pub hashes: Vec<(PathBuf, u64, i64, String)>,
 }
 
 /// The first column named "balance", else the first whose name has balance, amount or delta.
@@ -1117,4 +1188,63 @@ pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<Piv
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
     let values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
     Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })
+}
+
+/// "Show rows" on a cell of a pivot tab: the tab's steps, the pivot among them, and the cell that was clicked.
+pub struct ShowRowsRequest {
+    pub base: TabSource,
+    /// All the tab's steps. The pivot is `steps[pivot_at]`; steps after it (filter, sort, a new column...) are read through
+    /// `pivot_table::pivot_rows_of`.
+    pub steps: Vec<TransformStep>,
+    pub pivot_at: usize,
+    pub spec: crate::models::PivotSpec,
+    /// Columns that steps after the pivot added, renamed or rewrote: a cell of those has no rows of its own.
+    pub later_made: Vec<String>,
+    /// The row of the table on the screen (counted from its first row) and the heading of the column that was clicked.
+    pub row: usize,
+    pub column: String,
+    /// How many rows the table on the screen has, to refuse a pivot that has changed since.
+    pub expected_rows: usize,
+    pub temp_dir: PathBuf,
+}
+
+/// The rows of a cell as a tab: the source and the steps before the pivot, with a filter for the cell.
+pub struct ShowRowsResult {
+    pub title: String,
+    pub base: TabSource,
+    pub steps: Vec<TransformStep>,
+}
+
+/// Builds the pivot again to find which values the clicked cell stands for, and the tab that holds exactly its rows. When
+/// steps follow the pivot, they are applied to the pivot's table and the clicked row is found again in the pivot by its row
+/// fields, so a sort or a filter of the result does not move the cell.
+pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Finding the rows of that cell\u{2026}", None);
+    ctx.check()?;
+    let Some((before, rest)) = req.steps.split_at_checked(req.pivot_at) else {
+        anyhow::bail!("Show rows: the pivot is no longer one of this tab's steps. Open the pivot again.");
+    };
+    let later = rest.get(1..).unwrap_or(&[]);
+    let lf = crate::engine::compile_tab_lazy(&req.base, before, &req.temp_dir)?;
+    let build = crate::pivot_table::build_pivot(lf, &req.spec)?;
+    ctx.check()?;
+    let pivot_row = if later.is_empty() {
+        if build.df.height() != req.expected_rows {
+            anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
+        }
+        req.row
+    } else {
+        if req.later_made.contains(&req.column) || !build.df.get_column_names().iter().any(|n| n.as_str() == req.column.as_str()) {
+            anyhow::bail!("Show rows: '{}' was added, renamed or changed by a step after the pivot, so it has no rows of its own. Double-click a number in one of the pivot's own columns.", req.column);
+        }
+        let shown = crate::engine::apply_steps_to(build.df.clone().lazy(), later)?.collect().context("Show rows could not apply the steps after the pivot")?;
+        if shown.height() != req.expected_rows {
+            anyhow::bail!("Show rows: the table now has {} rows and the one on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", shown.height(), req.expected_rows);
+        }
+        crate::pivot_table::pivot_row_of_shown(&build, &shown, req.row)?
+    };
+    let cell = crate::pivot_table::cell_rows(&req.spec, &build, pivot_row, &req.column)?;
+    let mut steps = before.to_vec();
+    steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
+    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps })))
 }

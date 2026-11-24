@@ -2,7 +2,7 @@
 
 ## 1. What it does
 
-Puts text values in the order a bank reads them, not the order of the alphabet. A custom list is a saved sequence of values (High, Medium, Low). Tenor is built in: it reads "1m", "100D", "1y" and orders them by length in days. Both work in Sort, in the Rows and Columns of a Pivot, and later in the Chart and the filter picker.
+Puts text values in the order a bank reads them, not the order of the alphabet. A custom list is a saved sequence of values (High, Medium, Low). Tenor is built in: it reads "1m", "100D", "1y" and orders them by length in days. Both work in Sort, in the Rows and Columns of a Pivot, and later in the Chart and the filter picker. Two more orders are built in: **Calendar** (months, day names, quarters, "Aug 2026", "FY2026") and **Ranges** ("Below 0%", "0%", "8%–9%", "> 15%", "No rate").
 
 ## 2. When to use it
 
@@ -96,3 +96,6 @@ Test: `guide_custom_sort_lists`
 - A number without a unit ("5") is not a tenor.
 - In the pivot, "By value" orders the rows by the first value field, high to low, and applies to Rows only.
 - A list matches whole values after trimming spaces; it does not match parts of a value.
+- **Calendar** ranks month names (short and long, any case), day names, Q1–Q4, FQ1–FQ4, W01–W54, "Aug 2026", "2026 Q1" and "FY2026"/"FY2026-27". Day names follow the week start of View ▸ Calendar… (copied into the step): with a Saturday start, Mon, Sat, Fri sorts as Sat, Mon, Fri. See [Calendar settings](calendar-settings.md).
+- **Ranges** ranks a label by its first number and its unit (%, Thousand, Lakh, Million, Crore, days, months, years): "Below x" first, an exact "x" before a range that starts at x, "Above x" after the ranges, then "No rate" and anything it cannot read, in natural order. "10%–11%, No rate, 0%, 8%–9%, > 15%, Below 0%" sorts as Below 0%, 0%, 8%–9%, 10%–11%, > 15%, No rate. A column of plain numbers is not Ranges.
+- A pivot, chart or sort picks Calendar or Ranges by itself when a field is added and every label reads (a Split date column states its own order), and stores the choice. Existing pivots, charts and sorts are never re-ordered. "Calendar" and "ranges" are built-in names: a list cannot use them.

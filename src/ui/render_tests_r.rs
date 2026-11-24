@@ -423,7 +423,7 @@ fn s8_reset_colours_and_text_size_work_by_real_clicks_and_the_pdf_dialog_offers_
 // ------------------------------------------------------------------------------------------------ final fixes B: screenshots
 
 /// Runs one frame and writes it (meshes and font atlas) for `tools/egui_mesh_png.py`.
-fn dump_frame(rig: &mut Rig, path: &std::path::Path, dark: bool) {
+pub(crate) fn dump_frame(rig: &mut Rig, path: &std::path::Path, dark: bool) {
     let out = rig.ctx.run(rig.input.clone(), |c| rig.app.frame_ui(c));
     let ppp = out.pixels_per_point;
     let prims = rig.ctx.tessellate(out.shapes, ppp);
@@ -457,7 +457,7 @@ fn dump_frame(rig: &mut Rig, path: &std::path::Path, dark: bool) {
     std::fs::write(path, serde_json::to_string(&doc).expect("json")).expect("write the frame");
 }
 
-fn python_with_numpy_and_pillow() -> bool {
+pub(crate) fn python_with_numpy_and_pillow() -> bool {
     std::process::Command::new("python3").args(["-c", "import numpy, PIL"]).output().map(|o| o.status.success()).unwrap_or(false)
 }
 

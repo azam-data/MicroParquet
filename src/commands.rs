@@ -11,6 +11,12 @@ pub enum CommandId {
     DirectConvert,
     Batch,
     Stack,
+    ProjectNew,
+    ProjectOpen,
+    ProjectRecent,
+    ProjectSave,
+    ProjectSaveAs,
+    ProjectClose,
     SaveMacro,
     LoadMacro,
     LoadMacroNewTab,
@@ -29,6 +35,7 @@ pub enum CommandId {
     Conditional,
     Normaliser,
     CleanBreaks,
+    SplitDate,
     JoinTabs,
     CopyTable,
     // Banking
@@ -90,6 +97,8 @@ pub enum CommandId {
     ToggleChart,
     ToggleSummary,
     SortLists,
+    CalendarSettings,
+    HouseColours,
     // Help
     About,
 }
@@ -136,6 +145,8 @@ pub enum Needs {
     Undo,
     /// Something to redo on the active tab.
     Redo,
+    /// A project is open (Phase 8 W4).
+    Project,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -162,6 +173,12 @@ pub const COMMANDS: &[Command] = &[
     c(I::DirectConvert, "Convert CSV to Parquet directly\u{2026}", G::File, "converter transform file", N::Nothing),
     c(I::Batch, "Recursive batch folder mirror\u{2026}", G::File, "folder convert many files", N::Nothing),
     c(I::Stack, "Stack / merge several files\u{2026}", G::File, "append union combine vertical", N::Nothing),
+    c(I::ProjectNew, "New project", G::File, "workspace session clear start fresh mpproj", N::Nothing),
+    c(I::ProjectOpen, "Open project\u{2026}", G::File, "workspace session reopen mpproj sources files relink", N::Nothing),
+    c(I::ProjectRecent, "Open recent project\u{2026}", G::File, "workspace session last mpproj history", N::Nothing),
+    c(I::ProjectSave, "Save project", G::File, "workspace session tabs steps pivots charts mpproj", N::Nothing),
+    c(I::ProjectSaveAs, "Save project as\u{2026}", G::File, "workspace session copy rename mpproj", N::Nothing),
+    c(I::ProjectClose, "Close project", G::File, "workspace session end tabs mpproj", N::Project),
     c(I::SaveMacro, "Save steps as a macro\u{2026}", G::File, "recipe mpq json", N::Tab),
     c(I::LoadMacro, "Load and replay a macro on this tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
     c(I::LoadMacroNewTab, "Load and replay a macro into a new tab\u{2026}", G::File, "recipe mpq json apply", N::Tab),
@@ -178,6 +195,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Pivot, "Pivot table (Rows, Columns, Values)\u{2026}", G::Transform, "group by aggregate wavg weighted average summary crosstab subtotal", N::Tab),
     c(I::Conditional, "Conditional column (IF / ELSE)\u{2026}", G::Transform, "case when flag", N::Tab),
     c(I::CleanBreaks, "Clean line breaks\u{2026}", G::Transform, "newline carriage return quoted multiline cell wrap spaces replace", N::Tab),
+    c(I::SplitDate, "Split date\u{2026}", G::Transform, "date parts year quarter month month-year week day name fiscal open date calendar columns", N::Tab),
     c(I::Normaliser, "Counterparty name normaliser\u{2026}", G::Transform, "clean entity names ltd", N::Tab),
     c(I::JoinTabs, "SQL join of two open tabs\u{2026}", G::Transform, "merge lookup left right", N::TwoTabs),
     c(I::CopyTable, "Copy the table to the clipboard", G::Transform, "excel powerpoint slides paste spreadsheet", N::Tab),
@@ -235,6 +253,8 @@ pub const COMMANDS: &[Command] = &[
     c(I::ToggleChart, "Show or hide the chart", G::View, "graph plot bar line category series aggregation top n", N::Nothing),
     c(I::ToggleSummary, "Show/hide summary row", G::View, "totals sum count average footer selectors band", N::Nothing),
     c(I::SortLists, "Custom sort lists\u{2026}", G::View, "order tenor custom list rank sequence high medium low", N::Nothing),
+    c(I::CalendarSettings, "Calendar\u{2026}", G::View, "fiscal year start month week start saturday sunday monday date parts quarter", N::Nothing),
+    c(I::HouseColours, "House colours\u{2026}", G::View, "house colour colours palette brand name item pick swatch hex", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
 ];
 
@@ -264,7 +284,7 @@ pub const TOOLBAR_BUTTONS_FILE: &[CommandId] = &[I::OpenFile, I::Stack, I::Batch
 pub const TOOLBAR_BUTTONS_TRANSFORM: &[CommandId] = &[I::Filter, I::Sort, I::Columns, I::CalcColumn, I::Pivot, I::RateProfile];
 pub const TOOLBAR_BUTTONS_VIEW: &[CommandId] = &[I::ToggleChart, I::ToggleSql];
 /// The items of the Edit menu below Undo and Redo (Undo and Redo come first).
-pub const EDIT_MENU: &[CommandId] = &[I::Undo, I::Redo, I::Conditional, I::Normaliser, I::CleanBreaks, I::JoinTabs, I::CopyTable];
+pub const EDIT_MENU: &[CommandId] = &[I::Undo, I::Redo, I::Conditional, I::Normaliser, I::CleanBreaks, I::SplitDate, I::JoinTabs, I::CopyTable];
 /// Edit ▸ "Data checks".
 pub const DATA_CHECKS: &[CommandId] = &[I::Audit, I::DqScorecard];
 
@@ -297,10 +317,45 @@ pub struct CommandState {
     pub result_tab: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// A project is open.
+    pub project: bool,
+    /// The active tab draws a chart of another tab (Phase 8 W5): its steps are the source tab's.
+    pub chart_tab: bool,
+}
+
+/// The short reason a step command gives on a chart tab (the full text is the note of the steps panel).
+pub const CHART_TAB_STEP_REASON: &str = "Not on a chart tab.";
+
+/// The commands that add a step to the active tab in place (their dialogs end in "Add" on that tab). On a chart tab
+/// they are greyed: the tab has no steps of its own (they are its source tab's), and the steps panel says so.
+pub fn adds_step_to_active_tab(id: CommandId) -> bool {
+    matches!(
+        id,
+        CommandId::Filter
+            | CommandId::Sort
+            | CommandId::Columns
+            | CommandId::CalcColumn
+            | CommandId::Pivot
+            | CommandId::Conditional
+            | CommandId::Normaliser
+            | CommandId::CleanBreaks
+            | CommandId::SplitDate
+            | CommandId::Buckets
+            | CommandId::RateProfile
+            | CommandId::Duration
+            | CommandId::Ftp
+            | CommandId::Provision
+            | CommandId::ClassifyOverdue
+            | CommandId::IfrsEcl
+            | CommandId::Limits
+    )
 }
 
 /// Why a command cannot run now; `None` when it can.
 pub fn unavailable_reason(cmd: &Command, state: CommandState) -> Option<&'static str> {
+    if state.tabs > 0 && state.chart_tab && adds_step_to_active_tab(cmd.id) {
+        return Some(CHART_TAB_STEP_REASON);
+    }
     match cmd.needs {
         Needs::Nothing => None,
         Needs::Tab if state.tabs == 0 => Some("Open a file first."),
@@ -308,6 +363,7 @@ pub fn unavailable_reason(cmd: &Command, state: CommandState) -> Option<&'static
         Needs::ResultTab if state.tabs == 0 || !state.result_tab => Some("Open a tool's result tab (for example the gap ladder or the IRRBB scenarios) to chart it."),
         Needs::Undo if state.tabs == 0 || !state.can_undo => Some("Nothing to undo."),
         Needs::Redo if state.tabs == 0 || !state.can_redo => Some("Nothing to redo."),
+        Needs::Project if !state.project => Some("No project is open."),
         _ => None,
     }
 }

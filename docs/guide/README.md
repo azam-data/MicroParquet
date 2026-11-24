@@ -8,6 +8,8 @@ Copying the table: Ctrl+C or Edit ▸ Copy table puts the rows on the page on th
 
 Window settings: View ▸ Zoom (or Ctrl+= / Ctrl+- / Ctrl+0, or a click on the percentage at the right end of the status bar) changes the size of everything; "Set current zoom as default" keeps it for the next start (`portable_data/settings.json`). The right panel is dragged wider by its left edge; the width is kept too.
 
+Project and calendar (Phase 8): the File menu also has New project, Open project…, Open recent project, Save project, Save project as… and Close project ([Projects](projects.md)); View has Calendar… ([Calendar settings](calendar-settings.md)) and House colours… ([Colours](colours.md)). The notes of this phase have eight sections instead of ten: what it does, when to use it, how to use it, an example from the tests, what it refuses and why, the Python export, where it is saved, and related tools.
+
 Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scale). Rates are in percent (9.5 means 9.5%). Shocks are in basis points. CBS dates are normally D/M/Y.
 
 ## Data preparation
@@ -23,16 +25,22 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Clean line breaks](clean-line-breaks.md): one line for each value that was split over several lines.
 - [Counterparty name normaliser](name-normaliser.md): one spelling for each company.
 - [Pivot table](pivot.md): Rows, Columns, Values and Filters with totals.
+- [Split date](split-date.md): one column for each part of a date (year, quarter, month, "Jan 2026", day name, fiscal year …).
+- [Date grouping](date-grouping.md): the same parts as pivot rows, chart categories and filters, with no new columns; why summing balances over months is wrong.
+- [Calendar settings](calendar-settings.md): View ▸ Calendar…: the first day of the week (Saturday) and the first month of the fiscal year (January), and what W03 and FY2025-26 mean.
 - [Summary row](summary-row.md): totals and weighted averages under the table.
 - [Column inspector](column-inspector.md): facts about one column.
 - [SQL editor](sql-editor.md): a query on the tab's table, with history and the last error.
 - [Chart](chart.md): the chart studio: bars, lines, areas, scatter, heatmaps and more over the whole tab, with HTML and Excel export, banking templates, chart books and "Copy as Python".
+- [Drill-down and Show rows](drill-down.md): click a bar to go one level down, a breadcrumb to go back, and "Show rows" for the rows behind a bar or a pivot cell.
+- [Colours](colours.md): a colour for one item, house colours for a name on every chart, and the warnings.
 - [Charts: how to choose one](charts.md): a primer: choose by the question, why a sorted bar beats a pie, why one axis, what the colours mean, how to write a takeaway title, when a number or a table is better. Then one note for each banking chart template: [gap ladder](chart-gap-ladder.md), [repricing gap](chart-repricing-gap.md), [NII bridge](chart-nii-bridge.md), [CL migration](chart-cl-migration.md), [classified trend](chart-classified-trend.md), [IRRBB scenarios](chart-irrbb-scenarios.md), [yield curves](chart-yield-curves.md), [LCR / NSFR](chart-lcr-nsfr.md), [ECL by stage](chart-ecl-by-stage.md), [deposit / loan mix](chart-deposit-mix.md), [rate profile](chart-rate-profile.md), [behaviour profile](chart-behaviour-profile.md), [data quality](chart-data-quality.md).
 - [Mudaraba profit distribution](mudaraba-profit-distribution.md): the Islamic window's weightage and PSR calculation, with parameters from a file.
 - [Data-quality scorecard](data-quality-scorecard.md): pass percentages by rule, an overall Green/Amber/Red score, failing rows and a control total.
 - [MoM variance](mom-variance.md): two months by product, the interest change split into volume, rate and mix, and commentary.
 - [Report packs](report-packs.md): a monthly workbook (Cover plus one sheet per item) made from this month's files.
 - [Saved tool runs](saved-tool-runs.md): keep the inputs of a result tab in a file and re-run the tool with other inputs.
+- [Projects (.mpproj)](projects.md): File ▸ Save project: the tabs, steps, pivots and charts of a session, reopened on this month's files through the Sources dialog.
 
 ## Treasury & ALM
 

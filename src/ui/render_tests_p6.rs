@@ -924,9 +924,9 @@ fn app_texts(p: &Painted) -> Vec<String> {
 
 #[test]
 fn u4_the_window_title_is_the_version_and_the_active_file() {
-    assert_eq!(crate::ui::tabs::window_title(None), "MicroParquet v1.6.0");
-    assert_eq!(crate::ui::tabs::window_title(Some("loans_2026-11.csv")), "MicroParquet v1.6.0 \u{2014} loans_2026-11.csv");
-    assert_eq!(crate::ui::tabs::window_title(Some("  ")), "MicroParquet v1.6.0", "a blank name adds nothing");
+    assert_eq!(crate::ui::tabs::window_title(None), "MicroParquet v1.8.0");
+    assert_eq!(crate::ui::tabs::window_title(Some("loans_2026-11.csv")), "MicroParquet v1.8.0 \u{2014} loans_2026-11.csv");
+    assert_eq!(crate::ui::tabs::window_title(Some("  ")), "MicroParquet v1.8.0", "a blank name adds nothing");
     for (ppp, w, h) in SCREENS {
         let mut app = test_app("p6u4a");
         let (ctx, input) = screen(ppp, w, h);
@@ -934,7 +934,7 @@ fn u4_the_window_title_is_the_version_and_the_active_file() {
             out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.iter().filter_map(|c| if let egui::ViewportCommand::Title(t) = c { Some(t.clone()) } else { None }).collect::<Vec<_>>()).unwrap_or_default()
         };
         let out = ctx.run(input.clone(), |c| app.frame_ui(c));
-        assert_eq!(app.window_title, "MicroParquet v1.6.0", "no tab: version only");
+        assert_eq!(app.window_title, "MicroParquet v1.8.0", "no tab: version only");
         let _ = title_cmd(&out);
         // open a file: the title says which
         let p = app.paths.root_dir.join("loans_2026-11.csv");
@@ -943,15 +943,15 @@ fn u4_the_window_title_is_the_version_and_the_active_file() {
         app.create_tab_from_source("Loans".into(), src, vec![], HashMap::new());
         settle(&mut app);
         let out = ctx.run(input.clone(), |c| app.frame_ui(c));
-        assert_eq!(app.window_title, "MicroParquet v1.6.0 \u{2014} loans_2026-11.csv", "an open tab: the file name");
-        assert_eq!(title_cmd(&out), vec!["MicroParquet v1.6.0 \u{2014} loans_2026-11.csv".to_string()], "the title was sent to the window");
+        assert_eq!(app.window_title, "MicroParquet v1.8.0 \u{2014} loans_2026-11.csv", "an open tab: the file name");
+        assert_eq!(title_cmd(&out), vec!["MicroParquet v1.8.0 \u{2014} loans_2026-11.csv".to_string()], "the title was sent to the window");
         // the same title is not sent again
         let out = ctx.run(input.clone(), |c| app.frame_ui(c));
         assert!(title_cmd(&out).is_empty());
         // closing the tab goes back to the version only
         app.close_tab(0);
         let out = ctx.run(input.clone(), |c| app.frame_ui(c));
-        assert_eq!(title_cmd(&out), vec!["MicroParquet v1.6.0".to_string()]);
+        assert_eq!(title_cmd(&out), vec!["MicroParquet v1.8.0".to_string()]);
     }
 }
 
@@ -1011,7 +1011,7 @@ fn u4_about_has_the_version_build_date_capabilities_folder_key_and_fonts_and_fit
             assert!(rc.is_positive() && inside(rc, r.window), "{what}: '{n}' {rc:?} is inside the dialog {:?}", r.window);
         }
         let all = app_texts(&p).join(" | ");
-        assert!(all.contains("MicroParquet v1.6.0"), "{what}: {all}");
+        assert!(all.contains("MicroParquet v1.8.0"), "{what}: {all}");
         let built = all.split("Built ").nth(1).map(|s| s.chars().take(10).collect::<String>()).unwrap_or_default();
         assert!(built.len() == 10 && built.as_bytes()[4] == b'-' && built.as_bytes()[7] == b'-' && built[..4].parse::<u32>().is_ok_and(|y| y >= 2026), "{what}: a build date YYYY-MM-DD: '{built}'");
         for t in ["Portable CSV/Parquet viewer", "Out-of-core Polars engine", "Multi-tab views", "Custom maturity buckets", "Per-metric number formats", "SIL Open Font License 1.1 (OFL)", "Masking key", "Data folder (portable_data)"] {
@@ -2597,7 +2597,7 @@ fn f2_the_chart_tab_has_a_pop_out_button_only_where_windows_work_and_the_window_
         let plot = rig.app.chart.rects.plot.unwrap_or_else(|| panic!("{what}: the chart in its window"));
         assert!(inside(plot, screen2), "{what}: the plot {plot:?} is inside the window {screen2:?}");
         // the Phase 6 controls are all in the window; the studio sections of Phase 7 (they scroll) are not required to be
-        let studio = ["Save chart", "Open saved chart", "Export to HTML", "Export to Excel", "Preview in browser", "Titles and look", "Reference lines", "Measures and panels", "Advanced options header", "Advanced options", "Advanced reset"];
+        let studio = ["Save chart", "Open saved chart", "Export to HTML", "Export to Excel", "Preview in browser", "Titles and look", "Colours", "Filters on this chart", "Reference lines", "Measures and panels", "Drill levels", "Drill levels hidden", "Add a level", "Date drill", "Advanced options header", "Advanced options", "Advanced reset"];
         for (n, f) in rig.app.chart.rects.fields.iter().filter(|(n, _)| !studio.contains(&n.as_str())) {
             assert!(inside(*f, screen2), "{what}: '{n}' {f:?} is in the window");
         }

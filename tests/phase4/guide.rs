@@ -247,14 +247,15 @@ fn guide_maturity_bucketer() {
 #[test]
 fn guide_rate_profile() {
     let df = frame(vec![text("Actnum", &["L1", "L2", "L3", "L4", "L5"]), opt_nums("Rate", &[Some(9.0), Some(8.5), Some(0.0), Some(15.5), None])]);
-    let step = TransformStep::RateBand { rate_col: "Rate".into(), band_def: RateBandDef::default_profile(), new_col: "Rate_Band".into() };
+    // the step the dialog makes since Phase 8 W3: no serial numbers
+    let step = TransformStep::RateBand { rate_col: "Rate".into(), band_def: RateBandDef { numbered: false, ..RateBandDef::default_profile() }, new_col: "Rate_Band".into() };
     let out = run_steps("g_rate_band", &df, &[step]).expect("the rate profile runs");
     assert_eq!(
         strings(&out, "Rate_Band"),
         vec![
-            Some("09. 8%\u{2013}9%".to_string()),
-            Some("09. 8%\u{2013}9%".to_string()),
-            Some("00. 0%".to_string()),
+            Some("8%\u{2013}9%".to_string()),
+            Some("8%\u{2013}9%".to_string()),
+            Some("0%".to_string()),
             Some("> 15%".to_string()),
             Some("No rate".to_string()),
         ],

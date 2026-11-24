@@ -1,12 +1,18 @@
 //! One module per screen (Phase 3 R1). `theme` holds every colour and size token.
 
 pub mod audit;
+pub mod auto_order;
 pub mod batch;
 pub mod buckets;
 pub mod calc_column;
+pub mod calendar;
+pub mod chart_filters;
+pub mod colour_picker;
 pub mod chart;
 pub mod chart_render;
 pub mod chart_studio;
+pub mod chart_tab;
+pub mod drill;
 pub mod cl_migration;
 pub mod columns;
 pub mod commands;
@@ -38,6 +44,7 @@ pub mod pivot;
 pub mod pivot_bar;
 pub mod pivot_builder;
 pub mod prelude;
+pub mod project;
 pub mod provision;
 pub mod rate_band;
 pub mod rate_shock;
@@ -47,6 +54,7 @@ pub mod reconcile;
 pub mod schema;
 pub mod sort;
 pub mod sort_lists;
+pub mod split_date;
 pub mod sql;
 pub mod stack;
 pub mod status;
@@ -71,6 +79,8 @@ mod render_tests_p5;
 mod render_tests_p6;
 #[cfg(test)]
 mod render_tests_p7;
+#[cfg(test)]
+mod render_tests_p8;
 #[cfg(test)]
 mod render_tests_r;
 #[cfg(test)]
@@ -125,6 +135,14 @@ impl MicroParquetApp {
             ActiveToolModal::FilterRows => self.render_filter_modal(ctx, cols),
             ActiveToolModal::SortRows => self.render_sort_modal(ctx, cols),
             ActiveToolModal::SortLists => self.render_sort_lists_modal(ctx, cols),
+            ActiveToolModal::Calendar => self.render_calendar_modal(ctx, cols),
+            ActiveToolModal::ColourPicker => self.render_colour_picker_modal(ctx, cols),
+            ActiveToolModal::HouseColours => self.render_house_colours_modal(ctx, cols),
+            ActiveToolModal::ProjectSources => self.render_project_sources_modal(ctx, cols),
+            ActiveToolModal::ProjectSave => self.render_project_save_modal(ctx, cols),
+            ActiveToolModal::ProjectPrompt => self.render_project_prompt_modal(ctx, cols),
+            ActiveToolModal::ProjectRecent => self.render_project_recent_modal(ctx, cols),
+            ActiveToolModal::SplitDate => self.render_split_date_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),
             ActiveToolModal::ChartOpen => self.render_chart_open_modal(ctx, cols),

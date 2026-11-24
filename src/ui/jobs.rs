@@ -31,6 +31,12 @@ impl MicroParquetApp {
     /// The window was asked to close. With an export running (and not yet confirmed), the question
     /// opens and the close is held; otherwise every job is cancelled and `.part` files are deleted.
     pub(crate) fn close_requested(&mut self) -> CloseDecision {
+        // unsaved changes of a project: Save / Don't save / Cancel comes first (Phase 8 W4)
+        if self.project_unsaved() && !self.project.close_confirmed {
+            self.project.prompt = Some(crate::ui::project::AfterPrompt::Quit);
+            self.active_tool = ActiveToolModal::ProjectPrompt;
+            return CloseDecision::Ask;
+        }
         if self.export_running() && !self.quit_confirmed {
             self.quit_guard = true;
             return CloseDecision::Ask;
@@ -119,8 +125,24 @@ impl MicroParquetApp {
                             p.values = Some(Err(msg));
                         }
                     }
+                    // the field keeps today's order: auto order is only a default
+                    JobKind::AutoOrder => self.auto_order_waits.clear(),
                     JobKind::Schema => self.status_message = format!("Schema not applied: {}", msg),
+                    JobKind::ProjectTab => {
+                        if let Some(id) = r.key.scope {
+                            self.project_tab_failed(id, &msg);
+                        }
+                    }
+                    JobKind::ProjectSave => self.project_save_failed(&msg),
+                    JobKind::ChartTab => {
+                        if let Some(id) = r.key.scope {
+                            self.chart_tab_calc_failed(id, &msg);
+                        }
+                    }
+                    JobKind::ShowRows => self.status_message = msg.clone(),
+                    JobKind::ProjectCheck => self.status_message = format!("The project's files could not be checked: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
+                    JobKind::ChartPickerValues => self.chart_picker_failed(msg.clone()),
                     JobKind::Dq => self.dq_failed(msg.clone()),
                     JobKind::Chart => {
                         self.chart.busy = false;
@@ -174,6 +196,12 @@ impl MicroParquetApp {
 
     fn apply_job_output(&mut self, out: JobOutput) {
         match out {
+            JobOutput::ProjectTab(l) => self.apply_project_tab(*l),
+            JobOutput::ProjectCheck(c) => self.apply_project_check(*c),
+            JobOutput::ProjectSave(b) => self.apply_project_built(*b),
+            JobOutput::ChartTab(c) => self.apply_chart_tab_calc(*c),
+            JobOutput::ShowRows(r) => self.apply_show_rows(*r),
+            JobOutput::ChartPicker(r) => self.apply_chart_picker_result(*r),
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
                 let status = match self.open_notes.remove(&tab.id) {
@@ -247,6 +275,7 @@ impl MicroParquetApp {
                 self.submit_column_stats(idx);
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
+            JobOutput::AutoOrder(r) => self.apply_auto_order(&r),
             JobOutput::PivotValues(r) => {
                 if !self.apply_sort_list_fill(&r) && !self.apply_pivot_bar_values(&r) {
                     self.apply_pivot_values(*r)

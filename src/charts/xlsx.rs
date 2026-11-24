@@ -102,13 +102,16 @@ struct Cx<'a> {
     lp: super::labels::LabelPlan,
     /// Labels of "All" left out because they would overlap (worked out by the app's layout at the chart's size).
     dropped: Vec<super::labels::LabelKey>,
+    /// The labels inside stacked segments (Phase 8 W11), as the app's layout decided them at the chart's size; none with the option off.
+    segs: std::collections::HashMap<(usize, usize, usize), super::layout::SegmentLabel>,
 }
 
 impl<'a> Cx<'a> {
     fn colour(&self, name: &str, i: usize, n: usize) -> u32 {
-        let slot = if name.is_empty() && n == 1 {
-            Some(0)
-        } else if name.is_empty() {
+        if name.is_empty() && n == 1 {
+            return super::colours::single_colour(self.data, &self.cm).hex(false);
+        }
+        let slot = if name.is_empty() {
             Some(i.min(t::SLOTS - 1))
         } else {
             None
@@ -198,6 +201,7 @@ impl<'a> Cx<'a> {
             foot.push(self.data.spec.footnote.trim().to_string());
         }
         foot.extend(self.data.notes.iter().cloned());
+        foot.extend(super::colours::colour_notes(self.data, &self.data.spec.colour_map));
         foot.extend(super::labels::footnote_notes(self.data, self.opts, self.dropped.len()));
         if !foot.is_empty() {
             ws.write_string_with_format(row, 0, t::tidy(&foot.join(" \u{b7} ")), &Format::new().set_font_name(t::FONT_EXCEL).set_font_size(t::FOOTNOTE_PT as f64).set_font_color(rgb(self.ink.muted))).map_err(x)?;
@@ -246,6 +250,12 @@ fn add_chart_sheet_scaled(wb: &mut Workbook, sheet_name: &str, data: &ChartData,
         text: Format::new().set_font_name(t::FONT_EXCEL),
         lp: super::labels::LabelPlan::new(spec, opts),
         dropped: super::labels::dropped_labels(data, opts, 720.0, 360.0),
+        segs: if spec.inside_labels && spec.stack != Stack::Grouped {
+            let l = super::layout::layout_chart(data, egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(720.0, 360.0)), &LayoutOpts { dark: false, ..opts.clone() }, &super::layout::ApproxMeasure);
+            l.segment_labels.into_iter().map(|x| ((x.panel, x.series, x.category), x)).collect()
+        } else {
+            std::collections::HashMap::new()
+        },
     };
     let mut ws = Worksheet::new();
     ws.set_name(&name).map_err(x)?;
@@ -486,11 +496,32 @@ fn cartesian_chart(cx: &Cx, g: &GridCols, kind: ChartKind, measure: usize, title
                 .collect();
             series.set_custom_data_labels(&labels);
         }
+        // Phase 8 W11: every series of a stacked column or bar carries data labels inside its segments, straight or turned, in white or
+        // ink; the segments with no room, or below the share asked for, have their label deleted (the tooltip and the table have them)
+        let inside = spec.inside_labels && kind == ChartKind::Bar && matches!(spec.stack, Stack::Stacked | Stack::Percent) && n_series > 1;
+        if inside {
+            let labels: Vec<ChartDataLabel> = (0..d.categories.len())
+                .map(|i| match cx.segs.get(&(measure, *s, i)) {
+                    Some(sl) => {
+                        let colour = ((sl.colour.r() as u32) << 16) | ((sl.colour.g() as u32) << 8) | sl.colour.b() as u32;
+                        let mut f = font(t::data_label_pt() as f64, false, colour);
+                        if sl.turned && !horizontal {
+                            f.set_rotation(-90);
+                        }
+                        let mut l = ChartDataLabel::new();
+                        l.set_value(sl.text.as_str()).set_font(&f).set_position(rust_xlsxwriter::ChartDataLabelPosition::Center);
+                        l.to_custom()
+                    }
+                    None => ChartDataLabel::new().set_hidden().to_custom(),
+                })
+                .collect();
+            series.set_custom_data_labels(&labels);
+        }
         if let Some(dl) = diverging_labels(cx, d, measure, kind) {
             series.set_data_label(&dl);
         }
         // the Data labels setting: when it differs from the default, every point carries a custom label or none
-        if !cx.lp.is_default() && !(spec.segment_labels && kind == ChartKind::Bar) {
+        if !cx.lp.is_default() && !(spec.segment_labels && kind == ChartKind::Bar) && !inside {
             let n = d.categories.len();
             let vals: Vec<Option<f64>> = d.measure(measure).and_then(|md| md.values.get(*s).cloned()).unwrap_or_default();
             let diverging = kind == ChartKind::Bar && n_series == 1 && vals.iter().flatten().any(|v| *v < 0.0);

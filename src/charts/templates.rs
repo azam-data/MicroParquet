@@ -1257,16 +1257,23 @@ fn rate_profile(df: &DataFrame) -> Result<Prepared> {
     let bal_c = amount_col(df).ok_or_else(|| anyhow!("{}: the tab has no balance column (a number column called balance, outstanding or amount).", t.name()))?;
     let bands = strs(t, df, &band_c)?;
     let bal = nums(t, df, &bal_c)?;
-    let mut by: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    let mut by: Vec<(String, f64)> = Vec::new();
     for i in 0..df.height() {
         match (bands[i].clone(), bal[i]) {
-            (Some(b), Some(v)) => *by.entry(b).or_default() += v,
+            (Some(b), Some(v)) => match by.iter_mut().find(|(k, _)| *k == b) {
+                Some(e) => e.1 += v,
+                None => by.push((b, v)),
+            },
             (None, None) => {}
             _ => bail!("{}: row {} has a blank rate band or balance. A blank is not read as zero: fill it or remove the row, then chart again.", t.name(), i + 1),
         }
     }
-    let total: f64 = by.values().sum();
+    // band order (W3): plain labels ("8%–9%") by the Ranges order, numbered ones ("09. 8%–9%") as text
+    let order = crate::sort_lists::detect_order(by.iter().map(|(k, _)| k.as_str()), &crate::dates::CalendarSettings::default()).filter(|o| *o == SortOrder::Ranges).unwrap_or_default();
+    by.sort_by(|a, b| order.compare(&Some(a.0.clone()), &Some(b.0.clone())));
+    let total: f64 = by.iter().map(|(_, v)| v).sum();
     let mut spec = base_spec(&band_c, ChartKind::Bar);
+    spec.order = order;
     spec.value = Some(bal_c.clone());
     spec.top_n = 200;
     spec.subtitle = format!("{} by rate band", bal_c);

@@ -105,7 +105,9 @@ Five settings in "Titles and look" of the chart studio change how a chart reads,
 | ![A donut of nine parts](img/charts/donut-9.png) | ![A donut grouped to Top 4 and Other](img/charts/donut-top4.png) |
 
 - **Reset colours.** Colours stay with a name (a product keeps its colour when a filter removes another). If an old chart left them in a different order, "Reset colours" gives the names the palette again, in their present order.
-- **A chart in a PDF.** A chart tab ticked in Export ▸ PDF is written as the chart itself, drawn as vectors with the Source Sans 3 fonts in the file, on a page with the export's title; it is always the light chart. Tick "Add the data table on the next page" to follow it with the table.
+- **A chart in a PDF.** A chart tab ticked in Export ▸ PDF is written as the chart itself, drawn as vectors with the Source Sans 3 fonts in the file, on a page with the export's title; it is always the light chart. Tick "Add the data table on the next page" to follow it with the table. **Data table** (in "Titles and look"): Off, Below the chart or Beside the chart prints the chart's own numbers on the same page, categories down the side, one column per series, with a Total column and a Total row when the numbers add up (amounts or counts, not rates, shares or averages: then the page says "No totals: these numbers are rates, shares, averages or extremes, which do not add up."). Beside the chart the page is landscape. Table text is never smaller than 8 pt; a table that does not fit continues on the next page with its header repeated and "(continued)". A table too wide for the page is refused: "Show fewer series (Top N or a filter), or turn the Data table off". With the option Off the page is the page it always was.
+
+![A chart PDF page with the table below the chart](img/chart-pdf-table-below.png)
 
 ![A chart page of a PDF](img/charts/pdf-chart-page.png)
 

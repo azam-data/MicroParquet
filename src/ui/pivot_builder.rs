@@ -71,6 +71,8 @@ pub struct PivotRects {
     pub field_rows: Vec<(String, egui::Rect)>,
     /// The "Add to" menu button of each listed field.
     pub field_menus: Vec<(String, egui::Rect)>,
+    /// The expander of each date column ("Date parts"), by the column's name (W2).
+    pub expanders: Vec<(String, egui::Rect)>,
     pub toggles: egui::Rect,
     pub preview: egui::Rect,
     pub preview_scroll: egui::Rect,
@@ -91,6 +93,7 @@ impl Default for PivotRects {
             chips: Vec::new(),
             field_rows: Vec::new(),
             field_menus: Vec::new(),
+            expanders: Vec::new(),
             toggles: n,
             preview: n,
             preview_scroll: n,
@@ -129,6 +132,8 @@ pub struct PivotBuilderState {
     pub new_tab: bool,
     pub rects: PivotRects,
     pub open: bool,
+    /// The date columns whose parts are listed under them in the field list (W2).
+    pub expanded: HashSet<String>,
 }
 
 fn fingerprint<T: std::fmt::Debug>(x: &T) -> u64 {
@@ -251,7 +256,12 @@ impl MicroParquetApp {
             return;
         };
         self.pivot_builder.popup = Some(FilterPopup { field: field.to_string(), ..Default::default() });
-        let req = PivotValuesRequest { tab_id: input.tab_id, source: input.source, steps: input.steps, field: field.to_string(), temp_dir: self.paths.temp_dir.clone() };
+        let mut steps = input.steps;
+        // a date field's values: its part as a column, made by a one-part Split date (W2)
+        if let Some(d) = self.pivot_builder.spec.date_fields.iter().find(|d| d.name == field) {
+            steps.push(TransformStep::date_field_step(d));
+        }
+        let req = PivotValuesRequest { tab_id: input.tab_id, source: input.source, steps, field: field.to_string(), temp_dir: self.paths.temp_dir.clone() };
         let key = JobKey::tab(JobKind::PivotValues, input.tab_id);
         self.jobs.submit(key, "Values of a field", false, move |ctx| compute_pivot_values(req, ctx).map(|r| JobOutput::PivotValues(Box::new(r))));
     }
@@ -290,6 +300,20 @@ impl MicroParquetApp {
         PivotValue { field: field.to_string(), agg, weight_col: weight }
     }
 
+    /// Puts a date part into Rows, Columns or Filters (W2): the field "Open Date · Month", with its calendar.
+    /// A real column of that name is refused (the pivot says so).
+    pub(crate) fn add_pivot_date_field(&mut self, f: micro_parquet::dates::DateFieldRef, area: Area) {
+        if self.pivot_builder.fields.iter().any(|(n, _)| *n == f.name) {
+            self.pivot_builder.preview = Some(Err(format!("Pivot: the table already has a column called '{}'. Rename that column, or use it instead of the date field.", f.name)));
+            return;
+        }
+        let name = f.name.clone();
+        if !self.pivot_builder.spec.date_fields.iter().any(|d| d.name == name) {
+            self.pivot_builder.spec.date_fields.push(f);
+        }
+        self.add_pivot_field(&name, area);
+    }
+
     /// Puts a field into an area (a field is in Rows or in Columns, not both).
     pub(crate) fn add_pivot_field(&mut self, field: &str, area: Area) {
         match area {
@@ -302,12 +326,25 @@ impl MicroParquetApp {
                     }
                 }
                 let spec = &mut self.pivot_builder.spec;
+                let added = !spec.rows.iter().chain(spec.columns.iter()).any(|f| f == field);
                 spec.rows.retain(|f| f != field);
                 spec.columns.retain(|f| f != field);
                 if area == Area::Rows {
                     spec.rows.push(field.to_string());
                 } else {
                     spec.columns.push(field.to_string());
+                }
+                // W0 auto order: a date field's own order, the steps' order for the column, else Calendar or
+                // Ranges from its labels
+                let date_field = self.pivot_builder.spec.date_fields.iter().find(|d| d.name == field).cloned();
+                if added && !self.pivot_builder.spec.field_orders.iter().any(|o| o.field == field) {
+                    if let Some(d) = date_field {
+                        if let Some(order) = d.sort_order() {
+                            self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
+                        }
+                    } else if let Some(order) = self.auto_order(field, crate::ui::auto_order::AutoTarget::Pivot) {
+                        self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
+                    }
                 }
             }
             Area::Values => {
@@ -328,6 +365,9 @@ impl MicroParquetApp {
         let spec = &mut self.pivot_builder.spec;
         let (rows, cols) = (spec.rows.clone(), spec.columns.clone());
         spec.field_orders.retain(|o| rows.contains(&o.field) || cols.contains(&o.field));
+        // a date field no area uses any more is dropped (W2)
+        let filters: Vec<String> = spec.filters.iter().map(|f| f.field.clone()).collect();
+        spec.date_fields.retain(|d| rows.contains(&d.name) || cols.contains(&d.name) || filters.contains(&d.name));
     }
 
     fn remove_pivot_chip_inner(&mut self, area: Area, index: usize) {
@@ -508,7 +548,28 @@ impl MicroParquetApp {
         let out = egui::ScrollArea::vertical().id_salt("pivot_fields").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(w - theme::SPACE_M);
             for (name, kind) in &list {
-                self.pivot_field_row(ui, name, *kind, rects);
+                self.pivot_field_row(ui, name, *kind, None, rects);
+                if *kind == FieldKind::Date {
+                    // W2: the parts of a date column, under an expander, added like columns
+                    let open = self.pivot_builder.expanded.contains(name);
+                    let text = format!("{}  Date parts", if open { theme::ph::CARET_DOWN } else { theme::ph::CARET_RIGHT });
+                    let r = ui.add(egui::Button::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(tk.muted)).frame(false));
+                    rects.expanders.push((name.clone(), r.rect));
+                    if r.clicked() {
+                        if open {
+                            self.pivot_builder.expanded.remove(name);
+                        } else {
+                            self.pivot_builder.expanded.insert(name.clone());
+                        }
+                    }
+                    if open {
+                        let cal = self.calendar();
+                        for part in micro_parquet::dates::DatePart::ALL {
+                            let f = self.pivot_builder.spec.date_fields.iter().find(|d| d.column == *name && d.part == part).cloned().unwrap_or_else(|| micro_parquet::dates::DateFieldRef::new(name, part, cal));
+                            self.pivot_field_row(ui, &f.name.clone(), *kind, Some(&f), rects);
+                        }
+                    }
+                }
             }
             if list.is_empty() {
                 ui.label(egui::RichText::new("No field matches.").color(tk.muted));
@@ -517,7 +578,7 @@ impl MicroParquetApp {
         rects.fields_list = out.inner_rect;
     }
 
-    fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, rects: &mut PivotRects) {
+    fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, part: Option<&micro_parquet::dates::DateFieldRef>, rects: &mut PivotRects) {
         let tk = *theme::tokens(self.dark_mode);
         let areas = self.areas_of(name);
         let used = areas.iter().map(|a| a.used_word()).collect::<Vec<_>>().join(", ");
@@ -557,16 +618,24 @@ impl MicroParquetApp {
         }
         let gap = if used.is_empty() { 0.0 } else { theme::SPACE_S };
         let name_rect = egui::Rect::from_min_max(egui::pos2(badge.right() + theme::SPACE_S, drag_rect.top()), egui::pos2((used_rect.left() - gap).max(badge.right() + theme::SPACE_S), drag_rect.bottom()));
-        ui.put(name_rect, egui::Label::new(egui::RichText::new(name).color(tk.ink)).truncate().selectable(false));
+        // a date part is listed under its column as "› Month"
+        let shown = part.map(|p| format!("\u{203a} {}", p.part.label())).unwrap_or_else(|| name.to_string());
+        ui.put(name_rect, egui::Label::new(egui::RichText::new(shown).color(tk.ink)).truncate().selectable(false));
         // the menu: Add to Rows / Columns / Values / Filters
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(menu_rect), |ui| {
             // a button as small as its cell: the default minimum size would push the row wider
             ui.spacing_mut().interact_size = egui::vec2(theme::PIVOT_CHIP_MENU_W, theme::PIVOT_FIELD_ROW_H);
             ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
             ui.menu_button(theme::ph::DOTS_THREE, |ui| {
-                for area in [Area::Rows, Area::Columns, Area::Values, Area::Filters] {
+                // a date part is a label: Rows, Columns or Filters (W2)
+                let areas_offered: &[Area] = if part.is_some() { &[Area::Rows, Area::Columns, Area::Filters] } else { &[Area::Rows, Area::Columns, Area::Values, Area::Filters] };
+                for area in areas_offered {
                     if ui.button(format!("Add to {}", area.title())).clicked() {
-                        self.add_pivot_field(name, area);
+                        if let Some(p) = part {
+                            self.add_pivot_date_field(p.clone(), *area);
+                        } else {
+                            self.add_pivot_field(name, *area);
+                        }
                         ui.close_menu();
                     }
                 }
@@ -605,6 +674,12 @@ impl MicroParquetApp {
             if ui.selectable_label(!by_value && current == SortOrder::Tenor, "Tenor").clicked() {
                 choice = Some(SortOrder::Tenor);
                 ui.close_menu();
+            }
+            for o in self.builtin_orders() {
+                if ui.selectable_label(!by_value && current == o, o.label()).clicked() {
+                    choice = Some(o);
+                    ui.close_menu();
+                }
             }
             if is_row && !self.pivot_builder.spec.values.is_empty() && ui.selectable_label(by_value, "By value").clicked() {
                 value_sort = true;

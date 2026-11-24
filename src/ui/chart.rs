@@ -45,6 +45,10 @@ pub struct ChartState {
     /// "Reset colours" was clicked while the numbers were being calculated again: it is done when they arrive, on
     /// the names they have (the names of the old numbers are about to go).
     pub reset_colours: bool,
+    /// The chart tab the studio is editing (Phase 8 W5): its spec is the studio's, Update puts it back.
+    pub editing: Option<u64>,
+    /// The "Filters on this chart" section: the tick list that is open (Phase 8 W10).
+    pub filters_ui: crate::ui::chart_filters::ChartFilterState,
 }
 
 /// The names a chart's colours go to: its series, or its categories when it has no series.
@@ -72,11 +76,36 @@ pub struct ChartTabInfo {
     pub divisor: f64,
     pub decimals: usize,
     pub unit: String,
+    /// The id of the tab the chart draws (a project writes it as the chart's source, Phase 8 W4).
+    pub source_tab: Option<u64>,
+    /// What the source tab looked like when the numbers were calculated (empty = calculate again). A chart tab of
+    /// Phase 7 has no source tab and is never calculated again.
+    pub source_sig: String,
+    /// The signature a calculation on the worker is for.
+    pub pending_sig: Option<String>,
+    /// The source tab was closed: what it was, so Reopen can open it again.
+    pub closed: Option<ClosedSource>,
+    /// Why the chart could not be calculated again (the numbers shown are the last ones).
+    pub error: Option<String>,
+    /// The spec the worker is to calculate next (a drill or a filter on the chart tab, Phase 8 W6): the numbers shown keep
+    /// the spec they were calculated with until the new ones arrive.
+    pub next_spec: Option<ChartSpec>,
+}
+
+/// A source tab that was closed.
+#[derive(Clone, Debug)]
+pub struct ClosedSource {
+    pub title: String,
+    /// Its key in the open project, if it had one.
+    pub key: Option<String>,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub col_formats: HashMap<String, ColumnFormatSpec>,
 }
 
 impl Default for ChartState {
     fn default() -> Self {
-        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None }
+        Self { spec: ChartSpec::default(), tab_id: None, tab_key: String::new(), data: None, error: None, busy: false, reset_colours: false, editing: None, token: 0, submitted: None, saved: String::new(), rects: ChartRects::default(), show_table: false, export_message: None, export_path_override: None, no_browser: false, copied_python: None, filters_ui: Default::default() }
     }
 }
 
@@ -101,7 +130,7 @@ pub fn short_label(label: &str, max: usize) -> String {
 }
 
 /// The key a tab's chart choices are kept under: its file name, else its title.
-fn tab_key(tab: &TabState) -> String {
+pub(crate) fn tab_key(tab: &TabState) -> String {
     micro_parquet::steps_edit::source_files(&tab.source).first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| tab.title.clone())
 }
 
@@ -113,6 +142,11 @@ impl MicroParquetApp {
     /// The scale the chart shows its values in (`None` = as they are), from the value column's
     /// display format or the chart's own choice.
     pub(crate) fn chart_scale(&self, spec: &ChartSpec) -> Option<MoneyScale> {
+        self.chart_scale_of(spec, self.tabs.get(self.active_tab))
+    }
+
+    /// The same for the chart of tab `tab` (a project opens charts of tabs that are not the active one).
+    pub(crate) fn chart_scale_of(&self, spec: &ChartSpec, tab: Option<&TabState>) -> Option<MoneyScale> {
         if spec.agg == ChartAgg::Count {
             return None;
         }
@@ -120,7 +154,7 @@ impl MicroParquetApp {
             Some(s) => s,
             None => {
                 let col = spec.value.as_deref()?;
-                let fmt = self.tabs.get(self.active_tab).and_then(|t| t.col_formats.get(col));
+                let fmt = tab.and_then(|t| t.col_formats.get(col));
                 micro_parquet::models::resolved_scale(col, fmt, self.num_format)
             }
         }
@@ -352,13 +386,8 @@ impl MicroParquetApp {
         };
         data.spec = self.chart.spec.clone();
         let scale = self.chart_scale(&self.chart.spec);
-        let info = ChartTabInfo {
-            data: data.clone(),
-            show_table: false,
-            divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
-            decimals: self.global_decimals,
-            unit: scale.as_ref().map(scale_word).unwrap_or("").to_string(),
-        };
+        let sig = self.tabs.iter().find(|t| Some(t.id) == self.chart.tab_id).map(|t| micro_parquet::tab_jobs::source_signature(&t.source, &t.steps[..t.exec_steps.min(t.steps.len())])).unwrap_or_default();
+        let info = ChartTabInfo::linked(data.clone(), scale.map(|s| s.divisor).unwrap_or(1.0), self.global_decimals, scale.as_ref().map(scale_word).unwrap_or("").to_string(), self.chart.tab_id, sig);
         let result = (|| -> anyhow::Result<TabSource> {
             let mut df = chart_table(&data)?;
             std::fs::create_dir_all(&self.paths.temp_dir)?;
@@ -387,26 +416,74 @@ impl MicroParquetApp {
         self.tabs.get(self.active_tab).is_some_and(|t| self.chart_tabs.contains_key(&t.id))
     }
 
-    /// What fills the main area while a chart tab is active: a Table / Chart toggle, then the chart.
+    /// What fills the main area while a chart tab is active: a Table / Chart toggle and Edit chart, a note when the
+    /// chart is frozen, its source is closed or it could not be calculated again, then the chart.
     pub(crate) fn render_chart_main(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) else { return };
         let dark = self.dark_mode;
+        let tk = *theme::tokens(dark);
+        let mut edit = false;
+        let mut reopen = false;
+        let closed = self.chart_tabs.get(&id).and_then(|i| i.closed.clone());
+        let can_reopen = closed.as_ref().is_some_and(|c| self.chart_tab_can_reopen(c));
+        let drill_ctx = self.chart_tab_drill_ctx(id);
+        let mut crumb: Option<usize> = None;
+        let mut chart_action: Option<crate::ui::chart_render::ChartAction> = None;
+        self.drill_rects.clear();
         let Some(info) = self.chart_tabs.get_mut(&id) else { return };
         let label = if info.show_table { format!("{}  Show chart", egui_phosphor::regular::CHART_BAR) } else { format!("{}  Table", egui_phosphor::regular::TABLE) };
-        let b = ui.button(label);
-        if b.clicked() {
-            info.show_table = !info.show_table;
+        ui.horizontal_wrapped(|ui| {
+            let b = ui.button(label);
+            if b.clicked() {
+                info.show_table = !info.show_table;
+            }
+            let e = ui.add_enabled(info.closed.is_none(), egui::Button::new(format!("{}  Edit chart", egui_phosphor::regular::PENCIL_SIMPLE)));
+            let e = if info.closed.is_some() { e.on_disabled_hover_text("The source tab is closed. Reopen it to edit this chart.") } else { e.on_hover_text("Open the chart in the studio on its source tab") };
+            edit = e.clicked();
+        });
+        // what the chart is made from, and what is wrong with it
+        if let Some(c) = &closed {
+            let msg = format!("The source tab '{}' is closed. Reopen it to edit or refresh this chart.", c.title);
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Label::new(egui::RichText::new(msg).color(tk.warning)).wrap());
+                if can_reopen && ui.button("Reopen").clicked() {
+                    reopen = true;
+                }
+            });
+        } else if info.source_tab.is_none() {
+            ui.add(egui::Label::new(egui::RichText::new(crate::ui::chart_tab::OLDER_VERSION_NOTE).color(tk.muted)).wrap());
         }
+        if let Some(e) = &info.error {
+            ui.add(egui::Label::new(egui::RichText::new(format!("The chart could not be updated from its source tab, so it shows the last numbers: {}", e)).color(tk.danger)).wrap());
+        }
+        let dimmed = info.closed.is_some();
+        // W6: where the chart is in its drill, and the way back
+        crumb = crate::ui::drill::drill_breadcrumb(ui, dark, &info.data.spec, &mut self.drill_rects);
         ui.add_space(theme::SPACE_S);
         let opts = micro_parquet::charts::layout::LayoutOpts { dark, divisor: info.divisor, decimals: info.decimals, unit: info.unit.clone(), bare: false, colours: None };
+        if dimmed {
+            ui.set_opacity(theme::CHART_TAB_DIMMED_OPACITY);
+        }
         if info.show_table {
             crate::ui::chart_render::show_table(ui, &info.data, &opts);
         } else {
             let data = info.data.clone();
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let h = ui.available_height().max(theme::CHART_MIN_H);
-                crate::ui::chart_render::show_chart(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h));
+                chart_action = crate::ui::chart_render::show_chart_with(ui, egui::Id::new(("chart_tab", id)), &data, &opts, Some(h), Some(&drill_ctx)).action;
             });
+        }
+        if let Some(depth) = crumb {
+            self.chart_tab_drill_to(id, Some(depth));
+        }
+        if let Some(a) = chart_action {
+            self.chart_tab_chart_action(id, a);
+        }
+        if edit {
+            self.edit_chart_tab(id);
+        }
+        if reopen {
+            self.chart_tab_reopen(id);
         }
     }
 
@@ -519,31 +596,45 @@ impl MicroParquetApp {
     /// The controls: the Phase 6 grid (category, series, aggregation, value, type, order, Top N, scale),
     /// the buttons, and the studio sections.
     fn chart_controls(&mut self, ui: &mut egui::Ui, rects: &mut ChartRects, acts: &mut StudioActions) {
+        self.chart_editing_banner(ui, rects);
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
         let avail = tab.available_columns();
         let numeric: Vec<String> = tab.cached_slice.get_columns().iter().filter(|c| is_number_type(c.dtype())).map(|c| c.name().to_string()).collect();
         let order_lists = self.sort_lists.lists.clone();
+        let builtin = self.builtin_orders();
         let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
+        let parts = self.chart_date_parts();
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
             ui.label("Category (X)");
-            let r = egui::ComboBox::from_id_salt("chart_category").width(combo_w).selected_text(&spec.category).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt("chart_category").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(&spec.category).show_ui(ui, |ui| {
                 for c in &avail {
                     ui.selectable_value(&mut spec.category, c.clone(), c);
+                }
+                // W2: the parts of each date column, "Open Date › Quarter"
+                if let Some(f) = date_part_items(ui, &parts, Some(spec.category.as_str())) {
+                    spec.category = f.name.clone();
+                    spec.order = f.sort_order().unwrap_or_default();
+                    spec.by_value = false;
+                    spec.category_part = Some(f);
                 }
             });
             add(ui, "Category", rects, r.response.rect);
             ui.end_row();
             ui.label("Series");
             let shown = spec.series.clone().unwrap_or_else(|| "(none)".to_string());
-            let r = egui::ComboBox::from_id_salt("chart_series").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt("chart_series").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(shown).show_ui(ui, |ui| {
                 ui.selectable_value(&mut spec.series, None, "(none)");
-                for c in avail.iter().filter(|c| **c != spec.category) {
+                for c in avail.iter().filter(|c| **c != spec.category && !spec.drill.iter().any(|l| l.name == **c)) {
                     ui.selectable_value(&mut spec.series, Some(c.clone()), c);
+                }
+                if let Some(f) = date_part_items(ui, &parts, spec.series.as_deref()) {
+                    spec.series = Some(f.name.clone());
+                    spec.series_part = Some(f);
                 }
             });
             add(ui, "Series", rects, r.response.rect);
@@ -603,6 +694,12 @@ impl MicroParquetApp {
                 if ui.selectable_label(!spec.by_value && spec.order == SortOrder::Tenor, "Tenor").clicked() {
                     spec.order = SortOrder::Tenor;
                     spec.by_value = false;
+                }
+                for o in &builtin {
+                    if ui.selectable_label(!spec.by_value && spec.order == *o, o.label()).clicked() {
+                        spec.order = o.clone();
+                        spec.by_value = false;
+                    }
                 }
                 if ui.selectable_label(spec.by_value, "By value").clicked() {
                     spec.by_value = true;
@@ -665,8 +762,28 @@ impl MicroParquetApp {
         });
         rects.controls = Some(controls.response.rect);
         self.chart.show_table = show_table;
+        // a part left behind when another column is picked is dropped (W2)
+        spec.drop_stale_date_parts();
+        // W6: with drill levels the Category picker names the top level, and the chart goes back to it
+        if spec.has_drill() && (spec.category != self.chart.spec.category || spec.category_part != self.chart.spec.category_part) {
+            let mut levels = spec.drill.clone();
+            levels[0] = micro_parquet::charts::spec::DrillLevel { name: spec.category.clone(), part: spec.category_part.clone() };
+            spec.set_drill(levels);
+        }
+        // W0 auto order: a category picked here with no order chosen gets the steps' order, Calendar or Ranges
+        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none();
+        let auto = new_category && spec.order.is_natural() && !spec.by_value;
         if spec != self.chart.spec {
+            let category = spec.category.clone();
+            self.auto_series_facet_order(&mut spec);
             self.chart_set_spec(spec);
+            if auto {
+                if let Some(order) = self.auto_order(&category, crate::ui::auto_order::AutoTarget::ChartCategory) {
+                    let mut s = self.chart.spec.clone();
+                    s.order = order;
+                    self.chart_set_spec(s);
+                }
+            }
         }
     }
 
@@ -720,6 +837,7 @@ impl MicroParquetApp {
         }
         self.studio_sections(ui, &mut spec, &avail, &numeric, rects);
         if spec != self.chart.spec {
+            self.auto_series_facet_order(&mut spec);
             self.chart_set_spec(spec);
         }
     }
@@ -732,6 +850,9 @@ impl MicroParquetApp {
         let mut switch_horizontal: Option<ChartSpec> = None;
         let scale = self.chart_scale(&self.chart.spec);
         let unit = scale.as_ref().map(scale_word).filter(|u| !u.is_empty()).map(str::to_string);
+        let mut crumb: Option<usize> = None;
+        let mut chart_action: Option<crate::ui::chart_render::ChartAction> = None;
+        self.drill_rects.clear();
         match (&self.chart.data, &self.chart.error) {
             (_, Some(e)) => {
                 rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(e).color(tk.danger)).wrap()).rect);
@@ -742,11 +863,14 @@ impl MicroParquetApp {
                     title.push_str("  \u{2014} calculating\u{2026}");
                 }
                 rects.title = Some(ui.add(egui::Label::new(egui::RichText::new(title).color(tk.ink2).size(theme::TEXT_LABEL)).wrap()).rect);
+                // W6: where the chart is in its drill, and the way back
+                crumb = crate::ui::drill::drill_breadcrumb(ui, self.dark_mode, &self.chart.spec, &mut self.drill_rects);
                 if self.chart.show_table {
                     let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor: scale.map(|s| s.divisor).unwrap_or(1.0), decimals: self.global_decimals, unit: String::new(), bare: true, colours: None };
                     crate::ui::chart_render::show_table(ui, d, &opts);
                 } else {
-                    let (plot, map, dont_fit) = self.draw_chart_plot(ui, d, scale);
+                    let (plot, map, dont_fit, action) = self.draw_chart_plot(ui, d, scale);
+                    chart_action = action;
                     rects.plot = Some(plot);
                     new_map = Some(map);
                     labels_dont_fit = dont_fit;
@@ -755,6 +879,15 @@ impl MicroParquetApp {
             (None, None) => {
                 rects.title = Some(ui.label(egui::RichText::new("Calculating the chart\u{2026}").color(tk.muted)).rect);
             }
+        }
+        // W6: a click on the breadcrumb or on a mark, or a menu item of the right-click menu
+        if let Some(depth) = crumb {
+            let mut spec = self.chart.spec.clone();
+            spec.drill_to(depth);
+            self.chart_set_spec(spec);
+        }
+        if let Some(a) = chart_action {
+            self.studio_chart_action(a);
         }
         // a donut of many parts: one line of advice
         if let (ChartKind::Donut, Some(d)) = (self.chart.spec.kind, self.chart.data.as_ref()) {
@@ -1080,7 +1213,7 @@ impl MicroParquetApp {
     /// The chart: drawn by the Phase 7 renderer (`chart_render`) in the quick-chart layout (plot and
     /// legend; the title line and notes above are the Phase 6 ones). Returns the chart's rectangle and
     /// the colour map with every series in it, which the caller stores in the spec.
-    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap, bool) {
+    fn draw_chart_plot(&self, ui: &mut egui::Ui, d: &ChartData, scale: Option<MoneyScale>) -> (egui::Rect, micro_parquet::charts::colours::ColourMap, bool, Option<crate::ui::chart_render::ChartAction>) {
         let opts = micro_parquet::charts::layout::LayoutOpts {
             dark: self.dark_mode,
             divisor: scale.map(|s| s.divisor).unwrap_or(1.0),
@@ -1100,8 +1233,41 @@ impl MicroParquetApp {
             shown = c;
             &shown
         };
-        let out = crate::ui::chart_render::show_chart(ui, egui::Id::new("chart_plot"), data, &opts, None);
+        let drill = self.studio_drill_ctx();
+        let out = crate::ui::chart_render::show_chart_with(ui, egui::Id::new("chart_plot"), data, &opts, None, Some(&drill));
         let plot = out.layout.panels.first().map(|p| p.plot).unwrap_or(out.rect);
-        (plot, out.layout.colour_map, out.layout.labels_dont_fit)
+        (plot, out.layout.colour_map, out.layout.labels_dont_fit, out.action)
+    }
+}
+
+/// The date parts of each Date or Datetime column of a tab (W2), with the calendar in force.
+pub(crate) fn date_parts_of(df: &DataFrame, cal: micro_parquet::dates::CalendarSettings) -> Vec<micro_parquet::dates::DateFieldRef> {
+    df.get_columns()
+        .iter()
+        .filter(|c| micro_parquet::dates::is_date_type(c.dtype()))
+        .flat_map(|c| micro_parquet::dates::DatePart::ALL.into_iter().map(move |p| micro_parquet::dates::DateFieldRef::new(c.name(), p, cal)))
+        .collect()
+}
+
+/// The parts listed in a chart picker under their date column ("Open Date › Quarter"); the one clicked.
+pub(crate) fn date_part_items(ui: &mut egui::Ui, parts: &[micro_parquet::dates::DateFieldRef], current: Option<&str>) -> Option<micro_parquet::dates::DateFieldRef> {
+    let mut picked = None;
+    let mut last_col = "";
+    for f in parts {
+        if f.column != last_col {
+            ui.separator();
+            last_col = f.column.as_str();
+        }
+        if ui.selectable_label(current == Some(f.name.as_str()), micro_parquet::dates::picker_label(&f.column, f.part)).clicked() {
+            picked = Some(f.clone());
+        }
+    }
+    picked
+}
+
+impl MicroParquetApp {
+    /// The date parts the chart pickers offer for the active tab.
+    pub(crate) fn chart_date_parts(&self) -> Vec<micro_parquet::dates::DateFieldRef> {
+        self.tabs.get(self.active_tab).map(|t| date_parts_of(&t.cached_slice, self.calendar())).unwrap_or_default()
     }
 }

@@ -445,8 +445,13 @@ pub const RATE_STEP_RANGE: std::ops::RangeInclusive<f64> = 0.01..=50.0;
 pub const COND_BODY_W: f32 = 720.0;
 pub const DIALOG_SCROLL_BAR_ALLOWANCE: f32 = 16.0;
 pub const FIELD_W_VALUE: f32 = 130.0;
+/// A value box in a narrow panel (the chart studio's "Add a filter" row, W9).
+pub const FIELD_W_VALUE_NARROW: f32 = 100.0;
 /// The value picker: its search box, its list's height and the button that opens it.
 pub const PICKER_SEARCH_W: f32 = 200.0;
+/// The room the picker's two buttons need beside its search box, and the least the box is narrowed to.
+pub const PICKER_BUTTONS_W: f32 = 130.0;
+pub const PICKER_SEARCH_MIN_W: f32 = 90.0;
 pub const PICKER_LIST_H: f32 = 200.0;
 pub const FIELD_W_PICK: f32 = 150.0;
 pub const FIELD_W_OP: f32 = 120.0;
@@ -476,11 +481,23 @@ pub const CHART_REF_LABEL_W: f32 = 90.0;
 pub const CHART_CONTROLS_W: f32 = 330.0;
 pub const CHART_WIDE_MIN_W: f32 = 720.0;
 pub const CHART_MIN_W: f32 = 200.0;
+/// Seconds between two looks of a chart tab at its source tab (Phase 8 W5).
+pub const CHART_TAB_LINK_CHECK_S: f64 = 0.4;
+/// How faint a chart tab is drawn while its source tab is closed (Phase 8 W5).
+pub const CHART_TAB_DIMMED_OPACITY: f32 = 0.45;
 pub const CHART_MIN_H: f32 = 175.0;
 pub const CHART_MAX_H: f32 = 520.0;
 pub const CHART_BAR_W: f64 = 0.65;
 /// The chart's controls and marks.
 pub const CHART_COMBO_W: f32 = 130.0;
+/// A colour swatch of the picker, and the hex box beside it (Phase 8 W7).
+pub const SWATCH: f32 = 24.0;
+pub const SWATCH_HEX_W: f32 = 100.0;
+/// The swatch in the studio's Colours list (a little lower than wide), and the name box of House colours.
+pub const SWATCH_LIST_H: f32 = 17.0;
+pub const SWATCH_NAME_W: f32 = 160.0;
+/// The list of a chart field picker: tall enough for the columns and the parts of a date column (W2).
+pub const CHART_PICKER_POPUP_H: f32 = 460.0;
 pub const CHART_COMBO_NARROW_W: f32 = 90.0;
 /// Longest category name on the x-axis, and room for one.
 pub const CHART_LABEL_CHARS: usize = 14;

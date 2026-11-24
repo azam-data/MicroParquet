@@ -508,6 +508,12 @@ pub(crate) struct Painted {
     pub(crate) shown: Vec<(String, egui::Pos2)>,
     /// The rectangle each text occupies.
     pub(crate) boxes: Vec<(String, egui::Rect)>,
+    /// The rectangle of each text's laid-out rows (a label in a wrapped row starts after the row's leading
+    /// space, which `boxes` includes): what the overlap checks of Phase 8 compare.
+    pub(crate) glyphs: Vec<(String, egui::Rect)>,
+    /// The alpha of the first glyph of each text as drawn (255 for an opaque colour; a `Ui` faded with `set_opacity`
+    /// multiplies the colours of its glyphs, so a dimmed text has less).
+    pub(crate) alpha: Vec<(String, u8)>,
 }
 
 pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted {
@@ -516,8 +522,16 @@ pub(crate) fn collect_painted(shapes: &[egui::epaint::ClippedShape]) -> Painted 
             egui::Shape::Text(t) => {
                 let fam = t.galley.job.sections.first().map(|s| s.format.font_id.family.clone()).unwrap_or(egui::FontFamily::Proportional);
                 out.colors.push((t.galley.text().to_string(), t.galley.job.sections.first().map(|s| s.format.color).unwrap_or(egui::Color32::PLACEHOLDER)));
+                if let Some(v) = t.galley.rows.iter().find_map(|r| r.visuals.mesh.vertices.first()) {
+                    out.alpha.push((t.galley.text().to_string(), v.color.a()));
+                }
                 out.shown.push((t.galley.rows.iter().map(|r| r.text()).collect::<String>(), t.pos));
                 out.boxes.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2())));
+                let rows = t.galley.rows.iter().filter(|r| !r.glyphs.is_empty()).fold(egui::Rect::NOTHING, |a, r| {
+                    let first = r.glyphs.first().map(|g| g.pos.x).unwrap_or(r.rect.left());
+                    a.union(egui::Rect::from_min_max(egui::pos2(first, r.rect.top()), r.rect.max))
+                });
+                out.glyphs.push((t.galley.text().to_string(), if rows.is_positive() { rows.translate(t.pos.to_vec2()) } else { t.galley.rect.translate(t.pos.to_vec2()) }));
                 out.texts.push((t.galley.text().to_string(), t.pos, fam));
             }
             egui::Shape::Rect(r) => out.rects.push((r.rect, r.fill)),
@@ -907,7 +921,7 @@ fn no_size_literal_is_left_outside_theme_rs() {
         .filter(|p| p.extension().is_some_and(|x| x == "rs"))
         .filter(|p| {
             let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "render_tests_p5.rs" | "render_tests_p6.rs" | "render_tests_p7.rs" | "render_tests_r.rs")
+            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "render_tests_p5.rs" | "render_tests_p6.rs" | "render_tests_p7.rs" | "render_tests_p8.rs" | "render_tests_r.rs")
         })
         .collect();
     files.push("src/main.rs".into());

@@ -615,6 +615,14 @@ impl MicroParquetApp {
 
     fn render_steps_tab(&mut self, ui: &mut egui::Ui, panel_h: f32) {
         let tk = *theme::tokens(self.dark_mode);
+        // a chart tab has no steps of its own: they are the source tab's (Phase 8 W5)
+        if let Some(note) = self.chart_tab_steps_note() {
+            egui::Frame::none().inner_margin(theme::MARGIN_PANEL_STEPS).show(ui, |ui| {
+                ui.label(theme::bold("Source").color(tk.ink));
+                ui.add(egui::Label::new(egui::RichText::new(note).color(tk.muted)).wrap());
+            });
+            return;
+        }
         let mut open_schema = false;
         let mut select: Option<usize> = None;
         let mut do_edit: Option<usize> = None;
@@ -925,6 +933,7 @@ impl MicroParquetApp {
         let mut do_summary: Option<(String, SummarySpec)> = None;
         let mut do_format = false;
         let mut do_type = false;
+        let mut do_split: Option<String> = None;
         let (num_format, decimals) = (self.num_format, self.global_decimals);
         let self_log = self.inspector_log;
         let mut new_log = self_log;
@@ -1143,6 +1152,10 @@ impl MicroParquetApp {
                 if wide(ui, format!("{}  Add as sort level", theme::ph::SORT_ASCENDING)).clicked() {
                     do_sort = Some(name.clone());
                 }
+                // a Date or Datetime column can be split into its parts (W1)
+                if dtype.as_ref().is_some_and(micro_parquet::dates::is_date_type) && wide(ui, format!("{}  Split date\u{2026}", theme::ph::CALENDAR)).clicked() {
+                    do_split = Some(name.clone());
+                }
                 // Summary: the choice for this column, and the weight of a weighted average
                 let current = tab.summary.get(&name).cloned().unwrap_or_else(|| match dtype.as_ref() {
                     Some(d) => micro_parquet::summary::default_spec_for(d, &name, tab.control_col.as_deref()),
@@ -1213,6 +1226,9 @@ impl MicroParquetApp {
         }
         if do_type {
             self.open_schema_modal_for_active_tab();
+        }
+        if let Some(c) = do_split {
+            self.open_split_date(Some(c));
         }
     }
 }

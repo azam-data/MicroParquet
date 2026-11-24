@@ -204,6 +204,11 @@ pub fn compute_chart_fixed(lf: LazyFrame, spec: &ChartSpec, fixed: Option<&Fixed
     } else {
         vec![String::new()]
     };
+    // Q1: a series order chosen for the chart lists the kept series in it (the series that stay are still the largest)
+    let mut series_kept = series_kept;
+    if let (None, Some(order), true) = (fixed, spec.series_order.as_ref(), spec.series.is_some()) {
+        series_kept.sort_by(|a, b| order.compare(&(if a == BLANK_LABEL { None } else { Some(a.clone()) }), &(if b == BLANK_LABEL { None } else { Some(b.clone()) })));
+    }
     let other_series = if series_kept.iter().any(|k| k == OTHER_LABEL) { "Other series".to_string() } else { OTHER_LABEL.to_string() };
 
     // 2. The cells: every row of the tab goes to its category (or "Other") and series (or "Other").

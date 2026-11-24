@@ -103,10 +103,15 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
+        let mut steps = tab.steps[..i].to_vec();
+        // a date field of the pivot (W2): its part as a column first
+        if let Some(d) = tab.steps.get(i).and_then(|s| s.as_pivot_spec()).and_then(|s| s.date_fields.into_iter().find(|d| d.name == field)) {
+            steps.push(TransformStep::date_field_step(&d));
+        }
         let req = micro_parquet::tab_jobs::PivotValuesRequest {
             tab_id: tab.id,
             source: tab.source.clone(),
-            steps: tab.steps[..i].to_vec(),
+            steps,
             field: field.to_string(),
             temp_dir: self.paths.temp_dir.clone(),
         };

@@ -247,13 +247,13 @@ The Power BI date hierarchy, without adding columns.
 - **"Edit chart"** on the chart tab opens the studio on the **source** tab with the chart tab's spec. The studio shows "Editing chart tab 'Chart: …'" with **Update chart tab** (replaces the spec) and **Open as new chart tab**. Values never re-aggregate the chart's own table, so "Sum of Sum of …" can't happen.
 - The steps panel of a chart tab is read-only, with: "This tab draws a chart of 'Loans'. Change the data on that tab, or use Edit chart."
 - **Source closed:** the chart keeps its last data, dimmed, with "The source tab 'Loans' is closed. Reopen it to edit or refresh this chart" and a **Reopen** button when the source is a file tab of the open project.
-- **Phase 7 compatibility:** chart tabs saved in `settings.json` by Phase 7 open as before (frozen), marked "Made by an older version; Edit chart opens it on its own table".
+- **Phase 7 compatibility:** Phase 7 kept only the `ChartSpec` of a chart tab in `settings.json` and never reopened it as a tab, and Phase 8 does not either: those entries load and are saved back unchanged. A chart tab that has no source tab is frozen (never calculated again) and marked "Made by an older version; Edit chart opens it on its own table".
 - **Acceptance:**
   - changing a filter on the source updates the chart tab's numbers to equal a new chart made from the source
   - Edit chart → change the aggregation → Update keeps one chart tab with the new numbers and the old title rule
   - Edit chart on the owner's case (Sum of Balance by Term period) shows "Sum of Balance", never "Sum of Sum of Balance"
   - closing the source dims the chart with the message; Reopen restores it
-  - a Phase 7 `settings.json` chart tab still opens
+  - a Phase 7 `settings.json` with chart tabs loads and is saved back unchanged (as in Phase 7, it is not reopened as tabs), and a chart tab with no source tab stays frozen with the note
   - render tests by real clicks at 3 sizes
 </task>
 
@@ -333,6 +333,42 @@ The Power BI date hierarchy, without adding columns.
 - **Acceptance:** a c8-style test checks every note has its sections, every picture it names exists, and the README lists the notes.
 </task>
 
+<task id="W10" name="Filters on a chart">
+- Studio: the series, category and facet fields each get a value tick list (search, All/None, row counts), like the filter value picker. A "Filters on this chart" section takes any column with the tab filter's picker, date "By" included.
+- Stored in ChartSpec.filters (added in W6, where Keep only this / Exclude this write), so the list shows those too and can remove them. Applied before aggregation; the source tab is unchanged.
+- The subtitle states them ("Filtered: Bank = Conventional"). Colours follow the entity, so a kept item keeps its colour. Honoured by every renderer, chart tabs, saved charts, chart books, projects, drill and Show rows.
+- Acceptance:
+  - Balance by Bucket, series Bank, keep Conventional: totals equal a chart of the source filtered to Bank = Conventional; the source tab's row count is unchanged; Conventional keeps its colour
+  - a filter made by Keep only this appears in the list and can be removed there
+  - a saved chart and a project round trip keep the filter; old charts load unchanged
+  - Show rows from a filtered chart includes the chart's filters
+  - render tests by real clicks at 3 sizes: the tick list, All/None, the "Filters on this chart" section
+</task>
+
+<task id="W9" name="Date comparisons by part">
+- On a Date or Datetime column the "By" choice (Date / Year / Month-Year / Year-Quarter / Month / Quarter / Day name) shows for every operator: =, ≠, in list, not in list, >, ≥, <, ≤ (and between, if the filter has it). It stays visible when the operator changes.
+- Comparison uses the part's order, never its text: Year and Month number numerically; Month-Year and Year-Quarter by time; Month, Quarter and Day name by the Calendar order (Day name from the copied week start); Date by date.
+- The value box offers the part's values in that order; a value that isn't that part is refused with a plain message. Blank dates never match. Stored in FilterCondition.part (serde default None). Works the same in the tab filter and in W10's "Filters on this chart". Python export mirrors it.
+- Acceptance:
+  - Year ≥ 2025 keeps 2025 and 2026 rows
+  - Month-Year ≥ Aug 2025 and ≤ Jan 2026 keeps exactly Aug 2025 to Jan 2026, across the year change
+  - Month < Apr keeps Jan to Mar of every year
+  - Day name ≥ Wed with Saturday start keeps Wed, Thu, Fri
+  - old filters load unchanged; Python gives the same rows when pandas is present
+  - render test by real clicks at 3 sizes: switching to > keeps the By choice, in the tab filter and in the chart's filters
+</task>
+
+<task id="W11" name="Stacked segment labels and data table">
+- Studio option for stacked and 100% stacked column and bar: "Segment labels" Off (default, today's output) / On. Each segment shows its value (percent for 100% stacked): straight if it fits, else turned 90° on column charts if it fits, else left out (still in the tooltip and table). Never clipped, never overlapping. Text is white or ink by contrast with the segment, as heatmap cells; never the series colour. "Hide below x% of the bar", default 5%. The total on top stays.
+- Honoured in-app, HTML (ECharts inside labels, rotate), Excel (dLbls per series) and PDF.
+- "Data table": Off (default) / Below the chart / Beside the chart. Chart PDF, chart book and report-pack PDF print the chart's data (categories × series, with totals, in the chart's scale and order) on the same page. Beside uses landscape. If the table doesn't fit, it continues on the next page with its header repeated; text never below 8 pt. HTML shows the table open under the chart.
+- Acceptance:
+  - a 3-series stacked column with a tall, a narrow and a tiny segment: straight, turned and left out; no label rect overlaps or leaves its segment (render tests at 3 sizes, light and dark)
+  - the Excel chart XML has dLbls on every series when On and none when Off
+  - a 12 × 3 chart PDF with the table below, and beside: the page text holds every value and total, on one page
+  - with both options Off, the output equals Phase 7's
+</task>
+
 </tasks>
 
 <guide_notes>
@@ -357,8 +393,9 @@ Every new note has these sections, in this order: What it does · When to use it
   - W1, W2 and W3 need W0.
   - W5 needs W4.
   - W6 needs W2 and W5.
+  - W10 needs W6 (it reads and writes `ChartSpec.filters`).
   - W8 runs last.
-- Sessions: A = W0, W1, W2, W3; B = W4, W5; C = W6, W7, W8.
+- Sessions: A = W0, W1, W2, W3; B = W4, W5; C1 = W6, C2 = W7 + W10, C3 = W9 + W11, C4 = W8.
 - One PR from `phase8` to main. Wait for Tests, and don't merge.
 </workflow>
 
@@ -371,4 +408,156 @@ Reply in no more than 30 lines:
 </report>
 
 <accepted_deviations>
+Session A (W0–W3) records its choices here and in `docs/phase8-progress.md`, for the owner to accept or change.
+
+- W0-1: auto order applies to a chart's category only (the chart has one order; series stay by size, facets as they come).
+- W0-2: the filter's value picker lists the values in the Calendar or Ranges order when every label parses (display only).
+- W0-3: "Week of year" can reach W54 in a leap year whose 1 January is the last day of its week; Calendar ranks W01–W54.
+- W0-4: Ranges reads a fixed grammar (Below/Under/Up to/</≤, Above/Over/>/≥, a unit, "–"/"-"/"to", "and above"/"or more");
+  other labels follow in natural order; plain numbers alone do not make a column Ranges.
+- W0-5: `actionlint` was refused by the session's permission check and not run; a test checks the workflow step instead.
+- W0-6: the macro Python export stays Polars Python; the Calendar and Ranges mirrors are plain Python functions, run by the tests with python3.
+- W0-7: two older tests that pinned 1.6.0 now expect 1.8.0.
+- W1-1: Split date is in the Edit menu with the other transforms (no Transform menu exists), the Column panel and Ctrl+K; non-date columns are listed under "Not dates" and refused with the message.
+- W1-2: a prefix equal to the column's name is stored empty (the default).
+- W1-3: the Python export is Polars with a plain-Python part function, not pandas `dt`; the test runs the function on all 1,000 rows.
+- W1-4: the preview is the first 5 rows of the page in view.
+- W2-1: date fields are stored as "Open Date · Month"; pickers show "Open Date › Month" (chart) and "› Month" (pivot list); a part is offered for Rows, Columns and Filters, not Values.
+- W2-2: a date field's value lists are read through a one-part Split date step on the worker; nothing is added to the tab.
+- W2-3: "By" offers Date, Year, Month-Year, Month, Quarter, Day name; changing it clears the picked values.
+- W2-4: chart picker lists are 460 pt tall; series and facet orders are unchanged from Phase 7.
+- W2-5: the pivot has no Python translation (as before); the filter "By" choice has one.
+- W3-1: the rate profile template orders plain labels by Ranges (the same order as the declared list); numbered labels keep the Natural order.
+- W3-2: built-in and saved presets stay numbered; the dialog's tick box (off for a new step, the step's own when editing) decides.
+- W3-3: the Phase 3 dialog test and the Phase 4 guide example now expect the plain labels a new step makes; the guide picture uses a plain-label sample.
+- W3-4: the Phase 8 overlap checks measure texts by their laid-out rows, not egui's row-wide galley rectangle.
+
+Owner decisions on Session A (given with the Session B brief):
+- W0-1 to W3-4 are accepted.
+- Q1: `ChartSpec.series_order` and `facet_order` (`Option<SortOrder>`, serde default `None` = today's behaviour), filled by the W0 auto-order rule when a field is added; existing charts never change. Test: a new chart with series "Open Date › Year" lists 2024, 2025, 2026; a Phase 7 saved chart keeps its order. Built (Session B2), `tests/phase8/q.rs`. A series or facet picked in the studio gets its order from the field (a date part: its own order, Natural for a number such as the year; a column: the steps' order, else Calendar or Ranges when its labels parse). A column whose labels give no order keeps `None` (series by size, panels largest first), so only a field that was added changes. The series that stay are still the largest; `series_order` then lists them. Suggestions, templates and opened charts are not touched.
+- Q2: the Python Tenor mirror uses the app's day count (month = 365/12 days, year = 365). Test against the app on 12M, 1Y, 18M, 2Y, 30D, 1M. Built (Session B2), `tests/phase8/q.rs`; the mirror also reads the units "mo" and "mos" like the app.
+- Q3: plain-Python date parts in the Polars export: accepted.
+
+Session B (W4) choices:
+- W4-1: a pivot tab is saved as its source's recipe plus its steps (the pivot is the last step), not as `ToolRun::PivotTab`: it opens even when the tab it was made from has changed since. Every tab on a file is a File recipe with all its steps.
+- W4-2: a tool's result tab (join, stack, reconcile, banking tools) is its `ToolRun` with the sources named by project key, plus the steps added to it afterwards. Its sources must be open tabs with the same source and steps (as for "Save run"); if not, the tab is left out with that message.
+- W4-3: the recipes are resolved on the UI thread one tab at a time (they read headers and small rule files); each tab is built on the worker, so "Opening 4 of 9: Gap ladder" follows the worker. A tab waits for the tabs it is built on.
+- W4-4: (replaced by the owner's decision) Save is a worker job: it builds the recipes and hashes the files it has not hashed before (blake3, remembering size, time and hash) with progress "Hashing Loans.csv 40%"; the window writes the file when the job's result arrives, and a second Save while one runs is refused.
+- W4-5: "unsaved" is asked only when a project is open, or (for New and Open) when tabs are open outside any project. It compares the tabs' sources (settings, not the files' sizes and dates), steps, formats, summary, control column, chart tabs and the active tab, every 0.4 s and at the moment of a close. The side panel's own chart choices are saved but do not set the "•".
+- W4-6: "Open recent project" is a submenu of File and, in Ctrl+K, a small list dialog.
+- W4-7: a chart tab is saved as its `ChartSpec` and the key of the tab it draws (`ChartTabInfo.source_tab`) and is calculated again on open; W5 builds the linked chart tab on this. A chart whose source tab is closed is left out with the reason.
+- W4-8: the column check is per file: a CSV's saved names are its schema's column names, a Parquet file's are its own. One missing column refuses the file and every tab built on it. Extra columns are fine.
+- W4-9: a tab that cannot open is a placeholder with no steps; its recipe stays in memory and is written again by Save. Export, copy, macro and Python commands are greyed for it.
+- W4-10: the "changed since saved" line leaves out files that were relinked, and follows "N tabs opened.".
+- W4-11: Open closes the session's tabs only after "Open" is pressed in the Sources dialog; Cancel leaves everything as it was.
+- W4-12: `--project` writes `<tab title>.parquet` (a second title gets "(2)") through a staging folder in `--export-dir`; a step that cannot run stops the run like a failing tab.
+- W4-13: not done in W4: the guide note `projects.md` and screenshots (W8); `cargo build --release` was not run in that session; it was run and passed at the end of B2.
+
+Owner decisions on Session B (W4):
+- W4-1 to W4-13 are accepted.
+- Q1 and Q2 are built (see above).
+- Project save: the blake3 hash runs on the worker with progress ("Hashing Loans.csv 40%"), reusing the cache; the UI never blocks. A test checks that save is dispatched as a worker job. (This replaces W4-4.)
+
+Session B2 (W5) choices:
+- W5-1: a chart tab is linked by `ChartTabInfo.source_tab` (the session id; in a project the key, as in W4-7). It remembers the source's signature (`tab_jobs::source_signature`: the source, the steps that run and, for a file, its size and time) and looks at it every 0.4 s; a different signature calculates the chart again on the worker from the source tab (`project::chart_tab_source`, the studio's own calculation), then replaces the chart tab's numbers, table and, when it still had the rule's title ("Chart: " and the chart's title), its title. Nothing is calculated when nothing changed.
+- W5-2: a calculation that fails (a step removed the column, for example) keeps the last numbers and says why in red above the chart; it is not tried again until the source changes once more.
+- W5-3: "Update chart tab" puts the studio's spec in the chart tab and the worker calculates it from the source (not from the studio's numbers); the app then shows the chart tab. "Open as new chart tab" is the existing "Open as tab". The banner is in the studio (side panel and pop-out); a switch to another tab ends the editing.
+- W5-4: Reopen is offered when the closed source was a file tab of the open project (`ClosedSource.key` and a file outside the temporary folder); any other closed source gets the message only. Edit chart is greyed while the source is closed. A chart tab whose source is closed is left out of a saved project (W4-7).
+- W5-5: a chart tab with no source tab (made by Phase 7, which kept only its spec in `settings.json`; the app never restored those entries, and still does not) is frozen: it is never calculated again, says "Made by an older version; Edit chart opens it on its own table", and Edit chart opens the studio on the chart tab's own table without loading its spec (the table's columns are not the spec's); only "Open as new chart tab" is offered.
+- W5-6: the project's "unsaved" fingerprint leaves out a chart tab's own source (a temporary table made again from the source). (Its second sentence, that the step commands were not greyed on a chart tab, is replaced by the owner's decision W5-7.)
+
+Owner decisions on Session B2 (W5):
+- Q1, Q2, the W4 follow-ups and W5-1 to W5-6 are accepted.
+- Q2: the Python Tenor mirror accepts exactly the labels the app accepts. The app reads "mo", "mos", "mon" and "mons" (`sort_lists::parse_tenor_days`), so they stay in the mirror and the test now lists them. The test (`tests/phase8/q.rs`) puts every unit word of the app, of the Ranges grammar and some near misses, each in four spellings, to the app and to the mirror, and they must agree on every label. This found one difference, now fixed: a number too big to hold (400 nines and a unit) was refused by the app and read as infinity by the mirror.
+- W5-7 (replaces the second sentence of W5-6): on a chart tab the step commands are greyed, in the Edit menu, the toolbar and Ctrl+K, with the text of the steps panel's note ("This tab draws a chart of 'Loans'. Change the data on that tab, or use Edit chart.") as the tooltip. They are the commands that add a step to the active tab in place (`commands::adds_step_to_active_tab`: Filter, Sort, Columns, Calc column, Pivot, Conditional column, Counterparty normaliser, Clean line breaks, Split date, Maturity bucketer, Rate profile, Duration, FTP, Provision, Classify overdue, IFRS 9 ECL, Limits). Commands that open a new tab or change nothing stay (Join, Copy, exports, Chart, the view commands, and the banking tools that make a result tab). In Ctrl+K the row shows "Not on a chart tab." and the whole note on hover and in the status line. As a backstop `push_step_to_active_tab` refuses a step for a chart tab (other doors such as the Column panel's button) with the same note. Test: `w5_the_step_commands_are_greyed_on_a_chart_tab_in_the_edit_menu_and_ctrl_k_by_real_clicks_at_three_sizes` and `w5_the_step_commands_are_greyed_on_a_chart_tab_and_every_other_command_is_as_it_was`.
+- Phase 7 chart tabs: the current behaviour is correct (Phase 7 never reopened them). The W5 compatibility line and its acceptance item are reworded above.
+- The W5 acceptance table (item to test) is in `docs/phase8-progress.md`. Writing it found one item with no test, the chart tab following a change of the source's *file* ("or data change"); added: `w5_a_source_looks_different_when_its_steps_or_its_file_change_and_the_same_when_nothing_did` and `w5_a_file_that_changes_under_the_source_updates_the_chart_tab_to_equal_a_new_chart`.
+
+Session C (W6) choices:
+- W6-1: `ChartSpec.drill` holds **all** the levels, top first (`DrillLevel { name, part }`, a column or a date part); while it is not empty the chart's `category` is the level it is at (`drill[drill_path.len()]`), kept by `ChartSpec::sync_level`. Every renderer therefore reads the current level from `category` unchanged, and a spec saved at level 2 (a chart tab, a project, a saved chart) calculates to level 2 again. One level is no drill (stored as none). In the studio the Category picker names the top level: picking another category starts the chart again at its top.
+- W6-2: a chart had no filters of its own, so `ChartSpec.filters` (`Vec<FilterCondition>`, serde default) is new: "Keep only this" adds an "in list" and "Exclude this" a "not in list" of the category value at the level shown. The drill path, these filters and the rows behind a mark all go through one function, `engine::filter_by_conditions` (a Filter group step, keep matching, all of the conditions), so the chart at a level and its Show rows tab cannot disagree. A date part is read through `FilterCondition.part`, a blank as "(blank)".
+- W6-3: Show rows of a mark opens a tab with the source tab's steps that run plus one Filter group: the chart's own filters, the path, the mark's category and, when the mark has them, its series and its panel (small multiples). A stacked or grouped segment is therefore the rows of that cell; a click that drills goes by the category alone. Title: "Rows: Deposit Type = FDR, Branch = Dhaka" (path, category, series, panel).
+- W6-4: the kinds that drill: column, bar, stacked, grouped, line (the category point), area (like a line), donut and heatmap. A heatmap click drills the category (x) and the cell's series value is part of its Show rows (the spec says "both levels"; the series is not a drill level of its own). Scatter, bubble, histogram, box, waterfall and the HTML-only kinds have no drill: the studio shows "Drill levels: <reason>" in place of the section.
+- W6-5: "Other" (Top N's remainder) is several values: a drill, Keep, Exclude and Show rows on it are refused with that message. A series called "Other" likewise. A series or panel column cannot also be a drill level (the chart says so).
+- W6-6: the Back key is Backspace or Alt+Left, on the active chart tab, or on the studio's chart while the pointer is over it, and never while a text box, a dialog or the search has the keyboard.
+- W6-7: a chart tab drills by asking the worker for the next level from its source (`ChartTabInfo.next_spec`); the numbers on the screen stay the calculated ones, with their own spec, until the new ones arrive. A chart tab whose source is closed, or that was made before it had one, cannot be calculated again, so its menu is greyed with the reason and a click does nothing. A drilled chart tab changes the project's "•" and is saved at its level.
+- W6-8: Show rows of a pivot cell is a worker job (`JobKind::ShowRows`): the pivot is built again to learn which values the cell's row and column stand for (`PivotBuild.row_keys`, `col_keys`), refused when its row count is not the screen's. A subtotal row restricts the fields it covers, a Total column and the grand total none; the pivot's own filters are always part of it; a row label shows no rows. It is offered when the pivot is the tab's last step and every step runs. The new tab has the steps before the pivot and one Filter group.
+- W6-9: the tooltip of a mark of a chart with drill levels has one more line: "Click to drill into Month", or "Last level: a click does nothing". A chart without drill levels is as before. The breadcrumb ends with a muted "by Month" naming the level the chart shows.
+- W6-10: a click down or up the same levels keeps the colour map (it belongs to the columns, and they are the same); another series column starts the colours again, as before.
+- W6-11: the one test of Phase 6 that lists the studio sections allowed to be out of view in the small pop-out window (`f2_…`) now names "Drill levels". Not done in W6: the guide note `drill-down.md` and the screenshots (W8); `cargo build --release` was not run in this session.
+
+Owner decisions on Session C (C1, W6):
+- W5-7 and W6-1 to W6-11 are accepted.
+- Pivot Show rows also works when steps follow the pivot, if those steps keep the pivot's row and column key columns intact (filter, sort, format, hide, add column). If a later step renames or drops a key column, or groups or pivots again, Show rows is greyed with a plain reason. Built (follow-ups): W6-12.
+- The Ctrl+K overlap of "Chart this result" and its reason at 1219 pt is fixed: a row's reason has a line of its own under the title and wraps, never clipped (W6-13).
+
+Session C (W6 follow-ups) choices:
+- W6-12: `pivot_table::pivot_rows_of(steps, steps_run)` reads the steps after a tab's last pivot. A step that keeps the pivot's row fields and rows (sort, filter, a new column, Split date, a column selection that keeps the row fields, a rename of another column) leaves Show rows on, and a cell is found again by its row fields' values (`pivot_row_of_shown`): the worker builds the pivot, applies the later steps to it, and matches the clicked row of the screen to exactly one pivot row (none or two is refused in words). Show rows is off for the whole tab, with a reason that names the step and the field, when a later step renames, drops (a column selection that leaves it out), writes over or sets to Number a row field, groups or pivots again (Group by, SQL, the banking tools). The "key columns" are read as the pivot's row fields; the value columns carry the column keys in their headings, and a value column that a later step renamed, rewrote or added is greyed **per cell** ("added, renamed or changed it") while the pivot's own columns keep working; a column dropped or hidden has no cell to click. A step that is off does not count, and a second pivot is the tab's pivot.
+- W6-13: the Ctrl+K row puts its reason on a second line, wrapped, under the title (the group name stays at the right of the title); the other palettes and menus are unchanged. The W5 test of the Split date row measures its band to include that line.
+
+Session C2 (W7) choices:
+- W7-1: `ColourMap.custom: Vec<(String, ColourPick)>` (serde default, left out of the file when empty, so a chart with no picks is written as before). `ColourPick` is `Slot` (the Base shade: a palette slot, with its dark pair) or `Hex` (the Light and Deep shades and any hex: one colour in both themes, written "#rrggbb"; a bad one is refused when the file is read). `ColourMap::get` reads the chart's own pick, then the house colour, then the slot; a name with a house colour is given no slot, so Reset colours leaves it alone.
+- W7-2: the house colours are read from `portable_data/house_colours.json` by each thread (`colours::house`, a thread-local copy that looks at the file's size and time every 0.5 s, and at once after the dialog saves). Names are matched trimmed and case-insensitive. A missing file is none; a broken one (bad hex, a slot past 8, a name that is empty or twice) is refused with its line in the status line at start-up and in View ▸ House colours…, and the charts use the palette. Tests change the folder with `rules::set_data_dir_override`.
+- W7-3: the warnings are for items that have a pick or a house colour, never for the automatic palette. A Base pick is the palette itself, so it is checked only for "Hard to tell from 'X'" (the palette's own orange and red are 7.1 apart; the dark green in the dark set is the status "good"); the Light, Deep and hex picks get all three: "Hard to tell from" (OKLab ΔE×100 below 10 in either theme), "Low contrast on the dark background" or "…light background" (below 3:1 against that theme's surface; the spec names only the dark one, the light is the same rule), and "This is a status colour (good)…" (ΔE below 5 of good, warning, serious or critical).
+- W7-4: the warnings are under the picker and in the chart's notes (the footnote of the app, the PDF, the HTML page and the workbook: "Colour of 'DPS': low contrast on the dark background."). The Python script has no notes.
+- W7-5: the picker is a dialog (not a pop-up): Automatic, the 24 swatches (Light, Base and Deep of each hue, Base drawn in the colour of the theme), the hex box with "Use hex", the tick box "Save as house colour" (the pick made while it is on is also written to the house file), the warnings and Done. A swatch is named on a line under the grid when the pointer is over it; a tooltip was tried and at 1219 pt it sat under the pointer and swallowed the click.
+- W7-6: the studio's "Colours (n)" section lists the names with their swatch and a tag ("your pick", "house colour"); the names are the series, or the categories of a donut. A chart of one colour (no series) says so. Right-click ▸ Colour… is in the mark menu, which the kinds that drill have; the other kinds use the studio list. A chart tab takes the pick without being calculated again, keeps it when a calculation that was running arrives, and writes it to `settings.json` like Reset colours does.
+- W7-7: View ▸ House colours… lists the colours (swatch, name, hex, Remove), adds a name (the picker opens for it) and changes one by its swatch. "Reset colours" has the tooltip "House colours stay."
+- Not done in W7: the guide note `colours.md` and the screenshots (W8); `cargo build --release` was not run in this session.
+
+Session C2 (W10) choices:
+- W10-1: the tick lists are in one studio section, "Filters on this chart (n)", not beside each field's box: a row for the Category, the Series and the Panels (when they are set), each with a "Values" button that opens the list under it; one list is open at a time. The list is the tab's value picker (search, row counts, a check box per value, "(blank)") with its two buttons named All and None. The values and their row counts are those of the source tab as it stands (the chart's other filters do not narrow them). A date part is listed as its part ("Open Date · Month").
+- W10-2: ticks are the values the chart keeps. With every value ticked there is no filter (and none is stored); unticking one stores an "is in list" filter of the rest; All gives the filter up; None keeps no rows, and the chart says so ("the filter on 'Bank' has no value ticked, so it keeps no rows. Tick a value, or press All"), `ChartSpec::check_filters`. When a column has too many values to list whole, nothing is ticked at first and the ticks are the values to keep (None then gives the filter up). Every list writes `ChartSpec.filters`, the same conditions Keep only this writes, so a chart keeps one kind of filter.
+- W10-3: the section also lists every filter of the chart ("Bank = Conventional", "Month \u{2260} Jan"), with a remove button; an "is in list" filter of a column that is not a field of the chart has its own Values button. "Add a filter on…" takes any column of the tab, and a date column gets the "By" choice (Date, Year, Month-Year, Month, Quarter, Day name) as the tab's filter does; changing the choice means choosing the column again.
+- W10-4: the subtitle is W6's: "Filtered: Bank = Conventional or Islamic" (the spec's W10 text now reads the same, by the owner's decision below, so a chart says one thing).
+- W10-5: three changes to the shared value picker, all for a narrow panel: its two buttons are named by the caller, its search box gives room to them (and they wrap) instead of leaving the window, and its list keeps its 200 pt when the panel has less room below it (it was squeezed to two rows). The dialogs that use it look as they did.
+- Not done in W10: the guide note (W8); `cargo build --release` was not run in this session.
+
+Owner decisions on Session C2 (W7 + W10):
+- W6-12, W6-13, W7-1 to W7-7 and W10-1 to W10-5 are accepted.
+- W7-3: a Base pick gets only the "Hard to tell from" warning (it is the palette itself): accepted.
+- W10-4: the subtitle keeps "Filtered: Bank = Conventional"; the W10 text in this spec is changed to match.
+- W7-6: right-click ▸ Colour… only where the right-click menu exists: accepted.
+- A chart of a single series lists its one series in the Colours list, named by its measure ("Sum of Balance"), and a pick there colours it in all five renderers. Built (C2 follow-ups): W7-8.
+
+Session C2 (W7 follow-ups) choices:
+- W7-8: `colours::single_series_name(data)` gives the name a chart of one series is listed under: its measure (`measure_names[0]`) when the chart is a column or bar, line, area, scatter, bubble, histogram or box plot with no named series, one measure, no linked panels. `colour_names_of` returns it, so the studio's Colours list, the picker's warnings, the chart's notes and right-click ▸ Colour… (on any mark of the chart) all work on it, and `colours::single_colour(data, cm)` is the colour every renderer draws that one series in: the chart's own pick, then the house colour, then the first slot. A pick is stored in `ColourMap.custom` under the measure's name, so changing the aggregation ("Count of Balance") starts it again at Automatic, as a renamed series would. Not listed: a chart with a Series (its series are listed, as before), two or more measures or linked panels (each panel keeps the first slot), a waterfall and a heatmap (they colour by step and by value; the mark still says "This chart draws one colour for everything"), a donut (its parts, as before) and the HTML-only kinds. The app and the PDF page (one layout), the page and chart book (ECharts), the workbook (`Cx::colour`) and the script (`colour_dict`; the histogram and box plot read `one_colour_expr`) all read it. The Phase 7 behaviour is unchanged when nothing is picked: the first slot in both themes. Tests: `tests/phase8/w7.rs` ×1, `render_tests_p8` ×1; the old render test that expected a column chart of one colour to refuse the picker now uses a waterfall.
+
+Session C3 (W9) choices:
+- W9-1: a part is compared by an order key, a whole number worked out from the date (`DatePart::order_key`): the year; months and quarters counted from year 0 (Dec 2025 is before Jan 2026); the month 1–12; the quarter 1–4; the day's place in the week from the copied week start (0 = the first day). `dates::keyed_condition` rewrites a condition on a part into one on a column of keys (`__mp_part<i>`, `DatePart::key_expr`) with its values written as keys, so every operator, the list tests and the chart's filters read the same numbers and nothing is compared as text. The engine (`with_condition_parts`) and the Python export both use it.
+- W9-2: the parts with an order are the filter's "By" list: Year, Month-Year, Year-Quarter (new), Month, Quarter and Day name; Date is the column itself (`part` is `None`, typed as YYYY-MM-DD, as before). A part with no order (a Week of year or a fiscal part, which a Show rows or an old file can store) still takes =, ≠, in list and not in list by its labels, and refuses >, ≥, <, ≤ and between in words. The text tests (contains, starts with, ends with) are refused for every part.
+- W9-3: a typed value is read as the part's label in any case, and the common other ways: Month-Year as "Aug 2026", "August 2026", "Aug-2026", "2026-08" or "08/2026"; Year-Quarter as "2026 Q1", "Q1 2026" or "2026-Q1"; Year as four digits; Month as a name (short or long, "Sept" too); Quarter as Q1 to Q4; Day name short or long. Anything else is refused: "'13/2026' is not a Month-Year. Write it like Aug 2026." (the dialog shows it and Apply stays off; the step and the chart say it too). A range written back to front is refused ("'Jan 2026' comes after 'Aug 2025'. Write the earlier one first.").
+- W9-4: a blank date never matches =, ≠, >, ≥, <, ≤, between or in list. "Not in list" keeps the rows with no date unless "(blank)" is picked, which is the rule for every column and what a W2 filter did, so an old "Day name not in Fri, Sat" gives the same rows. Question for the owner: should "not in list" by a part leave blank dates out too?
+- W9-5: in the tab's filter the "By" choice shows for =, ≠, in list, not in list, >, ≥, <, ≤ and between, and stays when the operator changes (a text test or a blank test has none, and drops it). Changing the operator turns the picked values of a list into the one limit of a comparison (the first), and back. A comparison by a part has a value box and a "▾" that lists the part's values from the table in the part's order (a calendar or time order, never text); one value is chosen, and "between" has two. Pop-up lists of By and of the operators are 460 pt tall so no item is below the fold. In "Filters on this chart" the adding row has an operator for a date column (is in list, which is the tick list, then equals, does not equal, >, ≥, <, ≤ and between), its value box(es) with the same list and "Add filter"; the other columns keep the tick list. Such a filter is written in the subtitle and the list as "Open Date · Month-Year ≥ Aug 2025", and one with no limit is refused by the chart.
+- W9-6: Python: the macro export is Polars Python (W0-6) and Polars is not installed here, so `_mp_date_key` (one function next to `_mp_date_part`) and the script's key limits are run in plain Python over all 1,000 dates of the test tab and the rows they keep are compared with the app's; the script of an impossible value says the same words (`raise ValueError`).
+- W9-7: one older test now expects the intended change: the W2 Python test of "Day name in Fri, Sat" reads `_mp_date_key` (the picked days written as their places in the week) where it read `_mp_date_part` (their labels); the rows are the same.
+- Not done in W9: the guide note (`filter.md`, W8).
+
+Session C3 (W11) choices:
+- W11-1: three new `ChartSpec` fields, all serde default: `inside_labels` (false), `inside_min_pct` (5) and `data_table` (`Off`, `Below`, `Beside`). The older `segment_labels` (the HQLA template's labels beside the stack) is a different feature and is untouched.
+- W11-2: a label inside a segment is centred in it. It is written straight when the segment is at least the text's width plus 6 pt and its height plus 4 pt; else turned 90° (reading upward) when it is a column and the segment is at least the text's width plus 6 pt tall and its height plus 4 pt wide; else left out (its tooltip still has the value). A segment of less than `inside_min_pct` of its bar's total (the sum of the absolute values) has none. A stacked bar says the value as the Data labels setting writes it, a 100% stacked bar its share with one decimal ("23.5%"). The text is white or the light theme's ink by the heatmap's contrast rule, never the series colour. The total on top is as before, and the Data labels "All" does not write a second label in a stacked segment when this is on. With it on, a stacked bar can be 48 pt wide (24 pt otherwise): labels need the room.
+- W11-3: the page and the workbook cannot measure text, so they take the app's layout decisions at a nominal size (the page at 640 × 420 pt, the workbook at its chart's 720 × 360): which segments have a label, which are turned (ECharts `rotate: 90`, Excel's label rotation of −90°), the text and its colour; the others have the label hidden (`show: false`, a deleted data label). In a page shown much smaller or larger than that, the labels are the ones decided there.
+- W11-4: the data table is for a column, bar, line, area, heatmap, donut or histogram chart with one measure and no small multiples; any other chart's Data table box is greyed and says why. It has the categories down the side in the chart's order, one column per series in the chart's order and scale (the numbers behind a 100% stacked chart, not the shares), a Total column and a Total row when the numbers add up (amounts or counts that were summed or counted and not turned into shares), else the note "No totals: these numbers are rates, shares, averages or extremes, which do not add up.". A group with no value shows "–".
+- W11-5: on a PDF page the chart is drawn by the same layout as before and the table under it (the chart takes 55% of the page's height) or beside it (the chart 58% of the width, the table at its right, on a landscape page even when the export asks for upright; the document starts landscape when its first page is such a chart). The table is 8 pt Source Sans, numbers right-aligned. Rows that do not fit continue on the next page, with the heading, "(continued)" and the table's header again; the total row stays with the last rows. A table too wide to go beside the chart goes below it; one wider than the page is refused with the width it needs ("Show fewer series (Top N or a filter), or turn the Data table off").
+- W11-6: the report-pack PDF printed tables only, no charts. A pack chart whose Data table is on now gets a page of its own after its item's table, with the table; a chart with the option off is not in the PDF, as in Phase 7. The pack's chart book (HTML) and a single chart's page show the table open under the chart; the page's "Table" toggle leaves it alone, and a page with no open table is the page of Phase 7 byte for byte.
+- W11-7: the Python script has neither the labels inside the segments nor the table.
+- W11-8: the Phase 7 baseline (`tests/fixtures/phase8_w11_off.hashes.json`, made by the Phase 7 code in a temporary worktree) found a change of W7-8: the script of a chart of one series wrote a `COLOURS` entry for its measure. It is now written only for a pick or a house colour, so an automatic colour gives the script of Phase 7.
+- W11-9: CI found that the runner has no `pdftotext` (poppler). As in Phase 7 (s6), the W11 tests that read PDF pages (and the `/pdf/` hashes of the baseline) are skipped with a note where `pdftotext` or `pypdf` is missing; they run here. To have them run in CI, the workflow needs `sudo apt-get install -y poppler-utils` (done in the follow-ups: owner decision below).
+- Not done in W11: the guide note (W8); `cargo build --release` was not run in this session.
+
+Owner decisions on Session C3 (W9 + W11):
+- W7-8, W9-1 to W9-7, W11-1 to W11-9 and the report-pack chart page (W11-6) are accepted.
+- W9-4: "not in list" by a date part keeps blank dates unless "(blank)" is ticked, as for every column: accepted, no change.
+- W11-9: the test workflow installs `poppler-utils` before `cargo test`, so the PDF checks run in CI instead of skipping. Built (follow-ups): W11-10; `actionlint` was run.
+- HTML segment labels keep the app's layout decision at the nominal size, and the series that carry them also get ECharts `labelLayout.hideOverlap`, so a smaller page drops colliding labels instead of overlapping them. Excel stays as it is. Built (follow-ups): W11-11.
+
+Session C3 (W11 follow-ups) choices:
+- W11-10: `.github/workflows/test.yml` has a step "Install poppler-utils (pdftotext)" (`sudo apt-get install -y poppler-utils`) before "cargo test" in the `test` job. `main.yml`'s release test job is not changed. `actionlint` (v1.7.7) passes on both workflow files.
+- W11-11: with Segment labels On on a stacked chart, every bar series of the page has `labelLayout: {hideOverlap: true}`; with it Off the series has no `labelLayout`, so the page is Phase 7's byte for byte. The text, the turning and the colour of each label are still the app's decision at 640 × 420 pt.
+
+Session C4 (W8) choices:
+- W8-1: the six new notes have the eight sections of `<guide_notes>` (not the ten of the older notes); `tests/phase8/w8.rs` checks the sections, that every table of an Example is the table the code gives and is followed by "Test: `name`" of a test that exists, that no word of the code appears, and the 150-line limit. The updated notes (`filter.md`, `pivot.md`, `custom-sort-lists.md`, `chart.md`, `charts.md`, `report-packs.md`, `README.md`) got text only, so their older tests are unchanged; `rate-profile.md` and `chart-rate-profile.md` were already done in W3.
+- W8-2: the pictures are in `docs/guide/img/` (light and `-dark`; the chart PDF page is light only, a PDF page is always the light chart). The dialogs are written by `render_tests_p8` ("W8: the pictures of the guide", 2 px to the point, 1291 × 700 pt) and need python3 with numpy and Pillow; the chart PDF page is written by `tests/phase8/w8.rs` through `pdftoppm`. Both skip with a note where the tool is missing, and a test checks that every picture a note names exists. Extra to the list of the spec: the Calendar dialog, a drilled chart's breadcrumb, the chart filter tick list and the segment labels (straight, turned and left out).
+- W8-3: `tools/chart_layout_png.py` drew every text level; the segment labels turned 90° need it to turn them, so the layout JSON now carries each text's `angle` and the script turns the texts of 70° or more (the slightly angled category labels are drawn as before).
+- W8-4: the Example of `projects.md` quotes the line the app writes after opening (`project::opened_summary`) and `drill-down.md` the Branch › Month › Band numbers of the render tests' deposit book; the date examples are 15 Jan 2026 and 1 Jan 2026 as in the W0 acceptance.
 </accepted_deviations>

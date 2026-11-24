@@ -728,6 +728,16 @@ impl CondOp {
         }
     }
 
+    /// The operators a date part can be compared with (Phase 8 W9): the comparisons and the lists, not the text tests.
+    pub fn supports_part(&self) -> bool {
+        matches!(self, CondOp::Equals | CondOp::NotEquals | CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte | CondOp::Between | CondOp::InList | CondOp::NotInList)
+    }
+
+    /// Compares a value with a limit rather than picking values from a list (>, ≥, <, ≤, between).
+    pub fn is_comparison(&self) -> bool {
+        matches!(self, CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte | CondOp::Between)
+    }
+
     /// Needs no value (is blank / is not blank).
     pub fn is_unary(&self) -> bool {
         matches!(self, CondOp::IsBlank | CondOp::IsNotBlank)
@@ -770,6 +780,10 @@ pub struct FilterCondition {
     /// "(blank)" was picked as well: blank values match (or, for "not in list", are left out too).
     #[serde(default)]
     pub or_blank: bool,
+    /// The value picker's "By" choice (Phase 8 W2): the condition matches a part of the date column (its Day
+    /// name, its Month-Year …) instead of the date. `None`: the column itself (every condition before W2).
+    #[serde(default)]
+    pub part: Option<crate::dates::DateFieldRef>,
 }
 
 /// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
@@ -794,15 +808,24 @@ impl FilterCondition {
         matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank)
     }
 
-    /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000".
+    /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000", "Open Date › Day name in list Fri; Sat".
     pub fn describe(&self) -> String {
+        let subject = self.subject();
         if self.uses_values() {
-            return format!("{} {} {}", self.column, self.op.label(), values_summary(&self.values, self.or_blank, 3));
+            return format!("{} {} {}", subject, self.op.label(), values_summary(&self.values, self.or_blank, 3));
         }
         match self.op {
-            CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", self.column, self.op.label()),
-            CondOp::Between => format!("{} between {} and {}", self.column, self.value.trim(), self.value2.trim()),
-            _ => format!("{} {} {}", self.column, self.op.label(), self.value.trim()),
+            CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", subject, self.op.label()),
+            CondOp::Between => format!("{} between {} and {}", subject, self.value.trim(), self.value2.trim()),
+            _ => format!("{} {} {}", subject, self.op.label(), self.value.trim()),
+        }
+    }
+
+    /// What the condition tests: the column, or "Open Date › Day name" for a date part (W2).
+    pub fn subject(&self) -> String {
+        match &self.part {
+            Some(p) => crate::dates::picker_label(&self.column, p.part),
+            None => self.column.clone(),
         }
     }
 }
@@ -1063,6 +1086,11 @@ pub struct RateBandDef {
     /// falls in 9%–10%.
     #[serde(default)]
     pub lower_inclusive: bool,
+    /// The labels carry a serial number ("09. 8%–9%") so that they sort in band order as text (every step,
+    /// preset and macro saved before Phase 8). The Rate profile dialog makes new steps without it
+    /// ("8%–9%"), and the step declares the band order instead (Phase 8 W3).
+    #[serde(default = "default_true")]
+    pub numbered: bool,
 }
 
 /// The most bands a profile may have.
@@ -1073,7 +1101,7 @@ pub const RATE_BANDS_MAX: usize = 500;
 pub struct RateBandLabels {
     /// The band edges in percent, starting at 0.
     pub edges: Vec<f64>,
-    /// "00. 0%": exactly zero.
+    /// "00. 0%" ("0%" unnumbered): exactly zero.
     pub zero: String,
     /// "Below 0%".
     pub below: String,
@@ -1105,11 +1133,11 @@ pub fn parse_rate_edges(text: &str) -> anyhow::Result<Vec<f64>> {
 
 impl RateBandDef {
     pub fn fixed(name: &str, start_pct: f64, end_pct: f64, step_pct: f64) -> Self {
-        Self { name: name.to_string(), mode: RateBandMode::Fixed { start_pct, end_pct, step_pct }, lower_inclusive: false }
+        Self { name: name.to_string(), mode: RateBandMode::Fixed { start_pct, end_pct, step_pct }, lower_inclusive: false, numbered: true }
     }
 
     pub fn custom(name: &str, edges: Vec<f64>) -> Self {
-        Self { name: name.to_string(), mode: RateBandMode::Custom { edges }, lower_inclusive: false }
+        Self { name: name.to_string(), mode: RateBandMode::Custom { edges }, lower_inclusive: false, numbered: true }
     }
 
     /// The default profile: 0% to 15% in steps of 1%.
@@ -1175,21 +1203,34 @@ impl RateBandDef {
         Ok(e)
     }
 
-    /// The labels of every band. They are numbered so that they sort in band order.
+    /// The labels of every band: numbered ("09. 8%–9%") so that they sort in band order as text, or plain
+    /// ("8%–9%") when `numbered` is off.
     pub fn labels(&self) -> anyhow::Result<RateBandLabels> {
         let edges = self.edges()?;
         let m = edges.len() - 1;
         let w = m.to_string().len().max(2);
-        let bands = (1..=m).map(|k| format!("{:0w$}. {}%\u{2013}{}%", k, fmt_pct(edges[k - 1]), fmt_pct(edges[k]), w = w)).collect();
+        let num = |k: usize| if self.numbered { format!("{:0w$}. ", k, w = w) } else { String::new() };
+        let bands = (1..=m).map(|k| format!("{}{}%\u{2013}{}%", num(k), fmt_pct(edges[k - 1]), fmt_pct(edges[k]))).collect();
         let last = fmt_pct(edges[m]);
         Ok(RateBandLabels {
-            zero: format!("{:0w$}. 0%", 0, w = w),
+            zero: format!("{}0%", num(0)),
             below: "Below 0%".to_string(),
             bands,
             above: if self.lower_inclusive { format!("\u{2265} {}%", last) } else { format!("> {}%", last) },
             blank: "No rate".to_string(),
             edges,
         })
+    }
+
+    /// Every label in band order: Below 0%, 0%, the bands, the top band, No rate (the order an unnumbered
+    /// band column declares).
+    pub fn band_order(&self) -> anyhow::Result<Vec<String>> {
+        let l = self.labels()?;
+        let mut v = vec![l.below, l.zero];
+        v.extend(l.bands);
+        v.push(l.above);
+        v.push(l.blank);
+        Ok(v)
     }
 
     /// The label of one rate (percent; `None` = blank).
@@ -1479,6 +1520,9 @@ pub struct PivotSpec {
     /// The order of the labels of a Rows or Columns field other than Natural (Phase 6 U3).
     #[serde(default)]
     pub field_orders: Vec<PivotFieldOrder>,
+    /// Date parts used as fields ("Open Date · Month", Phase 8 W2): added as columns before grouping.
+    #[serde(default)]
+    pub date_fields: Vec<crate::dates::DateFieldRef>,
 }
 
 /// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
@@ -1862,9 +1906,26 @@ pub enum TransformStep {
         sort_by_value: Option<PivotSortByValue>,
         #[serde(default)]
         field_orders: Vec<PivotFieldOrder>,
+        /// Date parts used as fields (Phase 8 W2).
+        #[serde(default)]
+        date_fields: Vec<crate::dates::DateFieldRef>,
     },
     SqlQuery {
         query: String,
+    },
+    /// Split date (Phase 8 W1): adds one column per date part ("Open Date Year", "Open Date Month" …) from a
+    /// Date or Datetime column, with the calendar the step was made with (a later change in View ▸ Calendar…
+    /// does not change it). A blank date gives blank parts.
+    SplitDate {
+        #[serde(default)]
+        column: String,
+        #[serde(default)]
+        parts: Vec<crate::dates::DatePart>,
+        #[serde(default)]
+        calendar: crate::dates::CalendarSettings,
+        /// The start of the new names; empty = the column's name.
+        #[serde(default)]
+        prefix: String,
     },
 }
 
@@ -1914,6 +1975,7 @@ impl TransformStep {
             TransformStep::IfrsEcl { .. } => "IFRS 9 ECL",
             TransformStep::GroupByPivot { .. } | TransformStep::PivotTable { .. } => "Pivot",
             TransformStep::SqlQuery { .. } => "SQL",
+            TransformStep::SplitDate { .. } => "Split date",
             TransformStep::Skipped { .. } => "Off",
         }
     }
@@ -2058,6 +2120,29 @@ impl TransformStep {
                 t
             }
             TransformStep::SqlQuery { .. } => "SQL Query Transform".to_string(),
+            TransformStep::SplitDate { column, parts, .. } => {
+                format!("Split date: {} \u{2192} {} column{}", column, parts.len(), if parts.len() == 1 { "" } else { "s" })
+            }
+        }
+    }
+
+    /// A one-part Split date that makes a date field's part a column of the field's name ("Open Date · Month"):
+    /// how the value lists of a date field are read (W2).
+    pub fn date_field_step(f: &crate::dates::DateFieldRef) -> TransformStep {
+        let label = f.part.label();
+        let prefix = f.name.strip_suffix(label).map(|p| p.trim_end().to_string()).unwrap_or_else(|| f.name.clone());
+        TransformStep::SplitDate { column: f.column.clone(), parts: vec![f.part], calendar: f.calendar, prefix }
+    }
+
+    /// The names of the columns a Split date step adds, in its part order: "<prefix> <Part>" (the prefix
+    /// defaults to the column's name). Empty for any other step.
+    pub fn split_date_names(&self) -> Vec<(crate::dates::DatePart, String)> {
+        match self {
+            TransformStep::SplitDate { column, parts, prefix, .. } => {
+                let p = if prefix.trim().is_empty() { column.trim() } else { prefix.trim() };
+                parts.iter().map(|part| (*part, format!("{} {}", p, part.label()))).collect()
+            }
+            _ => Vec::new(),
         }
     }
 }
@@ -2066,7 +2151,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -2078,6 +2163,7 @@ impl TransformStep {
                 scale: *scale,
                 sort_by_value: *sort_by_value,
                 field_orders: field_orders.clone(),
+                date_fields: date_fields.clone(),
             }),
             _ => None,
         }
@@ -2097,6 +2183,7 @@ impl TransformStep {
             scale: spec.scale,
             sort_by_value: spec.sort_by_value,
             field_orders: spec.field_orders,
+            date_fields: spec.date_fields,
         }
     }
 }
@@ -2241,6 +2328,9 @@ pub enum TabSource {
         curr_steps: Vec<TransformStep>,
         spec: crate::banking::ClMigrationSpec,
     },
+    /// A tab of a project that could not be opened (Phase 8 W4): no rows, nothing to export. The reason is
+    /// shown in the main area; the project keeps the tab's recipe, so saving the project again does not lose it.
+    Unavailable { reason: String },
 }
 
 /// Which table of the data-quality run a tab shows.
@@ -2498,6 +2588,43 @@ impl JoinStatus {
 }
 
 impl TabState {
+    /// A tab of a project that could not be opened (Phase 8 W4): no rows, the reason in the main area.
+    pub fn unavailable(id: u64, title: String, reason: String, steps: Vec<TransformStep>) -> TabState {
+        let n = steps.len();
+        TabState {
+            id,
+            title,
+            source: TabSource::Unavailable { reason },
+            steps,
+            col_formats: HashMap::new(),
+            total_rows: 0,
+            control_col: None,
+            control_sum: None,
+            baseline_control_sum: None,
+            viewport_offset: 0,
+            slice_offset: 0,
+            viewport_limit: 100,
+            cached_slice: DataFrame::empty(),
+            sql_scratchpad: "SELECT * FROM self LIMIT 100".to_string(),
+            sql_history: Vec::new(),
+            sql_error: None,
+            parse_failures: Vec::new(),
+            join_status: None,
+            totals: Default::default(),
+            row_check: None,
+            summary: Default::default(),
+            summary_cells: Vec::new(),
+            issues: Vec::new(),
+            exec_steps: n,
+            history: Default::default(),
+            step_counts: Vec::new(),
+            step_hashes: Vec::new(),
+            column_stats: None,
+            page_error: None,
+            summary_error: None,
+        }
+    }
+
     /// True when the pipeline has a filter step that is turned on.
     pub fn has_active_filter(&self) -> bool {
         self.steps.iter().any(|s| s.is_active_filter())

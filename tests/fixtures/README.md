@@ -34,3 +34,11 @@ not exist then, so the file was written by hand in that form (not by a worktree 
 `phase6_sort_pivot_unset.expected.csv` is the Phase 3 and 4 result worked out from the data: the rows
 in natural branch order with each branch's balance (CTG 173,000,000, DHK 375,000,000, SYL 0, XXX 1) and
 the grand total.
+
+## Phase 7 baseline (Phase 8 goal 3)
+
+`phase7_replay/` was made by the code of `main` at `f3e6f91` (the end of Phase 7), in a temporary worktree that
+shared this repository's build cache, with a throw-away test that used `tests/phase8/p7_baseline.rs` (Phase 7 APIs
+only): three macros saved with `save_macro_to_file`, a pack saved with `save_pack`, a chart saved with `save_chart`,
+and `phase7_replay.hashes.json`, the blake3 of what that code gave for them and for the seven older macro fixtures
+above. `w0_the_phase7_samples_replay_to_the_hashes_the_phase7_code_gave` replays them. Do not edit these files by hand.

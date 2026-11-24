@@ -7,6 +7,7 @@ pub mod calc;
 pub mod catlabels;
 pub mod colours;
 pub mod data;
+pub mod data_table;
 pub mod echarts;
 pub mod gallery;
 pub mod labels;

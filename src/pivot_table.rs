@@ -58,6 +58,12 @@ pub struct PivotBuild {
     pub df: DataFrame,
     /// Number of label columns at the left (the Rows fields, or one).
     pub label_columns: usize,
+    /// For each row of `df`: the values of the Rows fields it stands for, `None` being a blank. A detail row has one per
+    /// Rows field, a subtotal the first few, the grand total none (Phase 8 W6: Show rows).
+    pub row_keys: Vec<Vec<Option<String>>>,
+    /// For each value column of `df` (those after the label columns): the values of the Columns fields it stands for;
+    /// a Total column has none.
+    pub col_keys: Vec<Vec<Option<String>>>,
 }
 
 fn dtype_is_numeric(dt: &DataType) -> bool {
@@ -339,7 +345,7 @@ fn key_label(k: &Key) -> String {
 /// The pivot table of `lf` as a frame: label columns (the Rows fields), then the value columns
 /// (one per column label and value field, then the totals), and a last row of column totals.
 pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
-    let mut lf = lf;
+    let mut lf = pivot_input(lf, spec)?;
     let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
     validate_pivot(&schema, spec)?;
     let (nr, nc) = (spec.rows.len(), spec.columns.len());
@@ -596,7 +602,203 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         }
     }
     let df = DataFrame::new(series).context("Could not arrange the pivot table")?;
-    Ok(PivotBuild { df, label_columns: label_names.len() })
+    let row_keys: Vec<Vec<Option<String>>> = out_rows
+        .iter()
+        .map(|r| match r {
+            RowKind::Detail(k) | RowKind::Subtotal(_, k) => k.clone(),
+            RowKind::Grand => Vec::new(),
+        })
+        .collect();
+    let col_keys: Vec<Vec<Option<String>>> = out_cols
+        .iter()
+        .map(|(_, c)| match c {
+            ColKind::Cell(k, _) => k.clone(),
+            ColKind::RowTotal(_) => Vec::new(),
+        })
+        .collect();
+    Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys })
+}
+
+/// The rows behind one cell of a pivot (Phase 8 W6: "Show rows").
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellRows {
+    /// The pivot's own filters, then one condition per Rows and Columns field the cell stands for.
+    pub conditions: Vec<crate::models::FilterCondition>,
+    /// "Rows: Branch = Dhaka, Term = 1Y".
+    pub title: String,
+}
+
+/// The condition "this field is `value`" for a pivot field: a date field (a part of a date column) reads its part.
+fn field_condition(spec: &PivotSpec, field: &str, value: &Option<String>, keep: bool) -> crate::models::FilterCondition {
+    use crate::charts::spec::DrillLevel;
+    let level = match spec.date_fields.iter().find(|f| f.name == field) {
+        Some(f) => DrillLevel::of_part(f),
+        None => DrillLevel::column(field),
+    };
+    level.condition(value.as_deref().unwrap_or(BLANK_LABEL), keep)
+}
+
+/// The rows a cell of the built pivot adds up: the pivot's filters and, for the cell's row and column, each field's value.
+/// A subtotal row restricts only the fields it covers, a Total column and the grand total restrict none (so "Show rows" of a
+/// total gives the rows of that total). `col_name` is the heading of the clicked value column.
+pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &str) -> Result<CellRows> {
+    let names: Vec<String> = build.df.get_column_names().iter().map(|n| n.to_string()).collect();
+    let Some(at) = names.iter().position(|n| n == col_name) else {
+        bail!("Show rows: the column '{}' is not in the pivot. Open the pivot again.", col_name);
+    };
+    if at < build.label_columns {
+        bail!("Show rows works on the value cells, not on the row labels. Double-click a number.");
+    }
+    let (Some(row_key), Some(col_key)) = (build.row_keys.get(row), build.col_keys.get(at - build.label_columns)) else {
+        bail!("Show rows: that cell is not in the pivot (row {}). Open the pivot again.", row + 1);
+    };
+    let mut conditions: Vec<crate::models::FilterCondition> = Vec::new();
+    for f in &spec.filters {
+        if f.values.is_empty() {
+            continue;
+        }
+        let level = match spec.date_fields.iter().find(|d| d.name == f.field) {
+            Some(d) => crate::charts::spec::DrillLevel::of_part(d),
+            None => crate::charts::spec::DrillLevel::column(&f.field),
+        };
+        let mut c = level.condition("", true);
+        c.values = f.values.iter().flatten().cloned().collect();
+        c.or_blank = f.values.iter().any(|v| v.is_none());
+        conditions.push(c);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (i, v) in row_key.iter().enumerate() {
+        if let Some(field) = spec.rows.get(i) {
+            conditions.push(field_condition(spec, field, v, true));
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+        }
+    }
+    for (i, v) in col_key.iter().enumerate() {
+        if let Some(field) = spec.columns.get(i) {
+            conditions.push(field_condition(spec, field, v, true));
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+        }
+    }
+    let title = if parts.is_empty() { "Rows: all rows of the pivot".to_string() } else { format!("Rows: {}", parts.join(", ")) };
+    Ok(CellRows { conditions, title })
+}
+
+/// Whether "Show rows" can read the cells of a tab (Phase 8 W6 follow-up): the tab's last pivot, and the steps that come
+/// after it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PivotRows {
+    /// The tab has no pivot (or a step does not run): there are no cells to show rows of.
+    NotAPivot,
+    /// The pivot is there but a later step took away what its cells stand for; the reason is in plain words.
+    Unavailable(String),
+    /// The cells can be read. `at` is the pivot's place among the steps, `spec` its settings, and `later_made` the columns
+    /// that steps after it added, renamed or rewrote (a cell of those has no rows of its own).
+    Readable { at: usize, spec: PivotSpec, later_made: Vec<String> },
+}
+
+/// Looks at the steps after a tab's last pivot. Steps that keep the pivot's row fields and its rows (filter, sort, a new column, a
+/// column selection that keeps the row fields, Split date) leave "Show rows" on, because a cell is found again by its row
+/// fields' values. A step that renames, drops or rewrites a row field, or makes a new table (group by, pivot, SQL, the banking
+/// tools), turns it off and the reason names the step.
+pub fn pivot_rows_of(steps: &[TransformStep], steps_run: usize) -> PivotRows {
+    if steps_run != steps.len() {
+        return PivotRows::NotAPivot;
+    }
+    let Some(at) = steps.iter().rposition(|s| !s.is_skipped() && matches!(s, TransformStep::PivotTable { .. })) else {
+        return PivotRows::NotAPivot;
+    };
+    let Some(spec) = steps[at].as_pivot_spec() else { return PivotRows::NotAPivot };
+    let labels: Vec<String> = if spec.rows.is_empty() { vec![NO_ROWS_COLUMN.to_string()] } else { spec.rows.clone() };
+    let no = |what: String| PivotRows::Unavailable(format!("Show rows is off: {what} Take that step off the pivot tab to use it."));
+    let mut later_made: Vec<String> = Vec::new();
+    for s in &steps[at + 1..] {
+        if s.is_skipped() {
+            continue;
+        }
+        match s {
+            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } | TransformStep::SplitDate { .. } => {}
+            TransformStep::CleanLineBreaks { columns, .. } => {
+                if let Some(l) = labels.iter().find(|l| columns.contains(l)) {
+                    return no(format!("a step after the pivot ({}) changes the text of '{}', a row field of the pivot.", s.title(), l));
+                }
+                later_made.extend(columns.iter().cloned());
+            }
+            TransformStep::ConditionalColumn { .. }
+            | TransformStep::MathFormula { .. }
+            | TransformStep::NormalizeEntity { .. }
+            | TransformStep::MaturityBucket { .. }
+            | TransformStep::RateBand { .. } => {
+                if let Some(c) = written_column(s) {
+                    if labels.iter().any(|l| l == c) {
+                        return no(format!("a step after the pivot ({}) writes over '{}', a row field of the pivot.", s.title(), c));
+                    }
+                    later_made.push(c.to_string());
+                }
+            }
+            TransformStep::RenameColumn { old_name, new_name } => {
+                if labels.contains(old_name) {
+                    return no(format!("a step after the pivot renames '{}', a row field of the pivot, to '{}'.", old_name, new_name));
+                }
+                later_made.retain(|c| c != old_name);
+                later_made.push(new_name.clone());
+            }
+            TransformStep::ConvertToNumber { columns } => {
+                if let Some(l) = labels.iter().find(|l| columns.contains(l)) {
+                    return no(format!("a step after the pivot sets '{}', a row field of the pivot, to Number.", l));
+                }
+                later_made.extend(columns.iter().cloned());
+            }
+            TransformStep::SelectAndReorderColumns { cols } => {
+                if let Some(l) = labels.iter().find(|l| !cols.contains(l)) {
+                    return no(format!("a step after the pivot leaves out '{}', a row field of the pivot.", l));
+                }
+            }
+            TransformStep::PivotTable { .. } | TransformStep::GroupByPivot { .. } => {
+                return no("a step after the pivot groups or pivots the table again, so its cells are not the first pivot's.".to_string());
+            }
+            other => {
+                return no(format!("a step after the pivot ({}) makes a new table, so its cells are not the pivot's.", other.title()));
+            }
+        }
+    }
+    PivotRows::Readable { at, spec, later_made }
+}
+
+/// Finds the row of the built pivot that a row of the table on the screen (the pivot after the later steps) stands for: the
+/// pivot's row fields, as text, are the key. Exactly one pivot row must match.
+pub fn pivot_row_of_shown(build: &PivotBuild, shown: &DataFrame, shown_row: usize) -> Result<usize> {
+    let n = build.label_columns;
+    let names: Vec<String> = build.df.get_column_names().iter().take(n).map(|s| s.to_string()).collect();
+    let text = |df: &DataFrame, name: &str, row: usize| -> Result<String> {
+        let c = df.column(name).with_context(|| format!("Show rows: the column '{}' is no longer in the table. Open the pivot again.", name))?;
+        Ok(match c.get(row) {
+            Ok(AnyValue::Null) | Err(_) => String::new(),
+            Ok(AnyValue::String(s)) => s.to_string(),
+            Ok(AnyValue::StringOwned(s)) => s.to_string(),
+            Ok(v) => format!("{}", v),
+        })
+    };
+    if shown_row >= shown.height() {
+        bail!("Show rows: that row is not in the table (row {}). Open the pivot again.", shown_row + 1);
+    }
+    let want: Vec<String> = names.iter().map(|n| text(shown, n, shown_row)).collect::<Result<_>>()?;
+    let mut found: Option<usize> = None;
+    for r in 0..build.df.height() {
+        let mut same = true;
+        for (n, w) in names.iter().zip(&want) {
+            if text(&build.df, n, r)? != *w {
+                same = false;
+                break;
+            }
+        }
+        if same {
+            if found.is_some() {
+                bail!("Show rows: two rows of the pivot read '{}', so this one cannot be told apart. Open the pivot again.", want.join(" / "));
+            }
+            found = Some(r);
+        }
+    }
+    found.ok_or_else(|| anyhow::anyhow!("Show rows: the row '{}' is not in the pivot any more. Open the pivot again.", want.join(" / ")))
 }
 
 /// What the steps after a pivot did to its total rows (K5).
@@ -646,7 +848,8 @@ fn track_pivot_totals(steps: &[TransformStep]) -> PivotTracking {
         };
         match s {
             TransformStep::PivotTable { .. } => t = pivot_tracking_of(s),
-            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } | TransformStep::CleanLineBreaks { .. } => {}
+            // (Split date adds new columns and never writes one that exists)
+            TransformStep::SortRows { .. } | TransformStep::FilterRows { .. } | TransformStep::FilterGroup { .. } | TransformStep::CleanLineBreaks { .. } | TransformStep::SplitDate { .. } => {}
             TransformStep::ConditionalColumn { .. }
             | TransformStep::MathFormula { .. }
             | TransformStep::NormalizeEntity { .. }
@@ -728,6 +931,16 @@ pub fn without_total_rows(lf: LazyFrame, steps: &[TransformStep]) -> LazyFrame {
 }
 
 /// The pivot as a step of a pipeline: the table, then lazy again.
+/// The pivot's input: the table with its date fields (W2) added as columns.
+pub fn pivot_input(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
+    if spec.date_fields.is_empty() {
+        return Ok(lf);
+    }
+    let mut lf = lf;
+    let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
+    crate::dates::with_date_fields(lf, &spec.date_fields, &schema, "Pivot")
+}
+
 pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
     Ok(build_pivot(lf, spec)?.df.lazy())
 }
@@ -735,7 +948,7 @@ pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
 /// For each weighted-average value field: how many cells (groups of Rows × Columns) have weights
 /// of both signs, and so no rate. For the status-bar note.
 pub fn pivot_mixed_sign_cells(lf: LazyFrame, spec: &PivotSpec) -> Result<Vec<(String, usize)>> {
-    let mut lf = lf;
+    let mut lf = pivot_input(lf, spec)?;
     let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
     validate_pivot(&schema, spec)?;
     if !spec.values.iter().any(|v| v.agg == PivotAgg::WeightedAvg) {
@@ -931,6 +1144,7 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
             scale: PivotScale::Global,
             sort_by_value,
             field_orders: Vec::new(),
+            date_fields: Vec::new(),
         },
         renames,
         notes,

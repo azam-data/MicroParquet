@@ -72,7 +72,9 @@ pub fn list_charts(dir: &Path) -> Vec<(String, PathBuf)> {
 
 /// The columns the chart uses that the tab does not have, for the message when a chart is opened on another tab.
 pub fn missing_columns(spec: &ChartSpec, available: &[String]) -> Vec<String> {
-    let mut used: Vec<String> = Vec::new();
+    // a date part (W2) needs its date column, not a column of its own name
+    let fields = spec.date_fields();
+    let mut used: Vec<String> = fields.iter().map(|f| f.column.clone()).collect();
     if !spec.category.is_empty() {
         used.push(spec.category.clone());
     }
@@ -83,6 +85,7 @@ pub fn missing_columns(spec: &ChartSpec, available: &[String]) -> Vec<String> {
         used.extend(m.column);
         used.extend(m.weight);
     }
+    used.retain(|c| !fields.iter().any(|f| &f.name == c));
     used.sort();
     used.dedup();
     used.into_iter().filter(|c| !available.contains(c)).collect()

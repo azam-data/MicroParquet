@@ -111,6 +111,7 @@ impl MicroParquetApp {
         let mut picker = std::mem::take(&mut self.picker);
         let totals = self.picker_totals.clone();
         let sort_lists = self.sort_lists.lists.clone();
+        let calendar = self.calendar();
         let mut ask_values: Option<(String, Option<String>)> = None;
         let mut picker_buttons_seen: Vec<(usize, egui::Rect)> = Vec::new();
         theme::modal("\u{E3D4} Add Conditional Column (IF / ELSE IF / ELSE)")
@@ -202,6 +203,7 @@ impl MicroParquetApp {
                             let mut values = rule_selection(rule);
                             let mut blank = false;
                             let order = crate::ui::value_picker::picker_order(&sort_lists, &rule.col_name);
+                            picker.calendar = calendar;
                             let out = crate::ui::value_picker::picker_body(ui, &tk, &mut picker, &mut values, &mut blank, false, &order);
                             if out.changed {
                                 rule.values = values;
