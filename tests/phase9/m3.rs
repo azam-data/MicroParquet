@@ -357,8 +357,8 @@ fn m3_a_plain_sum_of_a_tagged_balance_over_many_dates_warns_and_an_untagged_colu
     let c = run(&dd, &df, sc.clone(), &spec(&["Branch"], &[], vec![plain("Balance", PivotAgg::Count)], &[]));
     assert_eq!(c.warnings, ["Count of Balance adds 23 dates of balances. Use Closing balance or Average balance."]);
     assert!(run(&dd, &df, sc.clone(), &sum_of("Fee")).warnings.is_empty(), "an untagged column has no warning");
-    // the closing balance is the right aggregation: no warning
-    assert!(run(&dd, &df, sc.clone(), &spec(&["Branch"], &[], vec![time("Balance", TimeAgg::ClosingBalance)], &[])).warnings.is_empty());
+    // the closing balance is the right aggregation: no stock warning, only the note of the span it covers (M4 follow-up)
+    assert_eq!(run(&dd, &df, sc.clone(), &spec(&["Branch"], &[], vec![time("Balance", TimeAgg::ClosingBalance)], &[])).warnings, ["Closing balance of Balance: whole data, 1 Nov 2026 \u{2013} 23 Nov 2026 (as of 23 Nov 2026)"]);
     // an old pivot (no data tab), and the same pivot with the tag removed, give the same numbers and no warning
     let mut old = sum_of("Balance");
     old.data_tab = String::new();

@@ -3246,11 +3246,12 @@ fn m3_the_aggregation_choice_in_values_lists_the_time_aggregations_on_a_date_lin
             assert_eq!(rig.app.pivot_builder.preview_warnings, ["Sum of Balance adds 34 dates of balances. Use Closing balance or Average balance."], "{what}");
             assert!(painted_has(&p, "Sum of Balance adds 34 dates of balances."), "{what}: the banner is drawn");
             assert!(!rig.app.pivot_builder.rects.warnings.is_empty(), "{what}");
-            // Closing balance again: no warning
+            // Closing balance again: no stock warning, only the note of the span it covers (M4 follow-up)
             let combo = rig.app.pivot_builder.rects.agg_combos[0].1;
             pick_agg(&mut rig, combo, "Closing balance", &what);
-            pump_until(&mut rig, "no warning", &|r| r.app.pivot_builder.preview_warnings.is_empty() && matches!(r.app.pivot_builder.preview, Some(Ok(_))));
-            assert!(rig.app.pivot_builder.rects.warnings.is_empty(), "{what}");
+            pump_until(&mut rig, "no warning", &|r| r.app.pivot_builder.preview_warnings.iter().all(|w| w.contains(": whole data, ")) && matches!(r.app.pivot_builder.preview, Some(Ok(_))) && !r.app.pivot_builder.preview_warnings.is_empty());
+            assert_eq!(rig.app.pivot_builder.preview_warnings.len(), 1, "{what}: {:?}", rig.app.pivot_builder.preview_warnings);
+            assert!(rig.app.pivot_builder.preview_warnings[0].starts_with("Closing balance of Balance: whole data, "), "{what}");
         }
     }
 }

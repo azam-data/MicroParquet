@@ -292,3 +292,28 @@ fn m4_a_chart_with_a_series_gives_one_line_per_key_and_a_chart_that_mixes_time_a
     let e = micro_parquet::model::with_scope(sc, || micro_parquet::charts::calc::compute(micro_parquet::engine::compile_tab_lazy(&src, &[], &dd).expect("source"), &spec)).err().map(|e| format!("{e:#}")).expect("a refusal");
     assert!(e.contains("can't share a chart with an ordinary aggregation"), "{e}");
 }
+
+#[test]
+fn m4_a_plain_value_with_no_calendar_field_says_which_span_it_covers_and_one_with_a_period_field_does_not() {
+    let dd = dir("p9m4_span_note");
+    let df = daily("2025-01-01", "2026-11-24");
+    let sc = scope(&dd, settings(1), "2026-11-24", vec![]);
+    let plain = PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(TimeAgg::ClosingBalance)) };
+    let b = run(&dd, &df, sc.clone(), &spec(&["Branch"], &[], vec![plain.clone()], &[]));
+    assert_eq!(b.warnings, ["Closing balance of Balance: whole data, 1 Jan 2025 \u{2013} 24 Nov 2026 (as of 24 Nov 2026)"]);
+    // another as-of date moves the end of the span
+    let sc2 = scope(&dd, settings(1), "2026-10-31", vec![]);
+    let b = run(&dd, &df, sc2, &spec(&["Branch"], &[], vec![plain.clone()], &[]));
+    assert_eq!(b.warnings, ["Closing balance of Balance: whole data, 1 Jan 2025 \u{2013} 31 Oct 2026 (as of 31 Oct 2026)"]);
+    // a value with an M4 choice (MTD) covers its own window, and a pivot with a Calendar period field covers each period: no note
+    let mtd = tv("Balance", TimeAgg::ClosingBalance, TimeWindow::Mtd, TimeShift::None, TimeShow::Value, TimePartial::SameDays);
+    assert!(run(&dd, &df, sc.clone(), &spec(&["Branch"], &[], vec![mtd], &[])).warnings.is_empty());
+    let b = run(&dd, &df, sc.clone(), &spec(&[&month_year()], &[], vec![plain.clone()], &["Month-Year"]));
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    // the chart's notes carry it too
+    use micro_parquet::charts::spec::{ChartSpec, MeasureSpec};
+    let src = crate::common::parquet(&dd, "accounts", &df);
+    let cs = ChartSpec { category: "Branch".into(), data_tab: "t1".into(), measures: vec![MeasureSpec { column: Some("Balance".into()), time: Some(TimeValue::of(TimeAgg::ClosingBalance)), ..Default::default() }], ..Default::default() };
+    let data = micro_parquet::model::with_scope(sc, || micro_parquet::charts::calc::compute(micro_parquet::engine::compile_tab_lazy(&src, &[], &dd).expect("source"), &cs)).unwrap_or_else(|e| panic!("the chart: {e:#}"));
+    assert!(data.notes.iter().any(|n| n == "Closing balance of Balance: whole data, 1 Jan 2025 \u{2013} 24 Nov 2026 (as of 24 Nov 2026)"), "{:?}", data.notes);
+}

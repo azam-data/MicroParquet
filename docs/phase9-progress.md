@@ -353,3 +353,16 @@ Not tested by a real click: picking a time aggregation from the chart studio's A
 Pictures (light and dark, written by `m4_pictures_...`): `docs/guide/img/pivot-time-choices.png`, `pivot-time-needs-period.png`, `pivot-time-prior-period.png`, `chart-time-sply.png` (each with `-dark`). Found by looking at them: the % columns first showed in Crore (the test helper had no column formats; fixed by passing them) and the chart showed a % divided into Crore (the chart's scale is chosen in the app from the value column; a % change is now never scaled, its tooltip says "%"). In `chart-time-sply` the side panel's own small chart is the chart tab's data, not the M4 chart.
 
 Proved to fail without the fix (two stubs, each restored, run one at a time): Same days ignored (always the full shifted period): `m4_mtd_and_sply...` and `m4_a_pivot_by_month_year...`; a zero earlier value shown as 0 instead of blank: `m4_a_pivot_by_month_year...`.
+
+## S8: owner decisions on S7, the M4 follow-up and M5
+
+Owner decisions on S7 (24 Nov 2026), also in `<accepted_deviations>` of the spec ("Owner decisions on S7"): M3-11 to M3-14 and M4-1 to M4-11 accepted; M4-1 follow-up: the pivot's and the chart's notes state the span of a plain whole-data value ("Closing balance of Balance: whole data, 1 Jan 2025 \u2013 24 Nov 2026 (as of 24 Nov 2026)"); the chart studio's time-aggregation list is checked by the owner by eye (left as recorded).
+
+### M4 follow-up (span note): item -> test
+
+| Acceptance item | Test |
+| --- | --- |
+| A plain whole-data value says its span in the pivot's notes: "Closing balance of Balance: whole data, 1 Jan 2025 – 24 Nov 2026 (as of 24 Nov 2026)"; the as-of date moves its end; no note with a Calendar period field or with an M4 choice (MTD); the chart's notes carry it | `tests/phase9/m4.rs` `m4_a_plain_value_with_no_calendar_field_says_which_span_it_covers_and_one_with_a_period_field_does_not` |
+| Existing tests that expected no note now expect it | `m3_a_plain_sum_of_a_tagged_balance...` (tests/phase9/m3.rs), UI `m3_the_aggregation_choice_in_values_lists...` (a stock warning gone, the span note left) |
+
+Proved to fail without the fix (note push stubbed, restored): `m4_a_plain_value_with_no_calendar_field...` fails (left: [] right: [the note]). Picture `pivot-time-aggregations(-dark).png` rewritten on purpose (it now shows the note); the other pictures a full run rewrote were restored. Full `cargo test --no-fail-fast`: all green except the two tests above, fixed and run alone.

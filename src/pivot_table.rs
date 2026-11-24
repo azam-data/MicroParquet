@@ -417,7 +417,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         .collect();
 
     let lf_time = if spec.has_time_values() { Some(lf.clone()) } else { None };
-    let warnings = crate::pivot_time::stock_warnings(&lf, spec, &schema)?;
+    let mut warnings = crate::pivot_time::stock_warnings(&lf, spec, &schema)?;
     let work = working_frame(lf, spec, &schema);
     let rows_idx: Vec<usize> = (0..nr).collect();
     let cols_idx: Vec<usize> = (nr..nr + nc).collect();
@@ -491,6 +491,14 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
             None => v.label(),
         }
     };
+
+    if let Some(t) = &time_result {
+        for (j, a, b, as_of) in &t.spans {
+            if let Some(v) = spec.values.get(*j) {
+                warnings.push(crate::measures::span_note(&heading(v), *a, *b, *as_of));
+            }
+        }
+    }
 
     let sort = spec.sort_by_value;
     let field_orders: Vec<SortOrder> = all_fields

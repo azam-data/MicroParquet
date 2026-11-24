@@ -498,3 +498,9 @@ pub fn combine(show: crate::models::TimeShow, shifted: bool, current: Measured, 
 pub fn stock_warning(agg_label: &str, column: &str, dates: usize) -> String {
     format!("{} of {} adds {} dates of balances. Use Closing balance or Average balance.", agg_label, column, dates)
 }
+
+/// The note of a plain time value with no Calendar field: the whole data it covers, so the number can't be misread.
+pub fn span_note(heading: &str, first: NaiveDate, last: NaiveDate, as_of: NaiveDate) -> String {
+    use crate::model_calendar::long_date;
+    format!("{}: whole data, {} \u{2013} {} (as of {})", heading, long_date(first), long_date(last), long_date(as_of))
+}

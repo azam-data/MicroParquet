@@ -32,6 +32,8 @@ pub struct TimeResult {
     pub date_column: String,
     /// The date column is a Date and time column (Show rows can't pick its days by value).
     pub date_is_datetime: bool,
+    /// Value index, first date, last date, as-of date: the span a plain whole-data value covers. Only when the pivot has no Calendar field.
+    pub spans: Vec<(usize, NaiveDate, NaiveDate, NaiveDate)>,
 }
 
 /// The pivot's own Calendar fields: the fields of the date link of its data tab.
@@ -302,7 +304,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         base: Option<crate::measures::Base>,
     }
     let mut periods: HashMap<Vec<Option<Option<String>>>, PeriodInfo> = HashMap::new();
-    let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))) };
+    let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))), spans: Vec::new() };
     for (rk, ck) in targets {
         // the cell's non-Calendar key, in field order
         let mut nc_key: Vec<Option<String>> = Vec::new();
@@ -430,6 +432,16 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 Measured::Blank(why) => {
                     slot[j] = None;
                     out.notes.insert((rk.clone(), ck.clone(), j), why);
+                }
+            }
+        }
+    }
+    // a plain value with no Calendar field keeps M3's whole-span number: say which span that is
+    if cal_at.is_empty() {
+        if let Some(first) = first_snap.filter(|f| *f <= as_of) {
+            for &j in &time_js {
+                if !spec.values[j].time.unwrap_or_default().is_m4() {
+                    out.spans.push((j, first, as_of, as_of));
                 }
             }
         }
