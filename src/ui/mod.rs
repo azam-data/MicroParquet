@@ -190,6 +190,12 @@ impl MicroParquetApp {
             ActiveToolModal::None => ModalOutcome { close: false, step: None },
         };
 
+        self.apply_modal_outcome(Some(ctx), outcome);
+    }
+
+    /// What the app does with what a tool dialog asked for: add or replace the step, then close it. `ctx` is the window the
+    /// edit banner is drawn in (none where nothing is drawn).
+    pub(crate) fn apply_modal_outcome(&mut self, ctx: Option<&egui::Context>, outcome: ModalOutcome) {
         if let Some((step, new_tab)) = outcome.step {
             if self.editing.is_some() {
                 // Edit in place: the step is replaced in its own tab (never a new tab).
@@ -202,7 +208,9 @@ impl MicroParquetApp {
         if let Some(source) = self.pending_ecl_summary.take() {
             self.create_tab_from_source_with("IFRS 9 summary".to_string(), source, Vec::new(), HashMap::new(), None);
         }
-        self.render_edit_banner(ctx);
+        if let Some(ctx) = ctx {
+            self.render_edit_banner(ctx);
+        }
         if outcome.close {
             self.active_tool = ActiveToolModal::None;
             self.editing = None;

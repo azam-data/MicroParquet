@@ -1127,6 +1127,8 @@ pub struct PivotPreviewRequest {
     pub steps: Vec<TransformStep>,
     pub spec: crate::models::PivotSpec,
     pub temp_dir: PathBuf,
+    /// How many rows of the table to bring back (`PIVOT_PREVIEW_ROWS` in the docked dialog, more in the pop-out window).
+    pub rows: usize,
 }
 
 pub struct PivotPreviewResult {
@@ -1138,10 +1140,14 @@ pub struct PivotPreviewResult {
     pub table: std::result::Result<DataFrame, String>,
     /// All rows of the pivot.
     pub total_rows: usize,
+    /// How many rows `table` was cut to.
+    pub limit: usize,
 }
 
-/// How many rows of the pivot the dialog previews.
+/// How many rows of the pivot the docked dialog previews (the pop-out window asks for as many as fit, at least this many).
 pub const PIVOT_PREVIEW_ROWS: usize = 20;
+/// The most rows the pop-out window's preview brings back.
+pub const PIVOT_PREVIEW_ROWS_MAX: usize = 500;
 
 /// The field list of the builder, and the pivot's first rows. A pivot that cannot be built gives
 /// its message in `table`, not an error of the job (the dialog shows it).
@@ -1158,12 +1164,12 @@ pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<P
         match crate::pivot_table::build_pivot(lf, &req.spec) {
             Ok(b) => {
                 let n = b.df.height();
-                (Ok(b.df.head(Some(PIVOT_PREVIEW_ROWS))), n)
+                (Ok(b.df.head(Some(req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX)))), n)
             }
             Err(e) => (Err(format!("{:#}", e)), 0),
         }
     };
-    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows })
+    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows, limit: req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX) })
 }
 
 pub struct PivotValuesRequest {

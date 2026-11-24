@@ -239,6 +239,15 @@ pub const SCHEMA_POPOUT_MIN_SIZE: [f32; 2] = [640.0, 480.0];
 /// The product and weight fields of the Mudaraba parameter editor.
 pub const MUD_PRODUCT_FIELD_W: f32 = 110.0;
 pub const MUD_WEIGHT_FIELD_W: f32 = 60.0;
+/// The pivot builder's own window (Phase 9 P1): where it opens the first time, and the least it can be made.
+pub const PIVOT_POPOUT_SIZE: [f32; 2] = [1280.0, 800.0];
+pub const PIVOT_POPOUT_MIN_SIZE: [f32; 2] = [760.0, 520.0];
+/// The window is never made bigger than this share of its monitor.
+pub const PIVOT_POPOUT_MONITOR_SHARE: f32 = 0.98;
+/// A saved window is shown again where it was when this much of its title bar (the top strip, so tall) is on the monitor.
+pub const PIVOT_POPOUT_TITLE_STRIP_H: f32 = 40.0;
+pub const PIVOT_POPOUT_SEEN_MIN_W: f32 = 100.0;
+pub const PIVOT_POPOUT_SEEN_MIN_H: f32 = 20.0;
 pub const CHART_POPOUT_SIZE: [f32; 2] = [900.0, 560.0];
 pub const CHART_POPOUT_MIN_SIZE: [f32; 2] = [520.0, 360.0];
 /// Space between the items of the two option rows.

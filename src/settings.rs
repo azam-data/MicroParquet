@@ -42,6 +42,9 @@ pub struct Settings {
     /// File ▸ Open recent project (Phase 8 W4): the last 8 project files, newest first.
     #[serde(default)]
     pub recent_projects: Vec<String>,
+    /// The pivot builder's own window (Phase 9 P1), as [x, y, width, height] in points: where it was and how big (none = never popped out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pivot_popout_rect: Option<[f32; 4]>,
 }
 
 pub fn settings_path(root: &Path) -> PathBuf {

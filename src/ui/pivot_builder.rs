@@ -57,6 +57,9 @@ impl Area {
 }
 
 /// The line in the empty Filters box.
+/// The title of the note the app window shows while the builder is in its own window.
+pub const PIVOT_POPOUT_NOTE_TITLE: &str = "Pivot builder";
+
 pub const FILTERS_EMPTY_HINT: &str = "Drop a field here to limit the pivot to chosen values";
 
 /// What the dialog drew, for the render tests.
@@ -79,6 +82,8 @@ pub struct PivotRects {
     pub popup: egui::Rect,
     pub footer_text: egui::Rect,
     pub buttons: Vec<(String, egui::Rect)>,
+    /// The "Dock" button the app window shows while the builder is in its own window.
+    pub note_dock: egui::Rect,
 }
 
 impl Default for PivotRects {
@@ -100,6 +105,7 @@ impl Default for PivotRects {
             popup: n,
             footer_text: n,
             buttons: Vec::new(),
+            note_dock: n,
         }
     }
 }
@@ -134,6 +140,72 @@ pub struct PivotBuilderState {
     pub open: bool,
     /// The date columns whose parts are listed under them in the field list (W2).
     pub expanded: HashSet<String>,
+    /// The builder is in its own window (P1). It is this same state, drawn there instead of docked, never both.
+    pub popped: bool,
+    /// How many times the window was asked for (the render tests read it: a backend without windows never opens one).
+    pub pop_requests: u32,
+    /// Where the window was last seen: [x, y, width, height] in points.
+    pub popout_live: Option<[f32; 4]>,
+    /// Where and how big the window opens: worked out when it first draws and kept until it is docked.
+    pub popout_start: Option<PopoutPlacement>,
+    /// How many rows the last preview was cut to (0 = not known yet: the docked count).
+    pub preview_limit: usize,
+}
+
+/// What a frame of the builder asks for, drawn docked or in its own window.
+#[derive(Default)]
+pub(crate) struct PivotActs {
+    /// Apply (with a step) or Cancel (without): the builder closes.
+    pub close: bool,
+    pub step: Option<(TransformStep, bool)>,
+    /// Pop out, Dock, or the window's close button: the builder changes place and stays open.
+    pub toggle_pop: bool,
+}
+
+/// Where the builder's own window opens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopoutPlacement {
+    pub size: egui::Vec2,
+    /// `None`: the system places it (the position of this app's window is not known).
+    pub pos: Option<egui::Pos2>,
+}
+
+/// Where the builder's own window opens: where it was last (`saved`: x, y, width, height) when its title strip is on the monitor
+/// of the main window, else centred on the main window. The only monitor this app can see is the main window's: egui 0.29 gives its
+/// size, not a list of monitors, and a window left on another monitor, or on one that is gone, cannot be told from one that is off the
+/// screen. So a saved place on any other monitor is not used (P1-2).
+pub fn popout_placement(saved: Option<[f32; 4]>, main: Option<egui::Rect>, monitor: Option<egui::Vec2>) -> PopoutPlacement {
+    let min = egui::vec2(theme::PIVOT_POPOUT_MIN_SIZE[0], theme::PIVOT_POPOUT_MIN_SIZE[1]);
+    let default = egui::vec2(theme::PIVOT_POPOUT_SIZE[0], theme::PIVOT_POPOUT_SIZE[1]);
+    let finite = |v: f32| v.is_finite();
+    let saved = saved.filter(|r| r.iter().all(|v| finite(*v)));
+    let mut size = saved.map(|r| egui::vec2(r[2], r[3])).unwrap_or(default).max(min);
+    // never bigger than the monitor
+    if let Some(m) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) {
+        size = size.min(m * theme::PIVOT_POPOUT_MONITOR_SHARE).max(min.min(m));
+    }
+    let Some(main) = main.filter(|m| finite(m.min.x) && finite(m.min.y) && finite(m.max.x) && finite(m.max.y)) else {
+        return PopoutPlacement { size, pos: None };
+    };
+    let centred = main.center() - size / 2.0;
+    let Some(monitor) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) else {
+        return PopoutPlacement { size, pos: Some(centred) };
+    };
+    // the monitor of the main window: monitors sit on a grid of their own size, with one corner at 0, 0
+    let origin = egui::pos2((main.center().x / monitor.x).floor() * monitor.x, (main.center().y / monitor.y).floor() * monitor.y);
+    let screen = egui::Rect::from_min_size(origin, monitor);
+    if let Some(r) = saved {
+        let at = egui::pos2(r[0], r[1]);
+        let strip = egui::Rect::from_min_size(at, egui::vec2(size.x, theme::PIVOT_POPOUT_TITLE_STRIP_H));
+        let seen = strip.intersect(screen);
+        if seen.width() >= theme::PIVOT_POPOUT_SEEN_MIN_W && seen.height() >= theme::PIVOT_POPOUT_SEEN_MIN_H {
+            return PopoutPlacement { size, pos: Some(at) };
+        }
+    }
+    // centred on the main window, and on the screen
+    let x = centred.x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
+    let y = centred.y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()));
+    PopoutPlacement { size, pos: Some(egui::pos2(x, y)) }
 }
 
 fn fingerprint<T: std::fmt::Debug>(x: &T) -> u64 {
@@ -170,7 +242,24 @@ impl MicroParquetApp {
         b.value_columns.clear();
         b.popup = None;
         b.new_tab = !editing;
+        b.popped = false;
+        b.popout_start = None;
+        b.preview_limit = 0;
         b.open = true;
+    }
+
+    /// How many rows the preview is cut to: the docked count, or, in the builder's own window, as many as fit its height
+    /// (in steps of that count, so a window being dragged does not ask for a new table at every pixel).
+    pub(crate) fn pivot_preview_rows_wanted(&self) -> usize {
+        use micro_parquet::tab_jobs::{PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX};
+        let b = &self.pivot_builder;
+        let h = b.rects.preview_scroll.height();
+        if !b.popped || !h.is_finite() || h <= 0.0 {
+            return PIVOT_PREVIEW_ROWS;
+        }
+        // the heading row comes first
+        let fit = ((h - theme::PIVOT_PREVIEW_ROW_H) / theme::PIVOT_PREVIEW_ROW_H).ceil().max(0.0) as usize;
+        (fit.div_ceil(PIVOT_PREVIEW_ROWS) * PIVOT_PREVIEW_ROWS).clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX)
     }
 
     /// The steps the pivot sees: while editing, those before the edited step; after "Insert after",
@@ -194,7 +283,8 @@ impl MicroParquetApp {
         let Some(input) = self.pivot_input() else {
             return;
         };
-        let token = fingerprint(&(&self.pivot_builder.spec, micro_parquet::steps_edit::pipeline_hash(&input.source, &input.steps)));
+        let rows = self.pivot_preview_rows_wanted();
+        let token = fingerprint(&(&self.pivot_builder.spec, micro_parquet::steps_edit::pipeline_hash(&input.source, &input.steps), rows));
         if self.pivot_builder.submitted == Some(token) {
             return;
         }
@@ -206,6 +296,7 @@ impl MicroParquetApp {
             steps: input.steps,
             spec: self.pivot_builder.spec.clone(),
             temp_dir: self.paths.temp_dir.clone(),
+            rows,
         };
         let key = JobKey::tab(JobKind::PivotPreview, input.tab_id);
         self.jobs.submit(key, "Pivot preview", false, move |ctx| compute_pivot_preview(req, ctx).map(|r| JobOutput::PivotPreview(Box::new(r))));
@@ -226,6 +317,7 @@ impl MicroParquetApp {
             }
             b.preview = Some(r.table);
             b.preview_total_rows = r.total_rows;
+            b.preview_limit = r.limit;
         }
     }
 
@@ -441,23 +533,107 @@ impl MicroParquetApp {
         }
     }
 
+    /// How many rows the preview on screen was cut to.
+    fn pivot_preview_limit(&self) -> usize {
+        match self.pivot_builder.preview_limit {
+            0 => micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS,
+            n => n,
+        }
+    }
+
+    /// The line under the title: the tab, and the step being edited or the step the pivot goes after.
+    fn pivot_subtitle(&self) -> String {
+        match (self.pivot_input(), &self.editing) {
+            (Some(i), Some(ed)) => format!("{} \u{b7} editing step {}", i.tab_title, ed.index + 1),
+            (Some(i), None) if i.after_step > 0 => format!("{} \u{b7} after step {}", i.tab_title, i.after_step),
+            (Some(i), None) => i.tab_title,
+            _ => String::new(),
+        }
+    }
+
+    /// The row under the title bar: the tab on the left, Pop out (docked) or Dock (in its own window) on the right.
+    fn pivot_header_row(&mut self, ui: &mut egui::Ui, subtitle: &str, can_pop: bool, rects: &mut PivotRects, acts: &mut PivotActs) {
+        let tk = *theme::tokens(self.dark_mode);
+        let popped = self.pivot_builder.popped;
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if can_pop || popped {
+                    let (name, label, tip) = if popped {
+                        ("Dock", format!("{} Dock", egui_phosphor::regular::ARROW_SQUARE_IN), "Put the builder back inside the app window, as it is")
+                    } else {
+                        ("Pop out", format!("{} Pop out", egui_phosphor::regular::ARROW_SQUARE_OUT), "Show the builder in its own window, which you can move to another monitor or make bigger")
+                    };
+                    let b = ui.button(label).on_hover_text(tip);
+                    rects.buttons.push((name.to_string(), b.rect));
+                    if b.clicked() {
+                        acts.toggle_pop = true;
+                    }
+                }
+                ui.add(egui::Label::new(egui::RichText::new(subtitle).color(tk.muted)).truncate());
+            });
+        });
+    }
+
+    /// The footer: the hint, Cancel and Create pivot tab (Save changes). The same docked and in its own window.
+    fn pivot_footer_row(&mut self, ui: &mut egui::Ui, rects: &mut PivotRects, acts: &mut PivotActs) {
+        let tk = *theme::tokens(self.dark_mode);
+        let editing = self.editing.is_some();
+        let can_create = self.pivot_builder_step().is_some();
+        ui.horizontal(|ui| {
+            let hint = self.pivot_hint();
+            let room = (ui.available_width() - theme::PIVOT_FOOTER_BUTTONS_W - theme::PIVOT_GAP).max(0.0);
+            let r = ui
+                .allocate_ui_with_layout(egui::vec2(room, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let color = if matches!(self.pivot_builder.preview, Some(Err(_))) { tk.danger } else { tk.muted };
+                    ui.add(egui::Label::new(egui::RichText::new(hint).color(color)).truncate());
+                })
+                .response;
+            rects.footer_text = r.rect;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if editing { "Save changes" } else { "Create pivot tab" };
+                let create = ui.add_enabled_ui(can_create, |ui| theme::primary_button(ui, label)).inner;
+                rects.buttons.push((label.to_string(), create.rect));
+                if create.clicked() {
+                    if let Some(s) = self.pivot_builder_step() {
+                        acts.step = Some((s, self.pivot_builder.new_tab));
+                        acts.close = true;
+                    }
+                }
+                let cancel = ui.button("Cancel");
+                rects.buttons.push(("Cancel".to_string(), cancel.rect));
+                if cancel.clicked() {
+                    acts.close = true;
+                }
+            });
+        });
+    }
+
     pub(crate) fn render_pivot_builder(&mut self, ctx: &egui::Context, _cols: Vec<String>) -> ModalOutcome {
-        let mut close = false;
-        let mut step: Option<(TransformStep, bool)> = None;
         if !self.pivot_builder.open {
             self.open_pivot_builder(None, self.editing.is_some());
         }
+        // a backend without windows keeps the builder in the app
+        if self.pivot_builder.popped && ctx.embed_viewports() {
+            self.pivot_builder.popped = false;
+            self.pivot_builder.popout_start = None;
+        }
         self.pivot_builder_tick();
-        let input = self.pivot_input();
-        let subtitle = match (&input, &self.editing) {
-            (Some(i), Some(ed)) => format!("{} \u{b7} editing step {}", i.tab_title, ed.index + 1),
-            (Some(i), None) if i.after_step > 0 => format!("{} \u{b7} after step {}", i.tab_title, i.after_step),
-            (Some(i), None) => i.tab_title.clone(),
-            _ => String::new(),
-        };
-        let editing = self.editing.is_some();
-        let can_create = self.pivot_builder_step().is_some();
+        let mut acts = PivotActs::default();
+        if self.pivot_builder.popped {
+            self.show_pivot_viewport(ctx, &mut acts);
+            self.pivot_popout_note(ctx, &mut acts);
+        } else {
+            self.show_pivot_docked(ctx, &mut acts);
+        }
+        self.pivot_finish(acts)
+    }
+
+    /// The builder as a dialog in the app window.
+    fn show_pivot_docked(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        let subtitle = self.pivot_subtitle();
+        let can_pop = !ctx.embed_viewports();
         let tk = *theme::tokens(self.dark_mode);
+        let _ = tk;
         let title = format!("{}  Pivot table", theme::ph::TABLE);
         let mut rects = PivotRects::default();
         theme::modal(&title)
@@ -465,49 +641,132 @@ impl MicroParquetApp {
             .min_width(theme::DIALOG_MIN_W_PIVOT_BUILDER)
             .fill_height()
             .show(ctx, |d| {
-                d.header(|ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(&subtitle).color(tk.muted)).truncate());
-                });
+                d.header(|ui| self.pivot_header_row(ui, &subtitle, can_pop, &mut rects, acts));
                 let body_h = d.body_max_h();
                 d.body_scroll(|ui| {
                     self.pivot_builder_body(ui, body_h, &mut rects);
                 });
-                d.footer(|ui| {
-                    ui.horizontal(|ui| {
-                        let hint = self.pivot_hint();
-                        let room = (ui.available_width() - theme::PIVOT_FOOTER_BUTTONS_W - theme::PIVOT_GAP).max(0.0);
-                        let r = ui
-                            .allocate_ui_with_layout(egui::vec2(room, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                let color = if matches!(self.pivot_builder.preview, Some(Err(_))) { tk.danger } else { tk.muted };
-                                ui.add(egui::Label::new(egui::RichText::new(hint).color(color)).truncate());
-                            })
-                            .response;
-                        rects.footer_text = r.rect;
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let label = if editing { "Save changes" } else { "Create pivot tab" };
-                            let create = ui.add_enabled_ui(can_create, |ui| theme::primary_button(ui, label)).inner;
-                            rects.buttons.push((label.to_string(), create.rect));
-                            if create.clicked() {
-                                if let Some(s) = self.pivot_builder_step() {
-                                    step = Some((s, self.pivot_builder.new_tab));
-                                    close = true;
-                                }
-                            }
-                            let cancel = ui.button("Cancel");
-                            rects.buttons.push(("Cancel".to_string(), cancel.rect));
-                            if cancel.clicked() {
-                                close = true;
-                            }
-                        });
-                    });
-                });
+                d.footer(|ui| self.pivot_footer_row(ui, &mut rects, acts));
             });
         self.pivot_builder.rects = rects;
-        if close {
+    }
+
+    /// The builder in its own native window (an immediate viewport): the same state, header, fields, preview and footer.
+    /// Closing the window docks it back.
+    fn show_pivot_viewport(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        if self.pivot_builder.popout_start.is_none() {
+            let (main, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
+            self.pivot_builder.popout_start = Some(popout_placement(self.settings.pivot_popout_rect, main, monitor));
+        }
+        let start = self.pivot_builder.popout_start.unwrap_or(PopoutPlacement { size: egui::vec2(theme::PIVOT_POPOUT_SIZE[0], theme::PIVOT_POPOUT_SIZE[1]), pos: None });
+        let tab = self.pivot_input().map(|i| i.tab_title).unwrap_or_default();
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(format!("Pivot builder \u{2014} {tab}"))
+            .with_inner_size(start.size)
+            .with_min_inner_size(theme::PIVOT_POPOUT_MIN_SIZE)
+            .with_resizable(true)
+            .with_maximize_button(true)
+            .with_minimize_button(true);
+        if let Some(p) = start.pos {
+            builder = builder.with_position(p);
+        }
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("pivot_popout"), builder, |ctx, class| {
+            if class == egui::ViewportClass::Embedded {
+                return;
+            }
+            self.pivot_popout_ui(ctx, acts);
+        });
+    }
+
+    /// What fills the builder's own window: the header, the fields and areas with a preview that takes the height that is left,
+    /// and the footer. (Tests draw it in a headless window of its size.) Esc is Cancel, unless the Filters list is open.
+    pub(crate) fn pivot_popout_ui(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        // the window's close button docks the builder back, as its Dock button does
+        if ctx.input(|i| i.viewport().close_requested()) {
+            acts.toggle_pop = true;
+            return;
+        }
+        ctx.input(|i| {
+            let v = i.viewport();
+            if let (Some(o), Some(inner)) = (v.outer_rect, v.inner_rect) {
+                self.pivot_builder.popout_live = Some([o.min.x, o.min.y, inner.width(), inner.height()]);
+            }
+        });
+        if self.pivot_builder.popup.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            acts.close = true;
+        }
+        let subtitle = self.pivot_subtitle();
+        let mut rects = PivotRects::default();
+        egui::TopBottomPanel::top("pivot_popout_header").show(ctx, |ui| self.pivot_header_row(ui, &subtitle, true, &mut rects, acts));
+        egui::TopBottomPanel::bottom("pivot_popout_footer").show(ctx, |ui| self.pivot_footer_row(ui, &mut rects, acts));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let body_h = ui.available_height();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).show(ui, |ui| {
+                self.pivot_builder_body(ui, body_h, &mut rects);
+            });
+        });
+        self.pivot_builder.rects = rects;
+    }
+
+    /// While the builder is in its own window, the app window says so and can take it back (the window may be on another monitor,
+    /// or lost behind another program).
+    fn pivot_popout_note(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        let tk = *theme::tokens(self.dark_mode);
+        let mut dock = egui::Rect::NOTHING;
+        theme::modal(PIVOT_POPOUT_NOTE_TITLE).default_width(theme::DIALOG_W_PIVOT_CONVERT).show(ctx, |d| {
+            d.body(|ui| {
+                ui.add(egui::Label::new(egui::RichText::new("The pivot builder is in its own window.").color(tk.muted)).wrap());
+            });
+            d.footer(|ui| {
+                let b = ui.button("Dock");
+                dock = b.rect;
+                if b.clicked() {
+                    acts.toggle_pop = true;
+                }
+            });
+        });
+        self.pivot_builder.rects.note_dock = dock;
+    }
+
+    /// What a frame asked for: move the builder, close it, or give back the step.
+    pub(crate) fn pivot_finish(&mut self, acts: PivotActs) -> ModalOutcome {
+        let was = self.pivot_builder.popped;
+        if acts.toggle_pop && !acts.close {
+            self.pivot_builder.popped = !was;
+            if !was {
+                self.pivot_builder.pop_requests += 1;
+            }
+        }
+        if was && (acts.toggle_pop || acts.close) {
+            self.pivot_save_popout_rect();
+            self.pivot_builder.popout_start = None;
+        }
+        if acts.close {
             self.pivot_builder.open = false;
             self.pivot_builder.popup = None;
+            self.pivot_builder.popped = false;
         }
-        ModalOutcome { close, step }
+        ModalOutcome { close: acts.close, step: acts.step }
+    }
+
+    /// Keeps where the builder's window is in `settings.json`.
+    pub(crate) fn pivot_save_popout_rect(&mut self) {
+        if let Some(r) = self.pivot_builder.popout_live {
+            if self.settings.pivot_popout_rect != Some(r) {
+                self.settings.pivot_popout_rect = Some(r);
+                self.save_settings();
+            }
+        }
+    }
+
+    /// One frame of the builder's own window in a window of its own, with what the app does after it (tests: they have no second window).
+    #[cfg(test)]
+    pub(crate) fn pivot_popout_frame(&mut self, ctx: &egui::Context) {
+        self.pivot_builder_tick();
+        let mut acts = PivotActs::default();
+        self.pivot_popout_ui(ctx, &mut acts);
+        let outcome = self.pivot_finish(acts);
+        self.apply_modal_outcome(None, outcome);
     }
 
     fn pivot_builder_body(&mut self, ui: &mut egui::Ui, body_h: f32, rects: &mut PivotRects) {
@@ -935,7 +1194,7 @@ impl MicroParquetApp {
                     Some(Ok(_)) => {
                         let s = &self.pivot_builder.spec;
                         let what = s.values.iter().map(|v| v.label()).collect::<Vec<_>>().join(", ");
-                        let shown = self.pivot_builder.preview_total_rows.min(micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS);
+                        let shown = self.pivot_builder.preview_total_rows.min(self.pivot_preview_limit());
                         format!("{} \u{b7} {} \u{b7} first {} of {} rows", what, s.scale.label(), shown, self.pivot_builder.preview_total_rows)
                     }
                     Some(Err(_)) => "no table yet".to_string(),
@@ -994,7 +1253,7 @@ impl MicroParquetApp {
             .collect();
         let total_w: f32 = widths.iter().sum();
         let last = cells.len().saturating_sub(1);
-        let has_total_row = spec.column_totals && spec.rows.len() > 0 && self.pivot_builder.preview_total_rows <= micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS;
+        let has_total_row = spec.column_totals && spec.rows.len() > 0 && self.pivot_builder.preview_total_rows <= self.pivot_preview_limit();
         let draw_row = |ui: &mut egui::Ui, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
             let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, theme::PIVOT_PREVIEW_ROW_H), egui::Sense::hover());
             if let Some(f) = fill {

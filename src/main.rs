@@ -528,6 +528,10 @@ impl eframe::App for MicroParquetApp {
 
     /// The chart studio's temporary files (previews, chart-data tables) go when the app closes.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // the pivot builder's own window: where it was when the app closed
+        if self.pivot_builder.popped {
+            self.pivot_save_popout_rect();
+        }
         micro_parquet::charts::echarts::clean_chart_temp(&self.paths.temp_dir);
     }
 }

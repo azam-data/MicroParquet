@@ -921,7 +921,7 @@ fn no_size_literal_is_left_outside_theme_rs() {
         .filter(|p| p.extension().is_some_and(|x| x == "rs"))
         .filter(|p| {
             let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "render_tests_p5.rs" | "render_tests_p6.rs" | "render_tests_p7.rs" | "render_tests_p8.rs" | "render_tests_r.rs")
+            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "render_tests_p5.rs" | "render_tests_p6.rs" | "render_tests_p7.rs" | "render_tests_p8.rs" | "render_tests_p9.rs" | "render_tests_r.rs")
         })
         .collect();
     files.push("src/main.rs".into());
