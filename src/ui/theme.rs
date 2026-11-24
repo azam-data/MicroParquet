@@ -381,6 +381,14 @@ pub const MODEL_LINK_TITLE_W: f32 = 170.0;
 pub const DIALOG_W_MEASURES: f32 = 640.0;
 pub const MEASURE_NAME_W: f32 = 170.0;
 pub const MEASURE_TAG_W: f32 = 150.0;
+/// The editor of a measure (M5): a wide box, a name box, a sign box, a test box, a value box, a day-count box.
+pub const MEASURE_BOX_W: f32 = 190.0;
+pub const MEASURE_NAME_BOX_W: f32 = 230.0;
+pub const MEASURE_SIGN_W: f32 = 110.0;
+pub const MEASURE_FIELD_W: f32 = 170.0;
+pub const MEASURE_TEST_W: f32 = 90.0;
+pub const MEASURE_VALUE_W: f32 = 130.0;
+pub const MEASURE_DAYCOUNT_W: f32 = 240.0;
 pub const MODEL_LIST_LINES: usize = 8;
 /// The width of the PDF export dialog's title box.
 pub const PDF_TITLE_FIELD_W: f32 = 320.0;

@@ -239,10 +239,11 @@ impl MicroParquetApp {
             titles: c.date_links.iter().map(|l| (l.data_tab.clone(), self.model_tab_title(&l.data_tab).trim_end_matches(" (not open)").to_string())).collect(),
         });
         let kinds = self.project.model.column_kinds.clone();
+        let measures = self.project.model.measures.clone();
         let fp = fingerprint(&(
             parts.iter().map(|(l, k, r)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)), r.clone())).collect::<Vec<_>>(),
             self.paths.temp_dir.clone(),
-            format!("{:?}", (&calendar, &kinds)),
+            format!("{:?}", (&calendar, &kinds, &measures)),
         ));
         if self.project.model_ui.scope.is_none() || self.project.model_ui.scope_fp != fp {
             let ctx = model::ModelContext {
@@ -250,6 +251,7 @@ impl MicroParquetApp {
                 temp_dir: self.paths.temp_dir.clone(),
                 calendar,
                 kinds,
+                measures,
             };
             self.project.model_ui.scope = Some(std::sync::Arc::new(ctx));
             self.project.model_ui.scope_fp = fp;

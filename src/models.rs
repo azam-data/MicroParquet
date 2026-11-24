@@ -763,7 +763,7 @@ impl CondOp {
 }
 
 /// One condition of a filter: "Balance > 1000", "Opndat between 2026-09-01 and 2026-09-30".
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct FilterCondition {
     pub column: String,
     pub op: CondOp,
@@ -1470,6 +1470,8 @@ pub enum TimeAgg {
     DistinctCountAtClosing,
     /// The weighted average of the rows at the last snapshot date in the period.
     WAvgAtClosing,
+    /// A named measure (Phase 9 M5): the value's `field` is the measure's name; its own aggregation, filters and sign are in the model.
+    Measure,
 }
 
 /// The window of a time value (Phase 9 M4): the days its aggregation reads.

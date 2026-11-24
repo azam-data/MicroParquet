@@ -180,3 +180,5 @@ mod p9_m2;
 mod p9_m3;
 #[path = "../phase9/m4.rs"]
 mod p9_m4;
+#[path = "../phase9/m5.rs"]
+mod p9_m5;

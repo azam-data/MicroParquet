@@ -49,6 +49,7 @@ pub fn scope(dd: &std::path::Path, cal: CalendarSettings, as_of: &str, kinds: Ve
             titles: vec![("t1".into(), "Accounts".into())],
         }),
         kinds,
+        measures: vec![],
     }))
 }
 

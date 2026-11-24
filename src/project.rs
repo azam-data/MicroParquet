@@ -854,6 +854,60 @@ pub fn export_file_names(titles: &[String]) -> Vec<String> {
 
 /// `--project <file> --export-dir <folder>`: opens the project (no relinking) and writes every tab as Parquet.
 /// A tab that fails stops the run, and nothing is written. Returns the files written.
+/// The model of a project as a headless run reads it (Phase 9 M5): each link's lookup read after its own steps, the key check
+/// done once (a broken link refuses its fields, as in the window), the calendar, the as-of date, the tags and the measures.
+/// `None` for a project with no model.
+fn headless_scope(project: &Project, opener: &mut Opener, paths: &PortablePaths) -> Result<Option<std::sync::Arc<crate::model::ModelContext>>> {
+    use crate::model::*;
+    let links = project.model.all_links();
+    if links.is_empty() {
+        return Ok(None);
+    }
+    let mut tab_of = |opener: &mut Opener, key: &str| -> Result<ModelTab> {
+        let Some(i) = project.tabs.iter().position(|t| t.key == key) else {
+            bail!("The model uses the tab '{}', which is not in the project.", key);
+        };
+        let title = project.tabs[i].title.clone();
+        match opener.prepare(i) {
+            Ok(Prepared::Table { source, steps }) => Ok(ModelTab { key: key.to_string(), title, source, steps }),
+            Ok(Prepared::Chart { .. }) => bail!("The model uses '{}', which is a chart tab, not a table.", title),
+            Err(e) => bail!("The model uses the tab '{}', which could not be opened: {}", title, e),
+        }
+    };
+    let mut parts: Vec<ScopeLink> = Vec::new();
+    for l in &links {
+        let lookup = tab_of(opener, &l.lookup_tab)?;
+        let is_calendar = project.model.calendar.as_ref().is_some_and(|c| c.tab == l.lookup_tab);
+        let refusal = if is_calendar {
+            None
+        } else {
+            let data = tab_of(opener, &l.data_tab)?;
+            let check = check_link(l, &data, &lookup, &paths.temp_dir, &|| Ok(()))?;
+            check.status().refusal(&lookup.title)
+        };
+        parts.push(ScopeLink { link: l.clone(), lookup: Some(lookup), refusal });
+    }
+    let calendar = match &project.model.calendar {
+        Some(c) => {
+            let mut ends: Vec<(String, chrono::NaiveDate)> = Vec::new();
+            let mut titles = Vec::new();
+            for l in &c.date_links {
+                let t = tab_of(opener, &l.data_tab)?;
+                let lf = crate::engine::compile_tab_lazy(&t.source, &t.steps, &paths.temp_dir)?;
+                let df = lf.select([polars::prelude::col(l.column.as_str()).cast(polars::prelude::DataType::Date).cast(polars::prelude::DataType::Int32).max().alias("m")]).collect()?;
+                let last = df.column("m")?.i32()?.get(0).and_then(crate::dates::date_from_days);
+                if let Some(d) = last {
+                    ends.push((t.title.clone(), d));
+                }
+                titles.push((l.data_tab.clone(), t.title));
+            }
+            Some(CalendarScope { settings: c.settings, tab: c.tab.clone(), date_links: c.date_links.clone(), as_of: crate::model_calendar::resolve(&project.model.as_of, &ends).map(|(d, _)| d), titles })
+        }
+        None => None,
+    };
+    Ok(Some(std::sync::Arc::new(ModelContext { links: parts, temp_dir: paths.temp_dir.clone(), calendar, kinds: project.model.column_kinds.clone(), measures: project.model.measures.clone() })))
+}
+
 pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &PortablePaths) -> Result<Vec<PathBuf>> {
     let project = load_project(project_path)?;
     if project.tabs.is_empty() {
@@ -867,7 +921,14 @@ pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &P
     std::fs::create_dir_all(&staging).with_context(|| format!("Could not create the folder {}", staging.display()))?;
     let titles: Vec<String> = project.tabs.iter().map(|t| t.title.clone()).collect();
     let names = export_file_names(&titles);
-    let result = (|| -> Result<Vec<(usize, PathBuf)>> {
+    let scope = match headless_scope(&project, &mut opener, paths) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+    };
+    let result = crate::model::with_scope(scope, || -> Result<Vec<(usize, PathBuf)>> {
         let mut written = Vec::new();
         for i in order {
             let tab = &project.tabs[i];
@@ -891,7 +952,7 @@ pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &P
             written.push((i, out));
         }
         Ok(written)
-    })();
+    });
     match result {
         Err(e) => {
             let _ = std::fs::remove_dir_all(&staging);

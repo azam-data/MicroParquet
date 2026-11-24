@@ -414,7 +414,20 @@ impl MicroParquetApp {
         self.pivot_input().is_some_and(|i| !self.pivot_data_tab(i.tab_id).is_empty())
     }
 
+    /// The named measures of the builder's tab (Phase 9 M5), in the order the model has them.
+    pub(crate) fn pivot_measures(&self) -> Vec<String> {
+        let Some(input) = self.pivot_input() else { return Vec::new() };
+        let key = self.pivot_data_tab(input.tab_id);
+        if key.is_empty() {
+            return Vec::new();
+        }
+        self.project.model.measures.iter().filter(|m| m.tab() == key && !self.pivot_builder.fields.iter().any(|(n, _)| n == m.name())).map(|m| m.name().to_string()).collect()
+    }
+
     fn default_value_for(&self, field: &str) -> PivotValue {
+        if self.pivot_measures().iter().any(|m| m == field) {
+            return PivotValue { field: field.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(TimeAgg::Measure)) };
+        }
         let kind = self.kind_of(field);
         // a column tagged as a balance, a flow or a YTD balance gets the aggregation its tag sets (Phase 9 M3)
         if kind == FieldKind::Number {
@@ -470,6 +483,11 @@ impl MicroParquetApp {
 
     /// Puts a field into an area (a field is in Rows or in Columns, not both).
     pub(crate) fn add_pivot_field(&mut self, field: &str, area: Area) {
+        // a named measure (Phase 9 M5) is a value, never a label
+        if area != Area::Values && self.pivot_measures().iter().any(|m| m == field) {
+            self.pivot_builder.preview = Some(Err(format!("'{}' is a measure. Add it to Values.", field)));
+            return;
+        }
         // a lookup field (Phase 9 M1) is registered in the spec when it is first put in an area; a broken link's field is refused
         if !self.pivot_builder.fields.iter().any(|(n, _)| n == field) && !self.pivot_builder.spec.model_fields.iter().any(|m| m.name == field) {
             if let Some((r, _, refusal)) = self.pivot_input().and_then(|i| self.model_field_named(i.tab_id, field)) {
@@ -1002,6 +1020,28 @@ impl MicroParquetApp {
                     }
                 }
             }
+            // Phase 9 M5: the named measures of the tab, under "Measures \u{203a}"; each is added to Values
+            let measures: Vec<String> = self.pivot_measures().into_iter().filter(|m| q.is_empty() || m.to_lowercase().contains(&q) || "measures".contains(&q)).collect();
+            if !measures.is_empty() {
+                shown_any = true;
+                let key = "Measures \u{203a}".to_string();
+                let open = !q.is_empty() || self.pivot_builder.expanded.contains(&key);
+                let text = format!("{}  {}", if open { theme::ph::CARET_DOWN } else { theme::ph::CARET_RIGHT }, key);
+                let r = ui.add(egui::Button::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(tk.muted)).frame(false)).on_hover_text("The named measures of this tab (Model \u{25b8} Measures\u{2026}). They go to Values.");
+                rects.expanders.push((key.clone(), r.rect));
+                if r.clicked() {
+                    if self.pivot_builder.expanded.contains(&key) {
+                        self.pivot_builder.expanded.remove(&key);
+                    } else {
+                        self.pivot_builder.expanded.insert(key.clone());
+                    }
+                }
+                if open {
+                    for m in &measures {
+                        self.pivot_field_row(ui, m, FieldKind::Number, None, None, rects);
+                    }
+                }
+            }
             if !shown_any {
                 ui.label(egui::RichText::new("No field matches.").color(tk.muted));
             }
@@ -1011,6 +1051,7 @@ impl MicroParquetApp {
 
     fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, part: Option<&micro_parquet::dates::DateFieldRef>, model: Option<(&micro_parquet::model::ModelFieldRef, Option<&str>)>, rects: &mut PivotRects) {
         let tk = *theme::tokens(self.dark_mode);
+        let is_measure = part.is_none() && model.is_none() && self.pivot_measures().iter().any(|m| m == name);
         let areas = self.areas_of(name);
         let used = areas.iter().map(|a| a.used_word()).collect::<Vec<_>>().join(", ");
         let row_w = ui.available_width();
@@ -1072,7 +1113,13 @@ impl MicroParquetApp {
             let mut draw_menu = |ui: &mut egui::Ui| {
             let menu = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
                 // a date part is a label: Rows, Columns or Filters (W2)
-                let areas_offered: &[Area] = if part.is_some() { &[Area::Rows, Area::Columns, Area::Filters] } else { &[Area::Rows, Area::Columns, Area::Values, Area::Filters] };
+                let areas_offered: &[Area] = if part.is_some() {
+                    &[Area::Rows, Area::Columns, Area::Filters]
+                } else if is_measure {
+                    &[Area::Values]
+                } else {
+                    &[Area::Rows, Area::Columns, Area::Values, Area::Filters]
+                };
                 for area in areas_offered {
                     if ui.button(format!("Add to {}", area.title())).clicked() {
                         if let Some(p) = part {
@@ -1346,11 +1393,17 @@ impl MicroParquetApp {
             // the list opens under the box and must end inside the window: it scrolls when the room is short
             let list_h = (ui.ctx().screen_rect().bottom() - ui.cursor().top() - theme::PIVOT_AGG_LIST_MARGIN).clamp(theme::PIVOT_AGG_LIST_MIN_H, theme::PIVOT_AGG_LIST_H);
             let box_w = if time.is_some() { theme::PIVOT_COMBO_TIME_W } else { theme::PIVOT_COMBO_AGG_W };
+            let is_measure = time.is_some_and(|t| t.agg == TimeAgg::Measure);
             let shown = match time {
+                Some(t) if is_measure => "Measure",
                 Some(t) => t.agg.label(),
                 None => agg.label(),
             };
             let combo = egui::ComboBox::from_id_salt(("pivot_agg", i)).width(box_w - ui.spacing().interact_size.y).height(list_h).selected_text(shown).show_ui(ui, |ui| {
+                if is_measure {
+                    ui.label(egui::RichText::new("A named measure: edit it in Model \u{25b8} Measures\u{2026}").color(tk.muted));
+                    return;
+                }
                 for a in PivotAgg::all() {
                     if numeric || matches!(a, PivotAgg::Count | PivotAgg::CountDistinct) {
                         if ui.selectable_label(time.is_none() && agg == *a, a.label()).clicked() {

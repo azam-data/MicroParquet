@@ -3707,3 +3707,270 @@ fn m4_pictures_of_the_time_choices_the_refusal_a_pivot_of_closing_vs_prior_perio
         shoot(&mut rig, "chart-time-sply", dark, screen);
     }
 }
+
+// ------------------------------------------------------------------------------------------------ M5: named measures and ratios
+
+use micro_parquet::measures::{DayCount, NamedMeasure, RatioFormat, Sign, Term};
+
+fn mrect(rig: &Rig, kind: &str, name: &str) -> egui::Rect {
+    let r = &rig.app.project.model_ui.measures.rects;
+    let list = match kind {
+        "button" => &r.buttons,
+        "field" => &r.fields,
+        _ => &r.sections,
+    };
+    list.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: the {kind} '{name}' in {:?}", rig.what, list.iter().map(|b| b.0.clone()).collect::<Vec<_>>()))
+}
+
+fn mclick(rig: &mut Rig, kind: &str, name: &str) {
+    let b = reveal(rig, &measures_title(), &|r| mrect(r, kind, name));
+    click_rect(rig, b);
+    rig.draw(3);
+}
+
+fn mtype(rig: &mut Rig, name: &str, text: &str) {
+    let b = reveal(rig, &measures_title(), &|r| mrect(r, "field", name));
+    click_rect(rig, b);
+    rig.step(vec![egui::Event::Text(text.to_string())]);
+    rig.draw(3);
+}
+
+fn mpick(rig: &mut Rig, name: &str, item: &str, what: &str) {
+    rig.draw(3);
+    let b = reveal(rig, &measures_title(), &|r| mrect(r, "field", name));
+    let mut p = click_rect(rig, b);
+    // (a first click in a frame sequence that has just changed the layout may not open the list: once more)
+    if last_box(&p, item, 0.0).is_none() {
+        p = click_rect(rig, b);
+    }
+    // (a list that has no room below the box opens above it)
+    let at = last_box(&p, item, 0.0).unwrap_or_else(|| panic!("{what}: '{item}' in the list of '{name}'"));
+    click_rect(rig, at);
+    rig.draw(3);
+}
+
+fn gl_measures() -> Vec<NamedMeasure> {
+    let gl = |v: &str| vec![micro_parquet::models::FilterCondition { column: "GL".into(), op: micro_parquet::models::CondOp::Equals, value: v.into(), ..Default::default() }];
+    vec![
+        NamedMeasure::Base { name: "Interest income".into(), tab: "t3".into(), column: "Balance".into(), aggregation: TimeAgg::TotalFlow, filters: gl("GL02"), sign: Sign::Minus, weight: None },
+        NamedMeasure::Base { name: "Interest expense".into(), tab: "t3".into(), column: "Balance".into(), aggregation: TimeAgg::TotalFlow, filters: gl("GL03"), sign: Sign::Plus, weight: None },
+        NamedMeasure::Base { name: "Closing earning assets".into(), tab: "t3".into(), column: "Balance".into(), aggregation: TimeAgg::ClosingBalance, filters: gl("GL04"), sign: Sign::Plus, weight: None },
+        NamedMeasure::Ratio {
+            name: "NIM".into(),
+            tab: "t3".into(),
+            numerator: vec![Term { measure: "Interest income".into(), sign: Sign::Plus }, Term { measure: "Interest expense".into(), sign: Sign::Minus }],
+            denominator: vec![Term { measure: "Closing earning assets".into(), sign: Sign::Plus }],
+            annualise: Some(DayCount::Actual365),
+            format: RatioFormat::Percent,
+        },
+    ]
+}
+
+#[test]
+fn m5_the_measures_dialog_adds_a_base_measure_and_a_ratio_by_real_clicks_and_refuses_in_words_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m5dialog", ppp, w, h, false);
+        menu_item9(&mut rig, "Model", "Measures");
+        rig.draw(4);
+        mclick(&mut rig, "section", "Measures");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "No measure yet."), "{what}");
+        // a base measure: name, aggregation, column, a filter on a column, and the sign
+        mclick(&mut rig, "button", "Add base measure");
+        mtype(&mut rig, "Name", "GL03 closing");
+        mpick(&mut rig, "Tab", "GL TB", &what);
+        mpick(&mut rig, "Column", "Balance", &what);
+        mclick(&mut rig, "button", "Add filter");
+        mpick(&mut rig, "Filter 1 field", "GL", &what);
+        mtype(&mut rig, "Filter 1 value", "GL03");
+        mclick(&mut rig, "button", "Save");
+        let m = rig.app.project.model.measures.clone();
+        assert_eq!(m.len(), 1, "{what}: {:?}", rig.app.project.model_ui.measures.edit.as_ref().map(|e| e.error.clone()));
+        match &m[0] {
+            NamedMeasure::Base { name, tab, column, aggregation, filters, sign, .. } => {
+                assert_eq!((name.as_str(), tab.as_str(), column.as_str(), *aggregation, *sign), ("GL03 closing", "t3", "Balance", TimeAgg::ClosingBalance, Sign::Plus), "{what}");
+                assert_eq!((filters[0].column.as_str(), filters[0].value.as_str()), ("GL", "GL03"), "{what}");
+            }
+            other => panic!("{what}: a base measure, not {other:?}"),
+        }
+        // a second one with the sign Minus and the total of a flow
+        mclick(&mut rig, "button", "Add base measure");
+        mtype(&mut rig, "Name", "All closing");
+        mpick(&mut rig, "Tab", "GL TB", &what);
+        mpick(&mut rig, "Column", "Balance", &what);
+        mpick(&mut rig, "Sign", "Minus (\u{2212})", &what);
+        mclick(&mut rig, "button", "Save");
+        assert!(matches!(&rig.app.project.model.measures[1], NamedMeasure::Base { sign: Sign::Minus, .. }), "{what}");
+        // a duplicate name is refused in words
+        mclick(&mut rig, "button", "Add base measure");
+        mtype(&mut rig, "Name", "all closing");
+        mpick(&mut rig, "Tab", "GL TB", &what);
+        mpick(&mut rig, "Column", "Balance", &what);
+        mclick(&mut rig, "button", "Save");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "A measure called 'all closing' already exists. Names must be different."), "{what}");
+        assert_eq!(rig.app.project.model.measures.len(), 2, "{what}");
+        mclick(&mut rig, "button", "Cancel edit");
+        // a ratio: numerator and denominator terms, and a day count
+        mclick(&mut rig, "button", "Add ratio");
+        mtype(&mut rig, "Name", "GL03 share");
+        mpick(&mut rig, "Tab", "GL TB", &what);
+        mpick(&mut rig, "Numerator 1 measure", "GL03 closing", &what);
+        mpick(&mut rig, "Denominator 1 measure", "All closing", &what);
+        mpick(&mut rig, "Day count", "Actual/360", &what);
+        mclick(&mut rig, "button", "Save");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "Only flows and period amounts can be annualised; 'GL03 closing' is a balance."), "{what}: a balance is not annualised");
+        assert_eq!(rig.app.project.model.measures.len(), 2, "{what}");
+        mpick(&mut rig, "Day count", "Not annualised (a plain share)", &what);
+        mclick(&mut rig, "button", "Save");
+        match &rig.app.project.model.measures[2] {
+            NamedMeasure::Ratio { name, numerator, denominator, annualise, .. } => {
+                assert_eq!((name.as_str(), numerator[0].measure.as_str(), denominator[0].measure.as_str(), *annualise), ("GL03 share", "GL03 closing", "All closing", None), "{what}");
+            }
+            other => panic!("{what}: a ratio, not {other:?}"),
+        }
+        // a measure in use can't be removed
+        mclick(&mut rig, "button", "Remove GL03 closing");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "'GL03 closing' is used by ratio 'GL03 share'. Remove it from there first."), "{what}");
+        assert_eq!(rig.app.project.model.measures.len(), 3, "{what}");
+        // the ratio can, and then the measure it used
+        mclick(&mut rig, "button", "Remove GL03 share");
+        mclick(&mut rig, "button", "Remove GL03 closing");
+        assert_eq!(rig.app.project.model.measures.iter().map(|m| m.name().to_string()).collect::<Vec<_>>(), ["All closing"], "{what}");
+        let p = rig.draw(3);
+        let r = assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+        let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+        assert_no_overlap(&texts, &what);
+        assert_not_clipped(&p, r.window, &what);
+    }
+}
+
+#[test]
+fn m5_the_values_list_has_a_measures_group_for_its_own_tab_and_a_measure_goes_to_values_only_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m5values", ppp, w, h, false);
+        rig.app.project.model.measures = gl_measures();
+        rig.draw(3);
+        // a pivot on another tab doesn't list them
+        rig.app.active_tab = 1;
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(8);
+        assert!(!rig.app.pivot_builder.rects.expanders.iter().any(|(n, _)| n == "Measures \u{203a}"), "{what}: Accounts has no measures");
+        rig.app.pivot_builder.open = false;
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        m3_open_builder_on_gl(&mut rig);
+        let mut place = Place::Docked;
+        let g = place.rects(&rig);
+        let expander = g.expanders.iter().find(|(n, _)| n == "Measures \u{203a}").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the 'Measures ›' group in {:?}", g.expanders));
+        place.click(&mut rig, expander);
+        place.draw(&mut rig, 4);
+        let g = place.rects(&rig);
+        for f in ["Interest income", "Interest expense", "Closing earning assets", "NIM"] {
+            assert!(g.field_rows.iter().any(|(n, _)| n == f), "{what}: '{f}' is listed: {:?}", g.field_rows);
+        }
+        // the menu of a measure offers Values only
+        let menu = place.rects(&rig).field_menus.iter().find(|(n, _)| n == "NIM").map(|(_, b)| *b).expect("the menu of NIM");
+        let p = place.click(&mut rig, menu);
+        assert!(last_box(&p, "Add to Values", menu.top()).is_some() && last_box(&p, "Add to Rows", menu.top()).is_none(), "{what}: only Values");
+        place.click(&mut rig, menu);
+        place.draw(&mut rig, 3);
+        // NIM to Values, Calendar > Month-Year to Rows
+        add_to(&mut place, &mut rig, "NIM", "Values", &what);
+        let v = rig.app.pivot_builder.spec.values[0].clone();
+        assert_eq!((v.field.as_str(), v.time.map(|t| t.agg)), ("NIM", Some(TimeAgg::Measure)), "{what}");
+        let g = place.rects(&rig);
+        let cal = g.expanders.iter().find(|(n, _)| n == "Calendar \u{203a}").map(|(_, r)| *r).expect("the Calendar group");
+        place.click(&mut rig, cal);
+        rig.app.pivot_builder.search = "Month-Year".into();
+        place.draw(&mut rig, 4);
+        add_to(&mut place, &mut rig, "Calendar \u{b7} Month-Year", "Rows", &what);
+        rig.app.pivot_builder.search.clear();
+        wait_in(&mut place, &mut rig, "the preview", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+        let df = rig.app.pivot_builder.preview.clone().and_then(|p| p.ok()).expect("the preview");
+        let labels = first_column(&df);
+        assert_eq!(labels[0], "Jan 2026", "{what}: {labels:?}");
+        assert!(df.get_column_names().iter().any(|n| n.as_str() == "NIM"), "{what}: the ratio's heading is its name: {:?}", df.get_column_names());
+        let r = place.rects(&rig);
+        assert!(r.agg_combos.iter().all(|(_, b)| inside(*b, r.right.expand(1.0))), "{what}: the chip's box is inside the dialog");
+        // a measure dropped on Rows is refused in words
+        rig.app.add_pivot_field("NIM", crate::ui::pivot_builder::Area::Rows);
+        assert!(matches!(&rig.app.pivot_builder.preview, Some(Err(m)) if m == "'NIM' is a measure. Add it to Values."), "{what}");
+    }
+}
+
+#[test]
+fn m5_pictures_of_the_measures_dialog_the_values_list_and_a_nim_pivot_by_month_year() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let (mut rig, what) = m3_rig("p9m5pics", SHOT_PPP, SHOT_W, SHOT_H + 200.0, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        rig.app.project.model.measures = gl_measures();
+        // the dialog with a base measure being edited, and with the ratio being edited
+        menu_item9(&mut rig, "Model", "Measures");
+        rig.draw(4);
+        mclick(&mut rig, "section", "Measures");
+        mclick(&mut rig, "button", "Edit Interest income");
+        let r = assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+        shoot(&mut rig, "measures-base-measure", dark, r.window.expand(10.0));
+        mclick(&mut rig, "button", "Cancel edit");
+        mclick(&mut rig, "button", "Edit NIM");
+        let r = assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+        shoot(&mut rig, "measures-ratio", dark, r.window.expand(10.0));
+        mclick(&mut rig, "button", "Cancel edit");
+        rig.app.active_tool = ActiveToolModal::None;
+        // (the pivot below uses a plus sign on the income, so its rates are those of a small spread)
+        if let Some(NamedMeasure::Base { sign, .. }) = rig.app.project.model.measures.first_mut() {
+            *sign = Sign::Plus;
+        }
+        rig.draw(3);
+        // the Values list with its Measures group
+        m3_open_builder_on_gl(&mut rig);
+        let mut place = Place::Docked;
+        let expander = place.rects(&rig).expanders.iter().find(|(n, _)| n == "Measures \u{203a}").map(|(_, r)| *r).expect("the Measures group");
+        place.click(&mut rig, expander);
+        place.draw(&mut rig, 4);
+        add_to(&mut place, &mut rig, "NIM", "Values", &what);
+        place.draw(&mut rig, 4);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-values-measures", dark, screen);
+        rig.app.pivot_builder.open = false;
+        rig.app.active_tool = ActiveToolModal::None;
+        rig.draw(3);
+        // a NIM pivot by Month-Year
+        let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t3").expect("the date link");
+        let f = ModelFieldRef::new(&link, "GL TB \u{2192} Calendar", "Calendar", "Month-Year");
+        let order = micro_parquet::dates::DatePart::MonthYear.sort_order(&rig.app.settings.calendar).map(|o| vec![PivotFieldOrder { field: f.name.clone(), order: o }]).unwrap_or_default();
+        let spec = PivotSpec {
+            rows: vec![f.name.clone()],
+            values: vec![
+                PivotValue { field: "NIM".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(TimeAgg::Measure)) },
+                PivotValue { field: "NIM".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg: TimeAgg::Measure, window: micro_parquet::models::TimeWindow::Ytd, ..Default::default() }) },
+            ],
+            row_totals: true,
+            column_totals: true,
+            model_fields: vec![f],
+            field_orders: order,
+            data_tab: "t3".into(),
+            ..Default::default()
+        };
+        rig.app.show_steps_sidebar = false;
+        let src = rig.app.tabs[2].source.clone();
+        let columns = vec![spec.rows[0].clone(), spec.values[0].label(), spec.values[1].label()];
+        let formats: std::collections::HashMap<String, micro_parquet::models::ColumnFormatSpec> = micro_parquet::pivot_table::pivot_column_formats(&spec, &columns, 2).into_iter().collect();
+        rig.app.create_tab_from_source("Pivot: NIM".into(), src, vec![TransformStep::from_pivot_spec(spec)], formats);
+        settle(&mut rig.app);
+        let at = rig.app.tabs.len() - 1;
+        rig.app.active_tab = at;
+        pump(&mut rig, "the NIM pivot", &|r| r.app.tabs[at].total_rows > 0 && r.app.tabs[at].cached_slice.column("NIM").is_ok());
+        rig.draw(6);
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "pivot-nim-month-year", dark, screen);
+    }
+}

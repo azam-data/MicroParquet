@@ -12,6 +12,8 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | M3 | DONE (S6) | (see git log: "Phase 9 M3") | tests/phase9/m3.rs x15; render_tests_p9 x4 (Measures dialog, aggregation choice, banner and tooltip, pictures) |
 | M3 follow-up | DONE (S7) | (see git log: "Phase 9 M3: follow-ups") | tests/phase9/m3.rs x3 (Show rows on a time cell); render_tests_p9 x2 |
 | M4 | DONE (S7) | (see git log: "Phase 9 M4") | tests/phase9/m4.rs x9; render_tests_p9 x5 (Values choices by clicks, the refusal, a Month-Year pivot, the chart studio, pictures) |
+| M4 follow-up | DONE (S8) | (see git log: "Phase 9 M4: follow-ups") | tests/phase9/m4.rs x1 (the span note) |
+| M5 | DONE (S8) | (see git log: "Phase 9 M5") | tests/phase9/m5.rs x7; render_tests_p9 x3 (Measures dialog, Values list group, pictures) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -366,3 +368,26 @@ Owner decisions on S7 (24 Nov 2026), also in `<accepted_deviations>` of the spec
 | Existing tests that expected no note now expect it | `m3_a_plain_sum_of_a_tagged_balance...` (tests/phase9/m3.rs), UI `m3_the_aggregation_choice_in_values_lists...` (a stock warning gone, the span note left) |
 
 Proved to fail without the fix (note push stubbed, restored): `m4_a_plain_value_with_no_calendar_field...` fails (left: [] right: [the note]). Picture `pivot-time-aggregations(-dark).png` rewritten on purpose (it now shows the note); the other pictures a full run rewrote were restored. Full `cargo test --no-fail-fast`: all green except the two tests above, fixed and run alone.
+
+## M5 acceptance: item -> test (S8)
+
+Library: `cargo test -q --test phase3 m5_` (7 tests). UI: `cargo test -q --bin MicroParquet m5_` (3 tests, 3 sizes, light; pictures light and dark). Deviations M5-1 to M5-11 (spec). Found by the NIM picture: M4's MTD/QTD/YTD with a period field read to the end of the year, fixed (M5-9).
+
+| Acceptance item (spec M5) | Test |
+| --- | --- |
+| Interest income Jan 2026 = 31 (sign Minus), average earning assets 3,650: yield Actual/365 = 10.00%, Actual/360 = 9.86%, Actual/Actual = 10.00%; Jan 2028: Actual/Actual = 10.03% | `m5_a_yield_is_the_income_of_the_month_annualised_over_the_average_earning_assets_by_day_count` |
+| NIM by Month-Year = (income - expense) annualised / average earning assets: Jan 2026 15%, Jan 2025 5%, Feb 2026 15%; vs SPLY (pp) 10.00; YTD 15%; YTD vs SPLY (pp) 10.00; Jan 2025 vs SPLY blank | `m5_the_nim_by_month_year_and_its_ytd_and_change_against_last_year_in_percentage_points` |
+| YTD of a month reads to that month (Jan 62, Feb 118, May 302) | `m5_a_ytd_window_of_a_month_reads_up_to_that_month_and_not_to_the_as_of_date` |
+| CASA ratio by Branch master > Region: Dhaka 30%, Khulna 90%, Grand total 40% (not the 60% average) | `m5_a_ratios_subtotal_and_total_come_from_its_own_numerator_and_denominator_not_the_average_of_the_regions` |
+| ADR on a month-end tab uses averages of month-ends, labelled (80 / 100 / 120, total 100) | `m5_the_adr_on_a_month_end_tab_uses_averages_of_month_ends_and_says_so` |
+| Refusals: annualising a balance, a duplicate name, removing a measure in use; a zero denominator is blank with its reason; a missing measure | `m5_a_zero_denominator_is_blank_with_its_reason_and_an_annualised_balance_or_a_missing_measure_is_refused`; UI `m5_the_measures_dialog_adds_a_base_measure_and_a_ratio_by_real_clicks_and_refuses_in_words_at_three_sizes` (the three messages painted in the dialog) |
+| A chart of NIM by Month-Year equals the pivot | `m5_a_chart_of_the_nim_by_month_year_equals_the_pivot` |
+| A project with measures round-trips; headless `--project` writes the same pivot tab | `m5_a_project_with_measures_round_trips_and_headless_writes_the_same_pivot_tab_as_the_window` (version 2, kind, Actual/365, sign Minus; the headless tab has 10.00 / 9.86 / 10.03) |
+| Render tests by real clicks at 3 sizes: the Measures dialog (base and ratio editors, day count, sign) | UI `m5_the_measures_dialog_adds...` (Name, Tab, Column, filter field and value, Sign, Day count, numerator and denominator boxes, Save, Remove) |
+| The Values list "Measures" group (own tab only, Values only, a ratio heading) | UI `m5_the_values_list_has_a_measures_group_for_its_own_tab_and_a_measure_goes_to_values_only_at_three_sizes` |
+
+Not tested by a real click: the chart studio's Value list "Measures" group (the headless click does not open that list, as in M4); recorded for the owner to check by eye.
+
+Pictures (light and dark, `m5_pictures_...`): `docs/guide/img/measures-base-measure.png`, `measures-ratio.png`, `pivot-values-measures.png`, `pivot-nim-month-year.png` (each with `-dark`); `model-measures-columns(-dark).png` rewritten on purpose (the dialog now has the Columns / Measures strip); the other pictures a full run rewrote were restored.
+
+Proved to fail without the fix (stubs, each restored, run one at a time): Actual/360 counted as 365 days: `m5_a_yield...` fails (left 10.0, right 9.86); YTD window read to the year end: `m5_a_ytd_window...` fails (left 302, right 62).

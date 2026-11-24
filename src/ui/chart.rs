@@ -619,6 +619,13 @@ impl MicroParquetApp {
         let warning = theme::tokens(self.dark_mode).warning;
         // a date-linked data tab of a project: the values can have a time aggregation (Phase 9 M4, one value type with the pivot)
         let time_choices = !self.pivot_data_tab(tab.id).is_empty();
+        // the named measures of this tab (Phase 9 M5), listed in the Value box under "Measures"
+        let tab_measures: Vec<String> = if time_choices {
+            let key = self.pivot_data_tab(tab.id);
+            self.project.model.measures.iter().filter(|m| m.tab() == key && !avail.iter().any(|c| c == m.name())).map(|m| m.name().to_string()).collect()
+        } else {
+            Vec::new()
+        };
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
@@ -687,7 +694,24 @@ impl MicroParquetApp {
                 let shown = spec.value.clone().unwrap_or_else(|| "(choose)".to_string());
                 let r = egui::ComboBox::from_id_salt("chart_value").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
                     for c in &avail {
-                        ui.selectable_value(&mut spec.value, Some(c.clone()), c);
+                        if ui.selectable_label(spec.value.as_ref() == Some(c) && spec.time.map(|t| t.agg) != Some(micro_parquet::models::TimeAgg::Measure), c).clicked() {
+                            spec.value = Some(c.clone());
+                            // a column after a measure: back to an ordinary aggregation
+                            if spec.time.is_some_and(|t| t.agg == micro_parquet::models::TimeAgg::Measure) {
+                                spec.time = None;
+                            }
+                        }
+                    }
+                    if !tab_measures.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Measures").size(theme::TEXT_LABEL).weak());
+                        for m in &tab_measures {
+                            let on = spec.value.as_ref() == Some(m) && spec.time.map(|t| t.agg) == Some(micro_parquet::models::TimeAgg::Measure);
+                            if ui.selectable_label(on, m).clicked() {
+                                spec.value = Some(m.clone());
+                                spec.time = Some(micro_parquet::models::TimeValue { agg: micro_parquet::models::TimeAgg::Measure, ..spec.time.unwrap_or_default() });
+                            }
+                        }
                     }
                 });
                 add(ui, "Value", rects, r.response.rect);

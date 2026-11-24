@@ -65,9 +65,7 @@ pub struct ModelCalendar {
 
 pub use crate::measures::ColumnKind;
 
-/// Placeholder: a named measure (M3 to M5 fill it in).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-pub struct NamedMeasure {}
+pub use crate::measures::NamedMeasure;
 
 /// The date the model reports as of (Phase 9 M2): the latest snapshot date of all date-linked tabs (the default), or a date the
 /// owner picked ("2026-10-31").
@@ -732,6 +730,8 @@ pub struct ModelContext {
     pub calendar: Option<CalendarScope>,
     /// The tags of the numeric columns (Phase 9 M3), for the stock warning.
     pub kinds: Vec<ColumnKind>,
+    /// The named measures (Phase 9 M5).
+    pub measures: Vec<NamedMeasure>,
 }
 
 /// The model calendar as a worker needs it.

@@ -126,6 +126,7 @@ impl TimeAgg {
             TimeAgg::CountAtClosing => "Count at closing",
             TimeAgg::DistinctCountAtClosing => "Distinct count at closing",
             TimeAgg::WAvgAtClosing => "W.Avg at closing",
+            TimeAgg::Measure => "Named measure",
         }
     }
 
@@ -141,6 +142,7 @@ impl TimeAgg {
             TimeAgg::PeriodAmount => format!("Period amount of {} (YTD)", field),
             TimeAgg::CountAtClosing => format!("Count at closing of {}", field),
             TimeAgg::DistinctCountAtClosing => format!("Distinct count at closing of {}", field),
+            TimeAgg::Measure => field.to_string(),
             TimeAgg::WAvgAtClosing => match weight {
                 Some(w) => format!("W.Avg at closing of {} by {}", field, w),
                 None => format!("W.Avg at closing of {}", field),
@@ -150,7 +152,7 @@ impl TimeAgg {
 
     /// True when the aggregation reads a column that is a number (the others count rows).
     pub fn needs_number(self) -> bool {
-        !matches!(self, TimeAgg::CountAtClosing | TimeAgg::DistinctCountAtClosing)
+        !matches!(self, TimeAgg::CountAtClosing | TimeAgg::DistinctCountAtClosing | TimeAgg::Measure)
     }
 
     /// True when the cells of a row or column add up to its total. Only a flow does; a balance is never added across dates.
@@ -300,6 +302,7 @@ pub fn evaluate(agg: TimeAgg, series: &BTreeMap<NaiveDate, DayStats>, period: &[
             };
             Measured::Value(value_on(series, c) - before)
         }
+        TimeAgg::Measure => Measured::Blank("A named measure is worked out from its own definition.".to_string()),
         TimeAgg::CountAtClosing | TimeAgg::DistinctCountAtClosing | TimeAgg::WAvgAtClosing => {
             let Some(c) = closing else {
                 return no_balance(tl, period_text);
@@ -350,6 +353,7 @@ pub fn rows_of(agg: TimeAgg, period: &[NaiveDate], tl: &Timeline, month_end: boo
                 plain(in_p)
             }
         }
+        TimeAgg::Measure => None,
         TimeAgg::PeriodAmount => {
             let c = closing?;
             let mut dates = vec![(c, Some("End"))];
@@ -412,11 +416,13 @@ pub fn plan(t: &crate::models::TimeValue, base: Option<Base>, as_of: NaiveDate, 
         },
         w => {
             let a = base.map(|b| b.end.min(as_of)).unwrap_or(as_of);
-            match w {
+            let (ws, ne, unit) = match w {
                 TimeWindow::Mtd => (month_start(a), month_end(a), PeriodUnit::Month),
                 TimeWindow::Qtd => (fiscal.fiscal_quarter_start(a), fiscal.fiscal_quarter_end(a), PeriodUnit::Quarter),
                 _ => (fiscal.fiscal_year_start(a), fiscal.fiscal_year_end(a), PeriodUnit::Year),
-            }
+            };
+            // a cell with a period reads up to its own anchor (its period's end), not to the end of the month, quarter or year
+            (ws, base.map(|b| ne.min(b.end)).unwrap_or(ne), unit)
         }
     };
     let starts_late = base.is_some_and(|b| b.start > as_of) || ws > as_of;
@@ -503,4 +509,253 @@ pub fn stock_warning(agg_label: &str, column: &str, dates: usize) -> String {
 pub fn span_note(heading: &str, first: NaiveDate, last: NaiveDate, as_of: NaiveDate) -> String {
     use crate::model_calendar::long_date;
     format!("{}: whole data, {} \u{2013} {} (as of {})", heading, long_date(first), long_date(last), long_date(as_of))
+}
+
+// ------------------------------------------------------------------------------------------------ named measures (M5)
+
+use crate::models::FilterCondition;
+
+/// The sign of a measure or of a term of a ratio: Minus turns a credit-negative trial balance around.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Sign {
+    #[default]
+    Plus,
+    Minus,
+}
+
+impl Sign {
+    pub fn factor(self) -> f64 {
+        match self {
+            Sign::Plus => 1.0,
+            Sign::Minus => -1.0,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Sign::Plus => "Plus (+)",
+            Sign::Minus => "Minus (\u{2212})",
+        }
+    }
+}
+
+/// How a ratio is annualised: the days of the year it is scaled to.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DayCount {
+    #[default]
+    #[serde(rename = "Actual/365")]
+    Actual365,
+    #[serde(rename = "Actual/360")]
+    Actual360,
+    #[serde(rename = "Actual/Actual")]
+    ActualActual,
+}
+
+impl DayCount {
+    pub fn all() -> &'static [DayCount] {
+        &[DayCount::Actual365, DayCount::Actual360, DayCount::ActualActual]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            DayCount::Actual365 => "Actual/365",
+            DayCount::Actual360 => "Actual/360",
+            DayCount::ActualActual => "Actual/Actual",
+        }
+    }
+    /// The days of a year: 365, 360, or the days of the fiscal year holding `end` (365 or 366).
+    pub fn year_days(self, end: NaiveDate, fiscal: &CalendarSettings) -> f64 {
+        match self {
+            DayCount::Actual365 => 365.0,
+            DayCount::Actual360 => 360.0,
+            DayCount::ActualActual => ((fiscal.fiscal_year_end(end) - fiscal.fiscal_year_start(end)).num_days() + 1) as f64,
+        }
+    }
+}
+
+/// How a ratio is shown: a percent (9.5 = 9.5%, as rates are kept) or a plain number.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RatioFormat {
+    #[default]
+    Percent,
+    Number,
+}
+
+impl RatioFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            RatioFormat::Percent => "Percent",
+            RatioFormat::Number => "Number",
+        }
+    }
+}
+
+/// A base measure of a ratio's numerator or denominator, with its sign.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct Term {
+    pub measure: String,
+    #[serde(default)]
+    pub sign: Sign,
+}
+
+/// A measure of one data tab with a name of its own (Phase 9 M5).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind")]
+pub enum NamedMeasure {
+    /// A column of the tab, aggregated over time (M3), for the rows that meet the filters (lookup and Calendar fields allowed).
+    Base {
+        name: String,
+        tab: String,
+        column: String,
+        #[serde(default)]
+        aggregation: TimeAgg,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        filters: Vec<FilterCondition>,
+        #[serde(default)]
+        sign: Sign,
+        /// The weight column of W.Avg at closing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        weight: Option<String>,
+    },
+    /// Numerator over denominator, each a signed sum of base measures; annualised when a day count is set.
+    Ratio {
+        name: String,
+        tab: String,
+        #[serde(default)]
+        numerator: Vec<Term>,
+        #[serde(default)]
+        denominator: Vec<Term>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annualise: Option<DayCount>,
+        #[serde(default)]
+        format: RatioFormat,
+    },
+}
+
+impl NamedMeasure {
+    pub fn name(&self) -> &str {
+        match self {
+            NamedMeasure::Base { name, .. } | NamedMeasure::Ratio { name, .. } => name,
+        }
+    }
+    pub fn tab(&self) -> &str {
+        match self {
+            NamedMeasure::Base { tab, .. } | NamedMeasure::Ratio { tab, .. } => tab,
+        }
+    }
+    pub fn is_ratio(&self) -> bool {
+        matches!(self, NamedMeasure::Ratio { .. })
+    }
+    /// Percent ratios show a change in percentage points.
+    pub fn is_percent_ratio(&self) -> bool {
+        matches!(self, NamedMeasure::Ratio { format: RatioFormat::Percent, .. })
+    }
+}
+
+/// A flow (a total over the window or a YTD movement) can be annualised; a balance or a count cannot.
+pub fn is_flow(agg: TimeAgg) -> bool {
+    matches!(agg, TimeAgg::TotalFlow | TimeAgg::PeriodAmount)
+}
+
+/// The named measure of the open project's model with this name.
+pub fn find_measure(name: &str) -> Option<NamedMeasure> {
+    crate::model::scope().and_then(|c| c.measures.iter().find(|m| m.name() == name).cloned())
+}
+
+/// Why `m` can't be saved among `all` (the measures of the project, without `m` itself when it is being edited), or `None`.
+pub fn check_measure(all: &[NamedMeasure], m: &NamedMeasure) -> Option<String> {
+    let name = m.name().trim();
+    if name.is_empty() {
+        return Some("Give the measure a name.".to_string());
+    }
+    if all.iter().any(|o| o.name().trim().eq_ignore_ascii_case(name)) {
+        return Some(format!("A measure called '{}' already exists. Names must be different.", name));
+    }
+    match m {
+        NamedMeasure::Base { column, aggregation, weight, .. } => {
+            if *aggregation == TimeAgg::Measure {
+                return Some("Pick an aggregation for the measure.".to_string());
+            }
+            if aggregation.needs_number() && column.trim().is_empty() {
+                return Some(format!("'{}': pick the column the measure adds up.", name));
+            }
+            if *aggregation == TimeAgg::WAvgAtClosing && weight.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                return Some(format!("'{}': a W.Avg at closing needs a weight column.", name));
+            }
+            None
+        }
+        NamedMeasure::Ratio { tab, numerator, denominator, annualise, .. } => {
+            if numerator.is_empty() {
+                return Some(format!("'{}': add at least one numerator term.", name));
+            }
+            if denominator.is_empty() {
+                return Some(format!("'{}': add at least one denominator term.", name));
+            }
+            for t in numerator.iter().chain(denominator.iter()) {
+                match all.iter().find(|o| o.name() == t.measure) {
+                    None => return Some(format!("'{}': the measure '{}' does not exist. Pick a base measure of this tab.", name, t.measure)),
+                    Some(o) if o.is_ratio() => return Some(format!("'{}': '{}' is a ratio. A ratio is made of base measures.", name, t.measure)),
+                    Some(o) if o.tab() != tab => return Some(format!("'{}': '{}' belongs to another tab. A ratio uses the measures of one tab.", name, t.measure)),
+                    _ => {}
+                }
+            }
+            if annualise.is_some() {
+                for t in numerator {
+                    if let Some(NamedMeasure::Base { aggregation, .. }) = all.iter().find(|o| o.name() == t.measure) {
+                        if !is_flow(*aggregation) {
+                            return Some(annualise_refusal(&t.measure));
+                        }
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+pub fn annualise_refusal(measure: &str) -> String {
+    format!("Only flows and period amounts can be annualised; '{}' is a balance.", measure)
+}
+
+/// Why `name` can't be removed: the ratios (`measures`) and the pivots and charts (`others`, by title) that use it.
+pub fn removal_refusal(measures: &[NamedMeasure], name: &str, others: &[String]) -> Option<String> {
+    let mut users: Vec<String> = measures
+        .iter()
+        .filter(|m| match m {
+            NamedMeasure::Ratio { numerator, denominator, .. } => numerator.iter().chain(denominator.iter()).any(|t| t.measure == name),
+            _ => false,
+        })
+        .map(|m| format!("ratio '{}'", m.name()))
+        .collect();
+    users.extend(others.iter().cloned());
+    if users.is_empty() {
+        None
+    } else {
+        Some(format!("'{}' is used by {}. Remove it from there first.", name, users.join(", ")))
+    }
+}
+
+/// The ratio of one window: the signed numerator over the signed denominator, the numerator scaled to a year when annualised.
+/// A blank term, a blank denominator or a denominator of 0 gives a blank with its reason, never 0.
+pub fn ratio_value(name: &str, num: &[(Measured, f64)], den: &[(Measured, f64)], annual: Option<f64>, percent: bool, text: &str) -> Measured {
+    let mut n = 0.0;
+    for (m, s) in num {
+        match m {
+            Measured::Value(v) => n += v * s,
+            Measured::Blank(why) => return Measured::Blank(why.clone()),
+        }
+    }
+    let mut d = 0.0;
+    for (m, s) in den {
+        match m {
+            Measured::Value(v) => d += v * s,
+            Measured::Blank(why) => return Measured::Blank(why.clone()),
+        }
+    }
+    if let Some(f) = annual {
+        n *= f;
+    }
+    if d == 0.0 {
+        return Measured::Blank(format!("The denominator of '{}' is 0 in {}, so the ratio can't be worked out.", name, text));
+    }
+    let r = n / d;
+    Measured::Value(if percent { r * 100.0 } else { r })
 }

@@ -34,6 +34,8 @@ pub struct TimeResult {
     pub date_is_datetime: bool,
     /// Value index, first date, last date, as-of date: the span a plain whole-data value covers. Only when the pivot has no Calendar field.
     pub spans: Vec<(usize, NaiveDate, NaiveDate, NaiveDate)>,
+    /// Notes of named measures (a ratio of averages of month-ends says so).
+    pub extra: Vec<String>,
 }
 
 /// The pivot's own Calendar fields: the fields of the date link of its data tab.
@@ -73,6 +75,94 @@ fn cell_texts(rk: &Key, ck: &Key, nr: usize, at: usize) -> Option<Option<String>
 /// Fills the time values of every cell of `cells` and returns why some are blank. `lf` is the pivot's input (its lookup fields joined)
 /// before the pivot's own filters; `row_keys` and `col_keys` are the keys the pivot shows.
 #[allow(clippy::too_many_arguments)]
+/// One daily series of a time value: a column, how it is aggregated, the rows it reads and its sign.
+struct Comp {
+    column: String,
+    agg: TimeAgg,
+    weight: Option<String>,
+    filters: Vec<FilterCondition>,
+    sign: f64,
+    /// A plain time value (no named measure): Show rows can list its rows.
+    plain: bool,
+    group: usize,
+    pos: usize,
+}
+
+/// What a time value is made of: one component, or a ratio of signed components (the term's sign beside its index).
+enum Res {
+    Single(usize),
+    Ratio { name: String, num: Vec<(usize, f64)>, den: Vec<(usize, f64)>, annualise: Option<crate::measures::DayCount>, percent: bool },
+}
+
+fn column_check(schema: &Schema, who: &str, column: &str, agg: TimeAgg) -> Result<()> {
+    let Some(dt) = schema.get(column) else {
+        bail!("Pivot: the measure '{}' reads the column '{}', which this tab no longer has. Edit it in Model \u{25b8} Measures\u{2026}.", who, column);
+    };
+    if agg.needs_number() && !dtype_is_number(dt) {
+        bail!("Pivot: the measure '{}' needs a number column, but '{}' is not one. Set it to a number in the schema.", who, column);
+    }
+    Ok(())
+}
+
+fn dtype_is_number(dt: &DataType) -> bool {
+    crate::pivot_table::dtype_is_numeric(dt)
+}
+
+fn base_comp(m: &crate::measures::NamedMeasure, schema: &Schema, sign: f64) -> Result<Comp> {
+    let crate::measures::NamedMeasure::Base { name, column, aggregation, filters, sign: s, weight, .. } = m else {
+        bail!("Pivot: '{}' is a ratio; a ratio is made of base measures.", m.name());
+    };
+    if aggregation.needs_number() || !column.is_empty() {
+        column_check(schema, name, column, *aggregation)?;
+    }
+    Ok(Comp { column: column.clone(), agg: *aggregation, weight: weight.clone(), filters: filters.clone(), sign: sign * s.factor(), plain: false, group: 0, pos: 0 })
+}
+
+/// The components of the value `j` of the pivot: its own column, or the base measures behind a named measure.
+fn resolve_value(spec: &PivotSpec, j: usize, ctx: &ModelContext, schema: &Schema, comps: &mut Vec<Comp>) -> Result<Res> {
+    let v = &spec.values[j];
+    let t = v.time.unwrap_or_default();
+    if t.agg != TimeAgg::Measure {
+        comps.push(Comp { column: v.field.clone(), agg: t.agg, weight: v.weight_col.clone(), filters: Vec::new(), sign: 1.0, plain: true, group: 0, pos: 0 });
+        return Ok(Res::Single(comps.len() - 1));
+    }
+    let Some(m) = ctx.measures.iter().find(|m| m.name() == v.field) else {
+        bail!("Pivot: the measure '{}' is not in the model of this project. Add it in Model \u{25b8} Measures\u{2026} or remove it from Values.", v.field);
+    };
+    if m.tab() != spec.data_tab {
+        bail!("Pivot: the measure '{}' belongs to another tab. Measures can only be used on the tab they are made for.", v.field);
+    }
+    match m {
+        crate::measures::NamedMeasure::Base { .. } => {
+            comps.push(base_comp(m, schema, 1.0)?);
+            Ok(Res::Single(comps.len() - 1))
+        }
+        crate::measures::NamedMeasure::Ratio { name, numerator, denominator, annualise, format, .. } => {
+            let mut side = |terms: &[crate::measures::Term], numerator_side: bool| -> Result<Vec<(usize, f64)>> {
+                let mut out = Vec::new();
+                for term in terms {
+                    let Some(b) = ctx.measures.iter().find(|x| x.name() == term.measure) else {
+                        bail!("Pivot: the ratio '{}' uses the measure '{}', which is not in the model. Edit the ratio in Model \u{25b8} Measures\u{2026}.", name, term.measure);
+                    };
+                    if numerator_side && annualise.is_some() {
+                        if let crate::measures::NamedMeasure::Base { aggregation, .. } = b {
+                            if !crate::measures::is_flow(*aggregation) {
+                                bail!("Pivot: {}", crate::measures::annualise_refusal(&term.measure));
+                            }
+                        }
+                    }
+                    comps.push(base_comp(b, schema, 1.0)?);
+                    out.push((comps.len() - 1, term.sign.factor()));
+                }
+                Ok(out)
+            };
+            let num = side(numerator, true)?;
+            let den = side(denominator, false)?;
+            Ok(Res::Ratio { name: name.clone(), num, den, annualise: *annualise, percent: *format == crate::measures::RatioFormat::Percent })
+        }
+    }
+}
+
 pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels: &[Vec<usize>], nr: usize, row_keys: &[Key], col_keys: &[Key], cells: &mut Cells) -> Result<TimeResult> {
     let (ctx, cal, link) = context_of(spec)?;
     let title = cal.title_of(&spec.data_tab);
@@ -137,31 +227,33 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
     if let Some(p) = crate::pivot_table::filter_predicate(&spec_rows, schema) {
         tw = tw.filter(p);
     }
-    let mut exprs: Vec<Expr> = vec![col(date_col).cast(DataType::Date).alias("__d")];
+    // the components of the time values: a plain value is one, a named measure is one (a base) or several (a ratio's terms)
     let nc_at: Vec<usize> = (0..fields.len()).filter(|i| !cal_at.contains(i)).collect();
-    for &i in &nc_at {
-        let dt = schema.get(fields[i].as_str()).cloned().unwrap_or(DataType::String);
-        exprs.push(key_text_expr(fields[i], &dt).alias(format!("__k{i}")));
-    }
     let time_js: Vec<usize> = spec.values.iter().enumerate().filter(|(_, v)| v.time.is_some()).map(|(j, _)| j).collect();
+    let mut comps: Vec<Comp> = Vec::new();
+    let mut resolved: HashMap<usize, Res> = HashMap::new();
     for &j in &time_js {
-        let v = &spec.values[j];
-        let dt = schema.get(v.field.as_str()).cloned().unwrap_or(DataType::String);
-        let agg = v.time.map(|t| t.agg).unwrap_or_default();
-        if agg.needs_number() {
-            exprs.push(col(v.field.as_str()).cast(DataType::Float64).alias(format!("__v{j}")));
-        } else {
-            exprs.push(lit(NULL).cast(DataType::Float64).alias(format!("__v{j}")));
-        }
-        exprs.push(key_text_expr(&v.field, &dt).alias(format!("__s{j}")));
-        match v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
-            Some(w) if agg == TimeAgg::WAvgAtClosing => exprs.push(col(w).cast(DataType::Float64).alias(format!("__w{j}"))),
-            _ => exprs.push(lit(NULL).cast(DataType::Float64).alias(format!("__w{j}"))),
-        }
+        let r = resolve_value(spec, j, &ctx, schema, &mut comps)?;
+        resolved.insert(j, r);
     }
-    let work = tw.select(exprs).filter(col("__d").is_not_null());
+    let mut groups: Vec<Vec<FilterCondition>> = Vec::new();
+    for c in comps.iter_mut() {
+        let g = match groups.iter().position(|f| *f == c.filters) {
+            Some(g) => g,
+            None => {
+                groups.push(c.filters.clone());
+                groups.len() - 1
+            }
+        };
+        c.group = g;
+    }
+    let mut in_group: Vec<Vec<usize>> = vec![Vec::new(); groups.len()];
+    for (ci, c) in comps.iter_mut().enumerate() {
+        c.pos = in_group[c.group].len();
+        in_group[c.group].push(ci);
+    }
 
-    // one group-by for each distinct set of non-Calendar keys the levels use
+    // one group-by for each distinct set of non-Calendar keys the levels use, in each group of filters
     let mut wanted: Vec<Vec<usize>> = Vec::new();
     for level in levels {
         let k: Vec<usize> = level.iter().copied().filter(|i| !cal_at.contains(i)).collect();
@@ -169,48 +261,80 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
             wanted.push(k);
         }
     }
-    let frames: Vec<LazyFrame> = wanted
-        .iter()
-        .map(|keys| {
+    let mut frames: Vec<LazyFrame> = Vec::new();
+    for (g, filters) in groups.iter().enumerate() {
+        let mut tg = tw.clone();
+        if !filters.is_empty() {
+            tg = crate::engine::filter_by_conditions(tg, filters).context("Pivot: the filters of a named measure could not be applied")?;
+        }
+        let mut exprs: Vec<Expr> = vec![col(date_col).cast(DataType::Date).alias("__d")];
+        for &i in &nc_at {
+            let dt = schema.get(fields[i].as_str()).cloned().unwrap_or(DataType::String);
+            exprs.push(key_text_expr(fields[i], &dt).alias(format!("__k{i}")));
+        }
+        for (n, &ci) in in_group[g].iter().enumerate() {
+            let c = &comps[ci];
+            let dt = schema.get(c.column.as_str()).cloned().unwrap_or(DataType::String);
+            if c.agg.needs_number() {
+                exprs.push(col(c.column.as_str()).cast(DataType::Float64).alias(format!("__v{n}")));
+            } else {
+                exprs.push(lit(NULL).cast(DataType::Float64).alias(format!("__v{n}")));
+            }
+            exprs.push(key_text_expr(&c.column, &dt).alias(format!("__s{n}")));
+            match c.weight.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+                Some(w) if c.agg == TimeAgg::WAvgAtClosing => exprs.push(col(w).cast(DataType::Float64).alias(format!("__w{n}"))),
+                _ => exprs.push(lit(NULL).cast(DataType::Float64).alias(format!("__w{n}"))),
+            }
+        }
+        let work = tg.select(exprs).filter(col("__d").is_not_null());
+        for keys in &wanted {
             let mut aggs: Vec<Expr> = Vec::new();
-            for &j in &time_js {
-                aggs.push(col(format!("__v{j}")).sum().cast(DataType::Float64).alias(format!("__sum{j}")));
-                aggs.push(col(format!("__s{j}")).is_not_null().cast(DataType::Int64).sum().cast(DataType::Float64).alias(format!("__cnt{j}")));
-                aggs.push(col(format!("__s{j}")).drop_nulls().n_unique().cast(DataType::Float64).alias(format!("__dst{j}")));
-                aggs.push((col(format!("__v{j}")) * col(format!("__w{j}"))).sum().cast(DataType::Float64).alias(format!("__ws{j}")));
-                aggs.push(col(format!("__w{j}")).sum().cast(DataType::Float64).alias(format!("__wt{j}")));
+            for n in 0..in_group[g].len() {
+                aggs.push(col(format!("__v{n}")).sum().cast(DataType::Float64).alias(format!("__sum{n}")));
+                aggs.push(col(format!("__s{n}")).is_not_null().cast(DataType::Int64).sum().cast(DataType::Float64).alias(format!("__cnt{n}")));
+                aggs.push(col(format!("__s{n}")).drop_nulls().n_unique().cast(DataType::Float64).alias(format!("__dst{n}")));
+                aggs.push((col(format!("__v{n}")) * col(format!("__w{n}"))).sum().cast(DataType::Float64).alias(format!("__ws{n}")));
+                aggs.push(col(format!("__w{n}")).sum().cast(DataType::Float64).alias(format!("__wt{n}")));
             }
             let mut by: Vec<Expr> = keys.iter().map(|i| col(format!("__k{i}"))).collect();
             by.push(col("__d"));
-            work.clone().group_by(by).agg(aggs)
-        })
-        .collect();
+            frames.push(work.clone().group_by(by).agg(aggs));
+        }
+    }
     let dfs = collect_all(frames).context("Pivot: the daily series could not be calculated")?;
-    // key texts -> (date -> stats of each time value)
+    // key texts -> (date -> stats of each component of the group)
     type Series = HashMap<Vec<Option<String>>, BTreeMap<NaiveDate, Vec<DayStats>>>;
-    let mut series: Vec<Series> = Vec::new();
-    for (keys, df) in wanted.iter().zip(dfs.iter()) {
-        let key_cols: Vec<Vec<Option<String>>> = keys.iter().map(|i| -> Result<Vec<Option<String>>> { Ok(df.column(&format!("__k{i}"))?.str()?.into_iter().map(|v| v.map(str::to_string)).collect()) }).collect::<Result<_>>()?;
-        let d = df.column("__d")?.cast(&DataType::Int32)?;
-        let d: Vec<Option<i32>> = d.i32()?.into_iter().collect();
-        let num = |name: String| -> Result<Vec<f64>> { Ok(df.column(&name)?.f64()?.into_iter().map(|v| v.filter(|x| x.is_finite()).unwrap_or(0.0)).collect()) };
-        let mut stats: Vec<[Vec<f64>; 5]> = Vec::new();
-        for &j in &time_js {
-            stats.push([num(format!("__sum{j}"))?, num(format!("__cnt{j}"))?, num(format!("__dst{j}"))?, num(format!("__ws{j}"))?, num(format!("__wt{j}"))?]);
-        }
-        let mut map: Series = HashMap::new();
-        for r in 0..df.height() {
-            let Some(date) = d[r].and_then(crate::dates::date_from_days) else { continue };
-            let key: Vec<Option<String>> = key_cols.iter().map(|c| c[r].clone()).collect();
-            let per_date = map.entry(key).or_default().entry(date).or_default();
-            if per_date.is_empty() {
-                per_date.resize(time_js.len(), DayStats::default());
+    let mut series: Vec<Vec<Series>> = Vec::new();
+    let mut dfi = dfs.iter();
+    for g in 0..groups.len() {
+        let mut per_keys: Vec<Series> = Vec::new();
+        for keys in wanted.iter() {
+            let Some(df) = dfi.next() else {
+                bail!("Pivot: the daily series of a measure could not be found. Open the pivot again.");
+            };
+            let key_cols: Vec<Vec<Option<String>>> = keys.iter().map(|i| -> Result<Vec<Option<String>>> { Ok(df.column(&format!("__k{i}"))?.str()?.into_iter().map(|v| v.map(str::to_string)).collect()) }).collect::<Result<_>>()?;
+            let d = df.column("__d")?.cast(&DataType::Int32)?;
+            let d: Vec<Option<i32>> = d.i32()?.into_iter().collect();
+            let num = |name: String| -> Result<Vec<f64>> { Ok(df.column(&name)?.f64()?.into_iter().map(|v| v.filter(|x| x.is_finite()).unwrap_or(0.0)).collect()) };
+            let mut stats: Vec<[Vec<f64>; 5]> = Vec::new();
+            for n in 0..in_group[g].len() {
+                stats.push([num(format!("__sum{n}"))?, num(format!("__cnt{n}"))?, num(format!("__dst{n}"))?, num(format!("__ws{n}"))?, num(format!("__wt{n}"))?]);
             }
-            for (n, s) in stats.iter().enumerate() {
-                per_date[n] = DayStats { sum: s[0][r], count: s[1][r], distinct: s[2][r], weighted: s[3][r], weight: s[4][r] };
+            let mut map: Series = HashMap::new();
+            for r in 0..df.height() {
+                let Some(date) = d[r].and_then(crate::dates::date_from_days) else { continue };
+                let key: Vec<Option<String>> = key_cols.iter().map(|c| c[r].clone()).collect();
+                let per_date = map.entry(key).or_default().entry(date).or_default();
+                if per_date.is_empty() {
+                    per_date.resize(in_group[g].len(), DayStats::default());
+                }
+                for (n, s) in stats.iter().enumerate() {
+                    per_date[n] = DayStats { sum: s[0][r], count: s[1][r], distinct: s[2][r], weighted: s[3][r], weight: s[4][r] };
+                }
             }
+            per_keys.push(map);
         }
-        series.push(map);
+        series.push(per_keys);
     }
 
     // the keys the cells have, level by level
@@ -304,7 +428,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         base: Option<crate::measures::Base>,
     }
     let mut periods: HashMap<Vec<Option<Option<String>>>, PeriodInfo> = HashMap::new();
-    let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))), spans: Vec::new() };
+    let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))), spans: Vec::new(), extra: Vec::new() };
     for (rk, ck) in targets {
         // the cell's non-Calendar key, in field order
         let mut nc_key: Vec<Option<String>> = Vec::new();
@@ -383,15 +507,50 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         });
         let (period, text) = (&entry.days, &entry.text);
         let empty: BTreeMap<NaiveDate, DayStats> = BTreeMap::new();
-        for (n, &j) in time_js.iter().enumerate() {
+        for &j in &time_js {
             let tv = spec.values[j].time.unwrap_or_default();
-            let agg = tv.agg;
-            let per_date: BTreeMap<NaiveDate, DayStats> = match series[which].get(&nc_key) {
-                Some(m) => m.iter().map(|(d, s)| (*d, s.get(n).copied().unwrap_or_default())).collect(),
-                None => empty.clone(),
+            let res = &resolved[&j];
+            let dates_of = |ci: usize| -> BTreeMap<NaiveDate, DayStats> {
+                let c = &comps[ci];
+                match series[c.group][which].get(&nc_key) {
+                    Some(m) => m.iter().map(|(d, s)| (*d, s.get(c.pos).copied().unwrap_or_default())).collect(),
+                    None => empty.clone(),
+                }
             };
+            let single_agg = match res {
+                Res::Single(ci) => comps[*ci].agg,
+                Res::Ratio { .. } => TimeAgg::Measure,
+            };
+            let term_dates: Vec<(usize, BTreeMap<NaiveDate, DayStats>)> = match res {
+                Res::Single(ci) => vec![(*ci, dates_of(*ci))],
+                Res::Ratio { num, den, .. } => num.iter().chain(den.iter()).map(|(ci, _)| (*ci, dates_of(*ci))).collect(),
+            };
+            let value_in = |days: &[NaiveDate], text: &str| -> Measured {
+                let eval = |ci: usize| -> Measured {
+                    let per = term_dates.iter().find(|(c, _)| *c == ci).map(|(_, m)| m);
+                    let m = evaluate(comps[ci].agg, per.unwrap_or(&empty), days, text, &timeline, month_end);
+                    match m {
+                        Measured::Value(v) => Measured::Value(v * comps[ci].sign),
+                        b => b,
+                    }
+                };
+                match res {
+                    Res::Single(ci) => eval(*ci),
+                    Res::Ratio { name, num, den, annualise, percent } => {
+                        let nums: Vec<(Measured, f64)> = num.iter().map(|(ci, s)| (eval(*ci), *s)).collect();
+                        let dens: Vec<(Measured, f64)> = den.iter().map(|(ci, s)| (eval(*ci), *s)).collect();
+                        let annual = match (annualise, days.last()) {
+                            (Some(dc), Some(end)) if !days.is_empty() => Some(dc.year_days(*end, &timeline.fiscal) / days.len() as f64),
+                            _ => None,
+                        };
+                        crate::measures::ratio_value(name, &nums, &dens, annual, *percent, text)
+                    }
+                }
+            };
+            let agg = single_agg;
+            let _ = agg;
             let (m, rows_days): (Measured, Vec<NaiveDate>) = if !tv.is_m4() {
-                (evaluate(agg, &per_date, period, text, &timeline, month_end), period.clone())
+                (value_in(period, text), period.clone())
             } else {
                 let plan = match crate::measures::plan(&tv, entry.base, as_of, &timeline.fiscal) {
                     Ok(p) => p,
@@ -405,13 +564,13 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                     }
                     Some((a, b)) => (crate::measures::days_between(a, b), format!("{} to {}", long_date(a), long_date(b))),
                 };
-                let current = evaluate(agg, &per_date, &cur_days, &cur_text, &timeline, month_end);
+                let current = value_in(&cur_days, &cur_text);
                 match plan.earlier.filter(|_| plan.current.is_some()) {
                     None => (current, cur_days),
                     Some((a, b)) => {
                         let e_days = crate::measures::days_between(a, b);
                         let e_text = format!("{} to {}", long_date(a), long_date(b));
-                        let earlier = evaluate(agg, &per_date, &e_days, &e_text, &timeline, month_end);
+                        let earlier = value_in(&e_days, &e_text);
                         let shows_earlier = tv.show == TimeShow::Value;
                         let rows_days = if shows_earlier { e_days } else { cur_days };
                         (crate::measures::combine(tv.show, true, current, Some((earlier, e_text))), rows_days)
@@ -419,8 +578,12 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 }
             };
             if m.value().is_some() {
-                if let Some(r) = crate::measures::rows_of(agg, &rows_days, &timeline, month_end) {
-                    out.rows.insert((rk.clone(), ck.clone(), j), r);
+                if let Res::Single(ci) = res {
+                    if comps[*ci].plain {
+                        if let Some(r) = crate::measures::rows_of(comps[*ci].agg, &rows_days, &timeline, month_end) {
+                            out.rows.insert((rk.clone(), ck.clone(), j), r);
+                        }
+                    }
                 }
             }
             let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
@@ -435,6 +598,18 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 }
             }
         }
+    }
+    if month_end {
+        for (j, r) in &resolved {
+            if let Res::Ratio { name, num, den, .. } = r {
+                if num.iter().chain(den.iter()).any(|(ci, _)| comps[*ci].agg == TimeAgg::AverageBalance) {
+                    out.extra.push(format!("{}: its average terms are averages of month-ends (the tab holds month-end data).", name));
+                }
+                let _ = j;
+            }
+        }
+        out.extra.sort();
+        out.extra.dedup();
     }
     // a plain value with no Calendar field keeps M3's whole-span number: say which span that is
     if cal_at.is_empty() {

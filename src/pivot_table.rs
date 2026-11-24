@@ -86,7 +86,7 @@ pub struct CellNote {
     pub text: String,
 }
 
-fn dtype_is_numeric(dt: &DataType) -> bool {
+pub(crate) fn dtype_is_numeric(dt: &DataType) -> bool {
     dt.is_numeric()
 }
 
@@ -138,6 +138,13 @@ pub fn validate_pivot(schema: &Schema, spec: &PivotSpec) -> Result<()> {
     }
     let mut labels: HashSet<String> = HashSet::new();
     for v in &spec.values {
+        if v.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+            // a named measure (Phase 9 M5): its columns are checked when it is worked out
+            if !labels.insert(v.label()) {
+                bail!("Pivot: '{}' is in Values twice. Remove one.", v.label());
+            }
+            continue;
+        }
         let dt = schema
             .get(v.field.as_str())
             .ok_or_else(|| anyhow::anyhow!("Pivot: column '{}' (in Values) was not found. Remove it or pick another column.", v.field))?;
@@ -487,12 +494,21 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     let month_end = time_result.as_ref().is_some_and(|t| t.month_end);
     let heading = |v: &PivotValue| -> String {
         match &v.time {
-            Some(t) => t.heading(&v.field, v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), month_end),
+            Some(t) => {
+                let h = t.heading(&v.field, v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), month_end);
+                // a change in a percent ratio is in percentage points
+                if t.agg == TimeAgg::Measure && t.show == TimeShow::Difference && crate::measures::find_measure(&v.field).is_some_and(|m| m.is_percent_ratio()) {
+                    format!("{} (pp)", h)
+                } else {
+                    h
+                }
+            }
             None => v.label(),
         }
     };
 
     if let Some(t) = &time_result {
+        warnings.extend(t.extra.iter().cloned());
         for (j, a, b, as_of) in &t.spans {
             if let Some(v) = spec.values.get(*j) {
                 warnings.push(crate::measures::span_note(&heading(v), *a, *b, *as_of));
@@ -1251,6 +1267,24 @@ pub fn pivot_value_format(v: &PivotValue, spec: &PivotSpec, decimals: usize) -> 
     }
     if v.time.is_some_and(|t| t.show == TimeShow::PercentChange) {
         return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 };
+    }
+    if v.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+        // a named measure (M5): a percent ratio in percent (a difference of two is in percentage points), a plain ratio as a number,
+        // a base measure as the column it adds up
+        match crate::measures::find_measure(&v.field) {
+            Some(crate::measures::NamedMeasure::Ratio { format: crate::measures::RatioFormat::Percent, .. }) => return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 },
+            Some(crate::measures::NamedMeasure::Ratio { .. }) => return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 2 },
+            Some(crate::measures::NamedMeasure::Base { column, aggregation, .. }) => {
+                if aggregation.is_count() {
+                    return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 0 };
+                }
+                return match classify_column_auto_format(&column) {
+                    MetricFormatType::Auto => ColumnFormatSpec { fmt_type: spec.scale.format_type().unwrap_or(MetricFormatType::Auto), decimals },
+                    other => ColumnFormatSpec { fmt_type: other, decimals },
+                };
+            }
+            None => {}
+        }
     }
     if matches!(v.agg, PivotAgg::Count | PivotAgg::CountDistinct) && v.time.is_none() || v.time.is_some_and(|t| t.agg.is_count()) {
         return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 0 };
