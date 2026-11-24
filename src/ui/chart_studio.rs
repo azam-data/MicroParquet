@@ -1015,6 +1015,8 @@ impl MicroParquetApp {
                 ui.label("Small multiples");
                 let shown = spec.facet.clone().unwrap_or_else(|| "(none)".to_string());
                 let parts = self.chart_date_parts();
+                let groups = self.chart_model_groups();
+                let warning = theme::tokens(self.dark_mode).warning;
                 let r = egui::ComboBox::from_id_salt("chart_facet").width(combo_w).height(theme::CHART_PICKER_POPUP_H).selected_text(shown).show_ui(ui, |ui| {
                     ui.selectable_value(&mut spec.facet, None, "(none)");
                     for c in avail.iter().filter(|c| **c != spec.category && spec.series.as_deref() != Some(c.as_str()) && !spec.drill.iter().any(|l| l.name == **c)) {
@@ -1024,6 +1026,10 @@ impl MicroParquetApp {
                     if let Some(f) = crate::ui::chart::date_part_items(ui, &parts, spec.facet.as_deref()) {
                         spec.facet = Some(f.name.clone());
                         spec.facet_part = Some(f);
+                    }
+                    if let Some(f) = crate::ui::chart::model_items(ui, &groups, spec.facet.as_deref(), warning) {
+                        spec.facet = Some(f.name.clone());
+                        spec.facet_model = Some(f);
                     }
                 });
                 rects.fields.push(("Facet".to_string(), r.response.rect));
@@ -1129,11 +1135,14 @@ impl MicroParquetApp {
             return;
         }
         let parts = self.chart_date_parts();
-        let shown = |l: &DrillLevel| match &l.part {
-            Some(p) => micro_parquet::dates::picker_label(&p.column, p.part),
-            None => l.name.clone(),
+        let groups = self.chart_model_groups();
+        let warning = tk.warning;
+        let shown = |l: &DrillLevel| match (&l.part, &l.model) {
+            (Some(p), _) => micro_parquet::dates::picker_label(&p.column, p.part),
+            (None, Some(m)) => m.picker(),
+            _ => l.name.clone(),
         };
-        let top = spec.drill.first().cloned().unwrap_or_else(|| DrillLevel { name: spec.category.clone(), part: spec.category_part.clone() });
+        let top = spec.drill.first().cloned().unwrap_or_else(|| DrillLevel { name: spec.category.clone(), part: spec.category_part.clone(), model: spec.category_model.clone() });
         let mut levels: Vec<DrillLevel> = if spec.drill.is_empty() { vec![top.clone()] } else { spec.drill.clone() };
         let before = levels.clone();
         let h = egui::CollapsingHeader::new(format!("Drill levels ({})", levels.len().saturating_sub(1))).id_salt("chart_drill").show(ui, |ui| {
@@ -1179,6 +1188,12 @@ impl MicroParquetApp {
                 if let Some(f) = crate::ui::chart::date_part_items(ui, &parts, None) {
                     if !used.contains(&f.name) {
                         levels.push(DrillLevel::of_part(&f));
+                    }
+                }
+                // M1: a lookup column as a level ("Region" then "Branch name")
+                if let Some(f) = crate::ui::chart::model_items(ui, &groups, None, warning) {
+                    if !used.contains(&f.name) {
+                        levels.push(DrillLevel::of_model(&f));
                     }
                 }
             });

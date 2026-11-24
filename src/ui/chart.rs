@@ -607,6 +607,8 @@ impl MicroParquetApp {
         let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
         let parts = self.chart_date_parts();
+        let groups = self.chart_model_groups();
+        let warning = theme::tokens(self.dark_mode).warning;
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
@@ -622,6 +624,13 @@ impl MicroParquetApp {
                     spec.by_value = false;
                     spec.category_part = Some(f);
                 }
+                // M1: the lookup columns of each link, "Branch master › Region"
+                if let Some(f) = model_items(ui, &groups, Some(spec.category.as_str()), warning) {
+                    spec.category = f.name.clone();
+                    spec.category_part = None;
+                    spec.by_value = false;
+                    spec.category_model = Some(f);
+                }
             });
             add(ui, "Category", rects, r.response.rect);
             ui.end_row();
@@ -635,6 +644,10 @@ impl MicroParquetApp {
                 if let Some(f) = date_part_items(ui, &parts, spec.series.as_deref()) {
                     spec.series = Some(f.name.clone());
                     spec.series_part = Some(f);
+                }
+                if let Some(f) = model_items(ui, &groups, spec.series.as_deref(), warning) {
+                    spec.series = Some(f.name.clone());
+                    spec.series_model = Some(f);
                 }
             });
             add(ui, "Series", rects, r.response.rect);
@@ -765,13 +778,13 @@ impl MicroParquetApp {
         // a part left behind when another column is picked is dropped (W2)
         spec.drop_stale_date_parts();
         // W6: with drill levels the Category picker names the top level, and the chart goes back to it
-        if spec.has_drill() && (spec.category != self.chart.spec.category || spec.category_part != self.chart.spec.category_part) {
+        if spec.has_drill() && (spec.category != self.chart.spec.category || spec.category_part != self.chart.spec.category_part || spec.category_model != self.chart.spec.category_model) {
             let mut levels = spec.drill.clone();
-            levels[0] = micro_parquet::charts::spec::DrillLevel { name: spec.category.clone(), part: spec.category_part.clone() };
+            levels[0] = micro_parquet::charts::spec::DrillLevel { name: spec.category.clone(), part: spec.category_part.clone(), model: spec.category_model.clone() };
             spec.set_drill(levels);
         }
         // W0 auto order: a category picked here with no order chosen gets the steps' order, Calendar or Ranges
-        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none();
+        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none() && spec.category_model.is_none();
         let auto = new_category && spec.order.is_natural() && !spec.by_value;
         if spec != self.chart.spec {
             let category = spec.category.clone();
@@ -1265,7 +1278,38 @@ pub(crate) fn date_part_items(ui: &mut egui::Ui, parts: &[micro_parquet::dates::
     picked
 }
 
+/// The lookup fields listed in a chart picker under their link ("Branch master › Region", Phase 9 M1); the one clicked. A broken
+/// link's fields are greyed and the reason is listed under them.
+pub(crate) fn model_items(ui: &mut egui::Ui, groups: &[crate::ui::model::LookupGroup], current: Option<&str>, warning: egui::Color32) -> Option<micro_parquet::model::ModelFieldRef> {
+    let mut picked = None;
+    for g in groups {
+        ui.separator();
+        for (r, _) in &g.columns {
+            let on = current == Some(r.name.as_str());
+            match &g.refusal {
+                Some(why) => {
+                    ui.add_enabled(false, egui::SelectableLabel::new(on, r.picker())).on_disabled_hover_text(why);
+                }
+                None => {
+                    if ui.selectable_label(on, r.picker()).clicked() {
+                        picked = Some(r.clone());
+                    }
+                }
+            }
+        }
+        if let Some(why) = &g.refusal {
+            ui.add(egui::Label::new(egui::RichText::new(why).size(theme::TEXT_LABEL).color(warning)).wrap());
+        }
+    }
+    picked
+}
+
 impl MicroParquetApp {
+    /// The lookup fields the chart pickers offer for the active tab (M1).
+    pub(crate) fn chart_model_groups(&self) -> Vec<crate::ui::model::LookupGroup> {
+        self.tabs.get(self.active_tab).map(|t| self.model_groups_for(t.id)).unwrap_or_default()
+    }
+
     /// The date parts the chart pickers offer for the active tab.
     pub(crate) fn chart_date_parts(&self) -> Vec<micro_parquet::dates::DateFieldRef> {
         self.tabs.get(self.active_tab).map(|t| date_parts_of(&t.cached_slice, self.calendar())).unwrap_or_default()

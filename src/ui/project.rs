@@ -212,8 +212,10 @@ impl MicroParquetApp {
             self.project.close_confirmed = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        self.model_scope_refresh();
         self.project_advance();
         self.model_tick();
+        self.model_scope_refresh();
         if self.project.active {
             let now = ctx.input(|i| i.time);
             if now - self.project.fp_checked_at > 0.4 { // not a size: seconds between two checks of the unsaved marker

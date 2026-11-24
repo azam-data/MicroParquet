@@ -453,6 +453,8 @@ pub struct PickerRequest {
     pub field: String,
     pub search: Option<String>,
     pub temp_dir: PathBuf,
+    /// The field is a lookup field (Phase 9 M1): its values are the lookup column's, with "(no match)" and "(blank)".
+    pub lookup: Option<crate::model::ModelFieldRef>,
 }
 
 pub struct PickerResult {
@@ -466,8 +468,12 @@ pub struct PickerResult {
 pub fn compute_picker_values(req: PickerRequest, ctx: &JobCtx) -> Result<PickerResult> {
     ctx.set_progress("Listing the values…", None);
     ctx.check()?;
-    let PickerRequest { tab_id, token, source, steps, field, search, temp_dir } = req;
+    let PickerRequest { tab_id, token, source, steps, field, search, temp_dir, lookup } = req;
     let values = compile_tab_lazy(&source, &steps, &temp_dir)
+        .and_then(|lf| match &lookup {
+            Some(f) => crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: field.clone(), as_: crate::model::LookupAs::Text }], "Filter"),
+            None => Ok(lf),
+        })
         .and_then(|lf| crate::value_picker::picker_values(lf, &field, search.as_deref(), crate::value_picker::PICKER_LIMIT))
         .map_err(|e| format!("{:#}", e));
     Ok(PickerResult { tab_id, token, field, search, values })
@@ -1214,6 +1220,8 @@ pub struct PivotValuesRequest {
     pub steps: Vec<TransformStep>,
     pub field: String,
     pub temp_dir: PathBuf,
+    /// The field is a lookup field (Phase 9 M1): its values are the lookup column's, with "(no match)" and "(blank)".
+    pub lookup: Option<crate::model::ModelFieldRef>,
 }
 
 pub struct PivotValuesResult {
@@ -1228,7 +1236,24 @@ pub const PIVOT_FILTER_VALUES_MAX: usize = 2000;
 pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<PivotValuesResult> {
     ctx.check()?;
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
-    let values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
+    let lf = match &req.lookup {
+        Some(f) => match crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: req.field.clone(), as_: crate::model::LookupAs::Text }], "Filter") {
+            Ok(lf) => lf,
+            Err(e) => return Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values: Err(format!("{:#}", e)) }),
+        },
+        None => lf,
+    };
+    let mut values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
+    if req.lookup.is_some() {
+        // the lookup's "(blank)" and "(no match)" come last, in that order
+        if let Ok((v, _)) = &mut values {
+            v.sort_by_key(|x| match x {
+                None => 1,
+                Some(t) if t == crate::model::NO_MATCH_LABEL => 2,
+                Some(_) => 0,
+            });
+        }
+    }
     Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })
 }
 

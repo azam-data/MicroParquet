@@ -28,22 +28,40 @@ pub struct FieldKey {
     pub name: String,
     pub column: String,
     pub part: Option<DateFieldRef>,
+    /// The field is a lookup field (Phase 9 M1): `name` and `column` are its name, "Branch master · Region".
+    pub lookup: Option<micro_parquet::model::ModelFieldRef>,
 }
 
 impl FieldKey {
     pub fn column(name: &str) -> Self {
-        FieldKey { name: name.to_string(), column: name.to_string(), part: None }
+        FieldKey { name: name.to_string(), column: name.to_string(), part: None, lookup: None }
     }
 
     pub fn of(name: &str, part: &Option<DateFieldRef>) -> Self {
         match part {
-            Some(p) => FieldKey { name: p.name.clone(), column: p.column.clone(), part: Some(p.clone()) },
+            Some(p) => FieldKey { name: p.name.clone(), column: p.column.clone(), part: Some(p.clone()), lookup: None },
             None => Self::column(name),
         }
     }
 
+    /// A lookup field.
+    pub fn of_lookup(f: &micro_parquet::model::ModelFieldRef) -> Self {
+        FieldKey { name: f.name.clone(), column: f.name.clone(), part: None, lookup: Some(f.clone()) }
+    }
+
+    /// The chart's category, series or panels: a column, a date part or a lookup field.
+    pub fn of_field(name: &str, part: &Option<DateFieldRef>, model: &Option<micro_parquet::model::ModelFieldRef>) -> Self {
+        match model.as_ref().filter(|m| m.name == name) {
+            Some(m) => Self::of_lookup(m),
+            None => Self::of(name, part),
+        }
+    }
+
     fn of_condition(c: &FilterCondition) -> Self {
-        Self::of(&c.column, &c.part)
+        match &c.lookup {
+            Some(l) => Self::of_lookup(l),
+            None => Self::of(&c.column, &c.part),
+        }
     }
 }
 
@@ -77,7 +95,7 @@ impl MicroParquetApp {
         panel.token += 1;
         panel.waiting = true;
         panel.error = None;
-        let req = micro_parquet::tab_jobs::PickerRequest { tab_id: tab.id, token: panel.token, source: tab.source.clone(), steps, field: key.name.clone(), search, temp_dir: self.paths.temp_dir.clone() };
+        let req = micro_parquet::tab_jobs::PickerRequest { tab_id: tab.id, token: panel.token, source: tab.source.clone(), steps, field: key.name.clone(), search, temp_dir: self.paths.temp_dir.clone(), lookup: key.lookup.clone() };
         let tab_id = tab.id;
         self.jobs.submit(JobKey::tab(JobKind::ChartPickerValues, tab_id), "Listing the values", false, move |ctx| micro_parquet::tab_jobs::compute_picker_values(req, ctx).map(|r| JobOutput::ChartPicker(Box::new(r))));
     }
@@ -117,7 +135,7 @@ impl MicroParquetApp {
             return;
         }
         let token = ui.panel.token;
-        ui.panel = PickerPanel { owner: Some(0), field: key.name.clone(), token, part: key.part.clone(), ..Default::default() };
+        ui.panel = PickerPanel { owner: Some(0), field: key.name.clone(), token, part: key.part.clone(), lookup: key.lookup.clone(), ..Default::default() };
         ui.open = Some(key.clone());
         self.chart_picker_request(key, None);
     }
@@ -128,6 +146,8 @@ impl MicroParquetApp {
         let calendar = self.calendar();
         let sort_lists = self.sort_lists.lists.clone();
         let date_cols: Vec<String> = self.tabs.get(self.active_tab).map(|t| t.cached_slice.get_columns().iter().filter(|c| micro_parquet::dates::is_date_type(c.dtype())).map(|c| c.name().to_string()).collect()).unwrap_or_default();
+        let groups = self.chart_model_groups();
+        let lookup_named = |n: &str| groups.iter().find_map(|g| g.columns.iter().find(|(r, _)| r.name == n).map(|(r, _)| r.clone()));
         let mut panel = std::mem::take(&mut self.chart.filters_ui.panel);
         let mut open = self.chart.filters_ui.open.clone();
         let mut add = self.chart.filters_ui.add.clone();
@@ -143,9 +163,9 @@ impl MicroParquetApp {
         let mut new_filter: Option<FilterCondition> = None;
         let mut add_problem_text: Option<String> = None;
         let fields: Vec<(&str, FieldKey)> = [
-            ("Category", Some(FieldKey::of(&spec.category, &spec.category_part)).filter(|k| !k.name.is_empty())),
-            ("Series", spec.series.as_ref().map(|s| FieldKey::of(s, &spec.series_part))),
-            ("Panels", spec.facet.as_ref().map(|s| FieldKey::of(s, &spec.facet_part))),
+            ("Category", Some(FieldKey::of_field(&spec.category, &spec.category_part, &spec.category_model)).filter(|k| !k.name.is_empty())),
+            ("Series", spec.series.as_ref().map(|s| FieldKey::of_field(s, &spec.series_part, &spec.series_model))),
+            ("Panels", spec.facet.as_ref().map(|s| FieldKey::of_field(s, &spec.facet_part, &spec.facet_model))),
         ]
         .into_iter()
         .filter_map(|(l, k)| k.map(|k| (l, k)))
@@ -166,6 +186,7 @@ impl MicroParquetApp {
                 None => (Vec::new(), false),
             };
             panel.part = key.part.clone();
+            panel.lookup = key.lookup.clone();
             panel.calendar = calendar;
             let order = match &key.part {
                 Some(p) => p.sort_order().unwrap_or_default(),
@@ -180,7 +201,7 @@ impl MicroParquetApp {
                         spec.filters.remove(i);
                     }
                 } else {
-                    let c = FilterCondition { column: key.column.clone(), op: CondOp::InList, values: values.clone(), or_blank: blank, part: key.part.clone(), value: values.join(", "), ..Default::default() };
+                    let c = FilterCondition { column: key.column.clone(), op: CondOp::InList, values: values.clone(), or_blank: blank, part: key.part.clone(), lookup: key.lookup.clone(), value: values.join(", "), ..Default::default() };
                     match existing {
                         Some(i) => spec.filters[i] = c,
                         None => spec.filters.push(c),
@@ -259,6 +280,15 @@ impl MicroParquetApp {
                             add_value2.clear();
                             add_list = None;
                         }
+                    }
+                    // Phase 9 M1: the lookup columns of each link
+                    if let Some(f) = crate::ui::chart::model_items(ui, &groups, add.as_ref().map(|(a, _)| a.as_str()), tk.warning) {
+                        add = Some((f.name.clone(), None));
+                        open_now = Some(FieldKey::of_lookup(&f));
+                        add_op = None;
+                        add_value.clear();
+                        add_value2.clear();
+                        add_list = None;
                     }
                 });
                 rects.fields.push(("Add a filter".to_string(), r.response.rect));
@@ -371,7 +401,10 @@ impl MicroParquetApp {
             }
             // the tick list of the filter being added (until it has a value, it is not a filter)
             if let Some((col, part)) = add.clone().filter(|_| add_op.is_none()) {
-                let key = FieldKey::of(&col, &part.map(|p| DateFieldRef::new(&col, p, calendar)));
+                let key = match lookup_named(&col) {
+                    Some(f) => FieldKey::of_lookup(&f),
+                    None => FieldKey::of(&col, &part.map(|p| DateFieldRef::new(&col, p, calendar))),
+                };
                 if open.as_ref() == Some(&key) && !hosts_by_field(&key) && !spec.filters.iter().any(|c| c.op == CondOp::InList && FieldKey::of_condition(c) == key) {
                     tick_list(ui, spec, &mut panel, &key, &mut ask);
                 }
@@ -405,7 +438,10 @@ impl MicroParquetApp {
         }
         // the adding row is done once its filter exists: the list row takes over
         if let Some((col, part)) = self.chart.filters_ui.add.clone() {
-            let key = FieldKey::of(&col, &part.map(|p| DateFieldRef::new(&col, p, calendar)));
+            let key = match lookup_named(&col) {
+                Some(f) => FieldKey::of_lookup(&f),
+                None => FieldKey::of(&col, &part.map(|p| DateFieldRef::new(&col, p, calendar))),
+            };
             if spec.filters.iter().any(|c| c.op == CondOp::InList && FieldKey::of_condition(c) == key) {
                 self.chart.filters_ui.add = None;
             }

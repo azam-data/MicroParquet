@@ -114,7 +114,7 @@ impl MicroParquetApp {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };
-        let req = PivotValuesRequest { tab_id: tab.id, source: tab.source.clone(), steps: tab.steps.clone(), field: column.to_string(), temp_dir: self.paths.temp_dir.clone() };
+        let req = PivotValuesRequest { tab_id: tab.id, source: tab.source.clone(), steps: tab.steps.clone(), field: column.to_string(), temp_dir: self.paths.temp_dir.clone(), lookup: None };
         self.sort_lists.tenor_wait = Some((tab.id, column.to_string()));
         let key = JobKey::tab(JobKind::PivotValues, tab.id);
         self.jobs.submit(key, "Values of a column", false, move |ctx| compute_pivot_values(req, ctx).map(|r| JobOutput::PivotValues(Box::new(r))));

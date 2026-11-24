@@ -784,6 +784,10 @@ pub struct FilterCondition {
     /// name, its Month-Year …) instead of the date. `None`: the column itself (every condition before W2).
     #[serde(default)]
     pub part: Option<crate::dates::DateFieldRef>,
+    /// The condition is on a lookup column seen from this tab (Phase 9 M1): `column` is the field's name ("Branch master · Region") and
+    /// the rows are kept (or left out) by the lookup row their key matches. `None`: a column of the table (every condition before M1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup: Option<crate::model::ModelFieldRef>,
 }
 
 /// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
@@ -823,6 +827,9 @@ impl FilterCondition {
 
     /// What the condition tests: the column, or "Open Date › Day name" for a date part (W2).
     pub fn subject(&self) -> String {
+        if let Some(l) = &self.lookup {
+            return l.picker();
+        }
         match &self.part {
             Some(p) => crate::dates::picker_label(&self.column, p.part),
             None => self.column.clone(),
@@ -1560,9 +1567,24 @@ pub struct PivotSpec {
     /// Date parts used as fields ("Open Date · Month", Phase 8 W2): added as columns before grouping.
     #[serde(default)]
     pub date_fields: Vec<crate::dates::DateFieldRef>,
+    /// Lookup columns used as fields ("Branch master · Region", Phase 9 M1): joined on the worker before grouping, never added to the tab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_fields: Vec<crate::model::ModelFieldRef>,
     /// How the pivot is shown (Phase 9 P2). Side by side is not written, so pivots made before keep their bytes.
     #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
     pub layout: PivotLayout,
+}
+
+impl PivotSpec {
+    /// True when the field is in Rows, Columns, Filters or Values.
+    pub fn uses_field(&self, name: &str) -> bool {
+        self.labels_with(name) || self.values.iter().any(|v| v.field == name || v.weight_col.as_deref() == Some(name))
+    }
+
+    /// True when the field labels the pivot (Rows, Columns or Filters), where a lookup field is text.
+    pub fn labels_with(&self, name: &str) -> bool {
+        self.rows.iter().chain(self.columns.iter()).any(|f| f == name) || self.filters.iter().any(|f| f.field == name)
+    }
 }
 
 /// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
@@ -1949,6 +1971,9 @@ pub enum TransformStep {
         /// Date parts used as fields (Phase 8 W2).
         #[serde(default)]
         date_fields: Vec<crate::dates::DateFieldRef>,
+        /// Lookup columns used as fields (Phase 9 M1).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        model_fields: Vec<crate::model::ModelFieldRef>,
         /// How the pivot is shown (Phase 9 P2); the table the step gives is the same.
         #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
         layout: PivotLayout,
@@ -2194,7 +2219,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields, layout } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields, model_fields, layout } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -2207,6 +2232,7 @@ impl TransformStep {
                 sort_by_value: *sort_by_value,
                 field_orders: field_orders.clone(),
                 date_fields: date_fields.clone(),
+                model_fields: model_fields.clone(),
                 layout: *layout,
             }),
             _ => None,
@@ -2228,6 +2254,7 @@ impl TransformStep {
             sort_by_value: spec.sort_by_value,
             field_orders: spec.field_orders,
             date_fields: spec.date_fields,
+            model_fields: spec.model_fields,
             layout: spec.layout,
         }
     }

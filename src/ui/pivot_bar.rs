@@ -111,12 +111,14 @@ impl MicroParquetApp {
         if let Some(d) = tab.steps.get(i).and_then(|s| s.as_pivot_spec()).and_then(|s| s.date_fields.into_iter().find(|d| d.name == field)) {
             steps.push(TransformStep::date_field_step(&d));
         }
+        let lookup = tab.steps.get(i).and_then(|s| s.as_pivot_spec()).and_then(|s| s.model_fields.into_iter().find(|m| m.name == field));
         let req = micro_parquet::tab_jobs::PivotValuesRequest {
             tab_id: tab.id,
             source: tab.source.clone(),
             steps,
             field: field.to_string(),
             temp_dir: self.paths.temp_dir.clone(),
+            lookup,
         };
         self.pivot_bar.popup = Some(BarPopup { tab_id: tab.id, step_index: i, field: field.to_string(), search: String::new(), values: None, checked: HashSet::new() });
         let key = JobKey::tab(JobKind::PivotValues, tab.id);

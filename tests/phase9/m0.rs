@@ -384,6 +384,7 @@ fn m0_the_open_line_the_status_bar_and_the_status_texts_say_what_they_should() {
     assert_eq!(LinkStatus::OkUnmatched(12).text(), "OK \u{b7} 12 unmatched keys");
     assert_eq!(LinkStatus::OkUnmatched(1).text(), "OK \u{b7} 1 unmatched key");
     assert_eq!(LinkStatus::Broken(vec!["3 duplicate keys".into(), "2 blank lookup keys".into()]).text(), "Broken: 3 duplicate keys, 2 blank lookup keys");
+    assert_eq!(LinkStatus::Failed("the tab 'Branch master' is closed".into()).text(), "Can't check: the tab 'Branch master' is closed");
     assert!(LinkStatus::Failed("x".into()).is_broken() && !LinkStatus::OkUnmatched(3).is_broken());
 }
 
@@ -394,7 +395,7 @@ fn m0_a_tab_that_changed_since_the_link_was_made_says_so_instead_of_guessing() {
     let look = tab("t2", "Branch master", parquet(&d, "l", &DataFrame::new(vec![strs("Code", &["B1"])]).expect("l")));
     let gone = Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![pair("Branch", "Gone")], unmatched_value: None };
     let e = check_link(&gone, &data, &look, &d, &|| Ok(())).err().expect("refused");
-    assert_eq!(format!("{e:#}"), "'Branch master' has no column 'Gone' any more");
+    assert_eq!(format!("{e:#}"), "'Branch master' has no column 'Gone'");
     let numeric = tab("t2", "Branch master", parquet(&d, "l2", &DataFrame::new(vec![Series::new("Code".into(), [1i64])]).expect("l")));
     let link = Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![pair("Branch", "Code")], unmatched_value: None };
     let e = check_link(&link, &data, &numeric, &d, &|| Ok(())).err().expect("refused");

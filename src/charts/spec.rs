@@ -472,15 +472,22 @@ pub struct DrillLevel {
     /// The date part, when the level is one (its calendar is the one the level was made with).
     #[serde(default)]
     pub part: Option<crate::dates::DateFieldRef>,
+    /// The lookup field, when the level is one (Phase 9 M1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::model::ModelFieldRef>,
 }
 
 impl DrillLevel {
     pub fn column(name: &str) -> Self {
-        Self { name: name.to_string(), part: None }
+        Self { name: name.to_string(), part: None, model: None }
     }
 
     pub fn of_part(f: &crate::dates::DateFieldRef) -> Self {
-        Self { name: f.name.clone(), part: Some(f.clone()) }
+        Self { name: f.name.clone(), part: Some(f.clone()), model: None }
+    }
+
+    pub fn of_model(f: &crate::model::ModelFieldRef) -> Self {
+        Self { name: f.name.clone(), part: None, model: Some(f.clone()) }
     }
 
     /// The condition "this field is `value`" (the text a mark's category shows; "(blank)" is the blank rows).
@@ -492,6 +499,7 @@ impl DrillLevel {
             values: if blank { Vec::new() } else { vec![value.to_string()] },
             or_blank: blank,
             part: self.part.clone(),
+            lookup: self.model.clone(),
             ..Default::default()
         }
     }
@@ -575,6 +583,13 @@ pub struct ChartSpec {
     pub series_part: Option<crate::dates::DateFieldRef>,
     /// The facet is a date part: its name is `facet`.
     pub facet_part: Option<crate::dates::DateFieldRef>,
+    /// The category, series or facet is a lookup field (Phase 9 M1): its name is `category`, `series` or `facet`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_model: Option<crate::model::ModelFieldRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series_model: Option<crate::model::ModelFieldRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facet_model: Option<crate::model::ModelFieldRef>,
     /// The order of the series (Q1): `None` = by size, as before Phase 8. Filled when a series is added.
     pub series_order: Option<SortOrder>,
     /// The order of the facet panels (Q1): `None` = largest first, as before Phase 8.
@@ -646,6 +661,9 @@ impl Default for ChartSpec {
             category_part: None,
             series_part: None,
             facet_part: None,
+            category_model: None,
+            series_model: None,
+            facet_model: None,
             series_order: None,
             facet_order: None,
             drill: Vec::new(),
@@ -683,8 +701,30 @@ impl ChartSpec {
         out
     }
 
-    /// Drops a date part whose field is no longer the category, series or facet (another column was picked).
+    /// The lookup fields the chart uses as its category, series or facet (Phase 9 M1): only those whose name is still the field's.
+    pub fn model_fields(&self) -> Vec<crate::model::ModelFieldRef> {
+        let mut out: Vec<crate::model::ModelFieldRef> = Vec::new();
+        for (f, field) in [(&self.category_model, Some(self.category.as_str())), (&self.series_model, self.series.as_deref()), (&self.facet_model, self.facet.as_deref())] {
+            if let Some(f) = f.as_ref().filter(|f| Some(f.name.as_str()) == field) {
+                if !out.contains(f) {
+                    out.push(f.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Drops a date part or lookup field whose field is no longer the category, series or facet (another column was picked).
     pub fn drop_stale_date_parts(&mut self) {
+        if self.category_model.as_ref().is_some_and(|p| p.name != self.category) {
+            self.category_model = None;
+        }
+        if self.series_model.as_ref().is_some_and(|p| Some(p.name.as_str()) != self.series.as_deref()) {
+            self.series_model = None;
+        }
+        if self.facet_model.as_ref().is_some_and(|p| Some(p.name.as_str()) != self.facet.as_deref()) {
+            self.facet_model = None;
+        }
         if self.category_part.as_ref().is_some_and(|p| p.name != self.category) {
             self.category_part = None;
         }
@@ -714,7 +754,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -734,6 +774,7 @@ impl ChartSpec {
             (self.kind == ChartKind::Donut) as u8,
             // the date parts (W2): their calendar changes the numbers
             self.date_fields(),
+            self.model_fields(),
             self.series_order,
             self.facet_order,
             // W6: the level, the path and the chart's own filters decide which rows are read
@@ -784,6 +825,7 @@ impl ChartSpec {
         if let Some(l) = self.drill.get(self.drill_path.len()).cloned() {
             self.category = l.name;
             self.category_part = l.part;
+            self.category_model = l.model;
         }
     }
 
@@ -862,6 +904,7 @@ impl ChartSpec {
     /// One of the chart's own filters in words: "Bank = Conventional", "Bank = Conventional or Islamic", "Bank \u{2260} Islamic".
     pub fn filter_text(c: &FilterCondition) -> String {
         let field = c.part.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| c.column.clone());
+        let field = if c.lookup.is_some() { field.replacen(" \u{b7} ", " \u{203a} ", 1) } else { field };
         // a comparison with a limit (Phase 8 W9): "Open Date \u{b7} Month-Year \u{2265} Aug 2025"
         match c.op {
             CondOp::Gt | CondOp::Gte | CondOp::Lt | CondOp::Lte => return format!("{} {} {}", field, c.op.label(), c.value.trim()),
@@ -928,12 +971,12 @@ impl ChartSpec {
         let other = crate::chart::OTHER_LABEL;
         let mut out = self.row_conditions();
         Self::refuse_other(category)?;
-        let level = self.current_level().cloned().unwrap_or_else(|| DrillLevel { name: self.category.clone(), part: self.category_part.clone() });
+        let level = self.current_level().cloned().unwrap_or_else(|| DrillLevel { name: self.category.clone(), part: self.category_part.clone(), model: self.category_model.clone() });
         out.push(level.condition(category, true));
-        for (value, name, part) in [(series, self.series.as_deref(), &self.series_part), (facet, self.facet.as_deref(), &self.facet_part)] {
+        for (value, name, part, model) in [(series, self.series.as_deref(), &self.series_part, &self.series_model), (facet, self.facet.as_deref(), &self.facet_part, &self.facet_model)] {
             if let (Some(v), Some(n)) = (value.filter(|v| !v.is_empty()), name) {
                 Self::refuse_other(v)?;
-                out.push(DrillLevel { name: n.to_string(), part: part.clone() }.condition(v, true));
+                out.push(DrillLevel { name: n.to_string(), part: part.clone(), model: model.clone() }.condition(v, true));
             }
         }
         Ok(out)
@@ -956,7 +999,7 @@ impl ChartSpec {
     /// (a filter that is already there is not added twice). `false` when it was there already.
     pub fn add_value_filter(&mut self, value: &str, keep: bool) -> anyhow::Result<bool> {
         Self::refuse_other(value)?;
-        let level = self.current_level().cloned().unwrap_or_else(|| DrillLevel { name: self.category.clone(), part: self.category_part.clone() });
+        let level = self.current_level().cloned().unwrap_or_else(|| DrillLevel { name: self.category.clone(), part: self.category_part.clone(), model: self.category_model.clone() });
         let cond = level.condition(value, keep);
         if self.filters.contains(&cond) {
             return Ok(false);

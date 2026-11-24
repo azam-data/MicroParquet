@@ -2728,9 +2728,16 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             let mut schema = lf
                 .collect_schema()
                 .context("Could not read the column types for this filter")?;
-            // a condition on a date part (W2) tests a column of that part, added here and dropped after
-            let (conditions, temps) = with_condition_parts(&mut lf, conditions, &schema)?;
+            // a condition on a lookup field (M1) tests a column of the lookup, joined here and dropped after
+            let (conditions, mut temps) = with_condition_lookups(&mut lf, conditions, &schema)?;
             if !temps.is_empty() {
+                schema = lf.collect_schema().context("Could not read the column types for this filter")?;
+            }
+            // a condition on a date part (W2) tests a column of that part, added here and dropped after
+            let (conditions, part_temps) = with_condition_parts(&mut lf, &conditions, &schema)?;
+            let parts_added = !part_temps.is_empty();
+            temps.extend(part_temps);
+            if parts_added {
                 schema = lf.collect_schema().context("Could not read the column types for this filter")?;
             }
             let mut exprs = Vec::with_capacity(conditions.len());
@@ -2982,6 +2989,30 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(res_lf)
         }
     }
+}
+
+/// The conditions of a filter that are on a lookup field (Phase 9 M1) made conditions on a column: each reads `__mp_lk<i>`, the
+/// lookup's column joined to the table by the link (text with "(no match)" for a text column; the lookup's own value for any
+/// other), added to `lf`. Returns the conditions to test and the names to drop after.
+pub fn with_condition_lookups(lf: &mut LazyFrame, conditions: &[FilterCondition], _schema: &Schema) -> Result<(Vec<FilterCondition>, Vec<String>)> {
+    let mut out = Vec::with_capacity(conditions.len());
+    let mut wants = Vec::new();
+    let mut temps = Vec::new();
+    for (i, c) in conditions.iter().enumerate() {
+        match &c.lookup {
+            Some(f) => {
+                let name = format!("__mp_lk{}", i);
+                wants.push(crate::model::LookupWant { field: f.clone(), out: name.clone(), as_: crate::model::LookupAs::TextIfText });
+                out.push(FilterCondition { column: name.clone(), lookup: None, ..c.clone() });
+                temps.push(name);
+            }
+            None => out.push(c.clone()),
+        }
+    }
+    if !wants.is_empty() {
+        *lf = crate::model::with_lookup_columns(lf.clone(), &wants, "Filter")?;
+    }
+    Ok((out, temps))
 }
 
 /// The conditions of a filter with their date parts (W2) made columns: each condition with a part reads a

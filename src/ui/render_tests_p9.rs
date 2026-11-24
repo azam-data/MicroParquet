@@ -1866,3 +1866,570 @@ fn m0_pictures_of_the_links_and_key_check_dialogs() {
         shoot(&mut rig, "model-key-check-dialog", dark, r.window.expand(10.0));
     }
 }
+
+// ================================================================================ M1: lookup fields
+
+use micro_parquet::model::ModelFieldRef;
+
+/// The rig of M1: the 150-branch tab linked to a "Branch master" of 140 branches (B141 to B150 have no row: 10 unmatched keys),
+/// in an open project, the key check done.
+fn m1_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {
+    m1_rig_with(name, ppp, w, h, dark, branch_master(), &|s| *s == LinkStatus::OkUnmatched(10))
+}
+
+/// `m1_rig` with another branch master, and what the key check must say before the test goes on.
+fn m1_rig_with(name: &str, ppp: f32, w: f32, h: f32, dark: bool, master: DataFrame, status: &dyn Fn(&LinkStatus) -> bool) -> (Rig, String) {
+    let mut rig = rig9(name, ppp, w, h);
+    rig.app.dark_mode = dark;
+    let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+    rig.app.project.active = true;
+    rig.app.project.name = "Treasury".into();
+    open_table(&mut rig, "Branch master", master);
+    let ids: Vec<u64> = rig.app.tabs.iter().map(|t| t.id).collect();
+    for (i, id) in ids.iter().enumerate() {
+        rig.app.project.keys.insert(*id, format!("t{}", i + 1));
+    }
+    rig.app.project.model.links = vec![model::Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: Some("Balance".into()) }];
+    rig.app.active_tab = 0;
+    pump(&mut rig, "the key check", &|r| status(&model_status(r, 0)));
+    (rig, what)
+}
+
+/// The Balance of branches B001 to B070 (Dhaka), B071 to B140 (Ctg) and B141 to B150 (no match): 1000 + 10 * i.
+const M1_DHAKA: f64 = 94150.0;
+const M1_CTG: f64 = 143150.0;
+const M1_NO_MATCH: f64 = 24450.0;
+
+fn region_ref(rig: &Rig) -> ModelFieldRef {
+    let g = rig.app.model_groups_for(rig.app.tabs[0].id);
+    g[0].columns.iter().find(|(r, _)| r.column == "Region").map(|(r, _)| r.clone()).expect("the Region field")
+}
+
+fn first_column(df: &DataFrame) -> Vec<String> {
+    let name = df.get_column_names()[0].to_string();
+    df.column(&name).expect("column").cast(&polars::prelude::DataType::String).expect("text").str().expect("str").into_iter().map(|v| v.unwrap_or("(blank)").to_string()).collect()
+}
+
+fn number_of(df: &DataFrame, label: &str) -> f64 {
+    let labels = first_column(df);
+    let at = labels.iter().position(|l| l == label).unwrap_or_else(|| panic!("'{label}' in {labels:?}"));
+    let name = df.get_column_names()[1].to_string();
+    df.column(&name).expect("value").cast(&polars::prelude::DataType::Float64).expect("f64").f64().expect("f64").get(at).expect("a number")
+}
+
+#[test]
+fn m1_the_pivot_field_list_expands_a_link_and_lookup_fields_go_to_rows_values_and_filters_by_real_clicks_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_rig("p9m1pivot", ppp, w, h, dark);
+            rig.app.run_command(&rig.ctx, CommandId::Pivot);
+            rig.draw(8);
+            let title = format!("{}  Pivot table", theme::ph::TABLE);
+            let mut place = Place::Docked;
+            // the link is under the tab's own columns, closed
+            let g = place.rects(&rig);
+            let expander = g.expanders.iter().find(|(n, _)| n == "Branch master \u{203a}").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the 'Branch master ›' expander in {:?}", g.expanders));
+            assert!(inside(expander, g.fields_list), "{what}: the expander {expander:?} is in the list {:?}", g.fields_list);
+            let own: Vec<egui::Rect> = g.field_rows.iter().map(|(_, r)| *r).collect();
+            assert_eq!(own.len(), 3, "{what}: the tab's own three columns: {:?}", g.field_rows);
+            assert!(own.iter().all(|r| r.bottom() <= expander.top() + 1.0), "{what}: the link is listed under the tab's own columns");
+            assert!(!g.field_rows.iter().any(|(n, _)| n.starts_with("Branch master")), "{what}: the lookup's columns are not listed while it is closed");
+            // a click expands it: the lookup's columns are listed as fields
+            place.click(&mut rig, expander);
+            let p = place.draw(&mut rig, 4);
+            let g = place.rects(&rig);
+            for f in ["Branch master \u{b7} Code", "Branch master \u{b7} Region"] {
+                let r = g.field_rows.iter().find(|(n, _)| n == f).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: '{f}' in {:?}", g.field_rows));
+                assert!(r.top() > expander.top(), "{what}: '{f}' is under its link");
+                assert!(inside(r, g.fields_list), "{what}: '{f}' {r:?} is in the list {:?}", g.fields_list);
+                assert!(g.field_menus.iter().any(|(n, m)| n == f && inside(*m, r.expand(1.0))), "{what}: '{f}' has its Add to menu");
+            }
+            assert!(painted_has(&p, "\u{203a} Region") && painted_has(&p, "\u{203a} Code"), "{what}: a lookup column is listed as '› Region'");
+            let r = assert_dialog_fits(&rig.ctx, &title, &what);
+            let texts = crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window);
+            assert_no_overlap(&texts, &what);
+            assert_not_clipped(&p, r.window, &what);
+            // the search finds a lookup column by its name
+            rig.app.pivot_builder.search = "regi".into();
+            place.draw(&mut rig, 3);
+            assert!(place.rects(&rig).field_rows.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>() == ["Branch master \u{b7} Region"], "{what}: the search lists only 'Region': {:?}", place.rects(&rig).field_rows);
+            rig.app.pivot_builder.search.clear();
+            place.draw(&mut rig, 3);
+
+            // Region to Rows, Balance to Values, by the field menus
+            add_to(&mut place, &mut rig, "Branch master \u{b7} Region", "Rows", &what);
+            add_to(&mut place, &mut rig, "Balance", "Values", &what);
+            assert_eq!(rig.app.pivot_builder.spec.rows, vec!["Branch master \u{b7} Region".to_string()], "{what}");
+            assert_eq!(rig.app.pivot_builder.spec.model_fields.len(), 1, "{what}: the spec names the lookup field");
+            assert_eq!(rig.app.pivot_builder.spec.model_fields[0].lookup_tab, "t2", "{what}");
+            wait_in(&mut place, &mut rig, "the preview", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+            let df = rig.app.pivot_builder.preview.clone().and_then(|p| p.ok()).expect("the preview");
+            assert_eq!(first_column(&df), ["Ctg", "Dhaka", "(no match)", "Grand total"], "{what}: the values, then (no match) last, then the total");
+            assert_eq!(number_of(&df, "Dhaka"), M1_DHAKA, "{what}");
+            assert_eq!(number_of(&df, "Ctg"), M1_CTG, "{what}");
+            assert_eq!(number_of(&df, "(no match)"), M1_NO_MATCH, "{what}: the unmatched keys' sum");
+            assert_eq!(number_of(&df, "Grand total"), 261750.0, "{what}: the total is the ungrouped total");
+            // a lookup field in Values: Count distinct of Region
+            add_to(&mut place, &mut rig, "Branch master \u{b7} Code", "Values", &what);
+            let v = rig.app.pivot_builder.spec.values.last().cloned().expect("a value");
+            assert_eq!((v.field.as_str(), v.agg), ("Branch master \u{b7} Code", micro_parquet::models::PivotAgg::Count), "{what}: a text lookup field is counted");
+            // the result: Create pivot tab
+            let create = button(&rig, "Create pivot tab").unwrap_or_else(|| panic!("{what}: Create pivot tab"));
+            click_rect(&mut rig, create);
+            pump(&mut rig, "the pivot tab", &|r| r.app.tabs.len() == 3 && r.app.tabs[2].total_rows > 0);
+            let step = serde_json::to_value(rig.app.tabs[2].steps.last().expect("a step")).expect("json");
+            assert_eq!(step["PivotTable"]["model_fields"][0]["name"], "Branch master \u{b7} Region", "{what}: the step names the field: {step}");
+            let used: Vec<String> = step["PivotTable"]["model_fields"].as_array().expect("fields").iter().map(|f| f["name"].as_str().unwrap_or("").to_string()).collect();
+            assert_eq!(used, ["Branch master \u{b7} Region", "Branch master \u{b7} Code"], "{what}: the two lookup fields the pivot uses, Rows and Values: {step}");
+            let tab = &rig.app.tabs[2];
+            assert_eq!(first_column(&tab.cached_slice), ["Ctg", "Dhaka", "(no match)", "Grand total"], "{what}: the tab shows the same");
+            assert_eq!(rig.app.tabs[0].total_rows, 150, "{what}: the data tab's row count never changes");
+        }
+    }
+}
+
+use crate::ui::render_tests_p8::{category_index, double_click, has_text, mark_at, pump_until, right_click, text_box, value_cell_of_row, PLOT_ID};
+
+/// The rows of a tab as its steps give them, read under the project's model (as the app's jobs read them).
+fn rows_under_model(rig: &Rig, at: usize) -> DataFrame {
+    let t = &rig.app.tabs[at];
+    model::with_scope(rig.app.project.model_ui.scope.clone(), || micro_parquet::engine::compile_tab_lazy(&t.source, &t.steps, &rig.app.paths.temp_dir).expect("compiles").collect().expect("collects"))
+}
+
+fn sum_balance_of(df: &DataFrame) -> f64 {
+    df.column("Balance").expect("Balance").f64().expect("f").into_iter().flatten().sum()
+}
+
+/// Picks `item` in the studio's box `name` by real clicks (the list is scrolled to the item if it is not shown).
+fn studio_pick(rig: &mut Rig, name: &str, item: &str, what: &str) {
+    rig.draw(4);
+    let b = rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the '{name}' box in {:?}", rig.app.chart.rects.fields.iter().map(|f| f.0.clone()).collect::<Vec<_>>()));
+    let p = click_rect(rig, b);
+    let at = last_box(&p, item, 0.0).unwrap_or_else(|| panic!("{what}: '{item}' in the list of '{name}': {:?}", p.boxes.iter().rev().take(40).map(|b| b.0.clone()).collect::<Vec<_>>()));
+    assert!(inside(at, rig.ctx.screen_rect()), "{what}: '{item}' {at:?} is in the window");
+    click_rect(rig, at);
+    rig.draw(4);
+}
+
+#[test]
+fn m1_the_chart_pickers_list_the_lookup_fields_and_the_chart_equals_the_pivots_totals_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_rig("p9m1chart", ppp, w, h, dark);
+            rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+            let mut spec = rig.app.chart.spec.clone();
+            spec.category = "Product".into();
+            spec.value = Some("Balance".into());
+            rig.app.chart_set_spec(spec);
+            pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+            // the Category picker lists the lookup's columns under the tab's own, as "Branch master › Region"
+            rig.draw(4);
+            let cat = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Category").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Category box"));
+            let p = click_rect(&mut rig, cat);
+            for item in ["Branch master \u{203a} Code", "Branch master \u{203a} Region"] {
+                let at = last_box(&p, item, 0.0).unwrap_or_else(|| panic!("{what}: '{item}' in the picker: {:?}", p.boxes.iter().rev().take(40).map(|b| b.0.clone()).collect::<Vec<_>>()));
+                assert!(at.left() >= rig.ctx.screen_rect().left() && at.right() <= rig.ctx.screen_rect().right() + 0.5, "{what}: '{item}' {at:?} is in the window");
+            }
+            let own_last = last_box(&p, "Balance", 0.0).expect("Balance");
+            let region = last_box(&p, "Branch master \u{203a} Region", 0.0).expect("Region");
+            assert!(region.top() > own_last.top(), "{what}: the lookup's columns come after the tab's own");
+            click_rect(&mut rig, region);
+            let want = region_ref(&rig);
+            assert_eq!(rig.app.chart.spec.category, "Branch master \u{b7} Region", "{what}");
+            assert_eq!(rig.app.chart.spec.category_model.as_ref(), Some(&want), "{what}: the chart names the field");
+            pump_until(&mut rig, "the chart by Region", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Branch master \u{b7} Region"));
+            let d = rig.app.chart.data.clone().expect("data");
+            assert_eq!(d.categories, ["Ctg", "Dhaka", "(no match)"], "{what}: (no match) last");
+            let v: Vec<f64> = d.values[0].iter().map(|x| x.expect("a value")).collect();
+            assert_eq!(v, [M1_CTG, M1_DHAKA, M1_NO_MATCH], "{what}: the chart shows the pivot's numbers");
+            // the same numbers as a pivot of the same field
+            let pivot = micro_parquet::models::PivotSpec { rows: vec![want.name.clone()], values: vec![micro_parquet::models::PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], model_fields: vec![want.clone()], row_totals: true, column_totals: true, ..Default::default() };
+            let lf = micro_parquet::engine::compile_tab_lazy(&rig.app.tabs[0].source, &[], &rig.app.paths.temp_dir).expect("lf");
+            let b = model::with_scope(rig.app.project.model_ui.scope.clone(), || micro_parquet::pivot_table::build_pivot(lf, &pivot)).expect("pivot");
+            assert_eq!([number_of(&b.df, "Ctg"), number_of(&b.df, "Dhaka"), number_of(&b.df, "(no match)")], [M1_CTG, M1_DHAKA, M1_NO_MATCH], "{what}");
+
+            // the Series picker lists them too (not the field that is the category)
+            studio_pick(&mut rig, "Category", "Product", &what);
+            pump_until(&mut rig, "the chart by Product", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.category == "Product"));
+            assert!(rig.app.chart.spec.category_model.is_none(), "{what}: the lookup field is left behind with the category");
+            studio_pick(&mut rig, "Series", "Branch master \u{203a} Region", &what);
+            assert_eq!(rig.app.chart.spec.series.as_deref(), Some("Branch master \u{b7} Region"), "{what}");
+            assert!(rig.app.chart.spec.series_model.is_some(), "{what}");
+            pump_until(&mut rig, "the chart by Product and Region", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.spec.series.as_deref() == Some("Branch master \u{b7} Region") && !d.series.is_empty() && d.series[0] != ""));
+            let d = rig.app.chart.data.clone().expect("data");
+            assert_eq!(d.series.last().map(String::as_str), Some("(no match)"), "{what}: the series sorts (no match) last: {:?}", d.series);
+            let total: f64 = d.values.iter().flatten().flatten().sum();
+            assert_eq!(total, 261750.0, "{what}: every row is in a series");
+            let p = rig.draw(3);
+            let r = rig.ctx.screen_rect();
+            assert!(p.boxes.iter().all(|(_, b)| b.left() >= r.left() - 0.5 && b.right() <= r.right() + 0.5), "{what}: nothing is cut at the window's edge");
+        }
+    }
+}
+
+/// Opens the tab's Filter dialog with one list condition on `Product` and picks the lookup field "Branch master › Region" for it by
+/// real clicks. Returns the dialog's title.
+fn m1_filter_on_region(rig: &mut Rig, what: &str) -> String {
+    rig.app.run_command(&rig.ctx, CommandId::Filter);
+    rig.app.filter.conditions = vec![FilterCondition { column: "Product".into(), op: CondOp::InList, ..Default::default() }];
+    rig.draw(4);
+    let title = "\u{E30C}  Filter rows".to_string();
+    assert_dialog_fits(&rig.ctx, &title, what);
+    let col = rig.app.filter.col_boxes.first().map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the column box"));
+    let p = click_rect(rig, col);
+    for item in ["Product", "Branch master \u{203a} Region", "Branch master \u{203a} Code"] {
+        assert!(last_box(&p, item, 0.0).is_some(), "{what}: the column list has '{item}': {:?}", p.boxes.iter().rev().take(30).map(|b| b.0.clone()).collect::<Vec<_>>());
+    }
+    let region = last_box(&p, "Branch master \u{203a} Region", 0.0).expect("Region");
+    assert!(inside(region, rig.ctx.screen_rect()), "{what}: the item {region:?} is in the window");
+    click_rect(rig, region);
+    rig.draw(4);
+    title
+}
+
+#[test]
+fn m1_the_filter_dialog_takes_a_lookup_field_its_value_picker_lists_no_match_last_and_the_filter_keeps_exactly_those_rows_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_rig("p9m1filter", ppp, w, h, dark);
+            let title = m1_filter_on_region(&mut rig, &what);
+            let c = rig.app.filter.conditions[0].clone();
+            assert_eq!((c.column.as_str(), c.lookup.as_ref().map(|l| l.column.as_str())), ("Branch master \u{b7} Region", Some("Region")), "{what}: the condition is on the lookup field");
+            assert_eq!(c.subject(), "Branch master \u{203a} Region", "{what}");
+            // the value picker lists the lookup's values
+            let pick = rig.app.filter.pick_buttons.first().map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the picker button"));
+            click_rect(&mut rig, pick);
+            for _ in 0..200 {
+                settle(&mut rig.app);
+                rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+                rig.draw(2);
+                if rig.app.picker.rects.rows.iter().any(|(t, _)| t == "(no match)") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let p = rig.draw(3);
+            let rows: Vec<String> = rig.app.picker.rects.rows.iter().map(|(t, _)| t.clone()).collect();
+            assert_eq!(rows, ["Ctg", "Dhaka", "(no match)"], "{what}: the values, then (no match) last: {rows:?}");
+            let r = assert_dialog_fits(&rig.ctx, "\u{E30C}  Filter rows", &what);
+            assert_no_overlap(&crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window), &what);
+            // (no match) is ticked like a value
+            let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == "(no match)").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the (no match) box"));
+            click_rect(&mut rig, b);
+            assert_eq!(rig.app.filter.conditions[0].values, vec!["(no match)".to_string()], "{what}");
+            // Apply: the tab keeps exactly the 10 unmatched rows (B141 to B150); the branch master tab is unchanged
+            let p = rig.draw(2);
+            let apply = last_box(&p, "\u{E182}  Apply to current tab", 0.0).unwrap_or_else(|| panic!("{what}: Apply"));
+            click_rect(&mut rig, apply);
+            settle(&mut rig.app);
+            pump_until(&mut rig, "the filtered tab", &|r| r.app.tabs[0].total_rows == 10);
+            let tab = &rig.app.tabs[0];
+            assert!(matches!(tab.steps.last(), Some(TransformStep::FilterGroup { .. })), "{what}: {:?}", tab.steps);
+            let df = rows_under_model(&rig, 0);
+            assert_eq!(df.height(), 10, "{what}: exactly the unmatched rows");
+            assert_eq!(sum_balance_of(&df), M1_NO_MATCH, "{what}: and their sum");
+            let branches: Vec<String> = df.column("Branch").expect("Branch").str().expect("str").into_iter().flatten().map(str::to_string).collect();
+            assert_eq!((branches.first().map(String::as_str), branches.last().map(String::as_str)), (Some("B141"), Some("B150")), "{what}");
+            assert_eq!(rig.app.tabs[1].total_rows, 140, "{what}: the branch master tab's rows are unchanged (no flow back)");
+        }
+    }
+}
+
+use crate::ui::render_tests_p8::{click_field, show_field, wait_list};
+
+/// The studio's chart of the book by the lookup field Region (Balance, sum), calculated.
+fn m1_region_chart(rig: &mut Rig, what: &str) {
+    rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+    rig.draw(4);
+    pump_until(rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+    let want = region_ref(rig);
+    let spec = micro_parquet::charts::spec::ChartSpec { category: want.name.clone(), category_model: Some(want), value: Some("Balance".into()), agg: micro_parquet::charts::spec::ChartAgg::Sum, kind: micro_parquet::charts::spec::ChartKind::Bar, top_n: 50, ..Default::default() };
+    rig.app.chart_set_spec(spec);
+    pump_until(rig, what, &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 3));
+    rig.draw(3);
+}
+
+#[test]
+fn m1_filters_on_this_chart_take_a_lookup_field_and_its_tick_list_has_no_match_light_and_dark_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_rig("p9m1cflt", ppp, w, h, dark);
+            let _ = dark;
+            m1_region_chart(&mut rig, "the chart by Region");
+            click_field(&mut rig, crate::ui::chart_filters::FILTERS_TITLE);
+            // the category's own tick list: the lookup's values with (no match) last, and the rows each has
+            click_field(&mut rig, "Values: Category");
+            wait_list(&mut rig);
+            let full = rig.app.chart.filters_ui.panel.full.clone().expect("the list");
+            let mut counts: Vec<(String, u64)> = full.values.iter().map(|(k, n)| (k.clone().unwrap_or_default(), *n)).collect();
+            counts.sort();
+            assert_eq!(counts, vec![("(no match)".to_string(), 10), ("Ctg".to_string(), 70), ("Dhaka".to_string(), 70)], "{what}");
+            let rows: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+            assert_eq!(rows, ["Ctg", "Dhaka", "(no match)"], "{what}: (no match) is last");
+            // untick (no match): the chart keeps Ctg and Dhaka, and the filter is on the lookup field
+            let b = crate::ui::render_tests_p8::tick_box(&mut rig, "(no match)");
+            click_rect(&mut rig, b);
+            rig.draw(4);
+            assert_eq!(rig.app.chart.spec.filters.len(), 1, "{what}");
+            let c = rig.app.chart.spec.filters[0].clone();
+            assert_eq!((c.column.as_str(), c.lookup.is_some(), c.values.clone()), ("Branch master \u{b7} Region", true, vec!["Ctg".to_string(), "Dhaka".to_string()]), "{what}: {c:?}");
+            pump_until(&mut rig, "the filtered chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.categories.len() == 2));
+            let d = rig.app.chart.data.clone().expect("data");
+            assert_eq!(d.values[0].iter().flatten().sum::<f64>(), M1_CTG + M1_DHAKA, "{what}: the matched branches only");
+            assert_eq!(micro_parquet::charts::spec::ChartSpec::filter_text(&c), "Branch master \u{203a} Region = Ctg or Dhaka", "{what}");
+            assert_eq!(rig.app.tabs[0].total_rows, 150, "{what}: the tab is not changed");
+            // the add-a-filter list offers the lookup's columns
+            let add = show_field(&mut rig, "Add a filter");
+            let p = click_rect(&mut rig, add);
+            for item in ["Product", "Branch master \u{203a} Region", "Branch master \u{203a} Code"] {
+                assert!(last_box(&p, item, 0.0).is_some(), "{what}: the Add a filter list has '{item}'");
+            }
+            let code = last_box(&p, "Branch master \u{203a} Code", 0.0).expect("Code");
+            click_rect(&mut rig, code);
+            wait_list(&mut rig);
+            let rows: Vec<String> = rig.app.chart.filters_ui.panel.rects.rows.iter().map(|(l, _)| l.clone()).collect();
+            assert!(rows.contains(&"B001".to_string()), "{what}: the tick list of the new filter lists the lookup's values: {:?}", rows.iter().take(4).collect::<Vec<_>>());
+            assert_eq!(rig.app.chart.filters_ui.open.as_ref().and_then(|k| k.lookup.as_ref()).map(|l| l.column.as_str()), Some("Code"), "{what}");
+        }
+    }
+}
+
+#[test]
+fn m1_show_rows_from_a_pivot_cell_and_a_chart_mark_grouped_by_a_lookup_field_give_the_cells_rows_and_sum_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m1_rig("p9m1rows", ppp, w, h, false);
+        rig.app.show_steps_sidebar = false;
+        // a pivot tab by Region
+        let region = region_ref(&rig);
+        let spec = PivotSpec { rows: vec![region.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, model_fields: vec![region.clone()], ..Default::default() };
+        let src = rig.app.tabs[0].source.clone();
+        rig.app.create_tab_from_source("Pivot: Region".into(), src, vec![TransformStep::from_pivot_spec(spec)], std::collections::HashMap::new());
+        settle(&mut rig.app);
+        let at = rig.app.tabs.len() - 1;
+        rig.app.active_tab = at;
+        pump(&mut rig, "the pivot", &|r| r.app.tabs[at].total_rows == 4);
+        let mut n = rig.app.tabs.len();
+        for (label, rows, sum) in [("Dhaka", 70usize, M1_DHAKA), ("(no match)", 10, M1_NO_MATCH), ("Ctg", 70, M1_CTG)] {
+            let p = rig.draw(4);
+            let cell = value_cell_of_row(&p, label, &what);
+            assert!(inside(cell, rig.ctx.screen_rect()), "{what}: the cell of {label}");
+            double_click(&mut rig, cell.center());
+            pump_until(&mut rig, &format!("the rows of {label}"), &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+            assert_eq!(rig.app.tabs[n].title, format!("Rows: Branch master \u{b7} Region = {label}"), "{what}");
+            let df = rows_under_model(&rig, n);
+            assert_eq!((df.height(), sum_balance_of(&df)), (rows, sum), "{what}: the rows tab of {label} equals the cell");
+            assert!(matches!(rig.app.tabs[n].steps.last(), Some(TransformStep::FilterGroup { keep_matching: true, .. })), "{what}");
+            let FilterCondition { lookup, .. } = rig.app.tabs[n].steps.last().and_then(|s| s.as_filter_group()).expect("a filter").0[0].clone() else { unreachable!() };
+            assert!(lookup.is_some(), "{what}: the filter is on the lookup field");
+            rig.app.active_tab = at;
+            n += 1;
+        }
+        // a chart mark of the studio's chart by Region: right-click, Show rows
+        rig.app.active_tab = 0;
+        rig.draw(3);
+        m1_region_chart(&mut rig, "the chart by Region");
+        let plot = egui::Id::new(PLOT_ID);
+        for (label, rows, sum) in [("Dhaka", 70usize, M1_DHAKA), ("(no match)", 10, M1_NO_MATCH)] {
+            // (the chart follows the active tab: back on the book's tab it is made again)
+            if rig.app.chart.spec.category_model.is_none() {
+                m1_region_chart(&mut rig, "the chart by Region");
+            }
+            let cats = rig.app.chart.data.as_ref().expect("data").categories.clone();
+            let i = category_index(&cats, label, &what);
+            let c = mark_at(&mut rig, plot, i).center();
+            let p = right_click(&mut rig, c);
+            click_rect(&mut rig, text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: Show rows")));
+            pump_until(&mut rig, &format!("the rows of the {label} mark"), &|r| r.app.tabs.len() == n + 1 && !r.app.jobs.any_busy());
+            let df = rows_under_model(&rig, n);
+            assert_eq!((df.height(), sum_balance_of(&df)), (rows, sum), "{what}: the rows tab of the {label} mark equals the mark");
+            rig.app.active_tab = 0;
+            rig.draw(3);
+            n += 1;
+        }
+    }
+}
+
+/// The branch master with B001 twice: its link is Broken ("1 duplicate key").
+fn broken_master() -> DataFrame {
+    let mut codes: Vec<String> = (0..140).map(|i| format!("B{:03}", i + 1)).collect();
+    codes.push("B001".into());
+    let regions: Vec<&str> = (0..141).map(|i| if i < 70 { "Dhaka" } else { "Ctg" }).collect();
+    DataFrame::new(vec![Series::new("Code".into(), codes).into(), Series::new("Region".into(), regions).into()]).expect("master")
+}
+
+const M1_REASON: &str = "'Branch master' has 1 duplicate key. Open Model \u{25b8} Key check to see it.";
+
+fn m1_broken_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {
+    m1_rig_with(name, ppp, w, h, dark, broken_master(), &|s| matches!(s, LinkStatus::Broken(_)))
+}
+
+#[test]
+fn m1_a_broken_links_fields_are_greyed_with_the_reason_in_the_pivot_list_the_chart_picker_and_the_filter_and_a_pivot_using_one_shows_the_reason_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        for dark in [false, true] {
+            let (mut rig, what) = m1_broken_rig("p9m1broken", ppp, w, h, dark);
+            assert_eq!(model_status(&rig, 0).text(), "Broken: 1 duplicate key", "{what}");
+            // the pivot's field list: the link is listed, its fields greyed, the reason under it
+            rig.app.run_command(&rig.ctx, CommandId::Pivot);
+            rig.draw(8);
+            let mut place = Place::Docked;
+            let g = place.rects(&rig);
+            let expander = g.expanders.iter().find(|(n, _)| n == "Branch master \u{203a}").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the expander"));
+            let p = place.click(&mut rig, expander);
+            assert!(painted_has(&p, M1_REASON), "{what}: the reason is under the link: {:?}", p.boxes.iter().rev().take(12).map(|b| b.0.clone()).collect::<Vec<_>>());
+            let g = place.rects(&rig);
+            assert_eq!(g.link_notes.len(), 1, "{what}");
+            let region = g.field_rows.iter().find(|(n, _)| n == "Branch master \u{b7} Region").map(|(_, r)| *r).expect("Region is listed");
+            assert!(inside(region, g.fields_list) && g.link_notes[0].1.bottom() <= region.top() + 1.0, "{what}: the note is above the greyed fields");
+            let tk = *theme::tokens(dark);
+            let ink = |text: &str| p.colors.iter().find(|(t, _)| t == text).map(|(_, c)| *c);
+            assert_eq!(ink("\u{203a} Region"), Some(tk.muted), "{what}: a field of a broken link is greyed");
+            assert_ne!(ink("\u{203a} Region"), Some(tk.ink), "{what}: not the colour of a usable field");
+            // its menu is disabled: a click opens nothing, and nothing is added
+            let menu = g.field_menus.iter().find(|(n, _)| n == "Branch master \u{b7} Region").map(|(_, r)| *r).expect("its menu");
+            let p = place.click(&mut rig, menu);
+            assert!(last_box(&p, "Add to Rows", menu.top()).is_none(), "{what}: the menu of a broken link's field does not open");
+            assert!(rig.app.pivot_builder.spec.rows.is_empty() && rig.app.pivot_builder.spec.model_fields.is_empty(), "{what}");
+            let r = assert_dialog_fits(&rig.ctx, &format!("{}  Pivot table", theme::ph::TABLE), &what);
+            assert_no_overlap(&crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window), &what);
+            // a saved pivot that uses one shows the reason instead of numbers (the dialog's preview, and the tab)
+            let region_field = { let g = rig.app.model_groups_for(rig.app.tabs[0].id); g[0].columns.iter().find(|(r, _)| r.column == "Region").map(|(r, _)| r.clone()).expect("Region") };
+            let spec = PivotSpec { rows: vec![region_field.name.clone()], values: vec![PivotValue { field: "Balance".into(), agg: micro_parquet::models::PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, model_fields: vec![region_field.clone()], ..Default::default() };
+            rig.app.pivot_builder.spec = spec.clone();
+            wait_in(&mut place, &mut rig, "the preview", &|r| r.app.pivot_builder.preview.is_some());
+            match &rig.app.pivot_builder.preview {
+                Some(Err(m)) => assert_eq!(m, M1_REASON, "{what}: the preview says why"),
+                other => panic!("{what}: the preview of a pivot on a broken link: {:?}", other.as_ref().map(|r| r.as_ref().map(|d| d.height()))),
+            }
+            let p = place.draw(&mut rig, 3);
+            assert!(painted_has(&p, M1_REASON), "{what}: the dialog shows the reason where the numbers would be");
+            let cancel = button(&rig, "Cancel").unwrap_or_else(|| panic!("{what}: Cancel"));
+            click_rect(&mut rig, cancel);
+            rig.draw(3);
+            let src = rig.app.tabs[0].source.clone();
+            rig.app.create_tab_from_source("Pivot: Region".into(), src, vec![TransformStep::from_pivot_spec(spec)], std::collections::HashMap::new());
+            settle(&mut rig.app);
+            let at = rig.app.tabs.len() - 1;
+            rig.app.active_tab = at;
+            pump(&mut rig, "the pivot tab's broken step", &|r| !r.app.tabs[at].issues.is_empty());
+            let issue = rig.app.tabs[at].issues[0].clone();
+            assert_eq!((issue.index, issue.reason.as_str()), (0, M1_REASON), "{what}: the step is flagged with the link's reason");
+            assert!(rig.app.status_message.contains(M1_REASON), "{what}: and the status says it: {}", rig.app.status_message);
+            let p = rig.draw(3);
+            assert!(painted_has(&p, M1_REASON), "{what}: the screen shows the reason where the pivot's numbers would be");
+            rig.app.active_tab = 0;
+            rig.draw(3);
+
+            // the chart picker lists them greyed and picks nothing
+            rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+            rig.draw(4);
+            pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+            let cat = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Category").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Category"));
+            let p = click_rect(&mut rig, cat);
+            let item = last_box(&p, "Branch master \u{203a} Region", 0.0).unwrap_or_else(|| panic!("{what}: the greyed item is listed"));
+            assert!(painted_has(&p, M1_REASON), "{what}: the picker says why");
+            let before = rig.app.chart.spec.category.clone();
+            click_rect(&mut rig, item);
+            rig.draw(3);
+            assert_eq!(rig.app.chart.spec.category, before, "{what}: a greyed item picks nothing");
+            assert!(rig.app.chart.spec.category_model.is_none(), "{what}");
+        }
+    }
+}
+
+#[test]
+fn m1_a_link_whose_tab_is_closed_says_what_it_cant_check_in_its_own_words_in_the_links_dialog_the_status_bar_and_its_fields() {
+    use crate::ui::render_tests_p8::menu_item;
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m1_rig("p9m1closed", ppp, w, h, false);
+        // the lookup's tab is closed: the check can't run, and the link says why (not as a duplicate or blank key)
+        rig.app.close_tab(1);
+        pump(&mut rig, "the status", &|r| matches!(model_status(r, 0), LinkStatus::Failed(_)));
+        assert_eq!(model_status(&rig, 0).text(), "Can't check: the tab 'Branch master' is closed", "{what}");
+        assert_eq!(rig.app.model_counts(), (1, 1), "{what}: it counts as broken");
+        let p = rig.draw(3);
+        assert!(painted_has(&p, "Model: 1 link \u{b7} 1 broken"), "{what}: the status bar says it");
+        menu_item(&mut rig, "Model", "Links");
+        let p = rig.draw(5);
+        assert!(painted_has(&p, "Can't check: the tab 'Branch master' is closed"), "{what}: the Links list says why: {:?}", p.boxes.iter().filter(|b| b.0.len() > 12).map(|b| b.0.clone()).collect::<Vec<_>>());
+        assert!(!painted_has(&p, "Broken:"), "{what}: it is not the Broken of a checked link");
+        let r = assert_dialog_fits(&rig.ctx, &links_title(), &what);
+        assert_no_overlap(&crate::ui::render_tests_p8::dialog_texts(&mut rig, &p, r.window), &what);
+        let close = model_button(&rig, "Close");
+        click_rect(&mut rig, close);
+        rig.draw(3);
+        // the same in the Key check
+        menu_item(&mut rig, "Model", "Key check");
+        let p = rig.draw(5);
+        assert!(painted_has(&p, "Can't check: the tab 'Branch master' is closed."), "{what}: the Key check says it too");
+        // a link of the data tab to a lookup that is closed lists no columns, and its fields are refused with the reason
+        let groups = rig.app.model_groups_for(rig.app.tabs[0].id);
+        assert_eq!(groups[0].refusal.as_deref(), Some("The link to 'Branch master' can't be used. Can't check: the tab 'Branch master' is closed. Open Model \u{25b8} Key check to see it."), "{what}");
+        // the data tab's column that the link needs is gone: the same status in the same words
+        let (mut rig, what) = m1_rig("p9m1gone", ppp, w, h, false);
+        rig.app.project.model.links[0].keys[0].data = "Branch Code".into();
+        pump(&mut rig, "the status", &|r| matches!(model_status(r, 0), LinkStatus::Failed(_)));
+        assert_eq!(model_status(&rig, 0).text(), "Can't check: 'Deposits' has no column 'Branch Code'", "{what}");
+    }
+}
+
+#[test]
+fn m1_pictures_of_the_pivot_field_list_the_chart_picker_and_the_filter_value_picker_on_lookup_fields() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        // 1. the pivot builder: the lookup expanded under the tab's own columns, Region in Rows
+        let (mut rig, what) = m1_rig("p9m1shot1", SHOT_PPP, SHOT_W, SHOT_H, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(8);
+        let mut place = Place::Docked;
+        let expander = place.rects(&rig).expanders.iter().find(|(n, _)| n == "Branch master \u{203a}").map(|(_, r)| *r).expect("the expander");
+        place.click(&mut rig, expander);
+        add_to(&mut place, &mut rig, "Branch master \u{b7} Region", "Rows", &what);
+        add_to(&mut place, &mut rig, "Balance", "Values", &what);
+        wait_in(&mut place, &mut rig, "the preview", &|r| matches!(r.app.pivot_builder.preview, Some(Ok(_))));
+        let r = assert_dialog_fits(&rig.ctx, &format!("{}  Pivot table", theme::ph::TABLE), &what);
+        shoot(&mut rig, "pivot-lookup-fields", dark, r.window.expand(10.0));
+
+        // 2. the chart's Category picker, with the lookup's columns under the tab's own
+        let (mut rig, what) = m1_rig("p9m1shot2", SHOT_PPP, SHOT_W, SHOT_H, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+        rig.draw(4);
+        pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+        let cat = rig.app.chart.rects.fields.iter().find(|(n, _)| n == "Category").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Category"));
+        let p = click_rect(&mut rig, cat);
+        let first = last_box(&p, "Branch master \u{203a} Code", 0.0).expect("the lookup's first column");
+        let last = last_box(&p, "Branch master \u{203a} Region", 0.0).expect("the lookup's last column");
+        let list = p.boxes.iter().filter(|(_, b)| b.top() >= cat.top() && b.left() >= cat.left() - 4.0 && b.right() <= cat.right() + 40.0).fold(cat, |a, (_, b)| a.union(*b));
+        let screen = rig.ctx.screen_rect();
+        shoot(&mut rig, "chart-picker-lookup-fields", dark, list.union(first).union(last).expand(14.0).intersect(screen));
+
+        // 3. the filter dialog's value picker on "Branch master › Region", (no match) last and ticked
+        let (mut rig, what) = m1_rig("p9m1shot3", SHOT_PPP, SHOT_W, SHOT_H, dark);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        let title = m1_filter_on_region(&mut rig, &what);
+        let pick = rig.app.filter.pick_buttons.first().map(|(_, b)| *b).expect("the picker button");
+        click_rect(&mut rig, pick);
+        for _ in 0..200 {
+            settle(&mut rig.app);
+            rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 0.1);
+            rig.draw(2);
+            if rig.app.picker.rects.rows.iter().any(|(t, _)| t == "(no match)") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let b = rig.app.picker.rects.boxes.iter().find(|(t, _)| t == "(no match)").map(|(_, b)| *b).expect("the (no match) box");
+        click_rect(&mut rig, b);
+        rig.draw(5);
+        let r = assert_dialog_fits(&rig.ctx, &title, &what);
+        shoot(&mut rig, "filter-lookup-values", dark, r.window.expand(10.0));
+    }
+}

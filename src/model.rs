@@ -277,8 +277,14 @@ impl LinkStatus {
             LinkStatus::Ok => "OK".to_string(),
             LinkStatus::OkUnmatched(n) => format!("OK \u{b7} {} unmatched {}", n, if *n == 1 { "key" } else { "keys" }),
             LinkStatus::Broken(r) => format!("Broken: {}", r.join(", ")),
-            LinkStatus::Failed(m) => format!("Broken: {}", m),
+            LinkStatus::Failed(m) => Self::cant_check(m),
         }
+    }
+
+    /// "Can't check: the tab 'Branch master' is closed": a link whose check cannot run says why in its own words, apart from the
+    /// duplicate and blank keys of a link that was checked (M0-4, owner decision on S3).
+    pub fn cant_check(why: &str) -> String {
+        format!("Can't check: {}", why.trim_end_matches('.'))
     }
 
     /// The link cannot be used (a broken link or one that cannot be checked).
@@ -290,7 +296,7 @@ impl LinkStatus {
     pub fn reason(&self) -> String {
         match self {
             LinkStatus::Broken(r) => r.join(", "),
-            LinkStatus::Failed(m) => m.clone(),
+            LinkStatus::Failed(m) => Self::cant_check(m),
             _ => String::new(),
         }
     }
@@ -321,6 +327,9 @@ impl KeyCheck {
 
 /// "'Branch master' has 3 duplicate keys. Open Model ▸ Key check to see them." (what a lookup field of a broken link says)
 pub fn broken_message(lookup_title: &str, status: &LinkStatus) -> String {
+    if let LinkStatus::Failed(why) = status {
+        return format!("The link to '{}' can't be used. {}. Open Model \u{25b8} Key check to see it.", lookup_title, LinkStatus::cant_check(why));
+    }
     format!("'{}' has {}. Open Model \u{25b8} Key check to see {}.", lookup_title, status.reason(), if matches!(status, LinkStatus::Broken(r) if r.len() == 1 && r[0].starts_with("1 ")) { "it" } else { "them" })
 }
 
@@ -389,10 +398,10 @@ fn open_pair(link: &Link, data: &ModelTab, lookup: &ModelTab, temp_dir: &Path) -
     let lc = tab_columns(&mut ll, lookup)?;
     let (mut ds, mut ls) = (Vec::new(), Vec::new());
     for k in &link.keys {
-        let d = dc.iter().find(|c| c.0 == k.data).ok_or_else(|| anyhow!("'{}' has no column '{}' any more", data.title, k.data))?;
-        let l = lc.iter().find(|c| c.0 == k.lookup).ok_or_else(|| anyhow!("'{}' has no column '{}' any more", lookup.title, k.lookup))?;
+        let d = dc.iter().find(|c| c.0 == k.data).ok_or_else(|| anyhow!("'{}' has no column '{}'", data.title, k.data))?;
+        let l = lc.iter().find(|c| c.0 == k.lookup).ok_or_else(|| anyhow!("'{}' has no column '{}'", lookup.title, k.lookup))?;
         if d.1 != l.1 {
-            bail!("'{}' is {} in '{}' and {} in '{}' now. Set both to text in Schema & Ingestion first", k.data, type_word(&d.1), data.title, type_word(&l.1), lookup.title);
+            bail!("'{}' is {} in '{}' and {} in '{}' now. Set both to the same type in Schema & Ingestion first", k.data, type_word(&d.1), data.title, type_word(&l.1), lookup.title);
         }
         ds.push(d.1 == DataType::String);
         ls.push(l.1 == DataType::String);
@@ -451,7 +460,7 @@ pub fn check_link(link: &Link, data: &ModelTab, lookup: &ModelTab, temp_dir: &Pa
     if let Some(v) = link.unmatched_value.as_ref().filter(|v| !v.is_empty()) {
         let mut probe = dl.clone();
         match probe.collect_schema()?.get(v.as_str()) {
-            None => out.value_note = Some(format!("'{}' has no column '{}' any more, so no sums are shown", data.title, v)),
+            None => out.value_note = Some(format!("'{}' has no column '{}', so no sums are shown", data.title, v)),
             Some(dt) if !dt.is_numeric() => out.value_note = Some(format!("'{}' is {} in '{}', so no sums are shown. Pick a number column", v, type_word(dt), data.title)),
             Some(_) => value = Some(v.clone()),
         }
@@ -501,7 +510,7 @@ pub fn duplicate_rows(link: &Link, lookup: &ModelTab, temp_dir: &Path) -> Result
     let schema = probe.collect_schema()?;
     let mut string_cols = Vec::new();
     for k in &link.keys {
-        let dt = schema.get(k.lookup.as_str()).ok_or_else(|| anyhow!("'{}' has no column '{}' any more", lookup.title, k.lookup))?;
+        let dt = schema.get(k.lookup.as_str()).ok_or_else(|| anyhow!("'{}' has no column '{}'", lookup.title, k.lookup))?;
         string_cols.push(*dt == DataType::String);
     }
     let names: Vec<String> = schema.iter().map(|(n, _)| n.to_string()).collect();
@@ -564,4 +573,277 @@ pub fn unmatched_list_text(link: &Link, check: &KeyCheck) -> String {
 /// Where the Key check says to look for what the link joins: "Wing + Product code ↔ Wing + Code".
 pub fn pairs_text(l: &Link) -> String {
     pair_list(&l.keys)
+}
+
+// ----------------------------------------------------------------------------------------------- lookup fields (Phase 9 M1)
+
+/// The value of every lookup field for a data row whose key has no row in the lookup.
+pub const NO_MATCH_LABEL: &str = "(no match)";
+
+/// "Branch master · Region": the stored name of a lookup field.
+pub fn field_name(lookup_title: &str, column: &str) -> String {
+    format!("{} \u{b7} {}", lookup_title, column)
+}
+
+/// "Branch master › Region": how the pickers list a lookup's column under its link.
+pub fn picker_label(lookup_title: &str, column: &str) -> String {
+    format!("{} \u{203a} {}", lookup_title, column)
+}
+
+/// A lookup column seen from a data tab (a "lookup field"): a pivot's Rows, Columns, Filters or Values field, a chart's category,
+/// series, facet or drill level, a filter condition. The link is named by the two tabs' project keys; a data tab links to a given
+/// lookup once, so the pair says which link. It carries the link's name for the messages that have no project to read it from.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct ModelFieldRef {
+    /// The field's name in the spec ("Branch master · Region").
+    #[serde(default)]
+    pub name: String,
+    /// The data tab's project key (the link's own side).
+    #[serde(default)]
+    pub data_tab: String,
+    /// The lookup tab's project key.
+    #[serde(default)]
+    pub lookup_tab: String,
+    /// "Accounts → Branch master", for messages.
+    #[serde(default)]
+    pub link_name: String,
+    /// The lookup's column.
+    #[serde(default)]
+    pub column: String,
+}
+
+impl ModelFieldRef {
+    pub fn new(link: &Link, link_name: &str, lookup_title: &str, column: &str) -> ModelFieldRef {
+        ModelFieldRef { name: field_name(lookup_title, column), data_tab: link.data_tab.clone(), lookup_tab: link.lookup_tab.clone(), link_name: link_name.to_string(), column: column.to_string() }
+    }
+
+    /// "Branch master › Region".
+    pub fn picker(&self) -> String {
+        self.name.replacen(" \u{b7} ", " \u{203a} ", 1)
+    }
+}
+
+/// Where a label of a lookup field sorts (M1): the values first (0), then "(blank)" (1), then "(no match)" (2), whatever the order.
+pub fn label_rank(label: &str) -> u8 {
+    if label == crate::pivot_table::BLANK_LABEL {
+        1
+    } else if label == NO_MATCH_LABEL {
+        2
+    } else {
+        0
+    }
+}
+
+/// What a step that needs the model says outside a project.
+pub fn outside_project_message(link_name: &str) -> String {
+    format!("This step uses the model of a project (link '{}'). Open the project to run it.", link_name)
+}
+
+/// What the Python export says about a step that reads a lookup field.
+pub const PYTHON_REFUSAL: &str = "Python export can't follow links between tabs yet. Use the Join tool to copy the column, or export the result tab.";
+
+/// A link as the worker sees it while it builds a table: the link, the lookup read after its own steps, and why it can't be used.
+#[derive(Clone, Debug)]
+pub struct ScopeLink {
+    pub link: Link,
+    /// `None` when the lookup tab is not open (then `refusal` says so).
+    pub lookup: Option<ModelTab>,
+    /// Set when the link is broken or its check can't run: what a lookup field of it says instead of numbers.
+    pub refusal: Option<String>,
+}
+
+/// The model as the worker needs it: its links and where to put temporary files.
+#[derive(Clone, Debug, Default)]
+pub struct ModelContext {
+    pub links: Vec<ScopeLink>,
+    pub temp_dir: std::path::PathBuf,
+}
+
+thread_local! {
+    static SCOPE: std::cell::RefCell<Option<std::sync::Arc<ModelContext>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The model of the open project, as this thread sees it (`None` outside a project). The app sets it on its own thread each
+/// frame, and a job takes the one current when it is submitted (`jobs.rs`), so every table a job builds reads the same model.
+pub fn scope() -> Option<std::sync::Arc<ModelContext>> {
+    SCOPE.with(|s| s.borrow().clone())
+}
+
+pub fn set_scope(ctx: Option<std::sync::Arc<ModelContext>>) {
+    SCOPE.with(|s| *s.borrow_mut() = ctx);
+}
+
+/// Runs `f` with `ctx` as this thread's model, and puts the old one back.
+pub fn with_scope<R>(ctx: Option<std::sync::Arc<ModelContext>>, f: impl FnOnce() -> R) -> R {
+    let old = scope();
+    set_scope(ctx);
+    let r = f();
+    set_scope(old);
+    r
+}
+
+impl LinkStatus {
+    /// What a lookup field of this link says when the link can't be used; `None` when it can.
+    pub fn refusal(&self, lookup_title: &str) -> Option<String> {
+        if self.is_broken() {
+            Some(broken_message(lookup_title, self))
+        } else {
+            None
+        }
+    }
+}
+
+/// How a lookup field becomes a column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookupAs {
+    /// Text, with "(no match)" for a key with no lookup row and a blank for a blank key or a blank value (a label: Rows, Columns,
+    /// Filters, a chart's category, series, facet and drill level).
+    Text,
+    /// The lookup's own value, a blank where there is no match (a Values field of a pivot, which sums and counts).
+    Raw,
+    /// Text as above for a text column; the lookup's own value for any other (a filter condition, which compares numbers as numbers).
+    TextIfText,
+}
+
+/// One lookup field to add: the field, the column it is added as, and how.
+#[derive(Clone, Debug)]
+pub struct LookupWant {
+    pub field: ModelFieldRef,
+    pub out: String,
+    pub as_: LookupAs,
+}
+
+const HIT: &str = "__mp_hit";
+const FIELD: &str = "__mp_f";
+
+/// Adds lookup fields to a table by a left join on the link's keys (the W2 pattern: nothing is added to the tab, the caller drops
+/// the columns after it has grouped or filtered). A link is used only while its lookup keys are unique (the key check), and the
+/// join itself refuses a repeated key, so the row count of `lf` can't change. `what` starts the messages ("Pivot", "Chart", "Filter").
+pub fn with_lookup_columns(lf: LazyFrame, wants: &[LookupWant], what: &str) -> Result<LazyFrame> {
+    if wants.is_empty() {
+        return Ok(lf);
+    }
+    let mut lf = lf;
+    let schema = lf.collect_schema().with_context(|| format!("{}: the column types could not be read", what))?;
+    for w in wants {
+        if schema.get(w.out.as_str()).is_some() {
+            bail!("{}: the table already has a column called '{}'. Rename that column, or use it instead of the lookup field.", what, w.out);
+        }
+    }
+    let ctx = scope();
+    let mut ids: Vec<(String, String)> = Vec::new();
+    for w in wants {
+        let id = (w.field.data_tab.clone(), w.field.lookup_tab.clone());
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    for id in &ids {
+        let group: Vec<&LookupWant> = wants.iter().filter(|w| (&w.field.data_tab, &w.field.lookup_tab) == (&id.0, &id.1)).collect();
+        let link_name = group[0].field.link_name.clone();
+        let Some(ctx) = ctx.as_ref() else {
+            bail!("{}", outside_project_message(&link_name));
+        };
+        let Some(sl) = ctx.links.iter().find(|l| (&l.link.data_tab, &l.link.lookup_tab) == (&id.0, &id.1)) else {
+            bail!("{}: the link '{}' is not in this project's model. Add it in Model \u{25b8} Links, or remove the field.", what, link_name);
+        };
+        if let Some(r) = &sl.refusal {
+            bail!("{}", r);
+        }
+        let Some(lookup) = &sl.lookup else {
+            bail!("{}: the lookup tab of the link '{}' is not open.", what, link_name);
+        };
+        lf = join_lookup(lf, &schema, sl, lookup, &group, ctx, what)?;
+    }
+    Ok(lf)
+}
+
+fn join_lookup(lf: LazyFrame, schema: &Schema, sl: &ScopeLink, lookup: &ModelTab, group: &[&LookupWant], ctx: &ModelContext, what: &str) -> Result<LazyFrame> {
+    let link = &sl.link;
+    let mut ll = compile_tab_lazy(&lookup.source, &lookup.steps, &ctx.temp_dir).with_context(|| format!("{}: '{}' could not be read", what, lookup.title))?;
+    let lschema = ll.collect_schema().with_context(|| format!("{}: '{}' could not be read", what, lookup.title))?;
+    let (mut ds, mut ls) = (Vec::new(), Vec::new());
+    for k in &link.keys {
+        let d = schema.get(k.data.as_str()).ok_or_else(|| anyhow!("{}: there is no column '{}' at this step, and the link '{}' needs it.", what, k.data, group[0].field.link_name))?;
+        let l = lschema.get(k.lookup.as_str()).ok_or_else(|| anyhow!("{}: '{}' has no column '{}'. Open Model \u{25b8} Key check to see the link.", what, lookup.title, k.lookup))?;
+        if d != l {
+            bail!("{}: '{}' is {} in the data and {} in '{}'. Set both to the same type in Schema & Ingestion first.", what, k.data, type_word(d), type_word(l), lookup.title);
+        }
+        ds.push(*d == DataType::String);
+        ls.push(*l == DataType::String);
+    }
+    for w in group {
+        if lschema.get(w.field.column.as_str()).is_none() {
+            bail!("{}: '{}' has no column '{}'. Remove the field or pick another column.", what, lookup.title, w.field.column);
+        }
+    }
+    let n = link.keys.len();
+    let ks = key_names(n);
+    let key_exprs = || ks.iter().map(|k| col(k.as_str())).collect::<Vec<_>>();
+    let data_cols: Vec<String> = link.keys.iter().map(|k| k.data.clone()).collect();
+    let lookup_cols: Vec<String> = link.keys.iter().map(|k| k.lookup.clone()).collect();
+    let d = keyed(lf, &data_cols, &ds);
+    let mut pick: Vec<Expr> = key_exprs();
+    for (i, w) in group.iter().enumerate() {
+        pick.push(col(w.field.column.as_str()).alias(format!("{}{}", FIELD, i)));
+    }
+    pick.push(lit(true).alias(HIT));
+    // a blank lookup key never matches (M0-3), so those rows are left out of the join
+    let l = keyed(ll, &lookup_cols, &ls).filter(col(BLANK).not()).select(pick);
+    let mut args = JoinArgs::new(JoinType::Left);
+    args.validation = JoinValidation::ManyToOne;
+    let joined = d.join(l, key_exprs(), key_exprs(), args);
+    let mut exprs: Vec<Expr> = Vec::new();
+    let mut temps: Vec<String> = ks.clone();
+    temps.push(BLANK.to_string());
+    temps.push(HIT.to_string());
+    for (i, w) in group.iter().enumerate() {
+        let f = format!("{}{}", FIELD, i);
+        let dt = lschema.get(w.field.column.as_str()).cloned().unwrap_or(DataType::String);
+        let as_text = match w.as_ {
+            LookupAs::Text => true,
+            LookupAs::Raw => false,
+            LookupAs::TextIfText => dt == DataType::String,
+        };
+        let e = if as_text {
+            when(col(BLANK))
+                .then(lit(NULL).cast(DataType::String))
+                .when(col(HIT).is_null())
+                .then(lit(NO_MATCH_LABEL))
+                .otherwise(crate::pivot_table::key_text_expr(&f, &dt))
+        } else {
+            col(f.as_str())
+        };
+        exprs.push(e.alias(w.out.as_str()));
+        temps.push(f);
+    }
+    Ok(joined.with_columns(exprs).drop(temps.iter().map(|t| t.as_str()).collect::<Vec<_>>()))
+}
+
+/// The links a step needs when it reads a lookup field ("Accounts → Branch master"); empty for every other step.
+pub fn step_links(step: &TransformStep) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |s: &str| {
+        if !out.iter().any(|o| o == s) {
+            out.push(s.to_string());
+        }
+    };
+    match step.inner() {
+        TransformStep::FilterGroup { conditions, .. } => {
+            for c in conditions {
+                if let Some(l) = &c.lookup {
+                    add(&l.link_name);
+                }
+            }
+        }
+        TransformStep::PivotTable { .. } => {
+            if let Some(spec) = step.as_pivot_spec() {
+                for f in &spec.model_fields {
+                    add(&f.link_name);
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }

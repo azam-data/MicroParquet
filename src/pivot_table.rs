@@ -315,6 +315,25 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 
 /// One label of a key field: blanks last, numbers and dates by value, text in natural order.
 fn cmp_label(orders: &HashMap<Option<String>, f64>, numeric: bool, order: &SortOrder, a: &Option<String>, b: &Option<String>) -> Ordering {
+    cmp_label_in(orders, numeric, false, order, a, b)
+}
+
+/// Where a label of a lookup field sorts (M1): the values first, then "(blank)", then "(no match)", whatever the order chosen.
+fn lookup_rank(k: &Option<String>) -> u8 {
+    match k {
+        None => 1,
+        Some(t) if t == crate::model::NO_MATCH_LABEL => 2,
+        Some(_) => 0,
+    }
+}
+
+fn cmp_label_in(orders: &HashMap<Option<String>, f64>, numeric: bool, lookup: bool, order: &SortOrder, a: &Option<String>, b: &Option<String>) -> Ordering {
+    if lookup {
+        let (ra, rb) = (lookup_rank(a), lookup_rank(b));
+        if ra != rb && (ra > 0 || rb > 0) {
+            return ra.cmp(&rb);
+        }
+    }
     if !order.is_natural() {
         // a custom list or Tenor (U3): blanks last, then the listed or parsed values in order
         return order.compare(a, b);
@@ -421,9 +440,10 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         .iter()
         .map(|f| spec.field_orders.iter().find(|o| o.field == **f).map(|o| o.order.clone()).unwrap_or_default())
         .collect();
+    let is_lookup: Vec<bool> = all_fields.iter().map(|f| spec.model_fields.iter().any(|m| &m.name == *f)).collect();
     let by_labels = |a: &Key, b: &Key, idx0: usize| -> Ordering {
         for (p, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-            let o = cmp_label(&orders[idx0 + p], numeric_key[idx0 + p], &field_orders[idx0 + p], x, y);
+            let o = cmp_label_in(&orders[idx0 + p], numeric_key[idx0 + p], is_lookup[idx0 + p], &field_orders[idx0 + p], x, y);
             if o != Ordering::Equal {
                 return o;
             }
@@ -434,6 +454,13 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         if let Some(s) = sort {
             // level by level: the group's total first, then its label
             for k in 1..=a.len() {
+                // a lookup field's "(blank)" and "(no match)" stay last, whatever their totals
+                if is_lookup[k - 1] {
+                    let (ra, rb) = (lookup_rank(&a[k - 1]), lookup_rank(&b[k - 1]));
+                    if ra != rb && (ra > 0 || rb > 0) {
+                        return ra.cmp(&rb);
+                    }
+                }
                 let total = |key: &Key| -> Option<f64> { cells.get(&(key[..k].to_vec(), Vec::new())).and_then(|v| v.get(s.value_index).copied().flatten()) };
                 let (ta, tb) = (total(a), total(b));
                 let o = match (ta, tb) {
@@ -445,7 +472,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
                     (None, Some(_)) => Ordering::Greater,
                     (Some(_), None) => Ordering::Less,
                 };
-                let o = o.then_with(|| cmp_label(&orders[k - 1], numeric_key[k - 1], &field_orders[k - 1], &a[k - 1], &b[k - 1]));
+                let o = o.then_with(|| cmp_label_in(&orders[k - 1], numeric_key[k - 1], is_lookup[k - 1], &field_orders[k - 1], &a[k - 1], &b[k - 1]));
                 if o != Ordering::Equal {
                     return o;
                 }
@@ -628,13 +655,21 @@ pub struct CellRows {
     pub title: String,
 }
 
+/// The drill level a pivot field stands for: a date part, a lookup field or a column.
+fn level_of(spec: &PivotSpec, field: &str) -> crate::charts::spec::DrillLevel {
+    use crate::charts::spec::DrillLevel;
+    if let Some(f) = spec.date_fields.iter().find(|f| f.name == field) {
+        return DrillLevel::of_part(f);
+    }
+    if let Some(f) = spec.model_fields.iter().find(|f| f.name == field) {
+        return DrillLevel::of_model(f);
+    }
+    DrillLevel::column(field)
+}
+
 /// The condition "this field is `value`" for a pivot field: a date field (a part of a date column) reads its part.
 fn field_condition(spec: &PivotSpec, field: &str, value: &Option<String>, keep: bool) -> crate::models::FilterCondition {
-    use crate::charts::spec::DrillLevel;
-    let level = match spec.date_fields.iter().find(|f| f.name == field) {
-        Some(f) => DrillLevel::of_part(f),
-        None => DrillLevel::column(field),
-    };
+    let level = level_of(spec, field);
     level.condition(value.as_deref().unwrap_or(BLANK_LABEL), keep)
 }
 
@@ -670,10 +705,7 @@ pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<Stri
         if f.values.is_empty() {
             continue;
         }
-        let level = match spec.date_fields.iter().find(|d| d.name == f.field) {
-            Some(d) => crate::charts::spec::DrillLevel::of_part(d),
-            None => crate::charts::spec::DrillLevel::column(&f.field),
-        };
+        let level = level_of(spec, &f.field);
         let mut c = level.condition("", true);
         c.values = f.values.iter().flatten().cloned().collect();
         c.or_blank = f.values.iter().any(|v| v.is_none());
@@ -946,12 +978,19 @@ pub fn without_total_rows(lf: LazyFrame, steps: &[TransformStep]) -> LazyFrame {
 /// The pivot as a step of a pipeline: the table, then lazy again.
 /// The pivot's input: the table with its date fields (W2) added as columns.
 pub fn pivot_input(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
-    if spec.date_fields.is_empty() {
+    if spec.date_fields.is_empty() && spec.model_fields.is_empty() {
         return Ok(lf);
     }
     let mut lf = lf;
     let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
-    crate::dates::with_date_fields(lf, &spec.date_fields, &schema, "Pivot")
+    let lf = if spec.date_fields.is_empty() { lf } else { crate::dates::with_date_fields(lf, &spec.date_fields, &schema, "Pivot")? };
+    // lookup fields (M1): a field that labels (Rows, Columns, Filters) is text with "(no match)"; one that is only a Values field keeps its type
+    let wants = spec.model_fields.iter().filter(|f| spec.uses_field(&f.name)).map(|f| crate::model::LookupWant {
+        field: f.clone(),
+        out: f.name.clone(),
+        as_: if spec.labels_with(&f.name) { crate::model::LookupAs::Text } else { crate::model::LookupAs::Raw },
+    });
+    crate::model::with_lookup_columns(lf, &wants.collect::<Vec<_>>(), "Pivot")
 }
 
 pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
@@ -1158,6 +1197,7 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
             sort_by_value,
             field_orders: Vec::new(),
             date_fields: Vec::new(),
+            model_fields: Vec::new(),
             layout: PivotLayout::SideBySide,
         },
         renames,

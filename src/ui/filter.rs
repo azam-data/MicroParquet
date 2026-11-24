@@ -21,6 +21,8 @@ pub struct FilterState {
     /// The operator boxes, as (condition, rectangle).
     pub op_boxes: Vec<(usize, egui::Rect)>,
     pub list_buttons: Vec<(usize, u8, egui::Rect)>,
+    /// The column boxes, as (condition, rectangle).
+    pub col_boxes: Vec<(usize, egui::Rect)>,
 }
 
 impl Default for FilterState {
@@ -36,6 +38,7 @@ impl Default for FilterState {
             value_boxes: Vec::new(),
             op_boxes: Vec::new(),
             list_buttons: Vec::new(),
+            col_boxes: Vec::new(),
         }
     }
 }
@@ -239,6 +242,7 @@ impl MicroParquetApp {
         let sort_lists = self.sort_lists.lists.clone();
         let calendar = self.calendar();
         // the date columns of the tab: their value picker has a "By" choice (W2)
+        let groups = self.tabs.get(self.active_tab).map(|t| self.model_groups_for(t.id)).unwrap_or_default();
         let date_cols: Vec<String> = self.tabs.get(self.active_tab).map(|t| t.cached_slice.get_columns().iter().filter(|c| micro_parquet::dates::is_date_type(c.dtype())).map(|c| c.name().to_string()).collect()).unwrap_or_default();
         let mut by_rects: Vec<(usize, egui::Rect)> = Vec::new();
         let mut ask_values: Option<(String, Option<String>)> = None;
@@ -246,6 +250,7 @@ impl MicroParquetApp {
         let mut op_rects: Vec<(usize, egui::Rect)> = Vec::new();
         let mut value_boxes: Vec<(usize, u8, egui::Rect)> = Vec::new();
         let mut list_buttons: Vec<(usize, u8, egui::Rect)> = Vec::new();
+        let mut col_boxes: Vec<(usize, egui::Rect)> = Vec::new();
         let title = if editing.is_some() {
             "\u{E30C}  Edit filter"
         } else {
@@ -260,14 +265,24 @@ impl MicroParquetApp {
                         if i > 0 {
                             ui.label(egui::RichText::new(self.filter.join.label()).color(theme::muted(ui)));
                         }
-                        egui::ComboBox::from_id_salt(("flt_col", i))
+                        let col_combo = egui::ComboBox::from_id_salt(("flt_col", i))
                             .width(theme::FIELD_W_COLUMN)
                             .selected_text(&c.column)
                             .show_ui(ui, |ui| {
                                 for name in &avail_cols {
                                     ui.selectable_value(&mut c.column, name.clone(), name);
                                 }
+                                // Phase 9 M1: the lookup columns of each link, "Branch master › Region"
+                                if let Some(f) = crate::ui::chart::model_items(ui, &groups, c.lookup.as_ref().map(|l| l.name.as_str()), tk.warning) {
+                                    c.column = f.name.clone();
+                                    c.lookup = Some(f);
+                                }
                             });
+                        col_boxes.push((i, col_combo.response.rect));
+                        // a lookup field left behind when another column was picked is dropped
+                        if c.lookup.as_ref().is_some_and(|l| l.name != c.column) {
+                            c.lookup = None;
+                        }
                         let r = egui::ComboBox::from_id_salt(("flt_op", i))
                             .width(theme::FIELD_W_OP)
                             .height(theme::CHART_PICKER_POPUP_H)
@@ -327,6 +342,7 @@ impl MicroParquetApp {
                             picker_buttons_seen.push((i, b.rect));
                             if b.clicked() && picker.toggle(i, &pick_field) {
                                 picker.part = c.part.clone();
+                                picker.lookup = c.lookup.clone();
                                 ask_values = Some((pick_field.clone(), None));
                             }
                         } else if !c.op.is_unary() && c.part.is_some() {
@@ -466,6 +482,7 @@ impl MicroParquetApp {
         self.filter.op_boxes = op_rects;
         self.filter.value_boxes = value_boxes;
         self.filter.list_buttons = list_buttons;
+        self.filter.col_boxes = col_boxes;
         if let Some((field, search)) = ask_values {
             self.picker.field = field;
             self.picker_request(search);

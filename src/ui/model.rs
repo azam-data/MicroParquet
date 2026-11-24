@@ -3,6 +3,7 @@
 
 use crate::ui::prelude::*;
 use micro_parquet::jobs::{JobKey, JobKind};
+use polars::prelude::DataType;
 use micro_parquet::model::{self, KeyCheck, KeyPair, Link, LinkStatus, ModelTab, TabInfo, TabKind};
 use micro_parquet::tab_jobs::{compute_model_check, compute_model_rows, JobOutput, ModelCheckRequest, ModelCheckResult, ModelList, ModelRowsRequest, ModelRowsResult};
 use std::collections::HashMap;
@@ -34,6 +35,18 @@ pub struct LinkDraft {
     pub error: String,
 }
 
+/// The lookup columns a data tab can use as fields, under one link (Phase 9 M1): "Branch master ›" and its columns.
+#[derive(Clone, Debug)]
+pub struct LookupGroup {
+    pub link: Link,
+    /// "Accounts → Branch master".
+    pub link_name: String,
+    pub lookup_title: String,
+    /// Why the link can't be used, when it can't: the fields are listed greyed with this.
+    pub refusal: Option<String>,
+    pub columns: Vec<(micro_parquet::model::ModelFieldRef, DataType)>,
+}
+
 /// What the model's dialogs drew in the last frame (the render tests read it).
 #[derive(Clone, Debug, Default)]
 pub struct ModelRects {
@@ -60,6 +73,11 @@ pub struct ModelState {
     pub file_stamp: u64,
     /// What Copy list put on the clipboard last (tests read it).
     pub last_copied: String,
+    /// The model the workers read (Phase 9 M1), and what it was made from.
+    pub scope: Option<std::sync::Arc<model::ModelContext>>,
+    pub scope_fp: u64,
+    /// The title each linked tab had when it was last open, by project key: a tab that is closed is still named in the messages.
+    pub titles: HashMap<String, String>,
 }
 
 fn fingerprint<T: Hash>(v: &T) -> u64 {
@@ -94,7 +112,7 @@ impl MicroParquetApp {
         k
     }
 
-    fn model_tab_info(&self, id: u64) -> Option<TabInfo> {
+    pub(crate) fn model_tab_info(&self, id: u64) -> Option<TabInfo> {
         let t = self.tabs.iter().find(|t| t.id == id)?;
         let kind = if self.chart_tabs.contains_key(&id) {
             TabKind::Chart
@@ -107,7 +125,7 @@ impl MicroParquetApp {
         Some(TabInfo { key, title: t.title.clone(), kind, columns: t.cached_slice.get_columns().iter().map(|c| (c.name().to_string(), c.dtype().clone())).collect() })
     }
 
-    fn model_worker_tab(&self, key: &str) -> Option<ModelTab> {
+    pub(crate) fn model_worker_tab(&self, key: &str) -> Option<ModelTab> {
         let id = self.model_tab_id(key)?;
         let t = self.tabs.iter().find(|t| t.id == id)?;
         if matches!(t.source, TabSource::Unavailable { .. }) || self.chart_tabs.contains_key(&id) {
@@ -121,7 +139,7 @@ impl MicroParquetApp {
     pub(crate) fn model_tab_title(&self, key: &str) -> String {
         match self.model_tab_id(key).and_then(|id| self.tabs.iter().find(|t| t.id == id)) {
             Some(t) => t.title.clone(),
-            None => format!("{} (not open)", key),
+            None => format!("{} (not open)", self.project.model_ui.titles.get(key).map(String::as_str).unwrap_or(key)),
         }
     }
 
@@ -139,6 +157,84 @@ impl MicroParquetApp {
         (links.len(), links.iter().filter(|l| self.model_status_of(l).is_broken()).count())
     }
 
+    // ---------------------------------------------------------------------------- lookup fields (M1)
+
+    /// The links of a tab as a data tab, each with the lookup's columns as fields. Empty outside a project and for a tab with no links.
+    pub(crate) fn model_groups_for(&self, tab_id: u64) -> Vec<LookupGroup> {
+        if !self.project.active {
+            return Vec::new();
+        }
+        let Some(key) = self.project.keys.get(&tab_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for l in self.project.model.links.iter().filter(|l| &l.data_tab == key) {
+            let title = self.model_tab_title(&l.lookup_tab).trim_end_matches(" (not open)").to_string();
+            let name = self.model_link_name(l);
+            let columns = self
+                .model_tab_id(&l.lookup_tab)
+                .and_then(|id| self.model_tab_info(id))
+                .map(|i| i.columns.into_iter().map(|(c, dt)| (model::ModelFieldRef::new(l, &name, &title, &c), dt)).collect())
+                .unwrap_or_default();
+            out.push(LookupGroup { link: l.clone(), link_name: name, lookup_title: title.clone(), refusal: self.model_status_of(l).refusal(&title), columns });
+        }
+        out
+    }
+
+    /// The lookup field of this tab with this name ("Branch master · Region"), and the reason it can't be used when its link is broken.
+    pub(crate) fn model_field_named(&self, tab_id: u64, name: &str) -> Option<(model::ModelFieldRef, DataType, Option<String>)> {
+        self.model_groups_for(tab_id).into_iter().find_map(|g| g.columns.iter().find(|(r, _)| r.name == name).map(|(r, dt)| (r.clone(), dt.clone(), g.refusal.clone())))
+    }
+
+    /// The order the lookup's own steps declare for a column (Split date parts, unnumbered rate bands), when a lookup field is added.
+    pub(crate) fn model_declared_order(&self, f: &model::ModelFieldRef) -> Option<micro_parquet::sort_lists::SortOrder> {
+        let t = self.model_worker_tab(&f.lookup_tab)?;
+        micro_parquet::engine::column_orders(&t.steps).remove(&f.column)
+    }
+
+    // ---------------------------------------------------------------------------- the model the workers read (M1)
+
+    /// Why a tab can't be part of a check, in the words of the status: "the tab 'Branch master' is closed".
+    fn model_tab_problem(&self, key: &str) -> String {
+        match self.model_tab_id(key).and_then(|id| self.tabs.iter().find(|t| t.id == id)) {
+            None => format!("the tab '{}' is closed", self.model_tab_title(key).trim_end_matches(" (not open)")),
+            Some(t) if matches!(t.source, TabSource::Unavailable { .. }) => format!("the tab '{}' did not open", t.title),
+            Some(t) => format!("'{}' is a chart tab, not a table", t.title),
+        }
+    }
+
+    /// Makes the model of the open project the one this thread's jobs read: the links, the lookups read after their own steps, and
+    /// the reason a link can't be used. Called every frame; it rebuilds only when something it is made from changed.
+    pub(crate) fn model_scope_refresh(&mut self) {
+        if !self.project.active || self.project.model.links.is_empty() {
+            self.project.model_ui.scope = None;
+            self.project.model_ui.scope_fp = 0;
+            model::set_scope(None);
+            return;
+        }
+        let links = self.project.model.links.clone();
+        let mut parts: Vec<(Link, Option<ModelTab>, Option<String>)> = Vec::new();
+        for l in &links {
+            let lookup = self.model_worker_tab(&l.lookup_tab);
+            let title = self.model_tab_title(&l.lookup_tab).trim_end_matches(" (not open)").to_string();
+            let refusal = self.model_status_of(l).refusal(&title);
+            parts.push((l.clone(), lookup, refusal));
+        }
+        let fp = fingerprint(&(
+            parts.iter().map(|(l, k, r)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)), r.clone())).collect::<Vec<_>>(),
+            self.paths.temp_dir.clone(),
+        ));
+        if self.project.model_ui.scope.is_none() || self.project.model_ui.scope_fp != fp {
+            let ctx = model::ModelContext {
+                links: parts.into_iter().map(|(link, lookup, refusal)| model::ScopeLink { link, lookup, refusal }).collect(),
+                temp_dir: self.paths.temp_dir.clone(),
+            };
+            self.project.model_ui.scope = Some(std::sync::Arc::new(ctx));
+            self.project.model_ui.scope_fp = fp;
+        }
+        model::set_scope(self.project.model_ui.scope.clone());
+    }
+
     // ---------------------------------------------------------------------------- the checks
 
     fn model_link_fingerprint(&self, l: &Link, d: &ModelTab, k: &ModelTab) -> u64 {
@@ -152,13 +248,20 @@ impl MicroParquetApp {
             return;
         }
         let links = self.project.model.links.clone();
+        for l in &links {
+            for key in [&l.data_tab, &l.lookup_tab] {
+                if let Some(t) = self.model_tab_id(key).and_then(|id| self.tabs.iter().find(|t| t.id == id)).map(|t| t.title.clone()) {
+                    self.project.model_ui.titles.insert(key.clone(), t);
+                }
+            }
+        }
         self.project.model_ui.runtime.retain(|k, _| links.iter().any(|l| (&l.data_tab, &l.lookup_tab) == (&k.0, &k.1)));
         for l in &links {
             let ident = (l.data_tab.clone(), l.lookup_tab.clone());
             let (d, k) = (self.model_worker_tab(&l.data_tab), self.model_worker_tab(&l.lookup_tab));
             let (Some(d), Some(k)) = (d.clone(), k) else {
                 let which = if d.is_none() { &l.data_tab } else { &l.lookup_tab };
-                let why = format!("'{}' is not open as a table", self.model_tab_title(which).trim_end_matches(" (not open)"));
+                let why = self.model_tab_problem(which);
                 self.project.model_ui.runtime.insert(ident, LinkRuntime { status: LinkStatus::Failed(why), check: None, fingerprint: None, in_flight: false });
                 continue;
             };
@@ -591,7 +694,7 @@ impl MicroParquetApp {
                             ui.label(egui::RichText::new(format!("and {} more unmatched keys (Copy list has them all)", c.unmatched.len() - theme::MODEL_LIST_LINES)).size(theme::TEXT_LABEL).color(tk.muted));
                         }
                     } else if let LinkStatus::Failed(m) = &status {
-                        ui.add(egui::Label::new(egui::RichText::new(format!("The keys could not be checked: {}.", m.trim_end_matches('.'))).color(tk.danger)).wrap());
+                        ui.add(egui::Label::new(egui::RichText::new(format!("{}.", LinkStatus::cant_check(m))).color(tk.danger)).wrap());
                     }
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Sum of").color(tk.muted));

@@ -209,6 +209,9 @@ pub fn compute_chart_fixed(lf: LazyFrame, spec: &ChartSpec, fixed: Option<&Fixed
     if let (None, Some(order), true) = (fixed, spec.series_order.as_ref(), spec.series.is_some()) {
         series_kept.sort_by(|a, b| order.compare(&(if a == BLANK_LABEL { None } else { Some(a.clone()) }), &(if b == BLANK_LABEL { None } else { Some(b.clone()) })));
     }
+    if spec.series_model.is_some() {
+        series_kept.sort_by_key(|c| crate::model::label_rank(c));
+    }
     let other_series = if series_kept.iter().any(|k| k == OTHER_LABEL) { "Other series".to_string() } else { OTHER_LABEL.to_string() };
 
     // 2. The cells: every row of the tab goes to its category (or "Other") and series (or "Other").
@@ -249,6 +252,10 @@ pub fn compute_chart_fixed(lf: LazyFrame, spec: &ChartSpec, fixed: Option<&Fixed
         .then_with(|| SortOrder::Natural.compare(&key(a), &key(b))));
     } else {
         categories.sort_by(|a, b| spec.order.compare(&key(a), &key(b)));
+    }
+    // a lookup field's "(blank)" and "(no match)" come last, in that order, whatever the order (Phase 9 M1)
+    if spec.category_model.is_some() {
+        categories.sort_by_key(|c| crate::model::label_rank(c));
     }
     if has_other {
         categories.push(other_cat.clone());

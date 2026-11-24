@@ -76,6 +76,8 @@ pub struct PivotRects {
     pub field_menus: Vec<(String, egui::Rect)>,
     /// The expander of each date column ("Date parts"), by the column's name (W2).
     pub expanders: Vec<(String, egui::Rect)>,
+    /// The reason a broken link's fields are greyed, under its expander (Phase 9 M1).
+    pub link_notes: Vec<(String, egui::Rect)>,
     pub toggles: egui::Rect,
     pub preview: egui::Rect,
     pub preview_scroll: egui::Rect,
@@ -102,6 +104,7 @@ impl Default for PivotRects {
             field_rows: Vec::new(),
             field_menus: Vec::new(),
             expanders: Vec::new(),
+            link_notes: Vec::new(),
             toggles: n,
             preview: n,
             preview_scroll: n,
@@ -360,13 +363,20 @@ impl MicroParquetApp {
         if let Some(d) = self.pivot_builder.spec.date_fields.iter().find(|d| d.name == field) {
             steps.push(TransformStep::date_field_step(d));
         }
-        let req = PivotValuesRequest { tab_id: input.tab_id, source: input.source, steps, field: field.to_string(), temp_dir: self.paths.temp_dir.clone() };
+        // a lookup field's values: the lookup column joined to the table, with "(no match)" and "(blank)" (M1)
+        let lookup = self.pivot_builder.spec.model_fields.iter().find(|m| m.name == field).cloned();
+        let req = PivotValuesRequest { tab_id: input.tab_id, source: input.source, steps, field: field.to_string(), temp_dir: self.paths.temp_dir.clone(), lookup };
         let key = JobKey::tab(JobKind::PivotValues, input.tab_id);
         self.jobs.submit(key, "Values of a field", false, move |ctx| compute_pivot_values(req, ctx).map(|r| JobOutput::PivotValues(Box::new(r))));
     }
 
     fn kind_of(&self, field: &str) -> FieldKind {
-        self.pivot_builder.fields.iter().find(|(n, _)| n == field).map(|(_, k)| *k).unwrap_or(FieldKind::Other)
+        if let Some((_, k)) = self.pivot_builder.fields.iter().find(|(n, _)| n == field) {
+            return *k;
+        }
+        // a lookup field (Phase 9 M1) is the kind its lookup column is
+        let tab = self.pivot_input().map(|i| i.tab_id);
+        tab.and_then(|t| self.model_field_named(t, field)).map(|(_, dt, _)| FieldKind::of(&dt)).unwrap_or(FieldKind::Other)
     }
 
     /// The value a field gets when it is added to Values: a sum of a number, a count of anything
@@ -415,6 +425,16 @@ impl MicroParquetApp {
 
     /// Puts a field into an area (a field is in Rows or in Columns, not both).
     pub(crate) fn add_pivot_field(&mut self, field: &str, area: Area) {
+        // a lookup field (Phase 9 M1) is registered in the spec when it is first put in an area; a broken link's field is refused
+        if !self.pivot_builder.fields.iter().any(|(n, _)| n == field) && !self.pivot_builder.spec.model_fields.iter().any(|m| m.name == field) {
+            if let Some((r, _, refusal)) = self.pivot_input().and_then(|i| self.model_field_named(i.tab_id, field)) {
+                if let Some(why) = refusal {
+                    self.pivot_builder.preview = Some(Err(why));
+                    return;
+                }
+                self.pivot_builder.spec.model_fields.push(r);
+            }
+        }
         match area {
             Area::Rows | Area::Columns => {
                 // a list that names this field is pre-selected (U3)
@@ -437,8 +457,14 @@ impl MicroParquetApp {
                 // Ranges from its labels
                 let date_field = self.pivot_builder.spec.date_fields.iter().find(|d| d.name == field).cloned();
                 if added && !self.pivot_builder.spec.field_orders.iter().any(|o| o.field == field) {
+                    let model_field = self.pivot_builder.spec.model_fields.iter().find(|m| m.name == field).cloned();
                     if let Some(d) = date_field {
                         if let Some(order) = d.sort_order() {
+                            self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
+                        }
+                    } else if let Some(m) = model_field {
+                        // a lookup field's order is what the lookup's own steps declare (W0 on the lookup); its labels are not listed here
+                        if let Some(order) = self.model_declared_order(&m) {
                             self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
                         }
                     } else if let Some(order) = self.auto_order(field, crate::ui::auto_order::AutoTarget::Pivot) {
@@ -467,6 +493,9 @@ impl MicroParquetApp {
         // a date field no area uses any more is dropped (W2)
         let filters: Vec<String> = spec.filters.iter().map(|f| f.field.clone()).collect();
         spec.date_fields.retain(|d| rows.contains(&d.name) || cols.contains(&d.name) || filters.contains(&d.name));
+        // and so is a lookup field no area uses any more (M1)
+        let values: Vec<String> = spec.values.iter().map(|v| v.field.clone()).collect();
+        spec.model_fields.retain(|m| rows.contains(&m.name) || cols.contains(&m.name) || filters.contains(&m.name) || values.contains(&m.name));
     }
 
     fn remove_pivot_chip_inner(&mut self, area: Area, index: usize) {
@@ -868,7 +897,7 @@ impl MicroParquetApp {
         let out = egui::ScrollArea::vertical().id_salt("pivot_fields").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(w - theme::SPACE_M);
             for (name, kind) in &list {
-                self.pivot_field_row(ui, name, *kind, None, rects);
+                self.pivot_field_row(ui, name, *kind, None, None, rects);
                 if *kind == FieldKind::Date {
                     // W2: the parts of a date column, under an expander, added like columns
                     let open = self.pivot_builder.expanded.contains(name);
@@ -886,19 +915,56 @@ impl MicroParquetApp {
                         let cal = self.calendar();
                         for part in micro_parquet::dates::DatePart::ALL {
                             let f = self.pivot_builder.spec.date_fields.iter().find(|d| d.column == *name && d.part == part).cloned().unwrap_or_else(|| micro_parquet::dates::DateFieldRef::new(name, part, cal));
-                            self.pivot_field_row(ui, &f.name.clone(), *kind, Some(&f), rects);
+                            self.pivot_field_row(ui, &f.name.clone(), *kind, Some(&f), None, rects);
                         }
                     }
                 }
             }
-            if list.is_empty() {
+            // Phase 9 M1: the links of the tab, under its own columns: "Branch master ›" expands to the lookup's columns
+            let tab_id = self.pivot_input().map(|i| i.tab_id);
+            let groups = tab_id.map(|t| self.model_groups_for(t)).unwrap_or_default();
+            let mut shown_any = !list.is_empty();
+            for g in &groups {
+                let key = format!("{} \u{203a}", g.lookup_title);
+                let matching: Vec<(micro_parquet::model::ModelFieldRef, polars::prelude::DataType)> = g.columns.iter().filter(|(r, _)| q.is_empty() || r.name.to_lowercase().contains(&q) || g.lookup_title.to_lowercase().contains(&q)).cloned().collect();
+                if !q.is_empty() && matching.is_empty() {
+                    continue;
+                }
+                shown_any = true;
+                let open = !q.is_empty() || self.pivot_builder.expanded.contains(&key);
+                let text = format!("{}  {}", if open { theme::ph::CARET_DOWN } else { theme::ph::CARET_RIGHT }, key);
+                let colour = if g.refusal.is_some() { tk.muted } else { tk.muted };
+                let r = ui.add(egui::Button::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(colour)).frame(false));
+                let r = match &g.refusal {
+                    Some(why) => r.on_hover_text(why),
+                    None => r.on_hover_text(format!("The columns of '{}', joined by the link {}", g.lookup_title, g.link_name)),
+                };
+                rects.expanders.push((key.clone(), r.rect));
+                if r.clicked() {
+                    if self.pivot_builder.expanded.contains(&key) {
+                        self.pivot_builder.expanded.remove(&key);
+                    } else {
+                        self.pivot_builder.expanded.insert(key.clone());
+                    }
+                }
+                if open {
+                    if let Some(why) = &g.refusal {
+                        let note = ui.add(egui::Label::new(egui::RichText::new(why).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                        rects.link_notes.push((key.clone(), note.rect));
+                    }
+                    for (r, dt) in &matching {
+                        self.pivot_field_row(ui, &r.name.clone(), FieldKind::of(dt), None, Some((r, g.refusal.as_deref())), rects);
+                    }
+                }
+            }
+            if !shown_any {
                 ui.label(egui::RichText::new("No field matches.").color(tk.muted));
             }
         });
         rects.fields_list = out.inner_rect;
     }
 
-    fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, part: Option<&micro_parquet::dates::DateFieldRef>, rects: &mut PivotRects) {
+    fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, part: Option<&micro_parquet::dates::DateFieldRef>, model: Option<(&micro_parquet::model::ModelFieldRef, Option<&str>)>, rects: &mut PivotRects) {
         let tk = *theme::tokens(self.dark_mode);
         let areas = self.areas_of(name);
         let used = areas.iter().map(|a| a.used_word()).collect::<Vec<_>>().join(", ");
@@ -939,14 +1005,26 @@ impl MicroParquetApp {
         let gap = if used.is_empty() { 0.0 } else { theme::SPACE_S };
         let name_rect = egui::Rect::from_min_max(egui::pos2(badge.right() + theme::SPACE_S, drag_rect.top()), egui::pos2((used_rect.left() - gap).max(badge.right() + theme::SPACE_S), drag_rect.bottom()));
         // a date part is listed under its column as "› Month"
-        let shown = part.map(|p| format!("\u{203a} {}", p.part.label())).unwrap_or_else(|| name.to_string());
-        ui.put(name_rect, egui::Label::new(egui::RichText::new(shown).color(tk.ink)).truncate().selectable(false));
+        let shown = match (part, model) {
+            (Some(p), _) => format!("\u{203a} {}", p.part.label()),
+            // a lookup column is listed under its link as "› Region" (M1)
+            (None, Some((m, _))) => format!("\u{203a} {}", m.column),
+            _ => name.to_string(),
+        };
+        // a field of a broken link is greyed, and says why on hover
+        let refusal = model.and_then(|(_, why)| why);
+        let ink = if refusal.is_some() { tk.muted } else { tk.ink };
+        let label = ui.put(name_rect, egui::Label::new(egui::RichText::new(shown).color(ink)).truncate().selectable(false));
+        if let Some(why) = refusal {
+            label.on_hover_text(why);
+        }
         // the menu: Add to Rows / Columns / Values / Filters
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(menu_rect), |ui| {
             // a button as small as its cell: the default minimum size would push the row wider
             ui.spacing_mut().interact_size = egui::vec2(theme::PIVOT_CHIP_MENU_W, theme::PIVOT_FIELD_ROW_H);
             ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
             let bar_id = ui.id();
+            let mut draw_menu = |ui: &mut egui::Ui| {
             let menu = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
                 // a date part is a label: Rows, Columns or Filters (W2)
                 let areas_offered: &[Area] = if part.is_some() { &[Area::Rows, Area::Columns, Area::Filters] } else { &[Area::Rows, Area::Columns, Area::Values, Area::Filters] };
@@ -969,6 +1047,13 @@ impl MicroParquetApp {
             // an open menu takes Esc itself (egui's menus are not in its list of pop-ups)
             self.pivot_builder.menu_open = self.pivot_builder.menu_open || egui::menu::BarState::load(ui.ctx(), bar_id).is_some();
             menu.response.on_hover_text("Add to Rows, Columns, Values or Filters");
+            };
+            // a field of a broken link has its menu disabled (M1); the others are drawn as before
+            if refusal.is_some() {
+                ui.add_enabled_ui(false, |ui| draw_menu(ui));
+            } else {
+                draw_menu(ui);
+            }
         });
         rects.field_rows.push((name.to_string(), row));
         rects.field_menus.push((name.to_string(), menu_rect));

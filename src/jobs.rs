@@ -442,6 +442,9 @@ impl<T: Send + 'static> JobQueue<T> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
         let ctx = JobCtx { id, cancel: cancel.clone(), progress: Arc::new(Mutex::new(Progress::default())) };
+        // the job builds its tables with the model the project has now (Phase 9 M1), whichever thread it runs on
+        let model = crate::model::scope();
+        let work = move |c: &JobCtx| crate::model::with_scope(model, || work(c));
         let job = Queued { id, key, label: label.into(), long, ctx, work: Box::new(work) };
         {
             let mut st = lock(&self.shared.state);

@@ -7,6 +7,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | P1 | DONE (S1), follow-ups DONE (S2) | (see git log: "Phase 9 P1", "Phase 9 P1: follow-ups") | tests/phase9/p1.rs x2 (the saved rectangle is none in old files, round-trips and leaves old bytes alone; the preview brings back the rows asked for, 20 to 500); render_tests_p9 x10 (Pop out by real clicks and Apply gives the docked step as JSON, Dock and the window's close button, Cancel and Esc, the preview's rows and width, where the window opens, the rectangle saved and restored, no Pop out without windows, the fit at 3 sizes with windows of 900x600 and 1600x1000, closing the source tab, the note's Dock) |
 | P2 | DONE (S2), follow-up DONE (S3) | (see git log: "Phase 9 P2") | tests/phase9/p2.rs x16 (subtotals, grand total, leaves, hash of the flat table, three levels, blank lines, Columns, last-step rule, Excel XML, scale, PDF text and indent, CSV and Python, Show rows, old pivots, the sheet limit); render_tests_p9 x5 (the dialog, the tab's bar and undo, Show rows by clicks, steps after the pivot, the pop-out) |
 | M0 | DONE (S3) | (see git log: "Phase 9 M0") | tests/phase9/m0.rs x10 (composite key and duplicates, sorted duplicates, blank keys, unmatched keys and sums, the refusals, project v2 round trip and v1 bytes, the v1.8.0 refusal, relink to a duplicate, the open line and status texts, a tab changed since); render_tests_p9 x5 (the menu with and without a project, Links add/edit/remove and refusals, Key check and its three buttons, project save/open with the open line, pictures) |
+| M1 | DONE (S4) | (see git log: "Phase 9 M1") | tests/phase9/m1.rs x12; render_tests_p9 x7 (field list, chart pickers, filter dialog and value picker, chart filters, Show rows, broken links, closed tab) + 1 picture test |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -64,7 +65,7 @@ new Esc test fails (`p1_esc_is_cancel_docked_and_in_the_window_unless_a_text_box
 monitor rule put back, `p1_the_saved_window_is_used_as_it_is_on_any_monitor_and_it_is_centred_only_when_none_is_saved` and
 `p1_the_window_rectangle_is_saved_in_settings_when_the_builder_docks_and_opens_there_next_time` fail.
 
-Full `cargo test` before the commit: 9 + 304 + 709 + 60 passed.
+
 
 ## P2 acceptance: item -> test (S2)
 
@@ -125,7 +126,7 @@ Proved to fail without the fix (stubs, restored): the worker not returning the N
 
 The pictures `docs/guide/img/pivot-layout-dialog.png` and `-dark.png` changed on purpose (the dialog's preview is Nested now). The full test run also rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored.
 
-Full `cargo test` before the commit: 9 + 311 + 725 + 60 passed.
+
 
 ## M0 acceptance: item -> test (S3)
 
@@ -159,4 +160,43 @@ Proved to fail without the fix (stubs, each restored; all 16 runs finished, none
 - Copy list not kept, and a changed link not re-checked (choosing the sums column changes the link, so its check has to run again): UI `m0_key_check_lists…` fails with each (the second times out waiting for the sums).
 - model not part of "unsaved": the first run found no failing test (the test also added a tab, which moves the fingerprint). A model-only change was added to `m0_a_project_with_links…`; it fails with the stub and passes without.
 
-Full `cargo test` before the commit: 9 + 316 + 735 + 60 passed. The full run rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored.
+
+
+## S4: owner decisions on S3, recorded
+
+Written under "Owner decisions on S3" in `docs/phase9-spec.md` `<accepted_deviations>`: P2-11, M0-1 to M0-11, commit 6e14077 and the version-3 "newer project" tests accepted; M0-3 (blank keys never match, "(blank)" in M1), M0-1 accepted; M0-4 accepted with its status text changed: a link whose check can't run says "Can't check: the tab 'Branch master' is closed" / "Can't check: 'Accounts' has no column 'Branch Code'" (it was "Broken: ..."). Fixed in M1 (`LinkStatus::cant_check`, closed tabs named from a remembered title), tested by `m1_a_broken_link_refuses...`, `m1_the_check_of_a_link_whose_column_is_gone...`, UI `m1_a_link_whose_tab_is_closed...`. The M0 test text "... any more" was updated.
+
+## M1 acceptance: item -> test (S4)
+
+Library: `cargo test -q --test phase3 p9_m1`; UI: `cargo test -q --bin MicroParquet m1_` (3 sizes, light and dark).
+
+| Acceptance item (spec M1) | Test |
+| --- | --- |
+| Pivot by "Branch master > Region" equals the Join tool's pivot row for row, (no match) holds the unmatched sum, total = ungrouped total | `m1_a_pivot_by_a_lookup_field_equals_the_join_tools_pivot...`; UI by clicks: `m1_the_pivot_field_list_expands_a_link...` |
+| Linking never changes the data tab's row count, on every fixture | `m1_linking_never_changes_the_data_tabs_row_count_on_any_fixture` (matched, unmatched, blank keys, 1-3 columns, a lookup with no matching key, a one-row lookup, a composite key, a filter step); UI: data tab stays 150 rows |
+| Filter Region = Dhaka keeps exactly Dhaka's rows; the lookup tab unchanged | `m1_a_filter_on_a_lookup_field_keeps_exactly_that_regions_rows...`; UI `m1_the_filter_dialog_takes_a_lookup_field...` (branch master still 140 rows) |
+| Filter on (no match) keeps exactly the unmatched rows | `m1_a_filter_on_no_match_keeps_exactly_the_unmatched_rows...`, UI filter dialog (B141 to B150) |
+| Composite key (Wing, Product code) gives the right group for SB01 in each wing | `m1_a_composite_key_gives_the_right_product_group_for_sb01_in_each_wing` |
+| Chart by a lookup field equals the pivot; drill Region > Branch name adds up; Show rows from a chart mark and a pivot cell equal the cell | `m1_a_chart_by_a_lookup_field_equals_the_pivot_and_a_drill...`; UI `m1_show_rows_from_a_pivot_cell_and_a_chart_mark...`, `m1_the_chart_pickers_list_the_lookup_fields...` |
+| Broken link greys its fields with the reason; a pivot using one shows the reason | `m1_a_broken_link_refuses_its_fields_with_the_reason...`; UI `m1_a_broken_links_fields_are_greyed...` |
+| Macro with a lookup filter outside a project gives the message; Python export gives its message | `m1_outside_a_project_a_step_with_a_lookup_filter_gives_the_conventions_message...`, `m1_the_scope_is_taken_by_a_job...` |
+| Old pivots, charts and filters load unchanged | `m1_old_pivots_charts_and_filters_load_unchanged...` (and B0's replay) |
+| Render tests: field list expander, chart picker, filter value picker, Show rows | the UI tests above, plus `m1_filters_on_this_chart_take_a_lookup_field...`; "(no match)" and "(blank)" sort last: library tests and the pickers |
+| M0-4 "Can't check" wording | see S3 decisions above |
+
+Pictures (light and dark): `docs/guide/img/pivot-lookup-fields.png`, `chart-picker-lookup-fields.png`, `filter-lookup-values.png` (each with `-dark`).
+
+Deviations: M1-1 to M1-11 (in the spec).
+
+Proved to fail without the fix (stubs, each restored, run one at a time; failing tests by stub):
+- no "(no match)" label: lib `m1_a_pivot_by_a_lookup_field_equals...`, `m1_a_filter_on_no_match...`, `m1_a_chart_by...`, `m1_a_numeric_lookup_field...`; UI filters-on-chart, filter dialog, pictures, show rows.
+- blank key flag ignored: the same four lib tests.
+- sentinels not last: lib `m1_a_chart_by...`; UI `m1_the_chart_pickers...`.
+- pivot ignores lookup fields: 8 lib tests (pivot, composite, no match, values, chart, broken, outside project, ...).
+- filter lookups not applied: lib filter, no match, row count, outside project, broken, chart, scope tests.
+- job forgets the scope: lib `m1_the_scope_is_taken_by_a_job...`. No outside-project message: `m1_outside_a_project...`, `m1_the_scope...`. Python not refused: `m1_outside_a_project...`.
+- "Can't check" text old: lib `m1_a_broken_link_refuses...`, `m1_the_check_of_a_link_whose_column_is_gone...`; UI `m1_a_link_whose_tab_is_closed...`.
+- new fields always written: lib `m1_old_pivots_charts_and_filters_load_unchanged...`. Broken link not refused: lib `m1_a_broken_link_refuses...`, UI `m1_a_broken_links_fields_are_greyed...`. Menu of a broken field enabled: same UI test.
+- chart series lookup ignored: lib chart test, UI `m1_the_chart_pickers...`. Picker (no match) not last: UI chart-filters and filter-dialog tests. Expander missing: UI field-list, broken, pictures tests. Filter dialog not storing the lookup: UI filter dialog, pictures. Show rows dropping the lookup: lib chart and no-match tests, UI show-rows test.
+
+Full `cargo test` before the commit: 9 + 324 + 747 + 60 passed. The full run rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored. A first full run found `p1_esc_is_cancel...` failing (my wrapper around the field menu); fixed by wrapping only a broken link's menu.

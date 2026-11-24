@@ -76,7 +76,14 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         let schema = lf.collect_schema().context("Could not read the column types for the chart")?;
         crate::dates::with_date_fields(lf, &fields, &schema, "Chart")?
     };
+    // lookup fields (M1) are text, with "(no match)" for a key with no lookup row
+    let lf = crate::model::with_lookup_columns(lf, &chart_lookup_wants(spec), "Chart")?;
     compute_on(lf, spec)
+}
+
+/// The lookup fields of a chart as columns to add.
+pub fn chart_lookup_wants(spec: &ChartSpec) -> Vec<crate::model::LookupWant> {
+    spec.model_fields().into_iter().map(|f| crate::model::LookupWant { out: f.name.clone(), field: f, as_: crate::model::LookupAs::Text }).collect()
 }
 
 /// The chart of a table that already has the chart's date parts as columns (a facet's panel).
@@ -210,6 +217,9 @@ fn compute_facets(lf: LazyFrame, spec: &ChartSpec, facet: &str) -> Result<Vec<Fa
             order.sort_by(|&a, &b| o.compare(&key(a), &key(b)));
         }
         None => order.sort_by(|&a, &b| ns[b].cmp(&ns[a]).then_with(|| names[a].cmp(&names[b]))),
+    }
+    if spec.facet_model.is_some() {
+        order.sort_by_key(|&i| crate::model::label_rank(&names[i]));
     }
     let inner = ChartSpec { facet: None, ..spec.clone() };
     let mut out = Vec::new();

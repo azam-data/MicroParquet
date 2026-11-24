@@ -173,7 +173,7 @@ fn w2_a_real_column_with_the_fields_name_is_refused_and_the_value_lists_read_par
     // the values of a date field, as the pivot's Filters checklist and the filter's picker read them
     let d = dir("w2_values");
     let src = parquet(&d, "t", &df);
-    let req = micro_parquet::tab_jobs::PivotValuesRequest { tab_id: 1, source: src, steps: vec![TransformStep::date_field_step(&f)], field: f.name.clone(), temp_dir: d.clone() };
+    let req = micro_parquet::tab_jobs::PivotValuesRequest { tab_id: 1, source: src, steps: vec![TransformStep::date_field_step(&f)], field: f.name.clone(), temp_dir: d.clone(), lookup: None };
     let r = micro_parquet::tab_jobs::compute_pivot_values(req, &micro_parquet::jobs::JobCtx::inert()).expect("listed");
     let (values, _) = r.values.expect("values");
     let mut months: Vec<String> = values.iter().flatten().cloned().collect();

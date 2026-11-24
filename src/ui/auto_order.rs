@@ -50,7 +50,7 @@ impl MicroParquetApp {
             return Some(o);
         }
         let tab = self.tabs.get(self.active_tab)?;
-        let req = PivotValuesRequest { tab_id: tab.id, source: tab.source.clone(), steps: tab.steps.clone(), field: field.to_string(), temp_dir: self.paths.temp_dir.clone() };
+        let req = PivotValuesRequest { tab_id: tab.id, source: tab.source.clone(), steps: tab.steps.clone(), field: field.to_string(), temp_dir: self.paths.temp_dir.clone(), lookup: None };
         self.auto_order_waits.retain(|w| !(w.target == target && w.field == field));
         self.auto_order_waits.push(AutoOrderWait { tab_id: tab.id, field: field.to_string(), target: target.clone() });
         // one job per tab and field: two fields added one after the other are both read
@@ -133,6 +133,9 @@ impl MicroParquetApp {
             if let (Some(name), Some(f)) = (spec.series.clone(), spec.series_part.as_ref().filter(|p| Some(p.name.as_str()) == spec.series.as_deref())) {
                 let _ = name;
                 spec.series_order = Some(f.sort_order().unwrap_or(SortOrder::Natural));
+            } else if let Some(m) = spec.series_model.as_ref().filter(|p| Some(p.name.as_str()) == spec.series.as_deref()) {
+                // a lookup field's order is what the lookup's own steps declare (Phase 9 M1)
+                spec.series_order = self.model_declared_order(m);
             } else if let Some(name) = spec.series.clone().as_deref() {
                 spec.series_order = self.auto_order(&name, AutoTarget::ChartSeries);
             }
@@ -141,6 +144,8 @@ impl MicroParquetApp {
             spec.facet_order = None;
             if let (Some(_), Some(f)) = (spec.facet.clone(), spec.facet_part.as_ref().filter(|p| Some(p.name.as_str()) == spec.facet.as_deref())) {
                 spec.facet_order = Some(f.sort_order().unwrap_or(SortOrder::Natural));
+            } else if let Some(m) = spec.facet_model.as_ref().filter(|p| Some(p.name.as_str()) == spec.facet.as_deref()) {
+                spec.facet_order = self.model_declared_order(m);
             } else if let Some(name) = spec.facet.clone().as_deref() {
                 spec.facet_order = self.auto_order(&name, AutoTarget::ChartFacet);
             }
