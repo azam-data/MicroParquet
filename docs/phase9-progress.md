@@ -156,7 +156,7 @@ Proved to fail without the fix (stubs, each restored; all 16 runs finished, none
 - no role refusal, no second-link refusal: `m0_the_role_type_second_link_and_chart_tab_refusals…`, UI `m0_links_are_added_edited…`. No type refusal: `m0_the_role_type_second_link_and_chart_tab_refusals…`.
 - version always 1: `m0_a_project_with_a_model_is_version_2…`, `m0_the_v1_8_0_app_refuses…`, UI `m0_a_project_with_links…`. Empty model written: `m0_a_project_with_a_model_is_version_2…` and `b0_the_phase8_samples_replay…`. Version 2 refused by this app: `m0_a_project_with_a_model…`, `m0_relinking_a_lookup_file…`, UI `m0_a_project_with_links…`.
 - open line not added, model not saved, model not opened: UI `m0_a_project_with_links…`. No status bar item: UI `m0_a_project_with_links…`, `m0_key_check_lists…`, `m0_links_are_added_edited…`.
-- Copy list not kept, a tab change not re-checked (the edited link stays at the old status): UI `m0_key_check_lists…` (copy), `m0_links_are_added_edited…` (re-check; the first run listed only the copy test, the edit step times out waiting for the new status).
+- Copy list not kept, and a changed link not re-checked (choosing the sums column changes the link, so its check has to run again): UI `m0_key_check_lists…` fails with each (the second times out waiting for the sums).
 - model not part of "unsaved": the first run found no failing test (the test also added a tab, which moves the fingerprint). A model-only change was added to `m0_a_project_with_links…`; it fails with the stub and passes without.
 
 Full `cargo test` before the commit: 9 + 316 + 735 + 60 passed. The full run rewrote `pivot-date-expander*.png` and `sources-dialog*.png`; those were restored.
