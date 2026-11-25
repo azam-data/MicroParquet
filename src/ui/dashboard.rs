@@ -707,6 +707,19 @@ impl MicroParquetApp {
                     if let DashItemKind::Kpi(k) = &mut dash.pages[pi].items[ii].kind {
                         self.kpi_editor(ui, k, &mut rects);
                     }
+                    if matches!(dash.pages[pi].items[ii].kind, DashItemKind::Pivot(_)) {
+                        ui.label("Unit for money columns");
+                        let mut u = dash.pages[pi].items[ii].unit.unwrap_or_default();
+                        let before = u;
+                        egui::ComboBox::from_id_salt("dash_item_unit").selected_text(u.label()).show_ui(ui, |ui| {
+                            for x in ItemUnit::ALL {
+                                ui.selectable_value(&mut u, x, x.label());
+                            }
+                        });
+                        if u != before {
+                            dash.pages[pi].items[ii].unit = if u == ItemUnit::Crore { None } else { Some(u) };
+                        }
+                    }
                     ui.horizontal_wrapped(|ui| {
                         if Self::dash_button(ui, "Item earlier", "Move earlier", &mut rects) {
                             item_op = Some(("up", ii));
@@ -1019,7 +1032,7 @@ impl MicroParquetApp {
                     if let Some(c) = page.state.cross.as_ref().filter(|c| c.item == item.id) {
                         child.label(egui::RichText::new(format!("\u{25cf} Selected: {}", c.chip())).size(theme::TEXT_LABEL).color(tk.accent));
                     }
-                    if let Some((level, value)) = Self::draw_dash_table(&mut child, &item.id, t, rects) {
+                    if let Some((level, value)) = Self::draw_dash_table(&mut child, &item.id, t, item.unit.unwrap_or_default(), rects) {
                         if let (Ok(res), DashItemKind::Pivot(_)) = (&resolved, &item.kind) {
                             if let ItemSource::Pivot { spec, .. } = &res.source {
                                 match CrossPick::from_pivot(spec, level, &value, &item.id, res.data_tab.as_deref()) {
@@ -1228,13 +1241,15 @@ impl MicroParquetApp {
 
     /// A pivot as a table (Nested, with its indents, when the pivot is Nested). A click on a row label comes back as
     /// (the Rows field it belongs to, its text); the labels are buttons without a frame, named "Row <item> <text>".
-    fn draw_dash_table(ui: &mut egui::Ui, id: &str, t: &TableData, rects: &mut Vec<(String, egui::Rect)>) -> Option<(usize, String)> {
+    fn draw_dash_table(ui: &mut egui::Ui, id: &str, t: &TableData, unit: ItemUnit, rects: &mut Vec<(String, egui::Rect)>) -> Option<(usize, String)> {
         use polars::prelude::AnyValue;
-        let text = |s: &polars::prelude::Series, i: usize| -> String {
+        // `k` is the value column (None for a label column): money is shown in the item's unit, counts whole, the rest as they are
+        let text = |s: &polars::prelude::Series, i: usize, k: Option<usize>| -> String {
+            let (div, dec) = k.map(|k| cell_scale(t.kind_of(k), unit)).unwrap_or((1.0, 2));
             match s.get(i) {
                 Ok(AnyValue::Null) | Err(_) => String::new(),
-                Ok(AnyValue::Float64(v)) => format_with_commas(v, 2),
-                Ok(AnyValue::Float32(v)) => format_with_commas(v as f64, 2),
+                Ok(AnyValue::Float64(v)) => format_with_commas(v / div, dec),
+                Ok(AnyValue::Float32(v)) => format_with_commas(v as f64 / div, dec),
                 Ok(AnyValue::String(v)) => v.to_string(),
                 Ok(AnyValue::StringOwned(v)) => v.to_string(),
                 Ok(v) => format!("{}", v),
@@ -1258,27 +1273,31 @@ impl MicroParquetApp {
                 match &t.nested {
                     Some(n) => {
                         ui.label(theme::semibold(n.label_header.clone()));
-                        for c in n.values.get_columns() {
-                            ui.label(theme::semibold(c.name().to_string()));
+                        for (k, c) in n.values.get_columns().iter().enumerate() {
+                            ui.label(theme::semibold(heading_with_unit(c.name(), t.kind_of(k), unit)));
                         }
                         ui.end_row();
                         for (i, r) in n.rows.iter().enumerate().take(300) {
                             let plain = if r.is_subtotal() || r.label == micro_parquet::pivot_table::GRAND_TOTAL_LABEL { "" } else { r.label.as_str() };
                             label(ui, format!("{}{}", "\u{a0}\u{a0}".repeat(r.level), r.label), plain, r.level, &mut clicked);
-                            for c in n.values.get_columns() {
-                                ui.label(text(c, i));
+                            for (k, c) in n.values.get_columns().iter().enumerate() {
+                                ui.label(text(c, i, Some(k)));
                             }
                             ui.end_row();
                         }
                     }
                     None => {
-                        for c in &cols {
-                            ui.label(theme::semibold(c.name().to_string()));
+                        for (ci, c) in cols.iter().enumerate() {
+                            if ci < t.label_columns {
+                                ui.label(theme::semibold(c.name().to_string()));
+                            } else {
+                                ui.label(theme::semibold(heading_with_unit(c.name(), t.kind_of(ci - t.label_columns), unit)));
+                            }
                         }
                         ui.end_row();
                         for i in 0..t.df.height().min(300) {
                             for (ci, c) in cols.iter().enumerate() {
-                                let s = text(c, i);
+                                let s = text(c, i, ci.checked_sub(t.label_columns));
                                 if ci < t.label_columns {
                                     let plain = if s == micro_parquet::pivot_table::GRAND_TOTAL_LABEL { "" } else { s.as_str() };
                                     label(ui, s.clone(), plain, ci, &mut clicked);

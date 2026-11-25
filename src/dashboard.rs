@@ -183,6 +183,110 @@ pub struct DashItem {
     /// The slot of the page's design this item fills.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// The unit a pivot item shows money in; `None` is Crore. Old projects have none and look the same as before the setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<ItemUnit>,
+}
+
+/// The unit a pivot item's money columns are shown in (Phase 10): Crore unless the item says otherwise. Counts and shares are not money
+/// and follow the app's unit rule: counts whole, shares and rates as they are.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ItemUnit {
+    #[default]
+    Crore,
+    Lakh,
+    Million,
+    Thousand,
+    Absolute,
+}
+
+impl ItemUnit {
+    pub const ALL: [ItemUnit; 5] = [ItemUnit::Crore, ItemUnit::Lakh, ItemUnit::Million, ItemUnit::Thousand, ItemUnit::Absolute];
+    pub fn label(self) -> &'static str {
+        match self {
+            ItemUnit::Crore => "Crore",
+            ItemUnit::Lakh => "Lakh",
+            ItemUnit::Million => "Million",
+            ItemUnit::Thousand => "Thousand",
+            ItemUnit::Absolute => "Absolute (BDT)",
+        }
+    }
+    pub fn divisor(self) -> f64 {
+        match self {
+            ItemUnit::Crore => 10_000_000.0,
+            ItemUnit::Lakh => 100_000.0,
+            ItemUnit::Million => 1_000_000.0,
+            ItemUnit::Thousand => 1_000.0,
+            ItemUnit::Absolute => 1.0,
+        }
+    }
+    /// What a heading says after a money column's name.
+    pub fn short(self) -> &'static str {
+        match self {
+            ItemUnit::Crore => "Cr",
+            ItemUnit::Lakh => "Lakh",
+            ItemUnit::Million => "M",
+            ItemUnit::Thousand => "K",
+            ItemUnit::Absolute => "BDT",
+        }
+    }
+}
+
+/// What a pivot value column holds, which decides how it is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellKind {
+    /// Money: divided by the item's unit.
+    Money,
+    /// A count of rows or of distinct values: whole numbers.
+    Count,
+    /// An average or weighted average: as it is.
+    Plain,
+    /// A share or a rate (percent): as it is, with its percent sign in the heading.
+    Share,
+}
+
+/// The kind of a pivot value, by the app's rule for charts (`value_kind`): counts whole, averages as they are, shares and ratio measures
+/// as percent, everything else money.
+pub fn cell_kind(v: &PivotValue) -> CellKind {
+    if let Some(t) = &v.time {
+        if t.show == TimeShow::PercentChange {
+            return CellKind::Share;
+        }
+        if crate::measures::find_measure(&v.field).is_some_and(|m| m.is_ratio()) {
+            return CellKind::Share;
+        }
+        return CellKind::Money;
+    }
+    match v.agg {
+        PivotAgg::Count | PivotAgg::CountDistinct => CellKind::Count,
+        PivotAgg::Average | PivotAgg::WeightedAvg => CellKind::Plain,
+        PivotAgg::Sum | PivotAgg::Min | PivotAgg::Max => CellKind::Money,
+    }
+}
+
+/// The divisor and decimals a value column is shown with.
+pub fn cell_scale(kind: CellKind, unit: ItemUnit) -> (f64, usize) {
+    match kind {
+        CellKind::Money => (unit.divisor(), 2),
+        CellKind::Count => (1.0, 0),
+        CellKind::Plain | CellKind::Share => (1.0, 2),
+    }
+}
+
+/// A heading with its unit: "Sum of Balance (Cr)", "Average of Rate", "Share (%)".
+pub fn heading_with_unit(name: &str, kind: CellKind, unit: ItemUnit) -> String {
+    match kind {
+        CellKind::Money => format!("{} ({})", name, unit.short()),
+        CellKind::Share => format!("{} (%)", name),
+        CellKind::Count | CellKind::Plain => name.to_string(),
+    }
+}
+
+impl TableData {
+    /// The kind of value column `k` (counted among the value columns, not the labels); money when the table does not know.
+    pub fn kind_of(&self, k: usize) -> CellKind {
+        self.kinds.get(k).copied().unwrap_or(CellKind::Money)
+    }
 }
 
 impl DashItem {
@@ -626,6 +730,8 @@ pub struct TableData {
     /// Set when the pivot's layout is Nested.
     pub nested: Option<crate::pivot_view::NestedView>,
     pub notes: Vec<String>,
+    /// The kind of each value column of `df` (after the label columns), from the pivot's Values.
+    pub kinds: Vec<CellKind>,
 }
 
 /// An item's numbers: what the screen, the HTML file, the PPTX and the PDF all draw.
@@ -725,7 +831,8 @@ pub fn compute_item(req: &ItemRequest) -> Result<ItemData> {
             let spec = pivot_spec_with(spec, &req.picks);
             let build = crate::pivot_table::build_pivot(lf.clone(), &spec)?;
             let nested = if spec.layout.is_nested() { Some(crate::pivot_view::build_nested(lf, &spec)?) } else { None };
-            Ok(ItemData::Table(Box::new(TableData { df: build.df, label_columns: build.label_columns, nested, notes: build.warnings })))
+            let kinds = build.col_values.iter().map(|j| spec.values.get(*j).map(cell_kind).unwrap_or(CellKind::Money)).collect();
+            Ok(ItemData::Table(Box::new(TableData { df: build.df, label_columns: build.label_columns, nested, notes: build.warnings, kinds })))
         }
     }
 }

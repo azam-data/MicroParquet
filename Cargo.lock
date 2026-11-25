@@ -2550,6 +2550,7 @@ dependencies = [
  "serde_json",
  "walkdir",
  "winresource",
+ "zip",
 ]
 
 [[package]]

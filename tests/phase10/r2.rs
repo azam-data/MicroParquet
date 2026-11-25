@@ -348,3 +348,92 @@ await pg.goto('file://'+process.argv[2]);await pg.waitForSelector('[data-item=w]
 const o=await pg.evaluate(()=>{const g=id=>{const d=document.querySelector('[data-item='+id+'] .mp-chart');const op=echarts.getInstanceByDom(d).getOption();return {series:op.series.length,axes:op.yAxis.length,points:op.series[0].data.length}};return {two:g('m'),bridge:g('w')}});
 o.errors=bad;console.log(JSON.stringify(o));await b.close()})().catch(e=>{console.error(String(e));process.exit(1)});
 "#;
+
+/// Three steps × two wings, one row each; the balances are 100, 200, ... 600 million.
+fn heat_book(d: &std::path::Path) -> TabSource {
+    let df = DataFrame::new(vec![
+        strs("Step", &["s1", "s1", "s2", "s2", "s3", "s3"]),
+        strs("Wing", &["a", "b", "a", "b", "a", "b"]),
+        nums("Balance", &[100e6, 200e6, 300e6, 400e6, 500e6, 600e6]),
+    ])
+    .expect("data");
+    parquet(d, "r2_heat", &df)
+}
+
+#[test]
+fn r2_a_heatmap_and_a_histogram_are_drawn_from_the_apps_own_matrix_and_bins() {
+    let Some(node_path) = playwright_path() else {
+        eprintln!("R2 heatmap browser check skipped: node with playwright is not installed here");
+        return;
+    };
+    let dd = dir("p10r2_heat");
+    let src = heat_book(&dd);
+    let mut heat = bar("Step");
+    heat.kind = ChartKind::Heatmap;
+    heat.series = Some("Wing".into());
+    let mut hist = bar("Step");
+    hist.kind = ChartKind::Histogram;
+    let plan = one_page(vec![the_chart("h", "Heat", &src, heat), the_chart("g", "Spread", &src, hist)], &dd);
+    let answers = compute_answers(&plan).expect("answers");
+    let all: Value = serde_json::from_str(&answers_json(&plan, &answers)).expect("json");
+    let hm = &all["pages"][0]["items"][0]["answers"][0]["hm"];
+    let cells = grid(&hm["cells"]);
+    let mut flat: Vec<f64> = cells.iter().flatten().copied().collect();
+    flat.sort_by(|a, b| a.partial_cmp(b).expect("numbers"));
+    assert_eq!(flat, vec![1e7, 2e7, 3e7, 4e7, 5e7, 6e7], "100 to 600 million ÷ the item's unit of 10: {hm}");
+    let hg = &all["pages"][0]["items"][1]["answers"][0]["hg"];
+    let counts: f64 = hg["counts"].as_array().expect("counts").iter().map(|c| c.as_f64().unwrap_or(0.0)).sum();
+    let outside = hg["below"].as_f64().unwrap_or(0.0) + hg["above"].as_f64().unwrap_or(0.0);
+    assert_eq!(counts + outside, 6.0, "every row is in a bin or counted outside them: {hg}");
+    let looks = vec![PageLook { page_h: 625.0, rects: vec![[0.0, 0.0, 490.0, 300.0], [510.0, 0.0, 490.0, 300.0]], background: None }];
+    let html = render_page(&plan, &answers_json(&plan, &answers), &looks).expect("page");
+    let file = dd.join("heat.html");
+    std::fs::write(&file, &html).expect("write");
+    let script = dd.join("heat.js");
+    std::fs::write(&script, HEAT_SCRIPT).expect("script");
+    let o = Command::new("node").env("NODE_PATH", node_path).arg(&script).arg(&file).output().expect("node");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: Value = serde_json::from_slice(&o.stdout).expect("json");
+    assert_eq!(r["errors"].as_array().map(|a| a.len()), Some(0), "{}", r["errors"]);
+    assert_eq!(r["heat"]["type"], "heatmap", "{r}");
+    assert_eq!(r["heat"]["points"], 6, "{r}");
+    assert_eq!(r["hist"]["type"], "bar", "{r}");
+}
+
+const HEAT_SCRIPT: &str = r#"
+const {chromium}=require('playwright');
+(async()=>{const b=await chromium.launch();const pg=await b.newPage({viewport:{width:1300,height:900}});const bad=[];
+pg.on('console',m=>{if(m.type()==='error')bad.push(m.text())});pg.on('pageerror',e=>bad.push(String(e)));
+await pg.goto('file://'+process.argv[2]);await pg.waitForSelector('[data-item=g] canvas');
+const o=await pg.evaluate(()=>{const g=id=>{const op=echarts.getInstanceByDom(document.querySelector('[data-item='+id+'] .mp-chart')).getOption();return {type:op.series[0].type,points:op.series[0].data.length}};return {heat:g('h'),hist:g('g')}});
+o.errors=bad;console.log(JSON.stringify(o));await b.close()})().catch(e=>{console.error(String(e));process.exit(1)});
+"#;
+
+#[test]
+fn r2_a_pivot_item_shows_money_in_its_unit_counts_whole_and_old_projects_load_unchanged() {
+    let dd = dir("p10r2_unit");
+    let src = heat_book(&dd);
+    let spec = PivotSpec {
+        rows: vec!["Step".into()],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }, PivotValue { field: "Wing".into(), agg: PivotAgg::Count, weight_col: None, time: None }],
+        ..Default::default()
+    };
+    let mut it = ReportItem { id: "p".into(), title: "Pivot".into(), source: ItemSource::Pivot { base: src, steps: vec![], spec }, data_tab: Some("t1".into()), scale: unit_scale(ItemUnit::Lakh) };
+    let plan = one_page(vec![it.clone()], &dd);
+    let a = answer_of(&plan, 0);
+    // s1: 100 + 200 million = 300 million = 3,000 Lakh; two rows counted whole
+    assert_eq!(a["h"], serde_json::json!(["Sum of Balance (Lakh)", "Count of Wing"]), "{a}");
+    assert_eq!(grid(&a["v"]), vec![vec![3000.0, 7000.0, 11000.0], vec![2.0, 2.0, 2.0]], "{a}");
+    // the default unit is Crore: 300 million = 30 Cr
+    it.scale = unit_scale(ItemUnit::default());
+    let b = answer_of(&one_page(vec![it], &dd), 0);
+    assert_eq!(grid(&b["v"])[0], vec![30.0, 70.0, 110.0]);
+    assert_eq!(b["h"][0], "Sum of Balance (Cr)");
+    // an item saved before the setting has no unit and saves without one; a chosen unit round-trips
+    let old: DashItem = serde_json::from_str(r#"{"id":"i1","kind":{"Pivot":"t1"},"rect":null,"title_override":null}"#).expect("old item");
+    assert_eq!(old.unit, None);
+    assert!(!serde_json::to_string(&old).expect("json").contains("unit"));
+    let chosen = DashItem { unit: Some(ItemUnit::Lakh), ..old };
+    let back: DashItem = serde_json::from_str(&serde_json::to_string(&chosen).expect("json")).expect("back");
+    assert_eq!(back.unit, Some(ItemUnit::Lakh));
+}

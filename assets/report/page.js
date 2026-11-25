@@ -41,6 +41,22 @@ function chartOption(pi,it,a){
         renderItem:function(p,api){var x=api.value(0),lo=api.coord([x,api.value(1)]),hi=api.coord([x,api.value(2)]),w=api.size([1,0])[0]*0.6;
           return {type:'rect',shape:{x:lo[0]-w/2,y:Math.min(hi[1],lo[1]),width:w,height:Math.max(1,Math.abs(lo[1]-hi[1]))},style:api.style()}},encode:{x:0,y:[1,2]}}]};
   }
+  if(lk.ct==='heatmap'){
+    var hm=a.hm,data=[],pos=[];
+    hm.cells.forEach(function(r,ri){r.forEach(function(v,ci){if(v!=null){data.push([ci,ri,v]);if(v>0)pos.push(v)}})});
+    var lo=pos.length?Math.min.apply(null,pos):0,hi=pos.length?Math.max.apply(null,pos):1;
+    return {tooltip:{position:'top',formatter:function(p){return hm.rows[p.value[1]]+' · '+hm.cols[p.value[0]]+': '+fmt(p.value[2])+' '+u[0]}},
+      grid:{left:60,right:20,top:20,bottom:50,containLabel:true},
+      xAxis:{type:'category',data:hm.cols,axisLabel:{interval:0,hideOverlap:true}},yAxis:{type:'category',data:hm.rows,inverse:true},
+      visualMap:{type:'continuous',min:lo,max:hi===lo?lo+1:hi,show:false,dimension:2,inRange:{color:TH.seq[dark?'dark':'light']},outOfRange:{color:getComputedStyle(root).getPropertyValue('--grid').trim()||'#e1e0d9'}},
+      series:[{type:'heatmap',data:data,label:{show:true,formatter:function(p){return fmt(p.value[2])}}}]};
+  }
+  if(lk.ct==='hist'){
+    var h=a.hg,names=h.counts.map(function(n,i){return fmt(h.edges[i])+' – '+fmt(h.edges[i+1])});
+    return {tooltip:{trigger:'axis',axisPointer:{type:'shadow'},valueFormatter:function(v){return fmt(v,0)}},grid:{left:60,right:20,top:30,bottom:24,containLabel:true},
+      xAxis:{type:'category',data:names,axisLabel:{interval:0,hideOverlap:true}},yAxis:{type:'value',name:'Count',axisLabel:{formatter:function(v){return fmt(v,0)}}},
+      series:[{type:'bar',barCategoryGap:'5%',data:h.counts}]};
+  }
   if(lk.ct==='donut'){
     return {tooltip:{trigger:'item',valueFormatter:function(v){return fm(v,0)}},legend:{bottom:0,type:'scroll'},
       series:[{type:'pie',radius:['45%','70%'],label:{formatter:'{b}'},data:a.c.map(function(c,i){return {name:c,value:a.v[0][i],itemStyle:{opacity:dimmed(pi,it,c)?0.35:1}}})}]};
@@ -94,7 +110,7 @@ function drawChart(pi,it,f,body){
   var catOf=function(p){return lk.ct==='donut'?p.name:lk.ct==='waterfall'?a.wf[p.dataIndex][0]:(p.name!=null&&p.name!==''?p.name:a.c[p.dataIndex])};
   c.on('click',function(p){
     if(f.crossed)return;
-    var cat=catOf(p);if(f.path.length===0&&it.linked&&lk.ct!=='waterfall')toggleCross(pi,it,cat);
+    var cat=catOf(p);if(f.path.length===0&&it.linked&&lk.ct!=='waterfall'&&lk.ct!=='heatmap'&&lk.ct!=='hist')toggleCross(pi,it,cat);
   });
   c.on('contextmenu',function(p){
     p.event.event.preventDefault();var cat=catOf(p),e=p.event.event,ent=[];

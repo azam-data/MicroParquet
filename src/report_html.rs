@@ -340,11 +340,23 @@ pub fn values_json(a: &Answer, scale: &(f64, usize, String)) -> String {
             format!("[{}]", rows.join(","))
         }
         ItemData::Table(t) => {
+            // money in the item's unit, counts whole, averages and shares as they are (`cell_scale`)
             let cols: Vec<_> = match &t.nested {
                 Some(n) => n.values.get_columns().iter().collect(),
                 None => t.df.get_columns().iter().skip(t.label_columns).collect(),
             };
-            let rows: Vec<String> = cols.iter().map(|s| format!("[{}]", (0..s.len()).map(|i| number_json(s.get(i).ok().and_then(|v| v.extract::<f64>()), 1.0, 2)).collect::<Vec<_>>().join(","))).collect();
+            let rows: Vec<String> = cols
+                .iter()
+                .enumerate()
+                .map(|(k, s)| {
+                    let (div, dec) = match t.kind_of(k) {
+                        CellKind::Money => (scale.0, 2),
+                        CellKind::Count => (1.0, 0),
+                        CellKind::Plain | CellKind::Share => (1.0, 2),
+                    };
+                    format!("[{}]", (0..s.len()).map(|i| number_json(s.get(i).ok().and_then(|v| v.extract::<f64>()), div, dec)).collect::<Vec<_>>().join(","))
+                })
+                .collect();
             format!("[{}]", rows.join(","))
         }
         ItemData::Kpi(k) => format!("[[{}]]", std::iter::once(k.current).chain(k.spark.iter().copied()).map(|v| number_json(v, 1.0, 4)).collect::<Vec<_>>().join(",")),
@@ -388,6 +400,19 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String), source: &ItemSource, kp
                     Err(e) => extra = format!(",\"x\":{}", serde_json::to_string(&e.to_string()).unwrap_or_default()),
                 }
             }
+            if c.spec.kind == crate::charts::spec::ChartKind::Heatmap {
+                // the matrix as the app orders and fills it: rows are the series, columns the categories
+                let tf = c.spec.measure_list().first().map(|m| m.transform).unwrap_or(crate::charts::spec::Transform::None);
+                let hm = crate::charts::data::heatmap(c, tf);
+                let (div, dec) = measure_scale(&c.spec, 0, scale);
+                let cells: Vec<String> = hm.cells.iter().map(|r| format!("[{}]", r.iter().map(|v| number_json(*v, div, dec)).collect::<Vec<_>>().join(","))).collect();
+                extra = format!(",\"hm\":{{\"rows\":{},\"cols\":{},\"cells\":[{}]}}", strings_json(&hm.rows), strings_json(&hm.cols), cells.join(","));
+            }
+            if let Some(h) = &c.hist {
+                let edges: Vec<String> = h.edges.iter().map(|e| number_json(Some(*e), 1.0, 2)).collect();
+                let counts: Vec<String> = h.counts.iter().map(|n| n.to_string()).collect();
+                extra = format!(",\"hg\":{{\"edges\":[{}],\"counts\":[{}],\"below\":{},\"above\":{}}}", edges.join(","), counts.join(","), h.below, h.above);
+            }
             format!("{{\"p\":[{}],\"d\":{},\"m\":{},\"mu\":{},\"c\":{},\"s\":{},\"v\":{}{}}}", picks.join(","), strings_json(&a.path), strings_json(&c.measure_names), strings_json(&units), strings_json(&c.categories), strings_json(&c.series), values_json(a, scale), extra)
         }
         ItemData::Table(t) => {
@@ -400,7 +425,18 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String), source: &ItemSource, kp
                     (first, t.df.get_columns().iter().skip(t.label_columns).map(|c| c.name().to_string()).collect())
                 }
             };
-            format!("{{\"p\":[{}],\"d\":{},\"r\":{},\"h\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), strings_json(&labels), strings_json(&head), values_json(a, scale))
+            {
+                let head: Vec<String> = head
+                    .iter()
+                    .enumerate()
+                    .map(|(k, h)| match t.kind_of(k) {
+                        CellKind::Money => format!("{} ({})", h, scale.2),
+                        CellKind::Share => format!("{} (%)", h),
+                        CellKind::Count | CellKind::Plain => h.clone(),
+                    })
+                    .collect();
+                format!("{{\"p\":[{}],\"d\":{},\"r\":{},\"h\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), strings_json(&labels), strings_json(&head), values_json(a, scale))
+            }
         }
         ItemData::Kpi(k) => {
             let ItemSource::Kpi { spec, .. } = source else { return format!("{{\"p\":[{}],\"d\":[],\"x\":\"This card has no settings.\"}}", picks.join(",")) };
@@ -449,6 +485,8 @@ fn chart_look(source: &ItemSource, ia: &ItemAnswers) -> String {
         ChartKind::Area => "area",
         ChartKind::Donut => "donut",
         ChartKind::Waterfall => "waterfall",
+        ChartKind::Heatmap => "heatmap",
+        ChartKind::Histogram => "hist",
         _ => "table",
     };
     let kind = if many { "table" } else { kind };
@@ -558,13 +596,15 @@ fn themes_json() -> String {
     use crate::charts::tokens::{STATUS_CRITICAL, STATUS_GOOD, STATUS_SERIOUS, STATUS_WARNING};
     let hex = |c: u32| format!("\"#{:06x}\"", c);
     format!(
-        "{{\"light\":{},\"dark\":{},\"status\":{{\"good\":{},\"warning\":{},\"serious\":{},\"critical\":{}}}}}",
+        "{{\"light\":{},\"dark\":{},\"status\":{{\"good\":{},\"warning\":{},\"serious\":{},\"critical\":{}}},\"seq\":{{\"light\":[{}],\"dark\":[{}]}}}}",
         crate::charts::echarts::theme_json(false),
         crate::charts::echarts::theme_json(true),
         hex(STATUS_GOOD),
         hex(STATUS_WARNING),
         hex(STATUS_SERIOUS),
-        hex(STATUS_CRITICAL)
+        hex(STATUS_CRITICAL),
+        (0..13).map(|r| hex(crate::charts::tokens::sequential_colour(r, false))).collect::<Vec<_>>().join(","),
+        (0..13).map(|r| hex(crate::charts::tokens::sequential_colour(r, true))).collect::<Vec<_>>().join(",")
     )
 }
 }
@@ -663,4 +703,9 @@ pub fn check_plan(plan: &ReportPlan) -> Result<()> {
         bail!("The dashboard has no items to put in a file. Add a chart, a pivot or a card first.");
     }
     Ok(())
+}
+
+/// The scale a pivot item is exported with: its unit's divisor, 2 decimals and the short name its headings carry.
+pub fn unit_scale(u: ItemUnit) -> (f64, usize, String) {
+    (u.divisor(), 2, u.short().to_string())
 }
