@@ -4133,3 +4133,44 @@ fn m5_a_measure_is_renamed_in_the_dialog_by_real_clicks_and_a_ratio_a_pivot_and_
         assert_eq!(rig.app.project.model_ui.measures.edit.as_ref().map(|e| e.tab_key.as_str()), Some("t3"), "{what}: its tab is unchanged");
     }
 }
+
+// ------------------------------------------------------------------------------------------------ M6: the picture of the pop-out
+
+#[test]
+fn p1_picture_of_the_pop_out_window_with_a_pivot_built_in_it() {
+    use crate::ui::render_tests_p8::{can_shoot, styled, SHOT_PPP};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig9("p9p1shot", SHOT_PPP, 1291.0, 700.0);
+        rig.ctx.set_embed_viewports(false);
+        styled(&mut rig, dark);
+        let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
+        rig.app.run_command(&rig.ctx, CommandId::Pivot);
+        rig.draw(8);
+        pop_out(&mut rig, &what);
+        rig.draw(3);
+        assert!(rig.app.pivot_builder.popped, "{what}: popped out");
+        let (w, h) = (900.0, 600.0);
+        let (ctx, input) = crate::ui::render_tests::screen(SHOT_PPP, w, h);
+        crate::theme::apply_ui_theme(&ctx, dark, SHOT_PPP);
+        let mut place = Place::Window(Pop { ctx, input, last: Painted::default() });
+        place.draw(&mut rig, 6);
+        build_pivot(&mut place, &mut rig, &what);
+        place.draw(&mut rig, 6);
+        // the window's last frame, written as a picture
+        let Place::Window(mut pop) = place else { unreachable!("a window") };
+        pop.input.time = Some(pop.input.time.unwrap_or(0.0) + 1.0);
+        let out = pop.ctx.run(pop.input.clone(), |c| rig.app.pivot_popout_frame(c));
+        let tmp = std::env::temp_dir().join(format!("mp_p9shot_{}_{}.json", std::process::id(), dark));
+        crate::ui::render_tests_r::dump_output(&pop.ctx, out, &tmp, dark);
+        let dir = std::path::Path::new("docs/guide/img");
+        std::fs::create_dir_all(dir).expect("the picture folder");
+        let png = dir.join(format!("pivot-popout{}.png", if dark { "-dark" } else { "" }));
+        let r = std::process::Command::new("python3").args(["-I", "tools/egui_mesh_png.py"]).arg(&tmp).arg(&png).args(["0", "0", &w.to_string(), &h.to_string()]).output().expect("python3 runs");
+        assert!(r.status.success(), "{what}: {}", String::from_utf8_lossy(&r.stderr));
+        assert!(png.metadata().map(|m| m.len() > 3000).unwrap_or(false), "{what}: the picture has content");
+        let _ = std::fs::remove_file(&tmp);
+    }
+}

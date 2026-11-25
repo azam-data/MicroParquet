@@ -20,7 +20,7 @@ fn opt_strs(name: &str, v: &[Option<&str>]) -> Series {
     Series::new(name.into(), v.to_vec())
 }
 
-fn tab(key: &str, title: &str, source: TabSource) -> ModelTab {
+pub fn tab(key: &str, title: &str, source: TabSource) -> ModelTab {
     ModelTab { key: key.into(), title: title.into(), source, steps: vec![] }
 }
 
@@ -37,7 +37,7 @@ fn run(link: &Link, data: &ModelTab, lookup: &ModelTab, d: &Path) -> KeyCheck {
 }
 
 /// Accounts (Wing, Product code, Balance): SB01 is in both wings.
-fn accounts() -> DataFrame {
+pub fn accounts() -> DataFrame {
     DataFrame::new(vec![
         strs("Wing", &["Conventional", "Conventional", "Islami", "Islami", "Conventional"]),
         strs("Product code", &["SB01", "FD01", "SB01", "FD01", "XX99"]),
@@ -46,7 +46,7 @@ fn accounts() -> DataFrame {
     .expect("accounts")
 }
 
-fn products(extra: bool) -> DataFrame {
+pub fn products(extra: bool) -> DataFrame {
     let mut wing = vec!["Conventional", "Conventional", "Islami", "Islami"];
     let mut code = vec!["SB01", "FD01", "SB01", "FD01"];
     let mut group = vec!["Savings", "Term deposit", "Mudaraba savings", "Mudaraba term"];
@@ -58,7 +58,7 @@ fn products(extra: bool) -> DataFrame {
     DataFrame::new(vec![strs("Wing", &wing), strs("Code", &code), strs("Group", &group)]).expect("products")
 }
 
-fn composite() -> Link {
+pub fn composite() -> Link {
     Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![pair("Wing", "Wing"), pair("Product code", "Code")], unmatched_value: Some("Balance".into()) }
 }
 

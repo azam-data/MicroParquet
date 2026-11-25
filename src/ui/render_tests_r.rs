@@ -425,8 +425,13 @@ fn s8_reset_colours_and_text_size_work_by_real_clicks_and_the_pdf_dialog_offers_
 /// Runs one frame and writes it (meshes and font atlas) for `tools/egui_mesh_png.py`.
 pub(crate) fn dump_frame(rig: &mut Rig, path: &std::path::Path, dark: bool) {
     let out = rig.ctx.run(rig.input.clone(), |c| rig.app.frame_ui(c));
+    dump_output(&rig.ctx, out, path, dark);
+}
+
+/// `dump_frame` for a frame some other window (a second viewport's context) has just run.
+pub(crate) fn dump_output(ctx: &egui::Context, out: egui::FullOutput, path: &std::path::Path, dark: bool) {
     let ppp = out.pixels_per_point;
-    let prims = rig.ctx.tessellate(out.shapes, ppp);
+    let prims = ctx.tessellate(out.shapes, ppp);
     let mut meshes = Vec::new();
     for p in prims {
         let egui::epaint::Primitive::Mesh(m) = p.primitive else { continue };
@@ -443,14 +448,14 @@ pub(crate) fn dump_frame(rig: &mut Rig, path: &std::path::Path, dark: bool) {
             "idx": m.indices,
         }));
     }
-    let (size, rgba) = rig.ctx.fonts(|f| {
+    let (size, rgba) = ctx.fonts(|f| {
         let atlas = f.texture_atlas();
         let a = atlas.lock();
         let img = a.image();
         let rgba: Vec<u8> = img.srgba_pixels(None).flat_map(|c| [c.r(), c.g(), c.b(), c.a()]).collect();
         (img.size, rgba)
     });
-    let s = rig.ctx.screen_rect().size();
+    let s = ctx.screen_rect().size();
     let tk = *crate::theme::tokens(dark);
     let bg = tk.bg;
     let doc = serde_json::json!({"ppp": ppp, "size": [s.x, s.y], "background": [bg.r(), bg.g(), bg.b()], "atlas": {"size": size, "rgba": rgba}, "meshes": meshes});

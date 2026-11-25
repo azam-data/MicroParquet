@@ -9,7 +9,7 @@ use micro_parquet::models::*;
 use micro_parquet::pivot_table::PivotBuild;
 use polars::prelude::*;
 
-fn tv(field: &str, agg: TimeAgg, window: TimeWindow, shift: TimeShift, show: TimeShow, partial: TimePartial) -> PivotValue {
+pub fn tv(field: &str, agg: TimeAgg, window: TimeWindow, shift: TimeShift, show: TimeShow, partial: TimePartial) -> PivotValue {
     PivotValue { field: field.into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg, window, shift, show, partial }) }
 }
 
@@ -19,7 +19,7 @@ fn day(text: &str) -> NaiveDate {
 
 /// One row a day from `from` to `to`: Balance = days since 31 Dec 2024 (1 Jan 2025 = 1, 24 Nov 2025 = 328, 24 Nov 2026 = 693),
 /// Interest = 2 a day in 2025 and 1 a day after, Branch "B1".
-fn daily(from: &str, to: &str) -> DataFrame {
+pub fn daily(from: &str, to: &str) -> DataFrame {
     let (a, b) = (day(from), day(to));
     let epoch = day("2024-12-31");
     let mut dts: Vec<String> = Vec::new();
@@ -39,7 +39,7 @@ fn ord(text: &str) -> f64 {
     (day(text) - day("2024-12-31")).num_days() as f64
 }
 
-fn one(b: &PivotBuild, column: &str) -> f64 {
+pub fn one(b: &PivotBuild, column: &str) -> f64 {
     let v = floats(&b.df, column);
     assert_eq!(v.len(), 2, "B1 and the Grand total: {:?}", names(b));
     v[0].unwrap_or_else(|| panic!("a number in '{column}': {:?}", b.notes.iter().map(|n| n.text.clone()).collect::<Vec<_>>()))

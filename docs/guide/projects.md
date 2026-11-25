@@ -50,9 +50,10 @@ None. A project is not a script; use "Copy as Python" on a tab, or a macro, for 
 ## 7. Saved in
 
 - The `.mpproj` file (JSON, `"project_version": 1`), written where you choose, with a path relative to the project so a project and its files can be moved together.
+- **The model.** A project that has links, a calendar, column tags, an as-of date or measures has a `model` section and is written as `"project_version": 2`; a project with none is still version 1, byte for byte as before. Version 1.8.0 refuses a version 2 project with its "newer app" message. Open one on this month's files as usual: the open line also says which links are broken ("9 tabs opened; link 'Accounts → Branch master' is broken: 3 duplicate keys"), and the status bar shows "Model: 4 links · 1 broken". Relinking a lookup file to one with a duplicate key makes its link Broken. See [Links between tabs](model-links.md), [Key check](key-check.md) and [A monthly model, start to finish](monthly-model.md).
 - `settings.json`: the last 8 projects.
 - Headless: `MicroParquet --project <file> --export-dir <folder>` opens the project (no relinking: a missing or short file stops the run, naming it) and writes every tab as Parquet. If any tab fails, nothing is written.
 
 ## 8. Related tools
 
-[Saved tool runs](saved-tool-runs.md) · [Report packs](report-packs.md) · [Chart](chart.md) · [Batch](batch.md) · [Join](join.md) · [Pivot table](pivot.md)
+[Links between tabs](model-links.md) · [Key check](key-check.md) · [A monthly model, start to finish](monthly-model.md) · [Saved tool runs](saved-tool-runs.md) · [Report packs](report-packs.md) · [Chart](chart.md) · [Batch](batch.md) · [Join](join.md) · [Pivot table](pivot.md)

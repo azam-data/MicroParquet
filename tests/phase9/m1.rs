@@ -80,7 +80,7 @@ fn sum_balance() -> PivotValue {
     PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }
 }
 
-fn pivot_of(rows: &[&ModelFieldRef]) -> PivotSpec {
+pub fn pivot_of(rows: &[&ModelFieldRef]) -> PivotSpec {
     PivotSpec {
         rows: rows.iter().map(|r| r.name.clone()).collect(),
         values: vec![sum_balance()],
@@ -92,14 +92,14 @@ fn pivot_of(rows: &[&ModelFieldRef]) -> PivotSpec {
 }
 
 /// The label column and the first value column of a pivot, as (label, number) pairs.
-fn pairs(df: &DataFrame) -> Vec<(String, f64)> {
+pub fn pairs(df: &DataFrame) -> Vec<(String, f64)> {
     let names: Vec<String> = df.get_column_names().iter().map(|n| n.to_string()).collect();
     let labels = strings(df, &names[0]);
     let vals = floats(df, &names[1]);
     labels.into_iter().zip(vals).map(|(l, v)| (l.unwrap_or_else(|| "(blank)".to_string()), v.unwrap_or(f64::NAN))).collect()
 }
 
-fn run_pivot(f: &Fx, spec: &PivotSpec) -> Vec<(String, f64)> {
+pub fn run_pivot(f: &Fx, spec: &PivotSpec) -> Vec<(String, f64)> {
     let b = with_scope(scope_of(f, None), || build_pivot(lazy(f), spec)).expect("the pivot");
     pairs(&b.df)
 }

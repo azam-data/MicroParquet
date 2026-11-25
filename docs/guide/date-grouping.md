@@ -9,7 +9,7 @@ Uses a part of a date (the year, the month, "Jan 2026", the day name …) as a p
 - A quick monthly or quarterly view of one pivot or chart. Use Split date when the part must stay in the tab (to export it, or use it in several places).
 - A filter such as "Day name is Friday or Saturday" or "Month-Year from Aug 2025 to Jan 2026".
 
-> **Balances are stocks.** A balance is a position on one day. Adding the month-end balances of January, February and March gives a number that means nothing: it is three times the balance. Group by Month-Year and read one month at a time. Closing balance and average balance are measures of Phase 9.
+> **Balances are stocks.** A balance is a position on one day. Adding the month-end balances of January, February and March gives a number that means nothing: it is three times the balance. Group by Month-Year and read one month at a time, or use the closing balance or the average balance of a date-linked tab: see [Balances and flows](balances-and-flows.md), which says why balances are never added across dates and how a missing day is carried forward.
 
 ## 3. How to use it
 

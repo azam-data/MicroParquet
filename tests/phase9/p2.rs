@@ -17,7 +17,7 @@ use polars::prelude::*;
 use std::collections::HashMap;
 
 /// 16 accounts: A1 and A2 are under two CL statuses of Conventional, A6 under two of Islami, A11 under two Branches.
-fn book() -> DataFrame {
+pub fn book() -> DataFrame {
     //  bank, CL status, branch, account, balance, rate
     let rows: [(&str, Option<&str>, &str, &str, f64, f64); 16] = [
         ("Conventional", Some("HC"), "Dhaka", "A1", 100.0, 9.0),
@@ -65,11 +65,11 @@ fn values() -> Vec<PivotValue> {
     ]
 }
 
-fn spec(rows: &[&str], layout: PivotLayout) -> PivotSpec {
+pub fn spec(rows: &[&str], layout: PivotLayout) -> PivotSpec {
     PivotSpec { rows: rows.iter().map(|r| r.to_string()).collect(), values: values(), row_totals: true, column_totals: true, layout, ..Default::default() }
 }
 
-const NESTED: PivotLayout = PivotLayout::Nested { blank_line_after_group: false };
+pub const NESTED: PivotLayout = PivotLayout::Nested { blank_line_after_group: false };
 
 fn lazy() -> LazyFrame {
     book().lazy()

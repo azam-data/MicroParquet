@@ -15,6 +15,7 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | M4 follow-up | DONE (S8) | (see git log: "Phase 9 M4: follow-ups") | tests/phase9/m4.rs x1 (the span note) |
 | M5 | DONE (S8), follow-ups DONE (S9) | (see git log: "Phase 9 M5") | tests/phase9/m5.rs x7; render_tests_p9 x3 (Measures dialog, Values list group, pictures) |
 | M5 follow-up | DONE (S9) | (see git log: "Phase 9 M5: follow-ups") | tests/phase9/m5.rs x2 (a renamed measure gives the same numbers in a ratio, a pivot and a chart and keeps its name in a project; the pivot column of a measure is told from a column value); render_tests_p9 x2 (greyed Show rows with its reason, rename by real clicks) |
+| M6 | DONE (S9) | (see git log: "Phase 9 M6") | tests/phase9/m6.rs x6 (the fixture files and the project; the numbers of the worked example; the calendar example; the nine notes' sections and examples; pictures and README; the changed notes) + 2 dump tests and 1 ignored writer; render_tests_p9 x1 (the pop-out picture) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -413,3 +414,20 @@ Owner decisions on S8 (also in `<accepted_deviations>` of the spec, "Owner decis
 Pictures `measures-base-measure` and `measures-ratio` (light and dark) rewritten on purpose (the Name box is no longer greyed when a saved measure is edited); the others a full run rewrote were restored. Full `cargo test`: all green.
 
 Proved to fail without the fix (one stub at a time, each restored): the ratios' terms left on the old name: the rename test fails (`Yield 365: [Term { measure: "Interest income" ...`); `is_measure_column` always false: the greyed Show rows test fails at the first size.
+
+## M6 acceptance: item -> test (S9)
+
+Run: `cargo test -q --test phase3 m6_` (the notes and the worked example), `cargo test -q --bin MicroParquet p1_picture` (the new picture). Deviations M6-1 to M6-6 and one "Found, not changed" are in the spec.
+
+| Acceptance item (spec M6) | Test |
+| --- | --- |
+| The nine new notes (`pivot-popout`, `pivot-nested`, `model-links`, `key-check`, `model-calendar`, `balances-and-flows`, `time-intelligence`, `measures-and-ratios`, `monthly-model`) have the 8 sections of `<guide_notes>` in order, numbered steps, at most 150 lines, no word of the code | `m6_the_nine_new_notes_have_their_eight_sections_and_their_examples_are_the_tables_the_code_gives` |
+| Every Example table is the table the code gives and names a test that exists | same test (each table is compared character by character with `examples()`; the named test is looked up in `tests/` and `src/`) |
+| Every picture named exists (light and dark), the README lists the notes | `m6_every_picture_a_note_names_exists_in_light_and_dark_and_the_readme_lists_the_notes` |
+| The notes M6 changed (`pivot`, `chart`, `filter`, `projects`, `date-grouping`) say what the code now does | `m6_the_notes_that_phase_9_changed_say_what_the_code_now_does` |
+| `balances-and-flows.md` explains with the M3 numbers: no balances added across dates, carry-forward, Average of month-ends, income GLs as YTD | its three tables (daily 130 / 110 / blank / 230; month-end 120 / 140 / blank; YTD 10, 15, 20 and 25 from February) are checked by the test above and by the M3 tests it names |
+| The worked project `tests/fixtures/phase9_model/` (Accounts month-end, GL TB daily, branch master, product master by Wing + Product code, GL map) points only inside the fixtures | `m6_the_worked_example_files_are_the_ones_the_generator_writes_and_point_only_inside_the_fixture` |
+| `monthly-model.md`: CASA ratio by month and by region (MoM, vs SPLY), NIM, yield and cost of deposits (YTD, Actual/365), loan growth by product group vs SPLY %, ADR, and the monthly routine | `m6_the_worked_example_gives_the_numbers_the_monthly_model_note_quotes` (closings, ratios and changes worked from the generator's constants; yield 11.00%, cost 6.00%) |
+| The pictures: the pop-out, a Nested pivot with a blank line, Links, Key check, Calendar, the Values time choices, the Measures dialog, a NIM pivot | new `pivot-popout(-dark).png` by `p1_picture_of_the_pop_out_window_with_a_pivot_built_in_it`; the others exist from M0 to M5 (`pivot-nested-tab`, `model-links-dialog`, `model-key-check-dialog`, `model-calendar-dialog`, `pivot-time-choices`, `measures-ratio`, `pivot-nim-month-year`) |
+
+Proved to fail without the fix (one stub at a time, each restored): Actual/365 counted as 360 days: `m6_the_worked_example_gives_the_numbers...` fails ("Aug 2026 yield: 10.85 against 11"); a figure changed in a note's table (Times 2 to 3): the notes test fails ("key-check.md: table 1 differs from what the code gives"). Full `cargo test`: all green. Pictures a full run rewrote (`pivot-date-expander`, `sources-dialog`) were restored.

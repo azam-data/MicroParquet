@@ -17,7 +17,7 @@ fn cal_tab(cal: CalendarSettings) -> ModelTab {
 }
 
 /// The model: t1 "Accounts" with its Calendar t2, a lookup t3 on the column `key` (when given), and the measures.
-fn scope5(dd: &std::path::Path, as_of: &str, lookup: Option<(&str, &str, DataFrame)>, measures: Vec<NamedMeasure>) -> Option<Arc<ModelContext>> {
+pub fn scope5(dd: &std::path::Path, as_of: &str, lookup: Option<(&str, &str, DataFrame)>, measures: Vec<NamedMeasure>) -> Option<Arc<ModelContext>> {
     let cal = settings(1);
     let mut links = vec![ScopeLink { link: date_link("t1", "Date", "t2"), lookup: Some(cal_tab(cal)), refusal: None }];
     if let Some((title, key, df)) = lookup {
@@ -60,20 +60,20 @@ fn ratio(name: &str, num: Vec<Term>, den: Vec<Term>, dc: Option<DayCount>) -> Na
     NamedMeasure::Ratio { name: name.into(), tab: "t1".into(), numerator: num, denominator: den, annualise: dc, format: RatioFormat::Percent }
 }
 
-fn measure_value(name: &str, time: TimeValue) -> PivotValue {
+pub fn measure_value(name: &str, time: TimeValue) -> PivotValue {
     PivotValue { field: name.into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg: TimeAgg::Measure, ..time }) }
 }
 
-fn plain_measure(name: &str) -> PivotValue {
+pub fn plain_measure(name: &str) -> PivotValue {
     measure_value(name, TimeValue::default())
 }
 
-fn gl_map() -> DataFrame {
+pub fn gl_map() -> DataFrame {
     DataFrame::new(vec![strs("GL", &["INC", "EXP", "EA"]), strs("Head", &["Interest income", "Interest expense", "Earning assets"])]).expect("gl map")
 }
 
 /// One row a day for each GL from `from` to `to` (inclusive); amounts by GL and year.
-fn tb(ranges: &[(&str, &str)], inc: &dyn Fn(i32) -> f64, exp: f64) -> DataFrame {
+pub fn tb(ranges: &[(&str, &str)], inc: &dyn Fn(i32) -> f64, exp: f64) -> DataFrame {
     let (mut dts, mut gls, mut bal) = (Vec::new(), Vec::new(), Vec::new());
     for (from, to) in ranges {
         let mut x = d(from);
@@ -92,7 +92,7 @@ fn tb(ranges: &[(&str, &str)], inc: &dyn Fn(i32) -> f64, exp: f64) -> DataFrame 
     DataFrame::new(vec![dates("Date", &refs).into(), strs("GL", &gls).into(), nums("Balance", &bal)]).expect("trial balance")
 }
 
-fn yield_measures() -> Vec<NamedMeasure> {
+pub fn yield_measures() -> Vec<NamedMeasure> {
     vec![
         base("Interest income", "Balance", TimeAgg::TotalFlow, Some("Interest income"), Sign::Minus),
         base("Interest expense", "Balance", TimeAgg::TotalFlow, Some("Interest expense"), Sign::Plus),
@@ -104,7 +104,7 @@ fn yield_measures() -> Vec<NamedMeasure> {
     ]
 }
 
-fn pct(v: Option<f64>) -> f64 {
+pub fn pct(v: Option<f64>) -> f64 {
     (v.expect("a number") * 100.0).round() / 100.0
 }
 
@@ -128,7 +128,7 @@ fn m5_a_yield_is_the_income_of_the_month_annualised_over_the_average_earning_ass
     assert_eq!(pct(at(&b, "Jan 2028", "Yield Act")), 10.03);
 }
 
-fn nim_data() -> DataFrame {
+pub fn nim_data() -> DataFrame {
     // income 1 a day in 2025, 2 a day in 2026; expense 0.5 a day
     tb(&[("2025-01-01", "2026-02-28")], &|y| if y == 2025 { 1.0 } else { 2.0 }, 0.5)
 }
@@ -169,7 +169,7 @@ fn m5_the_nim_by_month_year_and_its_ytd_and_change_against_last_year_in_percenta
     assert_eq!(at(&b, "Jan 2025", "NIM \u{b7} vs SPLY (pp)"), None);
 }
 
-fn casa_tb() -> DataFrame {
+pub fn casa_tb() -> DataFrame {
     DataFrame::new(vec![
         dates("Date", &["2026-11-24"; 6]).into(),
         strs("Branch", &["B1", "B1", "B2", "B2", "B3", "B3"]).into(),
@@ -179,11 +179,11 @@ fn casa_tb() -> DataFrame {
     .expect("deposits")
 }
 
-fn branch_master() -> DataFrame {
+pub fn branch_master() -> DataFrame {
     DataFrame::new(vec![strs("Branch", &["B1", "B2", "B3"]), strs("Region", &["Dhaka", "Dhaka", "Khulna"])]).expect("branches")
 }
 
-fn casa_measures() -> Vec<NamedMeasure> {
+pub fn casa_measures() -> Vec<NamedMeasure> {
     let casa = FilterCondition { column: "Product".into(), op: CondOp::Equals, value: "CASA".into(), ..Default::default() };
     vec![
         NamedMeasure::Base { name: "CASA closing".into(), tab: "t1".into(), column: "Balance".into(), aggregation: TimeAgg::ClosingBalance, filters: vec![casa], sign: Sign::Plus, weight: None },

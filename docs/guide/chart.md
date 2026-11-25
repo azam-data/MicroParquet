@@ -61,6 +61,8 @@ Draws bars or a line of one number by one category, calculated over the whole ta
 22. **Data table** (Off, Below the chart or Beside the chart; column, bar, line, area, heatmap, donut and histogram with one measure and no panels). The chart PDF, the chart book and the report-pack PDF print the chart's numbers (categories × series, with totals, in the chart's scale and order) on the same page; the HTML page shows the table open under the chart. See "A chart in a PDF" in [Charts: how to choose one](charts.md).
 23. **Drill levels, colours and date parts.** "Drill levels" makes the chart clickable ([Drill-down](drill-down.md)); "Colours" picks a colour for one name ([Colours](colours.md)); the Category, Series and Panels pickers list the parts of a date column ([Date grouping](date-grouping.md)).
 
+24. **Fields of the model** (in a project that has a model). The Category, Series, Panels and drill pickers list the lookup fields of the tab's links ("Branch master › Region") and its Calendar fields ("Calendar › Month-Year"), in calendar order. The Value list has the time aggregations (closing, average, YTD movement, …) with Window, Shift, Show and Partial period rows, and a "Measures" group with the tab's named measures and ratios; a chart of a time value or a measure equals the pivot of the same fields. A chart of a plain Sum of a column tagged Balance over several dates says so in its notes. See [Links between tabs](model-links.md), [Time intelligence](time-intelligence.md), [Balances and flows](balances-and-flows.md) and [Measures and ratios](measures-and-ratios.md).
+
 ## 6. What you get
 
 A chart whose title reads like "Sum of Balance by Term Period: all 250 rows (Crore)". The x-axis names the categories (a long name is cut with "…", the tooltip has it whole). With Top N below the number of categories the title adds "top 3 of 5 categories". The table tab has one row per category (and series) with the value and "Rows".
@@ -115,3 +117,4 @@ Test: `guide_chart`
 - On a pivot table the subtotal and Grand total rows are not charted.
 - The HTML page carries Apache ECharts 6.1.0 inside it (about 1 MB); a chart of 1,000 points is under 2 MB. A waterfall that does not add up and invalid advanced JSON stop the export with a message, and no file is written.
 - The first chart of a tab picks the first text column and the first number column; change them as needed.
+- A chart of lookup fields, Calendar fields, time values or measures needs the project's model, is not translated by "Copy as Python" ("Python export can't follow links between tabs yet. Use the Join tool to copy the column, or export the result tab."), and a chart tab made from it is calculated again when its source tab changes.
