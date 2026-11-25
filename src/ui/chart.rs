@@ -147,7 +147,7 @@ impl MicroParquetApp {
 
     /// The same for the chart of tab `tab` (a project opens charts of tabs that are not the active one).
     pub(crate) fn chart_scale_of(&self, spec: &ChartSpec, tab: Option<&TabState>) -> Option<MoneyScale> {
-        if spec.agg == ChartAgg::Count {
+        if spec.agg == ChartAgg::Count || Self::chart_is_percent_change(spec) {
             return None;
         }
         match spec.scale.fixed() {
@@ -160,10 +160,18 @@ impl MicroParquetApp {
         }
     }
 
+    /// The chart's first measure is a time value shown as a % change (Phase 9 M4): a percent, never divided into Crore.
+    pub(crate) fn chart_is_percent_change(spec: &ChartSpec) -> bool {
+        spec.measure_list().first().and_then(|m| m.time).is_some_and(|t| t.show == micro_parquet::models::TimeShow::PercentChange)
+    }
+
     /// One value as the tooltip writes it: in the chart's scale, or in the column's own format.
     pub(crate) fn chart_value_text(&self, spec: &ChartSpec, v: f64) -> String {
         if spec.agg == ChartAgg::Count {
             return format_with_commas(v, 0);
+        }
+        if Self::chart_is_percent_change(spec) {
+            return format!("{}%", format_with_commas(v, 2));
         }
         if let Some(s) = spec.scale.fixed() {
             return match s {
@@ -218,7 +226,7 @@ impl MicroParquetApp {
         self.chart.submitted = Some(key);
         self.chart.token += 1;
         self.chart.busy = true;
-        let req = ChartRequest { tab_id: tab.id, token: self.chart.token, source: tab.source.clone(), steps: tab.steps[..exec].to_vec(), spec: self.chart.spec.clone(), temp_dir: self.paths.temp_dir.clone() };
+        let req = ChartRequest { tab_id: tab.id, token: self.chart.token, source: tab.source.clone(), steps: tab.steps[..exec].to_vec(), spec: ChartSpec { data_tab: self.pivot_data_tab(tab.id), ..self.chart.spec.clone() }, temp_dir: self.paths.temp_dir.clone() };
         let jkey = JobKey::tab(JobKind::Chart, tab.id);
         self.jobs.submit(jkey, "Calculating the chart", false, move |ctx| micro_parquet::tab_jobs::compute_chart_job(req, ctx).map(|r| JobOutput::Chart(Box::new(r))));
     }
@@ -607,6 +615,17 @@ impl MicroParquetApp {
         let mut show_table = self.chart.show_table;
         let mut spec = self.chart.spec.clone();
         let parts = self.chart_date_parts();
+        let groups = self.chart_model_groups();
+        let warning = theme::tokens(self.dark_mode).warning;
+        // a date-linked data tab of a project: the values can have a time aggregation (Phase 9 M4, one value type with the pivot)
+        let time_choices = !self.pivot_data_tab(tab.id).is_empty();
+        // the named measures of this tab (Phase 9 M5), listed in the Value box under "Measures"
+        let tab_measures: Vec<String> = if time_choices {
+            let key = self.pivot_data_tab(tab.id);
+            self.project.model.measures.iter().filter(|m| m.tab() == key && !avail.iter().any(|c| c == m.name())).map(|m| m.name().to_string()).collect()
+        } else {
+            Vec::new()
+        };
         let controls = egui::Grid::new("chart_controls").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
             let mut add = |_ui: &mut egui::Ui, name: &str, rects: &mut ChartRects, r: egui::Rect| rects.fields.push((name.to_string(), r));
             let combo_w = theme::CHART_COMBO_W;
@@ -622,6 +641,13 @@ impl MicroParquetApp {
                     spec.by_value = false;
                     spec.category_part = Some(f);
                 }
+                // M1: the lookup columns of each link, "Branch master › Region"
+                if let Some(f) = model_items(ui, &groups, Some(spec.category.as_str()), warning) {
+                    spec.category = f.name.clone();
+                    spec.category_part = None;
+                    spec.by_value = false;
+                    spec.category_model = Some(f);
+                }
             });
             add(ui, "Category", rects, r.response.rect);
             ui.end_row();
@@ -636,29 +662,62 @@ impl MicroParquetApp {
                     spec.series = Some(f.name.clone());
                     spec.series_part = Some(f);
                 }
+                if let Some(f) = model_items(ui, &groups, spec.series.as_deref(), warning) {
+                    spec.series = Some(f.name.clone());
+                    spec.series_model = Some(f);
+                }
             });
             add(ui, "Series", rects, r.response.rect);
             ui.end_row();
             ui.label("Aggregation");
-            let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(spec.agg.label()).show_ui(ui, |ui| {
+            let agg_text = spec.time.map(|t| t.agg.label()).unwrap_or(spec.agg.label());
+            let r = egui::ComboBox::from_id_salt("chart_agg").width(theme::CHART_COMBO_NARROW_W).selected_text(agg_text).show_ui(ui, |ui| {
                 for a in ChartAgg::all() {
-                    ui.selectable_value(&mut spec.agg, *a, a.label());
+                    if ui.selectable_label(spec.time.is_none() && spec.agg == *a, a.label()).clicked() {
+                        spec.agg = *a;
+                        spec.time = None;
+                    }
+                }
+                if time_choices {
+                    ui.separator();
+                    for t in micro_parquet::models::TimeAgg::all() {
+                        if ui.selectable_label(spec.time.map(|x| x.agg) == Some(*t), t.label()).clicked() {
+                            spec.time = Some(micro_parquet::models::TimeValue { agg: *t, ..spec.time.unwrap_or_default() });
+                        }
+                    }
                 }
             });
             add(ui, "Aggregation", rects, r.response.rect);
             ui.end_row();
-            if spec.agg.needs_value() {
+            if spec.time.is_some() || spec.agg.needs_value() {
                 ui.label("Value");
                 let shown = spec.value.clone().unwrap_or_else(|| "(choose)".to_string());
                 let r = egui::ComboBox::from_id_salt("chart_value").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
                     for c in &avail {
-                        ui.selectable_value(&mut spec.value, Some(c.clone()), c);
+                        if ui.selectable_label(spec.value.as_ref() == Some(c) && spec.time.map(|t| t.agg) != Some(micro_parquet::models::TimeAgg::Measure), c).clicked() {
+                            spec.value = Some(c.clone());
+                            // a column after a measure: back to an ordinary aggregation
+                            if spec.time.is_some_and(|t| t.agg == micro_parquet::models::TimeAgg::Measure) {
+                                spec.time = None;
+                            }
+                        }
+                    }
+                    if !tab_measures.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Measures").size(theme::TEXT_LABEL).weak());
+                        for m in &tab_measures {
+                            let on = spec.value.as_ref() == Some(m) && spec.time.map(|t| t.agg) == Some(micro_parquet::models::TimeAgg::Measure);
+                            if ui.selectable_label(on, m).clicked() {
+                                spec.value = Some(m.clone());
+                                spec.time = Some(micro_parquet::models::TimeValue { agg: micro_parquet::models::TimeAgg::Measure, ..spec.time.unwrap_or_default() });
+                            }
+                        }
                     }
                 });
                 add(ui, "Value", rects, r.response.rect);
                 ui.end_row();
             }
-            if spec.agg == ChartAgg::WeightedAvg {
+            if spec.time.map(|t| t.agg == micro_parquet::models::TimeAgg::WAvgAtClosing).unwrap_or(spec.agg == ChartAgg::WeightedAvg) {
                 ui.label("by");
                 let shown = spec.weight.clone().unwrap_or_else(|| "(choose)".to_string());
                 let r = egui::ComboBox::from_id_salt("chart_weight").width(combo_w).selected_text(shown).show_ui(ui, |ui| {
@@ -668,6 +727,51 @@ impl MicroParquetApp {
                 });
                 add(ui, "Weight", rects, r.response.rect);
                 ui.end_row();
+            }
+            // window, shift, what it shows and the partial period of a time value
+            if let Some(mut t) = spec.time {
+                use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+                ui.label("Window");
+                let r = egui::ComboBox::from_id_salt("chart_t_window").width(theme::CHART_COMBO_NARROW_W).selected_text(t.window.label()).show_ui(ui, |ui| {
+                    for w in TimeWindow::all() {
+                        ui.selectable_value(&mut t.window, *w, w.label());
+                    }
+                });
+                add(ui, "Window", rects, r.response.rect);
+                ui.end_row();
+                ui.label("Shift");
+                let r = egui::ComboBox::from_id_salt("chart_t_shift").width(theme::CHART_COMBO_NARROW_W).selected_text(t.shift.label()).show_ui(ui, |ui| {
+                    for x in TimeShift::all() {
+                        ui.selectable_value(&mut t.shift, *x, x.label());
+                    }
+                });
+                add(ui, "Shift", rects, r.response.rect);
+                ui.end_row();
+                ui.label("Show");
+                let r = egui::ComboBox::from_id_salt("chart_t_show").width(theme::CHART_COMBO_NARROW_W).selected_text(t.show.label()).show_ui(ui, |ui| {
+                    for x in TimeShow::all() {
+                        // a difference or a % change is against the shifted window
+                        if ui.add_enabled(*x == TimeShow::Value || t.shift != TimeShift::None, egui::SelectableLabel::new(t.show == *x, x.label())).clicked() {
+                            t.show = *x;
+                        }
+                    }
+                });
+                add(ui, "Show", rects, r.response.rect);
+                ui.end_row();
+                ui.label("Partial period");
+                let r = ui.add_enabled_ui(t.shift != TimeShift::None, |ui| {
+                    egui::ComboBox::from_id_salt("chart_t_partial").width(theme::CHART_COMBO_NARROW_W).selected_text(t.partial.label()).show_ui(ui, |ui| {
+                        for x in TimePartial::all() {
+                            ui.selectable_value(&mut t.partial, *x, x.label());
+                        }
+                    })
+                });
+                add(ui, "Partial period", rects, r.inner.response.rect);
+                ui.end_row();
+                if t.shift == TimeShift::None && t.show != TimeShow::Value {
+                    t.show = TimeShow::Value;
+                }
+                spec.time = Some(t);
             }
             ui.label("Type");
             let r = egui::ComboBox::from_id_salt("chart_kind").width(combo_w).selected_text(spec.kind.label()).show_ui(ui, |ui| {
@@ -765,13 +869,13 @@ impl MicroParquetApp {
         // a part left behind when another column is picked is dropped (W2)
         spec.drop_stale_date_parts();
         // W6: with drill levels the Category picker names the top level, and the chart goes back to it
-        if spec.has_drill() && (spec.category != self.chart.spec.category || spec.category_part != self.chart.spec.category_part) {
+        if spec.has_drill() && (spec.category != self.chart.spec.category || spec.category_part != self.chart.spec.category_part || spec.category_model != self.chart.spec.category_model) {
             let mut levels = spec.drill.clone();
-            levels[0] = micro_parquet::charts::spec::DrillLevel { name: spec.category.clone(), part: spec.category_part.clone() };
+            levels[0] = micro_parquet::charts::spec::DrillLevel { name: spec.category.clone(), part: spec.category_part.clone(), model: spec.category_model.clone() };
             spec.set_drill(levels);
         }
         // W0 auto order: a category picked here with no order chosen gets the steps' order, Calendar or Ranges
-        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none();
+        let new_category = spec.category != self.chart.spec.category && !spec.category.is_empty() && spec.category_part.is_none() && spec.category_model.is_none();
         let auto = new_category && spec.order.is_natural() && !spec.by_value;
         if spec != self.chart.spec {
             let category = spec.category.clone();
@@ -1265,7 +1369,38 @@ pub(crate) fn date_part_items(ui: &mut egui::Ui, parts: &[micro_parquet::dates::
     picked
 }
 
+/// The lookup fields listed in a chart picker under their link ("Branch master › Region", Phase 9 M1); the one clicked. A broken
+/// link's fields are greyed and the reason is listed under them.
+pub(crate) fn model_items(ui: &mut egui::Ui, groups: &[crate::ui::model::LookupGroup], current: Option<&str>, warning: egui::Color32) -> Option<micro_parquet::model::ModelFieldRef> {
+    let mut picked = None;
+    for g in groups {
+        ui.separator();
+        for (r, _) in &g.columns {
+            let on = current == Some(r.name.as_str());
+            match &g.refusal {
+                Some(why) => {
+                    ui.add_enabled(false, egui::SelectableLabel::new(on, r.picker())).on_disabled_hover_text(why);
+                }
+                None => {
+                    if ui.selectable_label(on, r.picker()).clicked() {
+                        picked = Some(r.clone());
+                    }
+                }
+            }
+        }
+        if let Some(why) = &g.refusal {
+            ui.add(egui::Label::new(egui::RichText::new(why).size(theme::TEXT_LABEL).color(warning)).wrap());
+        }
+    }
+    picked
+}
+
 impl MicroParquetApp {
+    /// The lookup fields the chart pickers offer for the active tab (M1).
+    pub(crate) fn chart_model_groups(&self) -> Vec<crate::ui::model::LookupGroup> {
+        self.tabs.get(self.active_tab).map(|t| self.model_groups_for(t.id)).unwrap_or_default()
+    }
+
     /// The date parts the chart pickers offer for the active tab.
     pub(crate) fn chart_date_parts(&self) -> Vec<micro_parquet::dates::DateFieldRef> {
         self.tabs.get(self.active_tab).map(|t| date_parts_of(&t.cached_slice, self.calendar())).unwrap_or_default()

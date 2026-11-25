@@ -41,3 +41,8 @@ When compacting, keep: the task IDs in progress, which tests pass or fail, devia
 - Full cargo test once before each commit, piped through tail -40.
 - Don't read src/main.rs or other large files whole; grep and read ranges.
 - Never paste build logs or test lists into the reply; summarise.
+- Lean sessions (owner decision, 24 Nov 2026; they replace stricter rules where the two differ):
+  - Stub proofs: prove one or two key tests per task (the ones that pin the main numbers or rules), one stub at a time, restored after each. Name them in the progress file.
+  - Pictures: write the light and dark versions, but open only the light one to check it. The owner checks the dark ones.
+  - Read only what the task needs: named spec sections, grep for the rest, never a whole large file.
+  - Keep the report to the spec's report format, with no narration of the work.

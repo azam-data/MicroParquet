@@ -4,6 +4,7 @@
 //! worker thread computes.
 
 use crate::ui::prelude::*;
+use micro_parquet::models::{TimeAgg, TimeValue};
 use micro_parquet::pivot_table::{pivot_column_formats, BLANK_LABEL};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -57,6 +58,9 @@ impl Area {
 }
 
 /// The line in the empty Filters box.
+/// The title of the note the app window shows while the builder is in its own window.
+pub const PIVOT_POPOUT_NOTE_TITLE: &str = "Pivot builder";
+
 pub const FILTERS_EMPTY_HINT: &str = "Drop a field here to limit the pivot to chosen values";
 
 /// What the dialog drew, for the render tests.
@@ -73,12 +77,23 @@ pub struct PivotRects {
     pub field_menus: Vec<(String, egui::Rect)>,
     /// The expander of each date column ("Date parts"), by the column's name (W2).
     pub expanders: Vec<(String, egui::Rect)>,
+    /// The reason a broken link's fields are greyed, under its expander (Phase 9 M1).
+    pub link_notes: Vec<(String, egui::Rect)>,
     pub toggles: egui::Rect,
     pub preview: egui::Rect,
     pub preview_scroll: egui::Rect,
     pub popup: egui::Rect,
     pub footer_text: egui::Rect,
     pub buttons: Vec<(String, egui::Rect)>,
+    /// The "Dock" button the app window shows while the builder is in its own window.
+    pub note_dock: egui::Rect,
+    /// The Layout box, and the "Blank line after each group" box of the Nested layout (Phase 9 P2).
+    pub layout_combo: egui::Rect,
+    pub blank_line: egui::Rect,
+    /// The aggregation box of each chip of Values, by its position (Phase 9 M3).
+    pub agg_combos: Vec<(usize, egui::Rect)>,
+    /// The warnings above the preview (Phase 9 M3).
+    pub warnings: Vec<egui::Rect>,
 }
 
 impl Default for PivotRects {
@@ -94,12 +109,18 @@ impl Default for PivotRects {
             field_rows: Vec::new(),
             field_menus: Vec::new(),
             expanders: Vec::new(),
+            link_notes: Vec::new(),
             toggles: n,
             preview: n,
             preview_scroll: n,
             popup: n,
             footer_text: n,
             buttons: Vec::new(),
+            note_dock: n,
+            layout_combo: n,
+            blank_line: n,
+            agg_combos: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 }
@@ -125,6 +146,13 @@ pub struct PivotBuilderState {
     /// The preview of those settings: the first rows, or why there is none.
     pub preview: Option<Result<DataFrame, String>>,
     pub preview_total_rows: usize,
+    /// The Nested view of the preview's settings, when they choose Nested (the dialog draws it instead of the flat table).
+    pub preview_nested: Option<micro_parquet::pivot_view::NestedView>,
+    /// Why a cell of the preview is blank, and what to warn about (Phase 9 M3).
+    pub preview_notes: Vec<micro_parquet::pivot_table::CellNote>,
+    pub preview_warnings: Vec<String>,
+    /// The blank cells with a reason drawn in the last frame: (reason, rect). The render tests read it.
+    pub notes_drawn: std::cell::RefCell<Vec<(String, egui::Rect)>>,
     /// All columns of the last good preview (the label columns first), for the column formats.
     pub value_columns: Vec<String>,
     pub popup: Option<FilterPopup>,
@@ -134,6 +162,69 @@ pub struct PivotBuilderState {
     pub open: bool,
     /// The date columns whose parts are listed under them in the field list (W2).
     pub expanded: HashSet<String>,
+    /// The builder is in its own window (P1). It is this same state, drawn there instead of docked, never both.
+    pub popped: bool,
+    /// How many times the window was asked for (the render tests read it: a backend without windows never opens one).
+    pub pop_requests: u32,
+    /// Where the window was last seen: [x, y, width, height] in points.
+    pub popout_live: Option<[f32; 4]>,
+    /// Where and how big the window opens: worked out when it first draws and kept until it is docked.
+    pub popout_start: Option<PopoutPlacement>,
+    /// How many rows the last preview was cut to (0 = not known yet: the docked count).
+    pub preview_limit: usize,
+    /// At the end of the last frame a text box had the keyboard, or a list or pop-up was open. egui takes the keyboard from a text
+    /// box when Esc arrives, before the builder looks, so this is what tells that Esc was meant for the text box.
+    pub esc_busy: bool,
+    /// A field's menu was open in this frame's drawing (egui does not list its menus among the open pop-ups).
+    pub menu_open: bool,
+}
+
+/// What a frame of the builder asks for, drawn docked or in its own window.
+#[derive(Default)]
+pub(crate) struct PivotActs {
+    /// Apply (with a step) or Cancel (without): the builder closes.
+    pub close: bool,
+    pub step: Option<(TransformStep, bool)>,
+    /// Pop out, Dock, or the window's close button: the builder changes place and stays open.
+    pub toggle_pop: bool,
+}
+
+/// Where the builder's own window opens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopoutPlacement {
+    pub size: egui::Vec2,
+    /// `None`: the system places it (the position of this app's window is not known).
+    pub pos: Option<egui::Pos2>,
+}
+
+/// Where the builder's own window opens: exactly where it was last (`saved`: x, y, width, height), on whatever monitor that is, with
+/// no check of the monitor (owner decision on P1-2). If that is off every screen, the Dock button in the app window brings the builder
+/// back. Centred on the main window, at the default size, only when no rectangle is saved.
+pub fn popout_placement(saved: Option<[f32; 4]>, main: Option<egui::Rect>, monitor: Option<egui::Vec2>) -> PopoutPlacement {
+    let min = egui::vec2(theme::PIVOT_POPOUT_MIN_SIZE[0], theme::PIVOT_POPOUT_MIN_SIZE[1]);
+    let default = egui::vec2(theme::PIVOT_POPOUT_SIZE[0], theme::PIVOT_POPOUT_SIZE[1]);
+    // a damaged number is not trusted: it is as if nothing was saved
+    if let Some(r) = saved.filter(|r| r.iter().all(|v| v.is_finite())) {
+        return PopoutPlacement { size: egui::vec2(r[2], r[3]).max(min), pos: Some(egui::pos2(r[0], r[1])) };
+    }
+    let mut size = default;
+    // never bigger than the monitor
+    if let Some(m) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) {
+        size = size.min(m * theme::PIVOT_POPOUT_MONITOR_SHARE).max(min.min(m));
+    }
+    let Some(main) = main.filter(|m| m.min.x.is_finite() && m.min.y.is_finite() && m.max.x.is_finite() && m.max.y.is_finite()) else {
+        return PopoutPlacement { size, pos: None };
+    };
+    let centred = main.center() - size / 2.0;
+    let Some(monitor) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) else {
+        return PopoutPlacement { size, pos: Some(centred) };
+    };
+    // centred on the main window, and on its monitor (monitors sit on a grid of their own size, with one corner at 0, 0)
+    let origin = egui::pos2((main.center().x / monitor.x).floor() * monitor.x, (main.center().y / monitor.y).floor() * monitor.y);
+    let screen = egui::Rect::from_min_size(origin, monitor);
+    let x = centred.x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
+    let y = centred.y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()));
+    PopoutPlacement { size, pos: Some(egui::pos2(x, y)) }
 }
 
 fn fingerprint<T: std::fmt::Debug>(x: &T) -> u64 {
@@ -167,10 +258,29 @@ impl MicroParquetApp {
         b.submitted = None;
         b.preview = None;
         b.preview_total_rows = 0;
+        b.preview_nested = None;
         b.value_columns.clear();
         b.popup = None;
         b.new_tab = !editing;
+        b.popped = false;
+        b.popout_start = None;
+        b.preview_limit = 0;
+        b.esc_busy = false;
         b.open = true;
+    }
+
+    /// How many rows the preview is cut to: the docked count, or, in the builder's own window, as many as fit its height
+    /// (in steps of that count, so a window being dragged does not ask for a new table at every pixel).
+    pub(crate) fn pivot_preview_rows_wanted(&self) -> usize {
+        use micro_parquet::tab_jobs::{PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX};
+        let b = &self.pivot_builder;
+        let h = b.rects.preview_scroll.height();
+        if !b.popped || !h.is_finite() || h <= 0.0 {
+            return PIVOT_PREVIEW_ROWS;
+        }
+        // the heading row comes first
+        let fit = ((h - theme::PIVOT_PREVIEW_ROW_H) / theme::PIVOT_PREVIEW_ROW_H).ceil().max(0.0) as usize;
+        (fit.div_ceil(PIVOT_PREVIEW_ROWS) * PIVOT_PREVIEW_ROWS).clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX)
     }
 
     /// The steps the pivot sees: while editing, those before the edited step; after "Insert after",
@@ -194,7 +304,9 @@ impl MicroParquetApp {
         let Some(input) = self.pivot_input() else {
             return;
         };
-        let token = fingerprint(&(&self.pivot_builder.spec, micro_parquet::steps_edit::pipeline_hash(&input.source, &input.steps)));
+        let rows = self.pivot_preview_rows_wanted();
+        self.pivot_builder.spec.data_tab = self.pivot_data_tab(input.tab_id);
+        let token = fingerprint(&(&self.pivot_builder.spec, micro_parquet::steps_edit::pipeline_hash(&input.source, &input.steps), rows));
         if self.pivot_builder.submitted == Some(token) {
             return;
         }
@@ -206,6 +318,7 @@ impl MicroParquetApp {
             steps: input.steps,
             spec: self.pivot_builder.spec.clone(),
             temp_dir: self.paths.temp_dir.clone(),
+            rows,
         };
         let key = JobKey::tab(JobKind::PivotPreview, input.tab_id);
         self.jobs.submit(key, "Pivot preview", false, move |ctx| compute_pivot_preview(req, ctx).map(|r| JobOutput::PivotPreview(Box::new(r))));
@@ -226,6 +339,10 @@ impl MicroParquetApp {
             }
             b.preview = Some(r.table);
             b.preview_total_rows = r.total_rows;
+            b.preview_nested = r.nested;
+            b.preview_notes = r.notes;
+            b.preview_warnings = r.warnings;
+            b.preview_limit = r.limit;
         }
     }
 
@@ -261,19 +378,69 @@ impl MicroParquetApp {
         if let Some(d) = self.pivot_builder.spec.date_fields.iter().find(|d| d.name == field) {
             steps.push(TransformStep::date_field_step(d));
         }
-        let req = PivotValuesRequest { tab_id: input.tab_id, source: input.source, steps, field: field.to_string(), temp_dir: self.paths.temp_dir.clone() };
+        // a lookup field's values: the lookup column joined to the table, with "(no match)" and "(blank)" (M1)
+        let lookup = self.pivot_builder.spec.model_fields.iter().find(|m| m.name == field).cloned();
+        let req = PivotValuesRequest { tab_id: input.tab_id, source: input.source, steps, field: field.to_string(), temp_dir: self.paths.temp_dir.clone(), lookup };
         let key = JobKey::tab(JobKind::PivotValues, input.tab_id);
         self.jobs.submit(key, "Values of a field", false, move |ctx| compute_pivot_values(req, ctx).map(|r| JobOutput::PivotValues(Box::new(r))));
     }
 
     fn kind_of(&self, field: &str) -> FieldKind {
-        self.pivot_builder.fields.iter().find(|(n, _)| n == field).map(|(_, k)| *k).unwrap_or(FieldKind::Other)
+        if let Some((_, k)) = self.pivot_builder.fields.iter().find(|(n, _)| n == field) {
+            return *k;
+        }
+        // a lookup field (Phase 9 M1) is the kind its lookup column is
+        let tab = self.pivot_input().map(|i| i.tab_id);
+        tab.and_then(|t| self.model_field_named(t, field)).map(|(_, dt, _)| FieldKind::of(&dt)).unwrap_or(FieldKind::Other)
     }
 
     /// The value a field gets when it is added to Values: a sum of a number, a count of anything
     /// else; a rate is averaged by the pinned control column (a sum of rates means nothing).
+    /// The project key of the tab the builder is for when it is a date-linked data tab (what its time aggregations and the stock
+    /// warning read); empty otherwise (Phase 9 M3).
+    pub(crate) fn pivot_data_tab(&self, tab_id: u64) -> String {
+        let Some(key) = self.project.keys.get(&tab_id) else {
+            return String::new();
+        };
+        if self.project.active && self.project.model.calendar.as_ref().is_some_and(|c| c.date_links.iter().any(|l| &l.data_tab == key)) {
+            key.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    /// True when the builder's tab is a date-linked data tab, so a value can have a time aggregation.
+    fn pivot_has_time_choices(&self) -> bool {
+        self.pivot_input().is_some_and(|i| !self.pivot_data_tab(i.tab_id).is_empty())
+    }
+
+    /// The named measures of the builder's tab (Phase 9 M5), in the order the model has them.
+    pub(crate) fn pivot_measures(&self) -> Vec<String> {
+        let Some(input) = self.pivot_input() else { return Vec::new() };
+        let key = self.pivot_data_tab(input.tab_id);
+        if key.is_empty() {
+            return Vec::new();
+        }
+        self.project.model.measures.iter().filter(|m| m.tab() == key && !self.pivot_builder.fields.iter().any(|(n, _)| n == m.name())).map(|m| m.name().to_string()).collect()
+    }
+
     fn default_value_for(&self, field: &str) -> PivotValue {
+        if self.pivot_measures().iter().any(|m| m == field) {
+            return PivotValue { field: field.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(TimeAgg::Measure)) };
+        }
         let kind = self.kind_of(field);
+        // a column tagged as a balance, a flow or a YTD balance gets the aggregation its tag sets (Phase 9 M3)
+        if kind == FieldKind::Number {
+            if let Some(input) = self.pivot_input() {
+                let key = self.pivot_data_tab(input.tab_id);
+                if let Some(tag) = (!key.is_empty()).then(|| self.column_tag(&key, field)).flatten() {
+                    let agg = tag.default_agg();
+                    if !self.pivot_builder.spec.values.iter().any(|v| v.field == field && v.time.is_some_and(|t| t.agg == agg)) {
+                        return PivotValue { field: field.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(agg)) };
+                    }
+                }
+            }
+        }
         let numbers: Vec<&String> = self.pivot_builder.fields.iter().filter(|(_, k)| *k == FieldKind::Number).map(|(n, _)| n).collect();
         let control = self.tabs.get(self.active_tab).and_then(|t| t.control_col.clone()).filter(|c| numbers.contains(&c) && c != field);
         let (mut agg, mut weight) = match kind {
@@ -297,7 +464,7 @@ impl MicroParquetApp {
                 weight = None;
             }
         }
-        PivotValue { field: field.to_string(), agg, weight_col: weight }
+        PivotValue { field: field.to_string(), agg, weight_col: weight, time: None }
     }
 
     /// Puts a date part into Rows, Columns or Filters (W2): the field "Open Date · Month", with its calendar.
@@ -316,6 +483,21 @@ impl MicroParquetApp {
 
     /// Puts a field into an area (a field is in Rows or in Columns, not both).
     pub(crate) fn add_pivot_field(&mut self, field: &str, area: Area) {
+        // a named measure (Phase 9 M5) is a value, never a label
+        if area != Area::Values && self.pivot_measures().iter().any(|m| m == field) {
+            self.pivot_builder.preview = Some(Err(format!("'{}' is a measure. Add it to Values.", field)));
+            return;
+        }
+        // a lookup field (Phase 9 M1) is registered in the spec when it is first put in an area; a broken link's field is refused
+        if !self.pivot_builder.fields.iter().any(|(n, _)| n == field) && !self.pivot_builder.spec.model_fields.iter().any(|m| m.name == field) {
+            if let Some((r, _, refusal)) = self.pivot_input().and_then(|i| self.model_field_named(i.tab_id, field)) {
+                if let Some(why) = refusal {
+                    self.pivot_builder.preview = Some(Err(why));
+                    return;
+                }
+                self.pivot_builder.spec.model_fields.push(r);
+            }
+        }
         match area {
             Area::Rows | Area::Columns => {
                 // a list that names this field is pre-selected (U3)
@@ -338,8 +520,14 @@ impl MicroParquetApp {
                 // Ranges from its labels
                 let date_field = self.pivot_builder.spec.date_fields.iter().find(|d| d.name == field).cloned();
                 if added && !self.pivot_builder.spec.field_orders.iter().any(|o| o.field == field) {
+                    let model_field = self.pivot_builder.spec.model_fields.iter().find(|m| m.name == field).cloned();
                     if let Some(d) = date_field {
                         if let Some(order) = d.sort_order() {
+                            self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
+                        }
+                    } else if let Some(m) = model_field {
+                        // a lookup field's order is what the lookup's own steps declare (W0 on the lookup); its labels are not listed here
+                        if let Some(order) = self.model_declared_order(&m) {
                             self.pivot_builder.spec.field_orders.push(PivotFieldOrder { field: field.to_string(), order });
                         }
                     } else if let Some(order) = self.auto_order(field, crate::ui::auto_order::AutoTarget::Pivot) {
@@ -368,6 +556,9 @@ impl MicroParquetApp {
         // a date field no area uses any more is dropped (W2)
         let filters: Vec<String> = spec.filters.iter().map(|f| f.field.clone()).collect();
         spec.date_fields.retain(|d| rows.contains(&d.name) || cols.contains(&d.name) || filters.contains(&d.name));
+        // and so is a lookup field no area uses any more (M1)
+        let values: Vec<String> = spec.values.iter().map(|v| v.field.clone()).collect();
+        spec.model_fields.retain(|m| rows.contains(&m.name) || cols.contains(&m.name) || filters.contains(&m.name) || values.contains(&m.name));
     }
 
     fn remove_pivot_chip_inner(&mut self, area: Area, index: usize) {
@@ -441,23 +632,138 @@ impl MicroParquetApp {
         }
     }
 
+    /// How many rows the preview on screen was cut to.
+    fn pivot_preview_limit(&self) -> usize {
+        match self.pivot_builder.preview_limit {
+            0 => micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS,
+            n => n,
+        }
+    }
+
+    /// The line under the title: the tab, and the step being edited or the step the pivot goes after.
+    fn pivot_subtitle(&self) -> String {
+        match (self.pivot_input(), &self.editing) {
+            (Some(i), Some(ed)) => format!("{} \u{b7} editing step {}", i.tab_title, ed.index + 1),
+            (Some(i), None) if i.after_step > 0 => format!("{} \u{b7} after step {}", i.tab_title, i.after_step),
+            (Some(i), None) => i.tab_title,
+            _ => String::new(),
+        }
+    }
+
+    /// The row under the title bar: the tab on the left, Pop out (docked) or Dock (in its own window) on the right.
+    fn pivot_header_row(&mut self, ui: &mut egui::Ui, subtitle: &str, can_pop: bool, rects: &mut PivotRects, acts: &mut PivotActs) {
+        let tk = *theme::tokens(self.dark_mode);
+        let popped = self.pivot_builder.popped;
+        ui.horizontal(|ui| {
+            // the layout of the pivot (Phase 9 P2), at the left of the row: it is how the tab shows the pivot, not a setting of its numbers
+            self.pivot_layout_controls(ui, rects);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if can_pop || popped {
+                    let (name, label, tip) = if popped {
+                        ("Dock", format!("{} Dock", egui_phosphor::regular::ARROW_SQUARE_IN), "Put the builder back inside the app window, as it is")
+                    } else {
+                        ("Pop out", format!("{} Pop out", egui_phosphor::regular::ARROW_SQUARE_OUT), "Show the builder in its own window, which you can move to another monitor or make bigger")
+                    };
+                    let b = ui.button(label).on_hover_text(tip);
+                    rects.buttons.push((name.to_string(), b.rect));
+                    if b.clicked() {
+                        acts.toggle_pop = true;
+                    }
+                }
+                ui.add(egui::Label::new(egui::RichText::new(subtitle).color(tk.muted)).truncate());
+            });
+        });
+    }
+
+    /// "Layout" with its box (Side by side, Nested (Excel style)) and, for Nested, "Blank line after each group" (Phase 9 P2).
+    fn pivot_layout_controls(&mut self, ui: &mut egui::Ui, rects: &mut PivotRects) {
+        let s = &mut self.pivot_builder.spec;
+        ui.label("Layout");
+        let nested_now = s.layout.is_nested();
+        let combo = egui::ComboBox::from_id_salt("pivot_layout").width(theme::PIVOT_COMBO_LAYOUT_W).selected_text(s.layout.label()).show_ui(ui, |ui| {
+            if ui.selectable_label(!nested_now, PivotLayout::SideBySide.label()).clicked() {
+                s.layout = PivotLayout::SideBySide;
+            }
+            if ui.selectable_label(nested_now, PivotLayout::Nested { blank_line_after_group: false }.label()).clicked() && !nested_now {
+                s.layout = PivotLayout::Nested { blank_line_after_group: false };
+            }
+        });
+        rects.layout_combo = combo.response.rect;
+        combo.response.on_hover_text("Nested puts all Rows fields in one column with each group's subtotal on its own line, as Excel's Compact form. The preview below and the tab show it the same way; exports of the data stay flat. Side by side previews the flat table.");
+        if s.layout.is_nested() {
+            let mut on = s.layout.blank_line();
+            let b = ui.checkbox(&mut on, "Blank line after each group");
+            rects.blank_line = b.rect;
+            if b.changed() {
+                s.layout = PivotLayout::Nested { blank_line_after_group: on };
+            }
+        }
+    }
+
+    /// The footer: the hint, Cancel and Create pivot tab (Save changes). The same docked and in its own window.
+    fn pivot_footer_row(&mut self, ui: &mut egui::Ui, rects: &mut PivotRects, acts: &mut PivotActs) {
+        let tk = *theme::tokens(self.dark_mode);
+        let editing = self.editing.is_some();
+        let can_create = self.pivot_builder_step().is_some();
+        ui.horizontal(|ui| {
+            let hint = self.pivot_hint();
+            let room = (ui.available_width() - theme::PIVOT_FOOTER_BUTTONS_W - theme::PIVOT_GAP).max(0.0);
+            let r = ui
+                .allocate_ui_with_layout(egui::vec2(room, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let color = if matches!(self.pivot_builder.preview, Some(Err(_))) { tk.danger } else { tk.muted };
+                    ui.add(egui::Label::new(egui::RichText::new(hint).color(color)).truncate());
+                })
+                .response;
+            rects.footer_text = r.rect;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if editing { "Save changes" } else { "Create pivot tab" };
+                let create = ui.add_enabled_ui(can_create, |ui| theme::primary_button(ui, label)).inner;
+                rects.buttons.push((label.to_string(), create.rect));
+                if create.clicked() {
+                    if let Some(s) = self.pivot_builder_step() {
+                        acts.step = Some((s, self.pivot_builder.new_tab));
+                        acts.close = true;
+                    }
+                }
+                let cancel = ui.button("Cancel");
+                rects.buttons.push(("Cancel".to_string(), cancel.rect));
+                if cancel.clicked() {
+                    acts.close = true;
+                }
+            });
+        });
+    }
+
     pub(crate) fn render_pivot_builder(&mut self, ctx: &egui::Context, _cols: Vec<String>) -> ModalOutcome {
-        let mut close = false;
-        let mut step: Option<(TransformStep, bool)> = None;
         if !self.pivot_builder.open {
             self.open_pivot_builder(None, self.editing.is_some());
         }
+        // a backend without windows keeps the builder in the app
+        if self.pivot_builder.popped && ctx.embed_viewports() {
+            self.pivot_builder.popped = false;
+            self.pivot_builder.popout_start = None;
+        }
         self.pivot_builder_tick();
-        let input = self.pivot_input();
-        let subtitle = match (&input, &self.editing) {
-            (Some(i), Some(ed)) => format!("{} \u{b7} editing step {}", i.tab_title, ed.index + 1),
-            (Some(i), None) if i.after_step > 0 => format!("{} \u{b7} after step {}", i.tab_title, i.after_step),
-            (Some(i), None) => i.tab_title.clone(),
-            _ => String::new(),
-        };
-        let editing = self.editing.is_some();
-        let can_create = self.pivot_builder_step().is_some();
+        let mut acts = PivotActs::default();
+        if self.pivot_builder.popped {
+            self.show_pivot_viewport(ctx, &mut acts);
+            self.pivot_popout_note(ctx, &mut acts);
+        } else {
+            self.show_pivot_docked(ctx, &mut acts);
+        }
+        self.pivot_finish(acts)
+    }
+
+    /// The builder as a dialog in the app window.
+    fn show_pivot_docked(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        if !self.command_open && self.pivot_esc_cancels(ctx) {
+            acts.close = true;
+        }
+        self.pivot_builder.menu_open = false;
+        let subtitle = self.pivot_subtitle();
+        let can_pop = !ctx.embed_viewports();
         let tk = *theme::tokens(self.dark_mode);
+        let _ = tk;
         let title = format!("{}  Pivot table", theme::ph::TABLE);
         let mut rects = PivotRects::default();
         theme::modal(&title)
@@ -465,49 +771,155 @@ impl MicroParquetApp {
             .min_width(theme::DIALOG_MIN_W_PIVOT_BUILDER)
             .fill_height()
             .show(ctx, |d| {
-                d.header(|ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(&subtitle).color(tk.muted)).truncate());
-                });
+                d.header(|ui| self.pivot_header_row(ui, &subtitle, can_pop, &mut rects, acts));
                 let body_h = d.body_max_h();
                 d.body_scroll(|ui| {
                     self.pivot_builder_body(ui, body_h, &mut rects);
                 });
-                d.footer(|ui| {
-                    ui.horizontal(|ui| {
-                        let hint = self.pivot_hint();
-                        let room = (ui.available_width() - theme::PIVOT_FOOTER_BUTTONS_W - theme::PIVOT_GAP).max(0.0);
-                        let r = ui
-                            .allocate_ui_with_layout(egui::vec2(room, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                let color = if matches!(self.pivot_builder.preview, Some(Err(_))) { tk.danger } else { tk.muted };
-                                ui.add(egui::Label::new(egui::RichText::new(hint).color(color)).truncate());
-                            })
-                            .response;
-                        rects.footer_text = r.rect;
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let label = if editing { "Save changes" } else { "Create pivot tab" };
-                            let create = ui.add_enabled_ui(can_create, |ui| theme::primary_button(ui, label)).inner;
-                            rects.buttons.push((label.to_string(), create.rect));
-                            if create.clicked() {
-                                if let Some(s) = self.pivot_builder_step() {
-                                    step = Some((s, self.pivot_builder.new_tab));
-                                    close = true;
-                                }
-                            }
-                            let cancel = ui.button("Cancel");
-                            rects.buttons.push(("Cancel".to_string(), cancel.rect));
-                            if cancel.clicked() {
-                                close = true;
-                            }
-                        });
-                    });
-                });
+                d.footer(|ui| self.pivot_footer_row(ui, &mut rects, acts));
             });
         self.pivot_builder.rects = rects;
-        if close {
+        self.pivot_builder.esc_busy = self.pivot_esc_holders(ctx) || self.pivot_builder.menu_open;
+    }
+
+    /// The builder in its own native window (an immediate viewport): the same state, header, fields, preview and footer.
+    /// Closing the window docks it back.
+    fn show_pivot_viewport(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        if self.pivot_builder.popout_start.is_none() {
+            let (main, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
+            self.pivot_builder.popout_start = Some(popout_placement(self.settings.pivot_popout_rect, main, monitor));
+            // what an earlier window showed is not where this one is
+            self.pivot_builder.popout_live = None;
+        }
+        let start = self.pivot_builder.popout_start.unwrap_or(PopoutPlacement { size: egui::vec2(theme::PIVOT_POPOUT_SIZE[0], theme::PIVOT_POPOUT_SIZE[1]), pos: None });
+        let tab = self.pivot_input().map(|i| i.tab_title).unwrap_or_default();
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(format!("Pivot builder \u{2014} {tab}"))
+            .with_inner_size(start.size)
+            .with_min_inner_size(theme::PIVOT_POPOUT_MIN_SIZE)
+            .with_resizable(true)
+            .with_maximize_button(true)
+            .with_minimize_button(true);
+        if let Some(p) = start.pos {
+            builder = builder.with_position(p);
+        }
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("pivot_popout"), builder, |ctx, class| {
+            if class == egui::ViewportClass::Embedded {
+                return;
+            }
+            self.pivot_popout_ui(ctx, acts);
+        });
+    }
+
+    /// Esc is Cancel, docked and in the window alike (owner decision on P1-3). It does nothing to the builder while a text box has the
+    /// keyboard, the Filters list is open, or a drop-down list or pop-up is open: Esc closes that first, and the next Esc is Cancel.
+    /// Read before the builder is drawn, so what takes Esc itself does not also cancel.
+    fn pivot_esc_cancels(&self, ctx: &egui::Context) -> bool {
+        // egui lets go of a text box's keyboard when Esc arrives, so the last frame's state counts too
+        let busy = self.pivot_esc_holders(ctx) || self.pivot_builder.esc_busy;
+        !busy && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    }
+
+    /// Something that takes Esc itself is open now: a text box with the keyboard, the Filters list, a drop-down list or a pop-up.
+    fn pivot_esc_holders(&self, ctx: &egui::Context) -> bool {
+        ctx.wants_keyboard_input() || ctx.memory(|m| m.any_popup_open()) || self.pivot_builder.popup.is_some()
+    }
+
+    /// What fills the builder's own window: the header, the fields and areas with a preview that takes the height that is left,
+    /// and the footer. (Tests draw it in a headless window of its size.) Esc is Cancel (`pivot_esc_cancels`).
+    pub(crate) fn pivot_popout_ui(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        // the window's close button docks the builder back, as its Dock button does
+        if ctx.input(|i| i.viewport().close_requested()) {
+            acts.toggle_pop = true;
+            return;
+        }
+        ctx.input(|i| {
+            let v = i.viewport();
+            if let (Some(o), Some(inner)) = (v.outer_rect, v.inner_rect) {
+                self.pivot_builder.popout_live = Some([o.min.x, o.min.y, inner.width(), inner.height()]);
+            }
+        });
+        if self.pivot_esc_cancels(ctx) {
+            acts.close = true;
+        }
+        self.pivot_builder.menu_open = false;
+        let subtitle = self.pivot_subtitle();
+        let mut rects = PivotRects::default();
+        egui::TopBottomPanel::top("pivot_popout_header").show(ctx, |ui| self.pivot_header_row(ui, &subtitle, true, &mut rects, acts));
+        egui::TopBottomPanel::bottom("pivot_popout_footer").show(ctx, |ui| self.pivot_footer_row(ui, &mut rects, acts));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let body_h = ui.available_height();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).show(ui, |ui| {
+                self.pivot_builder_body(ui, body_h, &mut rects);
+            });
+        });
+        self.pivot_builder.rects = rects;
+        self.pivot_builder.esc_busy = self.pivot_esc_holders(ctx) || self.pivot_builder.menu_open;
+    }
+
+    /// While the builder is in its own window, the app window says so and can take it back (the window may be on another monitor,
+    /// or lost behind another program).
+    fn pivot_popout_note(&mut self, ctx: &egui::Context, acts: &mut PivotActs) {
+        let tk = *theme::tokens(self.dark_mode);
+        let mut dock = egui::Rect::NOTHING;
+        theme::modal(PIVOT_POPOUT_NOTE_TITLE).default_width(theme::DIALOG_W_PIVOT_CONVERT).show(ctx, |d| {
+            d.body(|ui| {
+                ui.add(egui::Label::new(egui::RichText::new("The pivot builder is in its own window.").color(tk.muted)).wrap());
+            });
+            d.footer(|ui| {
+                let b = ui.button("Dock");
+                dock = b.rect;
+                if b.clicked() {
+                    acts.toggle_pop = true;
+                }
+            });
+        });
+        self.pivot_builder.rects.note_dock = dock;
+    }
+
+    /// What a frame asked for: move the builder, close it, or give back the step.
+    pub(crate) fn pivot_finish(&mut self, acts: PivotActs) -> ModalOutcome {
+        let was = self.pivot_builder.popped;
+        if acts.toggle_pop {
+            // the other place has its own keyboard and lists
+            self.pivot_builder.esc_busy = false;
+        }
+        if acts.toggle_pop && !acts.close {
+            self.pivot_builder.popped = !was;
+            if !was {
+                self.pivot_builder.pop_requests += 1;
+            }
+        }
+        if was && (acts.toggle_pop || acts.close) {
+            self.pivot_save_popout_rect();
+            self.pivot_builder.popout_start = None;
+        }
+        if acts.close {
             self.pivot_builder.open = false;
             self.pivot_builder.popup = None;
+            self.pivot_builder.popped = false;
         }
-        ModalOutcome { close, step }
+        ModalOutcome { close: acts.close, step: acts.step }
+    }
+
+    /// Keeps where the builder's window is in `settings.json`.
+    pub(crate) fn pivot_save_popout_rect(&mut self) {
+        if let Some(r) = self.pivot_builder.popout_live {
+            if self.settings.pivot_popout_rect != Some(r) {
+                self.settings.pivot_popout_rect = Some(r);
+                self.save_settings();
+            }
+        }
+    }
+
+    /// One frame of the builder's own window in a window of its own, with what the app does after it (tests: they have no second window).
+    #[cfg(test)]
+    pub(crate) fn pivot_popout_frame(&mut self, ctx: &egui::Context) {
+        self.pivot_builder_tick();
+        let mut acts = PivotActs::default();
+        self.pivot_popout_ui(ctx, &mut acts);
+        let outcome = self.pivot_finish(acts);
+        self.apply_modal_outcome(None, outcome);
     }
 
     fn pivot_builder_body(&mut self, ui: &mut egui::Ui, body_h: f32, rects: &mut PivotRects) {
@@ -548,7 +960,7 @@ impl MicroParquetApp {
         let out = egui::ScrollArea::vertical().id_salt("pivot_fields").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(w - theme::SPACE_M);
             for (name, kind) in &list {
-                self.pivot_field_row(ui, name, *kind, None, rects);
+                self.pivot_field_row(ui, name, *kind, None, None, rects);
                 if *kind == FieldKind::Date {
                     // W2: the parts of a date column, under an expander, added like columns
                     let open = self.pivot_builder.expanded.contains(name);
@@ -566,20 +978,80 @@ impl MicroParquetApp {
                         let cal = self.calendar();
                         for part in micro_parquet::dates::DatePart::ALL {
                             let f = self.pivot_builder.spec.date_fields.iter().find(|d| d.column == *name && d.part == part).cloned().unwrap_or_else(|| micro_parquet::dates::DateFieldRef::new(name, part, cal));
-                            self.pivot_field_row(ui, &f.name.clone(), *kind, Some(&f), rects);
+                            self.pivot_field_row(ui, &f.name.clone(), *kind, Some(&f), None, rects);
                         }
                     }
                 }
             }
-            if list.is_empty() {
+            // Phase 9 M1: the links of the tab, under its own columns: "Branch master ›" expands to the lookup's columns
+            let tab_id = self.pivot_input().map(|i| i.tab_id);
+            let groups = tab_id.map(|t| self.model_groups_for(t)).unwrap_or_default();
+            let mut shown_any = !list.is_empty();
+            for g in &groups {
+                let key = format!("{} \u{203a}", g.lookup_title);
+                let matching: Vec<(micro_parquet::model::ModelFieldRef, polars::prelude::DataType)> = g.columns.iter().filter(|(r, _)| q.is_empty() || r.name.to_lowercase().contains(&q) || g.lookup_title.to_lowercase().contains(&q)).cloned().collect();
+                if !q.is_empty() && matching.is_empty() {
+                    continue;
+                }
+                shown_any = true;
+                let open = !q.is_empty() || self.pivot_builder.expanded.contains(&key);
+                let text = format!("{}  {}", if open { theme::ph::CARET_DOWN } else { theme::ph::CARET_RIGHT }, key);
+                let colour = if g.refusal.is_some() { tk.muted } else { tk.muted };
+                let r = ui.add(egui::Button::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(colour)).frame(false));
+                let r = match &g.refusal {
+                    Some(why) => r.on_hover_text(why),
+                    None => r.on_hover_text(format!("The columns of '{}', joined by the link {}", g.lookup_title, g.link_name)),
+                };
+                rects.expanders.push((key.clone(), r.rect));
+                if r.clicked() {
+                    if self.pivot_builder.expanded.contains(&key) {
+                        self.pivot_builder.expanded.remove(&key);
+                    } else {
+                        self.pivot_builder.expanded.insert(key.clone());
+                    }
+                }
+                if open {
+                    if let Some(why) = &g.refusal {
+                        let note = ui.add(egui::Label::new(egui::RichText::new(why).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                        rects.link_notes.push((key.clone(), note.rect));
+                    }
+                    for (r, dt) in &matching {
+                        self.pivot_field_row(ui, &r.name.clone(), FieldKind::of(dt), None, Some((r, g.refusal.as_deref())), rects);
+                    }
+                }
+            }
+            // Phase 9 M5: the named measures of the tab, under "Measures \u{203a}"; each is added to Values
+            let measures: Vec<String> = self.pivot_measures().into_iter().filter(|m| q.is_empty() || m.to_lowercase().contains(&q) || "measures".contains(&q)).collect();
+            if !measures.is_empty() {
+                shown_any = true;
+                let key = "Measures \u{203a}".to_string();
+                let open = !q.is_empty() || self.pivot_builder.expanded.contains(&key);
+                let text = format!("{}  {}", if open { theme::ph::CARET_DOWN } else { theme::ph::CARET_RIGHT }, key);
+                let r = ui.add(egui::Button::new(egui::RichText::new(text).size(theme::TEXT_LABEL).color(tk.muted)).frame(false)).on_hover_text("The named measures of this tab (Model \u{25b8} Measures\u{2026}). They go to Values.");
+                rects.expanders.push((key.clone(), r.rect));
+                if r.clicked() {
+                    if self.pivot_builder.expanded.contains(&key) {
+                        self.pivot_builder.expanded.remove(&key);
+                    } else {
+                        self.pivot_builder.expanded.insert(key.clone());
+                    }
+                }
+                if open {
+                    for m in &measures {
+                        self.pivot_field_row(ui, m, FieldKind::Number, None, None, rects);
+                    }
+                }
+            }
+            if !shown_any {
                 ui.label(egui::RichText::new("No field matches.").color(tk.muted));
             }
         });
         rects.fields_list = out.inner_rect;
     }
 
-    fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, part: Option<&micro_parquet::dates::DateFieldRef>, rects: &mut PivotRects) {
+    fn pivot_field_row(&mut self, ui: &mut egui::Ui, name: &str, kind: FieldKind, part: Option<&micro_parquet::dates::DateFieldRef>, model: Option<(&micro_parquet::model::ModelFieldRef, Option<&str>)>, rects: &mut PivotRects) {
         let tk = *theme::tokens(self.dark_mode);
+        let is_measure = part.is_none() && model.is_none() && self.pivot_measures().iter().any(|m| m == name);
         let areas = self.areas_of(name);
         let used = areas.iter().map(|a| a.used_word()).collect::<Vec<_>>().join(", ");
         let row_w = ui.available_width();
@@ -619,16 +1091,35 @@ impl MicroParquetApp {
         let gap = if used.is_empty() { 0.0 } else { theme::SPACE_S };
         let name_rect = egui::Rect::from_min_max(egui::pos2(badge.right() + theme::SPACE_S, drag_rect.top()), egui::pos2((used_rect.left() - gap).max(badge.right() + theme::SPACE_S), drag_rect.bottom()));
         // a date part is listed under its column as "› Month"
-        let shown = part.map(|p| format!("\u{203a} {}", p.part.label())).unwrap_or_else(|| name.to_string());
-        ui.put(name_rect, egui::Label::new(egui::RichText::new(shown).color(tk.ink)).truncate().selectable(false));
+        let shown = match (part, model) {
+            (Some(p), _) => format!("\u{203a} {}", p.part.label()),
+            // a lookup column is listed under its link as "› Region" (M1)
+            (None, Some((m, _))) => format!("\u{203a} {}", m.column),
+            _ => name.to_string(),
+        };
+        // a field of a broken link is greyed, and says why on hover
+        let refusal = model.and_then(|(_, why)| why);
+        let ink = if refusal.is_some() { tk.muted } else { tk.ink };
+        let label = ui.put(name_rect, egui::Label::new(egui::RichText::new(shown).color(ink)).truncate().selectable(false));
+        if let Some(why) = refusal {
+            label.on_hover_text(why);
+        }
         // the menu: Add to Rows / Columns / Values / Filters
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(menu_rect), |ui| {
             // a button as small as its cell: the default minimum size would push the row wider
             ui.spacing_mut().interact_size = egui::vec2(theme::PIVOT_CHIP_MENU_W, theme::PIVOT_FIELD_ROW_H);
             ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
-            ui.menu_button(theme::ph::DOTS_THREE, |ui| {
+            let bar_id = ui.id();
+            let mut draw_menu = |ui: &mut egui::Ui| {
+            let menu = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
                 // a date part is a label: Rows, Columns or Filters (W2)
-                let areas_offered: &[Area] = if part.is_some() { &[Area::Rows, Area::Columns, Area::Filters] } else { &[Area::Rows, Area::Columns, Area::Values, Area::Filters] };
+                let areas_offered: &[Area] = if part.is_some() {
+                    &[Area::Rows, Area::Columns, Area::Filters]
+                } else if is_measure {
+                    &[Area::Values]
+                } else {
+                    &[Area::Rows, Area::Columns, Area::Values, Area::Filters]
+                };
                 for area in areas_offered {
                     if ui.button(format!("Add to {}", area.title())).clicked() {
                         if let Some(p) = part {
@@ -644,9 +1135,17 @@ impl MicroParquetApp {
                     ui.separator();
                     self.pivot_order_menu(ui, name, in_rows);
                 }
-            })
-            .response
-            .on_hover_text("Add to Rows, Columns, Values or Filters");
+            });
+            // an open menu takes Esc itself (egui's menus are not in its list of pop-ups)
+            self.pivot_builder.menu_open = self.pivot_builder.menu_open || egui::menu::BarState::load(ui.ctx(), bar_id).is_some();
+            menu.response.on_hover_text("Add to Rows, Columns, Values or Filters");
+            };
+            // a field of a broken link has its menu disabled (M1); the others are drawn as before
+            if refusal.is_some() {
+                ui.add_enabled_ui(false, |ui| draw_menu(ui));
+            } else {
+                draw_menu(ui);
+            }
         });
         rects.field_rows.push((name.to_string(), row));
         rects.field_menus.push((name.to_string(), menu_rect));
@@ -841,7 +1340,8 @@ impl MicroParquetApp {
                             }
                             Chip::Value(j) => {
                                 let v = spec_snapshot.values[*j].clone();
-                                let (rect, rm) = self.value_chip(ui, *j, &v, widths[i], tk);
+                                let (rect, rm, agg_rect) = self.value_chip(ui, *j, &v, widths[i], tk);
+                                rects.agg_combos.push((*j, agg_rect));
                                 rects.chips.push((area, v.field.clone(), rect));
                                 if rm {
                                     remove = Some(*j);
@@ -870,16 +1370,19 @@ impl MicroParquetApp {
 
     /// A chip of Values of exactly width `w`: the field (cut when the room is short), its
     /// aggregation (and weight), and a remove button.
-    fn value_chip(&mut self, ui: &mut egui::Ui, i: usize, v: &PivotValue, w: f32, tk: &theme::Tokens) -> (egui::Rect, bool) {
+    fn value_chip(&mut self, ui: &mut egui::Ui, i: usize, v: &PivotValue, w: f32, tk: &theme::Tokens) -> (egui::Rect, bool, egui::Rect) {
         let numeric = self.kind_of(&v.field) == FieldKind::Number;
         let numbers: Vec<String> = self.pivot_builder.fields.iter().filter(|(_, k)| *k == FieldKind::Number).map(|(n, _)| n.clone()).collect();
         let mut agg = v.agg;
+        let mut time = v.time;
+        let time_choices = self.pivot_has_time_choices();
+        let mut agg_rect = egui::Rect::NOTHING;
         let mut weight = v.weight_col.clone();
         let mut removed = false;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(w, theme::PIVOT_CHIP_H), egui::Sense::hover());
         ui.painter().rect(rect, theme::RADIUS_CONTROL, tk.surface, theme::line(tk.accent_soft_border));
         let inner = egui::Rect::from_min_max(egui::pos2(rect.left() + theme::SPACE_S, rect.top()), egui::pos2(rect.right() - theme::SPACE_XS, rect.bottom()));
-        let fixed = value_chip_fixed_width(agg);
+        let fixed = value_chip_fixed_width(agg, time);
         let label_w = (inner.width() - fixed).max(0.0);
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
             ui.spacing_mut().item_spacing.x = theme::SPACE_S;
@@ -887,14 +1390,112 @@ impl MicroParquetApp {
             ui.allocate_ui_with_layout(egui::vec2(label_w, theme::PIVOT_CHIP_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(&v.field).font(egui::FontId::new(theme::TEXT_BASE, theme::family_semibold())).color(tk.accent_dark)).truncate());
             });
-            egui::ComboBox::from_id_salt(("pivot_agg", i)).width(theme::PIVOT_COMBO_AGG_W - ui.spacing().interact_size.y).selected_text(agg.label()).show_ui(ui, |ui| {
+            // the list opens under the box and must end inside the window: it scrolls when the room is short
+            let list_h = (ui.ctx().screen_rect().bottom() - ui.cursor().top() - theme::PIVOT_AGG_LIST_MARGIN).clamp(theme::PIVOT_AGG_LIST_MIN_H, theme::PIVOT_AGG_LIST_H);
+            let box_w = if time.is_some() { theme::PIVOT_COMBO_TIME_W } else { theme::PIVOT_COMBO_AGG_W };
+            let is_measure = time.is_some_and(|t| t.agg == TimeAgg::Measure);
+            let shown = match time {
+                Some(t) if is_measure => "Measure",
+                Some(t) => t.agg.label(),
+                None => agg.label(),
+            };
+            let combo = egui::ComboBox::from_id_salt(("pivot_agg", i)).width(box_w - ui.spacing().interact_size.y).height(list_h).selected_text(shown).show_ui(ui, |ui| {
+                if is_measure {
+                    ui.label(egui::RichText::new("A named measure: edit it in Model \u{25b8} Measures\u{2026}").color(tk.muted));
+                    return;
+                }
                 for a in PivotAgg::all() {
                     if numeric || matches!(a, PivotAgg::Count | PivotAgg::CountDistinct) {
-                        ui.selectable_value(&mut agg, *a, a.label());
+                        if ui.selectable_label(time.is_none() && agg == *a, a.label()).clicked() {
+                            agg = *a;
+                            time = None;
+                        }
+                    }
+                }
+                // on a date-linked data tab: the aggregations over time (Phase 9 M3)
+                if time_choices {
+                    ui.separator();
+                    for t in TimeAgg::all() {
+                        if (numeric || !t.needs_number()) && ui.selectable_label(time.map(|x| x.agg) == Some(*t), t.label()).clicked() {
+                            time = Some(TimeValue { agg: *t, ..time.unwrap_or_default() });
+                        }
                     }
                 }
             });
-            if agg == PivotAgg::WeightedAvg {
+            agg_rect = combo.response.rect;
+            if let Some(mut t) = time {
+                let label = if t.is_m4() { "Time \u{2022}" } else { "Time" };
+                let btn = ui.add_sized(egui::vec2(theme::PIVOT_TIME_BTN_W, theme::PIVOT_TIME_BTN_H), egui::Button::new(egui::RichText::new(label).size(theme::TEXT_LABEL)));
+                btn.clone().on_hover_text("Window, shift and what the value shows (MTD, QTD, YTD, prior period, same period last year)");
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("pivot_time_btn", i)), btn.rect));
+                let pid = egui::Id::new(("pivot_time_popup", i));
+                if btn.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(pid));
+                }
+                let mut choices: Vec<(String, egui::Rect)> = Vec::new();
+                egui::popup::popup_below_widget(ui, pid, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                    use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+                    ui.set_min_width(theme::PIVOT_TIME_POPUP_W);
+                    let mut pick = |ui: &mut egui::Ui, group: &str, label: &str, on: bool, enabled: bool, choices: &mut Vec<(String, egui::Rect)>| -> bool {
+                        let r = ui.add_enabled(enabled, egui::SelectableLabel::new(on, label));
+                        choices.push((format!("{group}:{label}"), r.rect));
+                        r.clicked()
+                    };
+                    egui::Grid::new(("pivot_time_grid", i)).num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
+                        ui.label(egui::RichText::new("Window").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for w in TimeWindow::all() {
+                                if pick(ui, "window", w.label(), t.window == *w, true, &mut choices) {
+                                    t.window = *w;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Shift").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for x in TimeShift::all() {
+                                if pick(ui, "shift", x.label(), t.shift == *x, true, &mut choices) {
+                                    t.shift = *x;
+                                    if *x == TimeShift::None {
+                                        t.show = TimeShow::Value;
+                                    }
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Show").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for x in TimeShow::all() {
+                                if pick(ui, "show", x.label(), t.show == *x, *x == TimeShow::Value || t.shift != TimeShift::None, &mut choices) {
+                                    t.show = *x;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Partial period").color(tk.muted));
+                        ui.horizontal(|ui| {
+                            for x in TimePartial::all() {
+                                if pick(ui, "partial", x.label(), t.partial == *x, t.shift != TimeShift::None, &mut choices) {
+                                    t.partial = *x;
+                                }
+                            }
+                        });
+                        ui.end_row();
+                    });
+                    ui.label(egui::RichText::new(if t.shift == TimeShift::None { "A difference or % change needs a shift." } else { "Same days: the shifted window has the same day numbers; Full period: all of it." }).size(theme::TEXT_LABEL).color(tk.muted));
+                });
+                let open = ui.memory(|m| m.is_popup_open(pid));
+                ui.ctx().data_mut(|d| {
+                    if open {
+                        d.insert_temp(egui::Id::new("pivot_time_choices"), choices);
+                    } else {
+                        d.remove_temp::<Vec<(String, egui::Rect)>>(egui::Id::new("pivot_time_choices"));
+                    }
+                });
+                time = Some(t);
+            }
+            let wavg = time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg);
+            if wavg {
                 ui.label(egui::RichText::new("by").color(tk.muted));
                 let shown = weight.clone().unwrap_or_else(|| "choose".to_string());
                 egui::ComboBox::from_id_salt(("pivot_weight", i)).width(theme::PIVOT_COMBO_WEIGHT_W - ui.spacing().interact_size.y).selected_text(shown).show_ui(ui, |ui| {
@@ -911,16 +1512,18 @@ impl MicroParquetApp {
                 removed = true;
             }
         });
-        if agg != v.agg || weight != v.weight_col {
+        if agg != v.agg || weight != v.weight_col || time != v.time {
             if let Some(slot) = self.pivot_builder.spec.values.get_mut(i) {
                 slot.agg = agg;
-                if agg == PivotAgg::WeightedAvg && weight.is_none() {
+                slot.time = time;
+                let wavg = time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg);
+                if wavg && weight.is_none() {
                     weight = numbers.iter().find(|n| **n != slot.field).cloned();
                 }
-                slot.weight_col = if agg == PivotAgg::WeightedAvg { weight } else { None };
+                slot.weight_col = if wavg { weight } else { None };
             }
         }
-        (rect, removed)
+        (rect, removed, agg_rect)
     }
 
     fn pivot_preview(&mut self, ui: &mut egui::Ui, h: f32, tk: &theme::Tokens, rects: &mut PivotRects) {
@@ -935,7 +1538,7 @@ impl MicroParquetApp {
                     Some(Ok(_)) => {
                         let s = &self.pivot_builder.spec;
                         let what = s.values.iter().map(|v| v.label()).collect::<Vec<_>>().join(", ");
-                        let shown = self.pivot_builder.preview_total_rows.min(micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS);
+                        let shown = self.pivot_builder.preview_total_rows.min(self.pivot_preview_limit());
                         format!("{} \u{b7} {} \u{b7} first {} of {} rows", what, s.scale.label(), shown, self.pivot_builder.preview_total_rows)
                     }
                     Some(Err(_)) => "no table yet".to_string(),
@@ -950,10 +1553,18 @@ impl MicroParquetApp {
                     });
                 });
                 ui.separator();
+                // what the numbers need to be read with: the stock warning (Phase 9 M3)
+                for w in self.pivot_builder.preview_warnings.clone() {
+                    let r = ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", theme::ph::WARNING, w)).size(theme::TEXT_LABEL).color(tk.warning)).wrap());
+                    rects.warnings.push(r.rect);
+                }
                 let left = ui.available_height().min(h);
                 let area_h = (left - theme::SPACE_XS).max(theme::DATA_ROW_H);
                 let out = egui::ScrollArea::both().id_salt("pivot_preview").max_height(area_h).auto_shrink([false, false]).show(ui, |ui| match &self.pivot_builder.preview {
-                    Some(Ok(df)) => self.pivot_preview_grid(ui, df, tk),
+                    Some(Ok(df)) => match (&self.pivot_builder.preview_nested, matches!(self.pivot_builder.spec.layout, PivotLayout::Nested { .. })) {
+                        (Some(view), true) => self.pivot_preview_nested_grid(ui, view, tk),
+                        _ => self.pivot_preview_grid(ui, df, tk),
+                    },
                     Some(Err(e)) => {
                         ui.add_space(theme::SPACE_S);
                         ui.horizontal_wrapped(|ui| {
@@ -994,8 +1605,9 @@ impl MicroParquetApp {
             .collect();
         let total_w: f32 = widths.iter().sum();
         let last = cells.len().saturating_sub(1);
-        let has_total_row = spec.column_totals && spec.rows.len() > 0 && self.pivot_builder.preview_total_rows <= micro_parquet::tab_jobs::PIVOT_PREVIEW_ROWS;
-        let draw_row = |ui: &mut egui::Ui, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
+        let has_total_row = spec.column_totals && spec.rows.len() > 0 && self.pivot_builder.preview_total_rows <= self.pivot_preview_limit();
+        self.pivot_builder.notes_drawn.borrow_mut().clear();
+        let draw_row = |ui: &mut egui::Ui, row_at: Option<usize>, texts: &[String], head: bool, fill: Option<egui::Color32>, strong: bool| {
             let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, theme::PIVOT_PREVIEW_ROW_H), egui::Sense::hover());
             if let Some(f) = fill {
                 ui.painter().rect_filled(row, 0.0, f);
@@ -1006,6 +1618,13 @@ impl MicroParquetApp {
                 x += widths[c];
                 let inner = cell.shrink2(egui::vec2(theme::SPACE_M, 0.0));
                 let value = c >= label_n;
+                // a blank cell of a time aggregation says why on hover (Phase 9 M3)
+                if let (Some(r), true, true) = (row_at, value, t == "\u{2014}") {
+                    if let Some(n) = self.pivot_builder.preview_notes.iter().find(|n| n.row == r && n.column == names[c]) {
+                        ui.interact(cell, ui.id().with(("pivot_note", r, c)), egui::Sense::hover()).on_hover_text(&n.text);
+                        self.pivot_builder.notes_drawn.borrow_mut().push((n.text.clone(), cell));
+                    }
+                }
                 let rich = if head {
                     egui::RichText::new(t).font(head_font.clone()).color(tk.ink)
                 } else if value {
@@ -1020,11 +1639,77 @@ impl MicroParquetApp {
                 });
             }
         };
-        draw_row(ui, &names, true, Some(tk.zebra), true);
+        draw_row(ui, None, &names, true, Some(tk.zebra), true);
         for (r, row) in cells.iter().enumerate() {
             let total = has_total_row && r == last;
             let fill = if total { Some(tk.accent_soft) } else if r % 2 == 1 { Some(tk.zebra) } else { None };
-            draw_row(ui, row, false, fill, total);
+            draw_row(ui, Some(r), row, false, fill, total);
+        }
+    }
+
+    /// The preview of the Nested layout: one "Row Labels" column, a parent line and the Grand total in bold, the indent of each level,
+    /// the blank lines when chosen. It is the view the worker built for the tab's Nested layout, drawn the same way.
+    fn pivot_preview_nested_grid(&self, ui: &mut egui::Ui, view: &micro_parquet::pivot_view::NestedView, tk: &theme::Tokens) {
+        let spec = &self.pivot_builder.spec;
+        let names: Vec<String> = view.values.get_column_names().iter().map(|n| n.to_string()).collect();
+        let formats: HashMap<String, ColumnFormatSpec> = pivot_column_formats(spec, &names, self.global_decimals).into_iter().collect();
+        let cells: Vec<Vec<String>> = (0..view.rows.len())
+            .map(|r| {
+                if view.rows[r].is_blank() {
+                    return vec![String::new(); names.len()];
+                }
+                names.iter().enumerate().map(|(c, n)| view.values.get_columns().get(c).and_then(|s| s.get(r).ok()).map(|v| self.pivot_cell_text(n, v, formats.get(n))).unwrap_or_default()).collect()
+            })
+            .collect();
+        let mono = egui::FontId::new(theme::TEXT_MONO, egui::FontFamily::Monospace);
+        let head_font = egui::FontId::new(theme::TEXT_BASE, theme::family_semibold());
+        let deepest = view.rows.iter().map(|r| r.level).max().unwrap_or(0) as f32 * theme::NESTED_INDENT_PX;
+        let text_w = |t: &str, f: &egui::FontId| ui.fonts(|fo| fo.layout_no_wrap(t.to_string(), f.clone(), tk.ink).size().x);
+        let label_body = view.rows.iter().map(|r| text_w(&r.label, &head_font)).fold(0.0, f32::max);
+        let label_w = (text_w(&view.label_header, &head_font).max(label_body) + deepest + 2.0 * theme::SPACE_M).max(theme::PIVOT_PREVIEW_LABEL_W);
+        let mut widths = vec![label_w];
+        for (c, n) in names.iter().enumerate() {
+            let body = cells.iter().map(|row| text_w(&row[c], &mono)).fold(0.0, f32::max);
+            widths.push((text_w(n, &head_font).max(body) + 2.0 * theme::SPACE_M).max(theme::PIVOT_PREVIEW_COL_W));
+        }
+        let total_w: f32 = widths.iter().sum();
+        let draw_row = |ui: &mut egui::Ui, level: usize, label: &str, texts: &[String], head: bool, fill: Option<egui::Color32>, bold: bool| {
+            let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, theme::PIVOT_PREVIEW_ROW_H), egui::Sense::hover());
+            if let Some(f) = fill {
+                ui.painter().rect_filled(row, 0.0, f);
+            }
+            let mut x = row.left();
+            for c in 0..widths.len() {
+                let cell = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(widths[c], row.height()));
+                x += widths[c];
+                let mut inner = cell.shrink2(egui::vec2(theme::SPACE_M, 0.0));
+                let (t, layout) = if c == 0 {
+                    inner.min.x += level as f32 * theme::NESTED_INDENT_PX;
+                    (label, egui::Layout::left_to_right(egui::Align::Center))
+                } else {
+                    (texts[c - 1].as_str(), egui::Layout::right_to_left(egui::Align::Center))
+                };
+                if t.is_empty() {
+                    continue;
+                }
+                let rich = if head {
+                    egui::RichText::new(t).font(head_font.clone()).color(tk.ink)
+                } else if c > 0 {
+                    egui::RichText::new(t).font(if bold { egui::FontId::new(theme::TEXT_MONO, theme::family_mono_semibold()) } else { mono.clone() }).color(tk.ink)
+                } else if bold {
+                    egui::RichText::new(t).family(theme::family_bold()).size(theme::TEXT_BASE).color(tk.ink)
+                } else {
+                    egui::RichText::new(t).color(tk.ink)
+                };
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(layout), |ui| {
+                    ui.add(egui::Label::new(rich).truncate());
+                });
+            }
+        };
+        draw_row(ui, 0, &view.label_header, &names, true, Some(tk.zebra), true);
+        for (r, line) in view.rows.iter().enumerate() {
+            let fill = if line.is_grand_total() { Some(tk.accent_soft) } else { None };
+            draw_row(ui, line.level, &line.label, &cells[r], false, fill, line.is_bold());
         }
     }
 
@@ -1225,9 +1910,13 @@ fn chip_text_w(ui: &egui::Ui, text: &str, size: f32, family: egui::FontFamily) -
 }
 
 /// The width of what a chip of Values needs besides the field's name.
-fn value_chip_fixed_width(agg: PivotAgg) -> f32 {
-    let mut w = theme::SPACE_S + theme::PIVOT_COMBO_AGG_W + theme::SPACE_S + theme::PIVOT_CHIP_MENU_W;
-    if agg == PivotAgg::WeightedAvg {
+fn value_chip_fixed_width(agg: PivotAgg, time: Option<TimeValue>) -> f32 {
+    let box_w = if time.is_some() { theme::PIVOT_COMBO_TIME_W } else { theme::PIVOT_COMBO_AGG_W };
+    let mut w = theme::SPACE_S + box_w + theme::SPACE_S + theme::PIVOT_CHIP_MENU_W;
+    if time.is_some() {
+        w += theme::SPACE_S + theme::PIVOT_TIME_BTN_W;
+    }
+    if time.map(|t| t.agg == TimeAgg::WAvgAtClosing).unwrap_or(agg == PivotAgg::WeightedAvg) {
         w += theme::SPACE_S + theme::PIVOT_BADGE_W + theme::SPACE_S + theme::PIVOT_COMBO_WEIGHT_W;
     }
     w
@@ -1235,7 +1924,7 @@ fn value_chip_fixed_width(agg: PivotAgg) -> f32 {
 
 /// The natural width of a chip of Values.
 fn value_chip_width(ui: &egui::Ui, v: &PivotValue, _extra: f32) -> f32 {
-    2.0 * theme::SPACE_S + chip_text_w(ui, &v.field, theme::TEXT_BASE, theme::family_semibold()) + value_chip_fixed_width(v.agg)
+    2.0 * theme::SPACE_S + chip_text_w(ui, &v.field, theme::TEXT_BASE, theme::family_semibold()) + value_chip_fixed_width(v.agg, v.time)
 }
 
 /// The natural width of a chip of Rows, Columns or Filters.

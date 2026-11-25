@@ -31,6 +31,9 @@ pub mod irrbb;
 pub mod jobs;
 pub mod join;
 pub mod limits;
+pub mod model;
+pub mod model_calendar;
+pub mod model_measures;
 pub mod mom;
 pub mod mudaraba;
 pub mod clean_breaks;
@@ -43,6 +46,7 @@ pub mod normaliser;
 pub mod pivot;
 pub mod pivot_bar;
 pub mod pivot_builder;
+pub mod pivot_layout;
 pub mod prelude;
 pub mod project;
 pub mod provision;
@@ -81,6 +85,8 @@ mod render_tests_p6;
 mod render_tests_p7;
 #[cfg(test)]
 mod render_tests_p8;
+#[cfg(test)]
+mod render_tests_p9;
 #[cfg(test)]
 mod render_tests_r;
 #[cfg(test)]
@@ -142,6 +148,12 @@ impl MicroParquetApp {
             ActiveToolModal::ProjectSave => self.render_project_save_modal(ctx, cols),
             ActiveToolModal::ProjectPrompt => self.render_project_prompt_modal(ctx, cols),
             ActiveToolModal::ProjectRecent => self.render_project_recent_modal(ctx, cols),
+            ActiveToolModal::ModelLinks => self.render_model_links_modal(ctx, cols),
+            ActiveToolModal::ModelKeyCheck => self.render_model_key_check_modal(ctx, cols),
+            ActiveToolModal::ModelNoProject => self.render_model_no_project_modal(ctx, cols),
+            ActiveToolModal::ModelCalendar => self.render_model_calendar_modal(ctx, cols),
+            ActiveToolModal::ModelAsOf => self.render_model_as_of_modal(ctx, cols),
+            ActiveToolModal::ModelMeasures => self.render_model_measures_modal(ctx, cols),
             ActiveToolModal::SplitDate => self.render_split_date_modal(ctx, cols),
             ActiveToolModal::ChartGallery => self.render_chart_gallery_modal(ctx, cols),
             ActiveToolModal::ChartSave => self.render_chart_save_modal(ctx, cols),
@@ -188,6 +200,12 @@ impl MicroParquetApp {
             ActiveToolModal::None => ModalOutcome { close: false, step: None },
         };
 
+        self.apply_modal_outcome(Some(ctx), outcome);
+    }
+
+    /// What the app does with what a tool dialog asked for: add or replace the step, then close it. `ctx` is the window the
+    /// edit banner is drawn in (none where nothing is drawn).
+    pub(crate) fn apply_modal_outcome(&mut self, ctx: Option<&egui::Context>, outcome: ModalOutcome) {
         if let Some((step, new_tab)) = outcome.step {
             if self.editing.is_some() {
                 // Edit in place: the step is replaced in its own tab (never a new tab).
@@ -200,7 +218,9 @@ impl MicroParquetApp {
         if let Some(source) = self.pending_ecl_summary.take() {
             self.create_tab_from_source_with("IFRS 9 summary".to_string(), source, Vec::new(), HashMap::new(), None);
         }
-        self.render_edit_banner(ctx);
+        if let Some(ctx) = ctx {
+            self.render_edit_banner(ctx);
+        }
         if outcome.close {
             self.active_tool = ActiveToolModal::None;
             self.editing = None;

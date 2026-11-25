@@ -204,6 +204,8 @@ impl MicroParquetApp {
         let idx = self.tab_indices(&names)?;
         let first = idx.first().copied();
         match run {
+            // the model's Calendar is made by Model > Calendar, not run again from a dialog
+            ToolRun::Calendar(_) => return Err("The Calendar is made by the model. Change it in Model \u{25b8} Calendar\u{2026}".to_string()),
             ToolRun::GapLadder(r) => {
                 self.active_tab = first.unwrap_or(self.active_tab);
                 self.open_gap_ladder();

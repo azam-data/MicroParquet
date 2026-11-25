@@ -763,7 +763,7 @@ impl CondOp {
 }
 
 /// One condition of a filter: "Balance > 1000", "Opndat between 2026-09-01 and 2026-09-30".
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct FilterCondition {
     pub column: String,
     pub op: CondOp,
@@ -784,10 +784,36 @@ pub struct FilterCondition {
     /// name, its Month-Year …) instead of the date. `None`: the column itself (every condition before W2).
     #[serde(default)]
     pub part: Option<crate::dates::DateFieldRef>,
+    /// The condition is on a lookup column seen from this tab (Phase 9 M1): `column` is the field's name ("Branch master · Region") and
+    /// the rows are kept (or left out) by the lookup row their key matches. `None`: a column of the table (every condition before M1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup: Option<crate::model::ModelFieldRef>,
+    /// "(no match)" was picked on a lookup field (Phase 9 M1-4): the data rows whose key has no row in the lookup match (or, for "not
+    /// in list", are left out). A flag of its own, never a value, so a real value can't collide with it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_match: bool,
+    /// "(blank key)" was picked on a lookup field (Phase 9 M1-12): the data rows whose key is blank (missing, empty or only spaces)
+    /// match. A flag of its own, apart from "(blank)" (a matched lookup row with a blank cell) and "(no match)".
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blank_key: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Up to `n` values for a chip: "DHAKA NORTH; Khulna, West (+3)".
 pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
+    values_summary_nm(values, blank, false, n)
+}
+
+/// `values_summary` with "(no match)" (a lookup field's flag) after "(blank)".
+pub fn values_summary_nm(values: &[String], blank: bool, no_match: bool, n: usize) -> String {
+    values_summary_flags(values, blank, false, no_match, n)
+}
+
+/// `values_summary` with a lookup field's three labels in their order: "(blank)", "(blank key)", "(no match)".
+pub fn values_summary_flags(values: &[String], blank: bool, blank_key: bool, no_match: bool, n: usize) -> String {
     let mut s = values.iter().take(n).cloned().collect::<Vec<_>>().join("; ");
     let more = values.len().saturating_sub(n);
     if more > 0 {
@@ -799,20 +825,53 @@ pub fn values_summary(values: &[String], blank: bool, n: usize) -> String {
         }
         s.push_str("(blank)");
     }
+    if blank_key {
+        if !s.is_empty() {
+            s.push_str("; ");
+        }
+        s.push_str(crate::model::BLANK_KEY_LABEL);
+    }
+    if no_match {
+        if !s.is_empty() {
+            s.push_str("; ");
+        }
+        s.push_str(crate::model::NO_MATCH_LABEL);
+    }
     s
 }
 
 impl FilterCondition {
+    /// What the value picker shows ticked: the picked values and, on a lookup field, "(no match)" when its flag is on.
+    pub fn picked_with_no_match(&self, mut picked: Vec<String>) -> Vec<String> {
+        if self.blank_key && self.lookup.is_some() {
+            picked.push(crate::model::BLANK_KEY_LABEL.to_string());
+        }
+        if self.no_match && self.lookup.is_some() {
+            picked.push(crate::model::NO_MATCH_LABEL.to_string());
+        }
+        picked
+    }
+
+    /// Takes what the picker returned: on a lookup field "(no match)" becomes the flag and is not kept as a value.
+    pub fn set_picked(&mut self, mut values: Vec<String>) {
+        if self.lookup.is_some() {
+            self.no_match = values.iter().any(|v| v == crate::model::NO_MATCH_LABEL);
+            self.blank_key = values.iter().any(|v| v == crate::model::BLANK_KEY_LABEL);
+            values.retain(|v| v != crate::model::NO_MATCH_LABEL && v != crate::model::BLANK_KEY_LABEL);
+        }
+        self.values = values;
+    }
+
     /// True when the condition compares with picked values rather than a typed text.
     pub fn uses_values(&self) -> bool {
-        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank)
+        matches!(self.op, CondOp::Equals | CondOp::NotEquals | CondOp::InList | CondOp::NotInList) && (!self.values.is_empty() || self.or_blank || self.no_match || self.blank_key)
     }
 
     /// The chip text: "Brancd equals DHK", "Balance between 1000 and 5000", "Open Date › Day name in list Fri; Sat".
     pub fn describe(&self) -> String {
         let subject = self.subject();
         if self.uses_values() {
-            return format!("{} {} {}", subject, self.op.label(), values_summary(&self.values, self.or_blank, 3));
+            return format!("{} {} {}", subject, self.op.label(), values_summary_flags(&self.values, self.or_blank, self.blank_key, self.no_match, 3));
         }
         match self.op {
             CondOp::IsBlank | CondOp::IsNotBlank => format!("{} {}", subject, self.op.label()),
@@ -823,6 +882,9 @@ impl FilterCondition {
 
     /// What the condition tests: the column, or "Open Date › Day name" for a date part (W2).
     pub fn subject(&self) -> String {
+        if let Some(l) = &self.lookup {
+            return l.picker();
+        }
         match &self.part {
             Some(p) => crate::dates::picker_label(&self.column, p.part),
             None => self.column.clone(),
@@ -1387,20 +1449,211 @@ impl PivotAgg {
     }
 }
 
+/// A time aggregation of a value on a date-linked data tab (Phase 9 M3). The period of the cell is the Calendar fields of its row
+/// and column (M4 adds windows and shifts), its end cut at the as-of date; see `measures.rs`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeAgg {
+    /// The value at the last snapshot date in the period.
+    #[default]
+    ClosingBalance,
+    /// The value at the last snapshot date before the period.
+    OpeningBalance,
+    /// The mean of the value over every calendar day of the period, carried forward over days without data (Daily tabs); on a
+    /// Month-end tab the mean of the month-ends.
+    AverageBalance,
+    /// The sum of the rows dated in the period.
+    TotalFlow,
+    /// A YTD balance's movement in the period.
+    PeriodAmount,
+    /// Rows at the last snapshot date in the period.
+    CountAtClosing,
+    DistinctCountAtClosing,
+    /// The weighted average of the rows at the last snapshot date in the period.
+    WAvgAtClosing,
+    /// A named measure (Phase 9 M5): the value's `field` is the measure's name; its own aggregation, filters and sign are in the model.
+    Measure,
+}
+
+/// The window of a time value (Phase 9 M4): the days its aggregation reads.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeWindow {
+    /// The cell's own period (a Calendar field of Rows or Columns).
+    #[default]
+    Period,
+    /// The month of the anchor, up to the anchor.
+    Mtd,
+    /// The fiscal quarter of the anchor, up to the anchor.
+    Qtd,
+    /// The fiscal year of the anchor, up to the anchor.
+    Ytd,
+}
+
+impl TimeWindow {
+    pub fn all() -> &'static [TimeWindow] {
+        &[TimeWindow::Period, TimeWindow::Mtd, TimeWindow::Qtd, TimeWindow::Ytd]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeWindow::Period => "Period",
+            TimeWindow::Mtd => "MTD",
+            TimeWindow::Qtd => "QTD",
+            TimeWindow::Ytd => "YTD",
+        }
+    }
+}
+
+/// Which earlier window a time value is set against.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeShift {
+    #[default]
+    None,
+    /// The window one of its own units back (a month, a quarter, a year; a Period by its field's unit).
+    PriorPeriod,
+    /// The window one year back (same period last year).
+    Sply,
+}
+
+impl TimeShift {
+    pub fn all() -> &'static [TimeShift] {
+        &[TimeShift::None, TimeShift::PriorPeriod, TimeShift::Sply]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeShift::None => "None",
+            TimeShift::PriorPeriod => "Prior period",
+            TimeShift::Sply => "Same period last year",
+        }
+    }
+    /// How a heading names it.
+    pub fn short(self) -> &'static str {
+        match self {
+            TimeShift::None => "",
+            TimeShift::PriorPeriod => "Prior period",
+            TimeShift::Sply => "SPLY",
+        }
+    }
+}
+
+/// What a time value shows once it has its window and shift.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimeShow {
+    /// The value of the window (of the shifted window, when there is a shift).
+    #[default]
+    Value,
+    /// This window's value minus the shifted window's.
+    Difference,
+    /// (this - earlier) / |earlier| in percent.
+    PercentChange,
+}
+
+impl TimeShow {
+    pub fn all() -> &'static [TimeShow] {
+        &[TimeShow::Value, TimeShow::Difference, TimeShow::PercentChange]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeShow::Value => "Value",
+            TimeShow::Difference => "Difference",
+            TimeShow::PercentChange => "% change",
+        }
+    }
+}
+
+/// What the shifted window covers when the current window is cut by the as-of date.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TimePartial {
+    /// The same day numbers (1-24 Nov 2026 against 1-24 Nov 2025).
+    #[default]
+    SameDays,
+    /// The whole shifted period (all of Nov 2025).
+    FullPeriod,
+}
+
+impl TimePartial {
+    pub fn all() -> &'static [TimePartial] {
+        &[TimePartial::SameDays, TimePartial::FullPeriod]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            TimePartial::SameDays => "Same days",
+            TimePartial::FullPeriod => "Full period",
+        }
+    }
+}
+
+fn is_default_choice<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// The time part of a value (`PivotValue.time`, `MeasureSpec.time`): its aggregation (M3) and, from M4, its window, shift, what it
+/// shows and how a partial period is shifted. The M4 choices are not written while they are the defaults, so M3 files keep their bytes.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct TimeValue {
+    #[serde(default)]
+    pub agg: TimeAgg,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub window: TimeWindow,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub shift: TimeShift,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub show: TimeShow,
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub partial: TimePartial,
+}
+
+impl TimeValue {
+    /// A value with the aggregation and every M4 choice at its default.
+    pub fn of(agg: TimeAgg) -> TimeValue {
+        TimeValue { agg, ..Default::default() }
+    }
+
+    /// True when the value uses a window, shift or show of M4 (the M3 numbers are those of the other values).
+    pub fn is_m4(&self) -> bool {
+        self.window != TimeWindow::Period || self.shift != TimeShift::None || self.show != TimeShow::Value
+    }
+
+    /// The heading: "Closing balance of Balance", "Average balance of Balance \u{b7} YTD \u{b7} vs SPLY %". `month_end` is true on a
+    /// Month-end tab, where the average is of the month-ends.
+    pub fn heading(&self, field: &str, weight: Option<&str>, month_end: bool) -> String {
+        let mut h = self.agg.heading(field, weight, month_end);
+        if self.window != TimeWindow::Period {
+            h.push_str(&format!(" \u{b7} {}", self.window.label()));
+        }
+        if self.shift != TimeShift::None {
+            match self.show {
+                TimeShow::Value => h.push_str(&format!(" \u{b7} {}", self.shift.short())),
+                TimeShow::Difference => h.push_str(&format!(" \u{b7} vs {}", self.shift.short())),
+                TimeShow::PercentChange => h.push_str(&format!(" \u{b7} vs {} %", self.shift.short())),
+            }
+            if self.partial == TimePartial::FullPeriod {
+                h.push_str(" \u{b7} full period");
+            }
+        }
+        h
+    }
+}
+
 /// One value field of a pivot table.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct PivotValue {
     pub field: String,
     #[serde(default)]
     pub agg: PivotAgg,
-    /// The weight column of a weighted average.
+    /// The weight column of a weighted average (also of "W.Avg at closing").
     #[serde(default)]
     pub weight_col: Option<String>,
+    /// A time aggregation (Phase 9 M3): when set it is the aggregation and `agg` is not used. Not written when none, so old pivots
+    /// keep their bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<TimeValue>,
 }
 
 impl PivotValue {
-    /// "Sum of Balance", "W.Avg of Rate by Balance".
+    /// "Sum of Balance", "W.Avg of Rate by Balance", "Closing balance of Balance".
     pub fn label(&self) -> String {
+        if let Some(t) = &self.time {
+            return t.heading(&self.field, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), false);
+        }
         match (&self.agg, self.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty())) {
             (PivotAgg::WeightedAvg, Some(w)) => format!("W.Avg of {} by {}", self.field, w),
             (a, _) => format!("{} of {}", a.label(), self.field),
@@ -1494,6 +1747,43 @@ pub struct PivotSortByValue {
     pub descending: bool,
 }
 
+/// How a pivot is shown (Phase 9 P2). The pivot step's result is the flat table in both; this only chooses how the screen, the Excel
+/// export and the PDF export draw it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotLayout {
+    /// One column for each Rows field, subtotals (when ticked) on rows of their own: the layout of every pivot made before Phase 9.
+    #[default]
+    SideBySide,
+    /// Excel's Compact form: all Rows fields in one "Row Labels" column, each parent row carrying its subtotal, children indented.
+    Nested {
+        /// An empty line after each top-level group.
+        #[serde(default)]
+        blank_line_after_group: bool,
+    },
+}
+
+impl PivotLayout {
+    pub fn is_default(&self) -> bool {
+        *self == PivotLayout::SideBySide
+    }
+
+    pub fn is_nested(&self) -> bool {
+        matches!(self, PivotLayout::Nested { .. })
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PivotLayout::SideBySide => "Side by side",
+            PivotLayout::Nested { .. } => "Nested (Excel style)",
+        }
+    }
+
+    /// "Blank line after each group" (false for Side by side).
+    pub fn blank_line(&self) -> bool {
+        matches!(self, PivotLayout::Nested { blank_line_after_group: true })
+    }
+}
+
 /// Everything a pivot table is made of (the step `PivotTable`, the builder dialog and the engine share it).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PivotSpec {
@@ -1523,6 +1813,33 @@ pub struct PivotSpec {
     /// Date parts used as fields ("Open Date · Month", Phase 8 W2): added as columns before grouping.
     #[serde(default)]
     pub date_fields: Vec<crate::dates::DateFieldRef>,
+    /// Lookup columns used as fields ("Branch master · Region", Phase 9 M1): joined on the worker before grouping, never added to the tab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_fields: Vec<crate::model::ModelFieldRef>,
+    /// How the pivot is shown (Phase 9 P2). Side by side is not written, so pivots made before keep their bytes.
+    #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
+    pub layout: PivotLayout,
+    /// The data tab the pivot was made on, by its project key (Phase 9 M3): its date link gives the time aggregations their dates and
+    /// its column tags give the stock warning. Empty (not written) outside a project and on every pivot made before M3.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data_tab: String,
+}
+
+impl PivotSpec {
+    /// True when a value is a time aggregation.
+    pub fn has_time_values(&self) -> bool {
+        self.values.iter().any(|v| v.time.is_some())
+    }
+
+    /// True when the field is in Rows, Columns, Filters or Values.
+    pub fn uses_field(&self, name: &str) -> bool {
+        self.labels_with(name) || self.values.iter().any(|v| v.field == name || v.weight_col.as_deref() == Some(name))
+    }
+
+    /// True when the field labels the pivot (Rows, Columns or Filters), where a lookup field is text.
+    pub fn labels_with(&self, name: &str) -> bool {
+        self.rows.iter().chain(self.columns.iter()).any(|f| f == name) || self.filters.iter().any(|f| f.field == name)
+    }
 }
 
 /// The order chosen for one Rows or Columns field of a pivot (Phase 6 U3).
@@ -1909,6 +2226,15 @@ pub enum TransformStep {
         /// Date parts used as fields (Phase 8 W2).
         #[serde(default)]
         date_fields: Vec<crate::dates::DateFieldRef>,
+        /// Lookup columns used as fields (Phase 9 M1).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        model_fields: Vec<crate::model::ModelFieldRef>,
+        /// How the pivot is shown (Phase 9 P2); the table the step gives is the same.
+        #[serde(default, skip_serializing_if = "PivotLayout::is_default")]
+        layout: PivotLayout,
+        /// The data tab the pivot was made on, by project key (Phase 9 M3); see `PivotSpec.data_tab`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_tab: String,
     },
     SqlQuery {
         query: String,
@@ -1937,6 +2263,22 @@ impl TransformStep {
         match self {
             TransformStep::Skipped { step } => step.inner(),
             other => other,
+        }
+    }
+
+    /// A named measure was renamed (Phase 9 M5 follow-up): the pivot values that use it follow. True when something changed.
+    pub fn rename_measure(&mut self, old: &str, new: &str) -> bool {
+        match self {
+            TransformStep::Skipped { step } => step.rename_measure(old, new),
+            TransformStep::PivotTable { values, .. } => {
+                let mut changed = false;
+                for v in values.iter_mut().filter(|v| v.field == old && v.time.is_some_and(|t| t.agg == TimeAgg::Measure)) {
+                    v.field = new.to_string();
+                    changed = true;
+                }
+                changed
+            }
+            _ => false,
         }
     }
 
@@ -2151,7 +2493,7 @@ impl TransformStep {
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {
-            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields } => Some(PivotSpec {
+            TransformStep::PivotTable { rows, columns, values, filters, row_totals, column_totals, subtotals, show_as, scale, sort_by_value, field_orders, date_fields, model_fields, layout, data_tab } => Some(PivotSpec {
                 rows: rows.clone(),
                 columns: columns.clone(),
                 values: values.clone(),
@@ -2164,6 +2506,9 @@ impl TransformStep {
                 sort_by_value: *sort_by_value,
                 field_orders: field_orders.clone(),
                 date_fields: date_fields.clone(),
+                model_fields: model_fields.clone(),
+                layout: *layout,
+                data_tab: data_tab.clone(),
             }),
             _ => None,
         }
@@ -2184,6 +2529,9 @@ impl TransformStep {
             sort_by_value: spec.sort_by_value,
             field_orders: spec.field_orders,
             date_fields: spec.date_fields,
+            model_fields: spec.model_fields,
+            layout: spec.layout,
+            data_tab: spec.data_tab,
         }
     }
 }
@@ -2331,6 +2679,9 @@ pub enum TabSource {
     /// A tab of a project that could not be opened (Phase 8 W4): no rows, nothing to export. The reason is
     /// shown in the main area; the project keeps the tab's recipe, so saving the project again does not lose it.
     Unavailable { reason: String },
+    /// The model's Calendar (Phase 9 M2): one row per day from 1 January of `first_year` to 31 December of `last_year`, made from
+    /// the model's settings. It has no file; the project keeps this recipe, not the rows.
+    Calendar { settings: crate::dates::CalendarSettings, first_year: i32, last_year: i32 },
 }
 
 /// Which table of the data-quality run a tab shows.

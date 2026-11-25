@@ -86,6 +86,9 @@ pub fn missing_columns(spec: &ChartSpec, available: &[String]) -> Vec<String> {
         used.extend(m.weight);
     }
     used.retain(|c| !fields.iter().any(|f| &f.name == c));
+    // a lookup field (Phase 9 M1) is the link's column, not a column of the tab
+    let lookups = spec.model_fields();
+    used.retain(|c| !lookups.iter().any(|f| &f.name == c));
     used.sort();
     used.dedup();
     used.into_iter().filter(|c| !available.contains(c)).collect()

@@ -255,6 +255,7 @@ impl MicroParquetApp {
             steps: tab.steps[..tab.exec_steps.min(tab.steps.len())].to_vec(),
             field: column.clone(),
             temp_dir: self.paths.temp_dir.clone(),
+            lookup: None,
         };
         self.sort_lists.fill_wait = Some((tab.id, column));
         self.sort_lists.message = Some((false, "Reading the values on the worker\u{2026}".to_string()));

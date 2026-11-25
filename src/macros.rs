@@ -604,6 +604,10 @@ pub fn generate_python_polars_code(
     if !masked.is_empty() {
         anyhow::bail!(python_pii_refusal(&masked));
     }
+    // a lookup field needs the model of a project (Phase 9 M1): a script has no links to follow
+    if steps.iter().any(|s| !crate::model::step_links(s).is_empty()) {
+        anyhow::bail!("{}", crate::model::PYTHON_REFUSAL);
+    }
     let mut py = String::new();
     py.push_str("# ==========================================================================\n");
     py.push_str(&format!(

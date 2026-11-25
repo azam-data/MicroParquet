@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "name": "Deposits drill",
+  "chart": {
+    "category": "Product",
+    "series": "Segment",
+    "value": "Balance",
+    "weight": null,
+    "agg": "Sum",
+    "kind": "Bar",
+    "order": "Natural",
+    "by_value": false,
+    "top_n": 500,
+    "scale": "Follow",
+    "measures": [],
+    "size": null,
+    "facet": null,
+    "panels": [],
+    "horizontal": false,
+    "stack": "Stacked",
+    "stepped": false,
+    "waterfall": "StartStepsEnd",
+    "bins": null,
+    "title": "",
+    "subtitle": "",
+    "footnote": "",
+    "takeaway": "",
+    "ref_lines": [],
+    "ref_bands": [],
+    "limit_ticks": [],
+    "pad_axis_below": false,
+    "net_marker": false,
+    "segment_labels": true,
+    "bar_status": [],
+    "limit_note": "",
+    "highlight": null,
+    "colour_map": {
+      "slots": [
+        [
+          "Retail",
+          0
+        ],
+        [
+          "Corporate",
+          1
+        ]
+      ],
+      "custom": [
+        [
+          "Retail",
+          {
+            "kind": "hex",
+            "hex": "#037952"
+          }
+        ]
+      ]
+    },
+    "advanced_json": "",
+    "template": "",
+    "labels": {
+      "mode": "Auto",
+      "decimals": null,
+      "unit": "AsView",
+      "percent": true
+    },
+    "text_size": "Normal",
+    "donut_top": null,
+    "category_part": null,
+    "series_part": null,
+    "facet_part": null,
+    "series_order": null,
+    "facet_order": null,
+    "drill": [
+      {
+        "name": "Product",
+        "part": null
+      },
+      {
+        "name": "Branch",
+        "part": null
+      },
+      {
+        "name": "Open Date · Year",
+        "part": {
+          "name": "Open Date · Year",
+          "column": "Open Date",
+          "part": "Year",
+          "calendar": {
+            "fy_start_month": 7,
+            "week_start": "Mon"
+          }
+        }
+      }
+    ],
+    "drill_path": [],
+    "filters": [
+      {
+        "column": "Branch",
+        "op": "InList",
+        "value": "",
+        "value2": "",
+        "values": [
+          "Dhaka",
+          "Ctg"
+        ],
+        "or_blank": false,
+        "part": null
+      }
+    ],
+    "inside_labels": false,
+    "inside_min_pct": 5.0,
+    "data_table": "Below"
+  }
+}

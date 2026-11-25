@@ -200,7 +200,20 @@ pub fn export_scaled_tabs_with(
     let mut ok = Vec::new();
     let mut errors = Vec::new();
     let mut totals_errors = Vec::new();
+    // tabs whose last step is a pivot in the Nested layout are written as their Nested view (Phase 9 P2)
+    let mut nested: Vec<(String, crate::pivot_view::NestedView)> = Vec::new();
     for t in tabs {
+        match crate::pivot_view::nested_view_of_tab(t.source, t.steps, temp_dir).and_then(|v| match v {
+            Some(v) => check_nested_fits(&v, EXCEL_MAX_DATA_ROWS).map(|_| Some(v)),
+            None => Ok(None),
+        }) {
+            Ok(Some(v)) => nested.push((t.title.clone(), v)),
+            Ok(None) => {}
+            Err(e) => {
+                errors.push((t.title.clone(), format!("{:#}", e)));
+                continue;
+            }
+        }
         match compile_tab_lazy(t.source, t.steps, temp_dir).and_then(|lf| Ok(lf.collect()?)) {
             Ok(df) => {
                 // The summary is computed from the same collected data the sheet holds.
@@ -218,7 +231,20 @@ pub fn export_scaled_tabs_with(
             Err(e) => errors.push((t.title.clone(), format!("{:#}", e))),
         }
     }
-    write_xlsx_tabs_noted(ok, errors, totals_errors, out_path, EXCEL_MAX_DATA_ROWS, Some(scale))
+    write_xlsx_tabs_nested(ok, Vec::new(), &nested, errors, totals_errors, out_path, EXCEL_MAX_DATA_ROWS, Some(scale))
+}
+
+/// An Excel sheet holds at most `rows_per_sheet` data lines; a Nested pivot is written whole on one sheet (its parent lines belong
+/// with their children), so one with more lines is refused in words instead of being cut.
+pub fn check_nested_fits(view: &crate::pivot_view::NestedView, rows_per_sheet: usize) -> Result<()> {
+    if view.rows.len() > rows_per_sheet {
+        anyhow::bail!(
+            "The Nested layout of this pivot has {} lines and an Excel sheet holds {}. Use the Side by side layout, or filter the pivot first.",
+            view.rows.len(),
+            rows_per_sheet
+        );
+    }
+    Ok(())
 }
 
 /// `export_tabs_to_xlsx` with the rows-per-sheet limit as a parameter (tests use a small one).
@@ -306,6 +332,23 @@ pub fn write_xlsx_tabs_charted(
     rows_per_sheet: usize,
     scale: Option<XlsxScale>,
 ) -> Result<XlsxExportReport> {
+    write_xlsx_tabs_nested(tabs, tab_charts, &[], errors, totals_errors, out_path, rows_per_sheet, scale)
+}
+
+/// `write_xlsx_tabs_charted` where the tabs named in `nested` (by title) are written as their Nested view: one "Row Labels" column
+/// with real indent levels, bold parent lines and Grand total, the pivot's number formats, and the empty lines if chosen (P2). The tab's
+/// own table (`XlsxTab::df`) is still the flat table and gives each column its scale.
+#[allow(clippy::too_many_arguments)]
+pub fn write_xlsx_tabs_nested(
+    tabs: Vec<XlsxTab>,
+    tab_charts: Vec<TabCharts>,
+    nested: &[(String, crate::pivot_view::NestedView)],
+    errors: Vec<(String, String)>,
+    totals_errors: Vec<(String, String)>,
+    out_path: &Path,
+    rows_per_sheet: usize,
+    scale: Option<XlsxScale>,
+) -> Result<XlsxExportReport> {
     let rows_per_sheet = rows_per_sheet.max(1);
     let mut workbook = Workbook::new();
     let mut report = XlsxExportReport::default();
@@ -340,7 +383,8 @@ pub fn write_xlsx_tabs_charted(
                 Some(ColScale { unit: ms.unit, divide, fmt_suffix, fmt })
             })
             .collect();
-        let sheet_count = height.div_ceil(rows_per_sheet).max(1);
+        let nested_view = nested.iter().find(|(t, _)| *t == raw_title).map(|(_, v)| v);
+        let sheet_count = if nested_view.is_some() { 1 } else { height.div_ceil(rows_per_sheet).max(1) };
 
         for part in 0..sheet_count {
             let worksheet = workbook.add_worksheet();
@@ -355,6 +399,10 @@ pub fn write_xlsx_tabs_charted(
             worksheet
                 .set_name(&name)
                 .with_context(|| format!("Excel: invalid sheet name '{}'", name))?;
+            if let Some(view) = nested_view {
+                write_nested_sheet(worksheet, view, cols, &col_scales, &header_fmt, &num_fmt)?;
+                continue;
+            }
 
             for (c_idx, series) in cols.iter().enumerate() {
                 let header_text = match col_scales.get(c_idx).and_then(|c| c.as_ref()) {
@@ -496,6 +544,75 @@ pub fn write_xlsx_tabs_charted(
         .save(out_path)
         .context("Failed to save consolidated Excel workbook")?;
     Ok(report)
+}
+
+/// A pivot's Nested view as a sheet: "Row Labels" in column A (the alignment indent of each cell is its level, never spaces; parent
+/// lines and the Grand total are bold, with their numbers), then the pivot's value columns in the scale the flat table is written in. An
+/// empty line is an empty row.
+fn write_nested_sheet(
+    worksheet: &mut rust_xlsxwriter::Worksheet,
+    view: &crate::pivot_view::NestedView,
+    flat_cols: &[Series],
+    col_scales: &[Option<ColScale>],
+    header_fmt: &Format,
+    num_fmt: &Format,
+) -> Result<()> {
+    use crate::pivot_view::NestedKind;
+    use rust_xlsxwriter::FormatAlign;
+    worksheet.write_string_with_format(0, 0, &view.label_header, header_fmt)?;
+    let longest = view.rows.iter().map(|r| r.label.chars().count() + 2 * r.level).max().unwrap_or(0).max(view.label_header.chars().count());
+    worksheet.set_column_width(0, (longest as f64 + 2.0).clamp(18.0, 60.0))?;
+    let value_cols = view.values.get_columns();
+    // each value column's scale is the one of the flat table's column of that name
+    let scale_of: Vec<Option<&ColScale>> = value_cols
+        .iter()
+        .map(|c| flat_cols.iter().position(|f| f.name() == c.name()).and_then(|i| col_scales.get(i)).and_then(|c| c.as_ref()))
+        .collect();
+    for (k, c) in value_cols.iter().enumerate() {
+        let col = (k + 1) as u16;
+        let header = match scale_of[k] {
+            Some(cs) => format!("{} ({})", c.name().as_str(), cs.unit),
+            None => c.name().to_string(),
+        };
+        worksheet.write_string_with_format(0, col, &header, header_fmt)?;
+        worksheet.set_column_width(col, 18.0)?;
+    }
+    worksheet.set_freeze_panes(1, 1)?;
+    for (i, row) in view.rows.iter().enumerate() {
+        if row.kind == NestedKind::Blank {
+            continue;
+        }
+        let xr = (i + 1) as u32;
+        let bold = row.is_bold();
+        let mut label = Format::new().set_align(FormatAlign::Left).set_indent(row.level.min(15) as u8);
+        if bold {
+            label = label.set_bold();
+        }
+        worksheet.write_string_with_format(xr, 0, &row.label, &label)?;
+        for (k, c) in value_cols.iter().enumerate() {
+            let col = (k + 1) as u16;
+            let styled = |f: &Format| if bold { f.clone().set_bold() } else { f.clone() };
+            match c.get(i) {
+                Ok(AnyValue::Null) => {}
+                Ok(AnyValue::Float64(v)) => match scale_of[k] {
+                    Some(cs) => {
+                        worksheet.write_number_with_format(xr, col, v / cs.divide, &styled(&cs.fmt))?;
+                    }
+                    None => {
+                        worksheet.write_number_with_format(xr, col, v, &styled(num_fmt))?;
+                    }
+                },
+                Ok(AnyValue::Int64(v)) => {
+                    worksheet.write_number_with_format(xr, col, v as f64, &styled(&Format::new().set_num_format("#,##0")))?;
+                }
+                Ok(other) => {
+                    worksheet.write_string_with_format(xr, col, format!("{}", other), &styled(&Format::new()))?;
+                }
+                Err(e) => anyhow::bail!("Excel: could not read line {} of column '{}' of the Nested pivot: {}", i + 1, c.name(), e),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The summary as two rows in the summary colour, one blank row below the data: the label of each
@@ -667,6 +784,19 @@ pub fn export_pdf_tabs_with(
     global_decimals: usize,
     opts: &PdfOptions,
 ) -> Result<PdfExportReport> {
+    export_pdf_tabs_nested(tabs, &[], out_path, num_format, global_decimals, opts)
+}
+
+/// `export_pdf_tabs_with` where the tabs named in `styles` (by title) are the lines of a Nested pivot: their `df` is the table
+/// `pivot_view::pdf_table` made, and each line is set in its style (indent of 10 pt per level, bold parents) (Phase 9 P2).
+pub fn export_pdf_tabs_nested(
+    tabs: Vec<PdfTab>,
+    styles: &[(String, Vec<crate::pdf_layout::RowStyle>)],
+    out_path: &Path,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    opts: &PdfOptions,
+) -> Result<PdfExportReport> {
     use crate::pdf_layout::*;
     let (page_w, page_h) = (opts.page.width_mm(), opts.page.height_mm());
     let heading: Vec<String> = wrap_text_mm(opts.title.trim(), opts.page.usable_w_mm(), TITLE_PT, FontKind::Bold);
@@ -790,7 +920,8 @@ pub fn export_pdf_tabs_with(
         if truncated {
             report.truncated_tabs.push(title.clone());
         }
-        let layout = layout_pdf_tab_on(&opts.page, &title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB);
+        let line_styles: &[RowStyle] = styles.iter().find(|(t, _)| *t == title).map(|(_, s)| s.as_slice()).unwrap_or(&[]);
+        let layout = layout_pdf_tab_styled(&opts.page, &title, &df, &col_formats, num_format, global_decimals, &summary, PDF_MAX_ROWS_PER_TAB, line_styles);
         let n_parts = layout.parts.len();
         let total_height = df.height();
 
@@ -876,7 +1007,7 @@ pub fn export_pdf_tabs_with(
                     if cell.text.text.is_empty() {
                         continue;
                     }
-                    layer.use_text(cell.text.text.clone(), CELL_PT, Mm(cell.text.x), Mm(y_mm), if row.total { &font_bold } else { &font_reg });
+                    layer.use_text(cell.text.text.clone(), CELL_PT, Mm(cell.text.x), Mm(y_mm), if row.total || row.bold { &font_bold } else { &font_reg });
                 }
                 y_mm -= ROW_H_MM;
             }

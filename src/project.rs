@@ -19,6 +19,8 @@ use std::path::{Component, Path, PathBuf};
 
 /// The version of the file format this build writes and reads.
 pub const PROJECT_VERSION: u32 = 1;
+/// The version of a project that has a model (Phase 9 M0). The v1.8.0 app refuses it with its "newer MicroParquet" message.
+pub const PROJECT_VERSION_MODEL: u32 = 2;
 /// The extension of a project file.
 pub const PROJECT_EXT: &str = "mpproj";
 /// How many projects "Open recent project" lists.
@@ -119,11 +121,14 @@ pub struct Project {
     /// The key of the active tab ("" = none).
     pub active_tab: String,
     pub tabs: Vec<ProjectTab>,
+    /// The model: links between tabs (Phase 9 M0). Not in the file when it is empty, and then the project is version 1.
+    #[serde(skip_serializing_if = "crate::model::Model::is_empty")]
+    pub model: crate::model::Model,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new() }
+        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new(), model: crate::model::Model::default() }
     }
 }
 
@@ -143,7 +148,11 @@ fn sorted_value(v: serde_json::Value) -> serde_json::Value {
 impl Project {
     /// The file's text: keys in alphabetical order, so saving the same project twice gives the same bytes.
     pub fn to_json(&self) -> Result<String> {
-        let v = serde_json::to_value(self).context("The project could not be written")?;
+        let mut v = serde_json::to_value(self).context("The project could not be written")?;
+        // a project with a model is version 2, one without is version 1, whatever the value in memory
+        if let Some(m) = v.as_object_mut() {
+            m.insert("project_version".to_string(), serde_json::json!(if self.model.is_empty() { PROJECT_VERSION } else { PROJECT_VERSION_MODEL }));
+        }
         let mut text = serde_json::to_string_pretty(&sorted_value(v)).context("The project could not be written")?;
         text.push('\n');
         Ok(text)
@@ -152,17 +161,24 @@ impl Project {
     /// Reads a project from its text. A newer project version is refused before anything else is read.
     pub fn from_json(text: &str, name: &str) -> Result<Project> {
         let v: serde_json::Value = serde_json::from_str(text).map_err(|e| anyhow!("The project file {} is not valid: {}.", name, e))?;
-        let ver = v.get("project_version").and_then(|x| x.as_u64()).unwrap_or(PROJECT_VERSION as u64);
-        if ver > PROJECT_VERSION as u64 {
-            let by = v.get("app_version").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| format!("v{}", s)).unwrap_or_else(|| format!("(project version {})", ver));
-            bail!("This project was saved by a newer MicroParquet {}. Update the app to open it.", by);
-        }
+        check_version(&v, PROJECT_VERSION_MODEL)?;
         serde_json::from_value::<Project>(v).map_err(|e| anyhow!("The project file {} is not valid: {}.", name, e))
     }
 
     pub fn tab(&self, key: &str) -> Option<&ProjectTab> {
         self.tabs.iter().find(|t| t.key == key)
     }
+}
+
+/// Refuses a project saved by a newer app than one that reads up to `supported`. (The v1.8.0 app reads up to version 1, so it refuses
+/// a project with a model with this message; the test of that calls this with 1.)
+pub fn check_version(v: &serde_json::Value, supported: u32) -> Result<()> {
+    let ver = v.get("project_version").and_then(|x| x.as_u64()).unwrap_or(PROJECT_VERSION as u64);
+    if ver > supported as u64 {
+        let by = v.get("app_version").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| format!("v{}", s)).unwrap_or_else(|| format!("(project version {})", ver));
+        bail!("This project was saved by a newer MicroParquet {}. Update the app to open it.", by);
+    }
+    Ok(())
 }
 
 /// Reads a project file.
@@ -838,6 +854,60 @@ pub fn export_file_names(titles: &[String]) -> Vec<String> {
 
 /// `--project <file> --export-dir <folder>`: opens the project (no relinking) and writes every tab as Parquet.
 /// A tab that fails stops the run, and nothing is written. Returns the files written.
+/// The model of a project as a headless run reads it (Phase 9 M5): each link's lookup read after its own steps, the key check
+/// done once (a broken link refuses its fields, as in the window), the calendar, the as-of date, the tags and the measures.
+/// `None` for a project with no model.
+fn headless_scope(project: &Project, opener: &mut Opener, paths: &PortablePaths) -> Result<Option<std::sync::Arc<crate::model::ModelContext>>> {
+    use crate::model::*;
+    let links = project.model.all_links();
+    if links.is_empty() {
+        return Ok(None);
+    }
+    let mut tab_of = |opener: &mut Opener, key: &str| -> Result<ModelTab> {
+        let Some(i) = project.tabs.iter().position(|t| t.key == key) else {
+            bail!("The model uses the tab '{}', which is not in the project.", key);
+        };
+        let title = project.tabs[i].title.clone();
+        match opener.prepare(i) {
+            Ok(Prepared::Table { source, steps }) => Ok(ModelTab { key: key.to_string(), title, source, steps }),
+            Ok(Prepared::Chart { .. }) => bail!("The model uses '{}', which is a chart tab, not a table.", title),
+            Err(e) => bail!("The model uses the tab '{}', which could not be opened: {}", title, e),
+        }
+    };
+    let mut parts: Vec<ScopeLink> = Vec::new();
+    for l in &links {
+        let lookup = tab_of(opener, &l.lookup_tab)?;
+        let is_calendar = project.model.calendar.as_ref().is_some_and(|c| c.tab == l.lookup_tab);
+        let refusal = if is_calendar {
+            None
+        } else {
+            let data = tab_of(opener, &l.data_tab)?;
+            let check = check_link(l, &data, &lookup, &paths.temp_dir, &|| Ok(()))?;
+            check.status().refusal(&lookup.title)
+        };
+        parts.push(ScopeLink { link: l.clone(), lookup: Some(lookup), refusal });
+    }
+    let calendar = match &project.model.calendar {
+        Some(c) => {
+            let mut ends: Vec<(String, chrono::NaiveDate)> = Vec::new();
+            let mut titles = Vec::new();
+            for l in &c.date_links {
+                let t = tab_of(opener, &l.data_tab)?;
+                let lf = crate::engine::compile_tab_lazy(&t.source, &t.steps, &paths.temp_dir)?;
+                let df = lf.select([polars::prelude::col(l.column.as_str()).cast(polars::prelude::DataType::Date).cast(polars::prelude::DataType::Int32).max().alias("m")]).collect()?;
+                let last = df.column("m")?.i32()?.get(0).and_then(crate::dates::date_from_days);
+                if let Some(d) = last {
+                    ends.push((t.title.clone(), d));
+                }
+                titles.push((l.data_tab.clone(), t.title));
+            }
+            Some(CalendarScope { settings: c.settings, tab: c.tab.clone(), date_links: c.date_links.clone(), as_of: crate::model_calendar::resolve(&project.model.as_of, &ends).map(|(d, _)| d), titles })
+        }
+        None => None,
+    };
+    Ok(Some(std::sync::Arc::new(ModelContext { links: parts, temp_dir: paths.temp_dir.clone(), calendar, kinds: project.model.column_kinds.clone(), measures: project.model.measures.clone() })))
+}
+
 pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &PortablePaths) -> Result<Vec<PathBuf>> {
     let project = load_project(project_path)?;
     if project.tabs.is_empty() {
@@ -851,7 +921,14 @@ pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &P
     std::fs::create_dir_all(&staging).with_context(|| format!("Could not create the folder {}", staging.display()))?;
     let titles: Vec<String> = project.tabs.iter().map(|t| t.title.clone()).collect();
     let names = export_file_names(&titles);
-    let result = (|| -> Result<Vec<(usize, PathBuf)>> {
+    let scope = match headless_scope(&project, &mut opener, paths) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+    };
+    let result = crate::model::with_scope(scope, || -> Result<Vec<(usize, PathBuf)>> {
         let mut written = Vec::new();
         for i in order {
             let tab = &project.tabs[i];
@@ -875,7 +952,7 @@ pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &P
             written.push((i, out));
         }
         Ok(written)
-    })();
+    });
     match result {
         Err(e) => {
             let _ = std::fs::remove_dir_all(&staging);

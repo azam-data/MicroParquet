@@ -898,14 +898,14 @@ fn pivot_book() -> DataFrame {
 fn guide_pivot() {
     use micro_parquet::pivot_table::build_pivot;
     let df = pivot_book();
-    let sum = PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None };
+    let sum = PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None };
     let spec = PivotSpec { rows: vec!["Bucket".into()], columns: vec!["Bank".into()], values: vec![sum.clone()], row_totals: true, column_totals: true, ..Default::default() };
     let out = build_pivot(df.clone().lazy(), &spec).expect("the pivot builds").df;
     assert_eq!(floats(&out, "Total"), vec![Some(250.0), Some(350.0), Some(700.0), Some(1300.0)]);
     let share = PivotSpec { show_as: PivotShowAs::PctOfRowTotal, ..spec.clone() };
     let pct = build_pivot(df.clone().lazy(), &share).expect("the share builds").df;
     close(floats(&pct, "Conventional")[0], 80.0, 1e-9, "02 Conventional share of its row");
-    let wavg = PivotSpec { values: vec![PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }], ..spec.clone() };
+    let wavg = PivotSpec { values: vec![PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None }], ..spec.clone() };
     let rates = build_pivot(df.clone().lazy(), &wavg).expect("the weighted rates build").df;
     close(floats(&rates, "Conventional")[0], 6.0, 1e-9, "(100 x 5 + 100 x 7) / 200");
     check_guide(

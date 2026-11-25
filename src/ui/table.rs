@@ -3,6 +3,9 @@
 use crate::ui::prelude::*;
 use micro_parquet::summary::{default_spec_for, format_summary_value};
 
+#[path = "nested_grid.rs"]
+pub(crate) mod nested_grid;
+
 /// Text widths measured with the fonts egui has loaded.
 struct EguiMetrics<'a> {
     ctx: &'a egui::Context,
@@ -301,6 +304,9 @@ impl MicroParquetApp {
         // a pivot tab: its value cells (every column but the row fields) can show their rows, or say why they cannot (set by the caller)
         let show_rows: Option<crate::ui::drill::PivotRowsUi> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_show_rows", tab_id))));
         let shading: Option<Vec<Vec<micro_parquet::banking::Shade>>> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_shading", tab_id))));
+        // why a cell of a time aggregation is blank (Phase 9 M3), set by the caller; the cells drawn with a reason are noted for the tests
+        let blank_notes: Vec<micro_parquet::pivot_table::CellNote> = ui.ctx().data(|d| d.get_temp(egui::Id::new(("grid_notes", tab_id)))).unwrap_or_default();
+        let mut noted_cells: Vec<(String, egui::Rect)> = Vec::new();
         let mut report = GridReport::default();
         let want_x = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_x", tab_id))));
         let want_y = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(("grid_scroll_y", tab_id))));
@@ -501,9 +507,16 @@ impl MicroParquetApp {
                                         ui.with_layout(layout, |ui| {
                                             let r = ui.add(egui::Label::new(rich).truncate().sense(egui::Sense::click()));
                                             let rows_here = show_rows.as_ref().is_some_and(|p| !p.labels.iter().any(|l| l == c.name().as_str()));
-                                            let rows_off = if rows_here { show_rows.as_ref().and_then(|p| p.reason_for(c.name().as_str())) } else { None };
-                                            if rows_here && r.double_clicked() {
+                                            let blank_why = if is_null { blank_notes.iter().find(|n| n.row == row_offset + r_idx && n.column == c.name().as_str()).map(|n| n.text.clone()) } else { None };
+                                            let rows_off = if rows_here { show_rows.as_ref().and_then(|p| p.reason_for(c.name().as_str())).or(blank_why.clone()) } else { None };
+                                            if rows_here && r.double_clicked() && blank_why.is_none() {
                                                 action = Some(GridAction::ShowRows(row_offset + r_idx, c.name().to_string()));
+                                            }
+                                            if is_null {
+                                                if let Some(n) = blank_notes.iter().find(|n| n.row == row_offset + r_idx && n.column == c.name().as_str()) {
+                                                    r.clone().on_hover_text(n.text.as_str());
+                                                    noted_cells.push((n.text.clone(), r.rect));
+                                                }
                                             }
                                             r.context_menu(|ui| {
                                                 if rows_here {
@@ -534,7 +547,10 @@ impl MicroParquetApp {
                 });
             });
         report.frame = Some(framed.response.rect);
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("grid_report", tab_id)), report));
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new(("grid_report", tab_id)), report);
+            d.insert_temp(egui::Id::new(("grid_notes_drawn", tab_id)), noted_cells);
+        });
         action
     }
 
@@ -684,6 +700,21 @@ impl MicroParquetApp {
             }
             let stale = tab.page_error.is_some();
             migration_shading_for(ui.ctx(), tab);
+            // M3: the warnings of a pivot made on a data tab, and why its blank cells are blank
+            let report = self.pivot_report_for(tab).cloned();
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("grid_notes", tab.id)), report.as_ref().map(|r| r.notes.clone()).unwrap_or_default()));
+            let mut banner_rects: Vec<egui::Rect> = Vec::new();
+            if let Some(r) = &report {
+                for w in &r.warnings {
+                    let resp = ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", theme::ph::WARNING, w)).size(theme::TEXT_LABEL).color(theme::tokens(self.dark_mode).warning)).wrap());
+                    banner_rects.push(resp.rect);
+                }
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("pivot_banner", tab.id)), banner_rects));
+            // the rows of an average say so under the tab's title
+            if let Some(n) = self.tab_notes.get(&tab.id) {
+                ui.add(egui::Label::new(egui::RichText::new(n.as_str()).size(theme::TEXT_LABEL).color(theme::tokens(self.dark_mode).muted)).wrap());
+            }
             // W6: a pivot tab's value cells can show their rows
             let rows_key = egui::Id::new(("grid_show_rows", tab.id));
             match self.pivot_rows_ui(tab) {
@@ -692,22 +723,36 @@ impl MicroParquetApp {
                     ui.ctx().data_mut(|d| d.remove_temp::<crate::ui::drill::PivotRowsUi>(rows_key));
                 }
             }
+            // P2: a pivot in the Nested layout that is the tab's last step is drawn as its Nested view; with steps after it the tab shows
+            // the flat table and says so
+            let nested = self.nested_for_display(tab);
+            if let Some(note) = self.nested_note(tab) {
+                ui.label(egui::RichText::new(note).size(theme::TEXT_LABEL).color(theme::tokens(self.dark_mode).muted));
+            }
+            if nested.is_none() {
+                // the flat grid is drawn: what the Nested grid drew earlier is out of date
+                ui.ctx().data_mut(|d| d.remove_temp::<nested_grid::NestedGridReport>(egui::Id::new(("nested_grid_report", tab.id))));
+            }
+            let rows_ui = self.pivot_rows_ui(tab);
             ui.scope(|ui| {
-                if updating || stale {
+                if updating || stale || nested.is_some_and(|(_, fresh)| !fresh) {
                     ui.set_opacity(theme::DISABLED_OPACITY);
                 }
-                action = Self::render_data_grid(
-                    ui,
-                    &tab.cached_slice,
-                    &tab.col_formats,
-                    tab.slice_offset,
-                    self.num_format,
-                    self.global_decimals,
-                    tab.id,
-                    self.selected_column.as_deref(),
-                    &marks,
-                    if self.show_summary_row { Some(&view) } else { None },
-                );
+                action = match nested {
+                    Some((nv, _)) => nested_grid::render_nested_grid(ui, nv, &tab.col_formats, self.num_format, self.global_decimals, tab.id, rows_ui.as_ref()),
+                    None => Self::render_data_grid(
+                        ui,
+                        &tab.cached_slice,
+                        &tab.col_formats,
+                        tab.slice_offset,
+                        self.num_format,
+                        self.global_decimals,
+                        tab.id,
+                        self.selected_column.as_deref(),
+                        &marks,
+                        if self.show_summary_row { Some(&view) } else { None },
+                    ),
+                };
             });
         }
         match action {

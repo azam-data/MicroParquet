@@ -12,7 +12,7 @@ use crate::engine::{
     weighted_mixed_sign_notes, write_parse_failures_csv, NumericLookingColumn,
 };
 use crate::exporters::{
-    export_pdf_tabs, export_pdf_tabs_with, export_selected_tabs_to_xlsx_scaled, PdfOptions, split_and_export_by_column_ctx, PdfTab,
+    export_pdf_tabs, export_selected_tabs_to_xlsx_scaled, PdfOptions, split_and_export_by_column_ctx, PdfTab,
     ScaledTabToExport, XlsxScale, PDF_MAX_ROWS_PER_TAB,
 };
 use crate::jobs::{write_atomic, JobCtx};
@@ -57,6 +57,15 @@ pub enum JobOutput {
     ShowRows(Box<ShowRowsResult>),
     /// The values a chart's tick list lists (Phase 8 W10).
     ChartPicker(Box<PickerResult>),
+    /// The Nested view of a pivot tab (Phase 9 P2).
+    NestedView(Box<NestedViewResult>),
+    PivotReport(Box<PivotReportResult>),
+    /// The key check of a link (Phase 9 M0).
+    ModelCheck(Box<ModelCheckResult>),
+    /// A tab of the rows a key check lists (Phase 9 M0).
+    ModelRows(Box<ModelRowsResult>),
+    /// The snapshot dates of a date-linked tab (Phase 9 M2).
+    DateInfo(Box<DateInfoResult>),
 }
 
 /// A tab of a project, built on the worker.
@@ -447,6 +456,8 @@ pub struct PickerRequest {
     pub field: String,
     pub search: Option<String>,
     pub temp_dir: PathBuf,
+    /// The field is a lookup field (Phase 9 M1): its values are the lookup column's, with "(no match)" and "(blank)".
+    pub lookup: Option<crate::model::ModelFieldRef>,
 }
 
 pub struct PickerResult {
@@ -460,8 +471,12 @@ pub struct PickerResult {
 pub fn compute_picker_values(req: PickerRequest, ctx: &JobCtx) -> Result<PickerResult> {
     ctx.set_progress("Listing the values…", None);
     ctx.check()?;
-    let PickerRequest { tab_id, token, source, steps, field, search, temp_dir } = req;
+    let PickerRequest { tab_id, token, source, steps, field, search, temp_dir, lookup } = req;
     let values = compile_tab_lazy(&source, &steps, &temp_dir)
+        .and_then(|lf| match &lookup {
+            Some(f) => crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: field.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None, blank_key_out: None }], "Filter"),
+            None => Ok(lf),
+        })
         .and_then(|lf| crate::value_picker::picker_values(lf, &field, search.as_deref(), crate::value_picker::PICKER_LIMIT))
         .map_err(|e| format!("{:#}", e));
     Ok(PickerResult { tab_id, token, field, search, values })
@@ -829,12 +844,27 @@ pub fn export_tabs_pdf_with(
 ) -> Result<ExportOutcome> {
     let mut collected = Vec::new();
     let mut failed = Vec::new();
+    // the tabs whose last step is a pivot in the Nested layout: their lines' styles (P2)
+    let mut nested_styles: Vec<(String, Vec<crate::pdf_layout::RowStyle>)> = Vec::new();
     for (i, tab) in tabs.iter().enumerate() {
         ctx.check()?;
         ctx.set_progress(
             format!("Reading '{}' ({} of {})…", tab.title, i + 1, tabs.len()),
             Some(i as f32 / tabs.len().max(1) as f32),
         );
+        // a pivot in the Nested layout is printed as its Nested view
+        match crate::pivot_view::nested_view_of_tab(&tab.source, &tab.steps, temp_dir).and_then(|v| v.map(|v| crate::pivot_view::pdf_table(&v, PDF_MAX_ROWS_PER_TAB + 1)).transpose()) {
+            Ok(Some((df, styles))) => {
+                nested_styles.push((tab.title.clone(), styles));
+                collected.push(PdfTab { title: tab.title.clone(), df, col_formats: tab.col_formats.clone(), summary: Vec::new(), chart: tab.chart.clone() });
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                failed.push(format!("'{}' ({:#})", tab.title, e));
+                continue;
+            }
+        }
         // The summary is of the whole result; the page shows only the first rows (one past the
         // limit, so the export can say the tab was cut).
         match compile_tab_lazy(&tab.source, &tab.steps, temp_dir).and_then(|lf| {
@@ -853,7 +883,7 @@ pub fn export_tabs_pdf_with(
     }
     ctx.set_progress(format!("Writing {}…", display_name(out_path)), None);
     let rep = write_atomic(out_path, ctx, |tmp| {
-        export_pdf_tabs_with(collected, tmp, num_format, global_decimals, opts)
+        crate::exporters::export_pdf_tabs_nested(collected, &nested_styles, tmp, num_format, global_decimals, opts)
     })?;
     let mut msg = format!("Exported multi-tab PDF report to {:?}", out_path);
     let s = rep.summary();
@@ -1127,6 +1157,8 @@ pub struct PivotPreviewRequest {
     pub steps: Vec<TransformStep>,
     pub spec: crate::models::PivotSpec,
     pub temp_dir: PathBuf,
+    /// How many rows of the table to bring back (`PIVOT_PREVIEW_ROWS` in the docked dialog, more in the pop-out window).
+    pub rows: usize,
 }
 
 pub struct PivotPreviewResult {
@@ -1138,10 +1170,20 @@ pub struct PivotPreviewResult {
     pub table: std::result::Result<DataFrame, String>,
     /// All rows of the pivot.
     pub total_rows: usize,
+    /// How many rows `table` was cut to.
+    pub limit: usize,
+    /// The Nested view of the pivot (its first `limit` lines) when the settings choose Nested: built by the same function as the
+    /// tab's Nested view, from the same source rows (Phase 9 P2 follow-up).
+    pub nested: Option<crate::pivot_view::NestedView>,
+    /// Why a cell of the preview is blank, and the warnings about the pivot (Phase 9 M3).
+    pub notes: Vec<crate::pivot_table::CellNote>,
+    pub warnings: Vec<String>,
 }
 
-/// How many rows of the pivot the dialog previews.
+/// How many rows of the pivot the docked dialog previews (the pop-out window asks for as many as fit, at least this many).
 pub const PIVOT_PREVIEW_ROWS: usize = 20;
+/// The most rows the pop-out window's preview brings back.
+pub const PIVOT_PREVIEW_ROWS_MAX: usize = 500;
 
 /// The field list of the builder, and the pivot's first rows. A pivot that cannot be built gives
 /// its message in `table`, not an error of the job (the dialog shows it).
@@ -1152,18 +1194,33 @@ pub fn compute_pivot_preview(req: PivotPreviewRequest, ctx: &JobCtx) -> Result<P
     let schema = lf.collect_schema()?;
     let fields: Vec<(String, FieldKind)> = schema.iter().map(|(n, dt)| (n.to_string(), FieldKind::of(dt))).collect();
     ctx.check()?;
+    let limit = req.rows.clamp(PIVOT_PREVIEW_ROWS, PIVOT_PREVIEW_ROWS_MAX);
+    let mut nested = None;
+    let (mut notes, mut warnings) = (Vec::new(), Vec::new());
     let (table, total_rows) = if req.spec.values.is_empty() || (req.spec.rows.is_empty() && req.spec.columns.is_empty()) {
         (Err("Drag fields into Rows or Columns, and a field into Values, to see the table.".to_string()), 0)
     } else {
+        let wants_nested = matches!(req.spec.layout, crate::models::PivotLayout::Nested { .. }) && !req.spec.rows.is_empty();
+        let lf_nested = if wants_nested { Some(lf.clone()) } else { None };
         match crate::pivot_table::build_pivot(lf, &req.spec) {
             Ok(b) => {
                 let n = b.df.height();
-                (Ok(b.df.head(Some(PIVOT_PREVIEW_ROWS))), n)
+                notes = b.notes.clone();
+                warnings = b.warnings.clone();
+                match lf_nested.map(|l| crate::pivot_view::build_nested(l, &req.spec)) {
+                    Some(Ok(v)) => {
+                        let lines = v.rows.len();
+                        nested = Some(v.head(limit));
+                        (Ok(b.df.head(Some(limit))), lines)
+                    }
+                    Some(Err(e)) => (Err(format!("{:#}", e)), 0),
+                    None => (Ok(b.df.head(Some(limit))), n),
+                }
             }
             Err(e) => (Err(format!("{:#}", e)), 0),
         }
     };
-    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows })
+    Ok(PivotPreviewResult { tab_id: req.tab_id, token: req.token, fields, table, total_rows, limit, nested, notes, warnings })
 }
 
 pub struct PivotValuesRequest {
@@ -1172,6 +1229,8 @@ pub struct PivotValuesRequest {
     pub steps: Vec<TransformStep>,
     pub field: String,
     pub temp_dir: PathBuf,
+    /// The field is a lookup field (Phase 9 M1): its values are the lookup column's, with "(no match)" and "(blank)".
+    pub lookup: Option<crate::model::ModelFieldRef>,
 }
 
 pub struct PivotValuesResult {
@@ -1186,7 +1245,20 @@ pub const PIVOT_FILTER_VALUES_MAX: usize = 2000;
 pub fn compute_pivot_values(req: PivotValuesRequest, ctx: &JobCtx) -> Result<PivotValuesResult> {
     ctx.check()?;
     let lf = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir)?;
-    let values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
+    let lf = match &req.lookup {
+        Some(f) => match crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { field: f.clone(), out: req.field.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None, blank_key_out: None }], "Filter") {
+            Ok(lf) => lf,
+            Err(e) => return Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values: Err(format!("{:#}", e)) }),
+        },
+        None => lf,
+    };
+    let mut values = crate::pivot_table::distinct_field_values(lf, &req.field, PIVOT_FILTER_VALUES_MAX).map_err(|e| format!("{:#}", e));
+    if req.lookup.is_some() {
+        // the lookup's "(blank)" and "(no match)" come last, in that order
+        if let Ok((v, _)) = &mut values {
+            v.sort_by_key(crate::model::key_rank);
+        }
+    }
     Ok(PivotValuesResult { tab_id: req.tab_id, field: req.field, values })
 }
 
@@ -1213,12 +1285,31 @@ pub struct ShowRowsResult {
     pub title: String,
     pub base: TabSource,
     pub steps: Vec<TransformStep>,
+    /// Said under the tab's title (the rows of an average).
+    pub note: Option<String>,
+}
+
+/// "Show rows" on a line of a Nested pivot (Phase 9 P2): the request of a cell, with the Rows values of the line that was clicked
+/// (a parent line has the first few, the Grand total none). The Nested layout is only drawn when the pivot is the tab's last step, so
+/// `request.row` is not used and no step follows the pivot.
+pub struct NestedShowRowsRequest {
+    pub request: ShowRowsRequest,
+    pub row_key: Vec<Option<String>>,
 }
 
 /// Builds the pivot again to find which values the clicked cell stands for, and the tab that holds exactly its rows. When
 /// steps follow the pivot, they are applied to the pivot's table and the clicked row is found again in the pivot by its row
 /// fields, so a sort or a filter of the result does not move the cell.
 pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    show_rows_inner(req, None, ctx)
+}
+
+/// `show_rows_job` for a line of the Nested layout: the rows of that line's group (all of them for the Grand total) and column.
+pub fn show_rows_nested_job(req: NestedShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    show_rows_inner(req.request, Some(req.row_key), ctx)
+}
+
+fn show_rows_inner(req: ShowRowsRequest, nested_row: Option<Vec<Option<String>>>, ctx: &JobCtx) -> Result<JobOutput> {
     ctx.set_progress("Finding the rows of that cell\u{2026}", None);
     ctx.check()?;
     let Some((before, rest)) = req.steps.split_at_checked(req.pivot_at) else {
@@ -1228,23 +1319,205 @@ pub fn show_rows_job(req: ShowRowsRequest, ctx: &JobCtx) -> Result<JobOutput> {
     let lf = crate::engine::compile_tab_lazy(&req.base, before, &req.temp_dir)?;
     let build = crate::pivot_table::build_pivot(lf, &req.spec)?;
     ctx.check()?;
-    let pivot_row = if later.is_empty() {
+    let cell = if let Some(row_key) = nested_row {
+        if !later.is_empty() {
+            anyhow::bail!("Show rows: steps follow the pivot, so the table on the screen is the flat one. Double-click a number in it.");
+        }
         if build.df.height() != req.expected_rows {
             anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
         }
-        req.row
+        crate::pivot_table::cell_rows_at(&req.spec, &build, &row_key, &req.column)?
     } else {
-        if req.later_made.contains(&req.column) || !build.df.get_column_names().iter().any(|n| n.as_str() == req.column.as_str()) {
-            anyhow::bail!("Show rows: '{}' was added, renamed or changed by a step after the pivot, so it has no rows of its own. Double-click a number in one of the pivot's own columns.", req.column);
-        }
-        let shown = crate::engine::apply_steps_to(build.df.clone().lazy(), later)?.collect().context("Show rows could not apply the steps after the pivot")?;
-        if shown.height() != req.expected_rows {
-            anyhow::bail!("Show rows: the table now has {} rows and the one on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", shown.height(), req.expected_rows);
-        }
-        crate::pivot_table::pivot_row_of_shown(&build, &shown, req.row)?
+        let pivot_row = if later.is_empty() {
+            if build.df.height() != req.expected_rows {
+                anyhow::bail!("Show rows: the pivot now has {} rows and the table on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", build.df.height(), req.expected_rows);
+            }
+            req.row
+        } else {
+            if req.later_made.contains(&req.column) || !build.df.get_column_names().iter().any(|n| n.as_str() == req.column.as_str()) {
+                anyhow::bail!("Show rows: '{}' was added, renamed or changed by a step after the pivot, so it has no rows of its own. Double-click a number in one of the pivot's own columns.", req.column);
+            }
+            let shown = crate::engine::apply_steps_to(build.df.clone().lazy(), later)?.collect().context("Show rows could not apply the steps after the pivot")?;
+            if shown.height() != req.expected_rows {
+                anyhow::bail!("Show rows: the table now has {} rows and the one on the screen {}. The data has changed since it was drawn; close the pivot tab and open it again.", shown.height(), req.expected_rows);
+            }
+            crate::pivot_table::pivot_row_of_shown(&build, &shown, req.row)?
+        };
+        crate::pivot_table::cell_rows(&req.spec, &build, pivot_row, &req.column)?
     };
-    let cell = crate::pivot_table::cell_rows(&req.spec, &build, pivot_row, &req.column)?;
     let mut steps = before.to_vec();
     steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
-    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps })))
+    steps.extend(cell.extra_steps);
+    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps, note: cell.note })))
+}
+
+/// The Nested view of a pivot tab: the tab's steps up to the pivot, which must be the last one run (Phase 9 P2).
+pub struct NestedViewRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    /// The steps the tab runs (up to `exec_steps`).
+    pub steps: Vec<TransformStep>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct NestedViewResult {
+    pub tab_id: u64,
+    /// `steps_edit::pipeline_hash` of what the view was built for: a result for steps that have changed since is dropped.
+    pub pipeline: u64,
+    /// The view, or why it could not be built (the tab then shows the flat table and says why).
+    pub view: std::result::Result<Option<crate::pivot_view::NestedView>, String>,
+}
+
+/// Builds the Nested view on the worker: the pivot's source rows grouped once for every level, never added up from the flat table.
+pub fn compute_nested_view(req: NestedViewRequest, ctx: &JobCtx) -> Result<NestedViewResult> {
+    ctx.check()?;
+    ctx.set_progress("Nested pivot\u{2026}", None);
+    let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
+    let view = crate::pivot_view::nested_view_of_tab(&req.source, &req.steps, &req.temp_dir).map_err(|e| format!("{:#}", e));
+    Ok(NestedViewResult { tab_id: req.tab_id, pipeline, view })
+}
+
+/// What a pivot tab says about its numbers (Phase 9 M3): why a cell is blank, and the warnings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PivotReport {
+    pub warnings: Vec<String>,
+    pub notes: Vec<crate::pivot_table::CellNote>,
+}
+
+pub struct PivotReportRequest {
+    pub tab_id: u64,
+    pub source: TabSource,
+    /// The steps the tab runs (up to `exec_steps`).
+    pub steps: Vec<TransformStep>,
+    pub temp_dir: PathBuf,
+}
+
+pub struct PivotReportResult {
+    pub tab_id: u64,
+    /// `steps_edit::pipeline_hash` of what the report was made for: a result for steps that have changed since is dropped.
+    pub pipeline: u64,
+    /// The report, `None` when the tab's last step is not a pivot with a data tab, or why it could not be made.
+    pub report: std::result::Result<Option<PivotReport>, String>,
+}
+
+/// The report of a tab whose last step that is on is a pivot made on a data tab (a pivot with none has nothing to say).
+pub fn pivot_report_of_tab(source: &TabSource, steps: &[TransformStep], temp_dir: &Path) -> Result<Option<PivotReport>> {
+    let Some(at) = steps.iter().rposition(|s| !s.is_skipped()) else {
+        return Ok(None);
+    };
+    let Some(spec) = steps[at].as_pivot_spec() else {
+        return Ok(None);
+    };
+    if spec.data_tab.is_empty() || spec.values.is_empty() || (spec.rows.is_empty() && spec.columns.is_empty()) {
+        return Ok(None);
+    }
+    let lf = compile_tab_lazy(source, &steps[..at], temp_dir)?;
+    let b = crate::pivot_table::build_pivot(lf, &spec)?;
+    Ok(Some(PivotReport { warnings: b.warnings, notes: b.notes }))
+}
+
+/// Makes the report of a pivot tab on the worker.
+pub fn compute_pivot_report(req: PivotReportRequest, ctx: &JobCtx) -> Result<PivotReportResult> {
+    ctx.check()?;
+    ctx.set_progress("Pivot notes\u{2026}", None);
+    let pipeline = crate::steps_edit::pipeline_hash(&req.source, &req.steps);
+    let report = pivot_report_of_tab(&req.source, &req.steps, &req.temp_dir).map_err(|e| format!("{:#}", e));
+    Ok(PivotReportResult { tab_id: req.tab_id, pipeline, report })
+}
+
+/// The key check of one link, with the fingerprint of what it was run for: a result for tabs that have changed since is dropped.
+pub struct ModelCheckRequest {
+    pub link: crate::model::Link,
+    pub data: crate::model::ModelTab,
+    pub lookup: crate::model::ModelTab,
+    pub fingerprint: u64,
+    pub temp_dir: PathBuf,
+}
+
+pub struct ModelCheckResult {
+    pub link: crate::model::Link,
+    pub fingerprint: u64,
+    /// The check, or why it could not run.
+    pub check: std::result::Result<crate::model::KeyCheck, String>,
+}
+
+pub fn compute_model_check(req: ModelCheckRequest, ctx: &JobCtx) -> Result<ModelCheckResult> {
+    ctx.check()?;
+    ctx.set_progress("Checking the keys\u{2026}", None);
+    let check = crate::model::check_link(&req.link, &req.data, &req.lookup, &req.temp_dir, &|| ctx.check()).map_err(|e| {
+        if e.downcast_ref::<crate::jobs::Cancelled>().is_some() {
+            return "cancelled".to_string();
+        }
+        format!("{:#}", e)
+    });
+    if check.as_ref().err().is_some_and(|e| e == "cancelled") {
+        ctx.check()?;
+    }
+    Ok(ModelCheckResult { link: req.link, fingerprint: req.fingerprint, check })
+}
+
+/// The snapshot dates of a date-linked tab: how many rows each distinct date has, after the tab's steps (Phase 9 M2).
+pub struct DateInfoRequest {
+    pub tab_key: String,
+    pub column: String,
+    pub source: TabSource,
+    pub steps: Vec<TransformStep>,
+    pub fingerprint: u64,
+    pub temp_dir: PathBuf,
+}
+
+pub struct DateInfoResult {
+    pub tab_key: String,
+    pub column: String,
+    pub fingerprint: u64,
+    pub counts: std::result::Result<Vec<(chrono::NaiveDate, usize)>, String>,
+}
+
+pub fn compute_date_info(req: DateInfoRequest, ctx: &JobCtx) -> Result<DateInfoResult> {
+    ctx.check()?;
+    ctx.set_progress("Reading the snapshot dates\u{2026}", None);
+    let counts = compile_tab_lazy(&req.source, &req.steps, &req.temp_dir).and_then(|lf| crate::model_calendar::snapshot_counts(lf, &req.column)).map_err(|e| format!("{:#}", e));
+    ctx.check()?;
+    Ok(DateInfoResult { tab_key: req.tab_key, column: req.column, fingerprint: req.fingerprint, counts })
+}
+
+/// Which list of rows a key check opens as a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelList {
+    /// The lookup rows whose key repeats, with a Times column.
+    Duplicates,
+    /// The data rows whose key has no lookup row.
+    Unmatched,
+}
+
+pub struct ModelRowsRequest {
+    pub list: ModelList,
+    pub link: crate::model::Link,
+    pub data: crate::model::ModelTab,
+    pub lookup: crate::model::ModelTab,
+    pub temp_dir: PathBuf,
+    pub file_stamp: u64,
+}
+
+pub struct ModelRowsResult {
+    pub title: String,
+    pub source: TabSource,
+    pub rows: usize,
+}
+
+/// Lists the rows and writes them to a Parquet file in the temporary folder: the tab reads that file (it is a list to send back
+/// and fix at source, so it is not saved in a project).
+pub fn compute_model_rows(req: ModelRowsRequest, ctx: &JobCtx) -> Result<ModelRowsResult> {
+    ctx.check()?;
+    ctx.set_progress("Listing the rows\u{2026}", None);
+    let (mut df, title, stem) = match req.list {
+        ModelList::Duplicates => (crate::model::duplicate_rows(&req.link, &req.lookup, &req.temp_dir)?, format!("Duplicate keys: {}", req.lookup.title), "model_duplicates"),
+        ModelList::Unmatched => (crate::model::unmatched_rows(&req.link, &req.data, &req.lookup, &req.temp_dir)?, format!("Unmatched rows: {}", crate::model::link_name(&req.data.title, &req.lookup.title)), "model_unmatched"),
+    };
+    ctx.check()?;
+    std::fs::create_dir_all(&req.temp_dir).with_context(|| "The temporary folder could not be made")?;
+    let path = req.temp_dir.join(format!("{}_{}_{}.parquet", stem, std::process::id(), req.file_stamp));
+    let f = std::fs::File::create(&path).with_context(|| format!("The list could not be written to {}", path.display()))?;
+    polars::prelude::ParquetWriter::new(f).finish(&mut df).context("The list could not be written")?;
+    Ok(ModelRowsResult { title, source: TabSource::SingleFile { path, is_parquet: true, config: IngestionConfig::default() }, rows: df.height() })
 }

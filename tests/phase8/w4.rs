@@ -52,7 +52,7 @@ fn snap(id: u64, title: &str, source: TabSource, steps: Vec<TransformStep>) -> T
 }
 
 fn pivot_step() -> TransformStep {
-    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["CAT".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() })
+    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["CAT".into()], values: vec![PivotValue { field: "BAL".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() })
 }
 
 fn chart_spec() -> ChartSpec {
@@ -360,7 +360,7 @@ fn w4_a_tab_that_did_not_open_keeps_its_recipe_when_the_project_is_saved_again()
 
 #[test]
 fn w4_a_newer_project_is_refused_unknown_fields_are_ignored_and_the_recent_list_keeps_eight() {
-    let newer = r#"{"project_version": 2, "app_version": "9.9.0", "tabs": []}"#;
+    let newer = r#"{"project_version": 3, "app_version": "9.9.0", "tabs": []}"#;
     let e = Project::from_json(newer, "x.mpproj").err().expect("refused");
     assert_eq!(format!("{e:#}"), "This project was saved by a newer MicroParquet v9.9.0. Update the app to open it.");
     let p = Project::from_json(r#"{"project_version": 1, "future": {"a": 1}, "tabs": [{"key": "t1", "title": "T", "recipe": {"kind": "file", "future": 1, "source": {"file": {"name": "a.csv"}}}, "later": true}]}"#, "x.mpproj").expect("unknown fields are ignored");

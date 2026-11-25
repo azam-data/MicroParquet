@@ -83,9 +83,9 @@ fn the_top_bar_is_one_44_px_strip() {
     assert!(top >= 0.0 && bottom <= theme::TOP_BAR_H, "items lie inside the first 44 px: {top}..{bottom}");
     // order: mark, the seven menus, the buttons, then the search box at the far right
     let names: Vec<&str> = rects.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(&names[..8], &["Mark", "File", "Edit", "View", "Banking", "Charts", "Export", "Help"], "{names:?}");
+    assert_eq!(&names[..9], &["Mark", "File", "Edit", "View", "Model", "Banking", "Charts", "Export", "Help"], "{names:?}");
     assert_eq!(*names.last().unwrap_or(&""), "Search");
-    assert_eq!(names[8], "OpenFile", "the toolbar buttons follow the menus: {names:?}");
+    assert_eq!(names[9], "OpenFile", "the toolbar buttons follow the menus: {names:?}");
 }
 
 #[test]
@@ -921,7 +921,7 @@ fn no_size_literal_is_left_outside_theme_rs() {
         .filter(|p| p.extension().is_some_and(|x| x == "rs"))
         .filter(|p| {
             let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "render_tests_p5.rs" | "render_tests_p6.rs" | "render_tests_p7.rs" | "render_tests_p8.rs" | "render_tests_r.rs")
+            !matches!(n, "theme.rs" | "tests.rs" | "layout_tests.rs" | "render_tests.rs" | "render_tests_p4.rs" | "render_tests_p5.rs" | "render_tests_p6.rs" | "render_tests_p7.rs" | "render_tests_p8.rs" | "render_tests_p9.rs" | "render_tests_r.rs")
         })
         .collect();
     files.push("src/main.rs".into());

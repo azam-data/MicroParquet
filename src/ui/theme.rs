@@ -216,6 +216,8 @@ pub const HEADER_ROW_H: f32 = 38.0;
 pub const SELECTOR_ROW_H: f32 = 30.0;
 pub const SUMMARY_BAND_H: f32 = 38.0;
 pub const DATA_ROW_H: f32 = 32.0;
+/// One level of a Nested pivot's "Row Labels" is indented this far on the screen (Phase 9 P2).
+pub const NESTED_INDENT_PX: f32 = 16.0;
 pub const RADIUS_CONTROL: f32 = 6.0;
 pub const RADIUS_PANEL: f32 = 8.0;
 pub const SPACE_XS: f32 = 4.0;
@@ -239,6 +241,11 @@ pub const SCHEMA_POPOUT_MIN_SIZE: [f32; 2] = [640.0, 480.0];
 /// The product and weight fields of the Mudaraba parameter editor.
 pub const MUD_PRODUCT_FIELD_W: f32 = 110.0;
 pub const MUD_WEIGHT_FIELD_W: f32 = 60.0;
+/// The pivot builder's own window (Phase 9 P1): where it opens the first time, and the least it can be made.
+pub const PIVOT_POPOUT_SIZE: [f32; 2] = [1280.0, 800.0];
+pub const PIVOT_POPOUT_MIN_SIZE: [f32; 2] = [760.0, 520.0];
+/// The window is never made bigger than this share of its monitor.
+pub const PIVOT_POPOUT_MONITOR_SHARE: f32 = 0.98;
 pub const CHART_POPOUT_SIZE: [f32; 2] = [900.0, 560.0];
 pub const CHART_POPOUT_MIN_SIZE: [f32; 2] = [520.0, 360.0];
 /// Space between the items of the two option rows.
@@ -365,6 +372,24 @@ pub const ROUNDING_TAB_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_CONTROL
 pub const ROUNDING_BAR_TOP: egui::Rounding = egui::Rounding { nw: RADIUS_BAR, ne: RADIUS_BAR, sw: 0.0, se: 0.0 };
 // dialogs: widths (the schema dialog's is above) and the lists inside them
 pub const DIALOG_W_SORT: f32 = 700.0;
+/// The Links and Key check dialogs (Phase 9 M0): a share of the pivot builder's width, the width of a combo box, how many lines of a list.
+pub const MODEL_DIALOG_SHARE: f32 = 0.8;
+pub const MODEL_COMBO_W: f32 = 190.0;
+/// The cell of a data tab's title in the date-link rows of Model > Calendar..., so every box has one width and one left edge.
+pub const MODEL_LINK_TITLE_W: f32 = 170.0;
+/// Model > Measures...: the dialog, a column name's cell and the tag box.
+pub const DIALOG_W_MEASURES: f32 = 640.0;
+pub const MEASURE_NAME_W: f32 = 170.0;
+pub const MEASURE_TAG_W: f32 = 150.0;
+/// The editor of a measure (M5): a wide box, a name box, a sign box, a test box, a value box, a day-count box.
+pub const MEASURE_BOX_W: f32 = 190.0;
+pub const MEASURE_NAME_BOX_W: f32 = 230.0;
+pub const MEASURE_SIGN_W: f32 = 110.0;
+pub const MEASURE_FIELD_W: f32 = 170.0;
+pub const MEASURE_TEST_W: f32 = 90.0;
+pub const MEASURE_VALUE_W: f32 = 130.0;
+pub const MEASURE_DAYCOUNT_W: f32 = 240.0;
+pub const MODEL_LIST_LINES: usize = 8;
 /// The width of the PDF export dialog's title box.
 pub const PDF_TITLE_FIELD_W: f32 = 320.0;
 pub const DIALOG_W_ABOUT: f32 = 560.0;
@@ -391,7 +416,20 @@ pub const PIVOT_PREVIEW_LABEL_W: f32 = 190.0;
 pub const PIVOT_POPUP_W: f32 = 300.0;
 pub const PIVOT_POPUP_LIST_H: f32 = 220.0;
 pub const PIVOT_COMBO_W: f32 = 130.0;
+/// The pivot's Layout box ("Nested (Excel style)").
+pub const PIVOT_COMBO_LAYOUT_W: f32 = 160.0;
 pub const PIVOT_COMBO_AGG_W: f32 = 104.0;
+/// The aggregation box of a value that has a time aggregation ("Period amount (YTD balance)").
+pub const PIVOT_COMBO_TIME_W: f32 = 196.0;
+/// The "Time" button of a value that has a time aggregation (window, shift, show, partial period), and its popup.
+pub const PIVOT_TIME_BTN_W: f32 = 54.0;
+pub const PIVOT_TIME_BTN_H: f32 = PIVOT_CHIP_H - 4.0;
+pub const PIVOT_TIME_POPUP_W: f32 = 430.0;
+/// The most height the aggregation list of a value has before it scrolls (7 aggregations, a rule and 8 over time).
+pub const PIVOT_AGG_LIST_H: f32 = 460.0;
+/// The room the aggregation list leaves below it, and the least height it has.
+pub const PIVOT_AGG_LIST_MARGIN: f32 = 24.0;
+pub const PIVOT_AGG_LIST_MIN_H: f32 = 120.0;
 pub const PIVOT_COMBO_WEIGHT_W: f32 = 120.0;
 pub const PIVOT_COMBO_SORT_W: f32 = 210.0;
 pub const PIVOT_FOOTER_BUTTONS_W: f32 = 250.0;

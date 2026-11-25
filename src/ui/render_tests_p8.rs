@@ -302,7 +302,7 @@ fn w1_split_date_from_the_column_panel_and_the_edit_menu_by_real_clicks_at_three
 
 // ================================================================================ W2: date grouping
 
-fn last_box(p: &Painted, text: &str, below: f32) -> Option<egui::Rect> {
+pub(crate) fn last_box(p: &Painted, text: &str, below: f32) -> Option<egui::Rect> {
     p.boxes.iter().rev().find(|(t, b)| t == text && b.top() > below - 1.0).map(|(_, b)| *b)
 }
 
@@ -507,7 +507,7 @@ fn proj_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
 }
 
 /// Frames until `done`, moving the clock on (the project's "unsaved" check runs on the clock).
-fn pump_until(rig: &mut Rig, what: &str, done: &dyn Fn(&Rig) -> bool) {
+pub(crate) fn pump_until(rig: &mut Rig, what: &str, done: &dyn Fn(&Rig) -> bool) {
     for _ in 0..600 {
         rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
         rig.draw(1);
@@ -562,7 +562,7 @@ fn titles_and_hashes(rig: &Rig) -> Vec<(String, String)> {
 }
 
 fn branch_pivot() -> TransformStep {
-    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }], row_totals: true, column_totals: true, ..Default::default() })
+    TransformStep::from_pivot_spec(PivotSpec { rows: vec!["Branch".into()], values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }], row_totals: true, column_totals: true, ..Default::default() })
 }
 
 /// The file tab, a pivot tab of it and a chart tab of it.
@@ -911,7 +911,7 @@ fn w4_save_lists_the_tabs_it_leaves_out_and_a_newer_project_is_refused_by_the_me
 
         // a project saved by a newer program is refused with the version, and no dialog opens
         let newer = root.join("proj").join("Newer.mpproj");
-        std::fs::write(&newer, r#"{"project_version": 2, "app_version": "9.9.0", "tabs": []}"#).expect("file");
+        std::fs::write(&newer, r#"{"project_version": 3, "app_version": "9.9.0", "tabs": []}"#).expect("file");
         rig.app.project.test_pick = Some(newer);
         file_item(&mut rig, "Open project\u{2026}");
         assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
@@ -951,11 +951,11 @@ fn w4_a_file_that_changed_since_the_project_was_saved_is_said_in_the_status_line
 use micro_parquet::charts::layout::chart_title;
 
 /// The box of a text that ends with `text` (a button with its icon).
-fn text_box(p: &Painted, text: &str) -> Option<egui::Rect> {
+pub(crate) fn text_box(p: &Painted, text: &str) -> Option<egui::Rect> {
     p.boxes.iter().rev().find(|(t, _)| t.trim().ends_with(text)).map(|(_, b)| *b)
 }
 
-fn has_text(p: &Painted, text: &str) -> bool {
+pub(crate) fn has_text(p: &Painted, text: &str) -> bool {
     p.boxes.iter().any(|(t, _)| t.contains(text))
 }
 
@@ -1197,7 +1197,7 @@ fn count_text(p: &Painted, text: &str) -> usize {
 
 /// Moves the pointer onto `pos` the way a hand does (egui counts a movement only when it sees three positions over more
 /// than 10 ms, and shows no tooltip while the pointer rests where it clicked), then holds it there while the clock runs.
-fn hover_at(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+pub(crate) fn hover_at(rig: &mut Rig, pos: egui::Pos2) -> Painted {
     let t0 = rig.input.time.unwrap_or(0.0) + 1.0;
     for (dt, dx) in [(0.0, 30.0), (0.03, 20.0), (0.06, 10.0), (0.09, 0.0)] {
         rig.input.time = Some(t0 + dt);
@@ -1356,9 +1356,9 @@ fn w5_a_file_that_changes_under_the_source_updates_the_chart_tab_to_equal_a_new_
 use micro_parquet::charts::spec::{ChartKind, DrillLevel};
 use polars::prelude::IntoLazy;
 
-const PLOT_ID: &str = "chart_plot";
+pub(crate) const PLOT_ID: &str = "chart_plot";
 
-fn right_click(rig: &mut Rig, pos: egui::Pos2) -> Painted {
+pub(crate) fn right_click(rig: &mut Rig, pos: egui::Pos2) -> Painted {
     rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
     rig.step(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE }]);
     rig.step(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE }]);
@@ -1372,13 +1372,13 @@ fn key_press(rig: &mut Rig, key: egui::Key) -> Painted {
 }
 
 /// The rectangle of the mark of category number `category` of the chart drawn under `id`.
-fn mark_rect(rig: &Rig, id: egui::Id, category: usize) -> egui::Rect {
+pub(crate) fn mark_rect(rig: &Rig, id: egui::Id, category: usize) -> egui::Rect {
     // (the caller has scrolled the chart into view with `show_studio_chart`)
     let s = crate::ui::chart_render::last_shown(&rig.ctx, id).unwrap_or_else(|| panic!("{}: a chart is drawn under {id:?}", rig.what));
     s.layout.marks.iter().find(|m| m.category == category && m.series == 0 && m.panel == 0).map(|m| m.rect).unwrap_or_else(|| panic!("{}: a mark for category {category}: {} marks", rig.what, s.layout.marks.len()))
 }
 
-fn category_index(categories: &[String], name: &str, what: &str) -> usize {
+pub(crate) fn category_index(categories: &[String], name: &str, what: &str) -> usize {
     categories.iter().position(|c| c == name).unwrap_or_else(|| panic!("{what}: '{name}' is a category: {categories:?}"))
 }
 
@@ -1409,7 +1409,7 @@ fn assert_studio_equals_new_chart(rig: &Rig, what: &str) {
 
 /// Scrolls the side panel with the mouse wheel until every mark of the studio's chart is well inside the window (the chart is
 /// under the controls, so in a small window it starts below the fold).
-fn show_studio_chart(rig: &mut Rig) {
+pub(crate) fn show_studio_chart(rig: &mut Rig) {
     let id = egui::Id::new(PLOT_ID);
     for _ in 0..16 {
         rig.draw(3);
@@ -1433,7 +1433,7 @@ fn show_studio_chart(rig: &mut Rig) {
     panic!("{}: the studio's chart could not be scrolled into view", rig.what);
 }
 
-fn mark_at(rig: &mut Rig, id: egui::Id, category: usize) -> egui::Rect {
+pub(crate) fn mark_at(rig: &mut Rig, id: egui::Id, category: usize) -> egui::Rect {
     show_studio_chart(rig);
     mark_rect(rig, id, category)
 }
@@ -1736,7 +1736,7 @@ fn w6_a_chart_tab_drills_by_click_goes_back_by_breadcrumb_and_key_reopens_at_its
 }
 
 /// Scrolls the side panel with the wheel until the studio control `name` is well inside the window; its rectangle.
-fn show_field(rig: &mut Rig, name: &str) -> egui::Rect {
+pub(crate) fn show_field(rig: &mut Rig, name: &str) -> egui::Rect {
     for _ in 0..30 {
         rig.draw(3);
         let screen = rig.ctx.screen_rect();
@@ -1759,7 +1759,7 @@ fn show_field(rig: &mut Rig, name: &str) -> egui::Rect {
     panic!("{}: the control '{name}' could not be scrolled into view: {:?} in {:?}", rig.what, rig.app.chart.rects.fields.iter().find(|(n, _)| n == name).map(|(_, r)| *r), rig.ctx.screen_rect());
 }
 
-fn click_field(rig: &mut Rig, name: &str) -> Painted {
+pub(crate) fn click_field(rig: &mut Rig, name: &str) -> Painted {
     let r = show_field(rig, name);
     click_rect(rig, r)
 }
@@ -1856,7 +1856,7 @@ fn w6_the_drill_levels_section_adds_moves_and_removes_levels_offers_the_date_hie
 }
 
 /// The value cell to the right of the row label `label` in the grid the last frame drew.
-fn value_cell_of_row(p: &Painted, label: &str, what: &str) -> egui::Rect {
+pub(crate) fn value_cell_of_row(p: &Painted, label: &str, what: &str) -> egui::Rect {
     let l = p.boxes.iter().find(|(t, b)| t == label && b.top() > theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the row '{label}'"));
     p.boxes
         .iter()
@@ -1867,7 +1867,7 @@ fn value_cell_of_row(p: &Painted, label: &str, what: &str) -> egui::Rect {
 }
 
 /// Two real clicks at the same instant: a double-click.
-fn double_click(rig: &mut Rig, pos: egui::Pos2) {
+pub(crate) fn double_click(rig: &mut Rig, pos: egui::Pos2) {
     rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
     rig.click(pos);
     rig.click(pos);
@@ -2577,7 +2577,7 @@ fn w7_a_chart_of_one_series_lists_its_measure_in_colours_and_a_pick_there_colour
 // ================================================================================ W10: filters on a chart
 
 /// Scrolls the studio's panel with the wheel until the rectangle `get` gives is well inside the window; the rectangle.
-fn show_rect(rig: &mut Rig, what: &str, get: &dyn Fn(&Rig) -> Option<egui::Rect>) -> egui::Rect {
+pub(crate) fn show_rect(rig: &mut Rig, what: &str, get: &dyn Fn(&Rig) -> Option<egui::Rect>) -> egui::Rect {
     for _ in 0..30 {
         rig.draw(3);
         let screen = rig.ctx.screen_rect();
@@ -2600,12 +2600,12 @@ fn show_rect(rig: &mut Rig, what: &str, get: &dyn Fn(&Rig) -> Option<egui::Rect>
 }
 
 /// The check box of the value `label` in the open tick list, scrolled into view.
-fn tick_box(rig: &mut Rig, label: &str) -> egui::Rect {
+pub(crate) fn tick_box(rig: &mut Rig, label: &str) -> egui::Rect {
     let l = label.to_string();
     show_rect(rig, &format!("the check box of '{label}'"), &move |r| r.app.chart.filters_ui.panel.rects.boxes.iter().find(|(n, _)| *n == l).map(|(_, b)| *b))
 }
 
-fn filter_panel_button(rig: &mut Rig, which: &str) -> egui::Rect {
+pub(crate) fn filter_panel_button(rig: &mut Rig, which: &str) -> egui::Rect {
     let which = which.to_string();
     show_rect(rig, &format!("the tick list's '{which}'"), &move |r| {
         let p = &r.app.chart.filters_ui.panel.rects;
@@ -2638,7 +2638,7 @@ fn first_mark(rig: &Rig) -> (egui::Rect, String) {
     (m.rect, d.categories[m.category].clone())
 }
 
-fn wait_list(rig: &mut Rig) {
+pub(crate) fn wait_list(rig: &mut Rig) {
     pump_until(rig, "the tick list's values", &|r| r.app.chart.filters_ui.panel.full.is_some() && !r.app.jobs.any_busy());
     rig.draw(3);
 }
@@ -3246,12 +3246,12 @@ fn w11_the_studio_options_are_clicked_on_and_the_stacked_chart_labels_its_segmen
 // Each test drives the app to the state a guide note shows, by the same real clicks the tests above use, and writes the
 // picture under docs/guide/img/ (light, and dark where the app draws both), when python3 with numpy and Pillow is there.
 
-const SHOT_W: f32 = 1291.0;
-const SHOT_H: f32 = 700.0;
+pub(crate) const SHOT_W: f32 = 1291.0;
+pub(crate) const SHOT_H: f32 = 700.0;
 /// The pictures are made at two pixels to the point.
-const SHOT_PPP: f32 = 2.0;
+pub(crate) const SHOT_PPP: f32 = 2.0;
 
-fn can_shoot() -> bool {
+pub(crate) fn can_shoot() -> bool {
     let ok = crate::ui::render_tests_r::python_with_numpy_and_pillow();
     if !ok {
         eprintln!("skipped: python3 with numpy and Pillow is not available, so no guide pictures were written");
@@ -3260,7 +3260,7 @@ fn can_shoot() -> bool {
 }
 
 /// Makes the rig draw in the theme asked for, at the picture's scale.
-fn styled(rig: &mut Rig, dark: bool) {
+pub(crate) fn styled(rig: &mut Rig, dark: bool) {
     rig.app.ui_zoom = SHOT_PPP;
     rig.app.dark_mode = dark;
     crate::theme::apply_ui_theme(&rig.ctx, dark, SHOT_PPP);
@@ -3268,9 +3268,14 @@ fn styled(rig: &mut Rig, dark: bool) {
 }
 
 /// Writes `docs/guide/img/<name>[-dark].png`: the part `crop` (in points) of the frame as it is drawn now.
-fn shoot(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
+pub(crate) fn shoot(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
     rig.step(vec![egui::Event::PointerMoved(egui::pos2(2.0, 2.0))]);
     rig.draw(3);
+    shoot_held(rig, name, dark, crop);
+}
+
+/// `shoot` with the pointer left where it is (a picture of a tooltip).
+pub(crate) fn shoot_held(rig: &mut Rig, name: &str, dark: bool, crop: egui::Rect) {
     let screen = rig.ctx.screen_rect();
     let c = crop.intersect(screen);
     assert!(c.width() > 100.0 && c.height() > 40.0, "{name}: the part to draw {c:?} of {screen:?}");

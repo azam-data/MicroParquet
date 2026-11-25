@@ -33,10 +33,10 @@ pub const NO_ROWS_COLUMN: &str = "Row";
 /// Its only label.
 pub const NO_ROWS_LABEL: &str = "All rows";
 
-type Key = Vec<Option<String>>;
+pub(crate) type Key = Vec<Option<String>>;
 
 /// The data of one aggregation level: key (row part, column part) → one number per value field.
-type Cells = HashMap<(Key, Key), Vec<Option<f64>>>;
+pub(crate) type Cells = HashMap<(Key, Key), Vec<Option<f64>>>;
 
 /// Rows of the table that are only totals.
 #[derive(Clone, Debug, PartialEq)]
@@ -64,9 +64,29 @@ pub struct PivotBuild {
     /// For each value column of `df` (those after the label columns): the values of the Columns fields it stands for;
     /// a Total column has none.
     pub col_keys: Vec<Vec<Option<String>>>,
+    /// Why a cell is blank, for the cells of a time aggregation (Phase 9 M3): the reason is the cell's tooltip.
+    pub notes: Vec<CellNote>,
+    /// What to tell the owner about the pivot (Phase 9 M3): "Sum of Balance adds 23 dates of balances. ...".
+    pub warnings: Vec<String>,
+    /// The dates behind each time cell (Phase 9 M3 follow-up): (row key, column key, value index) → rows. Blank cells have none.
+    pub time_rows: HashMap<(Key, Key, usize), crate::measures::TimeRows>,
+    /// For each value column of `df`: the index of its value in the pivot's Values.
+    pub col_values: Vec<usize>,
+    /// The tab's date column when the pivot has time values.
+    pub date_column: String,
+    /// The date column is a Date and time column.
+    pub date_is_datetime: bool,
 }
 
-fn dtype_is_numeric(dt: &DataType) -> bool {
+/// Why one cell of a pivot is blank: its row in `df`, its column's heading and the reason.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellNote {
+    pub row: usize,
+    pub column: String,
+    pub text: String,
+}
+
+pub(crate) fn dtype_is_numeric(dt: &DataType) -> bool {
     dt.is_numeric()
 }
 
@@ -118,9 +138,35 @@ pub fn validate_pivot(schema: &Schema, spec: &PivotSpec) -> Result<()> {
     }
     let mut labels: HashSet<String> = HashSet::new();
     for v in &spec.values {
+        if v.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+            // a named measure (Phase 9 M5): its columns are checked when it is worked out
+            if !labels.insert(v.label()) {
+                bail!("Pivot: '{}' is in Values twice. Remove one.", v.label());
+            }
+            continue;
+        }
         let dt = schema
             .get(v.field.as_str())
             .ok_or_else(|| anyhow::anyhow!("Pivot: column '{}' (in Values) was not found. Remove it or pick another column.", v.field))?;
+        if let Some(t) = &v.time {
+            // a time aggregation (Phase 9 M3): the counts take any column, the others a number
+            if t.agg.needs_number() && !dtype_is_numeric(dt) {
+                bail!("Pivot: '{}' needs a number column, but '{}' is {}. Set it to a number in the schema, or use Count at closing.", v.label(), v.field, if dt.is_string() { "text".to_string() } else if dtype_is_date(dt) { "a date".to_string() } else { dt.to_string() });
+            }
+            if t.agg == TimeAgg::WAvgAtClosing {
+                let Some(w) = v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()) else {
+                    bail!("Pivot: '{}' needs a weight column. Choose one (usually Balance).", v.label());
+                };
+                let wdt = schema.get(w).ok_or_else(|| anyhow::anyhow!("Pivot: the weight column '{}' of '{}' was not found.", w, v.label()))?;
+                if !dtype_is_numeric(wdt) {
+                    bail!("Pivot: the weight column '{}' of '{}' is not a number.", w, v.label());
+                }
+            }
+            if !labels.insert(v.label()) {
+                bail!("Pivot: '{}' is in Values twice. Remove one.", v.label());
+            }
+            continue;
+        }
         let needs_number = matches!(v.agg, PivotAgg::Sum | PivotAgg::Average | PivotAgg::Min | PivotAgg::Max | PivotAgg::WeightedAvg);
         if needs_number && !dtype_is_numeric(dt) {
             bail!(
@@ -145,12 +191,12 @@ pub fn validate_pivot(schema: &Schema, spec: &PivotSpec) -> Result<()> {
         }
     }
     if spec.show_as != PivotShowAs::NoCalculation {
-        if let Some(v) = spec.values.iter().find(|v| !v.agg.is_additive()) {
+        if let Some(v) = spec.values.iter().find(|v| if let Some(t) = &v.time { !t.agg.is_additive() || t.is_m4() } else { !v.agg.is_additive() }) {
             bail!(
                 "Pivot: '{}' cannot be shown as a share ({}): parts of an {} do not add up to its total. Use Sum or Count, or choose No calculation.",
                 v.label(),
                 spec.show_as.label(),
-                v.agg.label().to_lowercase()
+                v.time.map(|t| t.agg.label()).unwrap_or(v.agg.label()).to_lowercase()
             );
         }
     }
@@ -166,6 +212,10 @@ pub fn validate_pivot(schema: &Schema, spec: &PivotSpec) -> Result<()> {
 /// weights of a weighted average mix positive and negative).
 fn value_exprs(j: usize, v: &PivotValue) -> Vec<Expr> {
     let a = format!("__a{j}");
+    if v.time.is_some() {
+        // a time aggregation is worked out from the daily series (pivot_time.rs); this only keeps the cell alive
+        return vec![len().cast(DataType::Float64).alias(&a)];
+    }
     match v.agg {
         PivotAgg::Sum => vec![col(format!("__v{j}")).sum().cast(DataType::Float64).alias(&a)],
         PivotAgg::Average => vec![col(format!("__v{j}")).mean().cast(DataType::Float64).alias(&a)],
@@ -181,7 +231,7 @@ fn value_exprs(j: usize, v: &PivotValue) -> Vec<Expr> {
 }
 
 /// The filter of a pivot table as one condition (`None` when nothing is restricted).
-fn filter_predicate(spec: &PivotSpec, schema: &Schema) -> Option<Expr> {
+pub(crate) fn filter_predicate(spec: &PivotSpec, schema: &Schema) -> Option<Expr> {
     let mut all: Option<Expr> = None;
     for f in &spec.filters {
         if f.values.is_empty() {
@@ -226,6 +276,9 @@ fn working_frame(lf: LazyFrame, spec: &PivotSpec, schema: &Schema) -> LazyFrame 
         }
     }
     for (j, v) in spec.values.iter().enumerate() {
+        if v.time.is_some() {
+            continue;
+        }
         let dt = schema.get(v.field.as_str()).cloned().unwrap_or(DataType::String);
         match v.agg {
             PivotAgg::Count | PivotAgg::CountDistinct => exprs.push(key_text_expr(&v.field, &dt).alias(format!("__s{j}"))),
@@ -315,6 +368,21 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 
 /// One label of a key field: blanks last, numbers and dates by value, text in natural order.
 fn cmp_label(orders: &HashMap<Option<String>, f64>, numeric: bool, order: &SortOrder, a: &Option<String>, b: &Option<String>) -> Ordering {
+    cmp_label_in(orders, numeric, false, order, a, b)
+}
+
+/// Where a label of a lookup field sorts (M1): the values first, then "(blank)", "(blank key)", "(no match)", whatever the order chosen.
+fn lookup_rank(k: &Option<String>) -> u8 {
+    crate::model::key_rank(k)
+}
+
+fn cmp_label_in(orders: &HashMap<Option<String>, f64>, numeric: bool, lookup: bool, order: &SortOrder, a: &Option<String>, b: &Option<String>) -> Ordering {
+    if lookup {
+        let (ra, rb) = (lookup_rank(a), lookup_rank(b));
+        if ra != rb && (ra > 0 || rb > 0) {
+            return ra.cmp(&rb);
+        }
+    }
     if !order.is_natural() {
         // a custom list or Tenor (U3): blanks last, then the listed or parsed values in order
         return order.compare(a, b);
@@ -355,6 +423,8 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         .map(|f| schema.get(f.as_str()).map(|dt| dtype_is_numeric(dt) || dtype_is_date(dt)).unwrap_or(false))
         .collect();
 
+    let lf_time = if spec.has_time_values() { Some(lf.clone()) } else { None };
+    let mut warnings = crate::pivot_time::stock_warnings(&lf, spec, &schema)?;
     let work = working_frame(lf, spec, &schema);
     let rows_idx: Vec<usize> = (0..nr).collect();
     let cols_idx: Vec<usize> = (nr..nr + nc).collect();
@@ -416,14 +486,45 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         );
     }
 
+    // the time aggregations (Phase 9 M3) are worked out from the daily series, cell by cell
+    let time_result = match lf_time {
+        Some(lf_time) => Some(crate::pivot_time::fill_time_cells(lf_time, spec, &schema, &levels, nr, &row_keys, &col_keys, &mut cells)?),
+        None => None,
+    };
+    let month_end = time_result.as_ref().is_some_and(|t| t.month_end);
+    let heading = |v: &PivotValue| -> String {
+        match &v.time {
+            Some(t) => {
+                let h = t.heading(&v.field, v.weight_col.as_deref().map(str::trim).filter(|w| !w.is_empty()), month_end);
+                // a change in a percent ratio is in percentage points
+                if t.agg == TimeAgg::Measure && t.show == TimeShow::Difference && crate::measures::find_measure(&v.field).is_some_and(|m| m.is_percent_ratio()) {
+                    format!("{} (pp)", h)
+                } else {
+                    h
+                }
+            }
+            None => v.label(),
+        }
+    };
+
+    if let Some(t) = &time_result {
+        warnings.extend(t.extra.iter().cloned());
+        for (j, a, b, as_of) in &t.spans {
+            if let Some(v) = spec.values.get(*j) {
+                warnings.push(crate::measures::span_note(&heading(v), *a, *b, *as_of));
+            }
+        }
+    }
+
     let sort = spec.sort_by_value;
     let field_orders: Vec<SortOrder> = all_fields
         .iter()
         .map(|f| spec.field_orders.iter().find(|o| o.field == **f).map(|o| o.order.clone()).unwrap_or_default())
         .collect();
+    let is_lookup: Vec<bool> = all_fields.iter().map(|f| spec.model_fields.iter().any(|m| &m.name == *f)).collect();
     let by_labels = |a: &Key, b: &Key, idx0: usize| -> Ordering {
         for (p, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-            let o = cmp_label(&orders[idx0 + p], numeric_key[idx0 + p], &field_orders[idx0 + p], x, y);
+            let o = cmp_label_in(&orders[idx0 + p], numeric_key[idx0 + p], is_lookup[idx0 + p], &field_orders[idx0 + p], x, y);
             if o != Ordering::Equal {
                 return o;
             }
@@ -434,6 +535,13 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
         if let Some(s) = sort {
             // level by level: the group's total first, then its label
             for k in 1..=a.len() {
+                // a lookup field's "(blank)" and "(no match)" stay last, whatever their totals
+                if is_lookup[k - 1] {
+                    let (ra, rb) = (lookup_rank(&a[k - 1]), lookup_rank(&b[k - 1]));
+                    if ra != rb && (ra > 0 || rb > 0) {
+                        return ra.cmp(&rb);
+                    }
+                }
                 let total = |key: &Key| -> Option<f64> { cells.get(&(key[..k].to_vec(), Vec::new())).and_then(|v| v.get(s.value_index).copied().flatten()) };
                 let (ta, tb) = (total(a), total(b));
                 let o = match (ta, tb) {
@@ -445,7 +553,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
                     (None, Some(_)) => Ordering::Greater,
                     (Some(_), None) => Ordering::Less,
                 };
-                let o = o.then_with(|| cmp_label(&orders[k - 1], numeric_key[k - 1], &field_orders[k - 1], &a[k - 1], &b[k - 1]));
+                let o = o.then_with(|| cmp_label_in(&orders[k - 1], numeric_key[k - 1], is_lookup[k - 1], &field_orders[k - 1], &a[k - 1], &b[k - 1]));
                 if o != Ordering::Equal {
                     return o;
                 }
@@ -487,18 +595,18 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     let mut out_cols: Vec<(String, ColKind)> = Vec::new();
     if nc == 0 {
         for (j, v) in spec.values.iter().enumerate() {
-            out_cols.push((v.label(), ColKind::Cell(Vec::new(), j)));
+            out_cols.push((heading(v), ColKind::Cell(Vec::new(), j)));
         }
     } else {
         for ck in &col_keys {
             for (j, v) in spec.values.iter().enumerate() {
-                let name = if multi { format!("{} | {}", key_label(ck), v.label()) } else { key_label(ck) };
+                let name = if multi { format!("{} | {}", key_label(ck), heading(v)) } else { key_label(ck) };
                 out_cols.push((name, ColKind::Cell(ck.clone(), j)));
             }
         }
         if spec.row_totals {
             for (j, v) in spec.values.iter().enumerate() {
-                let name = if multi { format!("{} | {}", TOTAL_LABEL, v.label()) } else { TOTAL_LABEL.to_string() };
+                let name = if multi { format!("{} | {}", TOTAL_LABEL, heading(v)) } else { TOTAL_LABEL.to_string() };
                 out_cols.push((name, ColKind::RowTotal(j)));
             }
         }
@@ -574,6 +682,7 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
             c.push(labels.get(i).cloned().unwrap_or_default());
         }
     }
+    let mut notes: Vec<CellNote> = Vec::new();
     let mut series: Vec<Series> = label_names.iter().zip(label_cols).map(|(n, c)| Series::new(n.as_str().into(), c)).collect();
     for (name, ck) in &out_cols {
         let j = match ck {
@@ -593,7 +702,31 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
                 }
             })
             .collect();
-        let is_count = matches!(spec.values[j].agg, PivotAgg::Count | PivotAgg::CountDistinct) && spec.show_as == PivotShowAs::NoCalculation;
+        let is_count = match &spec.values[j].time {
+            Some(t) => t.agg.is_count() && t.show != TimeShow::PercentChange,
+            None => matches!(spec.values[j].agg, PivotAgg::Count | PivotAgg::CountDistinct),
+        } && spec.show_as == PivotShowAs::NoCalculation;
+        // why a time cell is blank: its reason is the cell's tooltip
+        if let Some(t) = &time_result {
+            for (r, v) in values.iter().enumerate() {
+                if v.is_some() {
+                    continue;
+                }
+                let (rowpart, colpart): (Key, Key) = (
+                    match &out_rows[r] {
+                        RowKind::Detail(k) | RowKind::Subtotal(_, k) => k.clone(),
+                        RowKind::Grand => Vec::new(),
+                    },
+                    match ck {
+                        ColKind::Cell(k, _) => k.clone(),
+                        ColKind::RowTotal(_) => Vec::new(),
+                    },
+                );
+                if let Some(text) = t.notes.get(&(rowpart, colpart, j)) {
+                    notes.push(CellNote { row: r, column: name.clone(), text: text.clone() });
+                }
+            }
+        }
         if is_count {
             let ints: Vec<Option<i64>> = values.iter().map(|v| v.map(|x| x.round() as i64)).collect();
             series.push(Series::new(name.as_str().into(), ints));
@@ -616,25 +749,57 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
             ColKind::RowTotal(_) => Vec::new(),
         })
         .collect();
-    Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys })
+    let col_values: Vec<usize> = out_cols.iter().map(|(_, c)| match c { ColKind::Cell(_, j) | ColKind::RowTotal(j) => *j }).collect();
+    let (time_rows, date_column, date_is_datetime) = match time_result {
+        Some(t) => (t.rows, t.date_column, t.date_is_datetime),
+        None => (HashMap::new(), String::new(), false),
+    };
+    Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys, notes, warnings, time_rows, col_values, date_column, date_is_datetime })
+}
+
+/// Why Show rows is off on the cell of a named measure (Phase 9 M5): its number comes from several filtered series.
+pub const MEASURE_NO_ROWS: &str = "This number combines several filtered series. Use Show rows on a column value instead.";
+
+/// Whether the value column headed `col_name` of the pivot `spec` holds a named measure (its heading is the measure's name, then
+/// the window, shift and show). With one value and Columns fields the headings are the column keys only, so every value column
+/// is that value's.
+pub fn is_measure_column(spec: &PivotSpec, col_name: &str) -> bool {
+    let is_measure = |v: &PivotValue| v.time.is_some_and(|t| t.agg == TimeAgg::Measure);
+    if spec.values.len() == 1 {
+        return is_measure(&spec.values[0]);
+    }
+    let last = col_name.rsplit(" | ").next().unwrap_or(col_name);
+    spec.values.iter().filter(|v| is_measure(v)).any(|v| last == v.field || last.starts_with(&format!("{} \u{b7} ", v.field)) || last.starts_with(&format!("{} (pp)", v.field)))
 }
 
 /// The rows behind one cell of a pivot (Phase 8 W6: "Show rows").
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct CellRows {
     /// The pivot's own filters, then one condition per Rows and Columns field the cell stands for.
     pub conditions: Vec<crate::models::FilterCondition>,
     /// "Rows: Branch = Dhaka, Term = 1Y".
     pub title: String,
+    /// Steps that follow the filter (a time cell's "Part" column).
+    pub extra_steps: Vec<crate::models::TransformStep>,
+    /// Said under the tab's title.
+    pub note: Option<String>,
+}
+
+/// The drill level a pivot field stands for: a date part, a lookup field or a column.
+fn level_of(spec: &PivotSpec, field: &str) -> crate::charts::spec::DrillLevel {
+    use crate::charts::spec::DrillLevel;
+    if let Some(f) = spec.date_fields.iter().find(|f| f.name == field) {
+        return DrillLevel::of_part(f);
+    }
+    if let Some(f) = spec.model_fields.iter().find(|f| f.name == field) {
+        return DrillLevel::of_model(f);
+    }
+    DrillLevel::column(field)
 }
 
 /// The condition "this field is `value`" for a pivot field: a date field (a part of a date column) reads its part.
 fn field_condition(spec: &PivotSpec, field: &str, value: &Option<String>, keep: bool) -> crate::models::FilterCondition {
-    use crate::charts::spec::DrillLevel;
-    let level = match spec.date_fields.iter().find(|f| f.name == field) {
-        Some(f) => DrillLevel::of_part(f),
-        None => DrillLevel::column(field),
-    };
+    let level = level_of(spec, field);
     level.condition(value.as_deref().unwrap_or(BLANK_LABEL), keep)
 }
 
@@ -642,6 +807,16 @@ fn field_condition(spec: &PivotSpec, field: &str, value: &Option<String>, keep: 
 /// A subtotal row restricts only the fields it covers, a Total column and the grand total restrict none (so "Show rows" of a
 /// total gives the rows of that total). `col_name` is the heading of the clicked value column.
 pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &str) -> Result<CellRows> {
+    let Some(row_key) = build.row_keys.get(row) else {
+        bail!("Show rows: that cell is not in the pivot (row {}). Open the pivot again.", row + 1);
+    };
+    cell_rows_at(spec, build, row_key, col_name)
+}
+
+/// `cell_rows` for the Rows values a line stands for instead of a row of the table: a line of the Nested layout (Phase 9 P2). A
+/// parent line has the first few Rows fields' values and gives every source row of that group, the Grand total none and gives all
+/// of them; either way the pivot's own filters apply.
+pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String>], col_name: &str) -> Result<CellRows> {
     let names: Vec<String> = build.df.get_column_names().iter().map(|n| n.to_string()).collect();
     let Some(at) = names.iter().position(|n| n == col_name) else {
         bail!("Show rows: the column '{}' is not in the pivot. Open the pivot again.", col_name);
@@ -649,20 +824,25 @@ pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &st
     if at < build.label_columns {
         bail!("Show rows works on the value cells, not on the row labels. Double-click a number.");
     }
-    let (Some(row_key), Some(col_key)) = (build.row_keys.get(row), build.col_keys.get(at - build.label_columns)) else {
-        bail!("Show rows: that cell is not in the pivot (row {}). Open the pivot again.", row + 1);
+    let Some(col_key) = build.col_keys.get(at - build.label_columns) else {
+        bail!("Show rows: the column '{}' is not in the pivot. Open the pivot again.", col_name);
     };
+    if row_key.len() > spec.rows.len() {
+        bail!("Show rows: that line has more values than the pivot has Rows fields. Open the pivot again.");
+    }
+    let value_at = build.col_values.get(at - build.label_columns).copied().unwrap_or(0);
+    let time_cell = spec.values.get(value_at).is_some_and(|v| v.time.is_some());
+    if time_cell {
+        return time_cell_rows(spec, build, row_key, col_key, value_at);
+    }
     let mut conditions: Vec<crate::models::FilterCondition> = Vec::new();
     for f in &spec.filters {
         if f.values.is_empty() {
             continue;
         }
-        let level = match spec.date_fields.iter().find(|d| d.name == f.field) {
-            Some(d) => crate::charts::spec::DrillLevel::of_part(d),
-            None => crate::charts::spec::DrillLevel::column(&f.field),
-        };
+        let level = level_of(spec, &f.field);
         let mut c = level.condition("", true);
-        c.values = f.values.iter().flatten().cloned().collect();
+        c.set_picked(f.values.iter().flatten().cloned().collect());
         c.or_blank = f.values.iter().any(|v| v.is_none());
         conditions.push(c);
     }
@@ -680,7 +860,78 @@ pub fn cell_rows(spec: &PivotSpec, build: &PivotBuild, row: usize, col_name: &st
         }
     }
     let title = if parts.is_empty() { "Rows: all rows of the pivot".to_string() } else { format!("Rows: {}", parts.join(", ")) };
-    Ok(CellRows { conditions, title })
+    Ok(CellRows { conditions, title, extra_steps: Vec::new(), note: None })
+}
+
+/// The rows behind a time cell (M3 follow-up): the cell's keys and filters on the other fields, and the dates its number is made
+/// of. A Calendar field only picks the period, so it is not a condition: the rows are those of the dates the number reads.
+fn time_cell_rows(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String>], col_key: &[Option<String>], j: usize) -> Result<CellRows> {
+    use crate::models::{CondOp, FilterCondition};
+    let value = &spec.values[j];
+    if value.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+        bail!("{}", MEASURE_NO_ROWS);
+    }
+    let calendar: HashSet<String> = match crate::model::scope().and_then(|c| c.calendar.clone()) {
+        Some(cal) => crate::pivot_time::calendar_fields(spec, &cal.tab),
+        None => HashSet::new(),
+    };
+    let Some(tr) = build.time_rows.get(&(row_key.to_vec(), col_key.to_vec(), j)) else {
+        bail!("Show rows: this cell is blank, so it has no rows. Point at it to see why.");
+    };
+    let mut conditions: Vec<FilterCondition> = Vec::new();
+    for f in &spec.filters {
+        if f.values.is_empty() || calendar.contains(&f.field) {
+            continue;
+        }
+        let mut c = level_of(spec, &f.field).condition("", true);
+        c.set_picked(f.values.iter().flatten().cloned().collect());
+        c.or_blank = f.values.iter().any(|v| v.is_none());
+        conditions.push(c);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (i, v) in row_key.iter().enumerate() {
+        if let Some(field) = spec.rows.get(i) {
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+            if !calendar.contains(field) {
+                conditions.push(field_condition(spec, field, v, true));
+            }
+        }
+    }
+    for (i, v) in col_key.iter().enumerate() {
+        if let Some(field) = spec.columns.get(i) {
+            parts.push(format!("{} = {}", field, v.as_deref().unwrap_or(BLANK_LABEL)));
+            if !calendar.contains(field) {
+                conditions.push(field_condition(spec, field, v, true));
+            }
+        }
+    }
+    let column = build.date_column.clone();
+    if build.date_is_datetime {
+        bail!("Show rows: '{}' is a Date and time column, so the rows of a day can't be picked from it. Convert it to a Date (Convert column type) in the data tab first.", column);
+    }
+    if column.is_empty() {
+        bail!("Show rows: the date column of this pivot's tab is not known. Open the pivot again.");
+    }
+    let mut dates: Vec<String> = tr.dates.iter().map(|(d, _)| d.format("%Y-%m-%d").to_string()).collect();
+    dates.sort();
+    dates.dedup();
+    conditions.push(FilterCondition { column: column.clone(), op: CondOp::InList, values: dates, ..Default::default() });
+    let mut extra_steps = Vec::new();
+    if tr.dates.iter().any(|(_, p)| p.is_some()) {
+        // Period amount: the rows of the two dates it subtracts, told apart
+        let end = tr.dates.iter().find(|(_, p)| *p == Some("End")).map(|(d, _)| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+        extra_steps.push(crate::models::TransformStep::ConditionalColumn {
+            new_col: "Part".to_string(),
+            rules: vec![crate::models::CondRule { col_name: column, op: crate::models::FilterOp::Eq, compare_val: end, output_val: "End".to_string(), compare_is_col: false, values: Vec::new() }],
+            fallback: "Start".to_string(),
+            output_as_float: false,
+            blank_result: Default::default(),
+        });
+    }
+    let what = spec.values[j].label();
+    let _ = value;
+    let title = if parts.is_empty() { format!("Rows: {}", what) } else { format!("Rows: {} \u{b7} {}", parts.join(", "), what) };
+    Ok(CellRows { conditions, title, extra_steps, note: tr.note.map(str::to_string) })
 }
 
 /// Whether "Show rows" can read the cells of a tab (Phase 8 W6 follow-up): the tab's last pivot, and the steps that come
@@ -933,12 +1184,21 @@ pub fn without_total_rows(lf: LazyFrame, steps: &[TransformStep]) -> LazyFrame {
 /// The pivot as a step of a pipeline: the table, then lazy again.
 /// The pivot's input: the table with its date fields (W2) added as columns.
 pub fn pivot_input(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
-    if spec.date_fields.is_empty() {
+    if spec.date_fields.is_empty() && spec.model_fields.is_empty() {
         return Ok(lf);
     }
     let mut lf = lf;
     let schema = lf.collect_schema().context("Could not read the column types for this pivot")?;
-    crate::dates::with_date_fields(lf, &spec.date_fields, &schema, "Pivot")
+    let lf = if spec.date_fields.is_empty() { lf } else { crate::dates::with_date_fields(lf, &spec.date_fields, &schema, "Pivot")? };
+    // lookup fields (M1): a field that labels (Rows, Columns, Filters) is text with "(no match)"; one that is only a Values field keeps its type
+    let wants = spec.model_fields.iter().filter(|f| spec.uses_field(&f.name)).map(|f| crate::model::LookupWant {
+        field: f.clone(),
+        out: f.name.clone(),
+        as_: if spec.labels_with(&f.name) { crate::model::LookupAs::Text } else { crate::model::LookupAs::Raw },
+        unmatched_out: None,
+        blank_key_out: None,
+    });
+    crate::model::with_lookup_columns(lf, &wants.collect::<Vec<_>>(), "Pivot")
 }
 
 pub fn apply_pivot_table(lf: LazyFrame, spec: &PivotSpec) -> Result<LazyFrame> {
@@ -1023,7 +1283,28 @@ pub fn pivot_value_format(v: &PivotValue, spec: &PivotSpec, decimals: usize) -> 
     if spec.show_as != PivotShowAs::NoCalculation {
         return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 };
     }
-    if matches!(v.agg, PivotAgg::Count | PivotAgg::CountDistinct) {
+    if v.time.is_some_and(|t| t.show == TimeShow::PercentChange) {
+        return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 };
+    }
+    if v.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+        // a named measure (M5): a percent ratio in percent (a difference of two is in percentage points), a plain ratio as a number,
+        // a base measure as the column it adds up
+        match crate::measures::find_measure(&v.field) {
+            Some(crate::measures::NamedMeasure::Ratio { format: crate::measures::RatioFormat::Percent, .. }) => return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 },
+            Some(crate::measures::NamedMeasure::Ratio { .. }) => return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 2 },
+            Some(crate::measures::NamedMeasure::Base { column, aggregation, .. }) => {
+                if aggregation.is_count() {
+                    return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 0 };
+                }
+                return match classify_column_auto_format(&column) {
+                    MetricFormatType::Auto => ColumnFormatSpec { fmt_type: spec.scale.format_type().unwrap_or(MetricFormatType::Auto), decimals },
+                    other => ColumnFormatSpec { fmt_type: other, decimals },
+                };
+            }
+            None => {}
+        }
+    }
+    if matches!(v.agg, PivotAgg::Count | PivotAgg::CountDistinct) && v.time.is_none() || v.time.is_some_and(|t| t.agg.is_count()) {
         return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 0 };
     }
     match classify_column_auto_format(&v.field) {
@@ -1094,7 +1375,7 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
                 (PivotAgg::WeightedAvg, Some(w.to_string()))
             }
         };
-        let v = PivotValue { field: a.target_col.clone(), agg, weight_col };
+        let v = PivotValue { field: a.target_col.clone(), agg, weight_col, time: None };
         if values.iter().any(|o| o.label() == v.label()) {
             bail!(
                 "The metrics '{}' and another one both calculate '{}'. The new pivot allows each calculation once; remove one, then convert.",
@@ -1145,6 +1426,9 @@ pub fn convert_group_by_pivot(step: &TransformStep) -> Result<PivotConversion> {
             sort_by_value,
             field_orders: Vec::new(),
             date_fields: Vec::new(),
+            model_fields: Vec::new(),
+            layout: PivotLayout::SideBySide,
+            data_tab: String::new(),
         },
         renames,
         notes,

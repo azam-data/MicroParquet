@@ -10,6 +10,8 @@ Window settings: View ▸ Zoom (or Ctrl+= / Ctrl+- / Ctrl+0, or a click on the p
 
 Project and calendar (Phase 8): the File menu also has New project, Open project…, Open recent project, Save project, Save project as… and Close project ([Projects](projects.md)); View has Calendar… ([Calendar settings](calendar-settings.md)) and House colours… ([Colours](colours.md)). The notes of this phase have eight sections instead of ten: what it does, when to use it, how to use it, an example from the tests, what it refuses and why, the Python export, where it is saved, and related tools.
 
+The model (Phase 9): a project can link its tabs like tables of a database, share one calendar, and measure balances and flows over time. The notes of this phase have the same eight sections: [Links between tabs](model-links.md), [Key check](key-check.md), [Shared calendar](model-calendar.md), [Balances and flows](balances-and-flows.md), [Time intelligence](time-intelligence.md), [Measures and ratios](measures-and-ratios.md), [Pivot builder in its own window](pivot-popout.md), [Nested pivot layout](pivot-nested.md) and [A monthly model, start to finish](monthly-model.md).
+
 Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scale). Rates are in percent (9.5 means 9.5%). Shocks are in basis points. CBS dates are normally D/M/Y.
 
 ## Data preparation
@@ -41,6 +43,18 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Report packs](report-packs.md): a monthly workbook (Cover plus one sheet per item) made from this month's files.
 - [Saved tool runs](saved-tool-runs.md): keep the inputs of a result tab in a file and re-run the tool with other inputs.
 - [Projects (.mpproj)](projects.md): File ▸ Save project: the tabs, steps, pivots and charts of a session, reopened on this month's files through the Sources dialog.
+
+## The model (Phase 9)
+
+- [Pivot builder in its own window](pivot-popout.md): Pop out the pivot dialog to a window of its own, with a larger preview; the same state, never a copy.
+- [Nested pivot layout](pivot-nested.md): Excel's Compact form: one "Row Labels" column, bold subtotals on the parent lines, indented children.
+- [Links between tabs](model-links.md): Model ▸ Links…: Accounts to the branch master, the product master (two key columns), the GL map; lookup fields in pivots, charts and filters.
+- [Key check](key-check.md): duplicate, blank and unmatched keys, as lists you can send back to be fixed.
+- [Shared calendar](model-calendar.md): one calendar for every date-linked tab, its snapshot dates (month-end or daily) and the as-of date.
+- [Balances and flows](balances-and-flows.md): closing, opening and average balances, flow totals and YTD movements, and why balances are never added across dates.
+- [Time intelligence](time-intelligence.md): MTD, QTD, YTD, prior period and same period last year, the same days or the full period.
+- [Measures and ratios](measures-and-ratios.md): named measures, CASA ratio, ADR, yield, cost of funds and NIM with a day count; rename a measure and everything follows.
+- [A monthly model, start to finish](monthly-model.md): one worked project and the monthly routine.
 
 ## Treasury & ALM
 

@@ -42,3 +42,18 @@ shared this repository's build cache, with a throw-away test that used `tests/ph
 only): three macros saved with `save_macro_to_file`, a pack saved with `save_pack`, a chart saved with `save_chart`,
 and `phase7_replay.hashes.json`, the blake3 of what that code gave for them and for the seven older macro fixtures
 above. `w0_the_phase7_samples_replay_to_the_hashes_the_phase7_code_gave` replays them. Do not edit these files by hand.
+
+## Phase 8 baseline (Phase 9 goal 3)
+
+`phase8_replay/` was made by the code of the tag `v1.8.0` (the end of Phase 8), in a temporary git worktree that shared
+this repository's build cache, with a throw-away integration test that called `generate` of `tests/phase9/p8_baseline.rs`
+(Phase 8 APIs only): three macros saved with `save_macro_to_file` (Split date, a filter by a date part with ≥, an unnumbered
+rate band), a pack with a pivot by a date field and a chart (`save_pack`), two saved charts (`save_chart`; "Deposits drill"
+has drill levels, its own filter, a colour pick, segment labels and the data table), a project of 7 tabs (`write_project`:
+a file, a file with steps, the branch file, a join, a pivot tab, a gap ladder run and a chart tab at drill level 2), the two
+data files (`data/`) and `phase8_replay.hashes.json`, the blake3 of what that code gave: the rows of the macros, of the
+pack's sheets and of the 7 tabs, the numbers and layout of the charts in both themes, and the project's text after
+save → open → save (without `saved_at`, `app_version` and the files' modified times, and with the folder written as
+`<ROOT>`). `b0_the_phase8_samples_replay_to_the_hashes_the_phase8_code_gave` replays them on a copy. The `.mpproj` holds the
+absolute path of the machine that made it next to the path relative to its folder; the test reads the copies of the data
+files through relinks, so it does not depend on where the repository is. Do not edit these files by hand.

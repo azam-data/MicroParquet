@@ -1695,7 +1695,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => collect_masked_columns(source, out),
-        TabSource::Unavailable { .. } => {}
+        TabSource::Unavailable { .. } | TabSource::Calendar { .. } => {}
     }
 }
 
@@ -1715,7 +1715,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => source_masks_pii(source),
-        TabSource::Unavailable { .. } => false,
+        TabSource::Unavailable { .. } | TabSource::Calendar { .. } => false,
     }
 }
 
@@ -1865,6 +1865,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
             }
         }
         TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::Calendar { .. } => {}
         TabSource::Unavailable { reason } => anyhow::bail!("{}", reason),
     }
     let mut merged: Vec<ParseFailure> = Vec::new();
@@ -2588,6 +2589,7 @@ pub fn compile_tab_lazy(
             let curr_lf = compile_tab_lazy(curr_source, curr_steps, temp_dir)?;
             crate::banking::build_cl_migration(prev_lf, curr_lf, spec)?.lazy()
         }
+        TabSource::Calendar { settings, first_year, last_year } => crate::model_calendar::calendar_frame(settings, *first_year, *last_year)?.lazy(),
         TabSource::Unavailable { reason } => anyhow::bail!("This tab could not be opened: {}", reason),
     };
 
@@ -2728,14 +2730,25 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             let mut schema = lf
                 .collect_schema()
                 .context("Could not read the column types for this filter")?;
-            // a condition on a date part (W2) tests a column of that part, added here and dropped after
-            let (conditions, temps) = with_condition_parts(&mut lf, conditions, &schema)?;
+            // a condition on a lookup field (M1) tests a column of the lookup, joined here and dropped after
+            let (conditions, mut temps, unmatched) = with_condition_lookups(&mut lf, conditions, &schema)?;
             if !temps.is_empty() {
                 schema = lf.collect_schema().context("Could not read the column types for this filter")?;
             }
+            // a condition on a date part (W2) tests a column of that part, added here and dropped after
+            let (conditions, part_temps) = with_condition_parts(&mut lf, &conditions, &schema)?;
+            let parts_added = !part_temps.is_empty();
+            temps.extend(part_temps);
+            if parts_added {
+                schema = lf.collect_schema().context("Could not read the column types for this filter")?;
+            }
             let mut exprs = Vec::with_capacity(conditions.len());
-            for c in &conditions {
-                exprs.push(build_condition_expr(c, &schema)?);
+            for (i, c) in conditions.iter().enumerate() {
+                let e = build_condition_expr(c, &schema)?;
+                exprs.push(match unmatched.get(i).and_then(|u| u.as_ref()) {
+                    Some((u, b)) => no_match_expr(e, c, u, b),
+                    None => e,
+                });
             }
             let mut it = exprs.into_iter();
             let mut combined = it.next().unwrap_or_else(|| lit(true));
@@ -2982,6 +2995,37 @@ fn apply_single_step(lf: LazyFrame, step: &TransformStep) -> Result<LazyFrame> {
             Ok(res_lf)
         }
     }
+}
+
+/// The conditions of a filter that are on a lookup field (Phase 9 M1) made conditions on a column: each reads `__mp_lk<i>`, the
+/// lookup's column joined to the table by the link (text with "(no match)" for a text column; the lookup's own value for any
+/// other), added to `lf`. Returns the conditions to test and the names to drop after.
+pub fn with_condition_lookups(lf: &mut LazyFrame, conditions: &[FilterCondition], _schema: &Schema) -> Result<(Vec<FilterCondition>, Vec<String>, Vec<Option<(String, String)>>)> {
+    let mut unmatched_cols: Vec<Option<(String, String)>> = vec![None; conditions.len()];
+    let mut out = Vec::with_capacity(conditions.len());
+    let mut wants = Vec::new();
+    let mut temps = Vec::new();
+    for (i, c) in conditions.iter().enumerate() {
+        match &c.lookup {
+            Some(f) => {
+                let name = format!("__mp_lk{}", i);
+                // the lookup's own value in its own type; "(no match)" is the flag in a column of its own, never a value (M1-4)
+                let un = format!("__mp_lku{}", i);
+                let bk = format!("__mp_lkb{}", i);
+                wants.push(crate::model::LookupWant { field: f.clone(), out: name.clone(), as_: crate::model::LookupAs::Raw, unmatched_out: Some(un.clone()), blank_key_out: Some(bk.clone()) });
+                out.push(FilterCondition { column: name.clone(), lookup: None, ..c.clone() });
+                temps.push(name);
+                temps.push(un.clone());
+                temps.push(bk.clone());
+                unmatched_cols[i] = Some((un, bk));
+            }
+            None => out.push(c.clone()),
+        }
+    }
+    if !wants.is_empty() {
+        *lf = crate::model::with_lookup_columns(lf.clone(), &wants, "Filter")?;
+    }
+    Ok((out, temps, unmatched_cols))
 }
 
 /// The conditions of a filter with their date parts (W2) made columns: each condition with a part reads a
@@ -3312,6 +3356,18 @@ fn typed_operand(col_name: &str, trimmed: &str, schema: &Schema) -> Result<(Expr
             dtype
         );
     }
+}
+
+/// A condition on a lookup field, with "(no match)" (M1-4) and "(blank key)" (M1-12): a row whose key has no row in the lookup is kept by the flag alone. The
+/// lookup's value is blank there, but "(blank)" means a matched lookup row with a blank cell and never includes an unmatched row.
+/// A condition that leaves values out ("not equal", "not in list", "is not blank") keeps an unmatched row unless "(no match)" is
+/// picked.
+fn no_match_expr(e: Expr, c: &FilterCondition, unmatched: &str, blank_key: &str) -> Expr {
+    let negating = matches!(c.op, CondOp::NotEquals | CondOp::NotInList | CondOp::IsNotBlank);
+    let on_unmatched = if negating { !c.no_match } else { c.no_match };
+    // a row whose key is blank is its own set: only "(blank key)" keeps it, never "(blank)" or "(no match)" (M1-12)
+    let on_blank_key = if negating { !c.blank_key } else { c.blank_key };
+    when(col(blank_key)).then(lit(on_blank_key)).when(col(unmatched)).then(lit(on_unmatched)).otherwise(e)
 }
 
 /// One condition of a filter group, with the same type-aware comparison as a single filter.

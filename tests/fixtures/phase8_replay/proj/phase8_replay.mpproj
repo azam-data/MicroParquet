@@ -1,0 +1,977 @@
+{
+  "active_tab": "t6",
+  "app_version": "1.8.0",
+  "project_version": 1,
+  "saved_at": "2026-11-24T07:22:26+00:00",
+  "tabs": [
+    {
+      "chart": {
+        "advanced_json": "",
+        "agg": "Sum",
+        "bar_status": [],
+        "bins": null,
+        "by_value": false,
+        "category": "Product",
+        "category_part": null,
+        "colour_map": {
+          "custom": [
+            [
+              "Retail",
+              {
+                "hex": "#037952",
+                "kind": "hex"
+              }
+            ]
+          ],
+          "slots": [
+            [
+              "Retail",
+              0
+            ],
+            [
+              "Corporate",
+              1
+            ]
+          ]
+        },
+        "data_table": "Below",
+        "donut_top": null,
+        "drill": [
+          {
+            "name": "Product",
+            "part": null
+          },
+          {
+            "name": "Branch",
+            "part": null
+          },
+          {
+            "name": "Open Date · Year",
+            "part": {
+              "calendar": {
+                "fy_start_month": 7,
+                "week_start": "Mon"
+              },
+              "column": "Open Date",
+              "name": "Open Date · Year",
+              "part": "Year"
+            }
+          }
+        ],
+        "drill_path": [],
+        "facet": null,
+        "facet_order": null,
+        "facet_part": null,
+        "filters": [
+          {
+            "column": "Branch",
+            "op": "InList",
+            "or_blank": false,
+            "part": null,
+            "value": "",
+            "value2": "",
+            "values": [
+              "Dhaka",
+              "Ctg"
+            ]
+          }
+        ],
+        "footnote": "",
+        "highlight": null,
+        "horizontal": false,
+        "inside_labels": false,
+        "inside_min_pct": 5.0,
+        "kind": "Bar",
+        "labels": {
+          "decimals": null,
+          "mode": "Auto",
+          "percent": true,
+          "unit": "AsView"
+        },
+        "limit_note": "",
+        "limit_ticks": [],
+        "measures": [],
+        "net_marker": false,
+        "order": "Natural",
+        "pad_axis_below": false,
+        "panels": [],
+        "ref_bands": [],
+        "ref_lines": [],
+        "scale": "Follow",
+        "segment_labels": true,
+        "series": "Segment",
+        "series_order": null,
+        "series_part": null,
+        "size": null,
+        "stack": "Stacked",
+        "stepped": false,
+        "subtitle": "",
+        "takeaway": "",
+        "template": "",
+        "text_size": "Normal",
+        "title": "",
+        "top_n": 500,
+        "value": "Balance",
+        "waterfall": "StartStepsEnd",
+        "weight": null
+      },
+      "col_formats": {
+        "Balance": {
+          "decimals": 2,
+          "fmt_type": "BdtCrore"
+        }
+      },
+      "control_col": "Balance",
+      "key": "t1",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Open Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-06",
+                "2025-01-17",
+                "2025-01-28",
+                "2025-02-08",
+                "2025-02-19"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Dhaka",
+                "Ctg",
+                "Sylhet",
+                "Dhaka",
+                "Ctg"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Gold",
+                "Gold",
+                "Gold",
+                "Silver",
+                "Silver"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Segment",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Retail",
+                "Corporate",
+                "Retail",
+                "Corporate",
+                "Retail"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Rate",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "6.5",
+                "7.0",
+                "7.5",
+                "8.0",
+                "8.5"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1000000",
+                "2000000",
+                "3000000",
+                "1250000",
+                "2250000"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Maturity",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2026-01-06",
+                "2026-01-17",
+                "2026-01-28",
+                "2026-02-08",
+                "2026-02-19"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Open Date",
+            "Branch",
+            "Product",
+            "Segment",
+            "Rate",
+            "Balance",
+            "Maturity"
+          ],
+          "file": {
+            "blake3": "0269adcf872446a9b5e924f2fc109624d4ca48118befd67fa5b51c2e085410bb",
+            "modified": 1795504946,
+            "name": "Deposits.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase8_replay/data/Deposits.csv",
+            "rel_path": "../data/Deposits.csv",
+            "size": 3341
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Deposits.csv"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t2",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Open Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-06",
+                "2025-01-17",
+                "2025-01-28",
+                "2025-02-08",
+                "2025-02-19"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Dhaka",
+                "Ctg",
+                "Sylhet",
+                "Dhaka",
+                "Ctg"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Gold",
+                "Gold",
+                "Gold",
+                "Silver",
+                "Silver"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Segment",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Retail",
+                "Corporate",
+                "Retail",
+                "Corporate",
+                "Retail"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Rate",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "6.5",
+                "7.0",
+                "7.5",
+                "8.0",
+                "8.5"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1000000",
+                "2000000",
+                "3000000",
+                "1250000",
+                "2250000"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Maturity",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2026-01-06",
+                "2026-01-17",
+                "2026-01-28",
+                "2026-02-08",
+                "2026-02-19"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Open Date",
+            "Branch",
+            "Product",
+            "Segment",
+            "Rate",
+            "Balance",
+            "Maturity"
+          ],
+          "file": {
+            "blake3": "0269adcf872446a9b5e924f2fc109624d4ca48118befd67fa5b51c2e085410bb",
+            "modified": 1795504946,
+            "name": "Deposits.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase8_replay/data/Deposits.csv",
+            "rel_path": "../data/Deposits.csv",
+            "size": 3341
+          }
+        }
+      },
+      "steps": [
+        {
+          "SplitDate": {
+            "calendar": {
+              "fy_start_month": 7,
+              "week_start": "Mon"
+            },
+            "column": "Open Date",
+            "parts": [
+              "Year",
+              "MonthYear",
+              "DayName",
+              "FiscalYear"
+            ],
+            "prefix": "Opened"
+          }
+        },
+        {
+          "FilterGroup": {
+            "conditions": [
+              {
+                "column": "Open Date",
+                "op": "Gte",
+                "or_blank": false,
+                "part": {
+                  "calendar": {
+                    "fy_start_month": 7,
+                    "week_start": "Mon"
+                  },
+                  "column": "Open Date",
+                  "name": "Open Date · Month-Year",
+                  "part": "MonthYear"
+                },
+                "value": "Aug 2025",
+                "value2": "",
+                "values": []
+              }
+            ],
+            "join": "And",
+            "keep_matching": true
+          }
+        }
+      ],
+      "summary": {},
+      "title": "Deposits by date part"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t3",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Dhaka",
+                "Ctg",
+                "Sylhet"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Region",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Central",
+                "Southern",
+                "Northern"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Branch",
+            "Region"
+          ],
+          "file": {
+            "blake3": "4fa48e02ce39afaea4391f64dc362cb10b2e7c8225b2c331a3944acf2a54a89b",
+            "modified": 1795504946,
+            "name": "Branches.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase8_replay/data/Branches.csv",
+            "rel_path": "../data/Branches.csv",
+            "size": 57
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Branches.csv"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t4",
+      "recipe": {
+        "kind": "run",
+        "run": {
+          "keep_first_duplicate_right": false,
+          "keys": [
+            "Branch"
+          ],
+          "kind": "Left",
+          "left": "t1",
+          "right": "t3",
+          "right_cols_to_keep": [
+            "Region"
+          ],
+          "tool": "join"
+        },
+        "stack_files": []
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Join(Deposits.csv+Branches.csv)"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t5",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Open Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-06",
+                "2025-01-17",
+                "2025-01-28",
+                "2025-02-08",
+                "2025-02-19"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Dhaka",
+                "Ctg",
+                "Sylhet",
+                "Dhaka",
+                "Ctg"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Gold",
+                "Gold",
+                "Gold",
+                "Silver",
+                "Silver"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Segment",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Retail",
+                "Corporate",
+                "Retail",
+                "Corporate",
+                "Retail"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Rate",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "6.5",
+                "7.0",
+                "7.5",
+                "8.0",
+                "8.5"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1000000",
+                "2000000",
+                "3000000",
+                "1250000",
+                "2250000"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Maturity",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2026-01-06",
+                "2026-01-17",
+                "2026-01-28",
+                "2026-02-08",
+                "2026-02-19"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Open Date",
+            "Branch",
+            "Product",
+            "Segment",
+            "Rate",
+            "Balance",
+            "Maturity"
+          ],
+          "file": {
+            "blake3": "0269adcf872446a9b5e924f2fc109624d4ca48118befd67fa5b51c2e085410bb",
+            "modified": 1795504946,
+            "name": "Deposits.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase8_replay/data/Deposits.csv",
+            "rel_path": "../data/Deposits.csv",
+            "size": 3341
+          }
+        }
+      },
+      "steps": [
+        {
+          "PivotTable": {
+            "column_totals": true,
+            "columns": [],
+            "date_fields": [
+              {
+                "calendar": {
+                  "fy_start_month": 7,
+                  "week_start": "Mon"
+                },
+                "column": "Open Date",
+                "name": "Open Date · Month-Year",
+                "part": "MonthYear"
+              }
+            ],
+            "field_orders": [],
+            "filters": [],
+            "row_totals": true,
+            "rows": [
+              "Open Date · Month-Year"
+            ],
+            "scale": "Global",
+            "show_as": "NoCalculation",
+            "sort_by_value": null,
+            "subtotals": false,
+            "values": [
+              {
+                "agg": "Sum",
+                "field": "Balance",
+                "weight_col": null
+              }
+            ]
+          }
+        }
+      ],
+      "summary": {},
+      "title": "Pivot: Month-Year"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t6",
+      "recipe": {
+        "kind": "run",
+        "run": {
+          "behaviour_file": "",
+          "cutoff": "2026-10-31",
+          "inputs": [
+            {
+              "product_col": "",
+              "source": "t1",
+              "spec": {
+                "amount_col": "Balance",
+                "maturity_col": "Maturity",
+                "role": "Asset"
+              }
+            }
+          ],
+          "null_as_sight": true,
+          "preset": "Bangladesh Bank SLP (9 Liquidity Buckets)",
+          "preset_def": {
+            "name": "Bangladesh Bank SLP (9 Liquidity Buckets)",
+            "null_long_label": "09. Over 5 Years (Core)",
+            "null_sight_label": "01. Overnight / Sight (Non-Maturing)",
+            "overdue_label": "10. Overdue / Matured Unencashed",
+            "overflow_label": "09. Over 5 Years",
+            "rules": [
+              {
+                "label": "01. Overnight / 1 Day",
+                "max_days": 1
+              },
+              {
+                "label": "02. 2 to 7 Days",
+                "max_days": 7
+              },
+              {
+                "label": "03. 8 to 30 Days",
+                "max_days": 30
+              },
+              {
+                "label": "04. 1 to 3 Months (31-90d)",
+                "max_days": 90
+              },
+              {
+                "label": "05. 3 to 6 Months (91-180d)",
+                "max_days": 180
+              },
+              {
+                "label": "06. 6 to 12 Months (181-365d)",
+                "max_days": 365
+              },
+              {
+                "label": "07. 1 to 3 Years",
+                "max_days": 1095
+              },
+              {
+                "label": "08. 3 to 5 Years",
+                "max_days": 1825
+              }
+            ]
+          },
+          "stress_tdrr": false,
+          "tool": "gap_ladder"
+        },
+        "stack_files": []
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Gap ladder (SLP)"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t7",
+      "recipe": {
+        "kind": "chart",
+        "source": "t1",
+        "spec": {
+          "advanced_json": "",
+          "agg": "Sum",
+          "bar_status": [],
+          "bins": null,
+          "by_value": false,
+          "category": "Open Date · Year",
+          "category_part": {
+            "calendar": {
+              "fy_start_month": 7,
+              "week_start": "Mon"
+            },
+            "column": "Open Date",
+            "name": "Open Date · Year",
+            "part": "Year"
+          },
+          "colour_map": {
+            "custom": [
+              [
+                "Retail",
+                {
+                  "hex": "#037952",
+                  "kind": "hex"
+                }
+              ]
+            ],
+            "slots": [
+              [
+                "Retail",
+                0
+              ],
+              [
+                "Corporate",
+                1
+              ]
+            ]
+          },
+          "data_table": "Below",
+          "donut_top": null,
+          "drill": [
+            {
+              "name": "Product",
+              "part": null
+            },
+            {
+              "name": "Branch",
+              "part": null
+            },
+            {
+              "name": "Open Date · Year",
+              "part": {
+                "calendar": {
+                  "fy_start_month": 7,
+                  "week_start": "Mon"
+                },
+                "column": "Open Date",
+                "name": "Open Date · Year",
+                "part": "Year"
+              }
+            }
+          ],
+          "drill_path": [
+            [
+              "Product",
+              "Gold"
+            ],
+            [
+              "Branch",
+              "Dhaka"
+            ]
+          ],
+          "facet": null,
+          "facet_order": null,
+          "facet_part": null,
+          "filters": [
+            {
+              "column": "Branch",
+              "op": "InList",
+              "or_blank": false,
+              "part": null,
+              "value": "",
+              "value2": "",
+              "values": [
+                "Dhaka",
+                "Ctg"
+              ]
+            }
+          ],
+          "footnote": "",
+          "highlight": null,
+          "horizontal": false,
+          "inside_labels": false,
+          "inside_min_pct": 5.0,
+          "kind": "Bar",
+          "labels": {
+            "decimals": null,
+            "mode": "Auto",
+            "percent": true,
+            "unit": "AsView"
+          },
+          "limit_note": "",
+          "limit_ticks": [],
+          "measures": [],
+          "net_marker": false,
+          "order": "Natural",
+          "pad_axis_below": false,
+          "panels": [],
+          "ref_bands": [],
+          "ref_lines": [],
+          "scale": "Follow",
+          "segment_labels": true,
+          "series": "Segment",
+          "series_order": null,
+          "series_part": null,
+          "size": null,
+          "stack": "Stacked",
+          "stepped": false,
+          "subtitle": "",
+          "takeaway": "",
+          "template": "",
+          "text_size": "Normal",
+          "title": "",
+          "top_n": 500,
+          "value": "Balance",
+          "waterfall": "StartStepsEnd",
+          "weight": null
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Chart: Balance by Open Date Year"
+    }
+  ]
+}

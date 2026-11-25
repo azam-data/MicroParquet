@@ -140,6 +140,9 @@ impl MicroParquetApp {
                         }
                     }
                     JobKind::ShowRows => self.status_message = msg.clone(),
+                    JobKind::ModelCheck => self.model_check_failed(&msg),
+                    JobKind::DateInfo => self.date_info_failed(&msg),
+                    JobKind::ModelRows => self.status_message = msg.clone(),
                     JobKind::ProjectCheck => self.status_message = format!("The project's files could not be checked: {}", msg),
                     JobKind::PickerValues => self.picker_failed(msg.clone()),
                     JobKind::ChartPickerValues => self.chart_picker_failed(msg.clone()),
@@ -202,6 +205,11 @@ impl MicroParquetApp {
             JobOutput::ChartTab(c) => self.apply_chart_tab_calc(*c),
             JobOutput::ShowRows(r) => self.apply_show_rows(*r),
             JobOutput::ChartPicker(r) => self.apply_chart_picker_result(*r),
+            JobOutput::NestedView(r) => self.apply_nested_view(*r),
+            JobOutput::PivotReport(r) => self.apply_pivot_report(*r),
+            JobOutput::ModelCheck(r) => self.apply_model_check(*r),
+            JobOutput::DateInfo(r) => self.apply_date_info(*r),
+            JobOutput::ModelRows(r) => self.apply_model_rows(*r),
             JobOutput::Loaded(l) => {
                 let LoadedTab { mut tab, status } = *l;
                 let status = match self.open_notes.remove(&tab.id) {
@@ -222,6 +230,7 @@ impl MicroParquetApp {
                 }
                 self.submit_summary(self.active_tab);
                 self.submit_step_counts(self.active_tab);
+                self.submit_nested(self.active_tab);
             }
             JobOutput::Refreshed(r) => {
                 let Some(idx) = self.tab_position(r.tab_id) else {
@@ -273,6 +282,7 @@ impl MicroParquetApp {
                 self.submit_summary(idx);
                 self.submit_step_counts(idx);
                 self.submit_column_stats(idx);
+                self.submit_nested(idx);
             }
             JobOutput::PivotPreview(r) => self.apply_pivot_preview(*r),
             JobOutput::AutoOrder(r) => self.apply_auto_order(&r),

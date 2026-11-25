@@ -67,6 +67,15 @@ pub enum JobKind {
     ShowRows,
     /// The values of a field of the chart studio's "Filters on this chart" tick lists (Phase 8 W10).
     ChartPickerValues,
+    /// The Nested view of a pivot tab, built from the pivot's source rows (Phase 9 P2).
+    NestedView,
+    PivotReport,
+    /// The key check of one link of the model (Phase 9 M0).
+    ModelCheck,
+    /// The tab of duplicate lookup rows, or of unmatched data rows (Phase 9 M0).
+    ModelRows,
+    /// The snapshot dates of a date-linked tab (Phase 9 M2).
+    DateInfo,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never
@@ -436,6 +445,9 @@ impl<T: Send + 'static> JobQueue<T> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
         let ctx = JobCtx { id, cancel: cancel.clone(), progress: Arc::new(Mutex::new(Progress::default())) };
+        // the job builds its tables with the model the project has now (Phase 9 M1), whichever thread it runs on
+        let model = crate::model::scope();
+        let work = move |c: &JobCtx| crate::model::with_scope(model, || work(c));
         let job = Queued { id, key, label: label.into(), long, ctx, work: Box::new(work) };
         {
             let mut st = lock(&self.shared.state);

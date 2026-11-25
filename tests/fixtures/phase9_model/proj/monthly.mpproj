@@ -1,0 +1,2003 @@
+{
+  "active_tab": "t7",
+  "app_version": "1.8.0",
+  "model": {
+    "calendar": {
+      "date_links": [
+        {
+          "column": "Date",
+          "data_tab": "t1"
+        },
+        {
+          "column": "Date",
+          "data_tab": "t2"
+        }
+      ],
+      "settings": {
+        "fy_start_month": 1,
+        "week_start": "Sat"
+      },
+      "tab": "t6"
+    },
+    "column_kinds": [
+      {
+        "column": "Balance",
+        "kind": "Balance",
+        "tab": "t1"
+      }
+    ],
+    "links": [
+      {
+        "data_tab": "t1",
+        "keys": [
+          {
+            "data": "Branch",
+            "lookup": "Branch code"
+          }
+        ],
+        "lookup_tab": "t3",
+        "unmatched_value": null
+      },
+      {
+        "data_tab": "t1",
+        "keys": [
+          {
+            "data": "Wing",
+            "lookup": "Wing"
+          },
+          {
+            "data": "Product code",
+            "lookup": "Code"
+          }
+        ],
+        "lookup_tab": "t4",
+        "unmatched_value": null
+      },
+      {
+        "data_tab": "t2",
+        "keys": [
+          {
+            "data": "GL",
+            "lookup": "GL"
+          }
+        ],
+        "lookup_tab": "t5",
+        "unmatched_value": null
+      }
+    ],
+    "measures": [
+      {
+        "aggregation": "ClosingBalance",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "Product master · Group",
+            "lookup": {
+              "column": "Group",
+              "data_tab": "t1",
+              "link_name": "Accounts → Product master",
+              "lookup_tab": "t4",
+              "name": "Product master · Group"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "CASA",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "CASA closing",
+        "sign": "Plus",
+        "tab": "t1"
+      },
+      {
+        "aggregation": "ClosingBalance",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "Product master · Class",
+            "lookup": {
+              "column": "Class",
+              "data_tab": "t1",
+              "link_name": "Accounts → Product master",
+              "lookup_tab": "t4",
+              "name": "Product master · Class"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Deposit",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Deposits closing",
+        "sign": "Plus",
+        "tab": "t1"
+      },
+      {
+        "aggregation": "ClosingBalance",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "Product master · Class",
+            "lookup": {
+              "column": "Class",
+              "data_tab": "t1",
+              "link_name": "Accounts → Product master",
+              "lookup_tab": "t4",
+              "name": "Product master · Class"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Loan",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Loans closing",
+        "sign": "Plus",
+        "tab": "t1"
+      },
+      {
+        "denominator": [
+          {
+            "measure": "Deposits closing",
+            "sign": "Plus"
+          }
+        ],
+        "format": "Percent",
+        "kind": "Ratio",
+        "name": "CASA ratio",
+        "numerator": [
+          {
+            "measure": "CASA closing",
+            "sign": "Plus"
+          }
+        ],
+        "tab": "t1"
+      },
+      {
+        "denominator": [
+          {
+            "measure": "Deposits closing",
+            "sign": "Plus"
+          }
+        ],
+        "format": "Percent",
+        "kind": "Ratio",
+        "name": "ADR",
+        "numerator": [
+          {
+            "measure": "Loans closing",
+            "sign": "Plus"
+          }
+        ],
+        "tab": "t1"
+      },
+      {
+        "aggregation": "PeriodAmount",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "GL map · Head",
+            "lookup": {
+              "column": "Head",
+              "data_tab": "t2",
+              "link_name": "GL TB → GL map",
+              "lookup_tab": "t5",
+              "name": "GL map · Head"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Loan interest income",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Loan interest",
+        "sign": "Minus",
+        "tab": "t2"
+      },
+      {
+        "aggregation": "PeriodAmount",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "GL map · Head",
+            "lookup": {
+              "column": "Head",
+              "data_tab": "t2",
+              "link_name": "GL TB → GL map",
+              "lookup_tab": "t5",
+              "name": "GL map · Head"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Investment interest income",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Investment interest",
+        "sign": "Minus",
+        "tab": "t2"
+      },
+      {
+        "aggregation": "PeriodAmount",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "GL map · Head",
+            "lookup": {
+              "column": "Head",
+              "data_tab": "t2",
+              "link_name": "GL TB → GL map",
+              "lookup_tab": "t5",
+              "name": "GL map · Head"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Deposit interest expense",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Deposit interest",
+        "sign": "Plus",
+        "tab": "t2"
+      },
+      {
+        "aggregation": "AverageBalance",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "GL map · Head",
+            "lookup": {
+              "column": "Head",
+              "data_tab": "t2",
+              "link_name": "GL TB → GL map",
+              "lookup_tab": "t5",
+              "name": "GL map · Head"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Loans",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Average loans",
+        "sign": "Plus",
+        "tab": "t2"
+      },
+      {
+        "aggregation": "AverageBalance",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "GL map · Head",
+            "lookup": {
+              "column": "Head",
+              "data_tab": "t2",
+              "link_name": "GL TB → GL map",
+              "lookup_tab": "t5",
+              "name": "GL map · Head"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Investments",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Average investments",
+        "sign": "Plus",
+        "tab": "t2"
+      },
+      {
+        "aggregation": "AverageBalance",
+        "column": "Balance",
+        "filters": [
+          {
+            "column": "GL map · Head",
+            "lookup": {
+              "column": "Head",
+              "data_tab": "t2",
+              "link_name": "GL TB → GL map",
+              "lookup_tab": "t5",
+              "name": "GL map · Head"
+            },
+            "op": "Equals",
+            "or_blank": false,
+            "part": null,
+            "value": "Deposits",
+            "value2": "",
+            "values": []
+          }
+        ],
+        "kind": "Base",
+        "name": "Average deposits",
+        "sign": "Plus",
+        "tab": "t2"
+      },
+      {
+        "annualise": "Actual/365",
+        "denominator": [
+          {
+            "measure": "Average loans",
+            "sign": "Plus"
+          }
+        ],
+        "format": "Percent",
+        "kind": "Ratio",
+        "name": "Yield on loans",
+        "numerator": [
+          {
+            "measure": "Loan interest",
+            "sign": "Plus"
+          }
+        ],
+        "tab": "t2"
+      },
+      {
+        "annualise": "Actual/365",
+        "denominator": [
+          {
+            "measure": "Average deposits",
+            "sign": "Plus"
+          }
+        ],
+        "format": "Percent",
+        "kind": "Ratio",
+        "name": "Cost of deposits",
+        "numerator": [
+          {
+            "measure": "Deposit interest",
+            "sign": "Plus"
+          }
+        ],
+        "tab": "t2"
+      },
+      {
+        "annualise": "Actual/365",
+        "denominator": [
+          {
+            "measure": "Average loans",
+            "sign": "Plus"
+          },
+          {
+            "measure": "Average investments",
+            "sign": "Plus"
+          }
+        ],
+        "format": "Percent",
+        "kind": "Ratio",
+        "name": "NIM",
+        "numerator": [
+          {
+            "measure": "Loan interest",
+            "sign": "Plus"
+          },
+          {
+            "measure": "Investment interest",
+            "sign": "Plus"
+          },
+          {
+            "measure": "Deposit interest",
+            "sign": "Minus"
+          }
+        ],
+        "tab": "t2"
+      }
+    ]
+  },
+  "project_version": 2,
+  "saved_at": "2026-11-25T02:20:34+00:00",
+  "tabs": [
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t1",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Account",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01-C-CA01",
+                "BR01-C-SB01",
+                "BR01-C-FD01",
+                "BR01-C-LN01",
+                "BR01-C-LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Wing",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CA01",
+                "SB01",
+                "FD01",
+                "LN01",
+                "LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "62.40",
+                "93.60",
+                "144.00",
+                "108.00",
+                "60.00"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "Account",
+            "Branch",
+            "Wing",
+            "Product code",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8a790302a9f9d80a60356b5a66be6614a90b099dddecbb3d18b4da466268c74a",
+            "modified": 1795573234,
+            "name": "Accounts.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Accounts.csv",
+            "rel_path": "../data/Accounts.csv",
+            "size": 35185
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Accounts"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t2",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-01",
+                "2025-01-01",
+                "2025-01-01",
+                "2025-01-01",
+                "2025-01-01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "GL",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1101",
+                "1201",
+                "2101",
+                "4101",
+                "4201"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1000.00",
+                "400.00",
+                "1500.00",
+                "-0.29",
+                "-0.09"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "GL",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8041f4d08f312379dd1b194be5eb774f60407abed58716c46eb8f2b67c881e32",
+            "modified": 1795573234,
+            "name": "GL_TB.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/GL_TB.csv",
+            "rel_path": "../data/GL_TB.csv",
+            "size": 67277
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "GL TB"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t3",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01",
+                "BR02",
+                "BR03",
+                "BR04"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch name",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Gulshan",
+                "Motijheel",
+                "Agrabad",
+                "Khulna Main"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Region",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Dhaka",
+                "Dhaka",
+                "Chattogram",
+                "Khulna"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Branch code",
+            "Branch name",
+            "Region"
+          ],
+          "file": {
+            "blake3": "39b1a356ff1c37eb049ba6cf48bb6700d0a3822b94695c7a3a4b814579f19ced",
+            "modified": 1795573234,
+            "name": "Branch_master.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Branch_master.csv",
+            "rel_path": "../data/Branch_master.csv",
+            "size": 119
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Branch master"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t4",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Wing",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CA01",
+                "SB01",
+                "FD01",
+                "LN01",
+                "LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product name",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Current account",
+                "Savings account",
+                "Fixed deposit",
+                "Term loan",
+                "Working capital"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Group",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CASA",
+                "CASA",
+                "Term deposit",
+                "Term loan",
+                "Working capital"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Class",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Deposit",
+                "Deposit",
+                "Deposit",
+                "Loan",
+                "Loan"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Wing",
+            "Code",
+            "Product name",
+            "Group",
+            "Class"
+          ],
+          "file": {
+            "blake3": "d6f904a3a8aecaeac03e2701ff6cb09a96556d0d24195d504db7f4baa7a6023b",
+            "modified": 1795573234,
+            "name": "Product_master.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Product_master.csv",
+            "rel_path": "../data/Product_master.csv",
+            "size": 438
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Product master"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t5",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "GL",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1101",
+                "1201",
+                "2101",
+                "4101",
+                "4201"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Head",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Loans",
+                "Investments",
+                "Deposits",
+                "Loan interest income",
+                "Investment interest income"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "GL",
+            "Head"
+          ],
+          "file": {
+            "blake3": "40226f9784182302c66e47b67848aa978d6beed81a797fd03397c7e0888e6b73",
+            "modified": 1795573234,
+            "name": "GL_map.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/GL_map.csv",
+            "rel_path": "../data/GL_map.csv",
+            "size": 138
+          }
+        }
+      },
+      "steps": [],
+      "summary": {},
+      "title": "GL map"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t6",
+      "recipe": {
+        "kind": "run",
+        "run": {
+          "first_year": 2025,
+          "last_year": 2027,
+          "settings": {
+            "fy_start_month": 1,
+            "week_start": "Sat"
+          },
+          "tool": "calendar"
+        },
+        "stack_files": []
+      },
+      "steps": [],
+      "summary": {},
+      "title": "Calendar"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t7",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Account",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01-C-CA01",
+                "BR01-C-SB01",
+                "BR01-C-FD01",
+                "BR01-C-LN01",
+                "BR01-C-LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Wing",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CA01",
+                "SB01",
+                "FD01",
+                "LN01",
+                "LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "62.40",
+                "93.60",
+                "144.00",
+                "108.00",
+                "60.00"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "Account",
+            "Branch",
+            "Wing",
+            "Product code",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8a790302a9f9d80a60356b5a66be6614a90b099dddecbb3d18b4da466268c74a",
+            "modified": 1795573234,
+            "name": "Accounts.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Accounts.csv",
+            "rel_path": "../data/Accounts.csv",
+            "size": 35185
+          }
+        }
+      },
+      "steps": [
+        {
+          "PivotTable": {
+            "column_totals": false,
+            "columns": [],
+            "data_tab": "t1",
+            "date_fields": [],
+            "field_orders": [
+              {
+                "field": "Calendar · Month-Year",
+                "order": {
+                  "Calendar": {
+                    "week_start": "Sat"
+                  }
+                }
+              }
+            ],
+            "filters": [
+              {
+                "field": "Calendar · Month-Year",
+                "values": [
+                  "Aug 2026",
+                  "Sep 2026",
+                  "Oct 2026"
+                ]
+              }
+            ],
+            "model_fields": [
+              {
+                "column": "Month-Year",
+                "data_tab": "t1",
+                "link_name": "Accounts → Calendar",
+                "lookup_tab": "t6",
+                "name": "Calendar · Month-Year"
+              }
+            ],
+            "row_totals": false,
+            "rows": [
+              "Calendar · Month-Year"
+            ],
+            "scale": "Global",
+            "show_as": "NoCalculation",
+            "sort_by_value": null,
+            "subtotals": false,
+            "values": [
+              {
+                "agg": "Sum",
+                "field": "CASA ratio",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "CASA ratio",
+                "time": {
+                  "agg": "Measure",
+                  "shift": "PriorPeriod",
+                  "show": "Difference"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "CASA ratio",
+                "time": {
+                  "agg": "Measure",
+                  "shift": "Sply",
+                  "show": "Difference"
+                },
+                "weight_col": null
+              }
+            ]
+          }
+        }
+      ],
+      "summary": {},
+      "title": "CASA ratio by month"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t8",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Account",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01-C-CA01",
+                "BR01-C-SB01",
+                "BR01-C-FD01",
+                "BR01-C-LN01",
+                "BR01-C-LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Wing",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CA01",
+                "SB01",
+                "FD01",
+                "LN01",
+                "LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "62.40",
+                "93.60",
+                "144.00",
+                "108.00",
+                "60.00"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "Account",
+            "Branch",
+            "Wing",
+            "Product code",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8a790302a9f9d80a60356b5a66be6614a90b099dddecbb3d18b4da466268c74a",
+            "modified": 1795573234,
+            "name": "Accounts.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Accounts.csv",
+            "rel_path": "../data/Accounts.csv",
+            "size": 35185
+          }
+        }
+      },
+      "steps": [
+        {
+          "PivotTable": {
+            "column_totals": true,
+            "columns": [
+              "Calendar · Month-Year"
+            ],
+            "data_tab": "t1",
+            "date_fields": [],
+            "field_orders": [
+              {
+                "field": "Calendar · Month-Year",
+                "order": {
+                  "Calendar": {
+                    "week_start": "Sat"
+                  }
+                }
+              }
+            ],
+            "filters": [
+              {
+                "field": "Calendar · Month-Year",
+                "values": [
+                  "Oct 2026"
+                ]
+              }
+            ],
+            "model_fields": [
+              {
+                "column": "Region",
+                "data_tab": "t1",
+                "link_name": "Accounts → Branch master",
+                "lookup_tab": "t3",
+                "name": "Branch master · Region"
+              },
+              {
+                "column": "Month-Year",
+                "data_tab": "t1",
+                "link_name": "Accounts → Calendar",
+                "lookup_tab": "t6",
+                "name": "Calendar · Month-Year"
+              }
+            ],
+            "row_totals": false,
+            "rows": [
+              "Branch master · Region"
+            ],
+            "scale": "Global",
+            "show_as": "NoCalculation",
+            "sort_by_value": null,
+            "subtotals": false,
+            "values": [
+              {
+                "agg": "Sum",
+                "field": "CASA ratio",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "CASA closing",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "Deposits closing",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "CASA ratio",
+                "time": {
+                  "agg": "Measure",
+                  "shift": "Sply",
+                  "show": "Difference"
+                },
+                "weight_col": null
+              }
+            ]
+          }
+        }
+      ],
+      "summary": {},
+      "title": "CASA ratio by region"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t9",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-01",
+                "2025-01-01",
+                "2025-01-01",
+                "2025-01-01",
+                "2025-01-01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "GL",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1101",
+                "1201",
+                "2101",
+                "4101",
+                "4201"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "1000.00",
+                "400.00",
+                "1500.00",
+                "-0.29",
+                "-0.09"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "GL",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8041f4d08f312379dd1b194be5eb774f60407abed58716c46eb8f2b67c881e32",
+            "modified": 1795573234,
+            "name": "GL_TB.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/GL_TB.csv",
+            "rel_path": "../data/GL_TB.csv",
+            "size": 67277
+          }
+        }
+      },
+      "steps": [
+        {
+          "PivotTable": {
+            "column_totals": false,
+            "columns": [],
+            "data_tab": "t2",
+            "date_fields": [],
+            "field_orders": [
+              {
+                "field": "Calendar · Month-Year",
+                "order": {
+                  "Calendar": {
+                    "week_start": "Sat"
+                  }
+                }
+              }
+            ],
+            "filters": [
+              {
+                "field": "Calendar · Month-Year",
+                "values": [
+                  "Aug 2026",
+                  "Sep 2026",
+                  "Oct 2026"
+                ]
+              }
+            ],
+            "model_fields": [
+              {
+                "column": "Month-Year",
+                "data_tab": "t2",
+                "link_name": "GL TB → Calendar",
+                "lookup_tab": "t6",
+                "name": "Calendar · Month-Year"
+              }
+            ],
+            "row_totals": false,
+            "rows": [
+              "Calendar · Month-Year"
+            ],
+            "scale": "Global",
+            "show_as": "NoCalculation",
+            "sort_by_value": null,
+            "subtotals": false,
+            "values": [
+              {
+                "agg": "Sum",
+                "field": "Yield on loans",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "Cost of deposits",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "NIM",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "NIM",
+                "time": {
+                  "agg": "Measure",
+                  "shift": "Sply",
+                  "show": "Difference"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "NIM",
+                "time": {
+                  "agg": "Measure",
+                  "window": "Ytd"
+                },
+                "weight_col": null
+              }
+            ]
+          }
+        }
+      ],
+      "summary": {},
+      "title": "Margins"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t10",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Account",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01-C-CA01",
+                "BR01-C-SB01",
+                "BR01-C-FD01",
+                "BR01-C-LN01",
+                "BR01-C-LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Wing",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CA01",
+                "SB01",
+                "FD01",
+                "LN01",
+                "LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "62.40",
+                "93.60",
+                "144.00",
+                "108.00",
+                "60.00"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "Account",
+            "Branch",
+            "Wing",
+            "Product code",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8a790302a9f9d80a60356b5a66be6614a90b099dddecbb3d18b4da466268c74a",
+            "modified": 1795573234,
+            "name": "Accounts.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Accounts.csv",
+            "rel_path": "../data/Accounts.csv",
+            "size": 35185
+          }
+        }
+      },
+      "steps": [
+        {
+          "PivotTable": {
+            "column_totals": true,
+            "columns": [
+              "Calendar · Month-Year"
+            ],
+            "data_tab": "t1",
+            "date_fields": [],
+            "field_orders": [
+              {
+                "field": "Calendar · Month-Year",
+                "order": {
+                  "Calendar": {
+                    "week_start": "Sat"
+                  }
+                }
+              }
+            ],
+            "filters": [
+              {
+                "field": "Calendar · Month-Year",
+                "values": [
+                  "Oct 2026"
+                ]
+              },
+              {
+                "field": "Product master · Class",
+                "values": [
+                  "Loan"
+                ]
+              }
+            ],
+            "model_fields": [
+              {
+                "column": "Group",
+                "data_tab": "t1",
+                "link_name": "Accounts → Product master",
+                "lookup_tab": "t4",
+                "name": "Product master · Group"
+              },
+              {
+                "column": "Class",
+                "data_tab": "t1",
+                "link_name": "Accounts → Product master",
+                "lookup_tab": "t4",
+                "name": "Product master · Class"
+              },
+              {
+                "column": "Month-Year",
+                "data_tab": "t1",
+                "link_name": "Accounts → Calendar",
+                "lookup_tab": "t6",
+                "name": "Calendar · Month-Year"
+              }
+            ],
+            "row_totals": false,
+            "rows": [
+              "Product master · Group"
+            ],
+            "scale": "Global",
+            "show_as": "NoCalculation",
+            "sort_by_value": null,
+            "subtotals": false,
+            "values": [
+              {
+                "agg": "Sum",
+                "field": "Loans closing",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "Loans closing",
+                "time": {
+                  "agg": "Measure",
+                  "shift": "Sply",
+                  "show": "PercentChange"
+                },
+                "weight_col": null
+              }
+            ]
+          }
+        }
+      ],
+      "summary": {},
+      "title": "Loans by product group"
+    },
+    {
+      "chart": null,
+      "col_formats": {},
+      "control_col": null,
+      "key": "t11",
+      "recipe": {
+        "config": {
+          "auto_apply": false,
+          "columns": [
+            {
+              "dtype": "DateISO",
+              "has_dr_cr": false,
+              "name": "Date",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31",
+                "2025-01-31"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Account",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01-C-CA01",
+                "BR01-C-SB01",
+                "BR01-C-FD01",
+                "BR01-C-LN01",
+                "BR01-C-LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Branch",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01",
+                "BR01"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Wing",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional",
+                "Conventional"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Utf8",
+              "has_dr_cr": false,
+              "name": "Product code",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "CA01",
+                "SB01",
+                "FD01",
+                "LN01",
+                "LN02"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            },
+            {
+              "dtype": "Float64",
+              "has_dr_cr": false,
+              "name": "Balance",
+              "pii_mask": "None",
+              "rename_to": null,
+              "sample_values": [
+                "62.40",
+                "93.60",
+                "144.00",
+                "108.00",
+                "60.00"
+              ],
+              "sign_convention": "Unset",
+              "source_dtype": ""
+            }
+          ],
+          "encoding": "Utf8",
+          "heal_broken_csv_lines": false,
+          "parse_accounting_negatives": true,
+          "pii_salt": "BANK_ASIA_ALM_2026",
+          "sanitize_linebreaks": true,
+          "separator": ",",
+          "skip_rows": 0,
+          "trim_before_mask": false
+        },
+        "is_parquet": false,
+        "kind": "file",
+        "source": {
+          "columns": [
+            "Date",
+            "Account",
+            "Branch",
+            "Wing",
+            "Product code",
+            "Balance"
+          ],
+          "file": {
+            "blake3": "8a790302a9f9d80a60356b5a66be6614a90b099dddecbb3d18b4da466268c74a",
+            "modified": 1795573234,
+            "name": "Accounts.csv",
+            "path": "/home/user/MicroParquet/tests/fixtures/phase9_model/data/Accounts.csv",
+            "rel_path": "../data/Accounts.csv",
+            "size": 35185
+          }
+        }
+      },
+      "steps": [
+        {
+          "PivotTable": {
+            "column_totals": false,
+            "columns": [],
+            "data_tab": "t1",
+            "date_fields": [],
+            "field_orders": [
+              {
+                "field": "Calendar · Month-Year",
+                "order": {
+                  "Calendar": {
+                    "week_start": "Sat"
+                  }
+                }
+              }
+            ],
+            "filters": [
+              {
+                "field": "Calendar · Month-Year",
+                "values": [
+                  "Aug 2026",
+                  "Sep 2026",
+                  "Oct 2026"
+                ]
+              }
+            ],
+            "model_fields": [
+              {
+                "column": "Month-Year",
+                "data_tab": "t1",
+                "link_name": "Accounts → Calendar",
+                "lookup_tab": "t6",
+                "name": "Calendar · Month-Year"
+              }
+            ],
+            "row_totals": false,
+            "rows": [
+              "Calendar · Month-Year"
+            ],
+            "scale": "Global",
+            "show_as": "NoCalculation",
+            "sort_by_value": null,
+            "subtotals": false,
+            "values": [
+              {
+                "agg": "Sum",
+                "field": "ADR",
+                "time": {
+                  "agg": "Measure"
+                },
+                "weight_col": null
+              },
+              {
+                "agg": "Sum",
+                "field": "ADR",
+                "time": {
+                  "agg": "Measure",
+                  "shift": "Sply",
+                  "show": "Difference"
+                },
+                "weight_col": null
+              }
+            ]
+          }
+        }
+      ],
+      "summary": {},
+      "title": "ADR"
+    }
+  ]
+}

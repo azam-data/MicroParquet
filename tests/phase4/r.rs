@@ -101,9 +101,9 @@ fn pivot_for_export(scale: PivotScale) -> (DataFrame, std::collections::HashMap<
     let spec = PivotSpec {
         rows: vec!["Bank".into()],
         values: vec![
-            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None },
-            PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) },
-            PivotValue { field: "Balance".into(), agg: PivotAgg::Count, weight_col: None },
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None },
+            PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None },
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Count, weight_col: None, time: None },
         ],
         column_totals: true,
         scale,
@@ -760,7 +760,7 @@ fn segment_book() -> DataFrame {
 fn segment_spec(filter: Vec<Option<String>>) -> PivotSpec {
     PivotSpec {
         rows: vec!["Bucket".into()],
-        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None }, PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) }],
+        values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }, PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None }],
         filters: vec![PivotFilter { field: "Segment".into(), values: filter }],
         row_totals: true,
         column_totals: true,
@@ -820,8 +820,8 @@ fn pivot_for_pdf(banks: usize, scale: PivotScale) -> (DataFrame, std::collection
         rows: vec!["Segment".into()],
         columns: vec!["Bank".into()],
         values: vec![
-            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None },
-            PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()) },
+            PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None },
+            PivotValue { field: "Rate".into(), agg: PivotAgg::WeightedAvg, weight_col: Some("Balance".into()), time: None },
         ],
         row_totals: true,
         column_totals: true,

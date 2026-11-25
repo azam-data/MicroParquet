@@ -35,6 +35,8 @@ Keeps or removes rows that meet one or more conditions (equals, greater than, be
 6. To change it later, click the filter chip above the table, or Edit on the step, then "Save filter". "Remove this condition" takes one condition out; removing the last one removes the filter.
 7. **A Date or Datetime column also has "By".** It is Date (the dates themselves, as before), Year, Month-Year, Year-Quarter, Month, Quarter or Day name. "By" shows for every condition (equals, does not equal, is in list, is not in list, >, ≥, <, ≤ and between) and stays when you change the condition. For a list you tick the part's values ("Fri", "Sat"); for >, ≥, <, ≤ and between you type the limit (Aug 2025, 2025, Q2, Wed) or choose it with the "▾" list, which shows the part's own values in order. See also [Date grouping](date-grouping.md) and, for the chart's own filters ("Filters on this chart"), [Chart](chart.md).
 
+8. **Lookup and Calendar fields** (in a project that has a model). The column list also shows the fields of the tab's links ("Branch master › Region") and of the shared calendar ("Calendar › Month-Year"). The value picker lists the lookup's own values, and "(no match)" (a data key with no lookup row), "(blank key)" and "(blank)" can be ticked like any value. The filter keeps the data rows whose key's lookup row matches; nothing flows back to the lookup tab. Outside the project such a filter is refused: "This step uses the model of a project (link 'Accounts → Branch master'). Open the project to run it." See [Links between tabs](model-links.md).
+
 ![The By choice of a date condition](img/filter-by-choice.png)
 
 ## 6. What you get
@@ -85,4 +87,5 @@ Test: `guide_filter`
 ## 10. Limits and assumptions
 
 - Conditions compare a column with a value; to compare two columns use a Conditional column first.
+- The Python export does not follow a filter on a lookup or Calendar field: "Python export can't follow links between tabs yet. Use the Join tool to copy the column, or export the result tab."
 - Text comparisons are exact apart from the "contains", "starts with" and "ends with" tests.

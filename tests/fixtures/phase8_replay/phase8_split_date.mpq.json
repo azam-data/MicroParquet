@@ -1,0 +1,28 @@
+{
+  "app_version": "1.8.0",
+  "control_column": null,
+  "created_at": "2026-11-23 10:00:00",
+  "description": "",
+  "enforce_balance_control": false,
+  "name": "phase8_split_date",
+  "optional_ingestion_schema": null,
+  "steps": [
+    {
+      "SplitDate": {
+        "calendar": {
+          "fy_start_month": 7,
+          "week_start": "Mon"
+        },
+        "column": "Open Date",
+        "parts": [
+          "Year",
+          "MonthYear",
+          "DayName",
+          "FiscalYear"
+        ],
+        "prefix": "Opened"
+      }
+    }
+  ],
+  "summary": {}
+}

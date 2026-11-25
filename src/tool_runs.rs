@@ -97,6 +97,15 @@ fn name_of_base(env: &dyn RunEnv, source: &TabSource, steps: &[TransformStep]) -
 
 // ------------------------------------------------------------------------------ the configs
 
+/// The model's Calendar tab (Phase 9 M2): its settings and the years it covers. The rows are never saved.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct CalendarRun {
+    pub settings: crate::dates::CalendarSettings,
+    pub first_year: i32,
+    pub last_year: i32,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct RepricingGapRun {
@@ -289,6 +298,7 @@ pub struct PivotTabRun {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub enum ToolRun {
+    Calendar(CalendarRun),
     RepricingGap(RepricingGapRun),
     GapLadder(GapLadderRun),
     IrrbbLadder(IrrbbLadderRun),
@@ -347,6 +357,7 @@ impl ToolRun {
     /// The tool's name as the menus say it.
     pub fn tool_name(&self) -> &'static str {
         match self {
+            ToolRun::Calendar(_) => "Calendar",
             ToolRun::RepricingGap(_) => "Repricing gap",
             ToolRun::GapLadder(_) => "Gap ladder",
             ToolRun::IrrbbLadder(_) => "IRRBB cash-flow ladder",
@@ -407,6 +418,7 @@ impl ToolRun {
     /// Calls `f` on each source name (report packs point them at their input slots).
     pub fn each_source_name(&mut self, f: &mut dyn FnMut(&mut String)) {
         match self {
+            ToolRun::Calendar(_) => {}
             ToolRun::RepricingGap(r) => f(&mut r.source),
             ToolRun::GapLadder(r) => r.inputs.iter_mut().for_each(|i| f(&mut i.source)),
             ToolRun::IrrbbLadder(r) => r.inputs.iter_mut().for_each(|i| f(&mut i.source)),
@@ -464,6 +476,10 @@ impl ToolRun {
         }
         let name = |s: &TabSource, st: &[TransformStep]| name_of_base(env, s, st);
         match source {
+            TabSource::Calendar { settings, first_year, last_year } => {
+                no_extra_steps(tab_steps)?;
+                Ok(ToolRun::Calendar(CalendarRun { settings: *settings, first_year: *first_year, last_year: *last_year }))
+            }
             TabSource::RepricingGap { source, steps, spec } => {
                 no_extra_steps(tab_steps)?;
                 Ok(ToolRun::RepricingGap(RepricingGapRun { source: name(source, steps)?, spec: spec.clone() }))
@@ -568,6 +584,7 @@ impl ToolRun {
             env.tab(name)
         };
         match self {
+            ToolRun::Calendar(r) => Ok(vec![("Calendar".to_string(), TabSource::Calendar { settings: r.settings, first_year: r.first_year, last_year: r.last_year })]),
             ToolRun::RepricingGap(r) => {
                 let t = tab(&r.source)?;
                 Ok(vec![(format!("Repricing gap ({})", r.source), TabSource::RepricingGap { source: Box::new(t.source), steps: t.steps, spec: r.spec.clone() })])

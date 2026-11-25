@@ -1,0 +1,91 @@
+{
+  "name": "p8replay",
+  "inputs": [
+    {
+      "slot": "Deposits",
+      "schema_template": null,
+      "schema": null,
+      "steps": [],
+      "required_columns": [
+        "Open Date",
+        "Branch",
+        "Product",
+        "Segment",
+        "Rate",
+        "Balance",
+        "Maturity"
+      ],
+      "captured_from": "",
+      "captured_path": "",
+      "captured_hash": ""
+    }
+  ],
+  "items": [
+    {
+      "title": "Deposits by month",
+      "sheet": "Months",
+      "source": {
+        "kind": "pivot",
+        "slot": "Deposits",
+        "pivot": {
+          "PivotTable": {
+            "rows": [
+              "Open Date · Month-Year"
+            ],
+            "columns": [],
+            "values": [
+              {
+                "field": "Balance",
+                "agg": "Sum",
+                "weight_col": null
+              }
+            ],
+            "filters": [],
+            "row_totals": true,
+            "column_totals": true,
+            "subtotals": false,
+            "show_as": "NoCalculation",
+            "scale": "Global",
+            "sort_by_value": null,
+            "field_orders": [],
+            "date_fields": [
+              {
+                "name": "Open Date · Month-Year",
+                "column": "Open Date",
+                "part": "MonthYear",
+                "calendar": {
+                  "fy_start_month": 7,
+                  "week_start": "Mon"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "col_formats": {},
+      "chart": {
+        "kind": "saved",
+        "name": "Deposits by month"
+      }
+    },
+    {
+      "title": "Deposits",
+      "sheet": "Deposits",
+      "source": {
+        "kind": "steps",
+        "slot": "Deposits"
+      },
+      "col_formats": {},
+      "chart": {
+        "kind": "saved",
+        "name": "Deposits drill"
+      }
+    }
+  ],
+  "output": {
+    "pdf": false,
+    "scale": "BdtCrore",
+    "decimals": 2,
+    "html_charts": false
+  }
+}

@@ -216,7 +216,20 @@ pub struct PdfRow {
     pub cells: Vec<PdfCell>,
     /// A total row: bold, with a rule above it.
     pub total: bool,
+    /// Bold without a rule: a parent line of a Nested pivot (P2). A total row is bold too.
+    pub bold: bool,
 }
+
+/// How one line of a table is set when it is not plain (Phase 9 P2, the Nested pivot): the first column is moved right by
+/// `indent_mm` and the line is bold.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowStyle {
+    pub indent_mm: f32,
+    pub bold: bool,
+}
+
+/// The indent of one level of a Nested pivot in the PDF: 10 pt.
+pub const NESTED_INDENT_MM: f32 = 10.0 * 25.4 / 72.0;
 
 /// The summary band: per column a small label and the value (empty where there is none).
 #[derive(Clone, Debug, PartialEq)]
@@ -372,6 +385,23 @@ pub fn layout_pdf_tab_on(
     summary: &[SummaryCell],
     max_rows: usize,
 ) -> PdfTabLayout {
+    layout_pdf_tab_styled(page, title, df, col_formats, num_format, global_decimals, summary, max_rows, &[])
+}
+
+/// `layout_pdf_tab_on` with a style for each line (a line past the end of `styles` is plain): the lines of a Nested pivot.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_pdf_tab_styled(
+    page: &PdfPage,
+    title: &str,
+    df: &DataFrame,
+    col_formats: &HashMap<String, ColumnFormatSpec>,
+    num_format: NumberDisplayFormat,
+    global_decimals: usize,
+    summary: &[SummaryCell],
+    max_rows: usize,
+    styles: &[RowStyle],
+) -> PdfTabLayout {
+    let style_of = |r: usize| styles.get(r).copied().unwrap_or_default();
     let usable_w = page.usable_w_mm();
     let cols = df.get_columns();
     let n_rows = df.height().min(max_rows);
@@ -431,7 +461,12 @@ pub fn layout_pdf_tab_on(
         let val_w = cells
             .iter()
             .enumerate()
-            .map(|(r, t)| text_width_mm(t, CELL_PT, if total_rows.get(r).copied().unwrap_or(false) { FontKind::Bold } else { FontKind::Regular }))
+            .map(|(r, t)| {
+                let bold = total_rows.get(r).copied().unwrap_or(false) || style_of(r).bold;
+                // the first column carries each line's indent
+                let indent = if ci == 0 { style_of(r).indent_mm } else { 0.0 };
+                text_width_mm(t, CELL_PT, if bold { FontKind::Bold } else { FontKind::Regular }) + indent
+            })
             .fold(0.0f32, f32::max);
         let target = val_w.max(HEADER_WRAP_MM);
         let lines = wrap_header(&header, target, inner_cap);
@@ -580,17 +615,21 @@ pub fn layout_pdf_tab_on(
             let rows: Vec<PdfRow> = (0..n_rows)
                 .map(|r| {
                     let total = total_rows.get(r).copied().unwrap_or(false);
+                    let style = style_of(r);
+                    let bold = total || style.bold;
                     let cells = idx
                         .iter()
                         .enumerate()
                         .map(|(k, &i)| {
                             let col = &columns[k];
                             let text = infos[i].cells[r].clone();
-                            let w = text_width_mm(&text, CELL_PT, if total { FontKind::Bold } else { FontKind::Regular });
-                            PdfCell { text: PdfText { x: col.text_x(w), w, text }, col_x: col.x, col_w: col.w, align: col.align }
+                            let w = text_width_mm(&text, CELL_PT, if bold { FontKind::Bold } else { FontKind::Regular });
+                            // the label column of a Nested pivot is moved in by the line's level
+                            let indent = if i == 0 && col.align == PdfAlign::Left { style.indent_mm } else { 0.0 };
+                            PdfCell { text: PdfText { x: col.text_x(w) + indent, w, text }, col_x: col.x, col_w: col.w, align: col.align }
                         })
                         .collect();
-                    PdfRow { cells, total }
+                    PdfRow { cells, total, bold }
                 })
                 .collect();
             // the summary band

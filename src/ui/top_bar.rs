@@ -23,7 +23,7 @@ pub const BAR_ITEMS: [(CommandId, usize); 11] = [
 ];
 
 /// The menus, left to right. They never fold: only the buttons after them do.
-pub const MENUS: [&str; 7] = ["File", "Edit", "View", "Banking", "Charts", "Export", "Help"];
+pub const MENUS: [&str; 8] = ["File", "Edit", "View", "Model", "Banking", "Charts", "Export", "Help"];
 
 /// How the bar is laid out: how many of the visible buttons (counted from the right) are in the
 /// overflow menu "»", and how wide the search box is. Buttons always keep their labels.
@@ -209,6 +209,8 @@ impl MicroParquetApp {
         rects.push(("Edit".to_string(), r.rect));
         let r = self.view_menu(ui, ctx);
         rects.push(("View".to_string(), r.rect));
+        let r = self.model_menu(ui);
+        rects.push(("Model".to_string(), r.rect));
         for group_id in [CommandGroup::Banking, CommandGroup::Charts, CommandGroup::Export] {
             let name = match group_id {
                 CommandGroup::Banking => "Banking",

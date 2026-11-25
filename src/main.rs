@@ -146,6 +146,18 @@ pub enum ActiveToolModal {
     ProjectPrompt,
     /// File ▸ Open recent project (Phase 8 W4).
     ProjectRecent,
+    /// Model ▸ Links… (Phase 9 M0).
+    ModelLinks,
+    /// Model ▸ Key check… (Phase 9 M0).
+    ModelKeyCheck,
+    /// A Model item with no project open (Phase 9 M0).
+    ModelNoProject,
+    /// Model ▸ Calendar… (Phase 9 M2).
+    ModelCalendar,
+    /// Model ▸ As-of date… (Phase 9 M2).
+    ModelAsOf,
+    /// Model ▸ Measures… (Phase 9 M3).
+    ModelMeasures,
     /// Transform ▸ Split date… (Phase 8 W1).
     SplitDate,
     /// New chart: the chart gallery (Phase 7 C2).
@@ -340,6 +352,14 @@ pub struct MicroParquetApp {
     pub pivot: PivotState,
     pub pivot_builder: PivotBuilderState,
     pub pivot_bar: PivotBarState,
+    /// The Nested view of each pivot tab that is in the Nested layout, by tab id (Phase 9 P2).
+    pub nested_views: HashMap<u64, crate::ui::pivot_layout::NestedCache>,
+    /// Why a cell of a pivot tab is blank, and its warnings (Phase 9 M3), by tab id.
+    pub pivot_reports: HashMap<u64, crate::ui::pivot_layout::ReportCache>,
+    /// A note said under a tab's title (the rows of an average): tab id → text. Not saved.
+    pub tab_notes: HashMap<u64, String>,
+    /// The key each tab's report job in flight was made for.
+    pub pivot_report_key: HashMap<u64, (u64, u64)>,
     pub cl_migration: ClMigrationState,
     pub gap: GapState,
     pub cf: CfLadderState,
@@ -477,6 +497,10 @@ impl MicroParquetApp {
             pivot: PivotState::default(),
             pivot_builder: PivotBuilderState::default(),
             pivot_bar: PivotBarState::default(),
+            nested_views: HashMap::new(),
+            pivot_reports: HashMap::new(),
+            tab_notes: HashMap::new(),
+            pivot_report_key: HashMap::new(),
             cl_migration: ClMigrationState::default(),
             gap: GapState::default(),
             cf: CfLadderState::default(),
@@ -528,6 +552,10 @@ impl eframe::App for MicroParquetApp {
 
     /// The chart studio's temporary files (previews, chart-data tables) go when the app closes.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // the pivot builder's own window: where it was when the app closed
+        if self.pivot_builder.popped {
+            self.pivot_save_popout_rect();
+        }
         micro_parquet::charts::echarts::clean_chart_temp(&self.paths.temp_dir);
     }
 }
