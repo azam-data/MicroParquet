@@ -184,3 +184,9 @@ mod p9_m4;
 mod p9_m5;
 #[path = "../phase9/m6.rs"]
 mod p9_m6;
+
+// Phase 10 tests (tests/phase10/) are compiled into this binary too.
+#[path = "../phase10/p9_baseline.rs"]
+mod p10_p9_baseline;
+#[path = "../phase10/d0.rs"]
+mod p10_d0;

@@ -104,6 +104,8 @@ pub struct ProjectState {
     pub rects: ProjectRects,
     /// The model of the project: its links (Phase 9 M0), saved in the `.mpproj`.
     pub model: micro_parquet::model::Model,
+    /// The project's dashboard (Phase 10); kept so saving the project again never drops it.
+    pub dashboard: Option<micro_parquet::dashboard::Dashboard>,
     /// What the app knows of the links: the key checks, the open Links dialog.
     pub model_ui: crate::ui::model::ModelState,
     /// Tests: the file or folder the dialog would give, and how often a dialog was asked for.
@@ -310,6 +312,7 @@ impl MicroParquetApp {
         self.project.kept.clear();
         self.project.opening = None;
         self.project.model = micro_parquet::model::Model::default();
+        self.project.dashboard = None;
         self.project.model_ui = crate::ui::model::ModelState::default();
     }
 
@@ -390,6 +393,7 @@ impl MicroParquetApp {
         self.project.hash_cache.extend(b.cache);
         let mut project = b.saved.project;
         project.model = self.project.model.clone();
+        project.dashboard = self.project.dashboard.clone();
         let draft = SaveDraft { project, excluded: b.saved.excluded, keys: b.saved.keys, path: b.path };
         if draft.excluded.is_empty() {
             self.project_commit(draft);
@@ -457,6 +461,7 @@ impl MicroParquetApp {
     fn project_start_opening(&mut self, draft: SourcesDraft) {
         self.close_all_tabs();
         self.project.model = draft.project.model.clone();
+        self.project.dashboard = draft.project.dashboard.clone();
         self.project.active = true;
         self.project.path = Some(draft.path.clone());
         self.project.name = project_name(&draft.path);

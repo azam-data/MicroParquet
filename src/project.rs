@@ -21,6 +21,8 @@ use std::path::{Component, Path, PathBuf};
 pub const PROJECT_VERSION: u32 = 1;
 /// The version of a project that has a model (Phase 9 M0). The v1.8.0 app refuses it with its "newer MicroParquet" message.
 pub const PROJECT_VERSION_MODEL: u32 = 2;
+/// The version of a project that has a dashboard (Phase 10 D0). The v1.9.0 app refuses it with its "newer MicroParquet" message.
+pub const PROJECT_VERSION_DASHBOARD: u32 = 3;
 /// The extension of a project file.
 pub const PROJECT_EXT: &str = "mpproj";
 /// How many projects "Open recent project" lists.
@@ -124,11 +126,14 @@ pub struct Project {
     /// The model: links between tabs (Phase 9 M0). Not in the file when it is empty, and then the project is version 1.
     #[serde(skip_serializing_if = "crate::model::Model::is_empty")]
     pub model: crate::model::Model,
+    /// The dashboard (Phase 10 D0). Not in the file when there is none, and then the project is version 1 or 2 exactly as Phase 9 wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard: Option<crate::dashboard::Dashboard>,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new(), model: crate::model::Model::default() }
+        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new(), model: crate::model::Model::default(), dashboard: None }
     }
 }
 
@@ -149,9 +154,19 @@ impl Project {
     /// The file's text: keys in alphabetical order, so saving the same project twice gives the same bytes.
     pub fn to_json(&self) -> Result<String> {
         let mut v = serde_json::to_value(self).context("The project could not be written")?;
-        // a project with a model is version 2, one without is version 1, whatever the value in memory
+        // a project with a dashboard is version 3, one with a model version 2, one with neither version 1, whatever the value in memory
+        if let Some(d) = &self.dashboard {
+            d.validate()?;
+        }
         if let Some(m) = v.as_object_mut() {
-            m.insert("project_version".to_string(), serde_json::json!(if self.model.is_empty() { PROJECT_VERSION } else { PROJECT_VERSION_MODEL }));
+            let ver = if self.dashboard.is_some() {
+                PROJECT_VERSION_DASHBOARD
+            } else if self.model.is_empty() {
+                PROJECT_VERSION
+            } else {
+                PROJECT_VERSION_MODEL
+            };
+            m.insert("project_version".to_string(), serde_json::json!(ver));
         }
         let mut text = serde_json::to_string_pretty(&sorted_value(v)).context("The project could not be written")?;
         text.push('\n');
@@ -161,7 +176,7 @@ impl Project {
     /// Reads a project from its text. A newer project version is refused before anything else is read.
     pub fn from_json(text: &str, name: &str) -> Result<Project> {
         let v: serde_json::Value = serde_json::from_str(text).map_err(|e| anyhow!("The project file {} is not valid: {}.", name, e))?;
-        check_version(&v, PROJECT_VERSION_MODEL)?;
+        check_version(&v, PROJECT_VERSION_DASHBOARD)?;
         serde_json::from_value::<Project>(v).map_err(|e| anyhow!("The project file {} is not valid: {}.", name, e))
     }
 

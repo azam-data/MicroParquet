@@ -911,7 +911,7 @@ fn w4_save_lists_the_tabs_it_leaves_out_and_a_newer_project_is_refused_by_the_me
 
         // a project saved by a newer program is refused with the version, and no dialog opens
         let newer = root.join("proj").join("Newer.mpproj");
-        std::fs::write(&newer, r#"{"project_version": 3, "app_version": "9.9.0", "tabs": []}"#).expect("file");
+        std::fs::write(&newer, r#"{"project_version": 4, "app_version": "9.9.0", "tabs": []}"#).expect("file");
         rig.app.project.test_pick = Some(newer);
         file_item(&mut rig, "Open project\u{2026}");
         assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}");
