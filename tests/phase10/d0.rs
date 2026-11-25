@@ -54,7 +54,7 @@ fn dashboard() -> Dashboard {
                 id: "p1".into(),
                 title: "Overview".into(),
                 layout: PageLayout::Grid { per_row: 3 },
-                items: vec![item("i1", DashItemKind::Chart("t9".into())), item("i2", DashItemKind::Pivot("t8".into())), item("i3", DashItemKind::Kpi(KpiSpec { title: "CASA ratio".into() }))],
+                items: vec![item("i1", DashItemKind::Chart("t9".into())), item("i2", DashItemKind::Pivot("t8".into())), item("i3", DashItemKind::Kpi(KpiSpec { title: "CASA ratio".into(), ..Default::default() }))],
                 filters: vec![PageFilter { id: "f1".into(), label: "Region".into(), tab: "t1".into(), field: "Branch master \u{b7} Region".into(), ..Default::default() }],
                 state,
                 ..Default::default()
@@ -72,6 +72,7 @@ fn dashboard() -> Dashboard {
             },
         ],
         template_library: vec![TemplateRef { name: "Bank".into(), blake3: "ab".into() }],
+        default_kpi_unit: Default::default(),
     }
 }
 

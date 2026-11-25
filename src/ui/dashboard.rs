@@ -5,7 +5,7 @@
 
 use crate::ui::prelude::*;
 use micro_parquet::dashboard::*;
-use micro_parquet::kpi::KpiSpec;
+use micro_parquet::kpi::*;
 use micro_parquet::model::ModelFieldRef;
 use micro_parquet::models::*;
 use micro_parquet::tab_jobs::{dash_item_job, dash_values_job, source_signature};
@@ -114,7 +114,21 @@ impl MicroParquetApp {
     /// What the item reads, or why it can't be drawn.
     pub(crate) fn dash_resolve(&self, item: &DashItem) -> Result<Resolved, String> {
         match &item.kind {
-            DashItemKind::Kpi(_) => Err("KPI cards come with the next step of this phase.".to_string()),
+            DashItemKind::Kpi(k) => {
+                let key = match &k.source {
+                    KpiSource::Measure(name) => self.project.model.measures.iter().find(|m| m.name() == name).map(|m| m.tab().to_string()).ok_or_else(|| if name.is_empty() { "Pick a measure in the card's settings.".to_string() } else { format!("The measure '{}' is not in the model. Pick another in the card's settings.", name) })?,
+                    KpiSource::Value { tab, .. } => {
+                        if tab.is_empty() {
+                            return Err("Pick a data tab and a column in the card's settings.".to_string());
+                        }
+                        tab.clone()
+                    }
+                };
+                let idx = self.dash_index_of_key(&key).ok_or_else(|| SOURCE_REMOVED.to_string())?;
+                let t = &self.tabs[idx];
+                let n = t.exec_steps.min(t.steps.len());
+                Ok(Resolved { source: ItemSource::Kpi { spec: k.clone(), tab_key: key.clone(), base: t.source.clone(), steps: t.steps[..n].to_vec() }, data_tab: Some(key), scale: None, title: if k.title.is_empty() { "KPI".to_string() } else { k.title.clone() } })
+            }
             DashItemKind::Chart(key) => {
                 let idx = self.dash_index_of_key(key).ok_or_else(|| SOURCE_REMOVED.to_string())?;
                 let tab = &self.tabs[idx];
@@ -150,7 +164,7 @@ impl MicroParquetApp {
     }
 
     /// The picks of a page that reach an item, and the labels of the filters that have a pick but don't reach it.
-    fn dash_picks_for(&self, page: &DashPage, data_tab: Option<&str>) -> (Vec<(PageFilter, Vec<String>)>, Vec<String>) {
+    pub(crate) fn dash_picks_for(&self, page: &DashPage, data_tab: Option<&str>) -> (Vec<(PageFilter, Vec<String>)>, Vec<String>) {
         let (mut yes, mut no) = (Vec::new(), Vec::new());
         for (_, f, v) in page.active_picks() {
             if filter_applies(f, data_tab) {
@@ -160,6 +174,17 @@ impl MicroParquetApp {
             }
         }
         (yes, no)
+    }
+
+    /// What an item's numbers depend on: change it and they are calculated again. A card's unit, decimals, limits, direction and
+    /// title are not in it (they change the display, not the stored number).
+    pub(crate) fn dash_sig(&self, res: &Resolved, picks: &[(PageFilter, Vec<String>)]) -> String {
+        match &res.source {
+            ItemSource::Chart { base, steps, spec } => format!("{}|{:?}|{:?}", source_signature(base, steps), spec, picks),
+            ItemSource::Pivot { base, steps, spec } => format!("{}|{:?}|{:?}", source_signature(base, steps), spec, picks),
+            // a card also depends on the as-of date and the measures (the model)
+            ItemSource::Kpi { spec, base, steps, .. } => format!("{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}", source_signature(base, steps), spec.source, spec.compare, spec.sparkline, picks, self.project.model.measures, self.project.model.as_of),
+        }
     }
 
     /// Called every frame: the items of the open page and the values of its filters are calculated again when what they read changed.
@@ -173,10 +198,7 @@ impl MicroParquetApp {
             let view = self.dashboard_ui.items.entry(item.id.clone()).or_default().clone();
             let Ok(res) = self.dash_resolve(item) else { continue };
             let (picks, _) = self.dash_picks_for(&page, res.data_tab.as_deref());
-            let sig = match &res.source {
-                ItemSource::Chart { base, steps, spec } => format!("{}|{:?}|{:?}", source_signature(base, steps), spec, picks),
-                ItemSource::Pivot { base, steps, spec } => format!("{}|{:?}|{:?}", source_signature(base, steps), spec, picks),
-            };
+            let sig = self.dash_sig(&res, &picks);
             if view.sig == sig || view.pending.as_deref() == Some(sig.as_str()) {
                 continue;
             }
@@ -315,6 +337,13 @@ impl MicroParquetApp {
                 if choices.is_empty() {
                     ui.label("No chart tab or pivot tab is open. Make one first.");
                 }
+                let b = ui.button(format!("{}  KPI card", theme::ph::GAUGE));
+                rects.push(("Add KPI card".into(), b.rect));
+                if b.clicked() {
+                    add_item = Some(DashItemKind::Kpi(KpiSpec { title: "New KPI".into(), ..Default::default() }));
+                    ui.close_menu();
+                }
+                ui.separator();
                 for (key, title, chart) in &choices {
                     let text = format!("{}  {}", if *chart { theme::ph::CHART_BAR } else { theme::ph::TABLE }, title);
                     let b = ui.button(text);
@@ -488,6 +517,9 @@ impl MicroParquetApp {
         let mut page_op: Option<(&'static str, usize)> = None;
         let mut item_op: Option<(&'static str, usize)> = None;
         egui::SidePanel::right("dash_props").exact_width(theme::DASH_RIGHT_W).resizable(false).frame(egui::Frame::none()).show_inside(ui, |ui| {
+          egui::ScrollArea::vertical().id_salt("dash_props_scroll").auto_shrink([false, false]).show(ui, |ui| {
+            let sel = self.dashboard_ui.selected.clone().and_then(|id| dash.pages[pi].items.iter().position(|i| i.id == id));
+            if sel.is_none() {
             ui.label(theme::semibold("Page"));
             let mut title = dash.pages[pi].title.clone();
             if Self::dash_text_edit(ui, "Page title", &mut title, &mut rects, theme::DASH_RIGHT_W - theme::DASH_PROPS_PAD) {
@@ -527,13 +559,16 @@ impl MicroParquetApp {
             } else if Self::dash_button(ui, "Delete page", "Delete page", &mut rects) {
                 self.dashboard_ui.confirm_delete = true;
             }
-            ui.separator();
-            let sel = self.dashboard_ui.selected.clone().and_then(|id| dash.pages[pi].items.iter().position(|i| i.id == id));
+            }
             match sel {
                 None => {
+                    ui.separator();
                     ui.label(egui::RichText::new("Click an item to change it.").color(tk.muted));
                 }
                 Some(ii) => {
+                    if Self::dash_button(ui, "Page settings", "\u{2039} Page settings", &mut rects) {
+                        self.dashboard_ui.selected = None;
+                    }
                     ui.label(theme::semibold("Item"));
                     let source = match &dash.pages[pi].items[ii].kind {
                         DashItemKind::Chart(k) | DashItemKind::Pivot(k) => self.dash_index_of_key(k).map(|i| self.tabs[i].title.clone()).unwrap_or_else(|| SOURCE_REMOVED.to_string()),
@@ -544,6 +579,9 @@ impl MicroParquetApp {
                     ui.label("Title");
                     if Self::dash_text_edit(ui, "Item title", &mut t, &mut rects, theme::DASH_RIGHT_W - theme::DASH_PROPS_PAD) {
                         dash.pages[pi].items[ii].title_override = if t.is_empty() { None } else { Some(t) };
+                    }
+                    if let DashItemKind::Kpi(k) = &mut dash.pages[pi].items[ii].kind {
+                        self.kpi_editor(ui, k, &mut rects);
                     }
                     ui.horizontal_wrapped(|ui| {
                         if Self::dash_button(ui, "Item earlier", "Move earlier", &mut rects) {
@@ -558,9 +596,10 @@ impl MicroParquetApp {
                     });
                 }
             }
+          });
         });
         egui::CentralPanel::default().frame(egui::Frame::none()).show_inside(ui, |ui| {
-            self.render_dash_page(ui, &dash.pages[pi], &mut rects, &mut open_tab);
+            self.render_dash_page(ui, &dash.pages[pi], dash.default_kpi_unit, &mut rects, &mut open_tab);
         });
 
         // what was asked for
@@ -636,7 +675,7 @@ impl MicroParquetApp {
     }
 
     /// The page: its items in the grid, scaled to the space there is.
-    fn render_dash_page(&mut self, ui: &mut egui::Ui, page: &DashPage, rects: &mut Vec<(String, egui::Rect)>, open_tab: &mut Option<String>) {
+    fn render_dash_page(&mut self, ui: &mut egui::Ui, page: &DashPage, default_unit: KpiUnit, rects: &mut Vec<(String, egui::Rect)>, open_tab: &mut Option<String>) {
         let tk = *theme::tokens(self.dark_mode);
         let avail = ui.available_rect_before_wrap().shrink2(egui::vec2(theme::SPACE_S, 0.0));
         let scale = (avail.width() / PAGE_W as f32).min(avail.height() / PAGE_H as f32).max(theme::DASH_MIN_SCALE);
@@ -705,11 +744,180 @@ impl MicroParquetApp {
                     let h = (child.available_height() - theme::SPACE_XS).max(theme::SPACE_L);
                     crate::ui::chart_render::show_chart(&mut child, egui::Id::new(("dash_chart", item.id.clone())), data, &opts, Some(h));
                 }
+                (_, Some(ItemData::Kpi(k)), _) => {
+                    let DashItemKind::Kpi(spec) = &item.kind else { continue };
+                    Self::draw_kpi(&mut child, &tk, spec, k, default_unit, &item.id, rects);
+                }
                 (_, Some(ItemData::Table(t)), _) => {
                     Self::draw_dash_table(&mut child, &item.id, t);
                 }
             }
         }
+    }
+
+    /// The card's settings: what it shows, its unit, the comparison, which direction is good, up to two limits and the sparkline.
+    fn kpi_editor(&self, ui: &mut egui::Ui, k: &mut KpiSpec, rects: &mut Vec<(String, egui::Rect)>) {
+        let w = theme::DASH_RIGHT_W - theme::DASH_PROPS_PAD;
+        let combo = |ui: &mut egui::Ui, label: &str, name: &str, shown: String, rects: &mut Vec<(String, egui::Rect)>, body: &mut dyn FnMut(&mut egui::Ui)| {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                let r = egui::ComboBox::from_id_salt(("kpi", name.to_string())).selected_text(shown).width(w - theme::KPI_LABEL_W).show_ui(ui, |ui| body(ui));
+                rects.push((name.to_string(), r.response.rect));
+            });
+        };
+        let measures: Vec<String> = self.project.model.measures.iter().map(|m| m.name().to_string()).collect();
+        let shown = match &k.source {
+            KpiSource::Measure(n) if n.is_empty() => "Pick a measure".to_string(),
+            KpiSource::Measure(n) => n.clone(),
+            KpiSource::Value { tab, value } => format!("{} \u{b7} {}", self.dash_index_of_key(tab).map(|i| self.tabs[i].title.clone()).unwrap_or_else(|| tab.clone()), value.field),
+        };
+        combo(ui, "Shows", "KPI measure", shown, rects, &mut |ui| {
+            if measures.is_empty() {
+                ui.label("The model has no measures. Add one in Model \u{25b8} Measures\u{2026}.");
+            }
+            for m in &measures {
+                if ui.selectable_label(k.source == KpiSource::Measure(m.clone()), m).clicked() {
+                    k.source = KpiSource::Measure(m.clone());
+                    if k.title.is_empty() || k.title == "New KPI" {
+                        k.title = m.clone();
+                    }
+                }
+            }
+        });
+        combo(ui, "Unit", "KPI unit", k.unit.label().to_string(), rects, &mut |ui| {
+            for u in KpiUnit::ALL {
+                ui.selectable_value(&mut k.unit, u, u.label());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Decimals");
+            let r = ui.add(egui::DragValue::new(&mut k.decimals).range(0..=6));
+            rects.push(("KPI decimals".into(), r.rect));
+        });
+        let cmp = match k.compare {
+            KpiCompare::None => "Nothing",
+            KpiCompare::PriorPeriod => "Prior period",
+            KpiCompare::Sply => "Same period last year",
+        };
+        combo(ui, "Compare with", "KPI compare", cmp.to_string(), rects, &mut |ui| {
+            ui.selectable_value(&mut k.compare, KpiCompare::None, "Nothing");
+            ui.selectable_value(&mut k.compare, KpiCompare::PriorPeriod, "Prior period");
+            ui.selectable_value(&mut k.compare, KpiCompare::Sply, "Same period last year");
+        });
+        let gd = match k.good_direction {
+            GoodDirection::Up => "Up is good",
+            GoodDirection::Down => "Down is good",
+            GoodDirection::Neutral => "No judgement",
+        };
+        combo(ui, "Good direction", "KPI direction", gd.to_string(), rects, &mut |ui| {
+            ui.selectable_value(&mut k.good_direction, GoodDirection::Up, "Up is good");
+            ui.selectable_value(&mut k.good_direction, GoodDirection::Down, "Down is good");
+            ui.selectable_value(&mut k.good_direction, GoodDirection::Neutral, "No judgement");
+        });
+        ui.label("Limits");
+        let mut drop: Option<usize> = None;
+        for (i, t) in k.thresholds.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let op = if t.op == ThresholdOp::Below { "below" } else { "above" };
+                if ui.small_button(op).clicked() {
+                    t.op = if t.op == ThresholdOp::Below { ThresholdOp::Above } else { ThresholdOp::Below };
+                }
+                let r = ui.add(egui::DragValue::new(&mut t.limit).speed(0.5));
+                rects.push((format!("KPI limit {}", i + 1), r.rect));
+                let c = match t.colour {
+                    ThresholdColour::Amber => "amber",
+                    ThresholdColour::Red => "red",
+                    ThresholdColour::Green => "green",
+                };
+                if ui.small_button(c).clicked() {
+                    t.colour = match t.colour {
+                        ThresholdColour::Amber => ThresholdColour::Red,
+                        ThresholdColour::Red => ThresholdColour::Green,
+                        ThresholdColour::Green => ThresholdColour::Amber,
+                    };
+                }
+                if ui.small_button(theme::ph::X).clicked() {
+                    drop = Some(i);
+                }
+            });
+        }
+        if let Some(i) = drop {
+            k.thresholds.remove(i);
+        }
+        if k.thresholds.len() < MAX_THRESHOLDS {
+            let b = ui.button("Add limit");
+            rects.push(("KPI add limit".into(), b.rect));
+            if b.clicked() {
+                k.thresholds.push(Threshold::default());
+            }
+        }
+        let r = ui.checkbox(&mut k.sparkline, "Sparkline (12 months)");
+        rects.push(("KPI sparkline".into(), r.rect));
+    }
+
+    /// A KPI card: the number, the change with its arrow and words, and the sparkline. A tooltip carries the same words.
+    fn draw_kpi(ui: &mut egui::Ui, tk: &theme::Tokens, spec: &KpiSpec, v: &KpiValue, default_unit: KpiUnit, id: &str, rects: &mut Vec<(String, egui::Rect)>) {
+        let kv = view(spec, v, default_unit);
+        let tone_colour = |t: Tone| match t {
+            Tone::Good => tk.success,
+            Tone::Bad => tk.danger,
+            Tone::Neutral => tk.muted,
+        };
+        let number = match kv.threshold {
+            Some(ThresholdColour::Amber) => tk.warning,
+            Some(ThresholdColour::Red) => tk.danger,
+            Some(ThresholdColour::Green) => tk.success,
+            None => tk.ink,
+        };
+        let big = ui.add(egui::Label::new(theme::semibold(kv.value_text.clone()).size(theme::TEXT_KPI).color(number)).truncate());
+        rects.push((format!("KPI value {}", id), big.rect));
+        if !kv.change_text.is_empty() {
+            let text = if kv.arrow.is_empty() { kv.change_text.clone() } else { format!("{} {}", kv.arrow, kv.change_text) };
+            let r = ui.add(egui::Label::new(egui::RichText::new(text).color(tone_colour(kv.tone))).truncate());
+            rects.push((format!("KPI change {}", id), r.rect));
+            if !kv.words.is_empty() {
+                r.on_hover_text(format!("{} against the earlier period", kv.words));
+            }
+        }
+        if let Some(why) = &kv.reason {
+            ui.label(egui::RichText::new(why.clone()).size(theme::TEXT_LABEL).color(tk.muted));
+        }
+        for n in v.notes.iter().take(2) {
+            ui.label(egui::RichText::new(n.clone()).size(theme::TEXT_LABEL).color(tk.muted));
+        }
+        ui.label(egui::RichText::new(v.period.clone()).size(theme::TEXT_LABEL).color(tk.muted));
+        if !kv.spark.is_empty() {
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(theme::KPI_SPARK_W), theme::KPI_SPARK_H), egui::Sense::hover());
+            rects.push((format!("KPI spark {}", id), rect));
+            let vals: Vec<f64> = kv.spark.iter().flatten().copied().collect();
+            let (lo, hi) = vals.iter().fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(*x), b.max(*x)));
+            let span = if hi > lo { hi - lo } else { 1.0 };
+            let n = kv.spark.len().max(2) - 1;
+            let pt = |i: usize, y: f64| egui::pos2(rect.left() + rect.width() * i as f32 / n as f32, rect.bottom() - rect.height() * ((y - lo) / span) as f32);
+            // a gap breaks the line: each run of numbers is its own line
+            let mut run: Vec<egui::Pos2> = Vec::new();
+            let flush = |run: &mut Vec<egui::Pos2>, painter: &egui::Painter| {
+                match run.len() {
+                    0 => {}
+                    1 => {
+                        painter.circle_filled(run[0], theme::KPI_SPARK_DOT, tk.accent);
+                    }
+                    _ => {
+                        painter.add(egui::Shape::line(run.clone(), theme::line_thick(tk.accent)));
+                    }
+                }
+                run.clear();
+            };
+            for (i, y) in kv.spark.iter().enumerate() {
+                match y {
+                    Some(y) => run.push(pt(i, *y)),
+                    None => flush(&mut run, ui.painter()),
+                }
+            }
+            flush(&mut run, ui.painter());
+            resp.on_hover_text(format!("{} periods; a gap is a period with no number", kv.spark.len()));
+        }
+        ui.interact(ui.min_rect(), ui.id().with(("kpi_alt", id.to_string())), egui::Sense::hover()).on_hover_text(kv.alt.clone());
     }
 
     /// A pivot as a table (Nested, with its indents, when the pivot is Nested).

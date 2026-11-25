@@ -5,7 +5,7 @@
 //! spec, so a dashboard follows its tabs. A tab that was deleted shows "Source tab removed" on its item and in every export.
 //! Links use ids, never names, so renaming a page, an item or a filter breaks nothing.
 
-use crate::kpi::KpiSpec;
+use crate::kpi::{KpiSpec, KpiUnit};
 use crate::project::Project;
 use crate::chart::{ChartData, ChartSpec};
 use crate::models::*;
@@ -43,6 +43,8 @@ pub struct Dashboard {
     pub title: String,
     pub pages: Vec<DashPage>,
     pub template_library: Vec<TemplateRef>,
+    /// The unit KPI cards show money in when the card says Automatic (Crore when it is left alone).
+    pub default_kpi_unit: crate::kpi::KpiUnit,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -224,6 +226,8 @@ pub enum ItemSource {
     Chart { base: TabSource, steps: Vec<TransformStep>, spec: ChartSpec },
     /// A pivot tab: its table before the pivot step, and the pivot.
     Pivot { base: TabSource, steps: Vec<TransformStep>, spec: PivotSpec },
+    /// A KPI card: its settings and the data tab it reads (Phase 10 D2).
+    Kpi { spec: KpiSpec, tab_key: String, base: TabSource, steps: Vec<TransformStep> },
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +254,7 @@ pub struct TableData {
 pub enum ItemData {
     Chart(Box<ChartData>),
     Table(Box<TableData>),
+    Kpi(Box<crate::kpi::KpiValue>),
     /// The item can't be drawn, and why (a plain message, never an empty chart).
     Problem(String),
 }
@@ -260,6 +265,7 @@ impl ItemData {
         match self {
             ItemData::Chart(c) => &c.notes,
             ItemData::Table(t) => &t.notes,
+            ItemData::Kpi(k) => &k.notes,
             ItemData::Problem(_) => &[],
         }
     }
@@ -319,6 +325,10 @@ pub fn compute_item(req: &ItemRequest) -> Result<ItemData> {
             let lf = crate::engine::compile_tab_lazy(base, steps, &req.temp_dir)?;
             let data = crate::charts::calc::compute(crate::pivot_table::without_total_rows(lf, steps), &chart_spec_with(spec, &req.picks))?;
             Ok(ItemData::Chart(Box::new(data)))
+        }
+        ItemSource::Kpi { spec, tab_key, base, steps } => {
+            let r = crate::kpi::KpiRequest { spec: spec.clone(), tab_key: tab_key.clone(), base: base.clone(), steps: steps.clone(), picks: req.picks.clone(), temp_dir: req.temp_dir.clone() };
+            Ok(ItemData::Kpi(Box::new(crate::kpi::compute_kpi(&r)?)))
         }
         ItemSource::Pivot { base, steps, spec } => {
             let lf = crate::engine::compile_tab_lazy(base, steps, &req.temp_dir)?;

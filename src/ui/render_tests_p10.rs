@@ -282,3 +282,148 @@ fn d1_the_dashboard_page_is_drawn_as_a_picture_in_both_themes() {
         shoot(&mut rig, "dashboard-page", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
     }
 }
+
+// ------------------------------------------------------------------------------------------------ D2: KPI cards
+
+use micro_parquet::kpi::*;
+
+fn inject_kpi(rig: &mut Rig, item_id: &str, v: KpiValue) {
+    let d = rig.app.project.dashboard.clone().expect("a dashboard");
+    let page = &d.pages[0];
+    let item = page.items.iter().find(|i| i.id == item_id).expect("the item");
+    let res = rig.app.dash_resolve(item).unwrap_or_else(|e| panic!("{}: the card resolves: {e}", rig.what));
+    let (picks, _) = rig.app.dash_picks_for(page, res.data_tab.as_deref());
+    let sig = rig.app.dash_sig(&res, &picks);
+    rig.app.dashboard_ui.items.insert(item_id.to_string(), crate::ui::dashboard::ItemView { sig, pending: None, data: Some(ItemData::Kpi(Box::new(v))), error: None, scale: None });
+}
+
+fn pick_in(rig: &mut Rig, combo: &str, text: &str) {
+    click_named(rig, combo);
+    let p = rig.draw(3);
+    let (_, b) = p.boxes.iter().rev().find(|(t, _)| t == text).cloned().unwrap_or_else(|| panic!("{}: '{text}' in {combo}: {:?}", rig.what, p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+    rig.click_later(b.center());
+    rig.draw(3);
+}
+
+fn spec_of(rig: &Rig, id: &str) -> KpiSpec {
+    match &rig.app.project.dashboard.as_ref().expect("d").pages[0].items.iter().find(|i| i.id == id).expect("item").kind {
+        DashItemKind::Kpi(k) => k.clone(),
+        _ => panic!("a KPI card"),
+    }
+}
+
+#[test]
+fn d2_a_kpi_card_is_made_by_clicks_shows_number_arrow_and_words_and_its_settings_work_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig10("p10d2_card", ppp, w, h);
+        let what = rig.what.clone();
+        let book_key = key_of(&rig, "Book");
+        rig.app.project.model.measures.push(micro_parquet::measures::NamedMeasure::Base { name: "Deposits".into(), tab: book_key, column: "Balance".into(), aggregation: TimeAgg::ClosingBalance, filters: vec![], sign: micro_parquet::measures::Sign::Plus, weight: None });
+        rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+        rig.draw(5);
+        // Add item > KPI card
+        click_named(&mut rig, "Add item");
+        rig.draw(3);
+        click_named(&mut rig, "Add KPI card");
+        rig.draw(5);
+        let id = rig.app.project.dashboard.as_ref().expect("d").pages[0].items[0].id.clone();
+        assert!(rig.app.dashboard_ui.selected.as_deref() == Some(id.as_str()), "{what}: the new card is selected, so its settings show");
+        assert!(rig.app.dashboard_ui.items.get(&id).map_or(true, |v| v.data.is_none()), "{what}: no measure yet: nothing is invented");
+        assert!(rig.draw(2).boxes.iter().any(|(t, _)| t == "Pick a measure in the card's settings."), "{what}: the card says what to do");
+        // the settings, by real clicks
+        pick_in(&mut rig, "KPI measure", "Deposits");
+        assert_eq!(spec_of(&rig, &id).source, KpiSource::Measure("Deposits".into()), "{what}");
+        assert_eq!(spec_of(&rig, &id).title, "Deposits", "{what}: the title follows the measure");
+        pick_in(&mut rig, "KPI compare", "Prior period");
+        assert_eq!(spec_of(&rig, &id).compare, KpiCompare::PriorPeriod, "{what}");
+        // the numbers the worker would give (the model has no calendar in this rig): 4,825.00 Cr against 4,700.00 Cr
+        inject_kpi(&mut rig, &id, KpiValue { current: Some(48_250_000_000.0), earlier: Some(47_000_000_000.0), period: "Oct 2026".into(), ..Default::default() }); // money in BDT, not a size
+        let p = rig.draw(4);
+        let texts: Vec<String> = p.boxes.iter().map(|(t, _)| t.clone()).collect();
+        assert!(texts.iter().any(|t| t == "4,825.00 Cr"), "{what}: the number: {texts:?}");
+        assert!(texts.iter().any(|t| t == "\u{25b2} +125.00 Cr \u{b7} +2.66%"), "{what}: the arrow and the change: {texts:?}");
+        assert_eq!(rig.app.dashboard_ui.rects.iter().filter(|(n, _)| n.starts_with("KPI value")).count(), 1, "{what}");
+        // the direction: Down is good turns the same change bad, and the arrow is the same
+        pick_in(&mut rig, "KPI direction", "Down is good");
+        assert_eq!(spec_of(&rig, &id).good_direction, GoodDirection::Down, "{what}");
+        assert!(rig.draw(3).boxes.iter().any(|(t, _)| t == "\u{25b2} +125.00 Cr \u{b7} +2.66%"), "{what}: the arrow does not depend on the colour");
+        // the unit switch changes what is shown and not what is stored
+        pick_in(&mut rig, "KPI unit", "Absolute");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t == "48,250,000,000.00"), "{what}: Absolute: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        let ItemData::Kpi(k) = rig.app.dashboard_ui.items[&id].data.as_ref().expect("numbers") else { panic!("a card") };
+        assert_eq!(k.current, Some(48_250_000_000.0), "{what}: the stored number did not change"); // money in BDT, not a size
+        // a limit: add it, and the number is coloured by it (the value text is still there)
+        click_named(&mut rig, "KPI add limit");
+        rig.draw(3);
+        assert_eq!(spec_of(&rig, &id).thresholds.len(), 1, "{what}");
+        // the sparkline: with twelve numbers and a gap the card draws it
+        click_named(&mut rig, "KPI sparkline");
+        rig.draw(3);
+        assert!(spec_of(&rig, &id).sparkline, "{what}");
+        let mut spark: Vec<Option<f64>> = (0..12).map(|i| Some(1_000_000_000.0 * (i + 1) as f64)).collect(); // money in BDT, not a size
+        spark[4] = None;
+        inject_kpi(&mut rig, &id, KpiValue { current: Some(48_250_000_000.0), earlier: Some(47_000_000_000.0), period: "Oct 2026".into(), spark, ..Default::default() }); // money in BDT, not a size
+        let p = rig.draw(4);
+        let spark_rect = rect_of(&rig, &format!("KPI spark {id}"));
+        let item_rect = rect_of(&rig, &format!("Item {id}"));
+        assert!(item_rect.contains_rect(spark_rect), "{what}: the sparkline {spark_rect:?} is inside its card {item_rect:?}");
+        for key in [format!("KPI value {id}"), format!("KPI change {id}")] {
+            assert!(item_rect.contains_rect(rect_of(&rig, &key)), "{what}: {key} is inside its card");
+        }
+        assert_not_clipped(&p, rig.ctx.screen_rect(), &what);
+        let card: Vec<(String, egui::Rect)> = p.boxes.iter().filter(|(_, b)| item_rect.contains_rect(*b)).cloned().collect();
+        assert_no_overlap(&card, &what);
+    }
+}
+
+#[test]
+fn d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both_themes() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    let first = SIZES3[0];
+    let mut rig = rig10("p10d2_blank", first.0, first.1, first.2);
+    let book_key = key_of(&rig, "Book");
+    rig.app.project.model.measures.push(micro_parquet::measures::NamedMeasure::Base { name: "Deposits".into(), tab: book_key, column: "Balance".into(), aggregation: TimeAgg::ClosingBalance, filters: vec![], sign: micro_parquet::measures::Sign::Plus, weight: None });
+    rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+    rig.draw(4);
+    click_named(&mut rig, "Add item");
+    rig.draw(2);
+    click_named(&mut rig, "Add KPI card");
+    rig.draw(4);
+    pick_in(&mut rig, "KPI measure", "Deposits");
+    // the rig has no model calendar: the worker's refusal is shown in plain words, in the card, never a zero
+    rig.draw(6);
+    let p = rig.draw(2);
+    assert!(p.boxes.iter().any(|(t, _)| t.starts_with("Could not be calculated: ")), "the refusal is in the card: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+    // a number that is blank shows a dash and its reason
+    let id = rig.app.project.dashboard.as_ref().expect("d").pages[0].items[0].id.clone();
+    inject_kpi(&mut rig, &id, KpiValue { current: None, reason: Some("No balance in Nov 2026 for 'Book' (last date 31 Oct 2026)".into()), period: "Nov 2026".into(), ..Default::default() });
+    let p = rig.draw(4);
+    let texts: Vec<String> = p.boxes.iter().map(|(t, _)| t.clone()).collect();
+    assert!(texts.iter().any(|t| t == "\u{2014}") && texts.iter().any(|t| t.starts_with("No balance in Nov 2026")), "{texts:?}");
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig10("p10d2_shot", SHOT_PPP, SHOT_W, SHOT_H);
+        let book_key = key_of(&rig, "Book");
+        rig.app.project.model.measures.push(micro_parquet::measures::NamedMeasure::Base { name: "Deposits".into(), tab: book_key, column: "Balance".into(), aggregation: TimeAgg::ClosingBalance, filters: vec![], sign: micro_parquet::measures::Sign::Plus, weight: None });
+        styled(&mut rig, dark);
+        rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+        rig.draw(4);
+        click_named(&mut rig, "Add item");
+        rig.draw(2);
+        click_named(&mut rig, "Add KPI card");
+        rig.draw(4);
+        pick_in(&mut rig, "KPI measure", "Deposits");
+        pick_in(&mut rig, "KPI compare", "Prior period");
+        click_named(&mut rig, "KPI add limit");
+        click_named(&mut rig, "KPI sparkline");
+        let id = rig.app.project.dashboard.as_ref().expect("d").pages[0].items[0].id.clone();
+        let mut spark: Vec<Option<f64>> = (0..12).map(|i| Some(40_000_000_000.0 + 1_000_000_000.0 * i as f64)).collect(); // money in BDT, not a size
+        spark[4] = None;
+        inject_kpi(&mut rig, &id, KpiValue { current: Some(48_250_000_000.0), earlier: Some(47_000_000_000.0), period: "Oct 2026".into(), spark, ..Default::default() }); // money in BDT, not a size
+        rig.draw(4);
+        shoot(&mut rig, "dashboard-kpi", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
+    }
+}

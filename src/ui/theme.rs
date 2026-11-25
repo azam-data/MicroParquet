@@ -1564,3 +1564,11 @@ pub const DASH_LABEL_EDIT_W: f32 = 110.0;
 pub const DASH_PER_ROW_W: f32 = 48.0;
 /// The smallest scale a page is drawn at.
 pub const DASH_MIN_SCALE: f32 = 0.1;
+
+// ---- KPI cards (Phase 10 D2)
+pub const TEXT_KPI: f32 = 28.0;
+pub const KPI_SPARK_W: f32 = 160.0;
+pub const KPI_SPARK_H: f32 = 28.0;
+pub const KPI_SPARK_DOT: f32 = 2.5;
+/// The width the KPI settings keep for their labels.
+pub const KPI_LABEL_W: f32 = 78.0;

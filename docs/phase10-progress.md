@@ -7,7 +7,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 |---|---|---|
 | S1 | D0, C0 | D0 done, C0 done |
 | S2 | D1 | done |
-| S3–S12 | D2 … fixes | not started |
+| S3 | D2 | done |
+| S4–S12 | D3 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
 | Acceptance | Test |
@@ -45,3 +46,18 @@ Full test: 821 + 351 + 9 passed; two older tests used version 3 as "a newer proj
 
 Stub proof: D1 — page picks not added to the chart's filters → the lookup-filter test fails (restored).
 Picture: `docs/guide/img/dashboard-page.png` (light opened, dark written). Decisions: `docs/phase10-decisions.md`.
+
+## S3 acceptance → test (D2)
+| Acceptance | Test |
+|---|---|
+| 4,825.00 Cr; +125.00 Cr · +2.66%; ▲ | `d2_closing_deposits_4825_cr_against_4700_cr_is_plus_125_cr_and_plus_2_66_percent_up_and_good` |
+| Yield +0.50 pp ▲; cost of funds −0.40 pp ▼ green when Down is good | `d2_a_yield_of_11_against_10_50_is_plus_0_50_pp_and_a_cost_of_funds_down_0_40_is_green_when_down_is_good` |
+| Earlier 0 or blank: percent "—", amount stays | `d2_an_earlier_value_of_zero_has_no_percent_and_a_blank_one_has_no_change_and_never_a_zero` |
+| Below 80.00 → amber on 79.50, none on 80.00 | `d2_below_80_is_amber_on_79_50_and_no_colour_on_80_00_and_the_first_matching_limit_wins` |
+| Blank measure: "—" and its reason, never 0 | `d2_a_blank_measure_shows_a_dash_and_its_reason_never_a_zero`, `d2_a_month_with_no_balance_gives_no_number_and_the_pivots_reason` |
+| Unit switch changes display, not the stored number | `d2_the_unit_switch_changes_the_display_and_not_the_stored_number`; render test |
+| Sparkline of 12 points with one gap | `d2_the_card_works_out_the_closing_balance_the_prior_period_and_a_sparkline_with_one_gap` |
+| Arrow and words without colours | `d2_the_arrow_and_the_words_carry_the_change_when_the_colours_are_taken_away` |
+| Window: add, settings, fit at 3 sizes | `d2_a_kpi_card_is_made_by_clicks_shows_number_arrow_and_words_and_its_settings_work_at_three_sizes`, `d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both_themes` |
+
+Stub proof: D2 — "below" made "at or below" → the 80.00 limit test fails (restored). Picture: `docs/guide/img/dashboard-kpi.png` (light opened).

@@ -194,3 +194,5 @@ mod p10_d0;
 mod p10_c0;
 #[path = "../phase10/d1.rs"]
 mod p10_d1;
+#[path = "../phase10/d2.rs"]
+mod p10_d2;
