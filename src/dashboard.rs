@@ -36,6 +36,55 @@ pub struct TemplateRef {
     pub blake3: String,
 }
 
+/// What a slot of a design may hold.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SlotKind {
+    #[default]
+    Any,
+    Chart,
+    Pivot,
+    Kpi,
+}
+
+impl SlotKind {
+    pub const ALL: [SlotKind; 4] = [SlotKind::Any, SlotKind::Chart, SlotKind::Pivot, SlotKind::Kpi];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SlotKind::Any => "Any",
+            SlotKind::Chart => "Chart",
+            SlotKind::Pivot => "Pivot",
+            SlotKind::Kpi => "KPI",
+        }
+    }
+
+    /// True when an item of this kind may fill a slot of this kind.
+    pub fn accepts(self, k: &DashItemKind) -> bool {
+        matches!((self, k), (SlotKind::Any, _) | (SlotKind::Chart, DashItemKind::Chart(_)) | (SlotKind::Pivot, DashItemKind::Pivot(_)) | (SlotKind::Kpi, DashItemKind::Kpi(_)))
+    }
+}
+
+/// A place the owner drew over a design, in page units.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Slot {
+    pub name: String,
+    pub kind: SlotKind,
+    pub rect: DashRect,
+}
+
+/// A design kept inside the project: the picture (base64 of the PNG), its blake3 and its slots.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct TemplateData {
+    pub name: String,
+    pub blake3: String,
+    pub w: u32,
+    pub h: u32,
+    pub png_b64: String,
+    pub slots: Vec<Slot>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct Dashboard {
@@ -43,6 +92,9 @@ pub struct Dashboard {
     pub title: String,
     pub pages: Vec<DashPage>,
     pub template_library: Vec<TemplateRef>,
+    /// The copies of the designs, kept in the project so it shows them on another computer (D5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<TemplateData>,
     /// The unit KPI cards show money in when the card says Automatic (Crore when it is left alone).
     pub default_kpi_unit: crate::kpi::KpiUnit,
 }
@@ -71,6 +123,9 @@ pub struct DashPage {
     /// At most `MAX_PAGE_FILTERS`.
     pub filters: Vec<PageFilter>,
     pub background: Option<TemplateRef>,
+    /// The empty places of the design the page uses; an item that fills one has `slot` set (D5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub slots: Vec<Slot>,
     /// Free layout only: items may overlap (off by default).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub allow_overlap: bool,
@@ -114,6 +169,9 @@ pub struct DashItem {
     /// The item's own rect on a Free page; `None` on a Grid page, where the item's order gives its cell.
     pub rect: Option<DashRect>,
     pub title_override: Option<String>,
+    /// The slot of the page's design this item fills.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
 }
 
 impl DashItem {
@@ -410,6 +468,35 @@ impl DashPage {
         } else {
             r
         }
+    }
+
+    /// Uses a design: its picture is the page's background and its slots become empty places. The page becomes Free, because an item
+    /// that fills a slot sits where the slot is.
+    pub fn apply_template(&mut self, t: TemplateRef, slots: Vec<Slot>) -> Result<()> {
+        self.to_free()?;
+        self.background = Some(t);
+        self.slots = slots;
+        Ok(())
+    }
+
+    /// The slots no item fills yet.
+    pub fn empty_slots(&self) -> Vec<&Slot> {
+        self.slots.iter().filter(|s| !self.items.iter().any(|i| i.slot.as_deref() == Some(s.name.as_str()))).collect()
+    }
+
+    /// Puts `item` in the slot `name`: it takes the slot's place. A slot that is full, or of another kind, is refused in words.
+    pub fn fill_slot(&mut self, name: &str, mut item: DashItem) -> Result<()> {
+        let Some(slot) = self.slots.iter().find(|s| s.name == name).cloned() else { bail!("The page has no slot named '{}'.", name) };
+        if self.items.iter().any(|i| i.slot.as_deref() == Some(name)) {
+            bail!("The slot '{}' already has an item. Remove it first.", name);
+        }
+        if !slot.kind.accepts(&item.kind) {
+            bail!("The slot '{}' is for a {} item. Fill it with one, or change the slot's type in the design.", name, slot.kind.label().to_lowercase());
+        }
+        item.rect = Some(slot.rect);
+        item.slot = Some(name.to_string());
+        self.items.push(item);
+        Ok(())
     }
 
     /// The first free place for a new item of `w` × `h`, scanning rows from the top left in snapped steps. A page with no room is an

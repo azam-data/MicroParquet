@@ -19,6 +19,7 @@ pub mod commands;
 pub mod conditional;
 pub mod curves;
 pub mod dashboard;
+pub mod dashboard_design;
 pub mod dq;
 pub mod duration;
 pub mod export;

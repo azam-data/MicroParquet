@@ -10,7 +10,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S3 | D2 | done |
 | S4 | D3 | done |
 | S5 | D4 | done |
-| S6–S12 | D5 … fixes | not started |
+| S6 | D5 | done |
+| S7–S12 | R1 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
 | Acceptance | Test |
@@ -84,3 +85,14 @@ Stub proofs: D3 — `cross_for` that also filters the clicked item → the Dhaka
 | Dragged off the page is clamped, never lost | `d4_a_move_snaps_…`; render test (900 pt off) |
 
 Stub proofs: D4 — no snapping in `snap` → the move and resize tests fail; overlap test disabled → the overlap test fails (both restored). Picture: `docs/guide/img/dashboard-free.png` (light opened).
+
+## S6 acceptance → test (D5)
+| Acceptance | Test |
+|---|---|
+| 1920×1080 PNG, 4 slots, save, reopen: same template, slots, hash | `d5_a_1920_by_1080_png_with_4_slots_is_the_same_template_after_save_and_reopen`; render `d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_clicks_…` |
+| Project copy used when `portable_data` has none | `d5_the_project_copy_is_used_…`; render `d5_the_project_copy_shows_the_design_…` |
+| Image behind the items; items keep their palette | render flow test (`chart_fills` equal with and without the design) |
+| Hash mismatch reported | both of the copy tests |
+| Refusals: not a picture, over 3 MB, slot outside | `d5_a_file_that_is_not_a_picture_a_picture_over_3_mb_and_a_slot_outside_are_refused_in_words`; render `d5_a_file_that_is_not_a_picture_…` |
+
+Stub proofs: D5 — hash check switched off → the copy test fails; slot kind check switched off → the slot test fails (both restored). Picture: `docs/guide/img/dashboard-design.png` (light opened).

@@ -200,3 +200,5 @@ mod p10_d2;
 mod p10_d3;
 #[path = "../phase10/d4.rs"]
 mod p10_d4;
+#[path = "../phase10/d5.rs"]
+mod p10_d5;

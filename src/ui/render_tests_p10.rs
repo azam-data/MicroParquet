@@ -801,3 +801,202 @@ fn d4_a_free_page_is_drawn_as_a_picture_in_both_themes() {
         shoot(&mut rig, "dashboard-free", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
     }
 }
+
+// ------------------------------------------------------------------------------------------------ D5: design templates
+
+fn test_png(path: &std::path::Path, w: u32, h: u32) {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x % 200) as u8, (y % 200) as u8, 160, 255]));
+    img.save(path).expect("a test picture");
+}
+
+fn type_into(rig: &mut Rig, name: &str, text: &str) {
+    click_named(rig, name);
+    rig.draw(2);
+    // the click may have put the cursor in the middle: End first, then enough Backspaces
+    let end = |pressed| egui::Event::Key { key: egui::Key::End, physical_key: Some(egui::Key::End), pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    rig.step(vec![end(true), end(false)]);
+    for _ in 0..24 {
+        let ev = |pressed| egui::Event::Key { key: egui::Key::Backspace, physical_key: Some(egui::Key::Backspace), pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+        rig.step(vec![ev(true), ev(false)]);
+    }
+    rig.step(vec![egui::Event::Text(text.into())]);
+    rig.draw(3);
+}
+
+/// The fills of the rectangles a chart drew (its bars and its surface).
+fn chart_fills(rig: &Rig, item: &str) -> Vec<String> {
+    let s = crate::ui::chart_render::last_shown(&rig.ctx, egui::Id::new(("dash_chart", item))).unwrap_or_else(|| panic!("{}: {item} is drawn", rig.what));
+    let mut v: Vec<String> = s.layout.prims.iter().filter_map(|p| if let micro_parquet::charts::layout::Prim::Rect { fill, .. } = p { Some(format!("{fill:?}")) } else { None }).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+#[test]
+fn d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_clicks_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig10("p10d5_flow", ppp, w, h);
+        let what = rig.what.clone();
+        let data = micro_parquet::rules::data_dir();
+        let pic = rig.app.paths.root_dir.join("design_1920.png");
+        test_png(&pic, 1920, 1080);
+        rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+        rig.draw(5);
+        // Import: the picture the file dialog would have picked
+        rig.app.dashboard_ui.import_path = Some(pic);
+        let p = rig.draw(6);
+        assert!(rig.app.dashboard_ui.tpl.is_some(), "{what}: the editor opens on the picture");
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("stretched to fit")), "{what}: a 16:9 picture says so: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        // draw four slots with the pointer, in page units (snapped to 10): chart, pivot, card, any
+        let want = [("Deposits chart", SlotKind::Chart, 20.0, 20.0, 460.0, 420.0), ("Wing table", SlotKind::Pivot, 500.0, 20.0, 480.0, 280.0), ("CASA", SlotKind::Kpi, 20.0, 460.0, 220.0, 100.0), ("Notes", SlotKind::Any, 260.0, 460.0, 720.0, 140.0)]; // page units, not a size
+        let area = rect_of(&rig, "Design area");
+        let s = area.width() / PAGE_W as f32;
+        for (i, (name, kind, x, y, sw, sh)) in want.iter().enumerate() {
+            let a = area.min + egui::vec2(*x as f32 * s, *y as f32 * s);
+            let b = area.min + egui::vec2((*x + *sw) as f32 * s, (*y + *sh) as f32 * s);
+            drag_pointer(&mut rig, a, b);
+            let ed = rig.app.dashboard_ui.tpl.as_ref().expect("editor");
+            assert_eq!(ed.slots.len(), i + 1, "{what}: slot {} was drawn", i + 1);
+            assert_eq!(ed.slots[i].rect, DashRect { x: *x, y: *y, w: *sw, h: *sh }, "{what}: slot {} is where it was drawn, snapped", i + 1);
+            type_into(&mut rig, &format!("Slot {} name", i + 1), name);
+            if *kind != SlotKind::Any {
+                pick_in(&mut rig, &format!("Slot {} type", i + 1), kind.label());
+            }
+        }
+        // every control of a slot's row is inside the panel
+        for i in 1..=4 {
+            let panel_right = rect_of(&rig, "Design name").right();
+            assert!(rect_of(&rig, &format!("Remove slot {i}")).right() <= panel_right + 1.0, "{what}: the remove button of slot {i} is not cut off: {:?} vs {panel_right}", rect_of(&rig, &format!("Remove slot {i}")));
+        }
+        // a slot that is too small is refused in words
+        drag_pointer(&mut rig, area.min + egui::vec2(700.0 * s, 620.0 * s), area.min + egui::vec2(710.0 * s, 623.0 * s)); // page units, not a size
+        assert_eq!(rig.app.dashboard_ui.tpl.as_ref().expect("ed").slots.len(), 4, "{what}");
+        assert!(rig.app.dashboard_ui.tpl.as_ref().expect("ed").error.starts_with("That slot is too small"), "{what}");
+        type_into(&mut rig, "Design name", "Bank blue");
+        click_named(&mut rig, "Save design");
+        rig.draw(6);
+        assert!(rig.app.dashboard_ui.tpl.is_none(), "{what}: saved");
+        assert!(micro_parquet::templates::folder_of(&data, "Bank blue").join("design.png").exists() && micro_parquet::templates::folder_of(&data, "Bank blue").join("slots.json").exists(), "{what}: the files are in the data folder");
+        let d = rig.app.project.dashboard.as_ref().expect("d");
+        assert_eq!((d.templates.len(), d.template_library.len()), (1, 1), "{what}: the project keeps a copy");
+        assert_eq!(d.templates[0].slots.iter().map(|s| (s.name.clone(), s.kind)).collect::<Vec<_>>(), want.iter().map(|w| (w.0.to_string(), w.1)).collect::<Vec<_>>(), "{what}");
+        // use it on the page: it becomes Free, the picture is the background, four empty slots show
+        pick_in(&mut rig, "Page design", "Bank blue");
+        rig.draw(6);
+        let page = rig.app.project.dashboard.as_ref().expect("d").pages[0].clone();
+        assert_eq!((page.layout, page.slots.len(), page.items.len()), (PageLayout::Free, 4, 0), "{what}");
+        let bg = page.background.clone().expect("a background");
+        assert!(rig.app.dashboard_ui.textures.contains_key(&bg.blake3), "{what}: the picture is drawn behind the page");
+        assert_eq!(bg.blake3, rig.app.project.dashboard.as_ref().expect("d").templates[0].blake3, "{what}: the page names the copy by its hash");
+        for (name, ..) in &want {
+            assert!(rect_of(&rig, &format!("Slot {name}")).width() > 0.0, "{what}");
+        }
+        // fill: the card slot offers only a KPI card; the chart slot offers the chart tab and not the card
+        click_named(&mut rig, "Slot CASA");
+        rig.draw(3);
+        assert!(rig.app.dashboard_ui.rects.iter().any(|(n, _)| n == "Fill with KPI card") && !rig.app.dashboard_ui.rects.iter().any(|(n, _)| n.starts_with("Fill with Chart") || n == "Fill with Other by region"), "{what}: only what the slot takes");
+        click_named(&mut rig, "Fill with KPI card");
+        rig.draw(5);
+        click_named(&mut rig, "Slot Deposits chart");
+        rig.draw(3);
+        let chart_choice = rig.app.dashboard_ui.rects.iter().find(|(n, _)| n.starts_with("Fill with Chart")).map(|(n, _)| n.clone()).unwrap_or_else(|| panic!("{what}: the chart slot offers the chart tab"));
+        assert!(!rig.app.dashboard_ui.rects.iter().any(|(n, _)| n == "Fill with KPI card"), "{what}");
+        click_named(&mut rig, &chart_choice);
+        rig.draw(8);
+        let page = rig.app.project.dashboard.as_ref().expect("d").pages[0].clone();
+        assert_eq!(page.items.len(), 2, "{what}");
+        let chart_item = page.items.iter().find(|i| matches!(i.kind, DashItemKind::Chart(_))).expect("chart item").clone();
+        assert_eq!((chart_item.rect, chart_item.slot.as_deref()), (Some(DashRect { x: 20.0, y: 20.0, w: 460.0, h: 420.0 }), Some("Deposits chart")), "{what}: the item sits in its slot"); // page units, not a size
+        assert_eq!(page.empty_slots().len(), 2, "{what}");
+        // the design is only a background: the chart's own colours are the same with and without it
+        let with = chart_fills(&rig, &chart_item.id);
+        assert!(!with.is_empty(), "{what}");
+        rig.app.dashboard_ui.selected = None;
+        rig.draw(2);
+        click_named(&mut rig, "Page design");
+        let p = rig.draw(3);
+        let (_, none) = p.boxes.iter().rev().find(|(t, _)| t == "None").cloned().expect("None in the design list");
+        rig.click_later(none.center());
+        rig.draw(8);
+        assert!(rig.app.project.dashboard.as_ref().expect("d").pages[0].background.is_none(), "{what}");
+        assert_eq!(chart_fills(&rig, &chart_item.id), with, "{what}: a design never recolours a chart");
+    }
+}
+
+#[test]
+fn d5_the_project_copy_shows_the_design_when_the_data_folder_has_none_and_another_picture_under_the_name_is_reported() {
+    let first = SIZES3[0];
+    let mut rig = rig10("p10d5_copy", first.0, first.1, first.2);
+    let data = micro_parquet::rules::data_dir();
+    let pic = rig.app.paths.root_dir.join("design.png");
+    test_png(&pic, 1600, 1000);
+    let design = micro_parquet::templates::design_from_file(&pic).expect("design");
+    let slots = vec![Slot { name: "A".into(), kind: SlotKind::Any, rect: DashRect { x: 20.0, y: 20.0, w: 300.0, h: 200.0 } }]; // page units, not a size
+    // the dashboard has the design only as a project copy
+    rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+    rig.draw(4);
+    let tref = TemplateRef { name: "Only here".into(), blake3: design.blake3.clone() };
+    {
+        let d = rig.app.project.dashboard.as_mut().expect("d");
+        d.templates.push(micro_parquet::templates::project_copy("Only here", &design, &slots));
+        d.template_library.push(tref.clone());
+        d.pages[0].apply_template(tref.clone(), slots.clone()).expect("applied");
+    }
+    rig.draw(6);
+    assert!(rig.app.dashboard_ui.textures.contains_key(&design.blake3), "the picture comes from the project");
+    assert!(!micro_parquet::templates::folder_of(&data, "Only here").exists());
+    assert!(rig.app.dash_design_note(&rig.app.project.dashboard.as_ref().expect("d").pages[0]).is_none());
+    // another picture under the same name in the data folder: said, and the project's picture stays
+    let other = micro_parquet::templates::design_from_bytes(&std::fs::read({ let p2 = rig.app.paths.root_dir.join("other.png"); test_png(&p2, 1600, 1200); p2 }).expect("read")).expect("other");
+    micro_parquet::templates::save_to_folder(&data, "Only here", &other, &slots).expect("saved");
+    rig.app.dashboard_ui.textures.clear();
+    rig.draw(6);
+    let p = rig.draw(2);
+    assert!(rig.app.dashboard_ui.textures.contains_key(&design.blake3), "still the project's picture");
+    let note = rig.app.dash_design_note(&rig.app.project.dashboard.as_ref().expect("d").pages[0]).expect("a note");
+    assert!(note.contains("not the one this dashboard was made with"), "{note}");
+    let _ = p;
+    let p = rig.draw(3);
+    assert!(p.boxes.iter().any(|(t, _)| t.contains("not the one this dashboard was made with")), "the page settings say so: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+}
+
+#[test]
+fn d5_a_file_that_is_not_a_picture_is_refused_in_the_window_and_a_picture_is_written_in_both_themes() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    let first = SIZES3[0];
+    let mut rig = rig10("p10d5_bad", first.0, first.1, first.2);
+    let txt = rig.app.paths.root_dir.join("notes.png");
+    std::fs::write(&txt, "not a picture").expect("write");
+    rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+    rig.draw(4);
+    rig.app.dashboard_ui.import_path = Some(txt);
+    let p = rig.draw(5);
+    assert!(rig.app.dashboard_ui.tpl.is_none());
+    assert!(p.boxes.iter().any(|(t, _)| t == "This file is not a PNG or JPEG picture."), "{:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig10("p10d5_shot", SHOT_PPP, SHOT_W, SHOT_H);
+        styled(&mut rig, dark);
+        let pic = rig.app.paths.root_dir.join("design.png");
+        let img = image::RgbaImage::from_fn(1920, 1200, |x, y| {
+            let band = (y / 150) as u8;
+            image::Rgba([20 + band * 8, 60 + (x / 40) as u8 % 40, 120 + band * 10, 255])
+        });
+        img.save(&pic).expect("picture");
+        rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
+        rig.draw(4);
+        rig.app.dashboard_ui.import_path = Some(pic);
+        rig.draw(5);
+        let area = rect_of(&rig, "Design area");
+        let s = area.width() / PAGE_W as f32;
+        for (x, y, w, h) in [(20.0, 20.0, 460.0, 280.0), (500.0, 20.0, 480.0, 280.0), (20.0, 320.0, 220.0, 100.0)] { // page units, not a size
+            drag_pointer(&mut rig, area.min + egui::vec2(x * s, y * s), area.min + egui::vec2((x + w) * s, (y + h) * s));
+        }
+        type_into(&mut rig, "Slot 1 name", "Deposits chart");
+        pick_in(&mut rig, "Slot 1 type", "Chart");
+        rig.draw(3);
+        shoot(&mut rig, "dashboard-design", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
+    }
+}

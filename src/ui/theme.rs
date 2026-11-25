@@ -1564,6 +1564,10 @@ pub const DASH_LABEL_EDIT_W: f32 = 110.0;
 pub const DASH_PER_ROW_W: f32 = 48.0;
 /// The side of a drag handle of an item on a Free page.
 pub const DASH_HANDLE: f32 = 10.0;
+/// How see-through the slots drawn over a design are.
+pub const DASH_SLOT_FILL: f32 = 0.15;
+/// The width of a slot's name box in the design editor (the row also holds its type and a remove button).
+pub const DASH_SLOT_NAME_W: f32 = 54.0;
 /// The smallest scale a page is drawn at.
 pub const DASH_MIN_SCALE: f32 = 0.1;
 

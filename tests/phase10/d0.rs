@@ -73,6 +73,7 @@ fn dashboard() -> Dashboard {
         ],
         template_library: vec![TemplateRef { name: "Bank".into(), blake3: "ab".into() }],
         default_kpi_unit: Default::default(),
+        ..Default::default()
     }
 }
 

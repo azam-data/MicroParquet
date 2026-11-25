@@ -16,6 +16,23 @@ use std::collections::HashMap;
 pub const NO_PROJECT: &str = "Dashboards belong to a project. Save or open a project first.";
 pub const DASH_BUTTON: &str = "Dashboard";
 
+/// A design being made: the picture, the slots drawn so far.
+pub struct TplEdit {
+    pub name: String,
+    pub design: micro_parquet::templates::Design,
+    pub texture: egui::TextureHandle,
+    pub slots: Vec<Slot>,
+    /// The rectangle being drawn, in screen points: where the press was and where the pointer is.
+    pub drawing: Option<(egui::Pos2, egui::Pos2)>,
+    pub error: String,
+}
+
+impl std::fmt::Debug for TplEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TplEdit({})", self.name)
+    }
+}
+
 /// A drag of an item (or one of its handles) on a Free page.
 #[derive(Clone, Debug)]
 pub struct DragState {
@@ -37,6 +54,8 @@ pub enum PageAct {
     Notice(String),
     /// A drag, a resize or an arrow key gave the item this place on a Free page.
     SetRect(String, DashRect),
+    /// A click on an empty slot: its fill choices open.
+    OpenSlot(String),
 }
 
 /// One item's latest numbers.
@@ -82,6 +101,15 @@ pub struct DashboardUi {
     pub pending_layout: Option<bool>,
     /// The drag in progress on a Free page.
     pub drag: Option<DragState>,
+    /// The design editor (D5): a picture just imported, its slots being drawn.
+    pub tpl: Option<TplEdit>,
+    /// The slot being filled: its name; the choices show under the header.
+    pub fill_slot: Option<String>,
+    /// The background pictures of the pages, by blake3, and what went wrong with a design, by name.
+    pub textures: HashMap<String, egui::TextureHandle>,
+    pub design_notes: HashMap<String, String>,
+    /// A file the owner picked to import (the Import button sets it; the next frame reads it).
+    pub import_path: Option<std::path::PathBuf>,
     /// A refusal or a note in plain words, shown under the header.
     pub notice: String,
     pub next_id: u64,
@@ -101,7 +129,7 @@ fn scope_of(id: &str) -> u64 {
 }
 
 impl DashboardUi {
-    fn fresh_id(&mut self, prefix: &str, taken: &[String]) -> String {
+    pub(crate) fn fresh_id(&mut self, prefix: &str, taken: &[String]) -> String {
         loop {
             self.next_id += 1;
             let id = format!("{}{}", prefix, self.next_id);
@@ -308,7 +336,7 @@ impl MicroParquetApp {
     }
 
     /// The tabs an item can point at: (project key, title, is a chart tab), in tab order.
-    fn dash_source_choices(&mut self) -> Vec<(String, String, bool)> {
+    pub(crate) fn dash_source_choices(&mut self) -> Vec<(String, String, bool)> {
         let ids: Vec<(u64, String, bool, bool)> = self
             .tabs
             .iter()
@@ -354,6 +382,13 @@ impl MicroParquetApp {
             ui.label(NO_PROJECT);
             return;
         };
+        if self.dashboard_ui.tpl.is_some() {
+            self.render_design_editor(ui, &mut rects);
+            self.dashboard_ui.rects = rects;
+            return;
+        }
+        self.dash_load_import(ui.ctx());
+        self.dash_load_backgrounds(ui.ctx(), &dash);
         let before = dash.clone();
         if dash.pages.is_empty() {
             dash.pages.push(DashPage { id: "p1".into(), title: "Page 1".into(), ..Default::default() });
@@ -410,6 +445,8 @@ impl MicroParquetApp {
         if !self.dashboard_ui.notice.is_empty() {
             ui.colored_label(tk.danger, self.dashboard_ui.notice.clone());
         }
+
+        self.fill_row(ui, &mut dash, pi, &choices, &mut rects);
 
         // the "Add filter" row
         if let Some(mut af) = self.dashboard_ui.add_filter.clone() {
@@ -624,6 +661,7 @@ impl MicroParquetApp {
                 let r = ui.checkbox(&mut dash.pages[pi].allow_overlap, "Allow overlap");
                 rects.push(("Allow overlap".into(), r.rect));
             }
+            self.design_settings(ui, &mut dash, pi, &mut rects);
             ui.horizontal_wrapped(|ui| {
                 if Self::dash_button(ui, "Page earlier", "Move up", &mut rects) {
                     page_op = Some(("up", pi));
@@ -719,6 +757,7 @@ impl MicroParquetApp {
                 PageAct::DrillDown(item, v) => dash.pages[pi].state.drill_down(&item, &v),
                 PageAct::DrillBack(item, depth) => dash.pages[pi].state.drill_back_to(&item, depth),
                 PageAct::Notice(m) => self.dashboard_ui.notice = m,
+                PageAct::OpenSlot(n) => self.dashboard_ui.fill_slot = Some(n),
                 PageAct::SetRect(item, r) => {
                     if let Some(i) = dash.pages[pi].items.iter_mut().find(|i| i.id == item) {
                         i.rect = Some(r);
@@ -801,6 +840,21 @@ impl MicroParquetApp {
         let area = area.translate(egui::vec2(theme::SPACE_S, 0.0));
         ui.painter().rect(area, theme::RADIUS_PANEL, tk.surface, theme::line(tk.border));
         rects.push(("Page area".into(), area));
+        if let Some(tex) = page.background.as_ref().and_then(|b| self.dashboard_ui.textures.get(&b.blake3)) {
+            ui.painter().image(tex.id(), area, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            ui.painter().rect_stroke(area, theme::RADIUS_PANEL, theme::line(tk.border));
+        }
+        // the empty slots of the page's design: a click opens what can fill them
+        for s in page.empty_slots() {
+            let sr = egui::Rect::from_min_size(area.min + egui::vec2(s.rect.x as f32 * scale, s.rect.y as f32 * scale), egui::vec2(s.rect.w as f32 * scale, s.rect.h as f32 * scale));
+            let resp = ui.interact(sr, ui.id().with(("dash_slot", s.name.clone())), egui::Sense::click());
+            ui.painter().rect(sr, 0.0, tk.accent.gamma_multiply(theme::DASH_SLOT_FILL), theme::line_thick(tk.accent));
+            ui.painter().text(sr.center(), egui::Align2::CENTER_CENTER, format!("{} \u{b7} {}", s.name, s.kind.label()), egui::FontId::proportional(theme::TEXT_BASE), tk.ink);
+            rects.push((format!("Slot {}", s.name), sr));
+            if resp.clicked() {
+                acts.push(PageAct::OpenSlot(s.name.clone()));
+            }
+        }
         let places = match item_rects(page) {
             Ok(p) => p,
             Err(e) => {

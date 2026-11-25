@@ -47,3 +47,12 @@ Taken without asking the owner (he asked for a list at the end of the phase). Ne
 - D4-5 A new item on a Free page takes the first free 300 × 200 place scanning from the top left; a full page refuses in words (or places it at the top left when overlap is on).
 - D4-6 Arrow keys work on the selected item when no text box has the focus; Shift+arrows grow or shrink the bottom right corner by 10 units.
 - D4-7 `allow_overlap` and `grid_per_row` are written only when set, so a Grid page's saved bytes are unchanged.
+
+## S6 (D5)
+- D5-1 `image` 0.25.10 (the version already locked through eframe), `default-features = false`, features `png` and `jpeg`. The only new crates are `zune-jpeg` 0.5.15 and `zune-core` 0.5.3; `cargo check` took 29 s with them. No other feature was needed.
+- D5-2 Pages stay 1000 × 625 (16:10). A design that is not 16:10 is stretched over the page and the import says so ("export it at 1920×1200 for an exact fit"). Slots are stored in page units, so they line up with what is drawn.
+- D5-3 The project copy sits inside the dashboard as `templates` (base64 of the PNG, its blake3, its slots), because the project file is one JSON file; no base64 crate was added (a 30-line encoder, tested for every length 0–39). A 3 MB picture makes the project about 4 MB bigger.
+- D5-4 Resolution rule: the data-folder copy is used when it exists and its hash is the project's; no such template there → the project's copy; another picture under the same name → the project's copy plus a warning in the page settings. A damaged project copy (hash mismatch) is refused in words.
+- D5-5 Using a design makes the page Free (items that fill a slot sit where the slot is); "None" takes the background and slots away and leaves the items where they are.
+- D5-6 A slot is an empty place until an item fills it; clicking it lists only what its type takes. Removing the item makes the slot empty again. A design is drawn behind the items; items keep opaque surfaces, so on a Grid page the picture shows around them.
+- D5-7 Slots must be at least 60 × 40 units, inside the page, and named differently. A name that cannot be a folder name is refused.

@@ -45,5 +45,6 @@ pub mod steps_edit;
 pub mod tool_runs;
 pub mod summary;
 pub mod table_layout;
+pub mod templates;
 pub mod tab_jobs;
 pub mod value_picker;
