@@ -292,8 +292,8 @@ fn inject_kpi(rig: &mut Rig, item_id: &str, v: KpiValue) {
     let page = &d.pages[0];
     let item = page.items.iter().find(|i| i.id == item_id).expect("the item");
     let res = rig.app.dash_resolve(item).unwrap_or_else(|e| panic!("{}: the card resolves: {e}", rig.what));
-    let (picks, _) = rig.app.dash_picks_for(page, res.data_tab.as_deref());
-    let sig = rig.app.dash_sig(&res, &picks);
+    let (picks, _) = rig.app.dash_picks_for(page, res.data_tab.as_deref(), item_id);
+    let sig = rig.app.dash_item_sig(&res, &picks, page.state.drill_of(item_id));
     rig.app.dashboard_ui.items.insert(item_id.to_string(), crate::ui::dashboard::ItemView { sig, pending: None, data: Some(ItemData::Kpi(Box::new(v))), error: None, scale: None });
 }
 
@@ -425,5 +425,182 @@ fn d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both
         inject_kpi(&mut rig, &id, KpiValue { current: Some(48_250_000_000.0), earlier: Some(47_000_000_000.0), period: "Oct 2026".into(), spark, ..Default::default() }); // money in BDT, not a size
         rig.draw(4);
         shoot(&mut rig, "dashboard-kpi", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ D3: cross-filter and drill on a page
+
+use micro_parquet::charts::spec::DrillLevel;
+
+const MILLION: f64 = 1_000_000.0; // money in BDT, not a size
+
+/// The rig with a third data-tab item: a pivot "Book by risk" on the same data tab as the chart, so a click reaches it.
+fn rig_cross(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut rig = rig10(name, ppp, w, h);
+    let root = rig.app.paths.root_dir.clone();
+    let src = parquet_source(&root, "book", book(60, &["Dhaka", "Ctg"]));
+    rig.app.create_tab_from_source("Book by risk".into(), src, vec![sum_by("Risk")], HashMap::new());
+    settle(&mut rig.app);
+    let id = rig.app.tabs.last().expect("the new tab").id;
+    rig.app.model_ensure_key(id);
+    rig.draw(4);
+    dashboard_with_two_items(&mut rig);
+    click_named(&mut rig, "Add item");
+    let p = rig.draw(3);
+    let (_, b) = p.boxes.iter().rev().find(|(t, _)| t.contains("Book by risk")).cloned().unwrap_or_else(|| panic!("{}: 'Book by risk' in the Add item menu", rig.what));
+    rig.click_later(b.center());
+    rig.draw(8);
+    // one row of three, so the chart is big enough to have bars to click
+    rig.app.project.dashboard.as_mut().expect("d").pages[0].layout = PageLayout::Grid { per_row: 3 };
+    rig.draw(8);
+    rig
+}
+
+fn chart_data(rig: &Rig, item: &str) -> micro_parquet::chart::ChartData {
+    match rig.app.dashboard_ui.items[item].data.as_ref().unwrap_or_else(|| panic!("{}: {item} has numbers", rig.what)) {
+        ItemData::Chart(c) => (**c).clone(),
+        other => panic!("{}: a chart: {other:?}", rig.what),
+    }
+}
+
+/// The risk pivot's rows (without the grand total) as (risk, sum), read from the item's table.
+fn risk_rows(rig: &Rig, item: &str) -> Vec<(String, f64)> {
+    let ItemData::Table(t) = rig.app.dashboard_ui.items[item].data.as_ref().unwrap_or_else(|| panic!("{}: {item} has a table", rig.what)) else { panic!("{}: a table", rig.what) };
+    let names = t.df.get_columns()[0].str().expect("labels").into_iter().map(|v| v.unwrap_or("").to_string()).collect::<Vec<_>>();
+    let sums = t.df.get_columns()[1].f64().expect("sums").into_iter().map(|v| v.unwrap_or(0.0)).collect::<Vec<_>>();
+    names.into_iter().zip(sums).filter(|(n, _)| n != "Grand total").collect()
+}
+
+/// The hand-worked risk rows of the book (60 rows: risk = High, Medium, Low in turn, region = Dhaka, Ctg in turn,
+/// balance (10 + i) million) where `keep(i)` holds.
+fn hand_risk_rows(keep: impl Fn(usize) -> bool) -> Vec<(String, f64)> {
+    let mut m: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    for i in (0..60).filter(|i| keep(*i)) {
+        *m.entry(["High", "Medium", "Low"][i % 3].to_string()).or_default() += (10 + i) as f64 * MILLION;
+    }
+    m.into_iter().collect()
+}
+
+#[test]
+fn d3_a_click_on_a_bar_filters_the_linked_pivot_and_says_so_on_the_other_data_tab_and_a_pivot_row_filters_the_chart() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = rig_cross("p10d3_cross", ppp, w, h);
+        let what = rig.what.clone();
+        let all = chart_data(&rig, "i1");
+        let dim = all.spec.category.clone();
+        let cats = all.categories.clone();
+        assert!(cats.len() >= 2, "{what}: {cats:?}");
+        assert_eq!(hand_risk_rows(|_| true).len(), 3, "{what}");
+        // click the first bar with the real pointer
+        let r = crate::ui::render_tests_p8::mark_rect(&rig, egui::Id::new(("dash_chart", "i1")), 0);
+        rig.click_later(r.center());
+        let p = rig.draw(8);
+        let st = rig.app.project.dashboard.as_ref().expect("d").pages[0].state.clone();
+        let c = st.cross.clone().unwrap_or_else(|| panic!("{what}: the click set the cross-filter"));
+        assert_eq!((c.dimension.as_str(), c.value.as_str(), c.item.as_str()), (dim.as_str(), cats[0].as_str(), "i1"), "{what}");
+        let texts: Vec<String> = p.boxes.iter().map(|(t, _)| t.clone()).collect();
+        assert!(texts.iter().any(|t| *t == format!("{} = {} \u{d7}", dim, cats[0])), "{what}: the chip: {texts:?}");
+        // the clicked chart keeps all its bars
+        assert_eq!(chart_data(&rig, "i1").categories, cats, "{what}: the clicked item keeps all its marks");
+        // the pivot on the same data tab shows the hand-filtered rows
+        let col = |i: usize| if dim == "Region" { ["Dhaka", "Ctg"][i % 2] == cats[0] } else { ["High", "Medium", "Low"][i % 3] == cats[0] };
+        let want = hand_risk_rows(col);
+        assert_eq!(risk_rows(&rig, "i3"), want, "{what}: the linked pivot has only the rows of '{}'", cats[0]);
+        // the pivot on another data tab says the filter doesn't apply and keeps its rows
+        assert!(texts.iter().any(|t| *t == format!("Filter '{}' doesn't apply to this item", dim)), "{what}: {texts:?}");
+        let ItemData::Table(t) = rig.app.dashboard_ui.items["i2"].data.as_ref().expect("table") else { panic!("table") };
+        assert_eq!(t.df.height(), 3, "{what}: the other data tab is not filtered");
+        assert!(p.boxes.iter().all(|(_, b)| rig.ctx.screen_rect().expand(1.0).contains_rect(*b) || b.width() == 0.0), "{what}: nothing is drawn outside the window");
+        // the same bar again clears it
+        let r = crate::ui::render_tests_p8::mark_rect(&rig, egui::Id::new(("dash_chart", "i1")), 0);
+        rig.click_later(r.center());
+        rig.draw(8);
+        assert!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state.cross.is_none(), "{what}: clicking the same bar again clears");
+        assert_eq!(risk_rows(&rig, "i3"), hand_risk_rows(|_| true), "{what}");
+        // a pivot row click filters the chart: Risk = High is 20 of the 60 rows
+        click_named(&mut rig, "Row i3 High");
+        rig.draw(8);
+        let c = rig.app.project.dashboard.as_ref().expect("d").pages[0].state.cross.clone().unwrap_or_else(|| panic!("{what}: the row click set it"));
+        assert_eq!((c.dimension.as_str(), c.value.as_str(), c.item.as_str()), ("Risk", "High", "i3"), "{what}");
+        assert_eq!(chart_data(&rig, "i1").total_rows, 20, "{what}: the chart reads the High rows only");
+        assert_eq!(risk_rows(&rig, "i3"), hand_risk_rows(|_| true), "{what}: the clicked pivot keeps all its rows");
+        // the grand total is not a button
+        assert!(!rig.app.dashboard_ui.rects.iter().any(|(n, _)| n == "Row i3 Grand total"), "{what}");
+        // the chip clears it
+        click_named(&mut rig, "Cross chip");
+        rig.draw(8);
+        assert_eq!(chart_data(&rig, "i1").total_rows, 60, "{what}");
+        // Clear clears it too
+        click_named(&mut rig, "Row i3 Low");
+        rig.draw(6);
+        assert!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state.cross.is_some(), "{what}");
+        click_named(&mut rig, "Clear");
+        rig.draw(6);
+        assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state, PageState::default(), "{what}");
+    }
+}
+
+#[test]
+fn d3_the_right_click_menu_of_an_item_drills_down_and_back_restores_the_level_per_item_and_a_picture_is_written() {
+    use crate::ui::render_tests_p8::{can_shoot, mark_rect, right_click, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    let mut sizes: Vec<(f32, f32, f32)> = SIZES3.to_vec();
+    sizes.push((SHOT_PPP, SHOT_W, SHOT_H));
+    for (n, (ppp, w, h)) in sizes.into_iter().enumerate() {
+        let shot = n == SIZES3.len();
+        if shot && !can_shoot() {
+            return;
+        }
+        for dark in if shot { vec![false, true] } else { vec![false] } {
+            let mut rig = rig_cross("p10d3_drill", ppp, w, h);
+            if shot {
+                styled(&mut rig, dark);
+            }
+            let what = rig.what.clone();
+            // the chart tab's chart has two drill levels: Risk, then Region
+            let tab = rig.app.tabs.iter().find(|t| rig.app.chart_tabs.contains_key(&t.id)).expect("the chart tab").id;
+            let mut spec = rig.app.chart_tabs[&tab].data.spec.clone();
+            spec.category = "Risk".into();
+            spec.set_drill(vec![DrillLevel::column("Risk"), DrillLevel::column("Region")]);
+            rig.app.chart_tabs.get_mut(&tab).expect("info").next_spec = Some(spec);
+            rig.draw(8);
+            let top = chart_data(&rig, "i1");
+            assert_eq!(top.categories, vec!["High".to_string(), "Low".to_string(), "Medium".to_string()], "{what}");
+            // right-click the first bar: the page menu has the two items and none of the tab's
+            let r = mark_rect(&rig, egui::Id::new(("dash_chart", "i1")), 0);
+            let p = right_click(&mut rig, r.center());
+            let texts: Vec<String> = p.boxes.iter().map(|(t, _)| t.clone()).collect();
+            assert!(texts.iter().any(|t| t == "Filter the page by this") && texts.iter().any(|t| t == "Drill down"), "{what}: {texts:?}");
+            assert!(!texts.iter().any(|t| t == "Show rows" || t == "Keep only this" || t == "Exclude this"), "{what}: a page does not change the chart tab: {texts:?}");
+            let (_, b) = p.boxes.iter().find(|(t, _)| t == "Drill down").cloned().expect("Drill down");
+            rig.click_later(b.center());
+            let p = rig.draw(8);
+            assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state.drill_of("i1"), ["High".to_string()], "{what}");
+            // Risk = High, by region: the rows are i = 0, 3, 6, … (Dhaka for even i, Ctg for odd i): hand-worked sums, Dhaka 10 + 12 + … (i = 0, 6, …, 54)
+            let sum = |even: bool| (0..60usize).filter(|i| i % 3 == 0 && (i % 2 == 0) == even).map(|i| (10 + i) as f64 * MILLION).sum::<f64>();
+            let l1 = chart_data(&rig, "i1");
+            assert_eq!(l1.categories, vec!["Ctg".to_string(), "Dhaka".to_string()], "{what}");
+            assert_eq!(l1.values[0], vec![Some(sum(false)), Some(sum(true))], "{what}: the High rows by region");
+            assert_eq!(l1.spec.depth(), 1, "{what}");
+            let texts: Vec<String> = p.boxes.iter().map(|(t, _)| t.clone()).collect();
+            assert!(texts.iter().any(|t| t == "Back") && texts.iter().any(|t| t == "High"), "{what}: the breadcrumb and Back: {texts:?}");
+            assert!(rig.app.dashboard_ui.rects.iter().any(|(n, _)| n == "Level 0 i1") && rig.app.dashboard_ui.rects.iter().any(|(n, _)| n == "Back i1"), "{what}");
+            // the other items are not drilled
+            assert_eq!(risk_rows(&rig, "i3"), hand_risk_rows(|_| true), "{what}");
+            assert!(p.boxes.iter().all(|(_, b)| rig.ctx.screen_rect().expand(1.0).contains_rect(*b) || b.width() == 0.0), "{what}: nothing is drawn outside the window");
+            if shot {
+                // a click on a bar of the drilled chart filters the page: Region = Ctg
+                let r = mark_rect(&rig, egui::Id::new(("dash_chart", "i1")), 0);
+                rig.click_later(r.center());
+                rig.draw(8);
+                shoot(&mut rig, "dashboard-cross", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
+                continue;
+            }
+            // Back restores the first level, exactly
+            click_named(&mut rig, "Back i1");
+            rig.draw(8);
+            assert!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state.drill.is_empty(), "{what}");
+            assert_eq!(chart_data(&rig, "i1").categories, top.categories, "{what}");
+            assert_eq!(chart_data(&rig, "i1").values, top.values, "{what}");
+        }
     }
 }

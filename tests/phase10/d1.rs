@@ -24,7 +24,7 @@ fn digest(d: &micro_parquet::chart::ChartData) -> String {
 }
 
 fn request(source: ItemSource, picks: Vec<(PageFilter, Vec<String>)>, d: &std::path::Path) -> ItemRequest {
-    ItemRequest { item_id: "i1".into(), source, picks, temp_dir: d.to_path_buf() }
+    ItemRequest { item_id: "i1".into(), source, picks, drill: vec![], temp_dir: d.to_path_buf() }
 }
 
 #[test]

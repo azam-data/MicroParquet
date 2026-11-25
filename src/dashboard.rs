@@ -147,6 +147,59 @@ pub struct PageFilter {
 pub struct CrossPick {
     pub dimension: String,
     pub value: String,
+    /// The item the click was on: it keeps all its marks, every other item that reads the same data tab is filtered.
+    pub item: String,
+    /// The project key of the data tab the field belongs to.
+    pub tab: String,
+    /// The lookup field behind `dimension`; `None` for a column of the data tab.
+    pub model: Option<crate::model::ModelFieldRef>,
+}
+
+impl CrossPick {
+    /// The click as a page filter with one value, so it reaches an item the way a page filter does.
+    pub fn as_filter(&self) -> PageFilter {
+        PageFilter { id: "cross".into(), label: self.dimension.clone(), tab: self.tab.clone(), field: self.dimension.clone(), model: self.model.clone(), multi: false }
+    }
+
+    /// "Region = Dhaka": the chip's text.
+    pub fn chip(&self) -> String {
+        format!("{} = {}", self.dimension, self.value)
+    }
+
+    fn data_tab_of(tab: Option<&str>) -> Result<String> {
+        match tab {
+            Some(t) if !t.is_empty() => Ok(t.to_string()),
+            _ => bail!("This item has no data tab, so a click on it cannot filter the page."),
+        }
+    }
+
+    /// A click on a bar, slice or point of a chart: the chart's category at the level it is drawn at. A date part, the
+    /// "(Other)" mark and a blank are refused with what to do instead.
+    pub fn from_chart(spec: &ChartSpec, category: &str, item: &str, data_tab: Option<&str>) -> Result<CrossPick> {
+        ChartSpec::refuse_other(category)?;
+        if spec.category_part.is_some() {
+            bail!("'{}' is a part of a date, which a click cannot filter by. Use a page filter on the calendar field instead.", spec.category);
+        }
+        if category == crate::pivot_table::BLANK_LABEL || category.is_empty() {
+            bail!("A blank group cannot filter the page, because no value stands for it.");
+        }
+        Ok(CrossPick { dimension: spec.category.clone(), value: category.to_string(), item: item.to_string(), tab: Self::data_tab_of(data_tab)?, model: spec.category_model.clone() })
+    }
+
+    /// A click on a row label of a pivot: `level` is the Rows field the label belongs to (0 for the first).
+    pub fn from_pivot(spec: &PivotSpec, level: usize, value: &str, item: &str, data_tab: Option<&str>) -> Result<CrossPick> {
+        let Some(field) = spec.rows.get(level) else { bail!("This label does not belong to a Rows field, so it cannot filter the page.") };
+        if spec.date_fields.iter().any(|d| &d.name == field) {
+            bail!("'{}' is a part of a date, which a click cannot filter by. Use a page filter on the calendar field instead.", field);
+        }
+        if value == crate::pivot_table::BLANK_LABEL || value.is_empty() {
+            bail!("A blank group cannot filter the page, because no value stands for it.");
+        }
+        if value == crate::pivot_table::GRAND_TOTAL_LABEL {
+            bail!("The grand total is every row, so it cannot filter the page.");
+        }
+        Ok(CrossPick { dimension: field.clone(), value: value.to_string(), item: item.to_string(), tab: Self::data_tab_of(data_tab)?, model: spec.model_fields.iter().find(|m| &m.name == field).cloned() })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -163,6 +216,37 @@ impl PageState {
     /// The "Clear" button: all picks, the cross-filter and every drill go back to the start.
     pub fn clear(&mut self) {
         *self = PageState::default();
+    }
+
+    /// A click on a mark: the same mark again clears the cross-filter, any other mark replaces it. Returns true when it is set.
+    pub fn toggle_cross(&mut self, pick: CrossPick) -> bool {
+        if self.cross.as_ref() == Some(&pick) {
+            self.cross = None;
+            false
+        } else {
+            self.cross = Some(pick);
+            true
+        }
+    }
+
+    /// One level down on an item: the clicked value joins the item's own path.
+    pub fn drill_down(&mut self, item: &str, value: &str) {
+        self.drill.entry(item.to_string()).or_default().push(value.to_string());
+    }
+
+    /// Back up so that `depth` clicked values are left on the item's path (0 = the top of the item).
+    pub fn drill_back_to(&mut self, item: &str, depth: usize) {
+        if let Some(p) = self.drill.get_mut(item) {
+            p.truncate(depth);
+            if p.is_empty() {
+                self.drill.remove(item);
+            }
+        }
+    }
+
+    /// The item's own drill path.
+    pub fn drill_of(&self, item: &str) -> &[String] {
+        self.drill.get(item).map(|v| v.as_slice()).unwrap_or(&[])
     }
 }
 
@@ -236,6 +320,8 @@ pub struct ItemRequest {
     pub source: ItemSource,
     /// The page filters that apply to this item, each with the values picked (never an empty list: "All" is left out).
     pub picks: Vec<(PageFilter, Vec<String>)>,
+    /// The values clicked on the way down a chart's drill levels, on this page (empty = the chart as its tab has it).
+    pub drill: Vec<String>,
     pub temp_dir: std::path::PathBuf,
 }
 
@@ -298,6 +384,17 @@ pub fn chart_spec_with(spec: &ChartSpec, picks: &[(PageFilter, Vec<String>)]) ->
     s
 }
 
+/// The chart spec `path` levels further down: each clicked value goes on the chart's drill path (a value past the last level is left out).
+pub fn chart_spec_drilled(spec: &ChartSpec, path: &[String]) -> ChartSpec {
+    let mut s = spec.clone();
+    for v in path {
+        if !s.drill_down(v) {
+            break;
+        }
+    }
+    s
+}
+
 /// The pivot spec with the page's picks: a pick on a field the pivot already filters replaces that filter (the page is the reader's
 /// latest word); a lookup or Calendar field is added to the pivot's model fields.
 pub fn pivot_spec_with(spec: &PivotSpec, picks: &[(PageFilter, Vec<String>)]) -> PivotSpec {
@@ -323,7 +420,7 @@ pub fn compute_item(req: &ItemRequest) -> Result<ItemData> {
     match &req.source {
         ItemSource::Chart { base, steps, spec } => {
             let lf = crate::engine::compile_tab_lazy(base, steps, &req.temp_dir)?;
-            let data = crate::charts::calc::compute(crate::pivot_table::without_total_rows(lf, steps), &chart_spec_with(spec, &req.picks))?;
+            let data = crate::charts::calc::compute(crate::pivot_table::without_total_rows(lf, steps), &chart_spec_with(&chart_spec_drilled(spec, &req.drill), &req.picks))?;
             Ok(ItemData::Chart(Box::new(data)))
         }
         ItemSource::Kpi { spec, tab_key, base, steps } => {
@@ -388,6 +485,11 @@ impl DashPage {
             }
             self.state.filter_picks[MAX_PAGE_FILTERS - 1] = None;
         }
+    }
+
+    /// The page's cross-filter as it reaches `item_id`: every item but the one that was clicked (it keeps all its marks).
+    pub fn cross_for(&self, item_id: &str) -> Option<(PageFilter, Vec<String>)> {
+        self.state.cross.as_ref().filter(|c| c.item != item_id).map(|c| (c.as_filter(), vec![c.value.clone()]))
     }
 
     /// The picks that count: one entry per filter that has a value picked ("All" has none).

@@ -44,7 +44,7 @@ fn item(id: &str, kind: DashItemKind) -> DashItem {
 fn dashboard() -> Dashboard {
     let mut state = PageState::default();
     state.filter_picks[0] = Some(vec!["Dhaka".into(), "Ctg".into()]);
-    state.cross = Some(CrossPick { dimension: "Wing".into(), value: "Islami".into() });
+    state.cross = Some(CrossPick { dimension: "Wing".into(), value: "Islami".into(), ..Default::default() });
     state.drill.insert("i1".into(), vec!["Conventional".into()]);
     Dashboard {
         id: "d1".into(),

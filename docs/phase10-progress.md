@@ -8,7 +8,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S1 | D0, C0 | D0 done, C0 done |
 | S2 | D1 | done |
 | S3 | D2 | done |
-| S4–S12 | D3 … fixes | not started |
+| S4 | D3 | done |
+| S5–S12 | D4 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
 | Acceptance | Test |
@@ -61,3 +62,14 @@ Picture: `docs/guide/img/dashboard-page.png` (light opened, dark written). Decis
 | Window: add, settings, fit at 3 sizes | `d2_a_kpi_card_is_made_by_clicks_shows_number_arrow_and_words_and_its_settings_work_at_three_sizes`, `d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both_themes` |
 
 Stub proof: D2 — "below" made "at or below" → the 80.00 limit test fails (restored). Picture: `docs/guide/img/dashboard-kpi.png` (light opened).
+
+## S4 acceptance → test (D3)
+| Acceptance | Test |
+|---|---|
+| Dhaka click gives the Product bar Dhaka rows only; clicked item keeps its marks | `d3_clicking_dhaka_gives_the_product_bar_the_numbers_of_dhaka_rows_only_and_the_clicked_bar_keeps_all_its_marks`; render `d3_a_click_on_a_bar_filters_…` |
+| A pivot row click filters the charts | `d3_a_pivot_row_click_filters_the_charts_flat_and_nested_…`; render test |
+| Another data tab: "filter doesn't apply" | both of the above |
+| Back after two drill levels restores the first | `d3_back_after_two_drill_levels_restores_the_first_level_…`; render `d3_the_right_click_menu_…` |
+| State saved and restored with the project | `d3_the_cross_pick_and_the_drill_paths_are_saved_and_restored_with_the_project` |
+
+Stub proofs: D3 — `cross_for` that also filters the clicked item → the Dhaka test fails; `drill_back_to` cutting one level too late → the Back test fails (both restored). Picture: `docs/guide/img/dashboard-cross.png` (light opened).

@@ -4,6 +4,7 @@
 //! being calculated shows "Calculating…".
 
 use crate::ui::prelude::*;
+use micro_parquet::charts::spec::ChartSpec;
 use micro_parquet::dashboard::*;
 use micro_parquet::kpi::*;
 use micro_parquet::model::ModelFieldRef;
@@ -14,6 +15,14 @@ use std::collections::HashMap;
 /// What "Dashboard" says outside a project.
 pub const NO_PROJECT: &str = "Dashboards belong to a project. Save or open a project first.";
 pub const DASH_BUTTON: &str = "Dashboard";
+
+/// What a click on the page asked for; the page state is changed after the page is drawn.
+pub enum PageAct {
+    Cross(CrossPick),
+    DrillDown(String, String),
+    DrillBack(String, usize),
+    Notice(String),
+}
 
 /// One item's latest numbers.
 #[derive(Default, Clone)]
@@ -164,11 +173,13 @@ impl MicroParquetApp {
     }
 
     /// The picks of a page that reach an item, and the labels of the filters that have a pick but don't reach it.
-    pub(crate) fn dash_picks_for(&self, page: &DashPage, data_tab: Option<&str>) -> (Vec<(PageFilter, Vec<String>)>, Vec<String>) {
+    pub(crate) fn dash_picks_for(&self, page: &DashPage, data_tab: Option<&str>, item_id: &str) -> (Vec<(PageFilter, Vec<String>)>, Vec<String>) {
         let (mut yes, mut no) = (Vec::new(), Vec::new());
-        for (_, f, v) in page.active_picks() {
-            if filter_applies(f, data_tab) {
-                yes.push((f.clone(), v.clone()));
+        // the page filters, then the click (the item that was clicked is not filtered by its own click)
+        let all = page.active_picks().into_iter().map(|(_, f, v)| (f.clone(), v.clone())).chain(page.cross_for(item_id));
+        for (f, v) in all {
+            if filter_applies(&f, data_tab) {
+                yes.push((f, v));
             } else {
                 no.push(f.label.clone());
             }
@@ -187,6 +198,11 @@ impl MicroParquetApp {
         }
     }
 
+    /// `dash_sig` with the item's own drill path: what the worker's answer is checked against.
+    pub(crate) fn dash_item_sig(&self, res: &Resolved, picks: &[(PageFilter, Vec<String>)], drill: &[String]) -> String {
+        format!("{}|{:?}", self.dash_sig(res, picks), drill)
+    }
+
     /// Called every frame: the items of the open page and the values of its filters are calculated again when what they read changed.
     pub(crate) fn dashboard_tick(&mut self) {
         if !self.dashboard_ui.open {
@@ -197,12 +213,13 @@ impl MicroParquetApp {
         for item in &page.items {
             let view = self.dashboard_ui.items.entry(item.id.clone()).or_default().clone();
             let Ok(res) = self.dash_resolve(item) else { continue };
-            let (picks, _) = self.dash_picks_for(&page, res.data_tab.as_deref());
-            let sig = self.dash_sig(&res, &picks);
+            let (picks, _) = self.dash_picks_for(&page, res.data_tab.as_deref(), &item.id);
+            let drill: Vec<String> = page.state.drill_of(&item.id).to_vec();
+            let sig = self.dash_item_sig(&res, &picks, &drill);
             if view.sig == sig || view.pending.as_deref() == Some(sig.as_str()) {
                 continue;
             }
-            let req = ItemRequest { item_id: item.id.clone(), source: res.source, picks, temp_dir: self.paths.temp_dir.clone() };
+            let req = ItemRequest { item_id: item.id.clone(), source: res.source, picks, drill, temp_dir: self.paths.temp_dir.clone() };
             if let Some(v) = self.dashboard_ui.items.get_mut(&item.id) {
                 v.pending = Some(sig.clone());
                 v.scale = res.scale;
@@ -326,6 +343,7 @@ impl MicroParquetApp {
         self.dashboard_ui.page = pi;
         let mut close = false;
         let mut open_tab: Option<String> = None;
+        let mut acts: Vec<PageAct> = Vec::new();
         let mut add_item: Option<DashItemKind> = None;
         let choices = self.dash_source_choices();
 
@@ -496,6 +514,17 @@ impl MicroParquetApp {
                 dash.pages[pi].remove_filter(i);
             }
         }
+        // the click on a mark or a pivot row, as a chip that clears it
+        if let Some(c) = dash.pages[pi].state.cross.clone() {
+            ui.horizontal(|ui| {
+                ui.label("Clicked:");
+                let b = ui.button(format!("{} \u{d7}", c.chip())).on_hover_text("Click to clear this filter");
+                rects.push(("Cross chip".into(), b.rect));
+                if b.clicked() {
+                    dash.pages[pi].state.cross = None;
+                }
+            });
+        }
         ui.add_space(theme::SPACE_XS);
 
         // pages (left), properties (right), the page (centre)
@@ -599,7 +628,7 @@ impl MicroParquetApp {
           });
         });
         egui::CentralPanel::default().frame(egui::Frame::none()).show_inside(ui, |ui| {
-            self.render_dash_page(ui, &dash.pages[pi], dash.default_kpi_unit, &mut rects, &mut open_tab);
+            self.render_dash_page(ui, &dash.pages[pi], dash.default_kpi_unit, &mut rects, &mut open_tab, &mut acts);
         });
 
         // what was asked for
@@ -608,6 +637,18 @@ impl MicroParquetApp {
             let id = self.dashboard_ui.fresh_id("i", &taken);
             self.dashboard_ui.selected = Some(id.clone());
             dash.pages[pi].items.push(DashItem { id, kind, ..Default::default() });
+        }
+        for act in acts {
+            let st = &mut dash.pages[pi].state;
+            match act {
+                PageAct::Cross(p) => {
+                    st.toggle_cross(p);
+                    self.dashboard_ui.notice.clear();
+                }
+                PageAct::DrillDown(item, v) => st.drill_down(&item, &v),
+                PageAct::DrillBack(item, depth) => st.drill_back_to(&item, depth),
+                PageAct::Notice(m) => self.dashboard_ui.notice = m,
+            }
         }
         if let Some((op, ii)) = item_op {
             let items = &mut dash.pages[pi].items;
@@ -675,7 +716,7 @@ impl MicroParquetApp {
     }
 
     /// The page: its items in the grid, scaled to the space there is.
-    fn render_dash_page(&mut self, ui: &mut egui::Ui, page: &DashPage, default_unit: KpiUnit, rects: &mut Vec<(String, egui::Rect)>, open_tab: &mut Option<String>) {
+    fn render_dash_page(&mut self, ui: &mut egui::Ui, page: &DashPage, default_unit: KpiUnit, rects: &mut Vec<(String, egui::Rect)>, open_tab: &mut Option<String>, acts: &mut Vec<PageAct>) {
         let tk = *theme::tokens(self.dark_mode);
         let avail = ui.available_rect_before_wrap().shrink2(egui::vec2(theme::SPACE_S, 0.0));
         let scale = (avail.width() / PAGE_W as f32).min(avail.height() / PAGE_H as f32).max(theme::DASH_MIN_SCALE);
@@ -719,7 +760,7 @@ impl MicroParquetApp {
             }
             let view = self.dashboard_ui.items.get(&item.id).cloned().unwrap_or_default();
             let (not_applied, tabs_ok) = match &resolved {
-                Ok(res) => (self.dash_picks_for(page, res.data_tab.as_deref()).1, true),
+                Ok(res) => (self.dash_picks_for(page, res.data_tab.as_deref(), &item.id).1, true),
                 Err(_) => (Vec::new(), false),
             };
             for label in &not_applied {
@@ -738,18 +779,63 @@ impl MicroParquetApp {
                 (_, Some(ItemData::Problem(p)), _) => {
                     child.label(egui::RichText::new(p.clone()).color(tk.danger));
                 }
-                (_, Some(ItemData::Chart(data)), _) => {
+                (Ok(res), Some(ItemData::Chart(data)), _) => {
                     let (divisor, decimals, unit) = view.scale.clone().unwrap_or((1.0, 2, String::new()));
                     let opts = micro_parquet::charts::layout::LayoutOpts { dark: self.dark_mode, divisor, decimals, unit, bare: false, colours: None };
+                    let own = page.state.drill_of(&item.id).len();
+                    // the item's own drill: "All › FDR › Dhaka" with Back, per item
+                    if data.spec.has_drill() {
+                        let mut crumbs = Vec::new();
+                        let base = data.spec.depth().saturating_sub(own);
+                        if let Some(d) = crate::ui::drill::drill_breadcrumb(&mut child, self.dark_mode, &data.spec, &mut crumbs) {
+                            acts.push(PageAct::DrillBack(item.id.clone(), d.saturating_sub(base)));
+                        }
+                        rects.extend(crumbs.into_iter().map(|(n, r)| (format!("{} {}", n, item.id), r)));
+                        if own > 0 {
+                            let b = child.small_button("Back").on_hover_text("Back up one level on this item");
+                            rects.push((format!("Back {}", item.id), b.rect));
+                            if b.clicked() {
+                                acts.push(PageAct::DrillBack(item.id.clone(), own - 1));
+                            }
+                        }
+                    }
+                    if let Some(c) = page.state.cross.as_ref().filter(|c| c.item == item.id) {
+                        child.label(egui::RichText::new(format!("\u{25cf} Selected: {}", c.chip())).size(theme::TEXT_LABEL).color(tk.accent));
+                    }
                     let h = (child.available_height() - theme::SPACE_XS).max(theme::SPACE_L);
-                    crate::ui::chart_render::show_chart(&mut child, egui::Id::new(("dash_chart", item.id.clone())), data, &opts, Some(h));
+                    let ctx = crate::ui::chart_render::DrillCtx { kind_ok: data.spec.kind.drill_reason().is_none(), has_drill: data.spec.has_drill(), can_down: data.spec.has_drill() && !data.spec.at_last_level(), next_level: data.spec.drill.get(data.spec.depth() + 1).map(|l| l.name.clone()).unwrap_or_default(), rows_unavailable: None, blocked: None, page: true };
+                    let shown = crate::ui::chart_render::show_chart_with(&mut child, egui::Id::new(("dash_chart", item.id.clone())), data, &opts, Some(h), Some(&ctx));
+                    match shown.action {
+                        Some(crate::ui::chart_render::ChartAction::CrossFilter(m)) => match CrossPick::from_chart(&data.spec, &m.category, &item.id, res.data_tab.as_deref()) {
+                            Ok(p) => acts.push(PageAct::Cross(p)),
+                            Err(e) => acts.push(PageAct::Notice(format!("{:#}", e))),
+                        },
+                        Some(crate::ui::chart_render::ChartAction::DrillDown(m)) => match ChartSpec::refuse_other(&m.category) {
+                            Ok(()) => acts.push(PageAct::DrillDown(item.id.clone(), m.category)),
+                            Err(e) => acts.push(PageAct::Notice(format!("{:#}", e))),
+                        },
+                        _ => {}
+                    }
                 }
+                (Err(_), Some(ItemData::Chart(_)), _) => {}
                 (_, Some(ItemData::Kpi(k)), _) => {
                     let DashItemKind::Kpi(spec) = &item.kind else { continue };
                     Self::draw_kpi(&mut child, &tk, spec, k, default_unit, &item.id, rects);
                 }
                 (_, Some(ItemData::Table(t)), _) => {
-                    Self::draw_dash_table(&mut child, &item.id, t);
+                    if let Some(c) = page.state.cross.as_ref().filter(|c| c.item == item.id) {
+                        child.label(egui::RichText::new(format!("\u{25cf} Selected: {}", c.chip())).size(theme::TEXT_LABEL).color(tk.accent));
+                    }
+                    if let Some((level, value)) = Self::draw_dash_table(&mut child, &item.id, t, rects) {
+                        if let (Ok(res), DashItemKind::Pivot(_)) = (&resolved, &item.kind) {
+                            if let ItemSource::Pivot { spec, .. } = &res.source {
+                                match CrossPick::from_pivot(spec, level, &value, &item.id, res.data_tab.as_deref()) {
+                                    Ok(p) => acts.push(PageAct::Cross(p)),
+                                    Err(e) => acts.push(PageAct::Notice(format!("{:#}", e))),
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -920,8 +1006,9 @@ impl MicroParquetApp {
         ui.interact(ui.min_rect(), ui.id().with(("kpi_alt", id.to_string())), egui::Sense::hover()).on_hover_text(kv.alt.clone());
     }
 
-    /// A pivot as a table (Nested, with its indents, when the pivot is Nested).
-    fn draw_dash_table(ui: &mut egui::Ui, id: &str, t: &TableData) {
+    /// A pivot as a table (Nested, with its indents, when the pivot is Nested). A click on a row label comes back as
+    /// (the Rows field it belongs to, its text); the labels are buttons without a frame, named "Row <item> <text>".
+    fn draw_dash_table(ui: &mut egui::Ui, id: &str, t: &TableData, rects: &mut Vec<(String, egui::Rect)>) -> Option<(usize, String)> {
         use polars::prelude::AnyValue;
         let text = |s: &polars::prelude::Series, i: usize| -> String {
             match s.get(i) {
@@ -933,7 +1020,19 @@ impl MicroParquetApp {
                 Ok(v) => format!("{}", v),
             }
         };
+        let mut clicked: Option<(usize, String)> = None;
         let cols: Vec<_> = t.df.get_columns().iter().collect();
+        let mut label = |ui: &mut egui::Ui, shown: String, plain: &str, level: usize, clicked: &mut Option<(usize, String)>| {
+            if plain.is_empty() {
+                ui.label(shown);
+                return;
+            }
+            let r = ui.add(egui::Label::new(shown).sense(egui::Sense::click())).on_hover_text("Click to filter the page by this row");
+            rects.push((format!("Row {} {}", id, plain), r.rect));
+            if r.clicked() {
+                *clicked = Some((level, plain.to_string()));
+            }
+        };
         egui::ScrollArea::both().id_salt(("dash_table", id.to_string())).auto_shrink([false, false]).show(ui, |ui| {
             egui::Grid::new(("dash_grid", id.to_string())).striped(true).spacing(egui::vec2(theme::SPACE_M, 2.0)).show(ui, |ui| {
                 match &t.nested {
@@ -944,7 +1043,8 @@ impl MicroParquetApp {
                         }
                         ui.end_row();
                         for (i, r) in n.rows.iter().enumerate().take(300) {
-                            ui.label(format!("{}{}", "\u{a0}\u{a0}".repeat(r.level), r.label));
+                            let plain = if r.is_subtotal() || r.label == micro_parquet::pivot_table::GRAND_TOTAL_LABEL { "" } else { r.label.as_str() };
+                            label(ui, format!("{}{}", "\u{a0}\u{a0}".repeat(r.level), r.label), plain, r.level, &mut clicked);
                             for c in n.values.get_columns() {
                                 ui.label(text(c, i));
                             }
@@ -957,8 +1057,14 @@ impl MicroParquetApp {
                         }
                         ui.end_row();
                         for i in 0..t.df.height().min(300) {
-                            for c in &cols {
-                                ui.label(text(c, i));
+                            for (ci, c) in cols.iter().enumerate() {
+                                let s = text(c, i);
+                                if ci < t.label_columns {
+                                    let plain = if s == micro_parquet::pivot_table::GRAND_TOTAL_LABEL { "" } else { s.as_str() };
+                                    label(ui, s.clone(), plain, ci, &mut clicked);
+                                } else {
+                                    ui.label(s);
+                                }
                             }
                             ui.end_row();
                         }
@@ -966,6 +1072,7 @@ impl MicroParquetApp {
                 }
             });
         });
+        clicked
     }
 }
 

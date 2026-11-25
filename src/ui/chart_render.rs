@@ -56,6 +56,9 @@ pub struct DrillCtx {
     pub rows_unavailable: Option<String>,
     /// Why nothing here can change the chart (a chart tab that cannot be calculated again): every menu item is greyed with it.
     pub blocked: Option<String>,
+    /// The chart is an item on a dashboard page (Phase 10 D3): a click filters the page, and the menu has "Drill down" and
+    /// "Filter the page by this" only (the numbers of the chart's tab are not changed from a page).
+    pub page: bool,
 }
 
 /// What a click or a menu item asked for, with the mark it was on.
@@ -67,6 +70,8 @@ pub enum ChartAction {
     Exclude(MarkRef),
     /// The colour picker for the item the mark stands for (Phase 8 W7).
     Colour(MarkRef),
+    /// A click on a dashboard item: the page is filtered by this mark (Phase 10 D3).
+    CrossFilter(MarkRef),
 }
 
 /// The layout of the chart last shown under `id` (tests, and the "Open as tab" / save paths).
@@ -180,19 +185,24 @@ pub fn show_chart_with(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: 
         if let Some(hv) = &hover {
             // a chart with drill levels says what a click does (or that it does nothing at the last level)
             let mut hv = hv.clone();
-            if let Some(dc) = live.filter(|d| d.has_drill) {
+            if live.is_some_and(|d| d.page) {
+                hv.tip.push_str("\n\u{2192} Click to filter the page by this");
+                if let Some(dc) = live.filter(|d| d.has_drill && d.can_down) {
+                    hv.tip.push_str(&format!(" \u{b7} right-click to drill into {}", dc.next_level));
+                }
+            } else if let Some(dc) = live.filter(|d| d.has_drill) {
                 hv.tip.push_str(&if dc.can_down { format!("\n\u{2192} Click to drill into {}", dc.next_level) } else { "\n\u{2192} Last level: a click does nothing".to_string() });
             }
-            if live.is_some_and(|d| d.can_down) {
+            if live.is_some_and(|d| d.page || d.can_down) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             tooltip = Some(paint_hover(ui.ctx(), id, &layout, &hv, pos));
         }
     }
     if let Some(dc) = live {
-        if resp.clicked_by(egui::PointerButton::Primary) && dc.can_down {
+        if resp.clicked_by(egui::PointerButton::Primary) && (dc.can_down || dc.page) {
             if let Some(mark) = resp.interact_pointer_pos().and_then(&target_at) {
-                action = Some(ChartAction::DrillDown(mark));
+                action = Some(if dc.page { ChartAction::CrossFilter(mark) } else { ChartAction::DrillDown(mark) });
             }
         }
         // the mark under the pointer when the menu was asked for stays the menu's mark while the pointer moves over it
@@ -226,6 +236,11 @@ pub fn show_chart_with(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: 
                     ui.close_menu();
                 }
             };
+            if dc.page {
+                item(ui, "Filter the page by this", true, "", ChartAction::CrossFilter(mark.clone()));
+                item(ui, "Drill down", down_ok, &down_why, ChartAction::DrillDown(mark.clone()));
+                return;
+            }
             item(ui, "Drill down", down_ok, &down_why, ChartAction::DrillDown(mark.clone()));
             item(ui, "Show rows", dc.rows_unavailable.is_none(), dc.rows_unavailable.as_deref().unwrap_or(""), ChartAction::ShowRows(mark.clone()));
             item(ui, "Keep only this", true, "", ChartAction::Keep(mark.clone()));
