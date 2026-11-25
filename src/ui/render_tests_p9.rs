@@ -3974,3 +3974,162 @@ fn m5_pictures_of_the_measures_dialog_the_values_list_and_a_nim_pivot_by_month_y
         shoot(&mut rig, "pivot-nim-month-year", dark, screen);
     }
 }
+
+// ------------------------------------------------------------------------------------------------ M5 follow-ups (S9)
+
+/// A pivot tab on GL TB by Month-Year with these measures of `gl_measures()` as values; the tab's index.
+fn m5_measure_pivot(rig: &mut Rig, names: &[&str]) -> usize {
+    let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t3").expect("the date link");
+    let f = ModelFieldRef::new(&link, "GL TB \u{2192} Calendar", "Calendar", "Month-Year");
+    let order = micro_parquet::dates::DatePart::MonthYear.sort_order(&rig.app.settings.calendar).map(|o| vec![PivotFieldOrder { field: f.name.clone(), order: o }]).unwrap_or_default();
+    let spec = PivotSpec {
+        rows: vec![f.name.clone()],
+        values: names.iter().map(|n| PivotValue { field: n.to_string(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue::of(TimeAgg::Measure)) }).collect(),
+        row_totals: true,
+        column_totals: true,
+        model_fields: vec![f],
+        field_orders: order,
+        data_tab: "t3".into(),
+        ..Default::default()
+    };
+    rig.app.show_steps_sidebar = false;
+    let src = rig.app.tabs[2].source.clone();
+    let columns: Vec<String> = std::iter::once(spec.rows[0].clone()).chain(spec.values.iter().map(|v| v.label())).collect();
+    let formats: std::collections::HashMap<String, micro_parquet::models::ColumnFormatSpec> = micro_parquet::pivot_table::pivot_column_formats(&spec, &columns, 2).into_iter().collect();
+    rig.app.create_tab_from_source("Pivot: measures".into(), src, vec![TransformStep::from_pivot_spec(spec)], formats);
+    settle(&mut rig.app);
+    let at = rig.app.tabs.len() - 1;
+    rig.app.active_tab = at;
+    let first = names[0].to_string();
+    pump(rig, "the measure pivot", &|r| r.app.tabs[at].total_rows > 0 && r.app.tabs[at].cached_slice.column(first.as_str()).is_ok());
+    rig.draw(6);
+    at
+}
+
+fn m5_column(rig: &Rig, at: usize, name: &str) -> Vec<Option<f64>> {
+    rig.app.tabs[at].cached_slice.column(name).unwrap_or_else(|_| panic!("{}: the column '{name}' in {:?}", rig.what, rig.app.tabs[at].cached_slice.get_column_names())).f64().expect("numbers").into_iter().collect()
+}
+
+#[test]
+fn m5_a_number_of_a_named_measure_has_a_greyed_show_rows_with_its_reason_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m5rows", ppp, w, h, false);
+        rig.app.project.model.measures = gl_measures();
+        rig.draw(3);
+        m3_tag_gl_balance(&mut rig);
+        let at = m5_measure_pivot(&mut rig, &["NIM", "Interest income"]);
+        let n = rig.app.tabs.len();
+        let p = rig.draw(3);
+        let reason = "This number combines several filtered series. Use Show rows on a column value instead.";
+        // the first value cell is NIM's, the second Interest income's: both are measures
+        let cell = value_cell_of_row(&p, "Jan 2026", &what);
+        assert!(rig.app.tabs[at].cached_slice.column("NIM").is_ok_and(|c| !c.is_null().all()), "{what}: NIM has a number");
+        let p = right_click(&mut rig, cell.center());
+        let item = text_box(&p, "Show rows").unwrap_or_else(|| panic!("{what}: the menu has Show rows"));
+        click_rect(&mut rig, item);
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), n, "{what}: the greyed item opens nothing");
+        let p = crate::ui::render_tests_p8::hover_at(&mut rig, item.center());
+        assert!(painted_has(&p, reason), "{what}: the item says why");
+        // a double-click opens nothing either, and says the same in the status bar
+        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        rig.draw(3);
+        double_click(&mut rig, cell.center());
+        rig.draw(6);
+        assert_eq!(rig.app.tabs.len(), n, "{what}: a double-click opens nothing");
+        assert_eq!(rig.app.status_message, reason, "{what}");
+        // the rule of the column: the library tells a measure's column from a column value
+        let spec = rig.app.tabs[at].steps[0].as_pivot_spec().expect("the pivot");
+        assert!(micro_parquet::pivot_table::is_measure_column(&spec, "NIM") && micro_parquet::pivot_table::is_measure_column(&spec, "Interest income"), "{what}");
+    }
+}
+
+#[test]
+fn m5_a_measure_is_renamed_in_the_dialog_by_real_clicks_and_a_ratio_a_pivot_and_a_chart_tab_follow_at_three_sizes() {
+    use micro_parquet::charts::spec::{ChartKind, ChartSpec};
+    for (ppp, w, h) in SIZES3 {
+        let (mut rig, what) = m3_rig("p9m5rename", ppp, w, h, false);
+        rig.app.project.model.measures = gl_measures();
+        rig.draw(3);
+        m3_tag_gl_balance(&mut rig);
+        let (old, new) = ("Interest income", "Interest earned");
+        let at = m5_measure_pivot(&mut rig, &["NIM", old]);
+        let nim_before = m5_column(&rig, at, "NIM");
+        let income_before = m5_column(&rig, at, old);
+        assert!(income_before.iter().flatten().count() > 3 && nim_before.iter().flatten().count() > 3, "{what}: numbers to compare");
+        // a chart tab of the measure by Month-Year
+        rig.app.active_tab = 2;
+        rig.app.set_side_tab_visible(crate::ui::steps::RightTab::Chart, true);
+        rig.draw(4);
+        pump_until(&mut rig, "the first chart", &|r| !r.app.chart.busy && r.app.chart.data.is_some());
+        let link = rig.app.project.model.all_links().into_iter().find(|l| l.data_tab == "t3").expect("the date link");
+        let f = ModelFieldRef::new(&link, "GL TB \u{2192} Calendar", "Calendar", "Month-Year");
+        let spec = ChartSpec { category: f.name.clone(), category_model: Some(f), value: Some(old.into()), time: Some(TimeValue::of(TimeAgg::Measure)), kind: ChartKind::Bar, top_n: 50, data_tab: "t3".into(), ..Default::default() };
+        rig.app.chart_set_spec(spec);
+        pump_until(&mut rig, "the chart", &|r| !r.app.chart.busy && r.app.chart.data.as_ref().is_some_and(|d| d.measure_names.first().is_some_and(|n| n == old)));
+        rig.app.chart_open_as_chart_tab();
+        pump_until(&mut rig, "the chart tab", &|r| r.app.chart_tabs.len() == 1);
+        rig.draw(4);
+        let chart_before = rig.app.chart_tabs.values().next().and_then(|i| Some(i.data.values.clone())).expect("the chart tab");
+        // the dialog: Edit, clear the name with Ctrl+A, type the new one, Save
+        menu_item9(&mut rig, "Model", "Measures");
+        rig.draw(4);
+        mclick(&mut rig, "section", "Measures");
+        mclick(&mut rig, "button", &format!("Edit {old}"));
+        let b = reveal(&mut rig, &measures_title(), &|r| mrect(r, "field", "Name"));
+        click_rect(&mut rig, b);
+        let m = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let key = |pressed| egui::Event::Key { key: egui::Key::A, physical_key: Some(egui::Key::A), pressed, repeat: false, modifiers: m };
+        rig.step(vec![key(true), key(false)]);
+        rig.step(vec![egui::Event::Text(new.to_string())]);
+        rig.draw(3);
+        // a name another measure has is refused in words (case ignored), and so is an empty one: nothing changes
+        mtype(&mut rig, "Name", "");
+        let dup = |rig: &mut Rig, text: &str| {
+            let b = reveal(rig, &measures_title(), &|r| mrect(r, "field", "Name"));
+            click_rect(rig, b);
+            rig.step(vec![key(true), key(false)]);
+            if text.is_empty() {
+                let bs = |pressed| egui::Event::Key { key: egui::Key::Backspace, physical_key: Some(egui::Key::Backspace), pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+                rig.step(vec![bs(true), bs(false)]);
+            } else {
+                rig.step(vec![egui::Event::Text(text.to_string())]);
+            }
+            rig.draw(3);
+            mclick(rig, "button", "Save");
+            rig.draw(3)
+        };
+        let p = dup(&mut rig, "interest EXPENSE");
+        assert!(painted_has(&p, "A measure called 'interest EXPENSE' already exists. Names must be different."), "{what}");
+        let p = dup(&mut rig, "");
+        assert!(painted_has(&p, "Give the measure a name."), "{what}");
+        assert_eq!(rig.app.project.model.measures[0].name(), old, "{what}: refused, so unchanged");
+        let p = dup(&mut rig, new);
+        let r = assert_dialog_fits(&rig.ctx, &measures_title(), &what);
+        assert_not_clipped(&p, r.window, &what);
+        // renamed: the measure, the ratio's terms, the pivot's value, the chart's value
+        assert_eq!(rig.app.project.model.measures.iter().map(|m| m.name().to_string()).collect::<Vec<_>>(), [new, "Interest expense", "Closing earning assets", "NIM"], "{what}");
+        match &rig.app.project.model.measures[3] {
+            NamedMeasure::Ratio { numerator, .. } => assert_eq!(numerator[0].measure, new, "{what}: NIM's term follows"),
+            other => panic!("{what}: a ratio, not {other:?}"),
+        }
+        let spec = rig.app.tabs[at].steps[0].as_pivot_spec().expect("the pivot");
+        assert_eq!(spec.values.iter().map(|v| v.field.as_str()).collect::<Vec<_>>(), ["NIM", new], "{what}");
+        assert_eq!(rig.app.chart_tabs.values().next().and_then(|i| i.data.spec.value.clone()).as_deref(), Some(new), "{what}");
+        assert!(rig.app.measure_users(old).is_empty() && !rig.app.measure_users(new).is_empty(), "{what}: the users are listed under the new name");
+        // the numbers are the same under the new name
+        pump(&mut rig, "the pivot again", &|r| r.app.tabs[at].cached_slice.column(new).is_ok());
+        assert_eq!(m5_column(&rig, at, new), income_before, "{what}: the measure");
+        assert_eq!(m5_column(&rig, at, "NIM"), nim_before, "{what}: the ratio");
+        pump_until(&mut rig, "the chart tab again", &|r| r.app.chart_tabs.values().next().is_some_and(|i| i.data.spec.value.as_deref() == Some(new) && i.pending_sig.is_none() && i.data.measure_names.first().is_some_and(|n| n == new)));
+        assert_eq!(rig.app.chart_tabs.values().next().map(|i| i.data.values.clone()), Some(chart_before), "{what}: the chart");
+        // the name of a saved measure can be changed again, its tab still can't (the Tab box is disabled)
+        mclick(&mut rig, "button", &format!("Edit {new}"));
+        let tab_box = reveal(&mut rig, &measures_title(), &|r| mrect(r, "field", "Tab"));
+        let shown = |p: &Painted| p.boxes.iter().filter(|(t, _)| t.contains("Accounts")).count();
+        let closed = shown(&rig.draw(2));
+        let p = click_rect(&mut rig, tab_box);
+        assert_eq!(shown(&p), closed, "{what}: no list opens on the Tab box of a saved measure");
+        assert_eq!(rig.app.project.model_ui.measures.edit.as_ref().map(|e| e.tab_key.as_str()), Some("t3"), "{what}: its tab is unchanged");
+    }
+}

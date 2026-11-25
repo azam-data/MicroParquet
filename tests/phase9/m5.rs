@@ -378,3 +378,91 @@ fn m5_a_ytd_window_of_a_month_reads_up_to_that_month_and_not_to_the_as_of_date()
     assert_eq!(at(&b, "Feb 2026", "Interest income \u{b7} YTD"), Some(118.0));
     assert_eq!(at(&b, "May 2026", "Interest income \u{b7} YTD"), Some(302.0));
 }
+
+#[test]
+fn m5_a_renamed_measure_gives_the_same_numbers_in_a_ratio_a_pivot_and_a_chart_and_keeps_its_name_in_a_project() {
+    use micro_parquet::charts::spec::{ChartAgg, ChartKind, ChartSpec};
+    use micro_parquet::project::*;
+    let dd = dir("p9m5_rename");
+    let df = nim_data();
+    let src = parquet(&dd, "accounts", &df);
+    let (old, new) = ("Interest income", "Interest earned");
+    let f = cal_field("Month-Year");
+    let chart_spec = |name: &str| ChartSpec { category: f.name.clone(), category_model: Some(f.clone()), value: Some(name.into()), agg: ChartAgg::Sum, time: Some(TimeValue::of(TimeAgg::Measure)), kind: ChartKind::Bar, data_tab: "t1".into(), ..Default::default() };
+    let chart_of = |sc: Option<Arc<ModelContext>>, name: &str| {
+        micro_parquet::model::with_scope(sc, || micro_parquet::charts::calc::compute(micro_parquet::engine::compile_tab_lazy(&src, &[], &dd).expect("source"), &chart_spec(name))).unwrap_or_else(|e| panic!("the chart: {e:#}"))
+    };
+    // before: NIM (a ratio that uses the measure), the measure in a pivot, and in a chart
+    let before_measures = yield_measures();
+    let sc = scope5(&dd, "2026-02-28", Some(("GL map", "GL", gl_map())), before_measures.clone());
+    let pivot_spec = spec(&[&month_year()], &[], vec![plain_measure("NIM"), plain_measure(old)], &["Month-Year"]);
+    let before = run(&dd, &df, sc.clone(), &pivot_spec);
+    let chart_before = chart_of(sc, old);
+    assert_eq!(at(&before, "Jan 2026", old), Some(62.0));
+    // the rename, as the dialog does it: the measure, the ratios' terms, the saved pivot step, the chart's value
+    let mut measures = before_measures.clone();
+    let i = measures.iter().position(|m| m.name() == old).expect("the measure");
+    match &mut measures[i] {
+        NamedMeasure::Base { name, .. } => *name = new.to_string(),
+        other => panic!("a base measure, not {other:?}"),
+    }
+    micro_parquet::measures::rename_in_ratios(&mut measures, old, new);
+    let mut step = TransformStep::from_pivot_spec(pivot_spec);
+    assert!(step.rename_measure(old, new));
+    let mut chart_spec_after = chart_spec(old);
+    assert!(chart_spec_after.rename_measure(old, new));
+    assert_eq!(chart_spec_after.value.as_deref(), Some(new));
+    // NIM's terms follow, and the other ratios too
+    for m in measures.iter().filter(|m| m.is_ratio()) {
+        if let NamedMeasure::Ratio { numerator, denominator, .. } = m {
+            assert!(numerator.iter().chain(denominator.iter()).all(|t| t.measure != old), "{}: {:?}", m.name(), numerator);
+        }
+    }
+    let sc = scope5(&dd, "2026-02-28", Some(("GL map", "GL", gl_map())), measures.clone());
+    let after = run(&dd, &df, sc.clone(), &step.as_pivot_spec().expect("a pivot"));
+    assert_eq!(names(&after)[1..], ["NIM", new]);
+    for month in ["Jan 2025", "Jan 2026", "Feb 2026"] {
+        assert_eq!(at(&after, month, "NIM"), at(&before, month, "NIM"), "NIM {month}");
+        assert_eq!(at(&after, month, new), at(&before, month, old), "{new} {month}");
+    }
+    let chart_after = chart_of(sc, new);
+    assert_eq!(chart_after.categories, chart_before.categories);
+    assert_eq!(chart_after.values, chart_before.values);
+    // a duplicate name is refused in words (case ignored), an empty one too
+    let others: Vec<NamedMeasure> = measures.iter().filter(|m| m.name() != new).cloned().collect();
+    let dup = base("interest EXPENSE", "Balance", TimeAgg::TotalFlow, None, Sign::Plus);
+    assert_eq!(check_measure(&others, &dup).as_deref(), Some("A measure called 'interest EXPENSE' already exists. Names must be different."));
+    assert_eq!(check_measure(&others, &base("  ", "Balance", TimeAgg::TotalFlow, None, Sign::Plus)).as_deref(), Some("Give the measure a name."));
+    // the project keeps the new name everywhere
+    let root = dir("p9m5_rename_project");
+    for d in ["data", "proj", "temp"] {
+        std::fs::create_dir_all(root.join(d)).expect("folder");
+    }
+    std::fs::write(root.join("data/Accounts.csv"), "Date,GL,Balance\n2026-01-01,INC,1\n").expect("data");
+    let paths = PortablePaths { root_dir: root.clone(), macros_dir: root.join("m"), schemas_dir: root.join("s"), curves_dir: root.join("c"), buckets_file: root.join("b.json"), temp_dir: root.join("temp") };
+    let snaps = vec![snap(1, "t1", "Accounts", csv_source(&root.join("data/Accounts.csv")), vec![step.clone()])];
+    let pfile = root.join("proj/rename.mpproj");
+    let mut cache = HashCache::new();
+    let mut saved = build_project(&snaps, Some(1), &project_dir_of(&pfile), &paths, &mut cache).expect("builds");
+    saved.project.model = Model { measures: measures.clone(), ..Default::default() };
+    write_project(&pfile, &saved.project).expect("writes");
+    let loaded = load_project(&pfile).expect("opens");
+    assert_eq!(loaded.model.measures, measures);
+    assert!(loaded.model.measures.iter().any(|m| m.name() == new) && loaded.model.measures.iter().all(|m| m.name() != old));
+    // the name itself, the terms of the four ratios and the pivot step's value: no value, measure or term still says the old one
+    let text = std::fs::read_to_string(&pfile).expect("text");
+    assert!(text.matches(new).count() >= 6, "the new name is written {} times", text.matches(new).count());
+    assert!(!text.contains(&format!("\"measure\": \"{old}\"")) && !text.contains(&format!("\"field\": \"{old}\"")), "no term or value keeps the old name");
+}
+
+#[test]
+fn m5_a_pivot_column_of_a_named_measure_is_told_from_a_column_value() {
+    use micro_parquet::pivot_table::is_measure_column;
+    let one = spec(&[&month_year()], &[], vec![plain_measure("NIM")], &["Month-Year"]);
+    assert!(is_measure_column(&one, "NIM"));
+    assert!(is_measure_column(&one, "Dhaka"), "one value with Columns fields: every value column is the measure's");
+    let tv = TimeValue { window: TimeWindow::Ytd, shift: TimeShift::Sply, show: TimeShow::Difference, ..Default::default() };
+    let two = spec(&[&month_year()], &[], vec![plain_measure("NIM"), measure_value("NIM", tv), PivotValue { field: "Balance".into(), time: Some(TimeValue::of(TimeAgg::ClosingBalance)), ..Default::default() }], &["Month-Year"]);
+    assert!(is_measure_column(&two, "NIM") && is_measure_column(&two, "Dhaka | NIM \u{b7} YTD \u{b7} vs SPLY (pp)") && is_measure_column(&two, "NIM (pp)"));
+    assert!(!is_measure_column(&two, "Closing balance of Balance") && !is_measure_column(&two, "Dhaka | Closing balance of Balance"));
+}

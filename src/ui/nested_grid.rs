@@ -41,7 +41,7 @@ pub(crate) fn render_nested_grid(
     num_format: NumberDisplayFormat,
     global_decimals: usize,
     tab_id: u64,
-    show_rows_off: Option<&str>,
+    show_rows: Option<&crate::ui::drill::PivotRowsUi>,
 ) -> Option<GridAction> {
     use micro_parquet::table_layout::{column_min_width, MAX_COLUMN_WIDTH, SAMPLE_ROWS};
     let tk = *theme::tokens(ui.visuals().dark_mode);
@@ -140,13 +140,14 @@ pub(crate) fn render_nested_grid(
                                     let r = ui.add(egui::Label::new(rich).truncate().sense(egui::Sense::click()));
                                     // the text's own rectangle: what a click has to hit
                                     entry.cells.push((c.name().to_string(), r.rect));
+                                    let show_rows_off = show_rows.and_then(|p| p.reason_for(c.name().as_str()));
                                     if r.double_clicked() && show_rows_off.is_none() {
                                         action = Some(GridAction::ShowRows(i, c.name().to_string()));
                                     }
                                     r.context_menu(|ui| {
                                         let item = ui.add_enabled(show_rows_off.is_none(), egui::Button::new("Show rows"));
-                                        let item = match show_rows_off {
-                                            Some(why) => item.on_disabled_hover_text(why),
+                                        let item = match &show_rows_off {
+                                            Some(why) => item.on_disabled_hover_text(why.as_str()),
                                             None => item.on_hover_text("Open the rows this line adds up in a new tab (or double-click the cell)"),
                                         };
                                         if item.clicked() {

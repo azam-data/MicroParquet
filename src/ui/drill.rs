@@ -240,6 +240,8 @@ pub(crate) struct PivotRowsUi {
     pub later_made: Vec<String>,
     /// Why Show rows is off for the whole tab.
     pub off: Option<String>,
+    /// The pivot's settings, to tell a named measure's column (its cell has no rows to show).
+    pub spec: Option<micro_parquet::models::PivotSpec>,
 }
 
 impl PivotRowsUi {
@@ -250,6 +252,9 @@ impl PivotRowsUi {
         }
         if self.later_made.iter().any(|c| c == name) {
             return Some(format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", name));
+        }
+        if self.spec.as_ref().is_some_and(|s| micro_parquet::pivot_table::is_measure_column(s, name)) {
+            return Some(micro_parquet::pivot_table::MEASURE_NO_ROWS.to_string());
         }
         None
     }
@@ -264,11 +269,11 @@ impl MicroParquetApp {
             PivotRows::NotAPivot => None,
             PivotRows::Unavailable(reason) => {
                 let labels = tab.steps.iter().rev().find_map(|s| if s.is_skipped() { None } else { s.as_pivot_spec() }).map(|p| if p.rows.is_empty() { vec![NO_ROWS_COLUMN.to_string()] } else { p.rows }).unwrap_or_default();
-                Some(PivotRowsUi { labels, later_made: Vec::new(), off: Some(reason) })
+                Some(PivotRowsUi { labels, later_made: Vec::new(), off: Some(reason), spec: None })
             }
             PivotRows::Readable { spec, later_made, .. } => {
-                let labels = if spec.rows.is_empty() { vec![NO_ROWS_COLUMN.to_string()] } else { spec.rows };
-                Some(PivotRowsUi { labels, later_made, off: None })
+                let labels = if spec.rows.is_empty() { vec![NO_ROWS_COLUMN.to_string()] } else { spec.rows.clone() };
+                Some(PivotRowsUi { labels, later_made, off: None, spec: Some(spec) })
             }
         }
     }
@@ -291,6 +296,10 @@ impl MicroParquetApp {
         };
         if later_made.iter().any(|c| c == column) {
             self.status_message = format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", column);
+            return;
+        }
+        if micro_parquet::pivot_table::is_measure_column(&spec, column) {
+            self.status_message = micro_parquet::pivot_table::MEASURE_NO_ROWS.to_string();
             return;
         }
         // P2: on a Nested pivot the clicked line is a line of its view: a parent line gives every source row of its group

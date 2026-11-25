@@ -755,6 +755,24 @@ impl ChartSpec {
         }
     }
 
+    /// A named measure was renamed (Phase 9 M5 follow-up): the values that use it follow. True when something changed.
+    pub fn rename_measure(&mut self, old: &str, new: &str) -> bool {
+        use crate::models::TimeAgg;
+        let is = |column: &Option<String>, time: &Option<crate::models::TimeValue>| column.as_deref() == Some(old) && time.is_some_and(|t| t.agg == TimeAgg::Measure);
+        let mut changed = false;
+        if is(&self.value, &self.time) {
+            self.value = Some(new.to_string());
+            changed = true;
+        }
+        for m in self.measures.iter_mut().chain(self.size.iter_mut()) {
+            if is(&m.column, &m.time) {
+                m.column = Some(new.to_string());
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// The measures to calculate: `measures`, or the Phase 6 value/agg/weight as the only one.
     pub fn measure_list(&self) -> Vec<MeasureSpec> {
         if self.measures.is_empty() {

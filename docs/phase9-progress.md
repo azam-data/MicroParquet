@@ -13,7 +13,8 @@ Branch phase9. Sessions S1–S9 as in the spec. Resume from this file.
 | M3 follow-up | DONE (S7) | (see git log: "Phase 9 M3: follow-ups") | tests/phase9/m3.rs x3 (Show rows on a time cell); render_tests_p9 x2 |
 | M4 | DONE (S7) | (see git log: "Phase 9 M4") | tests/phase9/m4.rs x9; render_tests_p9 x5 (Values choices by clicks, the refusal, a Month-Year pivot, the chart studio, pictures) |
 | M4 follow-up | DONE (S8) | (see git log: "Phase 9 M4: follow-ups") | tests/phase9/m4.rs x1 (the span note) |
-| M5 | DONE (S8) | (see git log: "Phase 9 M5") | tests/phase9/m5.rs x7; render_tests_p9 x3 (Measures dialog, Values list group, pictures) |
+| M5 | DONE (S8), follow-ups DONE (S9) | (see git log: "Phase 9 M5") | tests/phase9/m5.rs x7; render_tests_p9 x3 (Measures dialog, Values list group, pictures) |
+| M5 follow-up | DONE (S9) | (see git log: "Phase 9 M5: follow-ups") | tests/phase9/m5.rs x2 (a renamed measure gives the same numbers in a ratio, a pivot and a chart and keeps its name in a project; the pivot column of a measure is told from a column value); render_tests_p9 x2 (greyed Show rows with its reason, rename by real clicks) |
 | B0 | DONE | (see git log: "Phase 9 B0") | tests/phase9/b0.rs x1 (3 macros, the pack's 2 sheets and 2 charts, the saved chart, the project's 7 tabs and its text after save-open-save replay to the hashes the v1.8.0 code gave) |
 
 ## B0 acceptance: item -> test
@@ -391,3 +392,24 @@ Not tested by a real click: the chart studio's Value list "Measures" group (the 
 Pictures (light and dark, `m5_pictures_...`): `docs/guide/img/measures-base-measure.png`, `measures-ratio.png`, `pivot-values-measures.png`, `pivot-nim-month-year.png` (each with `-dark`); `model-measures-columns(-dark).png` rewritten on purpose (the dialog now has the Columns / Measures strip); the other pictures a full run rewrote were restored.
 
 Proved to fail without the fix (stubs, each restored, run one at a time): Actual/360 counted as 365 days: `m5_a_yield...` fails (left 10.0, right 9.86); YTD window read to the year end: `m5_a_ytd_window...` fails (left 302, right 62).
+
+## S9: full test before any edit, owner decisions on S8 and the M5 follow-up
+
+The full `cargo test` before any edit (S8 had re-run only the tests of its last fix): all green, nothing to fix as "Phase 9 M5: fix". Pictures it rewrote (`pivot-date-expander`, `sources-dialog`, light and dark) were restored.
+
+Owner decisions on S8 (also in `<accepted_deviations>` of the spec, "Owner decisions on S8"): M5-1 to M5-11 accepted except M5-3, which is replaced (rename); M5-5 accepted with a greyed menu item and its reason; M5-8 and M5-9 accepted. New choices M5-12 to M5-14 are in the spec.
+
+### M5 follow-up: item -> test
+
+| Acceptance item | Test |
+| --- | --- |
+| Rename "Interest income" used by a NIM ratio, a pivot and a chart: the same numbers under the new name (NIM and the measure in the pivot for 3 months; the chart's values equal) | `tests/phase9/m5.rs` `m5_a_renamed_measure_gives_the_same_numbers_in_a_ratio_a_pivot_and_a_chart_and_keeps_its_name_in_a_project` |
+| A project round trip keeps the new name (the measure, the terms of the ratios, the pivot step: no "measure"/"field" of the old name left in the file) | same test |
+| A duplicate name (case ignored) and an empty name are refused in words | same test (library), and UI `m5_a_measure_is_renamed_in_the_dialog_by_real_clicks_...` (painted in the dialog) |
+| One render test by real clicks at 3 sizes: Edit, Ctrl+A, type the name, Save; ratio terms, pivot step, chart tab and chart values follow; the tab box of a saved measure stays closed | UI `m5_a_measure_is_renamed_in_the_dialog_by_real_clicks_and_a_ratio_a_pivot_and_a_chart_tab_follow_at_three_sizes` |
+| Show rows on a measure cell is greyed, with the reason as its tooltip, and a double-click opens nothing | UI `m5_a_number_of_a_named_measure_has_a_greyed_show_rows_with_its_reason_at_three_sizes` |
+| A measure's column is told from a column value | `m5_a_pivot_column_of_a_named_measure_is_told_from_a_column_value` |
+
+Pictures `measures-base-measure` and `measures-ratio` (light and dark) rewritten on purpose (the Name box is no longer greyed when a saved measure is edited); the others a full run rewrote were restored. Full `cargo test`: all green.
+
+Proved to fail without the fix (one stub at a time, each restored): the ratios' terms left on the old name: the rename test fails (`Yield 365: [Term { measure: "Interest income" ...`); `is_measure_column` always false: the greyed Show rows test fails at the first size.

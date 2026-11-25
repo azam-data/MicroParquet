@@ -757,6 +757,21 @@ pub fn build_pivot(lf: LazyFrame, spec: &PivotSpec) -> Result<PivotBuild> {
     Ok(PivotBuild { df, label_columns: label_names.len(), row_keys, col_keys, notes, warnings, time_rows, col_values, date_column, date_is_datetime })
 }
 
+/// Why Show rows is off on the cell of a named measure (Phase 9 M5): its number comes from several filtered series.
+pub const MEASURE_NO_ROWS: &str = "This number combines several filtered series. Use Show rows on a column value instead.";
+
+/// Whether the value column headed `col_name` of the pivot `spec` holds a named measure (its heading is the measure's name, then
+/// the window, shift and show). With one value and Columns fields the headings are the column keys only, so every value column
+/// is that value's.
+pub fn is_measure_column(spec: &PivotSpec, col_name: &str) -> bool {
+    let is_measure = |v: &PivotValue| v.time.is_some_and(|t| t.agg == TimeAgg::Measure);
+    if spec.values.len() == 1 {
+        return is_measure(&spec.values[0]);
+    }
+    let last = col_name.rsplit(" | ").next().unwrap_or(col_name);
+    spec.values.iter().filter(|v| is_measure(v)).any(|v| last == v.field || last.starts_with(&format!("{} \u{b7} ", v.field)) || last.starts_with(&format!("{} (pp)", v.field)))
+}
+
 /// The rows behind one cell of a pivot (Phase 8 W6: "Show rows").
 #[derive(Clone, Debug)]
 pub struct CellRows {
@@ -853,6 +868,9 @@ pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<Stri
 fn time_cell_rows(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String>], col_key: &[Option<String>], j: usize) -> Result<CellRows> {
     use crate::models::{CondOp, FilterCondition};
     let value = &spec.values[j];
+    if value.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+        bail!("{}", MEASURE_NO_ROWS);
+    }
     let calendar: HashSet<String> = match crate::model::scope().and_then(|c| c.calendar.clone()) {
         Some(cal) => crate::pivot_time::calendar_fields(spec, &cal.tab),
         None => HashSet::new(),

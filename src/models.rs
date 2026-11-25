@@ -2266,6 +2266,22 @@ impl TransformStep {
         }
     }
 
+    /// A named measure was renamed (Phase 9 M5 follow-up): the pivot values that use it follow. True when something changed.
+    pub fn rename_measure(&mut self, old: &str, new: &str) -> bool {
+        match self {
+            TransformStep::Skipped { step } => step.rename_measure(old, new),
+            TransformStep::PivotTable { values, .. } => {
+                let mut changed = false;
+                for v in values.iter_mut().filter(|v| v.field == old && v.time.is_some_and(|t| t.agg == TimeAgg::Measure)) {
+                    v.field = new.to_string();
+                    changed = true;
+                }
+                changed
+            }
+            _ => false,
+        }
+    }
+
     /// True for a step that is turned off.
     pub fn is_skipped(&self) -> bool {
         matches!(self, TransformStep::Skipped { .. })

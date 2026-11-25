@@ -43,7 +43,7 @@ pub struct FilterDraft {
 /// A measure being added or edited.
 #[derive(Clone, Debug)]
 pub struct MeasureEdit {
-    /// The place of the measure in the model when it is edited (its name then can't change).
+    /// The place of the measure in the model when it is edited (its name may change; every reference follows).
     pub index: Option<usize>,
     pub ratio: bool,
     pub name: String,
@@ -226,7 +226,7 @@ fn measure_editor(ui: &mut egui::Ui, e: &mut MeasureEdit, view_tabs: &[MeasureTa
     ui.label(egui::RichText::new(if e.ratio { "RATIO" } else { "BASE MEASURE" }).size(theme::TEXT_LABEL).color(tk.muted).strong());
     egui::Grid::new("measure_editor").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
         ui.label("Name");
-        let name = ui.add_enabled(e.index.is_none(), egui::TextEdit::singleline(&mut e.name).desired_width(theme::MEASURE_NAME_BOX_W).hint_text("for example NIM"));
+        let name = ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(theme::MEASURE_NAME_BOX_W).hint_text("for example NIM"));
         rects.fields.push(("Name".to_string(), name.rect));
         ui.end_row();
         ui.label("Tab");
@@ -581,6 +581,27 @@ impl MicroParquetApp {
 }
 
 impl MicroParquetApp {
+    /// A measure was renamed (M5 follow-up): the terms of ratios, the Values of pivots (also the saved pivot steps of every tab),
+    /// the values of chart tabs and of the open chart studio follow, and the pivots and charts that used it are calculated again with the model that has the new name.
+    fn rename_measure_everywhere(&mut self, old: &str, new: &str) {
+        micro_parquet::measures::rename_in_ratios(&mut self.project.model.measures, old, new);
+        // (the pivots are worked out again by `model_scope_refresh`, once the model the workers read has the new name)
+        for t in self.tabs.iter_mut() {
+            for s in t.steps.iter_mut() {
+                s.rename_measure(old, new);
+            }
+        }
+        for info in self.chart_tabs.values_mut() {
+            if info.data.spec.rename_measure(old, new) {
+                info.source_sig.clear();
+            }
+        }
+        self.chart.spec.rename_measure(old, new);
+        for v in self.pivot_builder.spec.values.iter_mut().filter(|v| v.field == old && v.time.is_some_and(|t| t.agg == micro_parquet::models::TimeAgg::Measure)) {
+            v.field = new.to_string();
+        }
+    }
+
     fn measure_act(&mut self, act: MeasureAct, infos: &[MeasureTabInfo]) {
         let first_tab = infos.first().map(|t| t.key.clone()).unwrap_or_default();
         let ui = &mut self.project.model_ui.measures;
@@ -625,9 +646,19 @@ impl MicroParquetApp {
                         }
                     }
                     None => {
+                        let mut renamed: Option<(String, String)> = None;
                         match e.index {
-                            Some(i) if i < self.project.model.measures.len() => self.project.model.measures[i] = m,
+                            Some(i) if i < self.project.model.measures.len() => {
+                                let old = self.project.model.measures[i].name().to_string();
+                                if old != m.name() {
+                                    renamed = Some((old, m.name().to_string()));
+                                }
+                                self.project.model.measures[i] = m;
+                            }
                             _ => self.project.model.measures.push(m),
+                        }
+                        if let Some((old, new)) = renamed {
+                            self.rename_measure_everywhere(&old, &new);
                         }
                         self.project.model_ui.measures.edit = None;
                     }

@@ -715,6 +715,17 @@ pub fn annualise_refusal(measure: &str) -> String {
     format!("Only flows and period amounts can be annualised; '{}' is a balance.", measure)
 }
 
+/// A measure was renamed from `old` to `new`: the terms of every ratio follow.
+pub fn rename_in_ratios(measures: &mut [NamedMeasure], old: &str, new: &str) {
+    for m in measures.iter_mut() {
+        if let NamedMeasure::Ratio { numerator, denominator, .. } = m {
+            for t in numerator.iter_mut().chain(denominator.iter_mut()).filter(|t| t.measure == old) {
+                t.measure = new.to_string();
+            }
+        }
+    }
+}
+
 /// Why `name` can't be removed: the ratios (`measures`) and the pivots and charts (`others`, by title) that use it.
 pub fn removal_refusal(measures: &[NamedMeasure], name: &str, others: &[String]) -> Option<String> {
     let mut users: Vec<String> = measures
