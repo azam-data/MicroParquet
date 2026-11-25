@@ -1552,3 +1552,15 @@ mod tests {
         assert!(missing.is_empty(), "no glyph for: {:?}", missing);
     }
 }
+
+// ---- the dashboard view (Phase 10 D1)
+/// The width of the pages list.
+pub const DASH_LEFT_W: f32 = 168.0;
+/// The width of the page and item properties.
+pub const DASH_RIGHT_W: f32 = 216.0;
+/// What a text box in the properties keeps clear of the panel's edge.
+pub const DASH_PROPS_PAD: f32 = 24.0;
+pub const DASH_LABEL_EDIT_W: f32 = 110.0;
+pub const DASH_PER_ROW_W: f32 = 48.0;
+/// The smallest scale a page is drawn at.
+pub const DASH_MIN_SCALE: f32 = 0.1;

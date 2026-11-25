@@ -7,7 +7,10 @@
 
 use crate::kpi::KpiSpec;
 use crate::project::Project;
-use anyhow::{bail, Result};
+use crate::chart::{ChartData, ChartSpec};
+use crate::models::*;
+use anyhow::{bail, Context, Result};
+use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -130,6 +133,10 @@ pub struct PageFilter {
     pub tab: String,
     /// The field's name as the pivot and chart code know it ("Branch master · Region", "Open Date · Month-Year", "Branch").
     pub field: String,
+    /// The lookup or Calendar field behind `field`; `None` for a column of the data tab.
+    pub model: Option<crate::model::ModelFieldRef>,
+    /// The reader may pick several values (off by default: one value or "All").
+    pub multi: bool,
 }
 
 /// A bar, slice or pivot row the reader clicked.
@@ -205,5 +212,176 @@ pub fn item_rects(page: &DashPage) -> Result<Vec<DashRect>> {
     match page.layout {
         PageLayout::Grid { per_row } => grid_rects(per_row, page.items.len(), PAGE_W, PAGE_H),
         PageLayout::Free => page.items.iter().map(|i| i.rect.ok_or_else(|| anyhow::anyhow!("The item '{}' on the page '{}' has no place yet. Drag it onto the page.", i.id, page.title))).collect(),
+    }
+}
+
+// -------------------------------------------------------------------------------------- items' numbers
+
+/// What one item needs from the worker: the source's own table (as the chart tab or pivot tab computes it), and the picks that apply.
+#[derive(Clone, Debug)]
+pub enum ItemSource {
+    /// A chart tab's source tab and the chart tab's own spec.
+    Chart { base: TabSource, steps: Vec<TransformStep>, spec: ChartSpec },
+    /// A pivot tab: its table before the pivot step, and the pivot.
+    Pivot { base: TabSource, steps: Vec<TransformStep>, spec: PivotSpec },
+}
+
+#[derive(Clone, Debug)]
+pub struct ItemRequest {
+    pub item_id: String,
+    pub source: ItemSource,
+    /// The page filters that apply to this item, each with the values picked (never an empty list: "All" is left out).
+    pub picks: Vec<(PageFilter, Vec<String>)>,
+    pub temp_dir: std::path::PathBuf,
+}
+
+/// A pivot item's table.
+#[derive(Clone, Debug)]
+pub struct TableData {
+    pub df: DataFrame,
+    pub label_columns: usize,
+    /// Set when the pivot's layout is Nested.
+    pub nested: Option<crate::pivot_view::NestedView>,
+    pub notes: Vec<String>,
+}
+
+/// An item's numbers: what the screen, the HTML file, the PPTX and the PDF all draw.
+#[derive(Clone, Debug)]
+pub enum ItemData {
+    Chart(Box<ChartData>),
+    Table(Box<TableData>),
+    /// The item can't be drawn, and why (a plain message, never an empty chart).
+    Problem(String),
+}
+
+impl ItemData {
+    /// The notes that go with the numbers (the month-end note among them): a chart's footnote, a pivot's notes.
+    pub fn notes(&self) -> &[String] {
+        match self {
+            ItemData::Chart(c) => &c.notes,
+            ItemData::Table(t) => &t.notes,
+            ItemData::Problem(_) => &[],
+        }
+    }
+}
+
+pub struct DashItemResult {
+    pub item_id: String,
+    pub sig: String,
+    pub data: ItemData,
+}
+
+pub struct DashValuesResult {
+    pub filter_id: String,
+    pub sig: String,
+    pub values: Vec<String>,
+    pub truncated: bool,
+}
+
+/// How many values a page filter's dropdown lists at most.
+pub const MAX_FILTER_VALUES: usize = 2000;
+
+fn pick_condition(f: &PageFilter, picks: &[String]) -> FilterCondition {
+    FilterCondition { column: f.field.clone(), op: CondOp::InList, values: picks.to_vec(), lookup: f.model.clone(), ..Default::default() }
+}
+
+/// The chart spec with the page's picks added to its own filters (the chart's own filters stay).
+pub fn chart_spec_with(spec: &ChartSpec, picks: &[(PageFilter, Vec<String>)]) -> ChartSpec {
+    let mut s = spec.clone();
+    s.filters.extend(picks.iter().map(|(f, v)| pick_condition(f, v)));
+    s
+}
+
+/// The pivot spec with the page's picks: a pick on a field the pivot already filters replaces that filter (the page is the reader's
+/// latest word); a lookup or Calendar field is added to the pivot's model fields.
+pub fn pivot_spec_with(spec: &PivotSpec, picks: &[(PageFilter, Vec<String>)]) -> PivotSpec {
+    let mut s = spec.clone();
+    for (f, v) in picks {
+        s.filters.retain(|x| x.field != f.field);
+        s.filters.push(PivotFilter { field: f.field.clone(), values: v.iter().map(|x| Some(x.clone())).collect() });
+        if let Some(m) = &f.model {
+            if !s.model_fields.contains(m) {
+                s.model_fields.push(m.clone());
+            }
+            if s.data_tab.is_empty() {
+                s.data_tab = f.tab.clone();
+            }
+        }
+    }
+    s
+}
+
+/// The one compute path of an item (Phase 10 goal 4): the chart tab's own calculation (`chart_tab_source`'s) or the pivot's own
+/// (`build_pivot`, `build_nested`), over the item's source with the page's picks added. Runs on the worker, inside the model scope.
+pub fn compute_item(req: &ItemRequest) -> Result<ItemData> {
+    match &req.source {
+        ItemSource::Chart { base, steps, spec } => {
+            let lf = crate::engine::compile_tab_lazy(base, steps, &req.temp_dir)?;
+            let data = crate::charts::calc::compute(crate::pivot_table::without_total_rows(lf, steps), &chart_spec_with(spec, &req.picks))?;
+            Ok(ItemData::Chart(Box::new(data)))
+        }
+        ItemSource::Pivot { base, steps, spec } => {
+            let lf = crate::engine::compile_tab_lazy(base, steps, &req.temp_dir)?;
+            let spec = pivot_spec_with(spec, &req.picks);
+            let build = crate::pivot_table::build_pivot(lf.clone(), &spec)?;
+            let nested = if spec.layout.is_nested() { Some(crate::pivot_view::build_nested(lf, &spec)?) } else { None };
+            Ok(ItemData::Table(Box::new(TableData { df: build.df, label_columns: build.label_columns, nested, notes: build.warnings })))
+        }
+    }
+}
+
+/// The values a page filter's dropdown lists: the distinct values of the field over its data tab's table, as text, in order.
+pub fn field_values(base: &TabSource, steps: &[TransformStep], f: &PageFilter, temp_dir: &std::path::Path) -> Result<(Vec<String>, bool)> {
+    let lf = crate::engine::compile_tab_lazy(base, steps, temp_dir)?;
+    let lf = match &f.model {
+        Some(m) => crate::model::with_lookup_columns(lf, &[crate::model::LookupWant { out: f.field.clone(), field: m.clone(), as_: crate::model::LookupAs::Text, unmatched_out: None, blank_key_out: None }], "Page filter")?,
+        None => lf,
+    };
+    let df = lf
+        .select([col(f.field.as_str()).cast(DataType::String).alias("__v")])
+        .filter(col("__v").is_not_null())
+        .unique(None, UniqueKeepStrategy::First)
+        .sort(["__v"], Default::default())
+        .limit(MAX_FILTER_VALUES as u32 + 1)
+        .collect()
+        .with_context(|| format!("The values of '{}' could not be read", f.field))?;
+    let mut values: Vec<String> = df.column("__v")?.str()?.into_iter().flatten().map(|s| s.to_string()).collect();
+    let truncated = values.len() > MAX_FILTER_VALUES;
+    values.truncate(MAX_FILTER_VALUES);
+    Ok((values, truncated))
+}
+
+/// Whether a page filter reaches an item: the item's data tab is the filter's.
+pub fn filter_applies(f: &PageFilter, item_data_tab: Option<&str>) -> bool {
+    item_data_tab.is_some_and(|t| !t.is_empty() && t == f.tab)
+}
+
+/// "A page can have 4 filters. Remove one first." for a 5th.
+pub const FIFTH_FILTER: &str = "A page can have 4 filters. Remove one first.";
+
+impl DashPage {
+    /// Adds a filter, or refuses the fifth with a plain message.
+    pub fn add_filter(&mut self, f: PageFilter) -> Result<()> {
+        if self.filters.len() >= MAX_PAGE_FILTERS {
+            bail!("{}", FIFTH_FILTER);
+        }
+        self.filters.push(f);
+        Ok(())
+    }
+
+    /// Removes a filter and its pick; the picks of the filters after it move up with them.
+    pub fn remove_filter(&mut self, i: usize) {
+        if i < self.filters.len() {
+            self.filters.remove(i);
+            for j in i..MAX_PAGE_FILTERS - 1 {
+                self.state.filter_picks[j] = self.state.filter_picks[j + 1].take();
+            }
+            self.state.filter_picks[MAX_PAGE_FILTERS - 1] = None;
+        }
+    }
+
+    /// The picks that count: one entry per filter that has a value picked ("All" has none).
+    pub fn active_picks(&self) -> Vec<(usize, &PageFilter, &Vec<String>)> {
+        self.filters.iter().enumerate().filter_map(|(i, f)| self.state.filter_picks.get(i).and_then(|p| p.as_ref()).filter(|v| !v.is_empty()).map(|v| (i, f, v))).collect()
     }
 }

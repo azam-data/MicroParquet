@@ -179,6 +179,10 @@ impl MicroParquetApp {
         if !self.project.model.is_empty() {
             format!("{:?}", self.project.model).hash(&mut h);
         }
+        // the dashboard is part of the project (nothing is hashed without one: a project without a dashboard hashes as before)
+        if let Some(d) = &self.project.dashboard {
+            format!("{:?}", d).hash(&mut h);
+        }
         format!("{:016x}", h.finish())
     }
 

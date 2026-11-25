@@ -6,7 +6,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | Session | Tasks | Status |
 |---|---|---|
 | S1 | D0, C0 | D0 done, C0 done |
-| S2–S12 | D1 … fixes | not started |
+| S2 | D1 | done |
+| S3–S12 | D2 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
 | Acceptance | Test |
@@ -32,3 +33,15 @@ The note is in `PivotBuild::warnings` (the pivot's notes; the chart's footnote c
 Stub proof: C0 — note function forced to `None` → the note test fails (restored).
 Faults listed by the owner: none.
 Full test: 821 + 351 + 9 passed; two older tests used version 3 as "a newer project" and now use 4 (D0 makes 3 known), re-run green.
+
+## S2 acceptance → test (D1)
+| Acceptance | Test |
+|---|---|
+| Item numbers equal the chart tab's / pivot tab's own, on every fixture | `d1_a_dashboard_item_has_the_numbers_of_the_chart_tab_and_the_pivot_tab_on_every_fixture` (tests/phase10/d1.rs); `d1_items_are_added_by_clicks_draw_the_tabs_own_numbers_and_fit_at_three_sizes` |
+| Lookup-field filter filters a linked item; unlinked says "filter doesn't apply" | `d1_a_filter_on_a_lookup_field_filters_a_linked_item_and_an_unlinked_item_is_told_it_does_not_apply`; `d1_a_filter_on_a_data_field_filters_the_linked_item_and_the_other_item_says_it_does_not_apply` (3 sizes) |
+| 5th filter refused with the message | `d1_the_fifth_filter_is_refused_and_removing_a_filter_moves_the_picks_up`; the 3-size filter test |
+| Renaming a source tab keeps the item; deleted tab says so; title opens the tab | `d1_renaming_a_source_tab_keeps_the_item_and_a_closed_one_says_source_tab_removed_and_the_title_opens_the_tab` |
+| Every control works at its real rect at three sizes | the render tests above, plus `d1_pages_are_added_renamed_reordered_and_deleted_after_a_confirm_and_items_move_and_go`, `d1_outside_a_project_the_dashboard_says_so` |
+
+Stub proof: D1 — page picks not added to the chart's filters → the lookup-filter test fails (restored).
+Picture: `docs/guide/img/dashboard-page.png` (light opened, dark written). Decisions: `docs/phase10-decisions.md`.

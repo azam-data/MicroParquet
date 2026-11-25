@@ -178,11 +178,11 @@ fn c2_a_chart_that_uses_columns_the_tab_lacks_names_them() {
 // ------------------------------------------------------------------------------- the Charts commands
 
 #[test]
-fn c2_the_charts_group_has_its_four_commands_with_reasons_when_they_cannot_run() {
+fn c2_the_charts_group_has_its_five_commands_with_reasons_when_they_cannot_run() {
     let ids: Vec<CommandId> = in_group(CommandGroup::Charts).map(|c| c.id).collect();
-    assert_eq!(ids, vec![CommandId::ChartNew, CommandId::ChartThis, CommandId::ChartOpenSaved, CommandId::ChartBook]);
+    assert_eq!(ids, vec![CommandId::ChartNew, CommandId::ChartThis, CommandId::ChartOpenSaved, CommandId::ChartBook, CommandId::Dashboard]);
     let titles: Vec<&str> = in_group(CommandGroup::Charts).map(|c| c.title).collect();
-    assert_eq!(titles, ["New chart\u{2026}", "Chart this result", "Open saved chart\u{2026}", "Chart book (HTML)\u{2026}"]);
+    assert_eq!(titles, ["New chart\u{2026}", "Chart this result", "Open saved chart\u{2026}", "Chart book (HTML)\u{2026}", "Dashboard\u{2026}"]);
     let st = |tabs: usize, result_tab: bool| CommandState { tabs, result_tab, ..Default::default() };
     let why = |id: CommandId, s: CommandState| unavailable_reason(command(id).unwrap(), s);
     assert!(why(CommandId::ChartNew, st(0, false)).is_some() && why(CommandId::ChartNew, st(1, false)).is_none());

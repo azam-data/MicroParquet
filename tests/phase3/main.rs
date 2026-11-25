@@ -192,3 +192,5 @@ mod p10_p9_baseline;
 mod p10_d0;
 #[path = "../phase10/c0.rs"]
 mod p10_c0;
+#[path = "../phase10/d1.rs"]
+mod p10_d1;

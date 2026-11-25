@@ -241,6 +241,8 @@ pub struct MicroParquetApp {
     chart_pop_requests: u32,
     /// The tabs that are charts (Phase 7: "Open as tab"), by tab id: they fill the main area with the chart.
     chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
+    /// The dashboard view of the open project (Phase 10 D1).
+    dashboard_ui: crate::ui::dashboard::DashboardUi,
     /// When the linked chart tabs last looked at their source tabs (seconds on the egui clock).
     chart_tab_checked_at: f64,
     /// The breadcrumb entries of the chart last drawn (name, rectangle), for the render tests (Phase 8 W6).
@@ -419,6 +421,7 @@ impl MicroParquetApp {
             chart_popped: false,
             chart_pop_requests: 0,
             chart_tabs: HashMap::new(),
+            dashboard_ui: Default::default(),
             chart_tab_checked_at: 0.0,
             drill_rects: Vec::new(),
             show_summary_row: true,
@@ -572,6 +575,7 @@ impl MicroParquetApp {
         self.project_tick(ctx);
         let now = ctx.input(|i| i.time);
         self.chart_tab_links_tick(now);
+        self.dashboard_tick();
         if ctx.input(|i| i.viewport().close_requested()) {
             match self.close_requested() {
                 ui::jobs::CloseDecision::Ask => ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose),
@@ -600,6 +604,10 @@ impl MicroParquetApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(tk.bg).inner_margin(theme::MARGIN_CENTRAL))
             .show(ctx, |ui| {
+                if self.dashboard_ui.open && self.project.dashboard.is_some() {
+                    self.render_dashboard_main(ui);
+                    return;
+                }
                 if self.tabs.is_empty() {
                     self.render_empty_state(ui);
                     return;

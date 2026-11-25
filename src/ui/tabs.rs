@@ -608,7 +608,7 @@ impl MicroParquetApp {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
                             ui.spacing_mut().item_spacing.x = theme::BAR_ITEM_GAP;
                             for idx in 0..self.tabs.len() {
-                                let active = idx == self.active_tab;
+                                let active = idx == self.active_tab && !self.dashboard_ui.open;
                                 let (tab_id, title) = match self.tabs.get(idx) {
                                     Some(t) => (t.id, t.title.clone()),
                                     None => continue,
@@ -701,6 +701,14 @@ impl MicroParquetApp {
                                 });
                                 report.cells.push(TabCell { index: idx, tab: rect, label: label_rect, close: close_rect, shown, full: title });
                             }
+                            if self.project.dashboard.is_some() {
+                                let on = self.dashboard_ui.open;
+                                let b = ui.selectable_label(on, format!("{}  {}", theme::ph::CHART_BAR, crate::ui::dashboard::DASH_BUTTON));
+                                self.dashboard_ui.strip_rect = Some(b.rect);
+                                if b.clicked() {
+                                    self.dashboard_ui.open = true;
+                                }
+                            }
                             if theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
                                 new_tab = true;
                             }
@@ -723,6 +731,7 @@ impl MicroParquetApp {
             }
         }
         if let Some(idx) = select {
+            self.dashboard_ui.open = false;
             if idx != self.active_tab {
                 self.active_tab = idx;
                 self.selected_column = None;

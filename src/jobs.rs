@@ -76,6 +76,10 @@ pub enum JobKind {
     ModelRows,
     /// The snapshot dates of a date-linked tab (Phase 9 M2).
     DateInfo,
+    /// One item of a dashboard page calculated (Phase 10 D1).
+    DashItem,
+    /// The values a dashboard page filter's dropdown lists (Phase 10 D1).
+    DashValues,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

@@ -67,6 +67,7 @@ pub enum CommandId {
     ChartThis,
     ChartOpenSaved,
     ChartBook,
+    Dashboard,
     // Export
     ExportChartHtml,
     ExportChartXlsx,
@@ -225,6 +226,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ChartThis, "Chart this result", G::Charts, "template graph result tab gap ladder bridge irrbb scenarios migration yield curves lcr nsfr ecl", N::ResultTab),
     c(I::ChartOpenSaved, "Open saved chart\u{2026}", G::Charts, "load charts folder json named", N::Tab),
     c(I::ChartBook, "Chart book (HTML)\u{2026}", G::Charts, "html page several charts report alco pack", N::Tab),
+    c(I::Dashboard, "Dashboard\u{2026}", G::Charts, "pages kpi cards report html pptx pdf filters pack alco", N::Nothing),
     c(I::ExportParquet, "Export this tab to Parquet\u{2026}", G::Export, "save parquet", N::Tab),
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
     c(I::ExportXlsx, "Export tabs to an Excel workbook\u{2026}", G::Export, "xlsx save spreadsheet totals", N::Tab),
