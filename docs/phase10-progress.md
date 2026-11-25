@@ -14,7 +14,7 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S7 | R1 (and D5 page shape) | done |
 | S8 | R2 (+ corrections, heatmap/histogram, pivot unit) | done |
 | S9 | X1 (+ combo chart, sparkline) | done |
-| S10 | X2 PDF pages; then the export dialog | PDF done, dialog next |
+| S10 | X2 PDF pages and the export dialog | done |
 | S8–S12 | R2 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
@@ -142,3 +142,11 @@ Stub proofs: X1 — always-Stored compression fails the deflate test; dropping t
 | combo chart with a right axis; card sparkline chart | `x1_one_slide_per_item_each_chart_part_has_its_chart_type_palette_and_workbook_ranges` |
 
 Stub proofs: X2 — shifting every item 3 mm fails the position test; not drawing the background fails the picture test (restored).
+
+## S10b acceptance → test (export dialog)
+| Acceptance | Test |
+|---|---|
+| email question first; size before writing; the three files written by real clicks | `x3_the_export_dialog_asks_the_email_question_checks_the_size_and_writes_the_three_files` (render test) |
+| the screen's filters in the files; the design counted and inlined; as-of said when unknown | `x3_the_html_file_counts_its_picture…`, `x3_powerpoint_and_pdf_show_the_screens_filters…` |
+
+Stub proof: letting "Check size" work before the email question is answered fails the dialog test (restored).

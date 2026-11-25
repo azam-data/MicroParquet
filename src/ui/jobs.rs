@@ -144,6 +144,7 @@ impl MicroParquetApp {
                             self.dash_item_failed(id, &msg);
                         }
                     }
+                    JobKind::DashPrepare => self.dash_prepare_failed(&msg),
                     JobKind::DashValues => {
                         if let Some(id) = r.key.scope {
                             self.dash_values_failed(id, &msg);
@@ -214,6 +215,7 @@ impl MicroParquetApp {
             JobOutput::ProjectSave(b) => self.apply_project_built(*b),
             JobOutput::ChartTab(c) => self.apply_chart_tab_calc(*c),
             JobOutput::DashItem(r) => self.apply_dash_item(*r),
+            JobOutput::DashHtml(p) => self.apply_dash_prepared(*p),
             JobOutput::DashValues(r) => self.apply_dash_values(*r),
             JobOutput::ShowRows(r) => self.apply_show_rows(*r),
             JobOutput::ChartPicker(r) => self.apply_chart_picker_result(*r),

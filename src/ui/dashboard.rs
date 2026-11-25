@@ -119,6 +119,8 @@ pub struct DashboardUi {
     pub strip_rect: Option<egui::Rect>,
     /// The id of each worker job's scope, by item or filter id.
     pub scopes: HashMap<u64, String>,
+    /// The Export dialog, when open.
+    pub export: Option<crate::ui::dashboard_export::ExportDlg>,
 }
 
 fn scope_of(id: &str) -> u64 {
@@ -437,6 +439,9 @@ impl MicroParquetApp {
             if Self::dash_button(ui, "Clear", "Clear", &mut rects) {
                 dash.pages[pi].state.clear();
                 self.dashboard_ui.notice.clear();
+            }
+            if Self::dash_button(ui, "Export", "Export\u{2026}", &mut rects) {
+                self.dashboard_ui.export.get_or_insert_with(Default::default);
             }
             if Self::dash_button(ui, "Close dashboard", "Close dashboard", &mut rects) {
                 close = true;
@@ -840,6 +845,8 @@ impl MicroParquetApp {
         if close {
             self.dashboard_ui.open = false;
         }
+        let ctx = ui.ctx().clone();
+        self.render_export_dialog(&ctx, &mut rects);
         self.dashboard_ui.rects = rects;
     }
 

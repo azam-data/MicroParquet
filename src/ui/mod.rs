@@ -20,6 +20,7 @@ pub mod conditional;
 pub mod curves;
 pub mod dashboard;
 pub mod dashboard_design;
+pub mod dashboard_export;
 pub mod dq;
 pub mod duration;
 pub mod export;

@@ -80,6 +80,8 @@ pub enum JobKind {
     DashItem,
     /// The values a dashboard page filter's dropdown lists (Phase 10 D1).
     DashValues,
+    /// The HTML report calculated, so its size is known before it is written (Phase 10 R2).
+    DashPrepare,
 }
 
 /// Identifies "the same job again". `scope` is usually a tab id; `None` means the job is never

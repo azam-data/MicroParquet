@@ -55,6 +55,7 @@ pub enum JobOutput {
     ChartTab(Box<ChartTabCalc>),
     /// A dashboard item's numbers (Phase 10 D1).
     DashItem(Box<crate::dashboard::DashItemResult>),
+    DashHtml(Box<crate::dash_export::HtmlPrepared>),
     /// The values of a dashboard page filter (Phase 10 D1).
     DashValues(Box<crate::dashboard::DashValuesResult>),
     /// The tab behind a cell of a pivot (Phase 8 W6).

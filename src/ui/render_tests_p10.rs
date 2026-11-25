@@ -1006,3 +1006,59 @@ fn d5_a_file_that_is_not_a_picture_is_refused_in_the_window_and_a_picture_is_wri
         shoot(&mut rig, "dashboard-design", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
     }
 }
+
+// ------------------------------------------------------------------------------------------------ the export dialog (S10)
+
+fn wait_jobs(rig: &mut Rig) {
+    for _ in 0..400 {
+        rig.draw(1);
+        if !rig.app.jobs.kind_busy(micro_parquet::jobs::JobKind::Export) && !rig.app.jobs.kind_busy(micro_parquet::jobs::JobKind::DashPrepare) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    rig.draw(3);
+}
+
+#[test]
+fn x3_the_export_dialog_asks_the_email_question_checks_the_size_and_writes_the_three_files() {
+    let mut rig = rig10("p10x3_export", SIZES3[1].0, SIZES3[1].1, SIZES3[1].2);
+    let what = rig.what.clone();
+    dashboard_with_two_items(&mut rig);
+    rig.draw(6);
+    let out = rig.app.paths.root_dir.join("export_out");
+    std::fs::create_dir_all(&out).expect("dir");
+    // the dialog opens from the header
+    click_named(&mut rig, "Export");
+    rig.draw(3);
+    assert!(rig.app.dashboard_ui.export.is_some(), "{what}: the Export button opens the dialog");
+    // HTML: nothing can be checked before the email question is answered
+    click_named(&mut rig, "Export check size");
+    rig.draw(3);
+    assert!(rig.app.dashboard_ui.export.as_ref().is_some_and(|d| d.prepared.is_none() && !d.busy), "{what}: no size before the question is answered");
+    click_named(&mut rig, "Export email No");
+    rig.draw(2);
+    click_named(&mut rig, "Export check size");
+    wait_jobs(&mut rig);
+    let prepared = rig.app.dashboard_ui.export.as_ref().and_then(|d| d.prepared.clone()).unwrap_or_else(|| panic!("{what}: the size is calculated: {:?}", rig.app.dashboard_ui.export.as_ref().map(|d| d.message.clone())));
+    assert!(prepared.html.starts_with("<!doctype html>") && prepared.parts.total() > 1_000_000, "{what}: {}", prepared.parts.total());
+    let html = out.join("report.html");
+    rig.app.dashboard_ui.export.as_mut().expect("dialog").path = Some(html.clone());
+    click_named(&mut rig, "Export write");
+    wait_jobs(&mut rig);
+    assert_eq!(std::fs::read_to_string(&html).expect("the HTML file").len(), prepared.html.len(), "{what}: the file is the one that was sized");
+    assert!(rig.app.status_message.contains("HTML report written"), "{what}: {}", rig.app.status_message);
+    // PowerPoint and PDF: one click each
+    for (name, file, magic) in [("PowerPoint", "pack.pptx", &b"PK"[..]), ("PDF", "pack.pdf", &b"%PDF"[..])] {
+        click_named(&mut rig, &format!("Export format {}", name));
+        rig.draw(2);
+        rig.app.dashboard_ui.export.as_mut().expect("dialog").path = Some(out.join(file));
+        click_named(&mut rig, "Export write");
+        wait_jobs(&mut rig);
+        let bytes = std::fs::read(out.join(file)).unwrap_or_else(|e| panic!("{what}: {file}: {e}: {}", rig.app.status_message));
+        assert!(bytes.starts_with(magic), "{what}: {file} is a {name} file");
+    }
+    click_named(&mut rig, "Export close");
+    rig.draw(2);
+    assert!(rig.app.dashboard_ui.export.is_none(), "{what}: Close closes the dialog");
+}
