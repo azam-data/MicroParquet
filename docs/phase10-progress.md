@@ -12,6 +12,7 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S5 | D4 | done |
 | S6 | D5 | done |
 | S7 | R1 (and D5 page shape) | done |
+| S8 | R2 | done |
 | S8–S12 | R2 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
@@ -110,3 +111,12 @@ Stub proofs: D5 — hash check switched off → the copy test fails; slot kind c
 | (coordinator note) page takes the picture's shape | `d5_a_page_takes_the_shape_of_its_picture_…`; render flow test (16:9 page area) |
 
 Stub proofs: R1 — states counted as n instead of n + 1 fails the 65-state test; the email limit made exclusive fails the gate test (both restored). No picture (R1 has no window).
+
+## S8 acceptance → test (R2)
+| Acceptance | Test |
+|---|---|
+| file opens in a headless browser, picks a filter, clicks a bar, drills, Back, expands a pivot row; each number equals `compute_item`; no console errors; no request leaves the file | `r2_the_page_in_a_headless_browser_shows_the_numbers_of_compute_item_through_filter_click_drill_back_and_expand` (skips with a note if node/playwright is missing) |
+| estimate within 10% of the real file | same test |
+| a layout that does not match the dashboard is refused in words | `r2_a_page_layout_that_does_not_match_the_dashboard_is_refused_in_plain_words` |
+
+Stub proofs: R2 — the page ignoring the click's answers fails "crossed i2"; the expand button doing nothing fails "rows 3 then 3" (both restored). No picture (the file is the output).

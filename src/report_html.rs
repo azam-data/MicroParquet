@@ -68,6 +68,16 @@ pub struct ItemAnswers {
     pub numbers: usize,
     /// `Ok` when a click on another item can filter this one in the file; otherwise why not ("Not linked to clicks").
     pub linked: std::result::Result<(), String>,
+    /// The item as it looks while another item's bar is clicked (R2): one answer per clicked value and filter state.
+    pub cross: Vec<CrossAnswer>,
+}
+
+/// An answer to a click: the item with the clicked value of `src` (an item's id) added to the page's filters.
+#[derive(Clone, Debug)]
+pub struct CrossAnswer {
+    pub src: String,
+    pub value: String,
+    pub answer: Answer,
 }
 
 #[derive(Clone, Debug)]
@@ -214,11 +224,60 @@ pub fn compute_answers(plan: &ReportPlan) -> Result<Vec<PageAnswers>> {
                     answers.push(Answer { picks: full, path, data });
                 }
             }
-            items.push(ItemAnswers { item_id: item.id.clone(), filters: applicable, answers, numbers, linked: additive(&item.source) });
+            items.push(ItemAnswers { item_id: item.id.clone(), filters: applicable, answers, numbers, linked: additive(&item.source), cross: Vec::new() });
         }
-        out.push(PageAnswers { page_id: page.id.clone(), items });
+        let mut pa = PageAnswers { page_id: page.id.clone(), items };
+        add_cross_answers(plan, page, &mut pa)?;
+        out.push(pa);
     }
     Ok(out)
+}
+
+/// The answers to clicks (R2-1): for each chart that can be clicked (a sum or count over one dimension), each of its top-level
+/// categories, and each other item that reads the same data tab and adds up: the item again with that value added to the page filters,
+/// for every filter state of the item. All through `compute_item`, so a click shows exactly what the app shows.
+fn add_cross_answers(plan: &ReportPlan, page: &ReportPage, pa: &mut PageAnswers) -> Result<()> {
+    // the clicks: (source item index, category) from the source's top-level answer with no filter picked
+    let mut clicks: Vec<(usize, CrossPick)> = Vec::new();
+    for (si, (item, ia)) in page.items.iter().zip(&pa.items).enumerate() {
+        let ItemSource::Chart { spec, .. } = &item.source else { continue };
+        if ia.linked.is_err() {
+            continue;
+        }
+        let Some(top) = ia.answers.iter().find(|a| a.path.is_empty() && a.picks.iter().all(|p| p.is_none())) else { continue };
+        let ItemData::Chart(c) = &top.data else { continue };
+        for cat in &c.categories {
+            if let Ok(pick) = CrossPick::from_chart(spec, cat, &item.id, item.data_tab.as_deref()) {
+                clicks.push((si, pick));
+            }
+        }
+    }
+    for (si, pick) in &clicks {
+        for (ti, item) in page.items.iter().enumerate() {
+            if ti == *si || pa.items[ti].linked.is_err() || item.data_tab.as_deref() != Some(pick.tab.as_str()) {
+                continue;
+            }
+            let applicable = pa.items[ti].filters.clone();
+            let vals: Vec<&Vec<String>> = applicable.iter().map(|i| &page.values[*i]).collect();
+            for state in states(&vals) {
+                let mut picks = picks_of(page, &applicable, &state);
+                picks.push((pick.as_filter(), vec![pick.value.clone()]));
+                let req = ItemRequest { item_id: item.id.clone(), source: item.source.clone(), picks, drill: Vec::new(), temp_dir: plan.temp_dir.clone() };
+                let data = compute_item(&req)?;
+                let ia = &mut pa.items[ti];
+                ia.numbers += numbers_of(&data);
+                if ia.numbers > MAX_NUMBERS_PER_ITEM {
+                    return Err(too_many(&item.title, ia.numbers));
+                }
+                let mut full: Vec<Option<String>> = vec![None; page.filters.len()];
+                for (k, i) in applicable.iter().enumerate() {
+                    full[*i] = state[k].clone();
+                }
+                ia.cross.push(CrossAnswer { src: page.items[*si].id.clone(), value: pick.value.clone(), answer: Answer { picks: full, path: Vec::new(), data } });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The items that do not react to a click in the file, by name, with why: the export dialog lists them.
@@ -269,22 +328,64 @@ pub fn values_json(a: &Answer, scale: &(f64, usize, String)) -> String {
 }
 
 fn answer_json(a: &Answer, scale: &(f64, usize, String)) -> String {
+    let mut out = answer_core(a, scale);
+    let notes = a.data.notes();
+    if !notes.is_empty() && out.ends_with('}') {
+        out.pop();
+        out.push_str(&format!(",\"n\":{}}}", strings_json(notes)));
+    }
+    out
+}
+
+fn answer_core(a: &Answer, scale: &(f64, usize, String)) -> String {
     let picks: Vec<String> = a.picks.iter().map(|p| p.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default()).unwrap_or_else(|| "null".to_string())).collect();
     match &a.data {
-        ItemData::Chart(c) => format!("{{\"p\":[{}],\"d\":{},\"c\":{},\"s\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), strings_json(&c.categories), strings_json(&c.series), values_json(a, scale)),
+        ItemData::Chart(c) => format!("{{\"p\":[{}],\"d\":{},\"m\":{},\"c\":{},\"s\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), serde_json::to_string(c.measure_names.first().map(|s| s.as_str()).unwrap_or("")).unwrap_or_default(), strings_json(&c.categories), strings_json(&c.series), values_json(a, scale)),
         ItemData::Table(t) => {
             let (labels, head): (Vec<String>, Vec<String>) = match &t.nested {
                 Some(n) => (n.rows.iter().map(|r| format!("{}\u{1f}{}", r.level, r.label)).collect(), n.values.get_columns().iter().map(|c| c.name().to_string()).collect()),
                 None => {
-                    let first = t.df.get_columns().first().map(|c| (0..c.len()).map(|i| c.get(i).map(|v| v.to_string().trim_matches('"').to_string()).unwrap_or_default()).collect()).unwrap_or_default();
+                    let n = t.label_columns.max(1);
+                    let cols: Vec<_> = t.df.get_columns().iter().take(n).collect();
+                    let first = (0..t.df.height()).map(|i| cols.iter().map(|c| c.get(i).map(|v| v.to_string().trim_matches('"').to_string()).unwrap_or_default()).collect::<Vec<_>>().join(" \u{b7} ")).collect();
                     (first, t.df.get_columns().iter().skip(t.label_columns).map(|c| c.name().to_string()).collect())
                 }
             };
             format!("{{\"p\":[{}],\"d\":{},\"r\":{},\"h\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), strings_json(&labels), strings_json(&head), values_json(a, scale))
         }
-        ItemData::Kpi(_) => format!("{{\"p\":[{}],\"d\":[],\"v\":{}}}", picks.join(","), values_json(a, scale)),
+        ItemData::Kpi(k) => format!(
+            "{{\"p\":[{}],\"d\":[],\"e\":{},\"r\":{},\"pd\":{},\"w\":{},\"v\":{}}}",
+            picks.join(","),
+            number_json(k.earlier, 1.0, 4),
+            k.is_ratio,
+            serde_json::to_string(&k.period).unwrap_or_default(),
+            serde_json::to_string(&k.reason).unwrap_or_default(),
+            values_json(a, scale)
+        ),
         ItemData::Problem(m) => format!("{{\"p\":[{}],\"d\":[],\"x\":{}}}", picks.join(","), serde_json::to_string(m).unwrap_or_default()),
     }
+}
+
+/// How the page draws a chart: its type, how series share a category and whether the bars lie down. A chart the page cannot draw
+/// (scatter, waterfall, facets, several measures) says `"table"`, and the page shows its numbers as a table with a note.
+fn chart_look(source: &ItemSource, ia: &ItemAnswers) -> String {
+    use crate::charts::spec::{ChartKind, Stack};
+    let ItemSource::Chart { spec, .. } = source else { return "null".to_string() };
+    let many = ia.answers.iter().any(|a| matches!(&a.data, ItemData::Chart(c) if !c.extra.is_empty() || !c.facets.is_empty() || c.size.is_some()));
+    let kind = match spec.kind {
+        ChartKind::Bar => "bar",
+        ChartKind::Line => "line",
+        ChartKind::Area => "area",
+        ChartKind::Donut => "donut",
+        _ => "table",
+    };
+    let kind = if many { "table" } else { kind };
+    let stack = match spec.stack {
+        Stack::Grouped => "g",
+        Stack::Stacked => "s",
+        Stack::Percent => "p",
+    };
+    format!("{{\"ct\":\"{}\",\"st\":\"{}\",\"hz\":{}}}", kind, stack, spec.horizontal)
 }
 
 /// The whole table of answers as one JSON text.
@@ -299,14 +400,19 @@ pub fn answers_json(plan: &ReportPlan, answers: &[PageAnswers]) -> String {
                 ItemSource::Kpi { .. } => "kpi",
             };
             let list: Vec<String> = ia.answers.iter().map(|a| answer_json(a, &item.scale)).collect();
+            let cross: Vec<String> = ia.cross.iter().map(|x| format!("{{\"k\":[{},{}],\"a\":{}}}", serde_json::to_string(&x.src).unwrap_or_default(), serde_json::to_string(&x.value).unwrap_or_default(), answer_json(&x.answer, &item.scale))).collect();
             items.push(format!(
-                "{{\"id\":{},\"title\":{},\"kind\":\"{}\",\"filters\":{:?},\"linked\":{},\"unit\":{},\"answers\":[{}]}}",
+                "{{\"id\":{},\"title\":{},\"kind\":\"{}\",\"filters\":{:?},\"linked\":{},\"unit\":{},\"look\":{},\"dim\":{},\"why\":{},\"cross\":[{}],\"answers\":[{}]}}",
                 serde_json::to_string(&item.id).unwrap_or_default(),
                 serde_json::to_string(&item.title).unwrap_or_default(),
                 kind,
                 ia.filters,
                 ia.linked.is_ok(),
                 serde_json::to_string(&item.scale.2).unwrap_or_default(),
+                chart_look(&item.source, ia),
+                serde_json::to_string(&match &item.source { ItemSource::Chart { spec, .. } => spec.category.clone(), _ => String::new() }).unwrap_or_default(),
+                serde_json::to_string(&ia.linked.as_ref().err()).unwrap_or_default(),
+                cross.join(","),
                 list.join(",")
             ));
         }
@@ -344,6 +450,66 @@ pub fn render_stub(plan: &ReportPlan, answers_json: &str) -> String {
     s.push_str(&escape_script(answers_json));
     s.push_str(SHELL_TAIL);
     s
+}
+
+// ------------------------------------------------------------------------------------------------ the page (R2)
+
+const PAGE_CSS: &str = include_str!("../assets/report/page.css");
+const PAGE_JS: &str = include_str!("../assets/report/page.js");
+
+/// How a page sits in the file: its height in units (the width is always 1000), where each item goes (the same order as the page's
+/// items, in page units) and the design picture as a data URI.
+#[derive(Clone, Debug)]
+pub struct PageLook {
+    pub page_h: f64,
+    pub rects: Vec<[f64; 4]>,
+    pub background: Option<String>,
+}
+
+fn looks_json(looks: &[PageLook]) -> String {
+    let pages: Vec<String> = looks.iter().map(|l| format!("{{\"h\":{},\"rects\":[{}]}}", l.page_h, l.rects.iter().map(|r| format!("[{:.2},{:.2},{:.2},{:.2}]", r[0], r[1], r[2], r[3])).collect::<Vec<_>>().join(","))).collect();
+    format!("{{\"pages\":[{}]}}", pages.join(","))
+}
+
+fn designs_json(plan: &ReportPlan, looks: &[PageLook]) -> String {
+    let parts: Vec<String> = plan.pages.iter().zip(looks).filter_map(|(p, l)| l.background.as_ref().map(|b| format!("{}:{}", serde_json::to_string(&p.id).unwrap_or_default(), serde_json::to_string(b).unwrap_or_default()))).collect();
+    format!("{{{}}}", parts.join(","))
+}
+
+fn themes_json() -> String {
+    format!("{{\"light\":{},\"dark\":{}}}", crate::charts::echarts::theme_json(false), crate::charts::echarts::theme_json(true))
+}
+
+const PAGE_HEAD: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>";
+
+/// The finished file: the page's code, the library, the answers and the pictures in one HTML file. It makes no request: every part is
+/// inside it.
+pub fn render_page(plan: &ReportPlan, answers_json: &str, looks: &[PageLook]) -> Result<String> {
+    if looks.len() != plan.pages.len() || plan.pages.iter().zip(looks).any(|(p, l)| p.items.len() != l.rects.len()) {
+        bail!("The page layout does not match the dashboard. Open the dashboard again and export again.");
+    }
+    let mut s = String::with_capacity(ECHARTS_JS.len() + answers_json.len() + PAGE_JS.len() + PAGE_CSS.len() + 16_384);
+    s.push_str(PAGE_HEAD);
+    s.push_str(&escape_script(&plan.title));
+    s.push_str("</title><style>");
+    s.push_str(PAGE_CSS);
+    s.push_str("</style></head><body><div id=\"app\"></div><script>");
+    s.push_str(ECHARTS_JS);
+    for (id, body) in [("answers", answers_json.to_string()), ("looks", looks_json(looks)), ("designs", designs_json(plan, looks)), ("themes", themes_json())] {
+        s.push_str(&format!("</script><script id=\"{}\" type=\"application/json\">", id));
+        s.push_str(&escape_script(&body));
+    }
+    s.push_str("</script><script>");
+    s.push_str(PAGE_JS);
+    s.push_str("</script></body></html>");
+    Ok(s)
+}
+
+/// The size of `render_page`'s file before it is written (the picture is counted as the data URI the file holds).
+pub fn estimate_page(plan: &ReportPlan, answers_json_len: usize, looks: &[PageLook]) -> SizeParts {
+    let template: usize = looks.iter().filter_map(|l| l.background.as_ref()).map(|b| b.len() + 2).sum();
+    let other = PAGE_HEAD.len() + escape_script(&plan.title).len() + PAGE_CSS.len() + PAGE_JS.len() + looks_json(looks).len() + themes_json().len() + designs_json(plan, looks).len().saturating_sub(template) + 330;
+    SizeParts { echarts: ECHARTS_JS.len(), shell: other, template, answers: answers_json_len }
 }
 
 /// The parts of the file's size.
