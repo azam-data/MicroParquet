@@ -12,7 +12,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S5 | D4 | done |
 | S6 | D5 | done |
 | S7 | R1 (and D5 page shape) | done |
-| S8 | R2 | done |
+| S8 | R2 (+ corrections, heatmap/histogram, pivot unit) | done |
+| S9 | X1 | done |
 | S8–S12 | R2 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
@@ -120,3 +121,14 @@ Stub proofs: R1 — states counted as n instead of n + 1 fails the 65-state test
 | a layout that does not match the dashboard is refused in words | `r2_a_page_layout_that_does_not_match_the_dashboard_is_refused_in_plain_words` |
 
 Stub proofs: R2 — the page ignoring the click's answers fails "crossed i2"; the expand button doing nothing fails "rows 3 then 3" (both restored). No picture (the file is the output).
+
+## S9 acceptance → test (X1)
+| Acceptance | Test |
+|---|---|
+| read back with the zip reader: every CRC, content types first, smaller than stored | `x1_the_package_reads_back_with_every_crc_content_types_first_and_deflate_smaller_than_stored` |
+| one slide per item; chart type per chart tab; series refs point at the workbook; palette | `x1_one_slide_per_item_each_chart_part_has_its_chart_type_palette_and_workbook_ranges` |
+| footnote with as-of and filters; pivot table unit; KPI card text and colours | `x1_the_footnote_the_pivot_table_and_the_kpi_card_say_what_the_app_says` |
+| LibreOffice converts the file (when installed) | `x1_libreoffice_opens_the_file_when_it_is_installed` |
+| design as background only when asked | `x1_a_design_picture_goes_behind_every_slide_only_when_asked` |
+
+Stub proofs: X1 — always-Stored compression fails the deflate test; dropping the threshold colour on the KPI number fails the card test (both restored). Added with it: pivot item unit (`r2_a_pivot_item_shows_money_in_its_unit…`; counts-as-money stub failed it), heatmap/histogram test.

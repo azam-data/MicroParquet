@@ -308,7 +308,7 @@ fn strings_json(v: &[String]) -> String {
 }
 
 /// The divisor and decimals a chart's measure is held with in the file, and the unit it is shown in (what the app's `value_kind` says).
-fn measure_scale(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, usize, String)) -> (f64, usize) {
+pub(crate) fn measure_scale(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, usize, String)) -> (f64, usize) {
     use crate::charts::axis::ValueKind;
     match crate::charts::layout::value_kind(spec, m) {
         ValueKind::Amount => (scale.0, scale.1),
@@ -318,7 +318,7 @@ fn measure_scale(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, 
     }
 }
 
-fn measure_unit(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, usize, String)) -> String {
+pub(crate) fn measure_unit(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, usize, String)) -> String {
     use crate::charts::axis::ValueKind;
     match crate::charts::layout::value_kind(spec, m) {
         ValueKind::Amount => scale.2.clone(),
