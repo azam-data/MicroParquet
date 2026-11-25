@@ -435,3 +435,11 @@ Proved to fail without the fix (one stub at a time, each restored): Actual/365 c
 ## S9: version 1.9.0
 
 `Cargo.toml` `version = "1.9.0"` (CRLF kept), `Cargo.lock` follows. The tests that pin the version were changed as W0-7 did for 1.8.0: `tests/phase3/l5.rs` (`CARGO_PKG_VERSION`), `tests/phase8/w0.rs` (`w0_the_version_is_1_8_0_and_a_tag_must_match_it`: its name is kept because the Phase 8 progress file names it; it now asserts 1.9.0 with CRLF), and the window-title tests of `src/ui/render_tests_p6.rs` ("MicroParquet v1.9.0"). B0 and the M0 version-check tests need no change (they name the 1.8.0 *app* that reads up to project version 1). Full `cargo test`: all green; pictures a full run rewrote were restored.
+
+## S9: release build and timing
+
+- `cargo build --release`: Finished, 10 min 21 s (42 warnings of the bin, none new; the Polars note about a future Rust version).
+- The `#[ignore]` timing test (`m6_timing_a_pivot_by_a_lookup_field_against_the_same_pivot_by_a_data_column_on_three_million_rows`, written in S9 because none existed; run with `cargo test --release --test phase3 m6_timing -- --ignored --nocapture`): 3,000,000 rows, 800 branches, 8 regions, Sum of Balance by region, three runs each, release profile.
+  - pivot by the lookup field (Branch master › Region): 0.65 s, 0.64 s, 0.75 s (best 0.64 s)
+  - the same pivot by a data column (Region): 0.21 s, 0.16 s, 0.13 s (best 0.13 s)
+  - the two pivots give the same numbers (asserted); no limit is asserted. The lookup field costs about 5 times a data column here (the join of 800 lookup rows to 3 million), under a second in all.

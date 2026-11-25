@@ -869,6 +869,63 @@ fn m6_the_notes_that_phase_9_changed_say_what_the_code_now_does() {
     assert!(src.contains("Python export can't follow links between tabs yet. Use the Join tool to copy the column, or export the result tab."));
 }
 
+// ------------------------------------------------------------------------------------------------ timing
+
+/// A pivot by a lookup field against the same pivot by a data column, on a synthetic tab of 3 million rows. No limit is asserted; the
+/// times are printed (run with `cargo test --release --test phase3 m6_timing -- --ignored --nocapture`). The two pivots must agree.
+#[test]
+#[ignore]
+fn m6_timing_a_pivot_by_a_lookup_field_against_the_same_pivot_by_a_data_column_on_three_million_rows() {
+    use std::time::Instant;
+    const ROWS: usize = 3_000_000;
+    const BRANCHES: usize = 800;
+    const REGIONS: usize = 8;
+    let d = dir("p9m6_timing");
+    let codes: Vec<String> = (0..BRANCHES).map(|b| format!("B{b:04}")).collect();
+    let region_of = |b: usize| format!("Region {}", b % REGIONS);
+    let branch: Vec<&str> = (0..ROWS).map(|i| codes[(i * 7919) % BRANCHES].as_str()).collect();
+    let region: Vec<String> = (0..ROWS).map(|i| region_of((i * 7919) % BRANCHES)).collect();
+    let balance: Vec<f64> = (0..ROWS).map(|i| ((i % 1000) as f64) * 1.25).collect();
+    let data = DataFrame::new(vec![Series::new("Branch".into(), branch.clone()).into(), Series::new("Balance".into(), balance.clone()).into()]).expect("data");
+    let with_region = DataFrame::new(vec![Series::new("Branch".into(), branch).into(), Series::new("Region".into(), region).into(), Series::new("Balance".into(), balance).into()]).expect("data with the column");
+    let master = DataFrame::new(vec![Series::new("Code".into(), codes.clone()).into(), Series::new("Region".into(), (0..BRANCHES).map(region_of).collect::<Vec<_>>()).into()]).expect("master");
+    let tab = |key: &str, title: &str, source: TabSource| ModelTab { key: key.into(), title: title.into(), source, steps: vec![] };
+    let f = m1::Fx {
+        d: d.clone(),
+        data: tab("t1", "Accounts", crate::common::parquet(&d, "accounts", &data)),
+        lookup: tab("t2", "Branch master", crate::common::parquet(&d, "master", &master)),
+        link: Link { data_tab: "t1".into(), lookup_tab: "t2".into(), keys: vec![KeyPair { data: "Branch".into(), lookup: "Code".into() }], unmatched_value: None },
+    };
+    let plain_source = crate::common::parquet(&d, "accounts_region", &with_region);
+    let region_field = m1::field(&f, "Region");
+    let by_lookup = m1::pivot_of(&[&region_field]);
+    let by_column = PivotSpec { rows: vec!["Region".into()], values: by_lookup.values.clone(), row_totals: true, column_totals: true, ..Default::default() };
+    let mut lookup_times = Vec::new();
+    let mut column_times = Vec::new();
+    let (mut a, mut b) = (None, None);
+    for _ in 0..3 {
+        let t = Instant::now();
+        let r = with_scope(m1::scope_of(&f, None), || micro_parquet::pivot_table::build_pivot(m1::lazy(&f), &by_lookup)).expect("the pivot by a lookup field");
+        lookup_times.push(t.elapsed().as_secs_f64());
+        a = Some(r.df);
+        let t = Instant::now();
+        let r = micro_parquet::pivot_table::build_pivot(micro_parquet::engine::compile_tab_lazy(&plain_source, &[], &d).expect("source"), &by_column).expect("the pivot by a data column");
+        column_times.push(t.elapsed().as_secs_f64());
+        b = Some(r.df);
+    }
+    let (a, b) = (m1::pairs(&a.expect("a")), m1::pairs(&b.expect("b")));
+    let mut sa = a.clone();
+    let mut sb = b.clone();
+    sa.sort_by(|x, y| x.0.cmp(&y.0));
+    sb.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(sa, sb, "the two pivots give the same numbers");
+    assert_eq!(a.len(), REGIONS + 1);
+    let show = |v: &[f64]| v.iter().map(|t| format!("{t:.2}s")).collect::<Vec<_>>().join(", ");
+    eprintln!("TIMING {ROWS} rows, {BRANCHES} branches, {REGIONS} regions");
+    eprintln!("TIMING by a lookup field (Branch master \u{b7} Region): {} (best {:.2}s)", show(&lookup_times), lookup_times.iter().cloned().fold(f64::MAX, f64::min));
+    eprintln!("TIMING by a data column (Region):                    {} (best {:.2}s)", show(&column_times), column_times.iter().cloned().fold(f64::MAX, f64::min));
+}
+
 #[allow(dead_code)]
 fn unused() {
     let _ = (pct, cal_field, calendar_field);
