@@ -307,11 +307,36 @@ fn strings_json(v: &[String]) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// The divisor and decimals a chart's measure is held with in the file, and the unit it is shown in (what the app's `value_kind` says).
+fn measure_scale(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, usize, String)) -> (f64, usize) {
+    use crate::charts::axis::ValueKind;
+    match crate::charts::layout::value_kind(spec, m) {
+        ValueKind::Amount => (scale.0, scale.1),
+        ValueKind::Percent => (1.0, 1),
+        ValueKind::Count => (1.0, 0),
+        ValueKind::Plain => (1.0, 2),
+    }
+}
+
+fn measure_unit(spec: &crate::charts::spec::ChartSpec, m: usize, scale: &(f64, usize, String)) -> String {
+    use crate::charts::axis::ValueKind;
+    match crate::charts::layout::value_kind(spec, m) {
+        ValueKind::Amount => scale.2.clone(),
+        ValueKind::Percent => "%".to_string(),
+        ValueKind::Count | ValueKind::Plain => String::new(),
+    }
+}
+
 /// The numbers of one answer as JSON text, with the commas that separate them: what `BYTES_PER_NUMBER` predicts.
 pub fn values_json(a: &Answer, scale: &(f64, usize, String)) -> String {
     match &a.data {
         ItemData::Chart(c) => {
-            let rows: Vec<String> = c.values.iter().map(|r| format!("[{}]", r.iter().map(|v| number_json(*v, scale.0, scale.1)).collect::<Vec<_>>().join(","))).collect();
+            // each measure in the unit the app shows it in: money in the item's unit, a share with one decimal, a count whole, any other number as it is
+            let mut rows: Vec<String> = Vec::new();
+            for (m, vals) in std::iter::once(&c.values).chain(c.extra.iter().map(|e| &e.values)).enumerate() {
+                let (div, dec) = measure_scale(&c.spec, m, scale);
+                rows.extend(vals.iter().map(|r| format!("[{}]", r.iter().map(|v| number_json(*v, div, dec)).collect::<Vec<_>>().join(","))));
+            }
             format!("[{}]", rows.join(","))
         }
         ItemData::Table(t) => {
@@ -327,8 +352,8 @@ pub fn values_json(a: &Answer, scale: &(f64, usize, String)) -> String {
     }
 }
 
-fn answer_json(a: &Answer, scale: &(f64, usize, String)) -> String {
-    let mut out = answer_core(a, scale);
+fn answer_json(a: &Answer, item: &ReportItem, kpi_unit: crate::kpi::KpiUnit) -> String {
+    let mut out = answer_core(a, &item.scale, &item.source, kpi_unit);
     let notes = a.data.notes();
     if !notes.is_empty() && out.ends_with('}') {
         out.pop();
@@ -337,10 +362,34 @@ fn answer_json(a: &Answer, scale: &(f64, usize, String)) -> String {
     out
 }
 
-fn answer_core(a: &Answer, scale: &(f64, usize, String)) -> String {
+fn answer_core(a: &Answer, scale: &(f64, usize, String), source: &ItemSource, kpi_unit: crate::kpi::KpiUnit) -> String {
     let picks: Vec<String> = a.picks.iter().map(|p| p.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default()).unwrap_or_else(|| "null".to_string())).collect();
     match &a.data {
-        ItemData::Chart(c) => format!("{{\"p\":[{}],\"d\":{},\"m\":{},\"c\":{},\"s\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), serde_json::to_string(c.measure_names.first().map(|s| s.as_str()).unwrap_or("")).unwrap_or_default(), strings_json(&c.categories), strings_json(&c.series), values_json(a, scale)),
+        ItemData::Chart(c) => {
+            let units: Vec<String> = (0..c.measure_names.len().max(1)).map(|m| measure_unit(&c.spec, m, scale)).collect();
+            let mut extra = String::new();
+            if c.spec.kind == crate::charts::spec::ChartKind::Waterfall {
+                match crate::charts::data::waterfall_from_data(c) {
+                    Ok(steps) => {
+                        let (div, dec) = measure_scale(&c.spec, 0, scale);
+                        let rows: Vec<String> = steps
+                            .iter()
+                            .map(|w| {
+                                let k = match w.kind {
+                                    crate::charts::data::StepKind::Start => "s",
+                                    crate::charts::data::StepKind::Delta => "d",
+                                    crate::charts::data::StepKind::End => "e",
+                                };
+                                format!("[{},\"{}\",{},{},{},{}]", serde_json::to_string(&w.label).unwrap_or_default(), k, number_json(Some(w.value), div, dec), number_json(Some(w.base), div, dec), number_json(Some(w.top), div, dec), number_json(Some(w.level), div, dec))
+                            })
+                            .collect();
+                        extra = format!(",\"wf\":[{}]", rows.join(","));
+                    }
+                    Err(e) => extra = format!(",\"x\":{}", serde_json::to_string(&e.to_string()).unwrap_or_default()),
+                }
+            }
+            format!("{{\"p\":[{}],\"d\":{},\"m\":{},\"mu\":{},\"c\":{},\"s\":{},\"v\":{}{}}}", picks.join(","), strings_json(&a.path), strings_json(&c.measure_names), strings_json(&units), strings_json(&c.categories), strings_json(&c.series), values_json(a, scale), extra)
+        }
         ItemData::Table(t) => {
             let (labels, head): (Vec<String>, Vec<String>) = match &t.nested {
                 Some(n) => (n.rows.iter().map(|r| format!("{}\u{1f}{}", r.level, r.label)).collect(), n.values.get_columns().iter().map(|c| c.name().to_string()).collect()),
@@ -353,15 +402,37 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String)) -> String {
             };
             format!("{{\"p\":[{}],\"d\":{},\"r\":{},\"h\":{},\"v\":{}}}", picks.join(","), strings_json(&a.path), strings_json(&labels), strings_json(&head), values_json(a, scale))
         }
-        ItemData::Kpi(k) => format!(
-            "{{\"p\":[{}],\"d\":[],\"e\":{},\"r\":{},\"pd\":{},\"w\":{},\"v\":{}}}",
-            picks.join(","),
-            number_json(k.earlier, 1.0, 4),
-            k.is_ratio,
-            serde_json::to_string(&k.period).unwrap_or_default(),
-            serde_json::to_string(&k.reason).unwrap_or_default(),
-            values_json(a, scale)
-        ),
+        ItemData::Kpi(k) => {
+            let ItemSource::Kpi { spec, .. } = source else { return format!("{{\"p\":[{}],\"d\":[],\"x\":\"This card has no settings.\"}}", picks.join(",")) };
+            let v = crate::kpi::view(spec, k, kpi_unit);
+            let tone = match v.tone {
+                crate::kpi::Tone::Good => "good",
+                crate::kpi::Tone::Bad => "bad",
+                crate::kpi::Tone::Neutral => "neutral",
+            };
+            let thr = match v.threshold {
+                Some(crate::kpi::ThresholdColour::Amber) => "amber",
+                Some(crate::kpi::ThresholdColour::Red) => "red",
+                Some(crate::kpi::ThresholdColour::Green) => "green",
+                None => "",
+            };
+            let spark: Vec<String> = v.spark.iter().map(|x| number_json(*x, 1.0, 4)).collect();
+            format!(
+                "{{\"p\":[{}],\"d\":[],\"k\":{{\"val\":{},\"chg\":{},\"arrow\":\"{}\",\"words\":\"{}\",\"tone\":\"{}\",\"thr\":\"{}\",\"why\":{},\"alt\":{},\"per\":{},\"spark\":[{}]}},\"v\":{}}}",
+                picks.join(","),
+                serde_json::to_string(&v.value_text).unwrap_or_default(),
+                serde_json::to_string(&v.change_text).unwrap_or_default(),
+                v.arrow,
+                v.words,
+                tone,
+                thr,
+                serde_json::to_string(&v.reason).unwrap_or_default(),
+                serde_json::to_string(&v.alt).unwrap_or_default(),
+                serde_json::to_string(&k.period).unwrap_or_default(),
+                spark.join(","),
+                values_json(a, scale)
+            )
+        }
         ItemData::Problem(m) => format!("{{\"p\":[{}],\"d\":[],\"x\":{}}}", picks.join(","), serde_json::to_string(m).unwrap_or_default()),
     }
 }
@@ -371,12 +442,13 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String)) -> String {
 fn chart_look(source: &ItemSource, ia: &ItemAnswers) -> String {
     use crate::charts::spec::{ChartKind, Stack};
     let ItemSource::Chart { spec, .. } = source else { return "null".to_string() };
-    let many = ia.answers.iter().any(|a| matches!(&a.data, ItemData::Chart(c) if !c.extra.is_empty() || !c.facets.is_empty() || c.size.is_some()));
+    let many = ia.answers.iter().any(|a| matches!(&a.data, ItemData::Chart(c) if !c.facets.is_empty() || c.size.is_some()));
     let kind = match spec.kind {
         ChartKind::Bar => "bar",
         ChartKind::Line => "line",
         ChartKind::Area => "area",
         ChartKind::Donut => "donut",
+        ChartKind::Waterfall => "waterfall",
         _ => "table",
     };
     let kind = if many { "table" } else { kind };
@@ -390,6 +462,11 @@ fn chart_look(source: &ItemSource, ia: &ItemAnswers) -> String {
 
 /// The whole table of answers as one JSON text.
 pub fn answers_json(plan: &ReportPlan, answers: &[PageAnswers]) -> String {
+    answers_json_with(plan, answers, crate::kpi::KpiUnit::Crore)
+}
+
+/// The same, with the dashboard's own unit for money on the KPI cards (`Dashboard.default_kpi_unit`).
+pub fn answers_json_with(plan: &ReportPlan, answers: &[PageAnswers], kpi_unit: crate::kpi::KpiUnit) -> String {
     let mut pages = Vec::new();
     for (page, pa) in plan.pages.iter().zip(answers) {
         let mut items = Vec::new();
@@ -399,8 +476,8 @@ pub fn answers_json(plan: &ReportPlan, answers: &[PageAnswers]) -> String {
                 ItemSource::Pivot { .. } => "pivot",
                 ItemSource::Kpi { .. } => "kpi",
             };
-            let list: Vec<String> = ia.answers.iter().map(|a| answer_json(a, &item.scale)).collect();
-            let cross: Vec<String> = ia.cross.iter().map(|x| format!("{{\"k\":[{},{}],\"a\":{}}}", serde_json::to_string(&x.src).unwrap_or_default(), serde_json::to_string(&x.value).unwrap_or_default(), answer_json(&x.answer, &item.scale))).collect();
+            let list: Vec<String> = ia.answers.iter().map(|a| answer_json(a, item, kpi_unit)).collect();
+            let cross: Vec<String> = ia.cross.iter().map(|x| format!("{{\"k\":[{},{}],\"a\":{}}}", serde_json::to_string(&x.src).unwrap_or_default(), serde_json::to_string(&x.value).unwrap_or_default(), answer_json(&x.answer, item, kpi_unit))).collect();
             items.push(format!(
                 "{{\"id\":{},\"title\":{},\"kind\":\"{}\",\"filters\":{:?},\"linked\":{},\"unit\":{},\"look\":{},\"dim\":{},\"why\":{},\"cross\":[{}],\"answers\":[{}]}}",
                 serde_json::to_string(&item.id).unwrap_or_default(),
@@ -477,7 +554,19 @@ fn designs_json(plan: &ReportPlan, looks: &[PageLook]) -> String {
 }
 
 fn themes_json() -> String {
-    format!("{{\"light\":{},\"dark\":{}}}", crate::charts::echarts::theme_json(false), crate::charts::echarts::theme_json(true))
+    {
+    use crate::charts::tokens::{STATUS_CRITICAL, STATUS_GOOD, STATUS_SERIOUS, STATUS_WARNING};
+    let hex = |c: u32| format!("\"#{:06x}\"", c);
+    format!(
+        "{{\"light\":{},\"dark\":{},\"status\":{{\"good\":{},\"warning\":{},\"serious\":{},\"critical\":{}}}}}",
+        crate::charts::echarts::theme_json(false),
+        crate::charts::echarts::theme_json(true),
+        hex(STATUS_GOOD),
+        hex(STATUS_WARNING),
+        hex(STATUS_SERIOUS),
+        hex(STATUS_CRITICAL)
+    )
+}
 }
 
 const PAGE_HEAD: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>";
