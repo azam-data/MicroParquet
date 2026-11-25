@@ -31,14 +31,20 @@ fn slide(title: &str, data: ItemData, scale: (f64, usize, String)) -> PptxSlide 
 fn plan(d: &std::path::Path) -> PptxPlan {
     let src = book(d);
     let crore = (10_000_000.0, 2, "Cr".to_string());
+    let src2 = src.clone();
+    let mut mixed = chart(ChartKind::Bar);
+    mixed.measures = vec![
+        micro_parquet::charts::spec::MeasureSpec { column: Some("Balance".into()), agg: ChartAgg::Sum, ..Default::default() },
+        micro_parquet::charts::spec::MeasureSpec { column: Some("Accounts".into()), agg: ChartAgg::Count, ..Default::default() },
+    ];
     let chart_item = |k: ChartKind| data_of(ItemSource::Chart { base: src.clone(), steps: vec![], spec: chart(k) }, d);
     let pivot = PivotSpec {
         rows: vec!["Step".into()],
         values: vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: None }, PivotValue { field: "Accounts".into(), agg: PivotAgg::Count, weight_col: None, time: None }],
         ..Default::default()
     };
-    let kspec = KpiSpec { title: "Net".into(), unit: KpiUnit::Crore, compare: KpiCompare::PriorPeriod, thresholds: vec![Threshold { op: ThresholdOp::Below, limit: 500.0, colour: ThresholdColour::Red }], ..Default::default() };
-    let kvalue = KpiValue { current: Some(4_000_000_000.0), earlier: Some(4_200_000_000.0), period: "Oct 2026".into(), ..Default::default() };
+    let kspec = KpiSpec { title: "Net".into(), unit: KpiUnit::Crore, compare: KpiCompare::PriorPeriod, thresholds: vec![Threshold { op: ThresholdOp::Below, limit: 500.0, colour: ThresholdColour::Red }], sparkline: true, ..Default::default() };
+    let kvalue = KpiValue { current: Some(4_000_000_000.0), earlier: Some(4_200_000_000.0), period: "Oct 2026".into(), spark: vec![Some(4.1e9), Some(4.2e9), None, Some(4.0e9)], spark_labels: vec!["Jul 2026".into(), "Aug 2026".into(), "Sep 2026".into(), "Oct 2026".into()], ..Default::default() };
     let mut k = slide("Net position", ItemData::Kpi(Box::new(kvalue)), crore.clone());
     k.kpi = Some((kspec, KpiUnit::Crore));
     PptxPlan {
@@ -50,6 +56,7 @@ fn plan(d: &std::path::Path) -> PptxPlan {
             slide("Bridge", chart_item(ChartKind::Waterfall), crore.clone()),
             slide("Steps", data_of(ItemSource::Pivot { base: src, steps: vec![], spec: pivot }, d), unit_scale(ItemUnit::Lakh)),
             k,
+            slide("Balance and accounts", data_of(ItemSource::Chart { base: src2, steps: vec![], spec: mixed }, d), crore.clone()),
         ],
         background: None,
     }
@@ -93,9 +100,17 @@ fn x1_one_slide_per_item_each_chart_part_has_its_chart_type_palette_and_workbook
     let dd = dir("p10x1_charts");
     let parts = read_all(&build_pptx(&plan(&dd)).expect("package"));
     let slides = parts.iter().filter(|(n, _)| n.starts_with("ppt/slides/slide")).count();
-    assert_eq!(slides, 6, "one slide per item");
+    assert_eq!(slides, 7, "one slide per item");
     let charts: Vec<String> = (1..=4).map(|i| part(&parts, &format!("ppt/charts/chart{i}.xml"))).collect();
-    assert!(parts.iter().all(|(n, _)| n != "ppt/charts/chart5.xml"), "the pivot and the card are not charts");
+    assert!(parts.iter().all(|(n, _)| n != "ppt/charts/chart7.xml"), "the pivot is not a chart; the card has a sparkline chart (5) and the two-unit chart is 6");
+    // the card's sparkline is a small line chart without axes, with a gap for the missing period
+    let spark = part(&parts, "ppt/charts/chart5.xml");
+    assert!(spark.contains("<c:lineChart>") && spark.contains("<c:delete val=\"1\"/>") && spark.contains("<c:ptCount val=\"4\"/>") && !spark.contains("<c:pt idx=\"2\"><c:v>4"), "{spark}");
+    assert!(part(&parts, "ppt/slides/slide6.xml").contains("r:id=\"rId2\""), "the card's slide holds the sparkline");
+    // money and a count in one chart: bars on the left axis, the count on a second axis on the right
+    let mixed = part(&parts, "ppt/charts/chart6.xml");
+    assert_eq!(mixed.matches("<c:barChart>").count(), 2, "one group per axis");
+    assert!(mixed.contains("<c:axId val=\"114\"/>") && mixed.contains("<c:axPos val=\"r\"/>") && mixed.contains("<c:crosses val=\"max\"/>"), "{mixed}");
     assert!(charts[0].contains("<c:barChart>") && charts[0].contains("<c:barDir val=\"col\"/>"));
     assert!(charts[1].contains("<c:lineChart>"));
     assert!(charts[2].contains("<c:doughnutChart>"));
@@ -157,7 +172,7 @@ fn x1_a_design_picture_goes_behind_every_slide_only_when_asked() {
     p.background = Some(png.clone());
     let with = read_all(&build_pptx(&p).expect("package"));
     assert_eq!(with.iter().find(|(n, _)| n == "ppt/media/image1.png").map(|(_, d)| d.clone()), Some(png));
-    for i in 1..=6 {
+    for i in 1..=7 {
         assert!(part(&with, &format!("ppt/slides/slide{i}.xml")).contains("<p:bg>"), "slide {i}");
         assert!(part(&with, &format!("ppt/slides/_rels/slide{i}.xml.rels")).contains("../media/image1.png"));
     }

@@ -13,7 +13,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S6 | D5 | done |
 | S7 | R1 (and D5 page shape) | done |
 | S8 | R2 (+ corrections, heatmap/histogram, pivot unit) | done |
-| S9 | X1 | done |
+| S9 | X1 (+ combo chart, sparkline) | done |
+| S10 | X2 PDF pages; then the export dialog | PDF done, dialog next |
 | S8–S12 | R2 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
@@ -132,3 +133,12 @@ Stub proofs: R2 — the page ignoring the click's answers fails "crossed i2"; th
 | design as background only when asked | `x1_a_design_picture_goes_behind_every_slide_only_when_asked` |
 
 Stub proofs: X1 — always-Stored compression fails the deflate test; dropping the threshold colour on the KPI number fails the card test (both restored). Added with it: pivot item unit (`r2_a_pivot_item_shows_money_in_its_unit…`; counts-as-money stub failed it), heatmap/histogram test.
+
+## S10 acceptance → test (X2)
+| Acceptance | Test |
+|---|---|
+| page count; A4 landscape; KPI number as the card shows it; image once per page; footer; positions within 1 mm; no overflow | `x2_pages_text_picture_footer_and_positions_of_a_free_layout_page` (poppler; skipped with a note if absent) |
+| empty dashboard and unreadable picture refused in words, no half file | `x2_an_empty_dashboard_is_refused_and_a_picture_that_is_not_one_says_so` |
+| combo chart with a right axis; card sparkline chart | `x1_one_slide_per_item_each_chart_part_has_its_chart_type_palette_and_workbook_ranges` |
+
+Stub proofs: X2 — shifting every item 3 mm fails the position test; not drawing the background fails the picture test (restored).

@@ -56,31 +56,36 @@ pub fn footnote(as_of: &str, filters: &[String], notes: &[String]) -> String {
 
 // ------------------------------------------------------------------------------------------------ what a slide holds
 
-enum Body {
+pub(crate) enum Body {
     Chart(ChartPart),
     Table { head: Vec<String>, rows: Vec<Vec<String>>, indent: Vec<usize>, bold: Vec<bool>, note: Option<String> },
-    Kpi { value: String, value_colour: Option<u32>, change: String, change_colour: Option<u32>, words: String, period: String, reason: Option<String> },
+    Kpi { value: String, value_colour: Option<u32>, change: String, change_colour: Option<u32>, words: String, period: String, reason: Option<String>, spark: Option<ChartPart> },
     Note(String),
 }
 
 #[derive(Clone)]
-struct Series {
-    name: String,
-    values: Vec<Option<f64>>,
-    colour: u32,
+pub(crate) struct Series {
+    pub(crate) name: String,
+    pub(crate) values: Vec<Option<f64>>,
+    pub(crate) colour: u32,
     /// Waterfall's invisible base series.
-    hidden: bool,
+    pub(crate) hidden: bool,
 }
 
 #[derive(Clone)]
-struct ChartPart {
-    kind: &'static str,
-    grouping: &'static str,
-    horizontal: bool,
-    categories: Vec<String>,
-    series: Vec<Series>,
-    unit: String,
-    numfmt: &'static str,
+pub(crate) struct ChartPart {
+    pub(crate) kind: &'static str,
+    pub(crate) grouping: &'static str,
+    pub(crate) horizontal: bool,
+    pub(crate) categories: Vec<String>,
+    pub(crate) series: Vec<Series>,
+    pub(crate) unit: String,
+    pub(crate) numfmt: &'static str,
+    /// The series (by index) drawn against a second value axis on the right, in `unit2`: measures in another unit than the first.
+    pub(crate) secondary: Vec<usize>,
+    pub(crate) unit2: String,
+    /// A card's sparkline: no axes, gridlines or legend.
+    pub(crate) mini: bool,
 }
 
 fn plain(s: &str) -> String {
@@ -122,19 +127,21 @@ fn chart_body(c: &ChartData, scale: &(f64, usize, String)) -> Body {
         ChartKind::Bar | ChartKind::Line | ChartKind::Area => {
             let m = c.measure_names.len().max(1);
             let units: Vec<String> = (0..m).map(|k| measure_unit(spec, k, scale)).collect();
-            if units.iter().any(|u| *u != units[0]) {
-                return table_of_chart(c, scale, "Shown as a table: the measures are in different units, which one PowerPoint chart cannot show on one axis.");
-            }
             let mut series = Vec::new();
+            let mut secondary: Vec<usize> = Vec::new();
             for (k, vals) in std::iter::once(&c.values).chain(c.extra.iter().map(|e| &e.values)).enumerate() {
                 let (div, _) = measure_scale(spec, k, scale);
                 for (j, row) in vals.iter().enumerate() {
                     let s = c.series.get(j).cloned().unwrap_or_default();
                     let mname = c.measure_names.get(k).cloned().unwrap_or_default();
                     let name = if m > 1 { if s.is_empty() { mname } else { format!("{} \u{b7} {}", s, mname) } } else if s.is_empty() { mname } else { s };
+                    if units[k] != units[0] {
+                        secondary.push(series.len());
+                    }
                     series.push(Series { name, values: row.iter().map(|v| scaled(*v, div)).collect(), colour: colour_of(series.len()), hidden: false });
                 }
             }
+            let unit2 = units.iter().find(|u| **u != units[0]).cloned().unwrap_or_default();
             let kind = match spec.kind {
                 ChartKind::Bar => "bar",
                 ChartKind::Line => "line",
@@ -147,7 +154,7 @@ fn chart_body(c: &ChartData, scale: &(f64, usize, String)) -> Body {
                 (_, Stack::Percent) => "percentStacked",
             };
             let grouping = if kind == "area" && grouping == "clustered" { "standard" } else { grouping };
-            Body::Chart(ChartPart { kind, grouping, horizontal: spec.horizontal && kind == "bar", categories: c.categories.clone(), series, unit: units[0].clone(), numfmt: if units[0] == "%" { "#,##0.0" } else { money_fmt(&units[0]) } })
+            Body::Chart(ChartPart { kind, grouping, horizontal: spec.horizontal && kind == "bar", categories: c.categories.clone(), series, unit: units[0].clone(), numfmt: if units[0] == "%" { "#,##0.0" } else { money_fmt(&units[0]) }, secondary, unit2, mini: false })
         }
         ChartKind::Donut => {
             let (div, _) = measure_scale(spec, 0, scale);
@@ -160,12 +167,15 @@ fn chart_body(c: &ChartData, scale: &(f64, usize, String)) -> Body {
                 series: vec![Series { name: c.measure_names.first().cloned().unwrap_or_default(), values: row.iter().map(|v| scaled(*v, div)).collect(), colour: colour_of(0), hidden: false }],
                 unit: measure_unit(spec, 0, scale),
                 numfmt: money_fmt(&measure_unit(spec, 0, scale)),
+                secondary: Vec::new(),
+                unit2: String::new(),
+                mini: false,
             })
         }
         ChartKind::Histogram => match &c.hist {
             Some(h) => {
                 let cats: Vec<String> = h.counts.iter().enumerate().map(|(i, _)| format!("{} \u{2013} {}", format_with_commas(h.edges[i], 2), format_with_commas(h.edges.get(i + 1).copied().unwrap_or(h.edges[i]), 2))).collect();
-                Body::Chart(ChartPart { kind: "bar", grouping: "clustered", horizontal: false, categories: cats, series: vec![Series { name: "Count".into(), values: h.counts.iter().map(|n| Some(*n as f64)).collect(), colour: colour_of(0), hidden: false }], unit: plain("Count"), numfmt: "#,##0" })
+                Body::Chart(ChartPart { kind: "bar", grouping: "clustered", horizontal: false, categories: cats, series: vec![Series { name: "Count".into(), values: h.counts.iter().map(|n| Some(*n as f64)).collect(), colour: colour_of(0), hidden: false }], unit: plain("Count"), numfmt: "#,##0", secondary: Vec::new(), unit2: String::new(), mini: false })
             }
             None => Body::Note("The histogram has no bins.".into()),
         },
@@ -196,6 +206,9 @@ fn chart_body(c: &ChartData, scale: &(f64, usize, String)) -> Body {
                     series: vec![s("Base", base, 0xffffff, true), s("Total", total, colour_of(0), false), s("Increase", up, crate::charts::tokens::STATUS_GOOD, false), s("Decrease", down, crate::charts::tokens::STATUS_CRITICAL, false)],
                     unit: measure_unit(spec, 0, scale),
                     numfmt: money_fmt(&measure_unit(spec, 0, scale)),
+                    secondary: Vec::new(),
+                    unit2: String::new(),
+                    mini: false,
                 })
             }
         },
@@ -279,14 +292,20 @@ fn kpi_body(k: &crate::kpi::KpiValue, spec: &KpiSpec, default_unit: KpiUnit) -> 
         words: if v.words.is_empty() { String::new() } else { format!("{} against the earlier period", v.words) },
         period: k.period.clone(),
         reason: v.reason,
+        spark: if v.spark.iter().flatten().count() > 1 {
+            let labels: Vec<String> = if k.spark_labels.len() == v.spark.len() { k.spark_labels.clone() } else { (1..=v.spark.len()).map(|i| i.to_string()).collect() };
+            Some(ChartPart { kind: "line", grouping: "standard", horizontal: false, categories: labels, series: vec![Series { name: spec.title.clone(), values: v.spark.clone(), colour: colour_of(0), hidden: false }], unit: String::new(), numfmt: "#,##0.00", secondary: Vec::new(), unit2: String::new(), mini: true })
+        } else {
+            None
+        },
     }
 }
 
-fn body_of(s: &PptxSlide) -> Body {
-    match &s.data {
-        ItemData::Chart(c) => chart_body(c, &s.scale),
-        ItemData::Table(t) => table_body(t, &s.scale),
-        ItemData::Kpi(k) => match &s.kpi {
+pub(crate) fn body_for(data: &ItemData, scale: &(f64, usize, String), kpi: &Option<(KpiSpec, KpiUnit)>) -> Body {
+    match data {
+        ItemData::Chart(c) => chart_body(c, scale),
+        ItemData::Table(t) => table_body(t, scale),
+        ItemData::Kpi(k) => match kpi {
             Some((spec, unit)) => kpi_body(k, spec, *unit),
             None => Body::Note("This card has no settings.".into()),
         },
@@ -322,8 +341,7 @@ fn str_cache(vals: &[String]) -> String {
 fn chart_xml(c: &ChartPart) -> String {
     let n = c.categories.len();
     let cat_ref = format!("Sheet1!$A$2:$A${}", n + 1);
-    let mut sers = String::new();
-    for (i, s) in c.series.iter().enumerate() {
+    let ser_xml = |i: usize, s: &Series| -> String {
         let col = col_letter(i + 1);
         let fill = if s.hidden { "<a:noFill/>".to_string() } else { format!("<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>", hex6(s.colour)) };
         let sp = match c.kind {
@@ -333,7 +351,7 @@ fn chart_xml(c: &ChartPart) -> String {
         };
         let dpts = if c.kind == "donut" { (0..n).map(|k| format!("<c:dPt><c:idx val=\"{}\"/><c:bubble3D val=\"0\"/><c:spPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill></c:spPr></c:dPt>", k, hex6(colour_of(k)))).collect::<String>() } else { String::new() };
         let pts: String = s.values.iter().enumerate().filter_map(|(k, v)| v.map(|x| format!("<c:pt idx=\"{}\"><c:v>{}</c:v></c:pt>", k, x))).collect();
-        sers.push_str(&format!(
+        format!(
             "<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/><c:tx><c:strRef><c:f>Sheet1!${col}$1</c:f><c:strCache>{name}</c:strCache></c:strRef></c:tx>{sp}{dpts}<c:cat><c:strRef><c:f>{cat_ref}</c:f><c:strCache>{cats}</c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!${col}$2:${col}${last}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"{n}\"/>{pts}</c:numCache></c:numRef></c:val>{smooth}</c:ser>",
             i = i,
             col = col,
@@ -346,32 +364,51 @@ fn chart_xml(c: &ChartPart) -> String {
             n = n,
             pts = pts,
             smooth = if c.kind == "line" { "<c:smooth val=\"0\"/>" } else { "" }
-        ));
-    }
+        )
+    };
     let overlap = if c.grouping == "stacked" || c.grouping == "percentStacked" { "<c:overlap val=\"100\"/>" } else { "" };
-    let group = match c.kind {
-        "bar" => format!("<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{}<c:gapWidth val=\"80\"/>{}<c:axId val=\"111\"/><c:axId val=\"112\"/></c:barChart>", if c.horizontal { "bar" } else { "col" }, c.grouping, sers, overlap),
-        "line" => format!("<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{}<c:marker val=\"1\"/><c:axId val=\"111\"/><c:axId val=\"112\"/></c:lineChart>", sers),
-        "area" => format!("<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{}<c:axId val=\"111\"/><c:axId val=\"112\"/></c:areaChart>", if c.grouping == "standard" { "standard" } else { c.grouping }, sers),
+    // one chart group per value axis: the first measure's unit on the left, any other unit on the right
+    let group = |sers: &str, ax: (u32, u32)| match c.kind {
+        "bar" => format!("<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{}<c:gapWidth val=\"80\"/>{}<c:axId val=\"{}\"/><c:axId val=\"{}\"/></c:barChart>", if c.horizontal { "bar" } else { "col" }, c.grouping, sers, overlap, ax.0, ax.1),
+        "line" => format!("<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{}<c:marker val=\"1\"/><c:axId val=\"{}\"/><c:axId val=\"{}\"/></c:lineChart>", sers, ax.0, ax.1),
+        "area" => format!("<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{}<c:axId val=\"{}\"/><c:axId val=\"{}\"/></c:areaChart>", c.grouping, sers, ax.0, ax.1),
         _ => format!("<c:doughnutChart><c:varyColors val=\"1\"/>{}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"55\"/></c:doughnutChart>", sers),
     };
+    let first: String = c.series.iter().enumerate().filter(|(i, _)| !c.secondary.contains(i)).map(|(i, s)| ser_xml(i, s)).collect();
+    let second: String = c.series.iter().enumerate().filter(|(i, _)| c.secondary.contains(i)).map(|(i, s)| ser_xml(i, s)).collect();
+    let mut groups = group(&first, (111, 112));
+    if !second.is_empty() {
+        groups.push_str(&group(&second, (113, 114)));
+    }
     let axes = if c.kind == "donut" {
         String::new()
     } else {
         let (cat_pos, val_pos) = if c.horizontal { ("l", "b") } else { ("b", "l") };
-        let title = if c.unit.is_empty() { String::new() } else { format!("<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1100\" b=\"0\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>", esc(&c.unit)) };
-        format!(
-            "<c:catAx><c:axId val=\"111\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"{cp}\"/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"low\"/><c:crossAx val=\"112\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx><c:valAx><c:axId val=\"112\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"{vp}\"/><c:majorGridlines><c:spPr><a:ln w=\"6350\"><a:solidFill><a:srgbClr val=\"E1E0D9\"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>{title}<c:numFmt formatCode=\"{fmt}\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"111\"/><c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>",
+        let title = |u: &str| if u.is_empty() || c.mini { String::new() } else { format!("<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1100\" b=\"0\"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title>", esc(u)) };
+        let del = if c.mini { 1 } else { 0 };
+        let grid = if c.mini { String::new() } else { "<c:majorGridlines><c:spPr><a:ln w=\"6350\"><a:solidFill><a:srgbClr val=\"E1E0D9\"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>".to_string() };
+        let mut x = format!(
+            "<c:catAx><c:axId val=\"111\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{del}\"/><c:axPos val=\"{cp}\"/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"low\"/><c:crossAx val=\"112\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx><c:valAx><c:axId val=\"112\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{del}\"/><c:axPos val=\"{vp}\"/>{grid}{title}<c:numFmt formatCode=\"{fmt}\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"111\"/><c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>",
+            del = del,
             cp = cat_pos,
             vp = val_pos,
-            title = title,
+            grid = grid,
+            title = title(&c.unit),
             fmt = c.numfmt
-        )
+        );
+        if !second.is_empty() {
+            x.push_str(&format!(
+                "<c:catAx><c:axId val=\"113\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"1\"/><c:axPos val=\"b\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"114\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx><c:valAx><c:axId val=\"114\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"r\"/>{}<c:numFmt formatCode=\"{}\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"113\"/><c:crosses val=\"max\"/><c:crossBetween val=\"between\"/></c:valAx>",
+                title(&c.unit2),
+                if c.unit2 == "%" { "#,##0.0" } else if c.unit2.is_empty() { "#,##0" } else { "#,##0.00" }
+            ));
+        }
+        x
     };
-    let hide_legend = c.series.len() == 1 && c.kind != "donut" || c.series.iter().any(|s| s.hidden);
+    let hide_legend = c.mini || (c.series.len() == 1 && c.kind != "donut") || c.series.iter().any(|s| s.hidden);
     let legend = if hide_legend { String::new() } else { "<c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/></c:legend>".to_string() };
     format!(
-        "{XML}<c:chartSpace xmlns:c=\"{NS_C}\" xmlns:a=\"{NS_A}\" xmlns:r=\"{NS_R}\"><c:roundedCorners val=\"0\"/><c:chart><c:autoTitleDeleted val=\"1\"/><c:plotArea><c:layout/>{group}{axes}</c:plotArea>{legend}<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1200\"/></a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr><c:externalData r:id=\"rId1\"><c:autoUpdate val=\"0\"/></c:externalData></c:chartSpace>"
+        "{XML}<c:chartSpace xmlns:c=\"{NS_C}\" xmlns:a=\"{NS_A}\" xmlns:r=\"{NS_R}\"><c:roundedCorners val=\"0\"/><c:chart><c:autoTitleDeleted val=\"1\"/><c:plotArea><c:layout/>{groups}{axes}</c:plotArea>{legend}<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz=\"1200\"/></a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr><c:externalData r:id=\"rId1\"><c:autoUpdate val=\"0\"/></c:externalData></c:chartSpace>"
     )
 }
 
@@ -451,15 +488,15 @@ fn table_frame(id: usize, head: &[String], rows: &[Vec<String>], indent: &[usize
     )
 }
 
-fn chart_frame(id: usize, alt: &str) -> String {
+fn chart_frame(id: usize, alt: &str, rect: (i64, i64, i64, i64)) -> String {
     format!(
         "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"{id}\" name=\"Chart\" descr=\"{alt}\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{w}\" cy=\"{h}\"/></p:xfrm><a:graphic><a:graphicData uri=\"{NS_C}\"><c:chart xmlns:c=\"{NS_C}\" r:id=\"rId2\"/></a:graphicData></a:graphic></p:graphicFrame>",
         id = id,
         alt = esc(alt),
-        x = MARGIN,
-        y = MARGIN + TITLE_H,
-        w = SLIDE_W - 2 * MARGIN,
-        h = SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H,
+        x = rect.0,
+        y = rect.1,
+        w = rect.2,
+        h = rect.3,
         NS_C = NS_C
     )
 }
@@ -479,11 +516,11 @@ fn slide_xml(title: &str, foot: &str, body: &str, background: bool) -> String {
 }
 
 fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
-    let body = body_of(s);
+    let body = body_for(&s.data, &s.scale, &s.kpi);
     match body {
         Body::Chart(c) => {
             let alt = format!("{}: chart of {} categories", s.title, c.categories.len());
-            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &chart_frame(4, &alt), background), chart: Some(c) }]
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &chart_frame(4, &alt, (MARGIN, MARGIN + TITLE_H, SLIDE_W - 2 * MARGIN, SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H)), background), chart: Some(c) }]
         }
         Body::Table { head, rows, indent, bold, note } => {
             let pages = rows.len().div_ceil(TABLE_ROWS_PER_SLIDE).max(1);
@@ -501,7 +538,7 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
                 })
                 .collect()
         }
-        Body::Kpi { value, value_colour, change, change_colour, words, period, reason } => {
+        Body::Kpi { value, value_colour, change, change_colour, words, period, reason, spark } => {
             let mut paras = para(&value, 6000, true, value_colour, "l");
             if !change.is_empty() {
                 paras.push_str(&para(&change, 2800, false, change_colour, "l"));
@@ -524,7 +561,15 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
                 SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H,
                 paras
             );
-            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &card, background), chart: None }]
+            // the sparkline is a small native line chart on the card, bottom right
+            let (body, chart) = match spark {
+                Some(c) => {
+                    let frame = chart_frame(5, &format!("{}: the last {} periods", s.title, c.categories.len()), (SLIDE_W - MARGIN - 4_200_000, SLIDE_H - MARGIN - FOOT_H - 1_900_000, 3_800_000, 1_500_000));
+                    (format!("{}{}", card, frame), Some(c))
+                }
+                None => (card, None),
+            };
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &body, background), chart }]
         }
         Body::Note(m) => {
             let b = text_box(4, "Message", MARGIN, MARGIN + TITLE_H, SLIDE_W - 2 * MARGIN, 1_000_000, &para(&m, 2000, false, Some(0x52514E), "l"));

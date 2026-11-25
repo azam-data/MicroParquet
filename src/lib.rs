@@ -12,6 +12,7 @@ pub mod column_stats;
 pub mod commands;
 pub mod curves;
 pub mod dashboard;
+pub mod dashboard_pdf;
 pub mod dates;
 pub mod dq;
 pub mod ecl;
