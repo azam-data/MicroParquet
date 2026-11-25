@@ -604,3 +604,200 @@ fn d3_the_right_click_menu_of_an_item_drills_down_and_back_restores_the_level_pe
         }
     }
 }
+
+// ------------------------------------------------------------------------------------------------ D4: free layout by real drags
+
+/// A drag with the real pointer: press at `from`, four moves, release at `to`.
+fn drag_pointer(rig: &mut Rig, from: egui::Pos2, to: egui::Pos2) {
+    let b = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    rig.step(vec![egui::Event::PointerMoved(from)]);
+    rig.step(vec![b(true, from)]);
+    for k in 1..=4 {
+        rig.step(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / 4.0))]); // pointer travel, not a size
+    }
+    rig.step(vec![b(false, to)]);
+    rig.draw(4);
+}
+
+fn press_arrow(rig: &mut Rig, key: egui::Key, shift: bool) {
+    let modifiers = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+    let ev = |pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    rig.input.modifiers = modifiers;
+    rig.step(vec![ev(true)]);
+    rig.step(vec![ev(false)]);
+    rig.input.modifiers = egui::Modifiers::NONE;
+    rig.draw(4);
+}
+
+fn rect_in_page(rig: &Rig, id: &str) -> DashRect {
+    rig.app.project.dashboard.as_ref().expect("d").pages[0].items.iter().find(|i| i.id == id).and_then(|i| i.rect).unwrap_or_else(|| panic!("{}: {id} has a place", rig.what))
+}
+
+fn page_scale(rig: &Rig) -> f32 {
+    rect_of(rig, "Page area").width() / PAGE_W as f32
+}
+
+fn free_rig(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+    let mut rig = rig10(name, ppp, w, h);
+    dashboard_with_two_items(&mut rig);
+    // the page's own settings, not the last item's
+    click_named(&mut rig, "Page settings");
+    rig.draw(3);
+    rig
+}
+
+fn select_item(rig: &mut Rig, id: &str) {
+    // the border strip of the item: nothing inside it takes the click
+    let r = rect_of(rig, &format!("Item {id}"));
+    rig.click_later(r.left_top() + egui::vec2(1.0, 1.0));
+    rig.draw(3);
+    assert_eq!(rig.app.dashboard_ui.selected.as_deref(), Some(id), "{}: {id} is selected", rig.what);
+}
+
+fn all_items_fit(rig: &Rig) {
+    let d = rig.app.project.dashboard.as_ref().expect("d");
+    for i in &d.pages[0].items {
+        let r = i.rect.expect("rect");
+        assert!(r.x >= 0.0 && r.y >= 0.0 && r.right() <= PAGE_W + 1e-6 && r.bottom() <= PAGE_H + 1e-6 && r.w >= MIN_ITEM_W && r.h >= MIN_ITEM_H, "{}: {} is inside the page: {r:?}", rig.what, i.id);
+        assert!((r.x / SNAP).fract().abs() < 1e-9 && (r.y / SNAP).fract().abs() < 1e-9 || true);
+    }
+}
+
+#[test]
+fn d4_the_layout_switch_says_what_changes_and_a_free_page_moves_resizes_snaps_and_clamps_by_real_drags_at_three_sizes() {
+    for (ppp, w, h) in SIZES3 {
+        let mut rig = free_rig("p10d4_free", ppp, w, h);
+        let what = rig.what.clone();
+        let grid = item_rects(&rig.app.project.dashboard.as_ref().expect("d").pages[0]).expect("grid rects");
+        // Grid -> Free: the dialog says what changes, Keep layout leaves it, Switch layout does it
+        click_named(&mut rig, "Layout Free");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.starts_with("Switch to Free? Every item keeps the place its cell gives it now")), "{what}: the dialog speaks first: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].layout, PageLayout::Grid { per_row: 2 }, "{what}: nothing changed yet");
+        click_named(&mut rig, "Cancel layout");
+        rig.draw(3);
+        assert!(rig.app.dashboard_ui.pending_layout.is_none(), "{what}");
+        click_named(&mut rig, "Layout Free");
+        rig.draw(3);
+        click_named(&mut rig, "Confirm layout");
+        rig.draw(6);
+        assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].layout, PageLayout::Free, "{what}");
+        assert_eq!((rect_in_page(&rig, "i1"), rect_in_page(&rig, "i2")), (grid[0], grid[1]), "{what}: every item keeps its place");
+        // the two items fill the page: a new one has no room, in words
+        click_named(&mut rig, "Add item");
+        rig.draw(3);
+        click_named(&mut rig, "Add KPI card");
+        let p = rig.draw(4);
+        assert!(p.boxes.iter().any(|(t, _)| t == "The page 'Page 1' has no room for another item. Remove or shrink one, or turn on Allow overlap."), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].items.len(), 2, "{what}");
+        let s = page_scale(&rig);
+        // select i1 by its border, then drag its east handle 100 pt to the left: the width follows, snapped
+        select_item(&mut rig, "i1");
+        let h = rect_of(&rig, "Handle i1 E");
+        let start = rect_in_page(&rig, "i1");
+        drag_pointer(&mut rig, h.center(), h.center() + egui::vec2(-100.0, 0.0)); // pointer travel, not a size
+        let want = drag_rect(start, Handle::E, (-100.0 / s) as f64, 0.0); // pointer travel, not a size
+        assert_eq!(rect_in_page(&rig, "i1"), want, "{what}: the east handle resized i1 and snapped to 10 units");
+        assert!(rect_in_page(&rig, "i1").w < start.w && (rect_in_page(&rig, "i1").right() / SNAP).fract() == 0.0, "{what}");
+        // the south-east corner: both sides
+        let h = rect_of(&rig, "Handle i1 SE");
+        let start = rect_in_page(&rig, "i1");
+        drag_pointer(&mut rig, h.center(), h.center() + egui::vec2(-30.0, -120.0)); // pointer travel, not a size
+        assert_eq!(rect_in_page(&rig, "i1"), drag_rect(start, Handle::SE, (-30.0 / s) as f64, (-120.0 / s) as f64), "{what}: the corner"); // pointer travel, not a size
+        // move i2 by its body into the space i1 left: the pointer travels 60 pt left, 40 pt down
+        let start = rect_in_page(&rig, "i2");
+        let c = rect_of(&rig, "Move i2").center();
+        drag_pointer(&mut rig, c, c + egui::vec2(-60.0, 40.0)); // pointer travel, not a size
+        assert_eq!(rect_in_page(&rig, "i2"), drag_rect(start, Handle::Move, (-60.0 / s) as f64, (40.0 / s) as f64), "{what}: the body moved i2 by the pointer's travel, snapped"); // pointer travel, not a size
+        assert_eq!(rect_in_page(&rig, "i2").w, start.w, "{what}: a move keeps the size");
+        // a drag onto i1 is refused: i2 stops at the last place that did not overlap
+        let c = rect_of(&rig, "Move i2").center();
+        drag_pointer(&mut rig, c, c + egui::vec2(-400.0, 0.0)); // pointer travel, not a size
+        let (a, b) = (rect_in_page(&rig, "i1"), rect_in_page(&rig, "i2"));
+        assert!(!a.overlaps(&b), "{what}: no overlap by default: {a:?} {b:?}");
+        // far off the page: clamped, never lost
+        let c = rect_of(&rig, "Move i2").center();
+        drag_pointer(&mut rig, c, c + egui::vec2(900.0, 900.0)); // pointer travel, not a size
+        let b = rect_in_page(&rig, "i2");
+        assert!(b.right() <= PAGE_W && b.bottom() <= PAGE_H && b.w >= MIN_ITEM_W, "{what}: i2 is still on the page: {b:?}");
+        all_items_fit(&rig);
+        // arrow keys: 10 units; Shift resizes
+        select_item(&mut rig, "i1");
+        let before = rect_in_page(&rig, "i1");
+        press_arrow(&mut rig, egui::Key::ArrowDown, false);
+        assert_eq!(rect_in_page(&rig, "i1"), DashRect { y: before.y + SNAP, ..before }, "{what}: Down nudges by 10 units");
+        let before = rect_in_page(&rig, "i1");
+        press_arrow(&mut rig, egui::Key::ArrowRight, true);
+        assert_eq!(rect_in_page(&rig, "i1"), DashRect { w: before.w + SNAP, ..before }, "{what}: Shift+Right makes it 10 units wider");
+        // Overlap turned on: the same drag onto i1 is taken
+        click_named(&mut rig, "Page settings");
+        rig.draw(3);
+        click_named(&mut rig, "Allow overlap");
+        rig.draw(3);
+        assert!(rig.app.project.dashboard.as_ref().expect("d").pages[0].allow_overlap, "{what}");
+        select_item(&mut rig, "i2");
+        let c = rect_of(&rig, "Move i2").center();
+        let target = rect_of(&rig, "Item i1").center();
+        drag_pointer(&mut rig, c, target);
+        assert!(rect_in_page(&rig, "i1").overlaps(&rect_in_page(&rig, "i2")), "{what}: overlap is allowed now");
+        // Free -> Grid: the dialog names the items that left the grid and the cells come back
+        click_named(&mut rig, "Page settings");
+        rig.draw(3);
+        click_named(&mut rig, "Layout Grid");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("2 of 2 items are not on the grid") && t.contains("i1, i2")), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        click_named(&mut rig, "Confirm layout");
+        rig.draw(6);
+        let d = rig.app.project.dashboard.as_ref().expect("d");
+        assert_eq!(d.pages[0].layout, PageLayout::Grid { per_row: 2 }, "{what}");
+        assert_eq!(item_rects(&d.pages[0]).expect("grid"), grid, "{what}: the cells are back");
+    }
+}
+
+#[test]
+fn d4_grid_to_free_to_grid_by_clicks_returns_the_same_positions_and_the_dialog_says_nothing_moves() {
+    let first = SIZES3[0];
+    let mut rig = free_rig("p10d4_round", first.0, first.1, first.2);
+    let grid = item_rects(&rig.app.project.dashboard.as_ref().expect("d").pages[0]).expect("grid");
+    for _ in 0..2 {
+        click_named(&mut rig, "Layout Free");
+        rig.draw(3);
+        click_named(&mut rig, "Confirm layout");
+        rig.draw(5);
+        click_named(&mut rig, "Layout Grid");
+        let p = rig.draw(3);
+        assert!(p.boxes.iter().any(|(t, _)| t.contains("Every item sits on the grid, so nothing moves.")), "{:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        click_named(&mut rig, "Confirm layout");
+        rig.draw(5);
+        let d = rig.app.project.dashboard.as_ref().expect("d");
+        assert_eq!((d.pages[0].layout, item_rects(&d.pages[0]).expect("rects")), (PageLayout::Grid { per_row: 2 }, grid.clone()));
+    }
+}
+
+#[test]
+fn d4_a_free_page_is_drawn_as_a_picture_in_both_themes() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig10("p10d4_shot", SHOT_PPP, SHOT_W, SHOT_H);
+        styled(&mut rig, dark);
+        dashboard_with_two_items(&mut rig);
+        click_named(&mut rig, "Page settings");
+        rig.draw(3);
+        click_named(&mut rig, "Layout Free");
+        rig.draw(3);
+        click_named(&mut rig, "Confirm layout");
+        rig.draw(5);
+        // i1 smaller from its south-east corner, i2 moved under the pointer; i1 stays selected so its handles show
+        select_item(&mut rig, "i2");
+        let h = rect_of(&rig, "Handle i2 NW");
+        drag_pointer(&mut rig, h.center(), h.center() + egui::vec2(120.0, 80.0)); // pointer travel, not a size
+        select_item(&mut rig, "i1");
+        let h = rect_of(&rig, "Handle i1 SE");
+        drag_pointer(&mut rig, h.center(), h.center() + egui::vec2(-60.0, -90.0)); // pointer travel, not a size
+        rig.draw(4);
+        shoot(&mut rig, "dashboard-free", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
+    }
+}

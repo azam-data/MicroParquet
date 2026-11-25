@@ -71,6 +71,12 @@ pub struct DashPage {
     /// At most `MAX_PAGE_FILTERS`.
     pub filters: Vec<PageFilter>,
     pub background: Option<TemplateRef>,
+    /// Free layout only: items may overlap (off by default).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_overlap: bool,
+    /// The items per row the page had before it was made Free, so switching back gives the same cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_per_row: Option<usize>,
     /// What the reader had picked: saved with the project so reopening shows the same page.
     pub state: PageState,
 }
@@ -298,6 +304,179 @@ pub fn item_rects(page: &DashPage) -> Result<Vec<DashRect>> {
     match page.layout {
         PageLayout::Grid { per_row } => grid_rects(per_row, page.items.len(), PAGE_W, PAGE_H),
         PageLayout::Free => page.items.iter().map(|i| i.rect.ok_or_else(|| anyhow::anyhow!("The item '{}' on the page '{}' has no place yet. Drag it onto the page.", i.id, page.title))).collect(),
+    }
+}
+
+// -------------------------------------------------------------------------------------- free layout (Phase 10 D4)
+
+/// The smallest an item may be made, in page units.
+pub const MIN_ITEM_W: f64 = 60.0;
+pub const MIN_ITEM_H: f64 = 40.0;
+/// The size of an item added to a Free page.
+pub const NEW_ITEM_W: f64 = 300.0;
+pub const NEW_ITEM_H: f64 = 200.0;
+
+/// What a drag holds: the whole item, a side or a corner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Handle {
+    Move,
+    N,
+    S,
+    E,
+    W,
+    NE,
+    NW,
+    SE,
+    SW,
+}
+
+impl Handle {
+    pub const ALL: [Handle; 8] = [Handle::NW, Handle::N, Handle::NE, Handle::E, Handle::SE, Handle::S, Handle::SW, Handle::W];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Handle::Move => "move",
+            Handle::N => "N",
+            Handle::S => "S",
+            Handle::E => "E",
+            Handle::W => "W",
+            Handle::NE => "NE",
+            Handle::NW => "NW",
+            Handle::SE => "SE",
+            Handle::SW => "SW",
+        }
+    }
+}
+
+impl DashRect {
+    pub fn right(&self) -> f64 {
+        self.x + self.w
+    }
+
+    pub fn bottom(&self) -> f64 {
+        self.y + self.h
+    }
+
+    /// True when the two share area; touching edges do not overlap.
+    pub fn overlaps(&self, o: &DashRect) -> bool {
+        self.x < o.right() - 1e-9 && o.x < self.right() - 1e-9 && self.y < o.bottom() - 1e-9 && o.y < self.bottom() - 1e-9
+    }
+}
+
+pub fn snap(v: f64) -> f64 {
+    (v / SNAP).round() * SNAP
+}
+
+/// The rect brought inside the page: never smaller than the minimum, never off an edge. An item dragged away is put back, not lost.
+pub fn clamp_to_page(r: DashRect) -> DashRect {
+    let w = r.w.clamp(MIN_ITEM_W, PAGE_W);
+    let h = r.h.clamp(MIN_ITEM_H, PAGE_H);
+    DashRect { x: r.x.clamp(0.0, PAGE_W - w), y: r.y.clamp(0.0, PAGE_H - h), w, h }
+}
+
+/// The rect after dragging `handle` by (`dx`, `dy`) page units from `start`: the edges that move snap to the 10-unit grid, the
+/// others stay where they were; the result is inside the page and not below the minimum size.
+pub fn drag_rect(start: DashRect, handle: Handle, dx: f64, dy: f64) -> DashRect {
+    if handle == Handle::Move {
+        return clamp_to_page(DashRect { x: snap(start.x + dx), y: snap(start.y + dy), w: start.w, h: start.h });
+    }
+    let (mut l, mut t, mut r, mut b) = (start.x, start.y, start.right(), start.bottom());
+    if matches!(handle, Handle::W | Handle::NW | Handle::SW) {
+        l = snap(l + dx).clamp(0.0, r - MIN_ITEM_W);
+    }
+    if matches!(handle, Handle::E | Handle::NE | Handle::SE) {
+        r = snap(r + dx).clamp(l + MIN_ITEM_W, PAGE_W);
+    }
+    if matches!(handle, Handle::N | Handle::NE | Handle::NW) {
+        t = snap(t + dy).clamp(0.0, b - MIN_ITEM_H);
+    }
+    if matches!(handle, Handle::S | Handle::SE | Handle::SW) {
+        b = snap(b + dy).clamp(t + MIN_ITEM_H, PAGE_H);
+    }
+    DashRect { x: l, y: t, w: r - l, h: b - t }
+}
+
+impl DashPage {
+    /// Where item `idx` ends up when it is asked to take `want`: inside the page, and not over another item unless the page allows
+    /// it. A place that is not allowed gives `prev` (the last good place), so a drag never jumps onto another item.
+    pub fn place(&self, idx: usize, want: DashRect, prev: DashRect) -> DashRect {
+        let r = clamp_to_page(want);
+        if self.allow_overlap {
+            return r;
+        }
+        let blocked = self.items.iter().enumerate().any(|(i, it)| i != idx && it.rect.is_some_and(|o| o.overlaps(&r)));
+        if blocked {
+            prev
+        } else {
+            r
+        }
+    }
+
+    /// The first free place for a new item of `w` × `h`, scanning rows from the top left in snapped steps. A page with no room is an
+    /// error in words (the page may allow overlap, or lose an item).
+    pub fn first_free_spot(&self, w: f64, h: f64) -> Result<DashRect> {
+        let mut y = 0.0;
+        while y + h <= PAGE_H + 1e-9 {
+            let mut x = 0.0;
+            while x + w <= PAGE_W + 1e-9 {
+                let r = DashRect { x, y, w, h };
+                if !self.items.iter().any(|i| i.rect.is_some_and(|o| o.overlaps(&r))) {
+                    return Ok(r);
+                }
+                x += SNAP;
+            }
+            y += SNAP;
+        }
+        if self.allow_overlap {
+            return Ok(DashRect { x: 0.0, y: 0.0, w, h });
+        }
+        bail!("The page '{}' has no room for another item. Remove or shrink one, or turn on Allow overlap.", self.title)
+    }
+
+    /// Grid to Free: every item keeps the place its cell gave it.
+    pub fn to_free(&mut self) -> Result<()> {
+        if let PageLayout::Grid { per_row } = self.layout {
+            let rects = grid_rects(per_row, self.items.len(), PAGE_W, PAGE_H)?;
+            for (i, r) in self.items.iter_mut().zip(rects) {
+                i.rect = Some(r);
+            }
+            self.grid_per_row = Some(per_row);
+            self.layout = PageLayout::Free;
+        }
+        Ok(())
+    }
+
+    /// Free to Grid: the items go to the cells of their order, with the items per row the page had before it was Free.
+    pub fn to_grid(&mut self) {
+        if self.layout == PageLayout::Free {
+            for i in &mut self.items {
+                i.rect = None;
+            }
+            self.layout = PageLayout::Grid { per_row: self.grid_per_row.unwrap_or(2).clamp(1, MAX_PER_ROW) };
+        }
+    }
+
+    /// The ids of the items of a Free page that do not sit on the cell their order gives them.
+    pub fn off_grid_items(&self) -> Vec<String> {
+        let per_row = self.grid_per_row.unwrap_or(2).clamp(1, MAX_PER_ROW);
+        let cells = grid_rects(per_row, self.items.len(), PAGE_W, PAGE_H).unwrap_or_default();
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        self.items.iter().enumerate().filter(|(i, it)| !it.rect.zip(cells.get(*i)).is_some_and(|(r, c)| near(r.x, c.x) && near(r.y, c.y) && near(r.w, c.w) && near(r.h, c.h))).map(|(_, it)| it.id.clone()).collect()
+    }
+
+    /// What the switch dialog says before the layout changes.
+    pub fn switch_message(&self) -> String {
+        match self.layout {
+            PageLayout::Grid { .. } => "Every item keeps the place its cell gives it now, and you can then drag and resize them. Switching back puts each item in the cell of its order; an item you have moved goes back to its cell.".to_string(),
+            PageLayout::Free => {
+                let off = self.off_grid_items();
+                if off.is_empty() {
+                    "Every item sits on the grid, so nothing moves.".to_string()
+                } else {
+                    format!("{} of {} items are not on the grid. They will go to the cells of their order and lose the place you gave them: {}.", off.len(), self.items.len(), off.join(", "))
+                }
+            }
+        }
     }
 }
 

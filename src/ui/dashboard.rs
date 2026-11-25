@@ -16,12 +16,27 @@ use std::collections::HashMap;
 pub const NO_PROJECT: &str = "Dashboards belong to a project. Save or open a project first.";
 pub const DASH_BUTTON: &str = "Dashboard";
 
+/// A drag of an item (or one of its handles) on a Free page.
+#[derive(Clone, Debug)]
+pub struct DragState {
+    pub item: String,
+    pub handle: Handle,
+    /// The item's rect when the drag started.
+    pub start: DashRect,
+    /// How far the pointer has gone since, in screen points.
+    pub total: egui::Vec2,
+    /// The last place that was allowed.
+    pub last_ok: DashRect,
+}
+
 /// What a click on the page asked for; the page state is changed after the page is drawn.
 pub enum PageAct {
     Cross(CrossPick),
     DrillDown(String, String),
     DrillBack(String, usize),
     Notice(String),
+    /// A drag, a resize or an arrow key gave the item this place on a Free page.
+    SetRect(String, DashRect),
 }
 
 /// One item's latest numbers.
@@ -63,6 +78,10 @@ pub struct DashboardUi {
     pub values: HashMap<String, FilterValues>,
     pub add_filter: Option<AddFilter>,
     pub confirm_delete: bool,
+    /// The layout the page was asked to switch to, waiting for the dialog's answer: `true` is Free.
+    pub pending_layout: Option<bool>,
+    /// The drag in progress on a Free page.
+    pub drag: Option<DragState>,
     /// A refusal or a note in plain words, shown under the header.
     pub notice: String,
     pub next_id: u64,
@@ -567,6 +586,44 @@ impl MicroParquetApp {
                     dash.pages[pi].layout = PageLayout::Grid { per_row: n };
                 });
             }
+            // the layout: Grid or Free, with a dialog that says what changes before it does
+            ui.horizontal(|ui| {
+                ui.label("Layout");
+                let free = dash.pages[pi].layout == PageLayout::Free;
+                for (name, is_free) in [("Grid", false), ("Free", true)] {
+                    let r = ui.selectable_label(free == is_free, name);
+                    rects.push((format!("Layout {name}"), r.rect));
+                    if r.clicked() && free != is_free {
+                        self.dashboard_ui.pending_layout = Some(is_free);
+                    }
+                }
+            });
+            if let Some(to_free) = self.dashboard_ui.pending_layout {
+                if (dash.pages[pi].layout == PageLayout::Free) == to_free {
+                    self.dashboard_ui.pending_layout = None;
+                } else {
+                    ui.label(egui::RichText::new(format!("Switch to {}? {}", if to_free { "Free" } else { "Grid" }, dash.pages[pi].switch_message())).color(tk.warning));
+                    ui.horizontal(|ui| {
+                        if Self::dash_button(ui, "Confirm layout", "Switch layout", &mut rects) {
+                            if to_free {
+                                if let Err(e) = dash.pages[pi].to_free() {
+                                    self.dashboard_ui.notice = format!("{:#}", e);
+                                }
+                            } else {
+                                dash.pages[pi].to_grid();
+                            }
+                            self.dashboard_ui.pending_layout = None;
+                        }
+                        if Self::dash_button(ui, "Cancel layout", "Keep layout", &mut rects) {
+                            self.dashboard_ui.pending_layout = None;
+                        }
+                    });
+                }
+            }
+            if dash.pages[pi].layout == PageLayout::Free {
+                let r = ui.checkbox(&mut dash.pages[pi].allow_overlap, "Allow overlap");
+                rects.push(("Allow overlap".into(), r.rect));
+            }
             ui.horizontal_wrapped(|ui| {
                 if Self::dash_button(ui, "Page earlier", "Move up", &mut rects) {
                     page_op = Some(("up", pi));
@@ -636,18 +693,37 @@ impl MicroParquetApp {
             let taken: Vec<String> = dash.pages[pi].items.iter().map(|i| i.id.clone()).collect();
             let id = self.dashboard_ui.fresh_id("i", &taken);
             self.dashboard_ui.selected = Some(id.clone());
-            dash.pages[pi].items.push(DashItem { id, kind, ..Default::default() });
+            let mut rect = None;
+            let mut ok = true;
+            if dash.pages[pi].layout == PageLayout::Free {
+                match dash.pages[pi].first_free_spot(NEW_ITEM_W, NEW_ITEM_H) {
+                    Ok(r) => rect = Some(r),
+                    Err(e) => {
+                        self.dashboard_ui.notice = format!("{:#}", e);
+                        ok = false;
+                    }
+                }
+            }
+            if ok {
+                dash.pages[pi].items.push(DashItem { id, kind, rect, ..Default::default() });
+            } else {
+                self.dashboard_ui.selected = None;
+            }
         }
         for act in acts {
-            let st = &mut dash.pages[pi].state;
             match act {
                 PageAct::Cross(p) => {
-                    st.toggle_cross(p);
+                    dash.pages[pi].state.toggle_cross(p);
                     self.dashboard_ui.notice.clear();
                 }
-                PageAct::DrillDown(item, v) => st.drill_down(&item, &v),
-                PageAct::DrillBack(item, depth) => st.drill_back_to(&item, depth),
+                PageAct::DrillDown(item, v) => dash.pages[pi].state.drill_down(&item, &v),
+                PageAct::DrillBack(item, depth) => dash.pages[pi].state.drill_back_to(&item, depth),
                 PageAct::Notice(m) => self.dashboard_ui.notice = m,
+                PageAct::SetRect(item, r) => {
+                    if let Some(i) = dash.pages[pi].items.iter_mut().find(|i| i.id == item) {
+                        i.rect = Some(r);
+                    }
+                }
             }
         }
         if let Some((op, ii)) = item_op {
@@ -735,13 +811,64 @@ impl MicroParquetApp {
         if page.items.is_empty() {
             ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "This page is empty. Use Add item to put a chart or a pivot on it.", egui::FontId::proportional(theme::TEXT_BASE), tk.muted);
         }
-        for (item, r) in page.items.iter().zip(places) {
+        // arrow keys: 10 units; with Shift they resize (the bottom right corner), on the selected item of a Free page
+        if page.layout == PageLayout::Free && ui.memory(|m| m.focused().is_none()) {
+            if let Some(sel) = self.dashboard_ui.selected.clone() {
+                if let Some(ii) = page.items.iter().position(|i| i.id == sel) {
+                    let (dx, dy, shift) = ui.input(|i| {
+                        let k = |key| i.key_pressed(key) as i32 as f64;
+                        (k(egui::Key::ArrowRight) - k(egui::Key::ArrowLeft), k(egui::Key::ArrowDown) - k(egui::Key::ArrowUp), i.modifiers.shift)
+                    });
+                    if let (true, Some(cur)) = (dx != 0.0 || dy != 0.0, page.items[ii].rect) {
+                        let want = drag_rect(cur, if shift { Handle::SE } else { Handle::Move }, dx * SNAP, dy * SNAP);
+                        let new = page.place(ii, want, cur);
+                        if new != cur {
+                            acts.push(PageAct::SetRect(sel, new));
+                        }
+                    }
+                }
+            }
+        }
+        for (ii, (item, r)) in page.items.iter().zip(places).enumerate() {
             let rect = egui::Rect::from_min_size(area.min + egui::vec2(r.x as f32 * scale, r.y as f32 * scale), egui::vec2(r.w as f32 * scale, r.h as f32 * scale));
             let resolved = self.dash_resolve(item);
             let selected = self.dashboard_ui.selected.as_deref() == Some(item.id.as_str());
-            let click = ui.interact(rect, ui.id().with(("dash_item", item.id.clone())), egui::Sense::click());
+            let free = page.layout == PageLayout::Free;
+            let click = ui.interact(rect, ui.id().with(("dash_item", item.id.clone())), if free { egui::Sense::click_and_drag() } else { egui::Sense::click() });
+            if free {
+                if let Some(a) = self.free_drag(&click, page, ii, Handle::Move, scale) {
+                    acts.push(a);
+                }
+            }
             ui.painter().rect(rect, theme::RADIUS_CONTROL, tk.surface, if selected { theme::line_thick(tk.accent) } else { theme::line(tk.border) });
             rects.push((format!("Item {}", item.id), rect));
+            if free && selected {
+                for h in Handle::ALL {
+                    let c = match h {
+                        Handle::NW => rect.left_top(),
+                        Handle::N => rect.center_top(),
+                        Handle::NE => rect.right_top(),
+                        Handle::E => rect.right_center(),
+                        Handle::SE => rect.right_bottom(),
+                        Handle::S => rect.center_bottom(),
+                        Handle::SW => rect.left_bottom(),
+                        _ => rect.left_center(),
+                    };
+                    let hr = egui::Rect::from_center_size(c, egui::Vec2::splat(theme::DASH_HANDLE));
+                    let resp = ui.interact(hr, ui.id().with(("dash_handle", item.id.clone(), h)), egui::Sense::drag());
+                    ui.painter().rect(hr, 0.0, tk.accent, theme::line(tk.surface));
+                    rects.push((format!("Handle {} {}", item.id, h.name()), hr));
+                    resp.clone().on_hover_cursor(match h {
+                        Handle::N | Handle::S => egui::CursorIcon::ResizeVertical,
+                        Handle::E | Handle::W => egui::CursorIcon::ResizeHorizontal,
+                        Handle::NW | Handle::SE => egui::CursorIcon::ResizeNwSe,
+                        _ => egui::CursorIcon::ResizeNeSw,
+                    });
+                    if let Some(a) = self.free_drag(&resp, page, ii, h, scale) {
+                        acts.push(a);
+                    }
+                }
+            }
             if click.clicked() {
                 self.dashboard_ui.selected = Some(item.id.clone());
             }
@@ -749,6 +876,18 @@ impl MicroParquetApp {
             let title = item.title_override.clone().or_else(|| resolved.as_ref().ok().map(|r| r.title.clone())).unwrap_or_else(|| "Item".to_string());
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
             child.set_clip_rect(inner.intersect(ui.clip_rect()));
+            // on a Free page a bar above the title moves the item (a table or a chart under the pointer would take a drag of its own)
+            if free {
+                let (bar, resp) = child.allocate_exact_size(egui::vec2(inner.width(), theme::DASH_HANDLE), egui::Sense::drag());
+                for k in -1..=1 {
+                    child.painter().circle_filled(bar.center() + egui::vec2(k as f32 * theme::SPACE_S, 0.0), 1.0, tk.muted);
+                }
+                rects.push((format!("Move {}", item.id), bar));
+                resp.clone().on_hover_cursor(egui::CursorIcon::Grab);
+                if let Some(a) = self.free_drag(&resp, page, ii, Handle::Move, scale) {
+                    acts.push(a);
+                }
+            }
             // the title opens the source tab
             let key = item.source_key().map(|k| k.to_string());
             let t = child.add(egui::Label::new(theme::semibold(title.clone()).color(if key.is_some() { tk.accent } else { tk.ink })).truncate().sense(egui::Sense::click()));
@@ -839,6 +978,33 @@ impl MicroParquetApp {
                 }
             }
         }
+    }
+
+    /// One drag step of an item or a handle on a Free page: the pointer's travel since the press, in page units, gives the place
+    /// (snapped, inside the page, not over another item unless allowed). Returns the new place when it changed.
+    fn free_drag(&mut self, resp: &egui::Response, page: &DashPage, ii: usize, handle: Handle, scale: f32) -> Option<PageAct> {
+        let item = page.items.get(ii)?;
+        let cur = item.rect?;
+        if resp.drag_started_by(egui::PointerButton::Primary) {
+            self.dashboard_ui.drag = Some(DragState { item: item.id.clone(), handle, start: cur, total: egui::Vec2::ZERO, last_ok: cur });
+            self.dashboard_ui.selected = Some(item.id.clone());
+        }
+        let mut out = None;
+        if resp.dragged() {
+            if let Some(d) = self.dashboard_ui.drag.as_mut().filter(|d| d.item == item.id && d.handle == handle) {
+                d.total += resp.drag_delta();
+                let want = drag_rect(d.start, handle, (d.total.x / scale) as f64, (d.total.y / scale) as f64);
+                let new = page.place(ii, want, d.last_ok);
+                d.last_ok = new;
+                if new != cur {
+                    out = Some(PageAct::SetRect(item.id.clone(), new));
+                }
+            }
+        }
+        if resp.drag_stopped() && self.dashboard_ui.drag.as_ref().is_some_and(|d| d.item == item.id && d.handle == handle) {
+            self.dashboard_ui.drag = None;
+        }
+        out
     }
 
     /// The card's settings: what it shows, its unit, the comparison, which direction is good, up to two limits and the sparkline.

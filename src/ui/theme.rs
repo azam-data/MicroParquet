@@ -1562,6 +1562,8 @@ pub const DASH_RIGHT_W: f32 = 216.0;
 pub const DASH_PROPS_PAD: f32 = 24.0;
 pub const DASH_LABEL_EDIT_W: f32 = 110.0;
 pub const DASH_PER_ROW_W: f32 = 48.0;
+/// The side of a drag handle of an item on a Free page.
+pub const DASH_HANDLE: f32 = 10.0;
 /// The smallest scale a page is drawn at.
 pub const DASH_MIN_SCALE: f32 = 0.1;
 

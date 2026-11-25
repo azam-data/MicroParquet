@@ -38,3 +38,12 @@ Taken without asking the owner (he asked for a list at the end of the phase). Ne
 - D3-6 Drill is per item and starts from the chart tab's own level. The path is stored as the clicked values; Back and the breadcrumb cut it. A path past the last level is ignored.
 - D3-7 The chip "Region = Dhaka ×" sits under the page filters; clicking it clears the click. "Clear" clears picks, click and drills as before.
 - D3-8 Old Phase 10 files whose cross pick has only a dimension and a value still open (new fields have defaults); such a pick filters nothing until clicked again because its data tab is empty.
+
+## S5 (D4)
+- D4-1 A bar of three dots above each item's title is the move handle on a Free page (a table or chart under the pointer would take a body drag). The body drag works too where nothing under the pointer takes it.
+- D4-2 A move or resize that would overlap another item (overlap off) is not taken: the item stays at the last allowed place of the drag, so it never jumps onto a neighbour. A place off the page is clamped inside it; minimum size 60 × 40 units.
+- D4-3 Grid to Free keeps each item's exact cell (not snapped to 10, so going back is lossless). Free to Grid clears the rects and returns to the items-per-row the page had (saved as `grid_per_row`); items go to the cells of their order.
+- D4-4 The layout dialog always shows its message first (what moves, naming items that left the grid) and has "Switch layout" / "Keep layout".
+- D4-5 A new item on a Free page takes the first free 300 × 200 place scanning from the top left; a full page refuses in words (or places it at the top left when overlap is on).
+- D4-6 Arrow keys work on the selected item when no text box has the focus; Shift+arrows grow or shrink the bottom right corner by 10 units.
+- D4-7 `allow_overlap` and `grid_per_row` are written only when set, so a Grid page's saved bytes are unchanged.

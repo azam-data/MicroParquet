@@ -9,7 +9,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S2 | D1 | done |
 | S3 | D2 | done |
 | S4 | D3 | done |
-| S5–S12 | D4 … fixes | not started |
+| S5 | D4 | done |
+| S6–S12 | D5 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
 | Acceptance | Test |
@@ -73,3 +74,13 @@ Stub proof: D2 — "below" made "at or below" → the 80.00 limit test fails (re
 | State saved and restored with the project | `d3_the_cross_pick_and_the_drill_paths_are_saved_and_restored_with_the_project` |
 
 Stub proofs: D3 — `cross_for` that also filters the clicked item → the Dhaka test fails; `drill_back_to` cutting one level too late → the Back test fails (both restored). Picture: `docs/guide/img/dashboard-cross.png` (light opened).
+
+## S5 acceptance → test (D4)
+| Acceptance | Test |
+|---|---|
+| Drag and resize by real events at 3 sizes | render `d4_the_layout_switch_says_what_changes_and_a_free_page_moves_resizes_snaps_and_clamps_by_real_drags_at_three_sizes` |
+| Snap to 10, inside the page, no overlap unless on | `d4_a_move_snaps_…`, `d4_each_corner_and_edge_resizes_…`, `d4_items_may_not_overlap_…` |
+| Grid → Free → Grid same positions | `d4_grid_to_free_to_grid_gives_the_same_positions_…`; render `d4_grid_to_free_to_grid_by_clicks_…` |
+| Dragged off the page is clamped, never lost | `d4_a_move_snaps_…`; render test (900 pt off) |
+
+Stub proofs: D4 — no snapping in `snap` → the move and resize tests fail; overlap test disabled → the overlap test fails (both restored). Picture: `docs/guide/img/dashboard-free.png` (light opened).
