@@ -11,7 +11,8 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | S4 | D3 | done |
 | S5 | D4 | done |
 | S6 | D5 | done |
-| S7–S12 | R1 … fixes | not started |
+| S7 | R1 (and D5 page shape) | done |
+| S8–S12 | R2 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
 | Acceptance | Test |
@@ -96,3 +97,16 @@ Stub proofs: D4 — no snapping in `snap` → the move and resize tests fail; ov
 | Refusals: not a picture, over 3 MB, slot outside | `d5_a_file_that_is_not_a_picture_a_picture_over_3_mb_and_a_slot_outside_are_refused_in_words`; render `d5_a_file_that_is_not_a_picture_…` |
 
 Stub proofs: D5 — hash check switched off → the copy test fails; slot kind check switched off → the slot test fails (both restored). Picture: `docs/guide/img/dashboard-design.png` (light opened).
+
+## S7 acceptance → test (R1)
+| Acceptance | Test |
+|---|---|
+| 12 and 4 values: 65 states, 390 numbers, 3,120 bytes ±10% | `r1_two_filters_of_12_and_4_values_make_65_states_and_a_6_bar_chart_390_numbers_at_8_bytes_each` |
+| Estimate within 10% of the real file | same test (stub file) |
+| 5.3 MB by email refused, suggestions in order, fewer values under 5 MB | `r1_five_point_three_mb_by_email_is_refused_…` |
+| Answers equal `compute_item` for 20 random states | `r1_the_answers_equal_compute_item_for_20_random_states_…` |
+| Non-additive items listed by name | `r1_the_items_that_do_not_react_to_clicks_are_listed_by_name_with_why` |
+| No account rows in the output | `r1_no_account_row_goes_into_the_file_…` |
+| (coordinator note) page takes the picture's shape | `d5_a_page_takes_the_shape_of_its_picture_…`; render flow test (16:9 page area) |
+
+Stub proofs: R1 — states counted as n instead of n + 1 fails the 65-state test; the email limit made exclusive fails the gate test (both restored). No picture (R1 has no window).

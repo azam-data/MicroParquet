@@ -834,8 +834,8 @@ impl MicroParquetApp {
     fn render_dash_page(&mut self, ui: &mut egui::Ui, page: &DashPage, default_unit: KpiUnit, rects: &mut Vec<(String, egui::Rect)>, open_tab: &mut Option<String>, acts: &mut Vec<PageAct>) {
         let tk = *theme::tokens(self.dark_mode);
         let avail = ui.available_rect_before_wrap().shrink2(egui::vec2(theme::SPACE_S, 0.0));
-        let scale = (avail.width() / PAGE_W as f32).min(avail.height() / PAGE_H as f32).max(theme::DASH_MIN_SCALE);
-        let size = egui::vec2(PAGE_W as f32 * scale, PAGE_H as f32 * scale);
+        let scale = (avail.width() / PAGE_W as f32).min(avail.height() / page.height() as f32).max(theme::DASH_MIN_SCALE);
+        let size = egui::vec2(PAGE_W as f32 * scale, page.height() as f32 * scale);
         let (area, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         let area = area.translate(egui::vec2(theme::SPACE_S, 0.0));
         ui.painter().rect(area, theme::RADIUS_PANEL, tk.surface, theme::line(tk.border));
@@ -874,7 +874,7 @@ impl MicroParquetApp {
                         (k(egui::Key::ArrowRight) - k(egui::Key::ArrowLeft), k(egui::Key::ArrowDown) - k(egui::Key::ArrowUp), i.modifiers.shift)
                     });
                     if let (true, Some(cur)) = (dx != 0.0 || dy != 0.0, page.items[ii].rect) {
-                        let want = drag_rect(cur, if shift { Handle::SE } else { Handle::Move }, dx * SNAP, dy * SNAP);
+                        let want = drag_rect(cur, if shift { Handle::SE } else { Handle::Move }, dx * SNAP, dy * SNAP, page.height());
                         let new = page.place(ii, want, cur);
                         if new != cur {
                             acts.push(PageAct::SetRect(sel, new));
@@ -1047,7 +1047,7 @@ impl MicroParquetApp {
         if resp.dragged() {
             if let Some(d) = self.dashboard_ui.drag.as_mut().filter(|d| d.item == item.id && d.handle == handle) {
                 d.total += resp.drag_delta();
-                let want = drag_rect(d.start, handle, (d.total.x / scale) as f64, (d.total.y / scale) as f64);
+                let want = drag_rect(d.start, handle, (d.total.x / scale) as f64, (d.total.y / scale) as f64, page.height());
                 let new = page.place(ii, want, d.last_ok);
                 d.last_ok = new;
                 if new != cur {

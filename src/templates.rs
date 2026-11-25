@@ -23,8 +23,15 @@ pub struct Design {
     pub w: u32,
     pub h: u32,
     pub blake3: String,
-    /// What to tell the owner (a picture that is not 16:10 is stretched to the page).
+    /// What to tell the owner; none for now (a page takes the picture's shape, so there is nothing to warn about).
     pub note: Option<String>,
+}
+
+impl Design {
+    /// The height of a page with this design, in page units (the width is 1000).
+    pub fn page_h(&self) -> f64 {
+        page_height_for(self.w, self.h)
+    }
 }
 
 fn is_png_or_jpeg(bytes: &[u8]) -> bool {
@@ -45,9 +52,7 @@ pub fn design_from_bytes(bytes: &[u8]) -> Result<Design> {
         bail!("This picture is {:.1} MB after it was made smaller; the limit is 3 MB. Export it with fewer colours or at a smaller size.", png.len() as f64 / 1_048_576.0);
     }
     let (w, h) = (rgba.width(), rgba.height());
-    let ratio = w as f64 / h as f64;
-    let page = PAGE_W / PAGE_H;
-    let note = ((ratio - page).abs() / page > 0.02).then(|| format!("This picture is {}\u{d7}{} px. Pages are 16:10, so it is stretched to fit; export it at 1920\u{d7}1200 for an exact fit.", w, h));
+    let note = None;
     let blake3 = blake3::hash(&png).to_hex().to_string();
     Ok(Design { png, w, h, blake3, note })
 }
@@ -59,7 +64,7 @@ pub fn design_from_file(path: &Path) -> Result<Design> {
 }
 
 /// The slots must be inside the page (the picture is stretched over it), named, and have different names.
-pub fn check_slots(slots: &[Slot]) -> Result<()> {
+pub fn check_slots(slots: &[Slot], page_h: f64) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     for s in slots {
         if s.name.trim().is_empty() {
@@ -69,7 +74,7 @@ pub fn check_slots(slots: &[Slot]) -> Result<()> {
             bail!("Two slots are named '{}'. Give each slot its own name.", s.name);
         }
         let r = s.rect;
-        if r.x < -1e-9 || r.y < -1e-9 || r.right() > PAGE_W + 1e-9 || r.bottom() > PAGE_H + 1e-9 || r.w < MIN_ITEM_W || r.h < MIN_ITEM_H {
+        if r.x < -1e-9 || r.y < -1e-9 || r.right() > PAGE_W + 1e-9 || r.bottom() > page_h + 1e-9 || r.w < MIN_ITEM_W || r.h < MIN_ITEM_H {
             bail!("The slot '{}' is outside the picture or too small. Draw it inside the picture, at least {} \u{d7} {} units.", s.name, MIN_ITEM_W, MIN_ITEM_H);
         }
     }
@@ -96,7 +101,7 @@ fn safe_name(name: &str) -> Result<()> {
 /// Saves the design in the data folder: `design.png` and `slots.json`.
 pub fn save_to_folder(data_dir: &Path, name: &str, d: &Design, slots: &[Slot]) -> Result<()> {
     safe_name(name)?;
-    check_slots(slots)?;
+    check_slots(slots, d.page_h())?;
     let dir = folder_of(data_dir, name);
     std::fs::create_dir_all(&dir).map_err(|e| anyhow::anyhow!("The folder '{}' could not be made: {}", dir.display(), e))?;
     std::fs::write(dir.join("design.png"), &d.png).map_err(|e| anyhow::anyhow!("The design could not be saved: {}", e))?;
@@ -117,6 +122,9 @@ pub struct Resolved {
     pub slots: Vec<Slot>,
     pub blake3: String,
     pub from: Origin,
+    /// The picture's size in pixels (the page takes its shape).
+    pub w: u32,
+    pub h: u32,
     /// What to tell the owner (the copy of this computer differs from the project's).
     pub warning: Option<String>,
 }
@@ -133,7 +141,8 @@ pub fn resolve(data_dir: &Path, name: &str, copy: Option<&TemplateData>) -> Resu
         if blake3::hash(&png).to_hex().as_str() != c.blake3 {
             bail!("The picture kept in the project for the template '{}' is damaged (its hash is not the recorded one). Import the template again.", name);
         }
-        Ok(Resolved { png, slots: c.slots.clone(), blake3: c.blake3.clone(), from: Origin::ProjectCopy, warning })
+        let (w, h) = if c.w > 0 && c.h > 0 { (c.w, c.h) } else { dims(&png) };
+        Ok(Resolved { png, slots: c.slots.clone(), blake3: c.blake3.clone(), from: Origin::ProjectCopy, w, h, warning })
     };
     if !png_path.exists() {
         return from_project(None);
@@ -146,7 +155,12 @@ pub fn resolve(data_dir: &Path, name: &str, copy: Option<&TemplateData>) -> Resu
         }
     }
     let slots: Vec<Slot> = serde_json::from_str(&std::fs::read_to_string(dir.join("slots.json")).map_err(|e| anyhow::anyhow!("The slots of '{}' could not be read: {}", name, e))?).map_err(|e| anyhow::anyhow!("The slots of '{}' are not readable: {}", name, e))?;
-    Ok(Resolved { png, slots, blake3: hash, from: Origin::DataFolder, warning: None })
+    let (w, h) = dims(&png);
+    Ok(Resolved { png, slots, blake3: hash, from: Origin::DataFolder, w, h, warning: None })
+}
+
+fn dims(png: &[u8]) -> (u32, u32) {
+    image::ImageReader::new(std::io::Cursor::new(png)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).unwrap_or((0, 0))
 }
 
 /// The names of the templates in the data folder, in order.

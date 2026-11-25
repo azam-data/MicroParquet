@@ -20,10 +20,10 @@ fn button(ui: &mut egui::Ui, name: &str, text: &str, rects: &mut Vec<(String, eg
 }
 
 /// The page-sized area that fits the space left, and its scale (points per page unit).
-fn fit_area(ui: &mut egui::Ui) -> (egui::Rect, f32) {
+fn fit_area(ui: &mut egui::Ui, page_h: f64) -> (egui::Rect, f32) {
     let avail = ui.available_rect_before_wrap().shrink2(egui::vec2(theme::SPACE_S, 0.0));
-    let scale = (avail.width() / PAGE_W as f32).min(avail.height() / PAGE_H as f32).max(theme::DASH_MIN_SCALE);
-    let (area, _) = ui.allocate_exact_size(egui::vec2(PAGE_W as f32 * scale, PAGE_H as f32 * scale), egui::Sense::hover());
+    let scale = (avail.width() / PAGE_W as f32).min(avail.height() / page_h as f32).max(theme::DASH_MIN_SCALE);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(PAGE_W as f32 * scale, page_h as f32 * scale), egui::Sense::hover());
     (area.translate(egui::vec2(theme::SPACE_S, 0.0)), scale)
 }
 
@@ -81,6 +81,7 @@ impl MicroParquetApp {
             let page = &mut dash.pages[pi];
             page.background = None;
             page.slots.clear();
+            page.set_height(PAGE_H);
             page.items.iter_mut().for_each(|i| i.slot = None);
             return;
         };
@@ -105,7 +106,7 @@ impl MicroParquetApp {
         if !dash.template_library.iter().any(|t| t.name == name) {
             dash.template_library.push(tref.clone());
         }
-        match dash.pages[pi].apply_template(tref, r.slots) {
+        match dash.pages[pi].apply_template(tref, r.slots, page_height_for(r.w, r.h)) {
             Ok(()) => self.dashboard_ui.notice.clear(),
             Err(e) => self.dashboard_ui.notice = format!("{:#}", e),
         }
@@ -242,7 +243,8 @@ impl MicroParquetApp {
             });
         });
         egui::CentralPanel::default().frame(egui::Frame::none()).show_inside(ui, |ui| {
-            let (area, scale) = fit_area(ui);
+            let page_h = ed.design.page_h();
+            let (area, scale) = fit_area(ui, page_h);
             ui.painter().image(ed.texture.id(), area, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             ui.painter().rect_stroke(area, theme::RADIUS_PANEL, theme::line(tk.border));
             rects.push(("Design area".into(), area));
@@ -260,9 +262,9 @@ impl MicroParquetApp {
                     let (x0, y0) = to_units(area, scale, a);
                     let (x1, y1) = to_units(area, scale, b);
                     let l = snap(x0.min(x1)).clamp(0.0, PAGE_W);
-                    let t = snap(y0.min(y1)).clamp(0.0, PAGE_H);
+                    let t = snap(y0.min(y1)).clamp(0.0, page_h);
                     let r = snap(x0.max(x1)).clamp(0.0, PAGE_W);
-                    let bt = snap(y0.max(y1)).clamp(0.0, PAGE_H);
+                    let bt = snap(y0.max(y1)).clamp(0.0, page_h);
                     let rect = DashRect { x: l, y: t, w: r - l, h: bt - t };
                     if rect.w >= MIN_ITEM_W && rect.h >= MIN_ITEM_H {
                         let mut n = ed.slots.len() + 1;

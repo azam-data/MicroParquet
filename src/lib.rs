@@ -37,6 +37,7 @@ pub mod pdf_layout;
 pub mod pivot_table;
 pub mod pivot_time;
 pub mod pivot_view;
+pub mod report_html;
 pub mod rules;
 pub mod schema_templates;
 pub mod settings;

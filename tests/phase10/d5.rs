@@ -16,7 +16,7 @@ fn slot(name: &str, kind: SlotKind, x: f64, y: f64, w: f64, h: f64) -> Slot {
 }
 
 fn four_slots() -> Vec<Slot> {
-    vec![slot("Deposits chart", SlotKind::Chart, 20.0, 20.0, 460.0, 280.0), slot("Wing table", SlotKind::Pivot, 500.0, 20.0, 480.0, 280.0), slot("CASA", SlotKind::Kpi, 20.0, 320.0, 220.0, 100.0), slot("Notes", SlotKind::Any, 260.0, 320.0, 720.0, 280.0)]
+    vec![slot("Deposits chart", SlotKind::Chart, 20.0, 20.0, 460.0, 280.0), slot("Wing table", SlotKind::Pivot, 500.0, 20.0, 480.0, 280.0), slot("CASA", SlotKind::Kpi, 20.0, 320.0, 220.0, 100.0), slot("Notes", SlotKind::Any, 260.0, 320.0, 720.0, 200.0)]
 }
 
 fn dir(name: &str) -> std::path::PathBuf {
@@ -30,7 +30,8 @@ fn dir(name: &str) -> std::path::PathBuf {
 fn d5_a_1920_by_1080_png_with_4_slots_is_the_same_template_after_save_and_reopen() {
     let d = design_from_bytes(&png_of(1920, 1080)).expect("a design");
     assert_eq!((d.w, d.h), (1920, 1080), "under 2,000 px: not made smaller");
-    assert!(d.note.as_deref().is_some_and(|n| n.contains("16:10") && n.contains("1920\u{d7}1200")), "a 16:9 picture is said to be stretched: {:?}", d.note);
+    // the page takes the picture's shape: 1000 x 562.5 units, nothing is stretched
+    assert!((d.page_h() - 562.5).abs() < 1e-9 && d.note.is_none());
     let slots = four_slots();
     let data = dir("save");
     save_to_folder(&data, "Bank blue", &d, &slots).expect("saved");
@@ -38,7 +39,7 @@ fn d5_a_1920_by_1080_png_with_4_slots_is_the_same_template_after_save_and_reopen
     let mut p = Project::from_json(&std::fs::read_to_string(crate::common::fixtures_dir().join("phase9_replay/proj/phase9_replay.mpproj")).expect("fixture"), "x").expect("opens");
     let tref = TemplateRef { name: "Bank blue".into(), blake3: d.blake3.clone() };
     let mut page = DashPage { id: "p1".into(), title: "P".into(), ..Default::default() };
-    page.apply_template(tref.clone(), slots.clone()).expect("applied");
+    page.apply_template(tref.clone(), slots.clone(), d.page_h()).expect("applied");
     p.dashboard = Some(Dashboard { id: "d1".into(), title: "D".into(), pages: vec![page], template_library: vec![tref.clone()], templates: vec![project_copy("Bank blue", &d, &slots)], ..Default::default() });
     let json = p.to_json().expect("json");
     let again = Project::from_json(&json, "x").expect("reopens");
@@ -101,11 +102,11 @@ fn d5_a_file_that_is_not_a_picture_a_picture_over_3_mb_and_a_slot_outside_are_re
     assert!(e.contains("MB after it was made smaller; the limit is 3 MB"), "{e}");
     // slots
     let outside = vec![slot("Off", SlotKind::Any, 900.0, 20.0, 200.0, 100.0)];
-    assert!(check_slots(&outside).expect_err("outside").to_string().contains("The slot 'Off' is outside the picture"));
+    assert!(check_slots(&outside, PAGE_H).expect_err("outside").to_string().contains("The slot 'Off' is outside the picture"));
     let twice = vec![slot("A", SlotKind::Any, 0.0, 0.0, 100.0, 100.0), slot("A", SlotKind::Chart, 200.0, 0.0, 100.0, 100.0)];
-    assert_eq!(check_slots(&twice).expect_err("twice").to_string(), "Two slots are named 'A'. Give each slot its own name.");
-    assert_eq!(check_slots(&[slot(" ", SlotKind::Any, 0.0, 0.0, 100.0, 100.0)]).expect_err("name").to_string(), "Every slot needs a name.");
-    check_slots(&four_slots()).expect("the four are fine");
+    assert_eq!(check_slots(&twice, PAGE_H).expect_err("twice").to_string(), "Two slots are named 'A'. Give each slot its own name.");
+    assert_eq!(check_slots(&[slot(" ", SlotKind::Any, 0.0, 0.0, 100.0, 100.0)], PAGE_H).expect_err("name").to_string(), "Every slot needs a name.");
+    check_slots(&four_slots(), PAGE_H).expect("the four are fine");
     // a name that cannot be a folder
     let d = design_from_bytes(&png_of(100, 100)).expect("design");
     assert!(save_to_folder(&dir("nm"), "a/b", &d, &[]).expect_err("name").to_string().contains("cannot be used as a folder name"));
@@ -123,8 +124,9 @@ fn d5_a_big_picture_is_made_smaller_to_2000_px_and_a_jpeg_is_read_and_kept_as_a_
     assert_eq!((d.w, d.h), (300, 200));
     assert!(d.png.starts_with(&[0x89, b'P', b'N', b'G']), "kept as a PNG");
     assert_eq!(d.blake3.len(), 64);
-    // no note for a 16:10 picture
-    assert!(design_from_bytes(&png_of(1600, 1000)).expect("16:10").note.is_none());
+    // a 16:10 picture gives the usual 625; a 4:3 one gives 750
+    assert_eq!(design_from_bytes(&png_of(1600, 1000)).expect("16:10").page_h(), 625.0);
+    assert_eq!(design_from_bytes(&png_of(1600, 1200)).expect("4:3").page_h(), 750.0);
 }
 
 #[test]
@@ -142,7 +144,7 @@ fn d5_base64_round_trips_every_length() {
 #[test]
 fn d5_a_slot_is_filled_by_an_item_of_its_kind_and_the_item_takes_its_place_and_an_emptied_slot_is_empty_again() {
     let mut page = DashPage { id: "p1".into(), title: "P".into(), ..Default::default() };
-    page.apply_template(TemplateRef { name: "T".into(), blake3: "h".into() }, four_slots()).expect("applied");
+    page.apply_template(TemplateRef { name: "T".into(), blake3: "h".into() }, four_slots(), PAGE_H).expect("applied");
     assert_eq!(page.empty_slots().len(), 4);
     let chart = DashItem { id: "i1".into(), kind: DashItemKind::Chart("t2".into()), ..Default::default() };
     page.fill_slot("Deposits chart", chart.clone()).expect("filled");
@@ -159,4 +161,30 @@ fn d5_a_slot_is_filled_by_an_item_of_its_kind_and_the_item_takes_its_place_and_a
     let plain = DashPage { id: "p".into(), title: "P".into(), ..Default::default() };
     let j = serde_json::to_string(&plain).expect("json");
     assert!(!j.contains("slots") && !j.contains("templates"), "{j}");
+}
+
+#[test]
+fn d5_a_page_takes_the_shape_of_its_picture_so_nothing_is_stretched_and_items_and_slots_stay_inside() {
+    // 1920 x 1080 gives a 1000 x 562.5 page
+    let d = design_from_bytes(&png_of(1920, 1080)).expect("design");
+    let mut page = DashPage { id: "p1".into(), title: "P".into(), layout: PageLayout::Grid { per_row: 1 }, items: vec![DashItem { id: "i1".into(), ..Default::default() }, DashItem { id: "i2".into(), ..Default::default() }], ..Default::default() };
+    assert_eq!(page.height(), 625.0);
+    page.to_free().expect("free");
+    assert_eq!(page.items[1].rect, Some(DashRect { x: 0.0, y: 317.5, w: 1000.0, h: 307.5 }), "one per row on 625: (625 - 10) / 2 = 307.5 each");
+    page.apply_template(TemplateRef { name: "T".into(), blake3: "h".into() }, vec![], d.page_h()).expect("applied");
+    assert_eq!(page.height(), 562.5);
+    // the second item is pulled inside the shorter page: y + h = 562.5
+    let r = page.items[1].rect.expect("rect");
+    assert!(r.bottom() <= 562.5 + 1e-9 && r.y >= 0.0, "{r:?}");
+    // a slot between 562.5 and 625 is outside this picture, and inside a 16:10 one
+    let low = [slot("Low", SlotKind::Any, 20.0, 540.0, 200.0, 70.0)];
+    assert!(check_slots(&low, d.page_h()).expect_err("outside").to_string().contains("outside the picture"));
+    check_slots(&low, PAGE_H).expect("inside 16:10");
+    // drags are held inside the page's own height
+    assert_eq!(drag_rect(DashRect { x: 0.0, y: 0.0, w: 300.0, h: 200.0 }, Handle::Move, 0.0, 9000.0, 562.5).y, 362.5);
+    // a 16:10 design writes nothing new; taking the design away gives 625 back
+    page.set_height(PAGE_H);
+    assert!(page.page_h.is_none() && !serde_json::to_string(&page).expect("json").contains("page_h"));
+    page.set_height(562.5);
+    assert!(serde_json::to_string(&page).expect("json").contains("\"page_h\":562.5"));
 }

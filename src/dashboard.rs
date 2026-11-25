@@ -123,6 +123,9 @@ pub struct DashPage {
     /// At most `MAX_PAGE_FILTERS`.
     pub filters: Vec<PageFilter>,
     pub background: Option<TemplateRef>,
+    /// The page's height in units when its design has another shape than 16:10 (the width is always 1000); `None` is 625.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_h: Option<f64>,
     /// The empty places of the design the page uses; an item that fills one has `slot` set (D5).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<Slot>,
@@ -149,6 +152,14 @@ impl Default for DashItemKind {
     fn default() -> Self {
         DashItemKind::Kpi(KpiSpec::default())
     }
+}
+
+/// The height of a page for a design `w` × `h` px: the page keeps the picture's shape (1000 units wide), so nothing is stretched.
+pub fn page_height_for(w: u32, h: u32) -> f64 {
+    if w == 0 || h == 0 {
+        return PAGE_H;
+    }
+    PAGE_W * h as f64 / w as f64
 }
 
 /// A rectangle in page units.
@@ -360,7 +371,7 @@ pub fn grid_rects(per_row: usize, count: usize, page_w: f64, page_h: f64) -> Res
 /// (an item with no rect on a Free page is an error to show, never a guessed place).
 pub fn item_rects(page: &DashPage) -> Result<Vec<DashRect>> {
     match page.layout {
-        PageLayout::Grid { per_row } => grid_rects(per_row, page.items.len(), PAGE_W, PAGE_H),
+        PageLayout::Grid { per_row } => grid_rects(per_row, page.items.len(), PAGE_W, page.height()),
         PageLayout::Free => page.items.iter().map(|i| i.rect.ok_or_else(|| anyhow::anyhow!("The item '{}' on the page '{}' has no place yet. Drag it onto the page.", i.id, page.title))).collect(),
     }
 }
@@ -426,17 +437,17 @@ pub fn snap(v: f64) -> f64 {
 }
 
 /// The rect brought inside the page: never smaller than the minimum, never off an edge. An item dragged away is put back, not lost.
-pub fn clamp_to_page(r: DashRect) -> DashRect {
+pub fn clamp_to_page(r: DashRect, page_h: f64) -> DashRect {
     let w = r.w.clamp(MIN_ITEM_W, PAGE_W);
-    let h = r.h.clamp(MIN_ITEM_H, PAGE_H);
-    DashRect { x: r.x.clamp(0.0, PAGE_W - w), y: r.y.clamp(0.0, PAGE_H - h), w, h }
+    let h = r.h.clamp(MIN_ITEM_H, page_h);
+    DashRect { x: r.x.clamp(0.0, PAGE_W - w), y: r.y.clamp(0.0, page_h - h), w, h }
 }
 
 /// The rect after dragging `handle` by (`dx`, `dy`) page units from `start`: the edges that move snap to the 10-unit grid, the
 /// others stay where they were; the result is inside the page and not below the minimum size.
-pub fn drag_rect(start: DashRect, handle: Handle, dx: f64, dy: f64) -> DashRect {
+pub fn drag_rect(start: DashRect, handle: Handle, dx: f64, dy: f64, page_h: f64) -> DashRect {
     if handle == Handle::Move {
-        return clamp_to_page(DashRect { x: snap(start.x + dx), y: snap(start.y + dy), w: start.w, h: start.h });
+        return clamp_to_page(DashRect { x: snap(start.x + dx), y: snap(start.y + dy), w: start.w, h: start.h }, page_h);
     }
     let (mut l, mut t, mut r, mut b) = (start.x, start.y, start.right(), start.bottom());
     if matches!(handle, Handle::W | Handle::NW | Handle::SW) {
@@ -449,7 +460,7 @@ pub fn drag_rect(start: DashRect, handle: Handle, dx: f64, dy: f64) -> DashRect 
         t = snap(t + dy).clamp(0.0, b - MIN_ITEM_H);
     }
     if matches!(handle, Handle::S | Handle::SE | Handle::SW) {
-        b = snap(b + dy).clamp(t + MIN_ITEM_H, PAGE_H);
+        b = snap(b + dy).clamp(t + MIN_ITEM_H, page_h);
     }
     DashRect { x: l, y: t, w: r - l, h: b - t }
 }
@@ -458,7 +469,7 @@ impl DashPage {
     /// Where item `idx` ends up when it is asked to take `want`: inside the page, and not over another item unless the page allows
     /// it. A place that is not allowed gives `prev` (the last good place), so a drag never jumps onto another item.
     pub fn place(&self, idx: usize, want: DashRect, prev: DashRect) -> DashRect {
-        let r = clamp_to_page(want);
+        let r = clamp_to_page(want, self.height());
         if self.allow_overlap {
             return r;
         }
@@ -472,11 +483,27 @@ impl DashPage {
 
     /// Uses a design: its picture is the page's background and its slots become empty places. The page becomes Free, because an item
     /// that fills a slot sits where the slot is.
-    pub fn apply_template(&mut self, t: TemplateRef, slots: Vec<Slot>) -> Result<()> {
+    pub fn apply_template(&mut self, t: TemplateRef, slots: Vec<Slot>, page_h: f64) -> Result<()> {
         self.to_free()?;
         self.background = Some(t);
         self.slots = slots;
+        self.set_height(page_h);
         Ok(())
+    }
+
+    /// The page's height in units: 625 (16:10) unless a design of another shape gives it. Items that no longer fit are pulled inside.
+    pub fn height(&self) -> f64 {
+        self.page_h.unwrap_or(PAGE_H)
+    }
+
+    pub fn set_height(&mut self, h: f64) {
+        self.page_h = if (h - PAGE_H).abs() < 0.01 { None } else { Some(h) };
+        let h = self.height();
+        for i in &mut self.items {
+            if let Some(r) = i.rect {
+                i.rect = Some(clamp_to_page(r, h));
+            }
+        }
     }
 
     /// The slots no item fills yet.
@@ -503,7 +530,7 @@ impl DashPage {
     /// error in words (the page may allow overlap, or lose an item).
     pub fn first_free_spot(&self, w: f64, h: f64) -> Result<DashRect> {
         let mut y = 0.0;
-        while y + h <= PAGE_H + 1e-9 {
+        while y + h <= self.height() + 1e-9 {
             let mut x = 0.0;
             while x + w <= PAGE_W + 1e-9 {
                 let r = DashRect { x, y, w, h };
@@ -523,7 +550,7 @@ impl DashPage {
     /// Grid to Free: every item keeps the place its cell gave it.
     pub fn to_free(&mut self) -> Result<()> {
         if let PageLayout::Grid { per_row } = self.layout {
-            let rects = grid_rects(per_row, self.items.len(), PAGE_W, PAGE_H)?;
+            let rects = grid_rects(per_row, self.items.len(), PAGE_W, self.height())?;
             for (i, r) in self.items.iter_mut().zip(rects) {
                 i.rect = Some(r);
             }
@@ -546,7 +573,7 @@ impl DashPage {
     /// The ids of the items of a Free page that do not sit on the cell their order gives them.
     pub fn off_grid_items(&self) -> Vec<String> {
         let per_row = self.grid_per_row.unwrap_or(2).clamp(1, MAX_PER_ROW);
-        let cells = grid_rects(per_row, self.items.len(), PAGE_W, PAGE_H).unwrap_or_default();
+        let cells = grid_rects(per_row, self.items.len(), PAGE_W, self.height()).unwrap_or_default();
         let near = |a: f64, b: f64| (a - b).abs() < 0.01;
         self.items.iter().enumerate().filter(|(i, it)| !it.rect.zip(cells.get(*i)).is_some_and(|(r, c)| near(r.x, c.x) && near(r.y, c.y) && near(r.w, c.w) && near(r.h, c.h))).map(|(_, it)| it.id.clone()).collect()
     }

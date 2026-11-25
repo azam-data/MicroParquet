@@ -696,19 +696,19 @@ fn d4_the_layout_switch_says_what_changes_and_a_free_page_moves_resizes_snaps_an
         let h = rect_of(&rig, "Handle i1 E");
         let start = rect_in_page(&rig, "i1");
         drag_pointer(&mut rig, h.center(), h.center() + egui::vec2(-100.0, 0.0)); // pointer travel, not a size
-        let want = drag_rect(start, Handle::E, (-100.0 / s) as f64, 0.0); // pointer travel, not a size
+        let want = drag_rect(start, Handle::E, (-100.0 / s) as f64, 0.0, PAGE_H); // pointer travel, not a size
         assert_eq!(rect_in_page(&rig, "i1"), want, "{what}: the east handle resized i1 and snapped to 10 units");
         assert!(rect_in_page(&rig, "i1").w < start.w && (rect_in_page(&rig, "i1").right() / SNAP).fract() == 0.0, "{what}");
         // the south-east corner: both sides
         let h = rect_of(&rig, "Handle i1 SE");
         let start = rect_in_page(&rig, "i1");
         drag_pointer(&mut rig, h.center(), h.center() + egui::vec2(-30.0, -120.0)); // pointer travel, not a size
-        assert_eq!(rect_in_page(&rig, "i1"), drag_rect(start, Handle::SE, (-30.0 / s) as f64, (-120.0 / s) as f64), "{what}: the corner"); // pointer travel, not a size
+        assert_eq!(rect_in_page(&rig, "i1"), drag_rect(start, Handle::SE, (-30.0 / s) as f64, (-120.0 / s) as f64, PAGE_H), "{what}: the corner"); // pointer travel, not a size
         // move i2 by its body into the space i1 left: the pointer travels 60 pt left, 40 pt down
         let start = rect_in_page(&rig, "i2");
         let c = rect_of(&rig, "Move i2").center();
         drag_pointer(&mut rig, c, c + egui::vec2(-60.0, 40.0)); // pointer travel, not a size
-        assert_eq!(rect_in_page(&rig, "i2"), drag_rect(start, Handle::Move, (-60.0 / s) as f64, (40.0 / s) as f64), "{what}: the body moved i2 by the pointer's travel, snapped"); // pointer travel, not a size
+        assert_eq!(rect_in_page(&rig, "i2"), drag_rect(start, Handle::Move, (-60.0 / s) as f64, (40.0 / s) as f64, PAGE_H), "{what}: the body moved i2 by the pointer's travel, snapped"); // pointer travel, not a size
         assert_eq!(rect_in_page(&rig, "i2").w, start.w, "{what}: a move keeps the size");
         // a drag onto i1 is refused: i2 stops at the last place that did not overlap
         let c = rect_of(&rig, "Move i2").center();
@@ -846,9 +846,12 @@ fn d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_cli
         rig.app.dashboard_ui.import_path = Some(pic);
         let p = rig.draw(6);
         assert!(rig.app.dashboard_ui.tpl.is_some(), "{what}: the editor opens on the picture");
-        assert!(p.boxes.iter().any(|(t, _)| t.contains("stretched to fit")), "{what}: a 16:9 picture says so: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        let _ = p;
+        // the editor's picture area has the picture's shape (16:9), not the page's old 16:10
+        let area0 = rect_of(&rig, "Design area");
+        assert!((area0.width() / area0.height() - 1920.0 / 1080.0).abs() < 0.01, "{what}: the picture is not stretched: {:?}", area0); // pixels, not a size
         // draw four slots with the pointer, in page units (snapped to 10): chart, pivot, card, any
-        let want = [("Deposits chart", SlotKind::Chart, 20.0, 20.0, 460.0, 420.0), ("Wing table", SlotKind::Pivot, 500.0, 20.0, 480.0, 280.0), ("CASA", SlotKind::Kpi, 20.0, 460.0, 220.0, 100.0), ("Notes", SlotKind::Any, 260.0, 460.0, 720.0, 140.0)]; // page units, not a size
+        let want = [("Deposits chart", SlotKind::Chart, 20.0, 20.0, 460.0, 400.0), ("Wing table", SlotKind::Pivot, 500.0, 20.0, 480.0, 280.0), ("CASA", SlotKind::Kpi, 20.0, 440.0, 220.0, 100.0), ("Notes", SlotKind::Any, 260.0, 440.0, 720.0, 100.0)]; // page units, not a size
         let area = rect_of(&rig, "Design area");
         let s = area.width() / PAGE_W as f32;
         for (i, (name, kind, x, y, sw, sh)) in want.iter().enumerate() {
@@ -869,7 +872,7 @@ fn d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_cli
             assert!(rect_of(&rig, &format!("Remove slot {i}")).right() <= panel_right + 1.0, "{what}: the remove button of slot {i} is not cut off: {:?} vs {panel_right}", rect_of(&rig, &format!("Remove slot {i}")));
         }
         // a slot that is too small is refused in words
-        drag_pointer(&mut rig, area.min + egui::vec2(700.0 * s, 620.0 * s), area.min + egui::vec2(710.0 * s, 623.0 * s)); // page units, not a size
+        drag_pointer(&mut rig, area.min + egui::vec2(700.0 * s, 500.0 * s), area.min + egui::vec2(710.0 * s, 503.0 * s)); // page units, not a size
         assert_eq!(rig.app.dashboard_ui.tpl.as_ref().expect("ed").slots.len(), 4, "{what}");
         assert!(rig.app.dashboard_ui.tpl.as_ref().expect("ed").error.starts_with("That slot is too small"), "{what}");
         type_into(&mut rig, "Design name", "Bank blue");
@@ -886,6 +889,9 @@ fn d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_cli
         let page = rig.app.project.dashboard.as_ref().expect("d").pages[0].clone();
         assert_eq!((page.layout, page.slots.len(), page.items.len()), (PageLayout::Free, 4, 0), "{what}");
         let bg = page.background.clone().expect("a background");
+        assert!((page.height() - 562.5).abs() < 1e-9, "{what}: the page takes the picture's 16:9 shape"); // page units, not a size
+        let pa = rect_of(&rig, "Page area");
+        assert!((pa.width() / pa.height() - 1920.0 / 1080.0).abs() < 0.01, "{what}: the page is drawn 16:9"); // pixels, not a size
         assert!(rig.app.dashboard_ui.textures.contains_key(&bg.blake3), "{what}: the picture is drawn behind the page");
         assert_eq!(bg.blake3, rig.app.project.dashboard.as_ref().expect("d").templates[0].blake3, "{what}: the page names the copy by its hash");
         for (name, ..) in &want {
@@ -906,7 +912,7 @@ fn d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_cli
         let page = rig.app.project.dashboard.as_ref().expect("d").pages[0].clone();
         assert_eq!(page.items.len(), 2, "{what}");
         let chart_item = page.items.iter().find(|i| matches!(i.kind, DashItemKind::Chart(_))).expect("chart item").clone();
-        assert_eq!((chart_item.rect, chart_item.slot.as_deref()), (Some(DashRect { x: 20.0, y: 20.0, w: 460.0, h: 420.0 }), Some("Deposits chart")), "{what}: the item sits in its slot"); // page units, not a size
+        assert_eq!((chart_item.rect, chart_item.slot.as_deref()), (Some(DashRect { x: 20.0, y: 20.0, w: 460.0, h: 400.0 }), Some("Deposits chart")), "{what}: the item sits in its slot"); // page units, not a size
         assert_eq!(page.empty_slots().len(), 2, "{what}");
         // the design is only a background: the chart's own colours are the same with and without it
         let with = chart_fills(&rig, &chart_item.id);
@@ -940,7 +946,7 @@ fn d5_the_project_copy_shows_the_design_when_the_data_folder_has_none_and_anothe
         let d = rig.app.project.dashboard.as_mut().expect("d");
         d.templates.push(micro_parquet::templates::project_copy("Only here", &design, &slots));
         d.template_library.push(tref.clone());
-        d.pages[0].apply_template(tref.clone(), slots.clone()).expect("applied");
+        d.pages[0].apply_template(tref.clone(), slots.clone(), design.page_h()).expect("applied");
     }
     rig.draw(6);
     assert!(rig.app.dashboard_ui.textures.contains_key(&design.blake3), "the picture comes from the project");
