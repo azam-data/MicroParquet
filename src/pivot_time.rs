@@ -429,6 +429,8 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
     }
     let mut periods: HashMap<Vec<Option<Option<String>>>, PeriodInfo> = HashMap::new();
     let mut out = TimeResult { month_end, notes: HashMap::new(), rows: HashMap::new(), date_column: link.column.clone(), date_is_datetime: schema.get(link.column.as_str()).is_some_and(|d| matches!(d, DataType::Datetime(..))), spans: Vec::new(), extra: Vec::new() };
+    // C0: notes for a month whose last calendar day has no rows (kept once each, in order)
+    let mut tail_notes: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (rk, ck) in targets {
         // the cell's non-Calendar key, in field order
         let mut nc_key: Vec<Option<String>> = Vec::new();
@@ -578,6 +580,15 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 }
             };
             if m.value().is_some() {
+                let income_after = match res {
+                    Res::Single(ci) => comps[*ci].agg == TimeAgg::PeriodAmount,
+                    Res::Ratio { num, den, annualise, .. } => annualise.is_some() || num.iter().chain(den.iter()).any(|(ci, _)| comps[*ci].agg == TimeAgg::PeriodAmount),
+                };
+                if let (true, Some(b)) = (income_after, entry.base) {
+                    if let Some(n) = month_end_note(&b, text, &timeline) {
+                        tail_notes.insert(n);
+                    }
+                }
                 if let Res::Single(ci) = res {
                     if comps[*ci].plain {
                         if let Some(r) = crate::measures::rows_of(comps[*ci].agg, &rows_days, &timeline, month_end) {
@@ -599,6 +610,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
             }
         }
     }
+    out.extra.extend(tail_notes);
     if month_end {
         for (j, r) in &resolved {
             if let Res::Ratio { name, num, den, .. } = r {
@@ -622,6 +634,21 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         }
     }
     Ok(out)
+}
+
+/// C0: "The last date with rows in Oct 2026 is 29 Oct; income posted after it counts in Nov 2026." when a finished month's last calendar
+/// day has no rows (a Friday or Saturday month-end). The numbers are unchanged; `None` when the month's last day has rows, when the
+/// month is not over at the as-of date, when it has no rows at all, or when the period is not a month.
+pub fn month_end_note(base: &crate::measures::Base, period_text: &str, tl: &crate::measures::Timeline) -> Option<String> {
+    if base.unit != crate::dates::PeriodUnit::Month || base.end > tl.as_of {
+        return None;
+    }
+    let last = tl.snapshots.iter().copied().filter(|d| *d >= base.start && *d <= base.end).max()?;
+    if last >= base.end {
+        return None;
+    }
+    let next = base.end.succ_opt()?;
+    Some(format!("The last date with rows in {} is {}; income posted after it counts in {}.", period_text, last.format("%-d %b"), next.format("%b %Y")))
 }
 
 /// The rows' dates and the dates counted for the stock warning: how many distinct dates the rows a value adds up span.

@@ -5,7 +5,7 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 
 | Session | Tasks | Status |
 |---|---|---|
-| S1 | D0, C0 | D0 done, C0 in progress |
+| S1 | D0, C0 | D0 done, C0 done |
 | S2–S12 | D1 … fixes | not started |
 
 ## S1 acceptance → test (tests/phase10/d0.rs)
@@ -20,3 +20,15 @@ Spec: `docs/phase10-spec.md`. Decisions: `docs/phase10-spec.md` <accepted_deviat
 | Extra: old file loads; limits refused | `d0_an_old_dashboard_without_new_fields_still_loads`, `d0_too_many_filters_and_duplicate_ids_are_refused_with_a_plain_message` |
 
 Stub proofs: D0 — version forced to 2 → the version-3 test fails (restored).
+
+## C0 (tests/phase10/c0.rs)
+| Acceptance | Test |
+|---|---|
+| Rows through 29 Oct: YTD income Oct unchanged (30) and note names "29 Oct" and "Nov 2026" | `c0_a_ytd_income_month_whose_last_day_has_no_rows_carries_the_note_and_the_same_number` |
+| Month whose last day has rows: no note | `c0_a_month_whose_last_day_has_rows_has_no_note` |
+| Flows: no note | `c0_a_flow_gets_no_note_even_when_the_last_day_has_no_rows` |
+
+The note is in `PivotBuild::warnings` (the pivot's notes; the chart's footnote copies them in `charts::calc`). Applies to Period amount and annualised ratios, months only, finished months only. The dashboard item tooltip (D1) reads the same chart notes.
+Stub proof: C0 — note function forced to `None` → the note test fails (restored).
+Faults listed by the owner: none.
+Full test: 821 + 351 + 9 passed; two older tests used version 3 as "a newer project" and now use 4 (D0 makes 3 known), re-run green.
