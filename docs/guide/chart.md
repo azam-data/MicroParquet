@@ -118,3 +118,5 @@ Test: `guide_chart`
 - The HTML page carries Apache ECharts 6.1.0 inside it (about 1 MB); a chart of 1,000 points is under 2 MB. A waterfall that does not add up and invalid advanced JSON stop the export with a message, and no file is written.
 - The first chart of a tab picks the first text column and the first number column; change them as needed.
 - A chart of lookup fields, Calendar fields, time values or measures needs the project's model, is not translated by "Copy as Python" ("Python export can't follow links between tabs yet. Use the Join tool to copy the column, or export the result tab."), and a chart tab made from it is calculated again when its source tab changes.
+
+Phase 10: a chart tab can be put on a [dashboard](dashboards.md) page; the item shows this tab's numbers, calculated by the same code, and follows the page's filters and clicks.

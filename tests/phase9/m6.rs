@@ -727,24 +727,24 @@ fn m6_the_worked_example_gives_the_numbers_the_monthly_model_note_quotes() {
 
 const NEW_NOTES: [&str; 9] = ["pivot-popout.md", "pivot-nested.md", "model-links.md", "key-check.md", "model-calendar.md", "balances-and-flows.md", "time-intelligence.md", "measures-and-ratios.md", "monthly-model.md"];
 
-const SECTIONS: [&str; 8] = ["## 1. What it does", "## 2. When to use it", "## 3. How to use it", "## 4. Example", "## 5. What it refuses and why", "## 6. Python export", "## 7. Saved in", "## 8. Related tools"];
+pub const SECTIONS: [&str; 8] = ["## 1. What it does", "## 2. When to use it", "## 3. How to use it", "## 4. Example", "## 5. What it refuses and why", "## 6. Python export", "## 7. Saved in", "## 8. Related tools"];
 
-fn guide() -> PathBuf {
+pub fn guide() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/guide")
 }
 
-fn read(name: &str) -> String {
+pub fn read(name: &str) -> String {
     std::fs::read_to_string(guide().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
-fn section(text: &str, heading: &str) -> String {
+pub fn section(text: &str, heading: &str) -> String {
     let mut lines = text.lines();
     lines.by_ref().find(|l| l.trim_end() == heading);
     lines.take_while(|l| !l.starts_with("## ")).collect::<Vec<_>>().join("\n")
 }
 
 /// Every table of a body, with the first non-empty line after it.
-fn tables_of(body: &str) -> Vec<(String, String)> {
+pub fn tables_of(body: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = body.lines().collect();
     let (mut out, mut i) = (Vec::new(), 0);
     while i < lines.len() {
@@ -763,7 +763,7 @@ fn tables_of(body: &str) -> Vec<(String, String)> {
 }
 
 /// Every Rust source of the tests and of the window's render tests, to find the tests the notes name.
-fn all_test_sources() -> String {
+pub fn all_test_sources() -> String {
     let mut all = String::new();
     let mut stack = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests"), PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
     while let Some(d) = stack.pop() {

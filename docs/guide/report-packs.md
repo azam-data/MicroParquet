@@ -108,3 +108,5 @@ Limits: a chart sheet's name is the item's sheet plus " chart", so the sheet nam
 - The files listed on the Cover are those read while the slots and items were made; rule files read only by a step inside a slot are listed too, but a file read in some other way is not.
 - A slot with a total of values that did not convert, or a mixed-sign weight, is reported on the Cover or stops the run; a pack does not guess.
 - Packs hold names and settings, never data; keep them out of the shared repository if they name internal files.
+
+Phase 10: the dashboard has its own exports, one page of the dashboard to a PDF page, one item to a slide, or the whole of it to one HTML file: see [PDF pages](export-pdf-pages.md), [PowerPoint](export-pptx.md) and [HTML report](export-html-report.md). A pack is still the way to write the Excel workbook.

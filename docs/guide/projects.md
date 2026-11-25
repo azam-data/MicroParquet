@@ -57,3 +57,5 @@ None. A project is not a script; use "Copy as Python" on a tab, or a macro, for 
 ## 8. Related tools
 
 [Links between tabs](model-links.md) · [Key check](key-check.md) · [A monthly model, start to finish](monthly-model.md) · [Saved tool runs](saved-tool-runs.md) · [Report packs](report-packs.md) · [Chart](chart.md) · [Batch](batch.md) · [Join](join.md) · [Pivot table](pivot.md)
+
+Phase 10: a project also holds the dashboard (pages, items, filters, layout and designs) under `dashboard`; see [Dashboards](dashboards.md). A project without one is written as before, and [A monthly dashboard routine](monthly-dashboard-routine.md) shows the relink-refresh-export steps.

@@ -111,3 +111,9 @@ Taken without asking the owner (he asked for a list at the end of the phase). Ne
 - X3-3 PowerPoint: "Use design as slide background" is offered only when a page has a design (the first page's design is used for every slide). PDF has no options. All three write through a temporary file and the result is in the status bar (a PDF table cut to fit is named there).
 - X3-4 A page filter whose values are not read yet stops the HTML check with "The values of the filter 'X' are not read yet. Wait a moment and try again." instead of exporting an empty dropdown. The as-of date comes from the model; without one the footnote says "As of date not set".
 - X3-5 `JobKind::DashPrepare` is new (its failure shows in the dialog); the writes use the existing Export job kind.
+
+## S11 (D9)
+- D9-1 No new pictures: the five Phase 10 pictures (page, KPI, cross, free, design; light and dark) already show every screen the notes describe. The exports have no picture because the file is the output. The notes test requires all five in both themes.
+- D9-2 Four tables are produced by the dashboard's own calls (`compute_item`, `kpi::view`): the bar by region, the KPI money and ratio cards, and the Dhaka click. The other notes quote hand-worked numbers from named tests (D5, D4, R1, X1, X2) in prose; the test checks every named test exists.
+- D9-3 The guide helpers of the Phase 9 notes test (`section`, `tables_of`, `read`, …) were made `pub` in `tests/phase9/m6.rs` so D9 reuses them; no behaviour change.
+- D9-4 The notes that Phase 10 changed (projects, chart, pivot, report packs) got one appended paragraph each, not a rewrite. The README has a new "Dashboards and reports (Phase 10)" section.

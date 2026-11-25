@@ -150,3 +150,13 @@ Stub proofs: X2 — shifting every item 3 mm fails the position test; not drawin
 | the screen's filters in the files; the design counted and inlined; as-of said when unknown | `x3_the_html_file_counts_its_picture…`, `x3_powerpoint_and_pdf_show_the_screens_filters…` |
 
 Stub proof: letting "Check size" work before the email question is answered fails the dialog test (restored).
+
+## S11 acceptance → test (D9)
+| Acceptance | Test |
+|---|---|
+| nine notes, eight sections in order, each names tests that exist, ≤150 lines, no code words | `d9_the_nine_notes_have_their_eight_sections_and_their_examples_are_the_tables_the_code_gives` |
+| the example tables are what the code gives | same test, with `d9_the_example_tables_of_the_notes_are_made_by_the_dashboards_own_calls` |
+| every named picture exists in light and dark; README lists the notes | `d9_every_picture_a_note_names_exists_in_light_and_dark_and_the_readme_lists_the_notes` |
+| changed notes say what the code does | `d9_the_notes_that_phase_10_changed_say_what_the_code_now_does` |
+
+Stub proofs: D9 — a wrong number in a table fails the tables test; a renamed section fails the sections test (both restored). No new picture.
