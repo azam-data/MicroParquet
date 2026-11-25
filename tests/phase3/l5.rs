@@ -103,7 +103,7 @@ fn l5_dir_is_writable_checks_by_writing() {
 
 #[test]
 fn l5_one_version_number_everywhere() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "1.8.0");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "1.9.0");
     let d = dir("ver");
     let p = d.join("m.mpq.json");
     let recipe = MacroRecipe {

@@ -115,7 +115,7 @@ pub struct ProjectState {
     pub dialog_requests: u32,
 }
 
-/// The window title: "MicroParquet v1.8.0 — Treasury Oct • — loans.csv".
+/// The window title: "MicroParquet v1.9.0 — Treasury Oct • — loans.csv".
 pub fn project_window_title(project: Option<(&str, bool)>, file: Option<&str>) -> String {
     let mut t = format!("MicroParquet v{}", env!("CARGO_PKG_VERSION"));
     if let Some((name, dirty)) = project {
