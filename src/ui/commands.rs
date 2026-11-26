@@ -86,6 +86,17 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::DqScorecard => ph::SCALES,
         CommandId::MomVariance => ph::CHART_LINE,
         CommandId::About => ph::INFO,
+        CommandId::Settings => ph::GEAR,
+        CommandId::GoReport => ph::SQUARES_FOUR,
+        CommandId::GoData => ph::TABLE,
+        CommandId::GoModel | CommandId::ModelSetup => ph::TREE_STRUCTURE,
+        CommandId::SendToReport => ph::PAPER_PLANE_TILT,
+        CommandId::ToggleAnalytics => ph::CHART_LINE_UP,
+        CommandId::ModelLinks => ph::LINK,
+        CommandId::ModelKeyCheck => ph::KEY,
+        CommandId::ModelCalendar => ph::CALENDAR,
+        CommandId::ModelAsOf => ph::CLOCK,
+        CommandId::ModelMeasures => ph::CALCULATOR,
     }
 }
 
@@ -103,6 +114,15 @@ pub fn toolbar_label(id: CommandId) -> &'static str {
         CommandId::RateProfile => "Rate profile",
         CommandId::ToggleChart => "Chart",
         CommandId::ToggleSql => "SQL",
+        CommandId::SendToReport => "Send to report",
+        CommandId::ToggleAnalytics => "Analytics",
+        CommandId::Dashboard => "Dashboard",
+        CommandId::ModelSetup => "Set up the model",
+        CommandId::ModelLinks => "Links",
+        CommandId::ModelKeyCheck => "Key check",
+        CommandId::ModelCalendar => "Calendar",
+        CommandId::ModelAsOf => "As-of date",
+        CommandId::ModelMeasures => "Measures",
         other => cmds::command(other).map(|c| c.title).unwrap_or(""),
     }
 }
@@ -182,7 +202,11 @@ impl MicroParquetApp {
 
     /// Runs a command and remembers it as recently used.
     pub(crate) fn run_command(&mut self, ctx: &egui::Context, id: CommandId) {
+        // a command of one view takes the window there first; if it still cannot run, the owner is back where they were
+        let before = self.ws.view;
+        self.enter_home_view(id);
         if let Some(why) = self.command_unavailable(id) {
+            self.switch_view(before);
             self.status_message = why.to_string();
             return;
         }
@@ -321,6 +345,18 @@ impl MicroParquetApp {
             CommandId::DqScorecard => self.open_dq(),
             CommandId::MomVariance => self.open_mom(),
             CommandId::About => self.show_about = true,
+            CommandId::Settings => self.open_settings(None),
+            CommandId::GoReport => self.switch_view(micro_parquet::workspace::View::Report),
+            CommandId::GoData => self.switch_view(micro_parquet::workspace::View::Data),
+            CommandId::GoModel => self.switch_view(micro_parquet::workspace::View::Model),
+            CommandId::SendToReport => self.send_to_report(),
+            CommandId::ToggleAnalytics => self.toggle_analytics(),
+            CommandId::ModelSetup => self.open_model_flow(None),
+            CommandId::ModelLinks => self.open_model_flow(Some(micro_parquet::workspace::ModelStep::Links)),
+            CommandId::ModelKeyCheck => self.open_model_flow(Some(micro_parquet::workspace::ModelStep::KeyCheck)),
+            CommandId::ModelCalendar => self.open_model_flow(Some(micro_parquet::workspace::ModelStep::Calendar)),
+            CommandId::ModelAsOf => self.open_model_flow(Some(micro_parquet::workspace::ModelStep::AsOf)),
+            CommandId::ModelMeasures => self.open_model_flow(Some(micro_parquet::workspace::ModelStep::Measures)),
         }
     }
 
@@ -353,8 +389,8 @@ impl MicroParquetApp {
                 id: Some(c.id),
                 column: None,
                 label: c.title.to_string(),
-                words: format!("{} {}", c.words, c.group.label()),
-                group: c.group.label(),
+                words: format!("{} {} {}", c.words, c.group.label(), micro_parquet::workspace::workflow_of(c.id)),
+                group: micro_parquet::workspace::workflow_of(c.id),
                 reason: cmds::unavailable_reason(c, state),
                 full_reason: cmds::unavailable_reason(c, state).map(|r| self.full_reason_of(r)),
                 recent: self.recent_commands.iter().position(|r| *r == c.id),
@@ -433,7 +469,7 @@ impl MicroParquetApp {
                         ui.set_width(theme::PALETTE_W);
                         let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.command_query)
-                                .hint_text("Search actions and columns")
+                                .hint_text("Search actions, columns, help\u{2026}")
                                 .desired_width(f32::INFINITY),
                         );
                         if self.command_focus {
@@ -448,8 +484,31 @@ impl MicroParquetApp {
                             if results.is_empty() {
                                 ui.label(egui::RichText::new("Nothing matches.").color(tk.muted));
                             }
+                            // with nothing typed: what you used last, a few things to try, then every action
+                            let empty_query = self.command_query.trim().is_empty();
+                            let mut section = if empty_query { 0 } else { 3 };
                             for (row, idx) in results.iter().enumerate() {
                                 let it = &items[*idx];
+                                if empty_query {
+                                    let recent_row = it.recent.is_some();
+                                    if section == 0 && recent_row {
+                                        ui.label(theme::label_text("RECENT").color(tk.muted));
+                                        section = 1;
+                                    }
+                                    if section <= 1 && !recent_row {
+                                        ui.label(theme::label_text("TRY TYPING").color(tk.muted));
+                                        for (phrase, finds) in micro_parquet::workspace::TRY_TYPING {
+                                            let r = ui.add(egui::Label::new(egui::RichText::new(format!("\u{201c}{}\u{201d}  \u{2192}  {}", phrase, finds)).color(tk.ink2)).sense(egui::Sense::click()));
+                                            if r.clicked() {
+                                                self.command_query = phrase.to_string();
+                                                self.command_cursor = 0;
+                                                self.command_focus = true;
+                                            }
+                                        }
+                                        ui.label(theme::label_text("ALL ACTIONS").color(tk.muted));
+                                        section = 2;
+                                    }
+                                }
                                 let on_cursor = row == self.command_cursor;
                                 let fill = if on_cursor { tk.accent_soft } else { egui::Color32::TRANSPARENT };
                                 let color = if it.reason.is_some() { tk.muted } else { tk.ink };

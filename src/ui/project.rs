@@ -106,6 +106,9 @@ pub struct ProjectState {
     pub model: micro_parquet::model::Model,
     /// The project's dashboard (Phase 10); kept so saving the project again never drops it.
     pub dashboard: Option<micro_parquet::dashboard::Dashboard>,
+    /// The tabs sent to the Report view with "Send to report" (by tab id), and the keys the project file listed for them while it opens.
+    pub report_ids: std::collections::HashSet<u64>,
+    pub report_pending: Vec<String>,
     /// What the app knows of the links: the key checks, the open Links dialog.
     pub model_ui: crate::ui::model::ModelState,
     /// Tests: the file or folder the dialog would give, and how often a dialog was asked for.
@@ -182,6 +185,12 @@ impl MicroParquetApp {
         // the dashboard is part of the project (nothing is hashed without one: a project without a dashboard hashes as before)
         if let Some(d) = &self.project.dashboard {
             format!("{:?}", d).hash(&mut h);
+        }
+        // the tabs sent to the report (nothing is hashed when there are none)
+        if !self.project.report_ids.is_empty() {
+            let mut ids: Vec<u64> = self.project.report_ids.iter().copied().collect();
+            ids.sort_unstable();
+            ids.hash(&mut h);
         }
         format!("{:016x}", h.finish())
     }
@@ -317,6 +326,8 @@ impl MicroParquetApp {
         self.project.opening = None;
         self.project.model = micro_parquet::model::Model::default();
         self.project.dashboard = None;
+        self.project.report_ids.clear();
+        self.project.report_pending.clear();
         self.project.model_ui = crate::ui::model::ModelState::default();
     }
 
@@ -398,6 +409,9 @@ impl MicroParquetApp {
         let mut project = b.saved.project;
         project.model = self.project.model.clone();
         project.dashboard = self.project.dashboard.clone();
+        let mut sent: Vec<String> = b.saved.keys.iter().filter(|(id, _)| self.project.report_ids.contains(id)).map(|(_, k)| k.clone()).collect();
+        sent.sort();
+        project.report_tabs = sent;
         let draft = SaveDraft { project, excluded: b.saved.excluded, keys: b.saved.keys, path: b.path };
         if draft.excluded.is_empty() {
             self.project_commit(draft);
@@ -466,6 +480,8 @@ impl MicroParquetApp {
         self.close_all_tabs();
         self.project.model = draft.project.model.clone();
         self.project.dashboard = draft.project.dashboard.clone();
+        self.project.report_ids.clear();
+        self.project.report_pending = draft.project.report_tabs.clone();
         self.project.active = true;
         self.project.path = Some(draft.path.clone());
         self.project.name = project_name(&draft.path);
@@ -534,6 +550,9 @@ impl MicroParquetApp {
         let tab = TabState::unavailable(id, pt.title.clone(), reason.to_string(), Vec::new());
         self.tabs.push(tab);
         self.project.keys.insert(id, pt.key.clone());
+        if self.project.report_pending.contains(&pt.key) {
+            self.project.report_ids.insert(id);
+        }
         self.project.kept.insert(id, pt.clone());
         if let Some(op) = self.project.opening.as_mut() {
             op.opener.failed(&pt.key, reason);
@@ -559,6 +578,9 @@ impl MicroParquetApp {
         let want_control = pt.control_col.clone().filter(|c| tab.control_col.as_ref() != Some(c) && tab.cached_slice.get_column_names().iter().any(|n| n.as_str() == c.as_str()));
         let id = tab.id;
         self.project.keys.insert(id, pt.key.clone());
+        if self.project.report_pending.contains(&pt.key) {
+            self.project.report_ids.insert(id);
+        }
         if let Some(v) = &pt.chart {
             self.settings.chart.insert(tab_key(&tab), v.clone());
         }

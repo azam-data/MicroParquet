@@ -102,6 +102,19 @@ pub enum CommandId {
     HouseColours,
     // Help
     About,
+    // The workspace (UI revamp): the three views, the Settings dialog, the model's set-up
+    Settings,
+    GoReport,
+    GoData,
+    GoModel,
+    SendToReport,
+    ToggleAnalytics,
+    ModelSetup,
+    ModelLinks,
+    ModelKeyCheck,
+    ModelCalendar,
+    ModelAsOf,
+    ModelMeasures,
 }
 
 /// Where a command lives in the menus and toolbar.
@@ -115,6 +128,10 @@ pub enum CommandGroup {
     Export,
     View,
     Help,
+    /// The model's set-up (Links, Key check, Calendar, As-of date, Measures).
+    Model,
+    /// The views, the Settings dialog and the Analytics pane.
+    Workspace,
 }
 
 impl CommandGroup {
@@ -128,6 +145,8 @@ impl CommandGroup {
             CommandGroup::Export => "Export",
             CommandGroup::View => "View",
             CommandGroup::Help => "Help",
+            CommandGroup::Model => "Model",
+            CommandGroup::Workspace => "Workspace",
         }
     }
 }
@@ -258,6 +277,18 @@ pub const COMMANDS: &[Command] = &[
     c(I::CalendarSettings, "Calendar\u{2026}", G::View, "fiscal year start month week start saturday sunday monday date parts quarter", N::Nothing),
     c(I::HouseColours, "House colours\u{2026}", G::View, "house colour colours palette brand name item pick swatch hex", N::Nothing),
     c(I::About, "About MicroParquet", G::Help, "version data folder path", N::Nothing),
+    c(I::Settings, "Settings\u{2026}", G::Workspace, "preferences options units numbers decimals crore display calendar fiscal colours sort lists toolbar panels", N::Nothing),
+    c(I::GoReport, "Go to the Report view", G::Workspace, "pivots charts dashboards saved views switch", N::Nothing),
+    c(I::GoData, "Go to the Data view", G::Workspace, "source files steps sql columns tables switch", N::Nothing),
+    c(I::GoModel, "Go to the Model view", G::Workspace, "relationships links key check calendar as of measures switch", N::Nothing),
+    c(I::SendToReport, "Send this table to the report", G::Workspace, "show publish report view add pivot result table", N::Tab),
+    c(I::ToggleAnalytics, "Show or hide the Analytics pane", G::Workspace, "forecast plan actual movers placeholder dock", N::Nothing),
+    c(I::ModelSetup, "Model set-up: step by step\u{2026}", G::Model, "tables links key check calendar as of measures relationships wizard flow", N::Nothing),
+    c(I::ModelLinks, "Model links\u{2026}", G::Model, "relationship lookup branch product master join keys", N::Nothing),
+    c(I::ModelKeyCheck, "Model key check\u{2026}", G::Model, "duplicate unmatched keys lookup problems", N::Nothing),
+    c(I::ModelCalendar, "Model calendar\u{2026}", G::Model, "shared calendar date table mtd ytd time intelligence", N::Nothing),
+    c(I::ModelAsOf, "Set the as-of date\u{2026}", G::Model, "as of date latest reporting date", N::Nothing),
+    c(I::ModelMeasures, "Model measures\u{2026}", G::Model, "measure nim yield cost of funds ratio average daily balance", N::Nothing),
 ];
 
 /// The heading a Banking command is listed under in the menu (the Banking menu lists them in

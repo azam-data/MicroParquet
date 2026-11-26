@@ -129,11 +129,15 @@ pub struct Project {
     /// The dashboard (Phase 10 D0). Not in the file when there is none, and then the project is version 1 or 2 exactly as Phase 9 wrote it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard: Option<crate::dashboard::Dashboard>,
+    /// The keys of the tabs sent to the Report view with "Send to report" (UI revamp). Not in the file when there are none, so a project
+    /// without any is written exactly as before; an older app ignores the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub report_tabs: Vec<String>,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new(), model: crate::model::Model::default(), dashboard: None }
+        Self { project_version: PROJECT_VERSION, app_version: env!("CARGO_PKG_VERSION").to_string(), saved_at: String::new(), active_tab: String::new(), tabs: Vec::new(), model: crate::model::Model::default(), dashboard: None, report_tabs: Vec::new() }
     }
 }
 

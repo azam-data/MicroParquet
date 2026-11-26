@@ -3,7 +3,7 @@
 
 use crate::ui::prelude::*;
 use crate::ui::tests::test_app;
-use crate::ui::top_bar::{ladder, plan_bar, BAR_ITEMS, MENUS};
+use crate::ui::top_bar::{ladder, plan_bar, MENUS};
 use micro_parquet::commands::CommandId;
 
 /// The window of the owner's smallest supported screen: 1280×720 pixels at 105% UI scale.
@@ -81,11 +81,11 @@ fn the_top_bar_is_one_44_px_strip() {
     let top = rects.iter().map(|(_, r)| r.top()).fold(f32::MAX, f32::min);
     let bottom = rects.iter().map(|(_, r)| r.bottom()).fold(f32::MIN, f32::max);
     assert!(top >= 0.0 && bottom <= theme::TOP_BAR_H, "items lie inside the first 44 px: {top}..{bottom}");
-    // order: mark, the seven menus, the buttons, then the search box at the far right
+    // order: mark, the three menus, the view's toolbar, then the search box at the far right
     let names: Vec<&str> = rects.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(&names[..9], &["Mark", "File", "Edit", "View", "Model", "Banking", "Charts", "Export", "Help"], "{names:?}");
+    assert_eq!(&names[..4], &["Mark", "File", "Settings", "Help"], "{names:?}");
     assert_eq!(*names.last().unwrap_or(&""), "Search");
-    assert_eq!(names[9], "OpenFile", "the toolbar buttons follow the menus: {names:?}");
+    assert_eq!(names[4], "OpenFile", "the toolbar of the view follows the menus: {names:?}");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn nothing_overlaps_at_1280_by_720_and_105_percent() {
 }
 
 /// The toolbar buttons by the names `bar_rects_at` gives their rectangles.
-const ITEM_NAMES: [&str; 11] = ["OpenFile", "Stack", "Batch", "Filter", "Sort", "Columns", "CalcColumn", "Pivot", "RateProfile", "ToggleChart", "ToggleSql"];
+const ITEM_NAMES: [&str; 14] = ["OpenFile", "Stack", "Batch", "Filter", "Sort", "Columns", "CalcColumn", "Pivot", "RateProfile", "Prepare", "Analyse", "ToggleSql", "SendToReport", "Share"];
 
 #[test]
 fn nothing_overlaps_at_any_window_width_the_menus_and_search_never_go_and_buttons_fold_from_the_right() {
@@ -143,8 +143,10 @@ fn the_ladder_folds_buttons_one_by_one_from_the_right_and_never_drops_a_label() 
 
 #[test]
 fn the_bar_items_are_the_toolbar_commands() {
-    let in_bar: Vec<CommandId> = BAR_ITEMS.iter().map(|(id, _)| *id).collect();
-    assert_eq!(in_bar, micro_parquet::commands::toolbar_buttons(), "same buttons, same order");
+    use micro_parquet::workspace::{view_bar, BarItem, View};
+    let old: Vec<CommandId> = micro_parquet::commands::toolbar_buttons();
+    let in_bar: Vec<CommandId> = view_bar(View::Data).iter().filter_map(|(i, _)| if let BarItem::Cmd(id) = i { Some(*id) } else { None }).filter(|id| old.contains(id)).collect();
+    assert_eq!(in_bar, old, "the Data view keeps the buttons it had, in the same order");
     assert_eq!(in_bar.len(), 11);
 }
 
@@ -152,7 +154,7 @@ fn the_bar_items_are_the_toolbar_commands() {
 fn at_1280_by_720_and_105_percent_the_menus_and_search_are_all_visible() {
     let (screen, rects) = bar_rects_at(WIN_W_PX);
     let rect = |n: &str| rects.iter().find(|(r, _)| r == n).map(|(_, r)| *r).unwrap_or_else(|| panic!("'{n}' is not in the bar: {rects:?}"));
-    for n in ["File", "Edit", "View", "Banking", "Export", "Help", "OpenFile", "Search"] {
+    for n in ["File", "Settings", "Help", "OpenFile", "Search"] {
         let r = rect(n);
         assert!(r.width() > 20.0 && r.right() <= screen.right() && r.left() >= 0.0, "{n}: {r:?}");
     }

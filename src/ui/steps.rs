@@ -394,7 +394,7 @@ impl MicroParquetApp {
     /// to (from today's width up to half the window), and each tab scrolls when its content is
     /// taller than the panel (Phase 6 U2).
     pub(crate) fn render_right_panel(&mut self, ctx: &egui::Context) {
-        if self.tabs.is_empty() || !self.side_panel_shown() {
+        if self.tabs.is_empty() || self.ws.view == micro_parquet::workspace::View::Model || !self.active_tab_in_view() || !self.side_panel_shown() {
             return;
         }
         // a tab switched off in View ▸ Side panel is not the one shown
@@ -454,6 +454,7 @@ impl MicroParquetApp {
                         RightTab::Column => self.render_column_tab(ui),
                         RightTab::Sql => self.render_sql_tab(ui, panel_h),
                         RightTab::Chart => self.render_chart_tab(ui),
+                        RightTab::Analytics => self.render_analytics_tab(ui),
                     });
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("right_panel_report"), RightPanelReport { scroll: area.inner_rect, content: area.content_size, offset: area.state.offset.y, tab }));
                 // the left edge: drag to resize, double-click for today's width (added last, so it is on top)
@@ -494,7 +495,7 @@ impl MicroParquetApp {
 
     /// The side-panel tabs that are switched on, in order.
     pub(crate) fn visible_side_tabs(&self) -> Vec<RightTab> {
-        RightTab::ALL.iter().copied().filter(|t| !self.settings.side_panel_hidden.iter().any(|n| n == t.name())).collect()
+        RightTab::ALL.iter().copied().filter(|t| t.in_view(self.ws.view) && !self.settings.side_panel_hidden.iter().any(|n| n == t.name())).collect()
     }
 
     /// The panel is drawn when it is on and at least one of its tabs is switched on.
@@ -1248,10 +1249,22 @@ pub enum RightTab {
     Column,
     Sql,
     Chart,
+    /// The placeholder pane of the Report view.
+    Analytics,
 }
 
 impl RightTab {
-    pub const ALL: [RightTab; 4] = [RightTab::Steps, RightTab::Column, RightTab::Sql, RightTab::Chart];
+    pub const ALL: [RightTab; 5] = [RightTab::Steps, RightTab::Column, RightTab::Sql, RightTab::Chart, RightTab::Analytics];
+
+    /// The tabs a view lists (SQL belongs to the Data view, Analytics to the Report view).
+    pub fn in_view(self, view: micro_parquet::workspace::View) -> bool {
+        use micro_parquet::workspace::View;
+        match self {
+            RightTab::Sql => view != View::Report,
+            RightTab::Analytics => view == View::Report,
+            _ => true,
+        }
+    }
 
     /// The name the View menu and settings.json use.
     pub fn name(self) -> &'static str {
@@ -1260,6 +1273,7 @@ impl RightTab {
             RightTab::Column => "Column",
             RightTab::Sql => "SQL",
             RightTab::Chart => "Chart",
+            RightTab::Analytics => "Analytics",
         }
     }
 }

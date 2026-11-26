@@ -47,6 +47,7 @@ pub mod settings;
 pub mod sort_lists;
 pub mod steps_edit;
 pub mod tool_runs;
+pub mod workspace;
 pub mod summary;
 pub mod table_layout;
 pub mod templates;

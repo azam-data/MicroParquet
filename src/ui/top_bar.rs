@@ -1,29 +1,12 @@
-//! The single top bar (44 px): app mark, the menus File / Edit / View / Banking / Export / Help, the
-//! toolbar buttons (always with their labels), then the command search box at the far right. The menus
-//! never fold; buttons that do not fit fold (from the right) into a "»" menu, so nothing overlaps at any window width.
+//! The single top bar (44 px): app mark, the menus File / Settings / Help, the toolbar of the current view (buttons and menus,
+//! always with their labels), then the command search box at the far right. The three menus never fold; toolbar items that do
+//! not fit fold (from the right) into a "»" menu, so nothing overlaps at any window width.
 
 use crate::ui::prelude::*;
-use micro_parquet::commands::{self as cmds, CommandGroup, CommandId};
+use micro_parquet::workspace::{self as ws, BarEntry, BarItem, MenuEntry, MenuKind, View};
 
-/// The toolbar buttons in the order they are drawn, with the group each belongs to (groups are
-/// separated by a thin line): Open / Stack / Batch | Filter / Sort / Columns / Calc column / Pivot /
-/// Rate profile | Chart / SQL. View ▸ "Toolbar buttons" switches each one off.
-pub const BAR_ITEMS: [(CommandId, usize); 11] = [
-    (CommandId::OpenFile, 0),
-    (CommandId::Stack, 0),
-    (CommandId::Batch, 0),
-    (CommandId::Filter, 1),
-    (CommandId::Sort, 1),
-    (CommandId::Columns, 1),
-    (CommandId::CalcColumn, 1),
-    (CommandId::Pivot, 1),
-    (CommandId::RateProfile, 1),
-    (CommandId::ToggleChart, 2),
-    (CommandId::ToggleSql, 2),
-];
-
-/// The menus, left to right. They never fold: only the buttons after them do.
-pub const MENUS: [&str; 8] = ["File", "Edit", "View", "Model", "Banking", "Charts", "Export", "Help"];
+/// The menus that are always there, left to right: the rest of the bar is the toolbar of the view. They never fold.
+pub const MENUS: [&str; 3] = ["File", "Settings", "Help"];
 
 /// How the bar is laid out: how many of the visible buttons (counted from the right) are in the
 /// overflow menu "»", and how wide the search box is. Buttons always keep their labels.
@@ -107,14 +90,19 @@ fn button_w(ui: &egui::Ui, text: &str) -> f32 {
     text_w(ui, text) + 2.0 * ui.spacing().button_padding.x + theme::BAR_WIDTH_SLACK
 }
 
-/// The text of a button: its icon and its label.
-fn item_text(id: CommandId) -> String {
-    let label = crate::ui::commands::toolbar_label(id);
-    let icon = crate::ui::commands::command_icon(id);
-    if label.is_empty() {
-        icon.to_string()
-    } else {
-        format!("{}  {}", icon, label)
+/// The text of a toolbar item: its icon and its label; a menu has a small caret.
+fn item_text(item: BarItem) -> String {
+    match item {
+        BarItem::Cmd(id) => {
+            let label = crate::ui::commands::toolbar_label(id);
+            let icon = crate::ui::commands::command_icon(id);
+            if label.is_empty() {
+                icon.to_string()
+            } else {
+                format!("{}  {}", icon, label)
+            }
+        }
+        BarItem::Menu(kind) => format!("{} {}", kind.label(), theme::ph::CARET_DOWN),
     }
 }
 
@@ -128,12 +116,12 @@ pub struct BarWidths {
     pub item_gap: f32,
 }
 
-fn measure(ui: &egui::Ui, visible: &[(CommandId, usize)]) -> BarWidths {
+fn measure(ui: &egui::Ui, visible: &[BarEntry]) -> BarWidths {
     let sp = ui.spacing().item_spacing.x;
     let fixed = theme::APP_MARK_SIZE + MENUS.iter().map(|t| sp + button_w(ui, t)).sum::<f32>();
     BarWidths {
         fixed,
-        label: visible.iter().map(|(id, _)| button_w(ui, &item_text(*id))).collect(),
+        label: visible.iter().map(|(item, _)| button_w(ui, &item_text(*item))).collect(),
         groups: visible.iter().map(|(_, g)| *g).collect(),
         overflow: button_w(ui, OVERFLOW_LABEL),
         gap: sp + theme::BAR_SEPARATOR_W + sp,
@@ -145,7 +133,7 @@ fn measure(ui: &egui::Ui, visible: &[(CommandId, usize)]) -> BarWidths {
 pub const OVERFLOW_LABEL: &str = "\u{bb}";
 
 /// The plan for a bar `avail` wide with these visible buttons, measured with `ui`'s fonts and spacing.
-pub fn plan_for(ui: &egui::Ui, avail: f32, visible: &[(CommandId, usize)]) -> BarPlan {
+pub fn plan_for(ui: &egui::Ui, avail: f32, visible: &[BarEntry]) -> BarPlan {
     let w = measure(ui, visible);
     plan_bar(avail, w.fixed, &w.label, &w.groups, w.overflow, w.gap, w.item_gap)
 }
@@ -154,9 +142,15 @@ pub fn plan_for(ui: &egui::Ui, avail: f32, visible: &[(CommandId, usize)]) -> Ba
 pub type BarRects = Vec<(String, egui::Rect)>;
 
 impl MicroParquetApp {
-    /// The toolbar buttons that are switched on in View ▸ Toolbar buttons.
-    pub(crate) fn visible_bar_items(&self) -> Vec<(CommandId, usize)> {
-        BAR_ITEMS.iter().copied().filter(|(id, _)| !self.settings.toolbar_hidden.iter().any(|n| n == crate::ui::commands::toolbar_label(*id))).collect()
+    /// The toolbar items of the current view that are switched on in Settings ▸ Toolbar & panels.
+    pub(crate) fn visible_bar_items(&self) -> Vec<BarEntry> {
+        ws::view_bar(self.ws.view)
+            .into_iter()
+            .filter(|(item, _)| match item {
+                BarItem::Cmd(id) => !self.settings.toolbar_hidden.iter().any(|n| n == crate::ui::commands::toolbar_label(*id)),
+                BarItem::Menu(_) => true,
+            })
+            .collect()
     }
 
     /// Draws the bar. Returns the rectangle of every item drawn.
@@ -193,56 +187,42 @@ impl MicroParquetApp {
         rects
     }
 
-    fn draw_bar_left(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, plan: &BarPlan, visible: &[(CommandId, usize)], rects: &mut BarRects) {
+    /// The entries of a toolbar menu: compact rows (the Analyse menu holds the long banking list in sub-menus).
+    fn draw_menu_entries(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: MenuKind) {
+        ui.spacing_mut().interact_size.y = theme::MENU_ROW_H;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for e in ws::menu_entries(kind) {
+            match e {
+                MenuEntry::Cmd(id) => self.command_menu_item(ui, ctx, id),
+                MenuEntry::Sub(name, ids) => {
+                    ui.menu_button(name, |ui| {
+                        ui.spacing_mut().interact_size.y = theme::MENU_ROW_H;
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for id in ids {
+                            self.command_menu_item(ui, ctx, id);
+                        }
+                    });
+                }
+                MenuEntry::Separator => {
+                    ui.separator();
+                }
+            }
+        }
+    }
+
+    fn draw_bar_left(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, plan: &BarPlan, visible: &[BarEntry], rects: &mut BarRects) {
         let tk = *theme::tokens(self.dark_mode);
-        let has_tab = !self.tabs.is_empty();
 
         // app mark
         let (rect, _) = ui.allocate_exact_size(egui::vec2(theme::APP_MARK_SIZE, theme::APP_MARK_SIZE), egui::Sense::hover());
         theme::paint_app_logo(ui.painter(), rect);
         rects.push(("Mark".to_string(), rect));
 
-        // the menus: File, Edit, View, Banking, Charts, Export, Help (they never fold)
+        // the menus: File, Settings, Help (they never fold)
         let r = self.file_menu(ui, ctx);
         rects.push(("File".to_string(), r.rect));
-        let r = self.edit_menu(ui, ctx);
-        rects.push(("Edit".to_string(), r.rect));
-        let r = self.view_menu(ui, ctx);
-        rects.push(("View".to_string(), r.rect));
-        let r = self.model_menu(ui);
-        rects.push(("Model".to_string(), r.rect));
-        for group_id in [CommandGroup::Banking, CommandGroup::Charts, CommandGroup::Export] {
-            let name = match group_id {
-                CommandGroup::Banking => "Banking",
-                CommandGroup::Charts => "Charts",
-                _ => "Export",
-            };
-            // (the Charts menu is always open: its items say why one cannot run)
-            let r = ui
-                .add_enabled_ui(has_tab || group_id == CommandGroup::Charts, |ui| {
-                    ui.menu_button(name, |ui| {
-                        // compact rows: the Banking menu has about twenty entries and four headings, and must
-                        // fit a 686 pt window under the top bar
-                        ui.spacing_mut().interact_size.y = theme::MENU_ROW_H;
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        let mut last_section: Option<&str> = None;
-                        for c in cmds::in_group(group_id) {
-                            let section = if group_id == CommandGroup::Banking { cmds::banking_section(c.id) } else { None };
-                            if section.is_some() && section != last_section {
-                                if last_section.is_some() {
-                                    ui.separator();
-                                }
-                                ui.label(theme::label_text(section.unwrap_or_default()).color(tk.muted));
-                                last_section = section;
-                            }
-                            self.command_menu_item(ui, ctx, c.id);
-                        }
-                    })
-                    .response
-                })
-                .inner;
-            rects.push((name.to_string(), r.rect));
-        }
+        let r = self.settings_menu(ui, ctx);
+        rects.push(("Settings".to_string(), r.rect));
         let r = ui
             .menu_button("Help", |ui| {
                 if ui.button("About MicroParquet").clicked() {
@@ -253,10 +233,10 @@ impl MicroParquetApp {
             .response;
         rects.push(("Help".to_string(), r.rect));
 
-        // the buttons that are not folded, group by group, each group after a thin line
+        // the view's items that are not folded, group by group, each group after a thin line
         let n = visible.len();
         let mut last_group = usize::MAX;
-        for (i, (id, group)) in visible.iter().enumerate() {
+        for (i, (item, group)) in visible.iter().enumerate() {
             if plan.is_folded(i, n) {
                 continue;
             }
@@ -264,23 +244,32 @@ impl MicroParquetApp {
                 bar_separator(ui, tk.border);
                 last_group = *group;
             }
-            let r = if matches!(id, CommandId::OpenFile | CommandId::Stack | CommandId::Batch | CommandId::ToggleChart) {
-                self.toolbar_button(ui, ctx, *id)
-            } else {
-                ui.add_enabled_ui(has_tab, |ui| self.toolbar_button(ui, ctx, *id)).inner
-            };
-            rects.push((format!("{:?}", id), r.rect));
+            match item {
+                BarItem::Cmd(id) => {
+                    let r = self.toolbar_button(ui, ctx, *id);
+                    rects.push((format!("{:?}", id), r.rect));
+                }
+                BarItem::Menu(kind) => {
+                    let r = ui.menu_button(item_text(*item), |ui| self.draw_menu_entries(ui, ctx, *kind)).response;
+                    rects.push((kind.label().to_string(), r.rect));
+                }
+            }
         }
 
-        // "»": the buttons that were folded, each as a menu item
+        // "»": the items that were folded, each as a menu item
         if plan.folded > 0 {
             bar_separator(ui, tk.border);
-            let folded: Vec<CommandId> = visible.iter().enumerate().filter(|(i, _)| plan.is_folded(*i, n)).map(|(_, (id, _))| *id).collect();
+            let folded: Vec<BarItem> = visible.iter().enumerate().filter(|(i, _)| plan.is_folded(*i, n)).map(|(_, (item, _))| *item).collect();
             let r = ui
                 .menu_button(OVERFLOW_LABEL, |ui| {
                     // the overflow menu has the labels the buttons had
-                    for id in &folded {
-                        self.command_menu_item_titled(ui, ctx, *id, crate::ui::commands::toolbar_label(*id));
+                    for item in &folded {
+                        match item {
+                            BarItem::Cmd(id) => self.command_menu_item_titled(ui, ctx, *id, crate::ui::commands::toolbar_label(*id)),
+                            BarItem::Menu(kind) => {
+                                ui.menu_button(kind.label(), |ui| self.draw_menu_entries(ui, ctx, *kind));
+                            }
+                        }
                     }
                 })
                 .response
@@ -294,4 +283,9 @@ impl MicroParquetApp {
 fn bar_separator(ui: &mut egui::Ui, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(theme::BAR_SEPARATOR_W, theme::BAR_SEPARATOR_H), egui::Sense::hover());
     ui.painter().vline(rect.center().x, rect.y_range(), theme::line(color));
+}
+
+/// The view the bar belongs to (tests).
+pub fn bar_view(app: &MicroParquetApp) -> View {
+    app.ws.view
 }

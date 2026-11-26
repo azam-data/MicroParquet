@@ -59,6 +59,10 @@ pub mod packs;
 pub mod runs;
 pub mod reconcile;
 pub mod schema;
+pub mod shell;
+pub mod settings_dialog;
+pub mod model_page;
+pub mod model_flow;
 pub mod sort;
 pub mod sort_lists;
 pub mod split_date;
@@ -155,6 +159,7 @@ impl MicroParquetApp {
             ActiveToolModal::ProjectRecent => self.render_project_recent_modal(ctx, cols),
             ActiveToolModal::ModelLinks => self.render_model_links_modal(ctx, cols),
             ActiveToolModal::ModelKeyCheck => self.render_model_key_check_modal(ctx, cols),
+            ActiveToolModal::ModelTables => self.render_model_tables_modal(ctx, cols),
             ActiveToolModal::ModelNoProject => self.render_model_no_project_modal(ctx, cols),
             ActiveToolModal::ModelCalendar => self.render_model_calendar_modal(ctx, cols),
             ActiveToolModal::ModelAsOf => self.render_model_as_of_modal(ctx, cols),
@@ -206,6 +211,8 @@ impl MicroParquetApp {
         };
 
         self.apply_modal_outcome(Some(ctx), outcome);
+        // a step chosen in the model's set-up (the strip or Back / Next)
+        self.apply_flow_goto();
     }
 
     /// What the app does with what a tool dialog asked for: add or replace the step, then close it. `ctx` is the window the

@@ -370,32 +370,7 @@ impl MicroParquetApp {
 
     // ---------------------------------------------------------------------------- the menu
 
-    pub(crate) fn model_menu(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        ui.menu_button(MODEL_TITLE, |ui| {
-            if ui.button("Links\u{2026}").clicked() {
-                ui.close_menu();
-                self.open_model_dialog(ActiveToolModal::ModelLinks);
-            }
-            if ui.button("Key check\u{2026}").clicked() {
-                ui.close_menu();
-                self.open_model_dialog(ActiveToolModal::ModelKeyCheck);
-            }
-            if ui.button("Calendar\u{2026}").clicked() {
-                ui.close_menu();
-                self.open_model_dialog(ActiveToolModal::ModelCalendar);
-            }
-            if ui.button("As-of date\u{2026}").clicked() {
-                ui.close_menu();
-                self.open_model_dialog(ActiveToolModal::ModelAsOf);
-            }
-            if ui.button("Measures\u{2026}").clicked() {
-                ui.close_menu();
-                self.open_model_dialog(ActiveToolModal::ModelMeasures);
-            }
-        })
-        .response
-    }
-
+    #[allow(dead_code)]
     fn open_model_dialog(&mut self, which: ActiveToolModal) {
         if !self.project.active {
             self.active_tool = ActiveToolModal::ModelNoProject;
@@ -504,13 +479,15 @@ impl MicroParquetApp {
         let selected = self.project.model_ui.selected.filter(|i| *i < links.len());
         let tabs: Vec<(u64, TabInfo)> = self.tabs.iter().filter_map(|t| self.model_tab_info(t.id).map(|i| (t.id, i))).collect();
         let title = format!("{}  {}", theme::ph::LINK, LINKS_TITLE);
-        theme::modal(&title).default_width(theme::DIALOG_W_PIVOT_BUILDER * theme::MODEL_DIALOG_SHARE).show(ctx, |d| {
+        let _ = &title;
+        theme::modal(crate::ui::model_flow::MODEL_SETUP_TITLE).default_width(theme::DIALOG_W_MODEL_FLOW).show(ctx, |d| {
             d.body(|ui| {
+                self.model_flow_header(ui, micro_parquet::workspace::ModelStep::Links);
                 if let Some(dr) = draft.as_mut() {
                     self.model_draft_form(ui, dr, &tabs, &mut rects, &tk);
                     return;
                 }
-                ui.add(egui::Label::new(egui::RichText::new("A link joins a data tab to a lookup tab on 1 to 3 key columns. Keys must be unique in the lookup; Model \u{25b8} Key check lists any that are not.").color(tk.muted)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new("A link joins a data tab to a lookup tab on 1 to 3 key columns. Keys must be unique in the lookup; the Key check step lists any that are not.").color(tk.muted)).wrap());
                 ui.add_space(theme::SPACE_S);
                 if links.is_empty() {
                     ui.label(egui::RichText::new("No links yet. Add one to use a lookup tab's columns in a pivot or chart.").color(tk.muted));
@@ -567,6 +544,7 @@ impl MicroParquetApp {
                         let c = ui.button("Close");
                         rects.buttons.push(("Close".to_string(), c.rect));
                         close = c.clicked();
+                        self.model_flow_footer(ui, micro_parquet::workspace::ModelStep::Links);
                     }
                 });
             });
@@ -708,10 +686,12 @@ impl MicroParquetApp {
                     .unwrap_or_default()
             })
             .collect();
-        theme::modal(&title).default_width(theme::DIALOG_W_PIVOT_BUILDER * theme::MODEL_DIALOG_SHARE).show(ctx, |d| {
+        let _ = &title;
+        theme::modal(crate::ui::model_flow::MODEL_SETUP_TITLE).default_width(theme::DIALOG_W_MODEL_FLOW).show(ctx, |d| {
             d.body(|ui| {
+                self.model_flow_header(ui, micro_parquet::workspace::ModelStep::KeyCheck);
                 if links.is_empty() {
-                    ui.label(egui::RichText::new("The model has no links yet. Model \u{25b8} Links\u{2026} makes one.").color(tk.muted));
+                    ui.label(egui::RichText::new("The model has no links yet. Go back to the Links step to make one.").color(tk.muted));
                 }
                 for (i, l) in links.iter().enumerate() {
                     let rt = self.project.model_ui.runtime.get(&(l.data_tab.clone(), l.lookup_tab.clone())).cloned();
@@ -795,6 +775,7 @@ impl MicroParquetApp {
                     let c = ui.button("Close");
                     rects.buttons.push(("Close".to_string(), c.rect));
                     close = c.clicked();
+                    self.model_flow_footer(ui, micro_parquet::workspace::ModelStep::KeyCheck);
                 });
             });
         });

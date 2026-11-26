@@ -56,6 +56,8 @@ pub enum PageAct {
     SetRect(String, DashRect),
     /// A click on an empty slot: its fill choices open.
     OpenSlot(String),
+    /// An item chosen on the empty page's cards.
+    Add(DashItemKind),
 }
 
 /// One item's latest numbers.
@@ -403,32 +405,30 @@ impl MicroParquetApp {
         let mut add_item: Option<DashItemKind> = None;
         let choices = self.dash_source_choices();
 
-        // header
+        // the toolbar: add a chart, a table, a KPI card or a filter on the left; layout, export and close on the right
         ui.horizontal(|ui| {
             ui.label(theme::semibold(format!("{}  {}", theme::ph::CHART_BAR, dash.title)).size(theme::TEXT_HEADING));
             ui.add_space(theme::SPACE_M);
-            let r = ui.menu_button("Add item", |ui| {
-                if choices.is_empty() {
-                    ui.label("No chart tab or pivot tab is open. Make one first.");
-                }
-                let b = ui.button(format!("{}  KPI card", theme::ph::GAUGE));
-                rects.push(("Add KPI card".into(), b.rect));
-                if b.clicked() {
-                    add_item = Some(DashItemKind::Kpi(KpiSpec { title: "New KPI".into(), ..Default::default() }));
-                    ui.close_menu();
-                }
-                ui.separator();
-                for (key, title, chart) in &choices {
-                    let text = format!("{}  {}", if *chart { theme::ph::CHART_BAR } else { theme::ph::TABLE }, title);
-                    let b = ui.button(text);
-                    if b.clicked() {
-                        add_item = Some(if *chart { DashItemKind::Chart(key.clone()) } else { DashItemKind::Pivot(key.clone()) });
-                        ui.close_menu();
+            for (name, text, charts) in [("Add chart", format!("{}  Chart", theme::ph::PLUS), true), ("Add table", format!("{}  Table", theme::ph::PLUS), false)] {
+                let r = ui.menu_button(text, |ui| {
+                    let mut any = false;
+                    for (key, title, chart) in choices.iter().filter(|(_, _, c)| *c == charts) {
+                        any = true;
+                        if ui.button(format!("{}  {}", if *chart { theme::ph::CHART_BAR } else { theme::ph::TABLE }, title)).clicked() {
+                            add_item = Some(if *chart { DashItemKind::Chart(key.clone()) } else { DashItemKind::Pivot(key.clone()) });
+                            ui.close_menu();
+                        }
                     }
-                }
-            });
-            rects.push(("Add item".into(), r.response.rect));
-            if Self::dash_button(ui, "Add filter", "Add filter", &mut rects) {
+                    if !any {
+                        ui.label(if charts { "No chart tab is open. Make one in the Report view first." } else { "No pivot tab is open. Make one in the Report view first." });
+                    }
+                });
+                rects.push((name.into(), r.response.rect));
+            }
+            if Self::dash_button(ui, "Add KPI card", &format!("{}  KPI", theme::ph::PLUS), &mut rects) {
+                add_item = Some(DashItemKind::Kpi(KpiSpec { title: "New KPI".into(), ..Default::default() }));
+            }
+            if Self::dash_button(ui, "Add filter", &format!("{}  Filter", theme::ph::PLUS), &mut rects) {
                 if dash.pages[pi].filters.len() >= MAX_PAGE_FILTERS {
                     self.dashboard_ui.notice = FIFTH_FILTER.to_string();
                 } else {
@@ -436,16 +436,39 @@ impl MicroParquetApp {
                     self.dashboard_ui.add_filter = Some(AddFilter::default());
                 }
             }
-            if Self::dash_button(ui, "Clear", "Clear", &mut rects) {
-                dash.pages[pi].state.clear();
-                self.dashboard_ui.notice.clear();
-            }
-            if Self::dash_button(ui, "Export", "Export\u{2026}", &mut rects) {
-                self.dashboard_ui.export.get_or_insert_with(Default::default);
-            }
-            if Self::dash_button(ui, "Close dashboard", "Close dashboard", &mut rects) {
-                close = true;
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if Self::dash_button(ui, "Close dashboard", "Close", &mut rects) {
+                    close = true;
+                }
+                // one Export button: the three files are inside
+                let r = ui.menu_button(format!("{}  Export", theme::ph::EXPORT), |ui| {
+                    for (name, f) in [("Export HTML", crate::ui::dashboard_export::ExportFormat::Html), ("Export PowerPoint", crate::ui::dashboard_export::ExportFormat::Pptx), ("Export PDF", crate::ui::dashboard_export::ExportFormat::Pdf)] {
+                        let text = match f {
+                            crate::ui::dashboard_export::ExportFormat::Html => "HTML report\u{2026}",
+                            crate::ui::dashboard_export::ExportFormat::Pptx => "PowerPoint\u{2026}",
+                            crate::ui::dashboard_export::ExportFormat::Pdf => "PDF\u{2026}",
+                        };
+                        let b = ui.button(text);
+                        rects.push((name.into(), b.rect));
+                        if b.clicked() {
+                            self.dashboard_ui.export = Some(crate::ui::dashboard_export::ExportDlg { format: f, ..Default::default() });
+                            ui.close_menu();
+                        }
+                    }
+                });
+                rects.push(("Export".into(), r.response.rect));
+                // Clear is under a menu and asks first
+                let r = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
+                    let b = ui.button("Clear the filters and clicks on this page");
+                    rects.push(("Clear".into(), b.rect));
+                    if b.clicked() {
+                        dash.pages[pi].state.clear();
+                        self.dashboard_ui.notice.clear();
+                        ui.close_menu();
+                    }
+                });
+                rects.push(("More".into(), r.response.rect));
+            });
         });
         if !self.dashboard_ui.notice.is_empty() {
             ui.colored_label(tk.danger, self.dashboard_ui.notice.clone());
@@ -591,6 +614,8 @@ impl MicroParquetApp {
         // pages (left), properties (right), the page (centre)
         let mut select_page: Option<usize> = None;
         let mut new_page = false;
+        let mut page_op: Option<(&'static str, usize)> = None;
+        let mut item_op: Option<(&'static str, usize)> = None;
         egui::SidePanel::left("dash_pages").exact_width(theme::DASH_LEFT_W).resizable(false).frame(egui::Frame::none()).show_inside(ui, |ui| {
             ui.label(theme::semibold("Pages"));
             for (i, p) in dash.pages.iter().enumerate() {
@@ -603,16 +628,14 @@ impl MicroParquetApp {
             if Self::dash_button(ui, "Add page", &format!("{}  Add page", theme::ph::PLUS), &mut rects) {
                 new_page = true;
             }
-        });
-        let mut page_op: Option<(&'static str, usize)> = None;
-        let mut item_op: Option<(&'static str, usize)> = None;
-        egui::SidePanel::right("dash_props").exact_width(theme::DASH_RIGHT_W).resizable(false).frame(egui::Frame::none()).show_inside(ui, |ui| {
-          egui::ScrollArea::vertical().id_salt("dash_props_scroll").auto_shrink([false, false]).show(ui, |ui| {
-            let sel = self.dashboard_ui.selected.clone().and_then(|id| dash.pages[pi].items.iter().position(|i| i.id == id));
-            if sel.is_none() {
+            ui.separator();
+            // the page's own settings stay here, so the canvas keeps the whole width
+            egui::ScrollArea::vertical().id_salt("dash_page_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                let sel = self.dashboard_ui.selected.clone().and_then(|id| dash.pages[pi].items.iter().position(|i| i.id == id));
+                let _ = sel;
             ui.label(theme::semibold("Page"));
             let mut title = dash.pages[pi].title.clone();
-            if Self::dash_text_edit(ui, "Page title", &mut title, &mut rects, theme::DASH_RIGHT_W - theme::DASH_PROPS_PAD) {
+            if Self::dash_text_edit(ui, "Page title", &mut title, &mut rects, theme::DASH_LEFT_W - theme::DASH_PROPS_PAD) {
                 dash.pages[pi].title = title;
             }
             if let PageLayout::Grid { per_row } = dash.pages[pi].layout {
@@ -688,16 +711,25 @@ impl MicroParquetApp {
             } else if Self::dash_button(ui, "Delete page", "Delete page", &mut rects) {
                 self.dashboard_ui.confirm_delete = true;
             }
-            }
-            match sel {
-                None => {
-                    ui.separator();
-                    ui.label(egui::RichText::new("Click an item to change it.").color(tk.muted));
-                }
-                Some(ii) => {
-                    if Self::dash_button(ui, "Page settings", "\u{2039} Page settings", &mut rects) {
-                        self.dashboard_ui.selected = None;
-                    }
+            });
+        });
+        egui::CentralPanel::default().frame(egui::Frame::none()).show_inside(ui, |ui| {
+            self.render_dash_page(ui, &dash.pages[pi], dash.default_kpi_unit, &mut rects, &mut open_tab, &mut acts);
+        });
+        // the selected tile's settings float beside it and go when you click somewhere else
+        if let Some(ii) = self.dashboard_ui.selected.clone().and_then(|id| dash.pages[pi].items.iter().position(|i| i.id == id)) {
+            let tile = rects.iter().find(|(n, _)| *n == format!("Item {}", dash.pages[pi].items[ii].id)).map(|(_, r)| *r);
+            let page_area = rects.iter().find(|(n, _)| n == "Page area").map(|(_, r)| *r).unwrap_or_else(|| ui.max_rect());
+            if let Some(tile) = tile {
+                let right_room = page_area.right() - tile.right();
+                let x = if right_room >= theme::TILE_PANEL_W + theme::TILE_PANEL_GAP { tile.right() + theme::TILE_PANEL_GAP } else { (tile.left() - theme::TILE_PANEL_W - theme::TILE_PANEL_GAP).max(page_area.left()) };
+                let pos = egui::pos2(x, tile.top().max(page_area.top()));
+                let ctx = ui.ctx().clone();
+                let area = egui::Area::new(egui::Id::new("dash_tile_panel")).order(egui::Order::Foreground).fixed_pos(pos).constrain_to(page_area.union(ui.max_rect())).show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_width(theme::TILE_PANEL_W);
+                        egui::ScrollArea::vertical().id_salt("dash_props_scroll").max_height(theme::TILE_PANEL_MAX_H).auto_shrink([true, true]).show(ui, |ui| {
+                            let ii = ii;
                     ui.label(theme::semibold("Item"));
                     let source = match &dash.pages[pi].items[ii].kind {
                         DashItemKind::Chart(k) | DashItemKind::Pivot(k) => self.dash_index_of_key(k).map(|i| self.tabs[i].title.clone()).unwrap_or_else(|| SOURCE_REMOVED.to_string()),
@@ -706,7 +738,7 @@ impl MicroParquetApp {
                     ui.label(egui::RichText::new(source).color(tk.muted));
                     let mut t = dash.pages[pi].items[ii].title_override.clone().unwrap_or_default();
                     ui.label("Title");
-                    if Self::dash_text_edit(ui, "Item title", &mut t, &mut rects, theme::DASH_RIGHT_W - theme::DASH_PROPS_PAD) {
+                    if Self::dash_text_edit(ui, "Item title", &mut t, &mut rects, theme::TILE_PANEL_W - theme::DASH_PROPS_PAD) {
                         dash.pages[pi].items[ii].title_override = if t.is_empty() { None } else { Some(t) };
                     }
                     if let DashItemKind::Kpi(k) = &mut dash.pages[pi].items[ii].kind {
@@ -736,35 +768,16 @@ impl MicroParquetApp {
                             item_op = Some(("remove", ii));
                         }
                     });
-                }
+                        });
+                    });
+                });
+                rects.push(("Tile panel".into(), area.response.rect));
             }
-          });
-        });
-        egui::CentralPanel::default().frame(egui::Frame::none()).show_inside(ui, |ui| {
-            self.render_dash_page(ui, &dash.pages[pi], dash.default_kpi_unit, &mut rects, &mut open_tab, &mut acts);
-        });
+        }
 
         // what was asked for
         if let Some(kind) = add_item {
-            let taken: Vec<String> = dash.pages[pi].items.iter().map(|i| i.id.clone()).collect();
-            let id = self.dashboard_ui.fresh_id("i", &taken);
-            self.dashboard_ui.selected = Some(id.clone());
-            let mut rect = None;
-            let mut ok = true;
-            if dash.pages[pi].layout == PageLayout::Free {
-                match dash.pages[pi].first_free_spot(NEW_ITEM_W, NEW_ITEM_H) {
-                    Ok(r) => rect = Some(r),
-                    Err(e) => {
-                        self.dashboard_ui.notice = format!("{:#}", e);
-                        ok = false;
-                    }
-                }
-            }
-            if ok {
-                dash.pages[pi].items.push(DashItem { id, kind, rect, ..Default::default() });
-            } else {
-                self.dashboard_ui.selected = None;
-            }
+            self.dash_add_item(&mut dash, pi, kind);
         }
         for act in acts {
             match act {
@@ -776,6 +789,7 @@ impl MicroParquetApp {
                 PageAct::DrillBack(item, depth) => dash.pages[pi].state.drill_back_to(&item, depth),
                 PageAct::Notice(m) => self.dashboard_ui.notice = m,
                 PageAct::OpenSlot(n) => self.dashboard_ui.fill_slot = Some(n),
+                PageAct::Add(kind) => self.dash_add_item(&mut dash, pi, kind),
                 PageAct::SetRect(item, r) => {
                     if let Some(i) = dash.pages[pi].items.iter_mut().find(|i| i.id == item) {
                         i.rect = Some(r);
@@ -850,6 +864,94 @@ impl MicroParquetApp {
         self.dashboard_ui.rects = rects;
     }
 
+    /// Puts a new item on page `pi` and selects it (on a Free page, in the first free spot; a full page says so).
+    fn dash_add_item(&mut self, dash: &mut Dashboard, pi: usize, kind: DashItemKind) {
+            let taken: Vec<String> = dash.pages[pi].items.iter().map(|i| i.id.clone()).collect();
+        let id = self.dashboard_ui.fresh_id("i", &taken);
+        self.dashboard_ui.selected = Some(id.clone());
+        let mut rect = None;
+        let mut ok = true;
+        if dash.pages[pi].layout == PageLayout::Free {
+            match dash.pages[pi].first_free_spot(NEW_ITEM_W, NEW_ITEM_H) {
+                Ok(r) => rect = Some(r),
+                Err(e) => {
+                    self.dashboard_ui.notice = format!("{:#}", e);
+                    ok = false;
+                }
+            }
+        }
+        if ok {
+            dash.pages[pi].items.push(DashItem { id, kind, rect, ..Default::default() });
+        } else {
+            self.dashboard_ui.selected = None;
+        }
+    }
+
+    /// An empty page says what to add first: a chart or a table that is already open, a KPI card, or a design to import.
+    fn render_empty_page_hint(&mut self, ui: &mut egui::Ui, area: egui::Rect, rects: &mut Vec<(String, egui::Rect)>, acts: &mut Vec<PageAct>) {
+        let tk = *theme::tokens(self.dark_mode);
+        let choices = self.dash_source_choices();
+        let (charts, tables): (Vec<_>, Vec<_>) = choices.iter().partition(|(_, _, c)| *c);
+        let hint = micro_parquet::workspace::empty_dashboard_hint(charts.len(), tables.len());
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area.shrink(theme::SPACE_M)).layout(egui::Layout::top_down(egui::Align::Center)));
+        child.set_clip_rect(area);
+        child.add_space(area.height() * theme::HINT_TOP_SHARE);
+        child.label(theme::semibold(hint.title).size(theme::TEXT_HINT_TITLE).color(tk.ink));
+        child.add(egui::Label::new(egui::RichText::new(hint.line).color(tk.muted)).wrap());
+        child.add_space(theme::SPACE_S);
+        child.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(theme::SPACE_S, theme::SPACE_S);
+            for (i, c) in hint.cards.iter().enumerate() {
+                egui::Frame::none().fill(tk.bg).stroke(theme::line(tk.border)).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(egui::Margin::same(theme::SPACE_S)).show(ui, |ui| {
+                    ui.set_width(theme::HINT_CARD_W);
+                    ui.vertical(|ui| {
+                        ui.label(theme::semibold(c.title).color(tk.ink));
+                        ui.add(egui::Label::new(egui::RichText::new(c.body).color(tk.muted)).wrap());
+                        match i {
+                            0 | 1 => {
+                                let list = if i == 0 { &charts } else { &tables };
+                                let r = ui.menu_button(if i == 0 { "Add chart" } else { "Add table" }, |ui| {
+                                    if list.is_empty() {
+                                        ui.label("None is open. Make one in the Report view first.");
+                                    }
+                                    for (key, title, chart) in list.iter().copied() {
+                                        if ui.button(title).clicked() {
+                                            acts.push(PageAct::Add(if *chart { DashItemKind::Chart(key.clone()) } else { DashItemKind::Pivot(key.clone()) }));
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                                rects.push((format!("Hint {}", if i == 0 { "Add chart" } else { "Add table" }), r.response.rect));
+                            }
+                            _ => {
+                                let b = ui.button("Add KPI card");
+                                rects.push(("Hint Add KPI".into(), b.rect));
+                                if b.clicked() {
+                                    acts.push(PageAct::Add(DashItemKind::Kpi(KpiSpec { title: "New KPI".into(), ..Default::default() })));
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+            // the design card is last: a picture from Claude Design or Canva becomes the page's layout
+            egui::Frame::none().fill(tk.bg).stroke(theme::line(tk.border)).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(egui::Margin::same(theme::SPACE_S)).show(ui, |ui| {
+                ui.set_width(theme::HINT_CARD_W);
+                ui.vertical(|ui| {
+                    ui.label(theme::semibold("Import a design").color(tk.ink));
+                    ui.add(egui::Label::new(egui::RichText::new("A page layout made in Claude Design or Canva").color(tk.muted)).wrap());
+                    let b = ui.button("Import design\u{2026}");
+                    rects.push(("Hint Import design".into(), b.rect));
+                    if b.clicked() {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("Picture", &["png", "jpg", "jpeg"]).pick_file() {
+                            self.dashboard_ui.import_path = Some(p);
+                        }
+                    }
+                });
+            });
+        });
+    }
+
     /// The page: its items in the grid, scaled to the space there is.
     fn render_dash_page(&mut self, ui: &mut egui::Ui, page: &DashPage, default_unit: KpiUnit, rects: &mut Vec<(String, egui::Rect)>, open_tab: &mut Option<String>, acts: &mut Vec<PageAct>) {
         let tk = *theme::tokens(self.dark_mode);
@@ -860,6 +962,10 @@ impl MicroParquetApp {
         let area = area.translate(egui::vec2(theme::SPACE_S, 0.0));
         ui.painter().rect(area, theme::RADIUS_PANEL, tk.surface, theme::line(tk.border));
         rects.push(("Page area".into(), area));
+        // a click on the page, not on an item, closes the tile's settings (the items are added after this, so they take their own clicks)
+        if ui.interact(area, ui.id().with("dash_page_bg"), egui::Sense::click()).clicked() {
+            self.dashboard_ui.selected = None;
+        }
         if let Some(tex) = page.background.as_ref().and_then(|b| self.dashboard_ui.textures.get(&b.blake3)) {
             ui.painter().image(tex.id(), area, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             ui.painter().rect_stroke(area, theme::RADIUS_PANEL, theme::line(tk.border));
@@ -882,8 +988,8 @@ impl MicroParquetApp {
                 return;
             }
         };
-        if page.items.is_empty() {
-            ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "This page is empty. Use Add item to put a chart or a pivot on it.", egui::FontId::proportional(theme::TEXT_BASE), tk.muted);
+        if page.items.is_empty() && page.slots.is_empty() {
+            self.render_empty_page_hint(ui, area, rects, acts);
         }
         // arrow keys: 10 units; with Shift they resize (the bottom right corner), on the selected item of a Free page
         if page.layout == PageLayout::Free && ui.memory(|m| m.focused().is_none()) {
