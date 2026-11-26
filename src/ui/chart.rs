@@ -214,7 +214,7 @@ impl MicroParquetApp {
     }
 
     /// Sends the settings to the worker when they (or the data) changed since the last request.
-    fn chart_tick(&mut self) {
+    pub(crate) fn chart_tick(&mut self) {
         let Some(tab) = self.tabs.get(self.active_tab) else {
             return;
         };

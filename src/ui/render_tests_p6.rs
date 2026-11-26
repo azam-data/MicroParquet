@@ -2061,8 +2061,9 @@ fn p3_the_mom_dialog_fits_builds_the_variance_and_the_commentary_tabs_by_clicks_
         let build = rig.app.mom.rects.buttons.iter().find(|(n, _)| n == "Build MoM variance").map(|(_, r)| *r).expect("button");
         pclick(&mut rig, build);
         settle(&mut rig.app);
-        assert_eq!(rig.app.tabs.len(), 4, "{what}: two tabs: {}", rig.app.status_message);
-        assert_eq!(rig.app.active_tab, 3, "{what}: the variance table is the active one");
+        assert_eq!(rig.app.tabs.len(), 5, "{what}: three tabs (variance, commentary, bridge): {}", rig.app.status_message);
+        assert_eq!(rig.app.tabs[4].title, "MoM bridge", "{what}");
+        assert_eq!(rig.app.active_tab, 4, "{what}: the last tab built (the bridge) is the active one");
         let t = &rig.app.tabs[3];
         assert_eq!(t.title, "MoM variance");
         assert_eq!(t.total_rows, 2, "{what}");

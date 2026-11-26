@@ -63,6 +63,14 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
+    let data = compute_base(lf, spec)?;
+    match &spec.forecast {
+        Some(f) => crate::forecast_chart::apply_forecast(data, f),
+        None => Ok(data),
+    }
+}
+
+fn compute_base(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
     // W6: the chart is drawn at its drill level, from the rows its path and its own filters leave
     spec.check_drill()?;
     spec.check_filters()?;

@@ -63,6 +63,19 @@ pub struct ModelCalendar {
     pub tab: String,
 }
 
+/// A budget or target table linked to a data tab (Phase 11 P1): one row per month and key (product, branch, wing ...), with one or more
+/// amount columns (Budget, Target ...). The month column holds a date; the month is what counts, so any day of it will do. The keys pair
+/// the data tab's columns (`data`) with the plan table's (`lookup`); the month is not a key pair. A plan row is for one month and one key
+/// combination: the same month and keys twice is a duplicate, and the plan is refused until it is fixed at source.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct PlanLink {
+    pub data_tab: String,
+    pub plan_tab: String,
+    pub month_column: String,
+    #[serde(default)]
+    pub keys: Vec<KeyPair>,
+}
+
 pub use crate::measures::ColumnKind;
 
 pub use crate::measures::NamedMeasure;
@@ -81,6 +94,9 @@ pub enum AsOf {
 pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// The budget and target tables (Phase 11).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<PlanLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<ModelCalendar>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -721,10 +737,22 @@ pub struct ScopeLink {
     pub refusal: Option<String>,
 }
 
+/// A plan link as the worker sees it: the link and the plan table read after its own steps.
+#[derive(Clone, Debug)]
+pub struct ScopePlan {
+    pub link: PlanLink,
+    /// `None` when the plan tab is not open.
+    pub table: Option<ModelTab>,
+    /// Why the plan can't be used (repeated month and key, a blank month ...), or `None`.
+    pub refusal: Option<String>,
+}
+
 /// The model as the worker needs it: its links and where to put temporary files.
 #[derive(Clone, Debug, Default)]
 pub struct ModelContext {
     pub links: Vec<ScopeLink>,
+    /// The budget and target tables of the model (Phase 11).
+    pub plans: Vec<ScopePlan>,
     pub temp_dir: std::path::PathBuf,
     /// The model calendar, the date links and the as-of date (Phase 9 M3): what the time aggregations read.
     pub calendar: Option<CalendarScope>,
@@ -983,4 +1011,109 @@ pub fn step_links(step: &TransformStep) -> Vec<String> {
         _ => {}
     }
     out
+}
+
+
+// ----------------------------------------------------------------------------------------------- budget and target tables (Phase 11)
+
+/// What the check of a plan table found (it reads only the plan table: its months, its keys and the repeats).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlanCheck {
+    pub rows: usize,
+    pub blank_months: usize,
+    pub blank_keys: usize,
+    /// Month and key combinations that appear more than once, and how many rows they make; the first few as text.
+    pub duplicate_keys: usize,
+    pub duplicate_examples: Vec<String>,
+    /// The first and last month (as "2026-07") of the plan.
+    pub months: Option<(String, String)>,
+}
+
+impl PlanCheck {
+    /// Why the plan can't be used, or `None`. A plan with a repeated month and key would be added twice, so it is refused, never summed.
+    pub fn refusal(&self, title: &str) -> Option<String> {
+        if self.rows == 0 {
+            return Some(format!("The plan table '{}' has no rows.", title));
+        }
+        let mut why: Vec<String> = Vec::new();
+        if self.blank_months > 0 {
+            why.push(format!("{} row(s) have a blank month", self.blank_months));
+        }
+        if self.blank_keys > 0 {
+            why.push(format!("{} row(s) have a blank key", self.blank_keys));
+        }
+        if self.duplicate_keys > 0 {
+            why.push(format!("{} month and key combination(s) appear more than once (for example {})", self.duplicate_keys, self.duplicate_examples.join("; ")));
+        }
+        if why.is_empty() {
+            None
+        } else {
+            Some(format!("The plan table '{}' can't be used yet: {}. Fix them at source.", title, why.join(", ")))
+        }
+    }
+}
+
+/// Checks a plan table: month column is a date, the keys exist, and no month and key repeats.
+pub fn check_plan(link: &PlanLink, plan: &ModelTab, temp_dir: &Path) -> Result<PlanCheck> {
+    let mut lf = compile_tab_lazy(&plan.source, &plan.steps, temp_dir).with_context(|| format!("'{}' could not be read", plan.title))?;
+    let schema = lf.collect_schema().with_context(|| format!("'{}' could not be read", plan.title))?;
+    plan_columns_ok(link, &schema, &plan.title)?;
+    let keys: Vec<String> = link.keys.iter().map(|k| k.lookup.clone()).collect();
+    let mut exprs: Vec<Expr> = vec![col(link.month_column.as_str()).cast(DataType::Date).cast(DataType::Int32).alias("__pd")];
+    for (i, k) in keys.iter().enumerate() {
+        let dt = schema.get(k.as_str()).cloned().unwrap_or(DataType::String);
+        exprs.push(crate::pivot_table::key_text_expr(k, &dt).alias(format!("__pk{i}")));
+    }
+    let df = lf.select(exprs).collect().with_context(|| format!("'{}' could not be read", plan.title))?;
+    let mut out = PlanCheck { rows: df.height(), ..Default::default() };
+    let days: Vec<Option<i32>> = df.column("__pd")?.i32()?.into_iter().collect();
+    let key_cols: Vec<Vec<Option<String>>> = (0..keys.len()).map(|i| Ok(df.column(&format!("__pk{i}"))?.str()?.into_iter().map(|v| v.map(str::to_string)).collect())).collect::<Result<_>>()?;
+    let mut seen: std::collections::BTreeMap<(String, Vec<String>), usize> = std::collections::BTreeMap::new();
+    let (mut first, mut last): (Option<String>, Option<String>) = (None, None);
+    for r in 0..df.height() {
+        let month = days[r].and_then(crate::dates::date_from_days).map(|d| d.format("%Y-%m").to_string());
+        let key: Option<Vec<String>> = key_cols.iter().map(|c| c[r].clone().filter(|t| !t.is_empty())).collect();
+        if month.is_none() {
+            out.blank_months += 1;
+        }
+        if key.is_none() {
+            out.blank_keys += 1;
+        }
+        if let (Some(m), Some(k)) = (month, key) {
+            if first.as_ref().is_none_or(|f| m < *f) {
+                first = Some(m.clone());
+            }
+            if last.as_ref().is_none_or(|l| m > *l) {
+                last = Some(m.clone());
+            }
+            *seen.entry((m, k)).or_insert(0) += 1;
+        }
+    }
+    for ((m, k), n) in seen.iter().filter(|(_, n)| **n > 1) {
+        out.duplicate_keys += 1;
+        if out.duplicate_examples.len() < 5 {
+            out.duplicate_examples.push(format!("{} {} ({} rows)", m, k.join(" / "), n));
+        }
+    }
+    out.months = first.zip(last);
+    Ok(out)
+}
+
+/// The plan table's month column is a date and its key columns exist, with the same types as the data tab's columns where those are known.
+pub fn plan_columns_ok(link: &PlanLink, schema: &Schema, title: &str) -> Result<()> {
+    let Some(dt) = schema.get(link.month_column.as_str()) else {
+        bail!("'{}' has no column '{}'. Open Model \u{25b8} Links and pick the month column again.", title, link.month_column);
+    };
+    if !matches!(dt, DataType::Date | DataType::Datetime(..)) {
+        bail!("The month column '{}' of '{}' is {}, not a date. Set it to a date type in Schema & Ingestion (a month such as 2026-07-31 or 31/07/2026).", link.month_column, title, type_word(dt));
+    }
+    if link.keys.is_empty() {
+        bail!("The plan link of '{}' has no key columns. Pick the columns that name a line of the plan (for example Product).", title);
+    }
+    for k in &link.keys {
+        if schema.get(k.lookup.as_str()).is_none() {
+            bail!("'{}' has no column '{}'. Open Model \u{25b8} Links and pick the key column again.", title, k.lookup);
+        }
+    }
+    Ok(())
 }

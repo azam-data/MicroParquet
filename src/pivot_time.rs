@@ -90,8 +90,25 @@ struct Comp {
 
 /// What a time value is made of: one component, or a ratio of signed components (the term's sign beside its index).
 enum Res {
+    /// A budget or target (Phase 11): the plan series `pc`, set against the actual (a `Single` or a `Ratio`) when the value shows a difference or a percent.
+    Plan { name: String, actual: Option<Box<Res>>, pc: usize, agg: crate::measures::PlanAgg, show: crate::measures::PlanShow },
     Single(usize),
     Ratio { name: String, num: Vec<(usize, f64)>, den: Vec<(usize, f64)>, annualise: Option<crate::measures::DayCount>, percent: bool },
+}
+
+/// A plan series of a pivot: the amount column of a plan table, by month and the pivot's keys.
+struct PlanComp {
+    plan_tab: String,
+    column: String,
+}
+
+/// The components behind a value, in the order its terms are given.
+fn res_cis(res: &Res) -> Vec<usize> {
+    match res {
+        Res::Single(ci) => vec![*ci],
+        Res::Ratio { num, den, .. } => num.iter().chain(den.iter()).map(|(ci, _)| *ci).collect(),
+        Res::Plan { actual, .. } => actual.as_deref().map(res_cis).unwrap_or_default(),
+    }
 }
 
 fn column_check(schema: &Schema, who: &str, column: &str, agg: TimeAgg) -> Result<()> {
@@ -119,7 +136,7 @@ fn base_comp(m: &crate::measures::NamedMeasure, schema: &Schema, sign: f64) -> R
 }
 
 /// The components of the value `j` of the pivot: its own column, or the base measures behind a named measure.
-fn resolve_value(spec: &PivotSpec, j: usize, ctx: &ModelContext, schema: &Schema, comps: &mut Vec<Comp>) -> Result<Res> {
+fn resolve_value(spec: &PivotSpec, j: usize, ctx: &ModelContext, schema: &Schema, comps: &mut Vec<Comp>, plans: &mut Vec<PlanComp>) -> Result<Res> {
     let v = &spec.values[j];
     let t = v.time.unwrap_or_default();
     if t.agg != TimeAgg::Measure {
@@ -132,10 +149,39 @@ fn resolve_value(spec: &PivotSpec, j: usize, ctx: &ModelContext, schema: &Schema
     if m.tab() != spec.data_tab {
         bail!("Pivot: the measure '{}' belongs to another tab. Measures can only be used on the tab they are made for.", v.field);
     }
+    resolve_measure(m, ctx, schema, comps, plans)
+}
+
+fn resolve_measure(m: &crate::measures::NamedMeasure, ctx: &ModelContext, schema: &Schema, comps: &mut Vec<Comp>, plans: &mut Vec<PlanComp>) -> Result<Res> {
     match m {
         crate::measures::NamedMeasure::Base { .. } => {
             comps.push(base_comp(m, schema, 1.0)?);
             Ok(Res::Single(comps.len() - 1))
+        }
+        crate::measures::NamedMeasure::Plan { name, plan_tab, column, agg, show, actual, tab } => {
+            let Some(sp) = ctx.plans.iter().find(|p| p.link.data_tab == *tab && p.link.plan_tab == *plan_tab) else {
+                bail!("Pivot: the measure '{}' needs the plan table linked to this tab. Open Model \u{25b8} Links \u{25b8} Budget and target tables and link it.", name);
+            };
+            if let Some(r) = &sp.refusal {
+                bail!("Pivot: {}", r);
+            }
+            if sp.table.is_none() {
+                bail!("Pivot: the plan table of '{}' is not open. Open it (or Model \u{25b8} Links) to use the measure.", name);
+            }
+            plans.push(PlanComp { plan_tab: plan_tab.clone(), column: column.clone() });
+            let pc = plans.len() - 1;
+            let actual_res = if *show == crate::measures::PlanShow::Plan {
+                None
+            } else {
+                let Some(a) = ctx.measures.iter().find(|x| x.name() == actual.as_str()) else {
+                    bail!("Pivot: the measure '{}' is set against '{}', which is not in the model. Edit it in Model \u{25b8} Measures\u{2026}.", name, actual);
+                };
+                if a.is_plan() {
+                    bail!("Pivot: the measure '{}' is set against '{}', which is itself a plan measure.", name, actual);
+                }
+                Some(Box::new(resolve_measure(a, ctx, schema, comps, plans)?))
+            };
+            Ok(Res::Plan { name: name.clone(), actual: actual_res, pc, agg: *agg, show: *show })
         }
         crate::measures::NamedMeasure::Ratio { name, numerator, denominator, annualise, format, .. } => {
             let mut side = |terms: &[crate::measures::Term], numerator_side: bool| -> Result<Vec<(usize, f64)>> {
@@ -159,6 +205,117 @@ fn resolve_value(spec: &PivotSpec, j: usize, ctx: &ModelContext, schema: &Schema
             let num = side(numerator, true)?;
             let den = side(denominator, false)?;
             Ok(Res::Ratio { name: name.clone(), num, den, annualise: *annualise, percent: *format == crate::measures::RatioFormat::Percent })
+        }
+    }
+}
+
+type PlanSeries = HashMap<Vec<Option<String>>, BTreeMap<(i32, u32), f64>>;
+
+/// Reads a plan table into its monthly amounts by the pivot's non-Calendar keys (one map for each key set the pivot's levels use).
+/// `fields` are the pivot's field names, `nc_at` the positions of the non-Calendar ones, `wanted` the key sets of the levels.
+#[allow(clippy::too_many_arguments)]
+fn plan_series_of(ctx: &ModelContext, spec: &PivotSpec, pc: &PlanComp, who: &str, fields: &[&String], nc_at: &[usize], wanted: &[Vec<usize>], filters: &[PivotFilter]) -> Result<Vec<PlanSeries>> {
+    let Some(sp) = ctx.plans.iter().find(|p| p.link.data_tab == spec.data_tab && p.link.plan_tab == pc.plan_tab) else {
+        bail!("Pivot: the plan table of '{}' is not linked to this tab.", who);
+    };
+    let Some(table) = &sp.table else {
+        bail!("Pivot: the plan table of '{}' is not open.", who);
+    };
+    let link = &sp.link;
+    let mut plf = crate::engine::compile_tab_lazy(&table.source, &table.steps, &ctx.temp_dir).with_context(|| format!("Pivot: the plan table '{}' could not be read", table.title))?;
+    let pschema = plf.collect_schema().with_context(|| format!("Pivot: the plan table '{}' could not be read", table.title))?;
+    model::plan_columns_ok(link, &pschema, &table.title)?;
+    match pschema.get(pc.column.as_str()) {
+        None => bail!("Pivot: the plan table '{}' has no column '{}' (used by '{}'). Edit the measure in Model \u{25b8} Measures\u{2026}.", table.title, pc.column, who),
+        Some(dt) if !dtype_is_number(dt) => bail!("Pivot: the plan column '{}' of '{}' is not a number. Set it to a number in the schema.", pc.column, table.title),
+        _ => {}
+    }
+    // each non-Calendar field of the pivot must be a key of the plan: a plan can't be split by anything else
+    let plan_col_of = |field: &str| -> Option<&String> { link.keys.iter().find(|k| k.data == field).map(|k| &k.lookup) };
+    for &i in nc_at {
+        if plan_col_of(fields[i]).is_none() {
+            let keys: Vec<&str> = link.keys.iter().map(|k| k.data.as_str()).collect();
+            bail!("Pivot: '{}' is a plan, which is set by {} only, and the pivot is split by '{}'. Split the pivot by those (or add that column to the plan link).", who, keys.join(" and "), fields[i]);
+        }
+    }
+    // the pivot's filters on the plan's keys apply to the plan too; any other filter can't be applied to it
+    for f in filters {
+        if f.values.is_empty() {
+            continue;
+        }
+        let Some(pcol) = plan_col_of(&f.field) else {
+            bail!("Pivot: '{}' is a plan, which can't be filtered by '{}'. Remove that filter or filter by the plan's keys only.", who, f.field);
+        };
+        let dt = pschema.get(pcol.as_str()).cloned().unwrap_or(DataType::String);
+        let texts: Vec<String> = f.values.iter().flatten().cloned().collect();
+        let mut keep = if texts.is_empty() { lit(false) } else { key_text_expr(pcol, &dt).is_in(lit(Series::new("v".into(), texts))) };
+        if f.values.iter().any(|v| v.is_none()) {
+            keep = keep.or(key_text_expr(pcol, &dt).is_null());
+        }
+        plf = plf.filter(keep);
+    }
+    let mut work_exprs: Vec<Expr> = vec![col(link.month_column.as_str()).cast(DataType::Date).cast(DataType::Int32).alias("__pd"), col(pc.column.as_str()).cast(DataType::Float64).alias("__pv")];
+    for &i in nc_at {
+        let pcol = plan_col_of(fields[i]).cloned().unwrap_or_default();
+        let dt = pschema.get(pcol.as_str()).cloned().unwrap_or(DataType::String);
+        work_exprs.push(key_text_expr(&pcol, &dt).alias(format!("__k{i}")));
+    }
+    let work = plf.select(work_exprs).filter(col("__pd").is_not_null());
+    let frames: Vec<LazyFrame> = wanted
+        .iter()
+        .map(|keys| {
+            let mut by: Vec<Expr> = keys.iter().map(|i| col(format!("__k{i}"))).collect();
+            by.push(col("__pd"));
+            work.clone().group_by(by).agg([col("__pv").sum().alias("__sum")])
+        })
+        .collect();
+    let dfs = collect_all(frames).with_context(|| format!("Pivot: the plan table '{}' could not be calculated", table.title))?;
+    let mut out: Vec<PlanSeries> = Vec::new();
+    for (keys, df) in wanted.iter().zip(dfs.iter()) {
+        let key_cols: Vec<Vec<Option<String>>> = keys.iter().map(|i| -> Result<Vec<Option<String>>> { Ok(df.column(&format!("__k{i}"))?.str()?.into_iter().map(|v| v.map(str::to_string)).collect()) }).collect::<Result<_>>()?;
+        let days: Vec<Option<i32>> = df.column("__pd")?.i32()?.into_iter().collect();
+        let sums: Vec<Option<f64>> = df.column("__sum")?.f64()?.into_iter().collect();
+        let mut map: PlanSeries = HashMap::new();
+        for r in 0..df.height() {
+            let Some(date) = days[r].and_then(crate::dates::date_from_days) else { continue };
+            let key: Vec<Option<String>> = key_cols.iter().map(|c| c[r].clone()).collect();
+            *map.entry(key).or_default().entry((chrono::Datelike::year(&date), chrono::Datelike::month(&date))).or_insert(0.0) += sums[r].filter(|x| x.is_finite()).unwrap_or(0.0);
+        }
+        out.push(map);
+    }
+    Ok(out)
+}
+
+/// The plan of a period: the months with a day in it add up (a month that has started counts in full) or the last of them, for the cell's key.
+/// A month the plan has no row for is a blank with its reason, never a smaller sum.
+fn plan_value(series: Option<&BTreeMap<(i32, u32), f64>>, agg: crate::measures::PlanAgg, days: &[NaiveDate], who: &str, key_text: &str, period_text: &str) -> Measured {
+    let mut months: Vec<(i32, u32)> = days.iter().map(|d| (chrono::Datelike::year(d), chrono::Datelike::month(d))).collect();
+    months.sort();
+    months.dedup();
+    if months.is_empty() {
+        return Measured::Blank(format!("No days in {} for '{}'", period_text, who));
+    }
+    let Some(series) = series else {
+        return Measured::Blank(format!("The plan has no rows for {} ('{}')", key_text, who));
+    };
+    let name = |m: (i32, u32)| NaiveDate::from_ymd_opt(m.0, m.1, 1).map(|d| d.format("%b %Y").to_string()).unwrap_or_default();
+    match agg {
+        crate::measures::PlanAgg::Sum => {
+            let mut total = 0.0;
+            for m in &months {
+                match series.get(m) {
+                    Some(v) => total += v,
+                    None => return Measured::Blank(format!("The plan has no row for {} in {} ('{}')", key_text, name(*m), who)),
+                }
+            }
+            Measured::Value(total)
+        }
+        crate::measures::PlanAgg::Closing => {
+            let m = months[months.len() - 1];
+            match series.get(&m) {
+                Some(v) => Measured::Value(*v),
+                None => Measured::Blank(format!("The plan has no row for {} in {} ('{}')", key_text, name(m), who)),
+            }
         }
     }
 }
@@ -231,9 +388,10 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
     let nc_at: Vec<usize> = (0..fields.len()).filter(|i| !cal_at.contains(i)).collect();
     let time_js: Vec<usize> = spec.values.iter().enumerate().filter(|(_, v)| v.time.is_some()).map(|(j, _)| j).collect();
     let mut comps: Vec<Comp> = Vec::new();
+    let mut plans: Vec<PlanComp> = Vec::new();
     let mut resolved: HashMap<usize, Res> = HashMap::new();
     for &j in &time_js {
-        let r = resolve_value(spec, j, &ctx, schema, &mut comps)?;
+        let r = resolve_value(spec, j, &ctx, schema, &mut comps, &mut plans)?;
         resolved.insert(j, r);
     }
     let mut groups: Vec<Vec<FilterCondition>> = Vec::new();
@@ -302,6 +460,15 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         }
     }
     let dfs = collect_all(frames).context("Pivot: the daily series could not be calculated")?;
+    // the plan tables behind the plan measures (Phase 11), by month and the pivot's keys
+    let mut plan_series: Vec<Vec<PlanSeries>> = Vec::new();
+    for (pi, pc) in plans.iter().enumerate() {
+        let who = resolved.values().find_map(|r| match r {
+            Res::Plan { name, pc: x, .. } if *x == pi => Some(name.clone()),
+            _ => None,
+        });
+        plan_series.push(plan_series_of(&ctx, spec, pc, &who.unwrap_or_else(|| pc.column.clone()), &fields, &nc_at, &wanted, &spec_rows.filters)?);
+    }
     // key texts -> (date -> stats of each component of the group)
     type Series = HashMap<Vec<Option<String>>, BTreeMap<NaiveDate, Vec<DayStats>>>;
     let mut series: Vec<Vec<Series>> = Vec::new();
@@ -519,15 +686,8 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                     None => empty.clone(),
                 }
             };
-            let single_agg = match res {
-                Res::Single(ci) => comps[*ci].agg,
-                Res::Ratio { .. } => TimeAgg::Measure,
-            };
-            let term_dates: Vec<(usize, BTreeMap<NaiveDate, DayStats>)> = match res {
-                Res::Single(ci) => vec![(*ci, dates_of(*ci))],
-                Res::Ratio { num, den, .. } => num.iter().chain(den.iter()).map(|(ci, _)| (*ci, dates_of(*ci))).collect(),
-            };
-            let value_in = |days: &[NaiveDate], text: &str| -> Measured {
+            let term_dates: Vec<(usize, BTreeMap<NaiveDate, DayStats>)> = res_cis(res).into_iter().map(|ci| (ci, dates_of(ci))).collect();
+            let base_value = |res: &Res, days: &[NaiveDate], text: &str| -> Measured {
                 let eval = |ci: usize| -> Measured {
                     let per = term_dates.iter().find(|(c, _)| *c == ci).map(|(_, m)| m);
                     let m = evaluate(comps[ci].agg, per.unwrap_or(&empty), days, text, &timeline, month_end);
@@ -547,10 +707,38 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                         };
                         crate::measures::ratio_value(name, &nums, &dens, annual, *percent, text)
                     }
+                    Res::Plan { .. } => Measured::Blank("A plan measure can't be set against another plan measure.".to_string()),
                 }
             };
-            let agg = single_agg;
-            let _ = agg;
+            let value_in = |days: &[NaiveDate], text: &str| -> Measured {
+                let Res::Plan { name, actual, pc, agg, show } = res else {
+                    return base_value(res, days, text);
+                };
+                let key_text = if nc_key.is_empty() { "all lines".to_string() } else { nc_key.iter().map(|k| k.clone().unwrap_or_else(|| crate::pivot_table::BLANK_LABEL.to_string())).collect::<Vec<_>>().join(" / ") };
+                let plan = plan_value(plan_series[*pc][which].get(&nc_key), *agg, days, name, &key_text, text);
+                let plan_v = match plan {
+                    Measured::Value(v) => v,
+                    b => return b,
+                };
+                let act = match actual {
+                    None => 0.0,
+                    Some(a) => match base_value(a, days, text) {
+                        Measured::Value(v) => v,
+                        b => return b,
+                    },
+                };
+                match show {
+                    crate::measures::PlanShow::Plan => Measured::Value(plan_v),
+                    crate::measures::PlanShow::Variance => Measured::Value(act - plan_v),
+                    crate::measures::PlanShow::PercentAchieved => {
+                        if plan_v == 0.0 {
+                            Measured::Blank(format!("The plan of '{}' for {} is 0 in {}, so % achieved can't be worked out.", name, key_text, text))
+                        } else {
+                            Measured::Value(act / plan_v * 100.0)
+                        }
+                    }
+                }
+            };
             let (m, rows_days): (Measured, Vec<NaiveDate>) = if !tv.is_m4() {
                 (value_in(period, text), period.clone())
             } else {
@@ -583,6 +771,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                 let income_after = match res {
                     Res::Single(ci) => comps[*ci].agg == TimeAgg::PeriodAmount,
                     Res::Ratio { num, den, annualise, .. } => annualise.is_some() || num.iter().chain(den.iter()).any(|(ci, _)| comps[*ci].agg == TimeAgg::PeriodAmount),
+                    Res::Plan { .. } => res_cis(res).iter().any(|ci| comps[*ci].agg == TimeAgg::PeriodAmount),
                 };
                 if let (true, Some(b)) = (income_after, entry.base) {
                     if let Some(n) = month_end_note(&b, text, &timeline) {

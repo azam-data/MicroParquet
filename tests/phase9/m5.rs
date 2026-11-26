@@ -26,6 +26,7 @@ pub fn scope5(dd: &std::path::Path, as_of: &str, lookup: Option<(&str, &str, Dat
     }
     Some(Arc::new(ModelContext {
         links,
+        plans: vec![],
         temp_dir: dd.to_path_buf(),
         calendar: Some(CalendarScope {
             settings: cal,

@@ -629,6 +629,11 @@ pub struct ChartSpec {
     pub inside_min_pct: f64,
     /// The chart's data printed with it: Off, below it or beside it.
     pub data_table: DataTable,
+
+    // ---- Phase 11 ----
+    /// Extend the line with a forecast and its bands (Analytics pane). `None` = no forecast, as before Phase 11.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forecast: Option<crate::forecast_chart::ForecastSpec>,
 }
 
 /// The share of a bar below which a segment has no label (Phase 8 W11).
@@ -691,6 +696,7 @@ impl Default for ChartSpec {
             inside_labels: false,
             inside_min_pct: INSIDE_MIN_PCT_DEFAULT,
             data_table: DataTable::Off,
+            forecast: None,
         }
     }
 }
@@ -791,7 +797,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -815,7 +821,9 @@ impl ChartSpec {
             self.series_order,
             self.facet_order,
             // W6: the level, the path and the chart's own filters decide which rows are read
-            (&self.drill, &self.drill_path, &self.filters)
+            (&self.drill, &self.drill_path, &self.filters),
+            // Phase 11: a forecast, and the form it is drawn on (it needs a line)
+            self.forecast.as_ref().map(|f| (f, self.kind as u8))
         )
     }
 }

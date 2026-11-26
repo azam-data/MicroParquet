@@ -137,6 +137,8 @@ pub fn auto_detect_smart_schema_with(path: &Path, base: &IngestionConfig) -> Res
             has_dr_cr,
             source_dtype: String::new(),
             rename_to: None,
+            drop: false,
+            reverse_sign: false,
         });
     }
 
@@ -485,12 +487,11 @@ fn run_typed_scan(
     // value is parsed from (for the failure count).
     let (lf, entries): (LazyFrame, Vec<(&ColumnSchemaConfig, Expr, Expr)>) = if is_parquet {
         let (lf, plan) = parquet_conversion_plan(path, config)?;
-        (lf, plan.into_iter().map(|(c, e)| (c, e.clone(), e)).collect())
+        (lf, plan.into_iter().filter(|(c, _)| !c.drop).map(|(c, e)| (c, e.clone(), e)).collect())
     } else {
         let lf = scan_csv_text(path, config, temp_dir)?;
         let entries = config
-            .columns
-            .iter()
+            .kept()
             .map(|c| (c, col(&c.name), raw_text_expr(c, config)))
             .collect();
         (lf, entries)
@@ -578,8 +579,7 @@ fn run_typed_scan(
 /// Fails when a Float64 column with no sign convention carries Dr/Cr values.
 fn check_dr_cr_conventions(path: &Path, is_parquet: bool, config: &IngestionConfig, temp_dir: &Path) -> Result<()> {
     let needs_check = config
-        .columns
-        .iter()
+        .kept()
         .any(|c| c.dtype == ColDataType::Float64 && c.sign_convention == SignConvention::Unset);
     if !needs_check {
         return Ok(());
@@ -1261,8 +1261,7 @@ pub fn build_lazy_pipeline(
     check_dr_cr_conventions(path, false, config, temp_dir)?;
 
     let exprs: Vec<Expr> = config
-        .columns
-        .iter()
+        .kept()
         .map(|c| typed_expr(raw_text_expr(c, config), c, config).alias(&c.name))
         .collect();
     if !exprs.is_empty() {
@@ -1279,7 +1278,9 @@ fn apply_renames(lf: LazyFrame, config: &IngestionConfig) -> Result<LazyFrame> {
         anyhow::bail!("Schema & Ingestion: {}", why);
     }
     let pairs = config.rename_pairs();
-    if pairs.is_empty() {
+    let dropped = config.dropped_names();
+    let reversed: Vec<&str> = config.kept().filter(|c| c.reverse_sign).map(|c| c.name.as_str()).collect();
+    if pairs.is_empty() && dropped.is_empty() && reversed.is_empty() {
         return Ok(lf);
     }
     let mut lf = lf;
@@ -1289,18 +1290,38 @@ fn apply_renames(lf: LazyFrame, config: &IngestionConfig) -> Result<LazyFrame> {
             anyhow::bail!("Schema & Ingestion: the schema renames the column '{}', which is not in the file. Open the Schema dialog and check the names.", old);
         }
     }
+    // Reverse sign: -x, with zero kept as zero (never "-0"), on the typed number columns.
+    if !reversed.is_empty() {
+        let mut flips: Vec<Expr> = Vec::new();
+        for name in &reversed {
+            let Some(dt) = schema.get(*name) else {
+                anyhow::bail!("Schema & Ingestion: Reverse sign is set on the column '{}', which is not in the file. Open the Schema dialog and check it.", name);
+            };
+            if !dt.is_numeric() {
+                anyhow::bail!("Schema & Ingestion: Reverse sign is set on '{}', which is not a number column ({}). Untick it or change the type.", name, dt);
+            }
+            flips.push(when(col(*name).eq(lit(0))).then(col(*name)).otherwise(col(*name) * lit(-1)).alias(*name));
+        }
+        lf = lf.with_columns(flips);
+    }
     // a column the schema does not list must not take a name a renamed column gets
     let renamed: std::collections::HashMap<&str, &str> = pairs.iter().map(|(o, n)| (o.as_str(), n.as_str())).collect();
-    let finals: Vec<String> = schema.iter_names().map(|n| renamed.get(n.as_str()).map(|s| s.to_string()).unwrap_or_else(|| n.to_string())).collect();
+    let keep: Vec<(String, String)> = schema
+        .iter_names()
+        .filter(|n| !dropped.iter().any(|d| d == n.as_str()))
+        .map(|n| (n.to_string(), renamed.get(n.as_str()).map(|s| s.to_string()).unwrap_or_else(|| n.to_string())))
+        .collect();
+    if keep.is_empty() {
+        anyhow::bail!("Schema & Ingestion: every column is left out. Keep at least one column.");
+    }
     let mut seen = std::collections::HashSet::new();
-    if let Some(dup) = finals.iter().find(|n| !seen.insert((*n).clone())) {
+    if let Some((_, dup)) = keep.iter().find(|(_, n)| !seen.insert(n.clone())) {
         anyhow::bail!("Schema & Ingestion: after the renames two columns are called '{}'. Change one \"Rename to\".", dup);
     }
     // one select: names can swap without clashing, and the column order stays
-    let exprs: Vec<Expr> = schema
-        .iter_names()
-        .zip(finals.iter())
-        .map(|(old, new)| if old.as_str() == new { col(old.as_str()) } else { col(old.as_str()).alias(new.as_str()) })
+    let exprs: Vec<Expr> = keep
+        .iter()
+        .map(|(old, new)| if old == new { col(old.as_str()) } else { col(old.as_str()).alias(new.as_str()) })
         .collect();
     Ok(lf.select(exprs))
 }
@@ -1672,7 +1693,7 @@ pub fn ensure_pii_key_for(source: &TabSource) -> Result<Option<String>> {
 /// Names of the PII-masked columns of every file in `source` (no duplicates).
 pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
     let mut add = |c: &IngestionConfig| {
-        for col in c.columns.iter().filter(|c| c.pii_mask != PiiMaskMode::None) {
+        for col in c.kept().filter(|c| c.pii_mask != PiiMaskMode::None) {
             // the column as the steps and exports see it: after the rename
             let name = col.final_name();
             if !out.contains(&name) {
@@ -1701,7 +1722,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
 
 /// Whether building this source masks any column (and so needs the PII key).
 pub fn source_masks_pii(source: &TabSource) -> bool {
-    let cfg_masks = |c: &IngestionConfig| c.columns.iter().any(|col| col.pii_mask != PiiMaskMode::None);
+    let cfg_masks = |c: &IngestionConfig| c.kept().any(|col| col.pii_mask != PiiMaskMode::None);
     match source {
         TabSource::SingleFile { config, .. } => cfg_masks(config),
         TabSource::VerticalStack { files, .. } => files.iter().any(|(_, _, c)| cfg_masks(c)),
@@ -2035,7 +2056,7 @@ fn parquet_conversion_plan<'a>(
     }
     let schema = lf.collect_schema().context("Failed to read the Parquet schema")?;
     let mut plan = Vec::new();
-    for c in &config.columns {
+    for c in config.kept() {
         let Some(dt) = schema.get(&c.name) else {
             anyhow::bail!(
                 "Column '{}' is in the schema but not in the Parquet file {:?}.",
@@ -2518,6 +2539,7 @@ pub fn compile_tab_lazy(
                     lines.extend(notes);
                     crate::mom::commentary_frame(&lines)?.lazy()
                 }
+                crate::models::MomView::Bridge => crate::mom::bridge_of(&df, spec)?.lazy(),
             }
         }
         TabSource::EclSummary { source, steps, spec } => {

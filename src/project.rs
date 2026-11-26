@@ -879,7 +879,7 @@ pub fn export_file_names(titles: &[String]) -> Vec<String> {
 fn headless_scope(project: &Project, opener: &mut Opener, paths: &PortablePaths) -> Result<Option<std::sync::Arc<crate::model::ModelContext>>> {
     use crate::model::*;
     let links = project.model.all_links();
-    if links.is_empty() {
+    if links.is_empty() && project.model.plans.is_empty() {
         return Ok(None);
     }
     let mut tab_of = |opener: &mut Opener, key: &str| -> Result<ModelTab> {
@@ -924,7 +924,22 @@ fn headless_scope(project: &Project, opener: &mut Opener, paths: &PortablePaths)
         }
         None => None,
     };
-    Ok(Some(std::sync::Arc::new(ModelContext { links: parts, temp_dir: paths.temp_dir.clone(), calendar, kinds: project.model.column_kinds.clone(), measures: project.model.measures.clone() })))
+    let mut plans: Vec<ScopePlan> = Vec::new();
+    for pl in &project.model.plans {
+        let data = tab_of(opener, &pl.data_tab)?;
+        match tab_of(opener, &pl.plan_tab) {
+            Ok(table) => {
+                let refusal = match check_plan(pl, &table, &paths.temp_dir) {
+                    Ok(c) => c.refusal(&table.title),
+                    Err(e) => Some(format!("{}", e)),
+                };
+                let _ = &data;
+                plans.push(ScopePlan { link: pl.clone(), table: Some(table), refusal });
+            }
+            Err(e) => plans.push(ScopePlan { link: pl.clone(), table: None, refusal: Some(format!("{}", e)) }),
+        }
+    }
+    Ok(Some(std::sync::Arc::new(ModelContext { links: parts, plans, temp_dir: paths.temp_dir.clone(), calendar, kinds: project.model.column_kinds.clone(), measures: project.model.measures.clone() })))
 }
 
 pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &PortablePaths) -> Result<Vec<PathBuf>> {

@@ -261,12 +261,12 @@ impl MicroParquetApp {
 
     // ------------------------------------------------------------------------------------------ Analytics
 
-    /// The Analytics tab of the Report view: a place kept for what comes later. Nothing here changes a number.
+    /// The Analytics tab of the Report view (Phase 11): the forecast of the chart being edited, and pointers to what comes later.
     pub(crate) fn render_analytics_tab(&mut self, ui: &mut egui::Ui) {
         let tk = *theme::tokens(self.dark_mode);
         ui.add_space(theme::SPACE_S);
         ui.label(theme::semibold("Analytics").size(theme::TEXT_HEADING));
-        ui.add(egui::Label::new(egui::RichText::new("This pane is next to the chart you are editing. These come in a later phase; nothing here changes your numbers yet.").color(tk.muted)).wrap());
+        self.render_forecast_card(ui);
         ui.add_space(theme::SPACE_S);
         for (name, what) in ANALYTICS_PLACEHOLDERS {
             egui::Frame::none().fill(tk.surface).stroke(theme::line(tk.border)).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(egui::Margin::same(theme::SPACE_S)).show(ui, |ui| {
@@ -281,8 +281,7 @@ impl MicroParquetApp {
 
 /// The placeholders of the Analytics pane.
 pub const ANALYTICS_PLACEHOLDERS: &[(&str, &str)] = &[
-    ("Forecast", "Extend a series with a back-tested forecast."),
-    ("Plan vs actual", "Compare a chart with the budget table."),
-    ("Top movers", "The items that moved most between two dates."),
-    ("What-if sliders", "Change a rate or a balance and see the chart move."),
+    ("Plan vs actual", "Link a budget table in Model, then add a vs-budget measure (Model > Measures); it works in pivots, charts and KPI cards."),
+    ("Top movers", "Later: the items that moved most between two dates."),
+    ("What-if sliders", "Later: change a rate or a balance and see the chart move."),
 ];

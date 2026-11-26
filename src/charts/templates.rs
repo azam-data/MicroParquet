@@ -329,7 +329,7 @@ pub fn fits(t: Template, df: &DataFrame) -> bool {
     match t {
         Template::GapLadder => ["Bucket", "Net gap", "Cumulative gap % of total assets"].iter().all(|c| has(df, c)),
         Template::RepricingGap => ["Repricing bucket", "Gap", "Cumulative gap"].iter().all(|c| has(df, c)),
-        Template::NiiBridge => ["Prev annual interest", "Curr annual interest", "Volume effect", "Rate effect", "Mix effect"].iter().all(|c| has(df, c)),
+        Template::NiiBridge => ["Prev annual interest", "Curr annual interest", "Volume effect", "Rate effect", "Mix effect"].iter().all(|c| has(df, c)) || has(df, crate::bridge::STEP) && (has(df, crate::bridge::INTEREST) || has(df, crate::bridge::BALANCE)),
         Template::ClMigration => has(df, "Previous grade") && has(df, "Closed/Repaid"),
         Template::IrrbbScenarios => ["Scenario", "EVE change", "Loss % of Tier 1"].iter().all(|c| has(df, c)),
         Template::LcrNsfr => ["Item", "Value", "Unit"].iter().all(|c| has(df, c)) && strs(t, df, "Item").map(|v| v.iter().flatten().any(|s| s == "LCR" || s == "NSFR")).unwrap_or(false),
@@ -566,8 +566,61 @@ fn repricing_gap(df: &DataFrame, _ctx: &Ctx) -> Result<Prepared> {
 
 // ------------------------------------------------------------------------------------- NII bridge
 
+/// The "MoM bridge" tab (Phase 11) charted as it is: a Step column and one amount column; the first row is the start total, the last the
+/// end total, and the steps between are the effects (or the keys' changes).
+fn bridge_table_chart(df: &DataFrame, ctx: &Ctx, value: &str) -> Result<Prepared> {
+    let t = Template::NiiBridge;
+    let steps = strs(t, df, crate::bridge::STEP)?;
+    let amounts = nums(t, df, value)?;
+    let mut labels = Vec::new();
+    let mut vals = Vec::new();
+    for (s, a) in steps.iter().zip(amounts.iter()) {
+        let (Some(s), Some(a)) = (s, a) else { bail!("{}: the bridge table has a blank step or amount. Build the MoM bridge again.", t.name()) };
+        labels.push(s.clone());
+        vals.push(*a);
+    }
+    if labels.len() < 3 {
+        bail!("{}: the bridge table has too few rows to draw.", t.name());
+    }
+    let table = frame(vec![Series::new("Step".into(), labels.clone()), Series::new(value.into(), vals.clone())])?;
+    let mut spec = base_spec("Step", ChartKind::Waterfall);
+    spec.order = order_of(&labels);
+    spec.value = Some(value.into());
+    spec.waterfall = WaterfallMode::StartStepsEnd;
+    let interest = value == crate::bridge::INTEREST;
+    spec.subtitle = if interest { "Annualised interest: volume, mix and rate".to_string() } else { "Balance by key".to_string() };
+    if interest {
+        spec.footnote = "Volume = \u{394}total balance \u{d7} prior average rate \u{b7} Mix = balance now \u{d7} each product's prior rate, less balance now \u{d7} the prior average rate \u{b7} Rate = balance now \u{d7} \u{394}each product's rate".to_string();
+    }
+    let n = vals.len();
+    let change = vals[n - 1] - vals[0];
+    let (mut name, mut e) = ("", 0.0f64);
+    for i in 1..n - 1 {
+        if vals[i].abs() > e.abs() {
+            name = labels[i].as_str();
+            e = vals[i];
+        }
+    }
+    let what = if change >= 0.0 { "rise" } else { "fall" };
+    let finding = if shows_zero(change, ctx) || name.is_empty() {
+        if interest { "Interest is unchanged between the two months".to_string() } else { "The balance is unchanged between the two months".to_string() }
+    } else {
+        format!("{} is the largest step behind the {} {}", name, amount_signed(change, ctx), what)
+    };
+    spec.title = finding.clone();
+    Ok(Prepared { template: t, table: Some(table), spec, finding, tab_title: "Chart: MoM bridge".to_string(), companion: None })
+}
+
 fn nii_bridge(df: &DataFrame, ctx: &Ctx) -> Result<Prepared> {
     let t = Template::NiiBridge;
+    if has(df, crate::bridge::STEP) && !has(df, "Volume effect") {
+        if has(df, crate::bridge::INTEREST) {
+            return bridge_table_chart(df, ctx, crate::bridge::INTEREST);
+        }
+        if has(df, crate::bridge::BALANCE) {
+            return bridge_table_chart(df, ctx, crate::bridge::BALANCE);
+        }
+    }
     let key = df.get_columns().first().map(|c| c.name().to_string());
     let keys = match &key {
         Some(k) => strs(t, df, k)?,

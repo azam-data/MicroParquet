@@ -670,6 +670,7 @@ impl ToolRun {
                 let title = match r.view {
                     MomView::Variance => "MoM variance",
                     MomView::Commentary => "MoM commentary",
+                    MomView::Bridge => "MoM bridge",
                 };
                 Ok(vec![(title.to_string(), TabSource::MomVariance { prev_source: Box::new(p.source), prev_steps: p.steps, curr_source: Box::new(c.source), curr_steps: c.steps, spec: r.spec.clone(), view: r.view })])
             }

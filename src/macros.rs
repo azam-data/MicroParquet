@@ -744,6 +744,17 @@ pub fn generate_python_polars_code(
         }
     }
 
+    // Reverse sign (Phase 11): the number columns flipped after typing, zero kept as zero.
+    let flips: Vec<String> = ingestion.kept().filter(|c| c.reverse_sign).map(|c| py_escape(&c.name)).collect();
+    if !flips.is_empty() {
+        py.push_str("# 2b2. Reverse the sign of columns (Schema & Ingestion, \"Reverse sign\")\n");
+        py.push_str("lf = lf.with_columns([\n");
+        for n in &flips {
+            py.push_str(&format!("    pl.when(pl.col(\"{n}\") == 0).then(pl.col(\"{n}\")).otherwise(-pl.col(\"{n}\")).alias(\"{n}\"),\n"));
+        }
+        py.push_str("])\n\n");
+    }
+
     // The schema's "Rename to" names, applied after typing and before any step (Phase 6 U1).
     let renames = ingestion.rename_pairs();
     if !renames.is_empty() {
@@ -753,6 +764,13 @@ pub fn generate_python_polars_code(
             py.push_str(&format!("    \"{}\": \"{}\",\n", py_escape(old), py_escape(new)));
         }
         py.push_str("})\n\n");
+    }
+    // Columns the schema leaves out (Phase 11), dropped last so the others keep their order.
+    let dropped = ingestion.dropped_names();
+    if !dropped.is_empty() {
+        let quoted: Vec<String> = dropped.iter().map(|n| format!("\"{}\"", py_escape(n))).collect();
+        py.push_str("# 2d. Leave out columns (Schema & Ingestion, not kept)\n");
+        py.push_str(&format!("lf = lf.drop([{}])\n\n", quoted.join(", ")));
     }
 
     // the helper of conditions on picked values (U7), when a step has one
