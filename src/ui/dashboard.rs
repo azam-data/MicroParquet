@@ -121,6 +121,8 @@ pub struct DashboardUi {
     pub import_path: Option<std::path::PathBuf>,
     /// A refusal or a note in plain words, shown under the header.
     pub notice: String,
+    /// Phase 13: the name typed in the Views menu for the view to save.
+    pub view_name: String,
     pub next_id: u64,
     /// The controls drawn in the last frame, by name (the render tests click these rects).
     pub rects: Vec<(String, egui::Rect)>,
@@ -582,6 +584,61 @@ impl MicroParquetApp {
                     }
                 });
                 rects.push(("Export".into(), r.response.rect));
+                // Phase 13: saved views of the page's filters, one click each
+                let n_views = dash.pages[pi].views.len();
+                let r = ui.menu_button(format!("{}  Views{}", theme::ph::BOOKMARK_SIMPLE, if n_views > 0 { format!(" ({})", n_views) } else { String::new() }), |ui| {
+                    let mut apply: Option<String> = None;
+                    let mut delete: Option<String> = None;
+                    if dash.pages[pi].views.is_empty() {
+                        ui.label(egui::RichText::new("No saved views yet. Pick the filters, then save them here.").color(tk.muted));
+                    }
+                    for v in &dash.pages[pi].views {
+                        let on = dash.pages[pi].view_is_on(v);
+                        ui.horizontal(|ui| {
+                            let b = ui.selectable_label(on, &v.name).on_hover_text("Put the page's filters as this view had them");
+                            rects.push((format!("View {}", v.name), b.rect));
+                            if b.clicked() {
+                                apply = Some(v.name.clone());
+                            }
+                            let x = ui.small_button(theme::ph::X).on_hover_text("Delete this view");
+                            rects.push((format!("Delete view {}", v.name), x.rect));
+                            if x.clicked() {
+                                delete = Some(v.name.clone());
+                            }
+                        });
+                    }
+                    ui.separator();
+                    ui.label("Save the page's filters as a view:");
+                    let mut save = false;
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut self.dashboard_ui.view_name).hint_text("Name, e.g. Conventional wing, Q4").desired_width(theme::DASH_LABEL_EDIT_W));
+                        rects.push(("View name".into(), r.rect));
+                        let b = ui.add_enabled(!self.dashboard_ui.view_name.trim().is_empty(), egui::Button::new("Save view"));
+                        rects.push(("Save view".into(), b.rect));
+                        save = b.clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.dashboard_ui.view_name.trim().is_empty());
+                    });
+                    if save {
+                        match dash.pages[pi].save_view(&self.dashboard_ui.view_name.clone()) {
+                            Ok(()) => {
+                                self.dashboard_ui.notice.clear();
+                                self.dashboard_ui.view_name.clear();
+                            }
+                            Err(e) => self.dashboard_ui.notice = format!("{}", e),
+                        }
+                        ui.close_menu();
+                    }
+                    if let Some(name) = apply {
+                        match dash.pages[pi].apply_view(&name) {
+                            Ok(notes) => self.dashboard_ui.notice = notes.join(" "),
+                            Err(e) => self.dashboard_ui.notice = format!("{}", e),
+                        }
+                        ui.close_menu();
+                    }
+                    if let Some(name) = delete {
+                        dash.pages[pi].delete_view(&name);
+                    }
+                });
+                rects.push(("Views".into(), r.response.rect));
                 // Clear is under a menu and asks first
                 let r = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
                     let b = ui.button("Clear the filters and clicks on this page");

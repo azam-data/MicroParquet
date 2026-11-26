@@ -142,6 +142,9 @@ pub struct DashPage {
     pub grid_rows: Option<usize>,
     /// What the reader had picked: saved with the project so reopening shows the same page.
     pub state: PageState,
+    /// Phase 13: named filter states of this page, one click each ("Conventional wing, this quarter").
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<SavedView>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -499,6 +502,77 @@ pub struct PageState {
     pub cross: Option<CrossPick>,
     /// Each item's drill path, by item id.
     pub drill: BTreeMap<String, Vec<String>>,
+}
+
+/// The most views a page keeps: a list longer than this is not a one-click list any more.
+pub const MAX_VIEWS: usize = 20;
+
+/// A named filter state of one page (Phase 13): what each page filter had picked, and the click on a mark or a row. The picks are
+/// kept by the filter's id, so a view still fits when the filters are reordered. The drill levels of the items are not part of a view.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct SavedView {
+    pub name: String,
+    /// (filter id, picked values); a filter that had nothing picked is not listed (it is "All").
+    pub picks: Vec<(String, Vec<String>)>,
+    pub cross: Option<CrossPick>,
+}
+
+impl DashPage {
+    /// Saves the page's present filter state as the view `name`; a view of the same name (capitals ignored) is replaced.
+    pub fn save_view(&mut self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("Type a name for the view (for example \"Conventional wing, Q4\").");
+        }
+        let view = SavedView {
+            name: name.to_string(),
+            picks: self.active_picks().into_iter().map(|(_, f, v)| (f.id.clone(), v.clone())).collect(),
+            cross: self.state.cross.clone(),
+        };
+        match self.views.iter().position(|v| v.name.to_lowercase() == name.to_lowercase()) {
+            Some(i) => self.views[i] = view,
+            None => {
+                if self.views.len() >= MAX_VIEWS {
+                    bail!("A page keeps {} views. Delete one first.", MAX_VIEWS);
+                }
+                self.views.push(view);
+            }
+        }
+        Ok(())
+    }
+
+    /// Puts the page's filters back as the view `name` had them. A filter the view names that is no longer on the page is said, not
+    /// skipped silently. The items' drill levels start again from the top.
+    pub fn apply_view(&mut self, name: &str) -> Result<Vec<String>> {
+        let Some(view) = self.views.iter().find(|v| v.name == name).cloned() else {
+            bail!("The view '{}' is not on this page.", name);
+        };
+        let mut notes = Vec::new();
+        let mut state = PageState::default();
+        for (id, values) in &view.picks {
+            match self.filters.iter().position(|f| &f.id == id) {
+                Some(j) => state.filter_picks[j] = Some(values.clone()),
+                None => notes.push(format!("The view '{}' used a filter that is no longer on this page, so that part is not applied.", view.name)),
+            }
+        }
+        state.cross = view.cross.clone();
+        notes.dedup();
+        self.state = state;
+        Ok(notes)
+    }
+
+    pub fn delete_view(&mut self, name: &str) -> bool {
+        let before = self.views.len();
+        self.views.retain(|v| v.name != name);
+        self.views.len() != before
+    }
+
+    /// Whether the page is in the state the view saved (to mark the view that is on).
+    pub fn view_is_on(&self, view: &SavedView) -> bool {
+        let now: Vec<(String, Vec<String>)> = self.active_picks().into_iter().map(|(_, f, v)| (f.id.clone(), v.clone())).collect();
+        now == view.picks && self.state.cross == view.cross
+    }
 }
 
 impl PageState {
