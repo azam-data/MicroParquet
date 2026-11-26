@@ -227,6 +227,8 @@ pub enum Status {
     Serious,
     #[default]
     Critical,
+    /// A target line (Phase 12): not a judgement, so neither green nor red. It is not offered in the reference-line list.
+    Neutral,
 }
 
 impl Status {
@@ -239,6 +241,7 @@ impl Status {
             Status::Warning => "Warning",
             Status::Serious => "Serious",
             Status::Critical => "Critical",
+            Status::Neutral => "Target",
         }
     }
     pub fn hex(&self) -> u32 {
@@ -248,6 +251,7 @@ impl Status {
             Status::Warning => t::STATUS_WARNING,
             Status::Serious => t::STATUS_SERIOUS,
             Status::Critical => t::STATUS_CRITICAL,
+            Status::Neutral => t::STATUS_NEUTRAL,
         }
     }
 }
@@ -271,6 +275,8 @@ pub struct RefBand {
     pub to: f64,
     pub label: String,
     pub panel: usize,
+    /// A red, amber or green band of a target (Phase 12); `None` = the neutral grey of a core level.
+    pub status: Option<Status>,
 }
 
 /// A limit that belongs to one category (the minimum cumulative gap of one bucket, the minimum ratio of
@@ -634,6 +640,43 @@ pub struct ChartSpec {
     /// Extend the line with a forecast and its bands (Analytics pane). `None` = no forecast, as before Phase 11.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forecast: Option<crate::forecast_chart::ForecastSpec>,
+
+    // ---- Phase 12 ----
+    /// A target line with red/amber/green bands on the value axis. `None` = none, as before Phase 12.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<ChartTarget>,
+}
+
+/// A chart's target (Phase 12): a line at the target and, when `show_bands`, the red, amber and green zones behind the marks.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ChartTarget {
+    /// The target in `unit` (5,000 with Crore is 5,000 Cr).
+    pub value: f64,
+    pub unit: crate::kpi::KpiUnit,
+    pub direction: crate::target::Direction,
+    pub bands: crate::target::Bands,
+    pub show_bands: bool,
+    /// The words on the line; "Target" when empty.
+    pub label: String,
+}
+
+impl Default for ChartTarget {
+    fn default() -> Self {
+        ChartTarget { value: 0.0, unit: crate::kpi::KpiUnit::Absolute, direction: crate::target::Direction::Up, bands: crate::target::Bands::default(), show_bands: true, label: String::new() }
+    }
+}
+
+impl ChartTarget {
+    /// The target in the column's own unit (BDT for money).
+    pub fn raw(&self) -> f64 {
+        self.value * match self.unit {
+            crate::kpi::KpiUnit::Crore => 10_000_000.0,
+            crate::kpi::KpiUnit::Lakh => 100_000.0,
+            crate::kpi::KpiUnit::Million => 1_000_000.0,
+            _ => 1.0,
+        }
+    }
 }
 
 /// The share of a bar below which a segment has no label (Phase 8 W11).
@@ -697,6 +740,7 @@ impl Default for ChartSpec {
             inside_min_pct: INSIDE_MIN_PCT_DEFAULT,
             data_table: DataTable::Off,
             forecast: None,
+            target: None,
         }
     }
 }
@@ -797,7 +841,7 @@ impl ChartSpec {
     /// The settings that change the numbers (not the look): when they change the worker recalculates.
     pub fn calc_key(&self) -> String {
         format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.category,
             self.series,
             self.value,
@@ -823,7 +867,9 @@ impl ChartSpec {
             // W6: the level, the path and the chart's own filters decide which rows are read
             (&self.drill, &self.drill_path, &self.filters),
             // Phase 11: a forecast, and the form it is drawn on (it needs a line)
-            self.forecast.as_ref().map(|f| (f, self.kind as u8))
+            self.forecast.as_ref().map(|f| (f, self.kind as u8)),
+            // Phase 12: a target draws a line and bands only; the numbers do not change, but the data carries them
+            &self.target
         )
     }
 }

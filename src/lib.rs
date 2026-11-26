@@ -48,6 +48,7 @@ pub mod report_html;
 pub mod rules;
 pub mod schema_templates;
 pub mod settings;
+pub mod target;
 pub mod sort_lists;
 pub mod steps_edit;
 pub mod tool_runs;

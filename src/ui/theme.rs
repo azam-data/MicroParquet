@@ -1594,6 +1594,11 @@ pub const TEXT_KPI: f32 = 28.0;
 pub const KPI_SPARK_W: f32 = 160.0;
 pub const KPI_SPARK_H: f32 = 28.0;
 pub const KPI_SPARK_DOT: f32 = 2.5;
+/// Phase 12: the bullet bar and the gauge of a card with a target.
+pub const KPI_BULLET_W: f32 = 200.0;
+pub const KPI_BULLET_H: f32 = 18.0;
+pub const KPI_GAUGE_W: f32 = 150.0;
+pub const KPI_BAND_ALPHA: u8 = 70;
 /// The width the KPI settings keep for their labels.
 pub const KPI_LABEL_W: f32 = 78.0;
 

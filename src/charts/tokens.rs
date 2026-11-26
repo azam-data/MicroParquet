@@ -123,6 +123,8 @@ pub const STATUS_GOOD: u32 = 0x0ca30c;
 pub const STATUS_WARNING: u32 = 0xfab219;
 pub const STATUS_SERIOUS: u32 = 0xec835a;
 pub const STATUS_CRITICAL: u32 = 0xd03b3b;
+/// A target line: neither good nor bad (Phase 12).
+pub const STATUS_NEUTRAL: u32 = 0x6b6a65;
 
 /// Waterfall totals (start and end bars), as in the reference rendering `02_nii_bridge.png`.
 pub const WATERFALL_START: u32 = 0x52514e;

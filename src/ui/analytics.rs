@@ -108,3 +108,62 @@ impl MicroParquetApp {
         });
     }
 }
+
+impl MicroParquetApp {
+    /// Phase 12 T3: the Target card. A target line and red/amber/green zones on the chart being edited.
+    pub(crate) fn render_target_card(&mut self, ui: &mut egui::Ui) {
+        use micro_parquet::charts::spec::ChartTarget;
+        use micro_parquet::kpi::KpiUnit;
+        use micro_parquet::target::Direction;
+        let tk = *theme::tokens(self.dark_mode);
+        if self.tabs.is_empty() {
+            return;
+        }
+        egui::Frame::none().fill(tk.surface).stroke(theme::line(tk.border)).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(egui::Margin::same(theme::SPACE_S)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(theme::semibold("Target and bands"));
+            ui.add(egui::Label::new(egui::RichText::new("Draws a target line on a column, bar, line or area chart, with red, amber and green zones behind it.").color(tk.muted)).wrap());
+            let mut on = self.chart.spec.target.is_some();
+            let before = on;
+            ui.checkbox(&mut on, "Add a target to this chart");
+            if on != before {
+                self.chart.spec.target = on.then(ChartTarget::default);
+            }
+            let Some(mut t) = self.chart.spec.target.clone() else {
+                return;
+            };
+            egui::Grid::new("target_grid").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
+                ui.label("Target");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut t.value).speed(1.0));
+                    egui::ComboBox::from_id_salt("target_unit").width(theme::CHART_COMBO_NARROW_W * 0.6).selected_text(t.unit.label()).show_ui(ui, |ui| {
+                        for u in [KpiUnit::Crore, KpiUnit::Lakh, KpiUnit::Million, KpiUnit::Absolute, KpiUnit::Percent] {
+                            ui.selectable_value(&mut t.unit, u, u.label());
+                        }
+                    });
+                });
+                ui.end_row();
+                ui.label("Good is");
+                egui::ComboBox::from_id_salt("target_dir").selected_text(if t.direction == Direction::Up { "Up (income, deposits)" } else { "Down (cost, NPL)" }).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut t.direction, Direction::Up, "Up (income, deposits)");
+                    ui.selectable_value(&mut t.direction, Direction::Down, "Down (cost, NPL)");
+                });
+                ui.end_row();
+                ui.label("Green within");
+                ui.add(egui::DragValue::new(&mut t.bands.green_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                ui.end_row();
+                ui.label("Amber within");
+                ui.add(egui::DragValue::new(&mut t.bands.amber_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                ui.end_row();
+                ui.label("Line label");
+                ui.add(egui::TextEdit::singleline(&mut t.label).hint_text("Target").desired_width(120.0));
+                ui.end_row();
+            });
+            ui.checkbox(&mut t.show_bands, "Show the red, amber and green zones");
+            if self.chart.spec.target.as_ref() != Some(&t) {
+                self.chart.spec.target = Some(t);
+            }
+            ui.add(egui::Label::new(egui::RichText::new("The zones are percentages of the target: green at or on the good side of it, amber up to the amber margin, red beyond. Each zone is named in words as well as colour.").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+        });
+    }
+}

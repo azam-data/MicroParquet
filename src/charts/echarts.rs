@@ -466,7 +466,7 @@ fn mark_lines(env: &Env, p: &Plan, horizontal: bool) -> (Option<Value>, Option<V
         .iter()
         .filter(|r| r.panel == p.idx.min(if env.data.facets.is_empty() { usize::MAX } else { 0 }))
         .map(|r| {
-            json!([{key: num(scaled(r.from, p.vk, env.opts)), "name": lit(&r.label), "label": {"show": !r.label.is_empty(), "formatter": lit(&r.label), "color": hx(env.ink.ink2)}, "itemStyle": {"color": hx(env.ink.deemph), "opacity": 0.35}}, {key: num(scaled(r.to, p.vk, env.opts))}])
+            json!([{key: num(scaled(r.from, p.vk, env.opts)), "name": lit(&r.label), "label": {"show": !r.label.is_empty(), "formatter": lit(&r.label), "color": hx(env.ink.ink2)}, "itemStyle": {"color": hx(r.status.map(|st| st.hex()).unwrap_or(env.ink.deemph)), "opacity": if r.status.is_some() { 0.16 } else { 0.35 }}}, {key: num(scaled(r.to, p.vk, env.opts))}])
         })
         .collect();
     let ml = (!lines.is_empty()).then(|| json!({"silent": true, "symbol": "none", "data": lines}));

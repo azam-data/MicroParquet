@@ -59,7 +59,7 @@ pub fn footnote(as_of: &str, filters: &[String], notes: &[String]) -> String {
 pub(crate) enum Body {
     Chart(ChartPart),
     Table { head: Vec<String>, rows: Vec<Vec<String>>, indent: Vec<usize>, bold: Vec<bool>, note: Option<String> },
-    Kpi { value: String, value_colour: Option<u32>, change: String, change_colour: Option<u32>, words: String, period: String, reason: Option<String>, spark: Option<ChartPart> },
+    Kpi { value: String, value_colour: Option<u32>, change: String, change_colour: Option<u32>, words: String, period: String, reason: Option<String>, spark: Option<ChartPart>, target: String, graphic: Option<crate::kpi::Graphic> },
     Note(String),
     /// A text box of the dashboard: one slide with the words as typed.
     Text { text: String, size_hundredths_pt: u32, bold: bool, algn: &'static str },
@@ -296,6 +296,8 @@ fn kpi_body(k: &crate::kpi::KpiValue, spec: &KpiSpec, default_unit: KpiUnit) -> 
         words: if v.words.is_empty() { String::new() } else { format!("{} against the earlier period", v.words) },
         period: k.period.clone(),
         reason: v.reason,
+        target: v.target_text.clone(),
+        graphic: v.graphic.clone(),
         spark: if v.spark.iter().flatten().count() > 1 {
             let labels: Vec<String> = if k.spark_labels.len() == v.spark.len() { k.spark_labels.clone() } else { (1..=v.spark.len()).map(|i| i.to_string()).collect() };
             Some(ChartPart { kind: "line", grouping: "standard", horizontal: false, categories: labels, series: vec![Series { name: spec.title.clone(), values: v.spark.clone(), colour: colour_of(0), hidden: false }], unit: String::new(), numfmt: "#,##0.00", secondary: Vec::new(), unit2: String::new(), mini: true })
@@ -540,6 +542,83 @@ fn slide_xml(title: &str, foot: &str, body: &str, background: bool) -> String {
     )
 }
 
+fn rag_hex(r: crate::target::Rag) -> u32 {
+    match r {
+        crate::target::Rag::Green => crate::charts::tokens::STATUS_GOOD,
+        crate::target::Rag::Amber => crate::charts::tokens::STATUS_WARNING,
+        crate::target::Rag::Red => crate::charts::tokens::STATUS_CRITICAL,
+    }
+}
+
+fn shape_xml(id: usize, name: &str, descr: &str, geom: &str, av: &str, rect: (i64, i64, i64, i64), fill: Option<(u32, u32)>, flip_v: bool) -> String {
+    let fill = match fill {
+        Some((c, alpha)) => format!("<a:solidFill><a:srgbClr val=\"{:06X}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill><a:ln><a:noFill/></a:ln>", c, alpha),
+        None => "<a:ln w=\"28575\"><a:solidFill><a:srgbClr val=\"0B0B0B\"/></a:solidFill></a:ln>".to_string(),
+    };
+    format!(
+        "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\" descr=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm{}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"{}\"><a:avLst>{}</a:avLst></a:prstGeom>{}</p:spPr></p:sp>",
+        id,
+        esc(name),
+        esc(descr),
+        if flip_v { " flipV=\"1\"" } else { "" },
+        rect.0,
+        rect.1,
+        rect.2.max(0),
+        rect.3.max(0),
+        geom,
+        av,
+        fill
+    )
+}
+
+/// The bullet bar or gauge of a card as native PowerPoint shapes (so they stay editable): light zones, a dark bar or needle, a target tick.
+/// `rect` is where it goes; `first_id` the shape id of the first piece.
+fn graphic_shapes(g: &crate::kpi::Graphic, first_id: usize, rect: (i64, i64, i64, i64)) -> String {
+    use crate::kpi::KpiVisual;
+    let alpha = 35_000;
+    let descr = format!("{} against a target of {} (scale {} to {})", g.value_text, g.target_text, g.lo_text, g.hi_text);
+    let mut out = String::new();
+    let mut id = first_id;
+    match g.kind {
+        KpiVisual::Gauge => {
+            // the dial is the top half of a square of side d, centred at the middle of the bottom edge of the visible half
+            let d = rect.2.min(rect.3 * 2);
+            let (cx, cy) = (rect.0 + rect.2 / 2, rect.1 + d / 2);
+            let (x0, y0) = (cx - d / 2, cy - d / 2);
+            for (from, to, rag) in &g.bands {
+                let ang = |f: f64| -> i64 { ((10_800_000.0 + 10_800_000.0 * f) as i64) % 21_600_000 };
+                let av = format!("<a:gd name=\"adj1\" fmla=\"val {}\"/><a:gd name=\"adj2\" fmla=\"val {}\"/><a:gd name=\"adj3\" fmla=\"val 19000\"/>", ang(g.frac(*from)), ang(g.frac(*to)));
+                out.push_str(&shape_xml(id, &format!("Gauge {}", rag.word()), &descr, "blockArc", &av, (x0, y0, d, d), Some((rag_hex(*rag), alpha)), false));
+                id += 1;
+            }
+            let tip = |f: f64, r: f64| -> (i64, i64) {
+                let a = std::f64::consts::PI * (1.0 - f);
+                (cx + (r * a.cos()) as i64, cy - (r * a.sin()) as i64)
+            };
+            let line = |id: usize, name: &str, a: (i64, i64), b: (i64, i64)| -> String {
+                let (x, y) = (a.0.min(b.0), a.1.min(b.1));
+                // a preset line runs from the top left to the bottom right; the other slant is the same line flipped
+                let up_right = (b.0 - a.0) * (b.1 - a.1) < 0;
+                shape_xml(id, name, &descr, "line", "", (x, y, (a.0 - b.0).abs(), (a.1 - b.1).abs()), None, up_right)
+            };
+            out.push_str(&line(id, "Gauge needle", (cx, cy), tip(g.frac(g.value), d as f64 / 2.0 * 0.92)));
+            out.push_str(&line(id + 1, "Gauge target", tip(g.frac(g.target), d as f64 / 2.0 * 0.58), tip(g.frac(g.target), d as f64 / 2.0 * 1.04)));
+        }
+        _ => {
+            let h = rect.3.min(450_000);
+            let y = rect.1;
+            let x = |f: f64| rect.0 + (rect.2 as f64 * f) as i64;
+            for (from, to, rag) in &g.bands {
+                out.push_str(&shape_xml(id, &format!("Bullet {}", rag.word()), &descr, "rect", "", (x(g.frac(*from)), y, x(g.frac(*to)) - x(g.frac(*from)), h), Some((rag_hex(*rag), alpha)), false));
+                id += 1;
+            }
+            out.push_str(&shape_xml(id, "Bullet value", &descr, "rect", "", (rect.0, y + h * 3 / 10, x(g.frac(g.value)) - rect.0, h * 4 / 10), Some((0x0B0B0B, 100_000)), false));
+            out.push_str(&shape_xml(id + 1, "Bullet target", &descr, "line", "", (x(g.frac(g.target)), y + h / 20, 0, h * 9 / 10), None, false));
+        }
+    }
+    out
+}
+
 fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
     let body = body_for(&s.data, &s.scale, &s.kpi);
     match body {
@@ -563,7 +642,7 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
                 })
                 .collect()
         }
-        Body::Kpi { value, value_colour, change, change_colour, words, period, reason, spark } => {
+        Body::Kpi { value, value_colour, change, change_colour, words, period, reason, spark, target, graphic } => {
             let mut paras = para(&value, 6000, true, value_colour, "l");
             if !change.is_empty() {
                 paras.push_str(&para(&change, 2800, false, change_colour, "l"));
@@ -573,6 +652,9 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
             }
             if let Some(r) = &reason {
                 paras.push_str(&para(r, 1800, false, Some(0x52514E), "l"));
+            }
+            if !target.is_empty() {
+                paras.push_str(&para(&target, 2000, false, Some(0x52514E), "l"));
             }
             if !period.is_empty() {
                 paras.push_str(&para(&period, 1800, false, Some(0x898781), "l"));
@@ -586,6 +668,11 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
                 SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H,
                 paras
             );
+            // a bullet bar or a gauge for a card with a target, drawn from native shapes (top right of the card)
+            let card = match &graphic {
+                Some(g) => format!("{}{}", card, graphic_shapes(g, 10, (SLIDE_W - MARGIN - 4_200_000, MARGIN + TITLE_H + 500_000, 3_800_000, 1_500_000))),
+                None => card,
+            };
             // the sparkline is a small native line chart on the card, bottom right
             let (body, chart) = match spark {
                 Some(c) => {

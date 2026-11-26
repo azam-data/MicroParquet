@@ -323,7 +323,8 @@ fn ref_lines(data: &ChartData, panel: usize, horizontal: bool, opts: &LayoutOpts
     for b in data.spec.ref_bands.iter().filter(|b| b.panel == panel) {
         let (a, c) = (scaled(b.from, vk, opts), scaled(b.to, vk, opts));
         let call = if horizontal { "axvspan" } else { "axhspan" };
-        let _ = writeln!(out, "{indent}{axname}.{call}({}, {}, color=DEEMPH, alpha=0.35, linewidth=0, label={})", f(a.min(c)), f(a.max(c)), s(&b.label));
+        let (col, al) = match b.status { Some(st) => (format!("\"#{:06x}\"", st.hex()), "0.16"), None => ("DEEMPH".to_string(), "0.35") };
+        let _ = writeln!(out, "{indent}{axname}.{call}({}, {}, color={}, alpha={}, linewidth=0, label={})", f(a.min(c)), f(a.max(c)), col, al, s(&b.label));
         if !b.label.is_empty() {
             let _ = writeln!(out, "{indent}{axname}.annotate({}, (0, {}), xycoords=(\"axes fraction\", \"data\"), xytext=(4, 3), textcoords=\"offset points\", fontsize=10, color=INK2)", s(&b.label), f(a.max(c)));
         }

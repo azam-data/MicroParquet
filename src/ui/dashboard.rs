@@ -1486,6 +1486,81 @@ impl MicroParquetApp {
             ui.selectable_value(&mut k.good_direction, GoodDirection::Down, "Down is good");
             ui.selectable_value(&mut k.good_direction, GoodDirection::Neutral, "No judgement");
         });
+        // Phase 12: the window and moving average of a measure card
+        if matches!(k.source, KpiSource::Measure(_)) {
+            combo(ui, "Window", "KPI window", k.window.label().to_string(), rects, &mut |ui| {
+                for w in micro_parquet::models::TimeWindow::all() {
+                    ui.selectable_value(&mut k.window, *w, w.label());
+                }
+            });
+            let can_smooth = k.window == micro_parquet::models::TimeWindow::Period && k.compare == KpiCompare::None;
+            ui.add_enabled_ui(can_smooth, |ui| {
+                combo(ui, "Average", "KPI average", k.smooth.label().to_string(), rects, &mut |ui| {
+                    for x in micro_parquet::models::Smooth::all() {
+                        ui.selectable_value(&mut k.smooth, *x, x.label());
+                    }
+                });
+            });
+            if !can_smooth {
+                k.smooth = micro_parquet::models::Smooth::None;
+            }
+        }
+        // Phase 12: a target with red/amber/green bands, and how the card draws it
+        {
+            let mut has = k.target.is_some();
+            let r = ui.checkbox(&mut has, "Target with red, amber, green");
+            rects.push(("KPI target".into(), r.rect));
+            if has && k.target.is_none() {
+                k.target = Some(micro_parquet::kpi::KpiTarget::default());
+            }
+            if !has {
+                k.target = None;
+                k.visual = micro_parquet::kpi::KpiVisual::Number;
+            }
+            if let Some(t) = k.target.as_mut() {
+                let plan_measures: Vec<String> = self.project.model.measures.iter().filter(|m| m.is_plan()).map(|m| m.name().to_string()).collect();
+                let shown = match &t.source {
+                    micro_parquet::kpi::TargetSource::Fixed(_) => "A number".to_string(),
+                    micro_parquet::kpi::TargetSource::Measure(n) => n.clone(),
+                };
+                combo(ui, "Target from", "KPI target source", shown, rects, &mut |ui| {
+                    if ui.selectable_label(matches!(t.source, micro_parquet::kpi::TargetSource::Fixed(_)), "A number").clicked() {
+                        t.source = micro_parquet::kpi::TargetSource::Fixed(0.0);
+                    }
+                    for m in &self.project.model.measures {
+                        let name = m.name().to_string();
+                        let label = if plan_measures.contains(&name) { format!("{} (budget / target)", name) } else { name.clone() };
+                        if ui.selectable_label(t.source == micro_parquet::kpi::TargetSource::Measure(name.clone()), label).clicked() {
+                            t.source = micro_parquet::kpi::TargetSource::Measure(name);
+                        }
+                    }
+                });
+                if let micro_parquet::kpi::TargetSource::Fixed(x) = &mut t.source {
+                    ui.horizontal(|ui| {
+                        ui.label("Target");
+                        let r = ui.add(egui::DragValue::new(x).speed(0.5));
+                        rects.push(("KPI target value".into(), r.rect));
+                        ui.label("(in the card's unit)");
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Green within");
+                    let r = ui.add(egui::DragValue::new(&mut t.bands.green_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                    rects.push(("KPI green margin".into(), r.rect));
+                    ui.label("amber within");
+                    let r = ui.add(egui::DragValue::new(&mut t.bands.amber_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                    rects.push(("KPI amber margin".into(), r.rect));
+                });
+                combo(ui, "Draw as", "KPI visual", k.visual.label().to_string(), rects, &mut |ui| {
+                    for v in micro_parquet::kpi::KpiVisual::ALL {
+                        ui.selectable_value(&mut k.visual, v, v.label());
+                    }
+                });
+                if k.good_direction == GoodDirection::Neutral {
+                    ui.colored_label(theme::warning(ui), "Bands need \"Up is good\" or \"Down is good\".");
+                }
+            }
+        }
         ui.label("Limits");
         let mut drop: Option<usize> = None;
         for (i, t) in k.thresholds.iter_mut().enumerate() {
@@ -1554,6 +1629,13 @@ impl MicroParquetApp {
         if let Some(why) = &kv.reason {
             ui.label(egui::RichText::new(why.clone()).size(theme::TEXT_LABEL).color(tk.muted));
         }
+        if !kv.target_text.is_empty() {
+            let r = ui.add(egui::Label::new(egui::RichText::new(kv.target_text.clone()).size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+            rects.push((format!("KPI target {}", id), r.rect));
+        }
+        if let Some(g) = &kv.graphic {
+            Self::draw_graphic(ui, tk, g, id, rects);
+        }
         for n in v.notes.iter().take(2) {
             ui.label(egui::RichText::new(n.clone()).size(theme::TEXT_LABEL).color(tk.muted));
         }
@@ -1590,6 +1672,68 @@ impl MicroParquetApp {
             resp.on_hover_text(format!("{} periods; a gap is a period with no number", kv.spark.len()));
         }
         ui.interact(ui.min_rect(), ui.id().with(("kpi_alt", id.to_string())), egui::Sense::hover()).on_hover_text(kv.alt.clone());
+    }
+
+    /// The bullet bar or the gauge of a card with a target: the bands as light zones, the number as a dark bar or needle, the target as a
+    /// tick. The words on the card say the same ("Target 5,000 Cr \u{b7} 98% of target \u{b7} amber"), so colour is never the only signal.
+    fn draw_graphic(ui: &mut egui::Ui, tk: &theme::Tokens, g: &micro_parquet::kpi::Graphic, id: &str, rects: &mut Vec<(String, egui::Rect)>) {
+        use micro_parquet::kpi::KpiVisual;
+        use micro_parquet::target::Rag;
+        let band = |r: Rag| {
+            let c = match r {
+                Rag::Green => tk.success,
+                Rag::Amber => tk.warning,
+                Rag::Red => tk.danger,
+            };
+            egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), theme::KPI_BAND_ALPHA)
+        };
+        match g.kind {
+            KpiVisual::Gauge => {
+                let w = ui.available_width().min(theme::KPI_GAUGE_W);
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, w / 2.0 + 6.0), egui::Sense::hover());
+                rects.push((format!("KPI gauge {}", id), rect));
+                let (cx, cy) = (rect.center().x as f64, (rect.bottom() - 4.0) as f64);
+                let (ro, ri) = ((w / 2.0 - 3.0) as f64, (w / 2.0 - 3.0) as f64 * 0.62);
+                let steps = 24;
+                for (from, to, rag) in &g.bands {
+                    let pts = micro_parquet::kpi::ring_segment(cx, cy, ro, ri, g.frac(*from), g.frac(*to), steps);
+                    let mut mesh = egui::epaint::Mesh::default();
+                    for p in &pts {
+                        mesh.colored_vertex(egui::pos2(p.0 as f32, p.1 as f32), band(*rag));
+                    }
+                    for i in 0..steps as u32 {
+                        let (o0, o1) = (i, i + 1);
+                        let (i0, i1) = ((steps as u32 + 1) + (steps as u32 - i), (steps as u32 + 1) + (steps as u32 - i - 1));
+                        mesh.add_triangle(o0, o1, i0);
+                        mesh.add_triangle(o1, i1, i0);
+                    }
+                    ui.painter().add(egui::Shape::mesh(mesh));
+                }
+                let at = |f: f64, r: f64| {
+                    let a = std::f64::consts::PI * (1.0 - f);
+                    egui::pos2((cx + r * a.cos()) as f32, (cy - r * a.sin()) as f32)
+                };
+                let t = g.frac(g.target);
+                ui.painter().line_segment([at(t, ri * 0.92), at(t, ro * 1.04)], egui::Stroke::new(2.0, tk.ink));
+                let v = g.frac(g.value);
+                ui.painter().line_segment([egui::pos2(cx as f32, cy as f32), at(v, ro * 0.96)], egui::Stroke::new(2.5, tk.ink));
+                ui.painter().circle_filled(egui::pos2(cx as f32, cy as f32), 3.5, tk.ink);
+                resp.on_hover_text(format!("{}: target {} (scale {} to {})", g.value_text, g.target_text, g.lo_text, g.hi_text));
+            }
+            _ => {
+                let w = ui.available_width().min(theme::KPI_BULLET_W);
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, theme::KPI_BULLET_H), egui::Sense::hover());
+                rects.push((format!("KPI bullet {}", id), rect));
+                let x = |f: f64| rect.left() + rect.width() * f as f32;
+                for (from, to, rag) in &g.bands {
+                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x(g.frac(*from)), rect.top()), egui::pos2(x(g.frac(*to)), rect.bottom())), 0.0, band(*rag));
+                }
+                let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.center().y - rect.height() * 0.2), egui::pos2(x(g.frac(g.value)), rect.center().y + rect.height() * 0.2));
+                ui.painter().rect_filled(bar, 0.0, tk.ink);
+                ui.painter().line_segment([egui::pos2(x(g.frac(g.target)), rect.top() + 1.0), egui::pos2(x(g.frac(g.target)), rect.bottom() - 1.0)], egui::Stroke::new(2.0, tk.ink));
+                resp.on_hover_text(format!("{}: target {} (scale {} to {})", g.value_text, g.target_text, g.lo_text, g.hi_text));
+            }
+        }
     }
 
     /// A pivot as a table (Nested, with its indents, when the pivot is Nested). A click on a row label comes back as
