@@ -1304,8 +1304,30 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
     // per-category limit ticks, and the ring and text of a breach (drawn last: on top of the marks)
     if matches!(p.kind, ChartKind::Bar | ChartKind::Line | ChartKind::Area) {
         limit_ticks(b, data, p, &geom, band, &band_centre, opts, if multi_index(data) { 0 } else { panel_idx }, plot);
+        note_markers(b, data, p, &geom, &band_centre, plot, surface);
     }
     let _ = (surface, label_h);
+}
+
+/// Phase 13: a numbered marker at the top of the plot over each noted category, with a thin line down to the axis. The text is in the
+/// footnote under the number (`calc::apply_annotations`). Notes belong to the chart's first panel.
+fn note_markers(b: &mut Builder, data: &ChartData, p: &Plan, g: &PanelLayout, centre: &dyn Fn(usize) -> f32, plot: Rect, surface: Color32) {
+    if p.index != 0 {
+        return;
+    }
+    let (ink_c, muted_c) = (rgb(b.ink.ink), rgb(b.ink.muted));
+    for (n, a) in data.spec.annotations.iter().enumerate() {
+        if a.text.trim().is_empty() {
+            continue;
+        }
+        let Some(ci) = p.categories.iter().position(|c| *c == a.category) else { continue };
+        let c = centre(ci);
+        let r = 8.0;
+        let (at, from, to) = if g.horizontal { (pos2(plot.right() - r - 2.0, c), pos2(plot.left(), c), pos2(plot.right() - 2.0 * r - 2.0, c)) } else { (pos2(c, plot.top() + r + 2.0), pos2(c, plot.bottom()), pos2(c, plot.top() + 2.0 * r + 2.0)) };
+        b.line(from, to, 1.0, muted_c);
+        b.out.prims.push(Prim::Circle { c: at, r, fill: ink_c, ring: Some((1.5, surface)) });
+        b.put(Role::Reference, &format!("{}", n + 1), Anchor::Centre, at, t::label_pt(), Face::Regular, surface);
+    }
 }
 
 /// Ticks across the category bands at their limits; a breach is ringed on the mark and written beside it.
