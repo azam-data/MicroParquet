@@ -411,6 +411,9 @@ impl<T: Send + 'static> JobQueue<T> {
                                 st.cancels.remove(&j.id);
                                 continue;
                             }
+                            // Running from the moment it leaves the queue, under this same lock: `wait_idle` must never see
+                            // a queue that is neither pending nor running while a job is on its way to the worker.
+                            st.running = Some(Running { id: j.id, key: j.key, label: j.label.clone(), long: j.long, ctx: j.ctx.clone() });
                             break j;
                         }
                         st = worker.cv.wait(st).unwrap_or_else(|e| e.into_inner());
