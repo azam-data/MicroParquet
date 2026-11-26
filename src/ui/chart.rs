@@ -730,7 +730,7 @@ impl MicroParquetApp {
             }
             // window, shift, what it shows and the partial period of a time value
             if let Some(mut t) = spec.time {
-                use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+                use micro_parquet::models::{Smooth, TimePartial, TimeShift, TimeShow, TimeWindow};
                 ui.label("Window");
                 let r = egui::ComboBox::from_id_salt("chart_t_window").width(theme::CHART_COMBO_NARROW_W).selected_text(t.window.label()).show_ui(ui, |ui| {
                     for w in TimeWindow::all() {
@@ -738,6 +738,19 @@ impl MicroParquetApp {
                     }
                 });
                 add(ui, "Window", rects, r.response.rect);
+                ui.end_row();
+                if t.window != TimeWindow::Period {
+                    t.smooth = Smooth::None;
+                }
+                ui.label("Moving average");
+                let r = ui.add_enabled_ui(t.window == TimeWindow::Period && t.shift == TimeShift::None, |ui| {
+                    egui::ComboBox::from_id_salt("chart_t_smooth").width(theme::CHART_COMBO_NARROW_W).selected_text(t.smooth.label()).show_ui(ui, |ui| {
+                        for x in Smooth::all() {
+                            ui.selectable_value(&mut t.smooth, *x, x.label());
+                        }
+                    })
+                });
+                add(ui, "Moving average", rects, r.inner.response.rect);
                 ui.end_row();
                 ui.label("Shift");
                 let r = egui::ComboBox::from_id_salt("chart_t_shift").width(theme::CHART_COMBO_NARROW_W).selected_text(t.shift.label()).show_ui(ui, |ui| {
@@ -747,6 +760,9 @@ impl MicroParquetApp {
                 });
                 add(ui, "Shift", rects, r.response.rect);
                 ui.end_row();
+                if t.shift != TimeShift::None {
+                    t.smooth = Smooth::None;
+                }
                 ui.label("Show");
                 let r = egui::ComboBox::from_id_salt("chart_t_show").width(theme::CHART_COMBO_NARROW_W).selected_text(t.show.label()).show_ui(ui, |ui| {
                     for x in TimeShow::all() {

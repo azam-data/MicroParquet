@@ -418,6 +418,7 @@ pub fn plan(t: &crate::models::TimeValue, base: Option<Base>, as_of: NaiveDate, 
             let a = base.map(|b| b.end.min(as_of)).unwrap_or(as_of);
             let (ws, ne, unit) = match w {
                 TimeWindow::Mtd => (month_start(a), month_end(a), PeriodUnit::Month),
+                TimeWindow::Rolling3 | TimeWindow::Rolling12 => (add_months(month_start(a), 1 - w.rolling_months().unwrap_or(1)), month_end(a), PeriodUnit::Month),
                 TimeWindow::Qtd => (fiscal.fiscal_quarter_start(a), fiscal.fiscal_quarter_end(a), PeriodUnit::Quarter),
                 _ => (fiscal.fiscal_year_start(a), fiscal.fiscal_year_end(a), PeriodUnit::Year),
             };
