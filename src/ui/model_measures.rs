@@ -425,8 +425,9 @@ impl MicroParquetApp {
         let mut set: Option<(String, String, Option<ColumnTag>)> = None;
         let mut act: Option<MeasureAct> = None;
         let mut close = false;
-        theme::modal(&format!("{}  {}", theme::ph::CALENDAR, MEASURES_DIALOG_TITLE)).default_width(theme::DIALOG_W_MEASURES).show(ctx, |d| {
+        theme::modal(crate::ui::model_flow::MODEL_SETUP_TITLE).default_width(theme::DIALOG_W_MODEL_FLOW).show(ctx, |d| {
             d.body(|ui| {
+                self.model_flow_header(ui, micro_parquet::workspace::ModelStep::Measures);
                 ui.horizontal(|ui| {
                     for (s, label) in [(MeasuresSection::Columns, "Columns"), (MeasuresSection::Measures, "Measures")] {
                         let r = ui.selectable_label(section == s, label);
@@ -559,9 +560,12 @@ impl MicroParquetApp {
                 }
             });
             d.footer(|ui| {
-                let c = ui.button("Close");
-                rects.buttons.push(("Close".to_string(), c.rect));
-                close = c.clicked();
+                ui.horizontal_wrapped(|ui| {
+                    let c = ui.button("Close");
+                    rects.buttons.push(("Close".to_string(), c.rect));
+                    close = c.clicked();
+                    self.model_flow_footer(ui, micro_parquet::workspace::ModelStep::Measures);
+                });
             });
         });
         self.project.model_ui.measures.rects = rects;

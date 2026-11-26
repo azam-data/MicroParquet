@@ -152,6 +152,8 @@ pub enum ActiveToolModal {
     ModelKeyCheck,
     /// A Model item with no project open (Phase 9 M0).
     ModelNoProject,
+    /// The first step of the model's set-up: the tables.
+    ModelTables,
     /// Model ▸ Calendar… (Phase 9 M2).
     ModelCalendar,
     /// Model ▸ As-of date… (Phase 9 M2).
@@ -241,6 +243,8 @@ pub struct MicroParquetApp {
     chart_pop_requests: u32,
     /// The tabs that are charts (Phase 7: "Open as tab"), by tab id: they fill the main area with the chart.
     chart_tabs: HashMap<u64, crate::ui::chart::ChartTabInfo>,
+    /// The dashboard view of the open project (Phase 10 D1).
+    dashboard_ui: crate::ui::dashboard::DashboardUi,
     /// When the linked chart tabs last looked at their source tabs (seconds on the egui clock).
     chart_tab_checked_at: f64,
     /// The breadcrumb entries of the chart last drawn (name, rectangle), for the render tests (Phase 8 W6).
@@ -260,6 +264,8 @@ pub struct MicroParquetApp {
     /// A step reopened in its modal (edit in place).
     pub editing: Option<ui::step_edit::EditingStep>,
     show_about: bool,
+    /// The shell: the view, the rail, the Settings dialog (UI revamp).
+    pub ws: ui::shell::WorkspaceUi,
     /// The row-count "Details" dialog is open.
     pub row_details_open: bool,
     /// The last 50 status messages (time, text), newest last, and the "Messages" list's state.
@@ -419,6 +425,7 @@ impl MicroParquetApp {
             chart_popped: false,
             chart_pop_requests: 0,
             chart_tabs: HashMap::new(),
+            dashboard_ui: Default::default(),
             chart_tab_checked_at: 0.0,
             drill_rects: Vec::new(),
             show_summary_row: true,
@@ -430,6 +437,7 @@ impl MicroParquetApp {
             insert_after: None,
             editing: None,
             show_about: false,
+            ws: ui::shell::WorkspaceUi { view: settings.last_view.as_deref().and_then(micro_parquet::workspace::View::from_name).unwrap_or_default(), ..Default::default() },
             row_details_open: false,
             status_log: Vec::new(),
             status_logged: String::new(),
@@ -557,6 +565,8 @@ impl eframe::App for MicroParquetApp {
             self.pivot_save_popout_rect();
         }
         micro_parquet::charts::echarts::clean_chart_temp(&self.paths.temp_dir);
+        // the view the window was in comes back next time
+        self.save_settings();
     }
 }
 
@@ -572,6 +582,7 @@ impl MicroParquetApp {
         self.project_tick(ctx);
         let now = ctx.input(|i| i.time);
         self.chart_tab_links_tick(now);
+        self.dashboard_tick();
         if ctx.input(|i| i.viewport().close_requested()) {
             match self.close_requested() {
                 ui::jobs::CloseDecision::Ask => ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose),
@@ -585,13 +596,19 @@ impl MicroParquetApp {
         self.handle_step_shortcuts(ctx);
         self.handle_drill_back_key(ctx);
         self.handle_tab_shortcuts(ctx);
-        self.render_top_bar(ctx);
-        self.render_tab_strip_panel(ctx);
+        self.sync_view();
+        self.ws.bar_rects = self.render_top_bar(ctx);
         self.render_status_bar(ctx);
+        self.render_rail(ctx);
+        self.render_tab_strip_panel(ctx);
         // Modal dialogs may cover the right panel: their area is the window less the top bar, the
         // tab strip and the status bar. (The central panel takes the rest, so egui cannot be
         // asked for it later.) Only the non-modal panels keep clear of the right panel.
-        theme::set_dialog_area(ctx, ctx.available_rect());
+        // (a dialog may cover the rail, and in the Model view, which has no tab strip, it still stays clear of that strip's place)
+        let mut area = ctx.available_rect();
+        area.set_left(ctx.screen_rect().left());
+        area.set_top(area.top().max(theme::TOP_BAR_H + theme::TAB_STRIP_H));
+        theme::set_dialog_area(ctx, area);
         self.render_right_panel(ctx);
         theme::set_central_area(ctx, ctx.available_rect());
 
@@ -600,8 +617,20 @@ impl MicroParquetApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(tk.bg).inner_margin(theme::MARGIN_CENTRAL))
             .show(ctx, |ui| {
-                if self.tabs.is_empty() {
-                    self.render_empty_state(ui);
+                if self.ws.view == micro_parquet::workspace::View::Model {
+                    self.render_model_page(ui);
+                    return;
+                }
+                if self.dashboard_ui.open && self.project.dashboard.is_some() && self.ws.view == micro_parquet::workspace::View::Dashboard {
+                    self.render_dashboard_main(ui);
+                    return;
+                }
+                if !self.active_tab_in_view() {
+                    // a view with nothing to show says what to do next
+                    match self.current_hint() {
+                        Some(h) => self.render_hint(ui, &h),
+                        None => self.render_view_without_active_tab(ui),
+                    }
                     return;
                 }
                 if self.active_is_unavailable() {
@@ -631,6 +660,7 @@ impl MicroParquetApp {
         self.render_row_details(ctx);
         self.render_messages(ctx);
         self.render_command_palette(ctx);
+        self.render_settings_dialog(ctx);
         self.render_quit_guard(ctx);
         self.render_chart_popout(ctx);
     }
@@ -667,27 +697,11 @@ impl MicroParquetApp {
         .response
     }
 
-    fn edit_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
-        use micro_parquet::commands::{DATA_CHECKS, EDIT_MENU};
-        ui.menu_button("Edit", |ui| {
-            for (i, id) in EDIT_MENU.iter().enumerate() {
-                if i == 2 {
-                    ui.separator();
-                }
-                self.command_menu_item(ui, ctx, *id);
-            }
+    /// The Settings menu: the dialog, the theme and the zoom. Everything else is a section of the dialog.
+    fn settings_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
+        ui.menu_button("Settings", |ui| {
+            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::Settings);
             ui.separator();
-            ui.menu_button("Data checks", |ui| {
-                for id in DATA_CHECKS {
-                    self.command_menu_item(ui, ctx, *id);
-                }
-            });
-        })
-        .response
-    }
-
-    fn view_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> egui::Response {
-        ui.menu_button("View", |ui| {
             let theme_label = if self.dark_mode { "Switch to Light Theme" } else { "Switch to Dark Theme" };
             if ui.button(format!("{}  {}", if self.dark_mode { theme::ph::SUN } else { theme::ph::MOON }, theme_label)).clicked() {
                 self.dark_mode = !self.dark_mode;
@@ -695,48 +709,6 @@ impl MicroParquetApp {
             }
             let zoom_title = format!("Zoom  {}", ui::zoom::percent_text(self.ui_zoom));
             ui.menu_button(zoom_title, |ui| self.zoom_menu_contents(ui, ctx));
-            ui.separator();
-            ui.menu_button("Default Monetary Scale", |ui| {
-                for fmt in NumberDisplayFormat::all() {
-                    ui.selectable_value(&mut self.num_format, *fmt, fmt.label());
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Decimal Places:");
-                if ui.small_button(" - ").clicked() && self.global_decimals > 0 {
-                    self.global_decimals -= 1;
-                }
-                ui.strong(format!("{}", self.global_decimals));
-                if ui.small_button(" + ").clicked() && self.global_decimals < 6 {
-                    self.global_decimals += 1;
-                }
-            });
-            ui.separator();
-            ui.menu_button("Toolbar buttons", |ui| {
-                for id in micro_parquet::commands::toolbar_buttons() {
-                    let name = ui::commands::toolbar_label(id);
-                    let mut on = !self.settings.toolbar_hidden.iter().any(|n| n == name);
-                    if ui.checkbox(&mut on, name).changed() {
-                        self.settings.toolbar_hidden.retain(|n| n != name);
-                        if !on {
-                            self.settings.toolbar_hidden.push(name.to_string());
-                        }
-                        self.save_settings();
-                    }
-                }
-            });
-            ui.menu_button("Side panel", |ui| {
-                for t in ui::steps::RightTab::ALL {
-                    let mut on = !self.settings.side_panel_hidden.iter().any(|n| n == t.name());
-                    if ui.checkbox(&mut on, t.name()).changed() {
-                        self.set_side_tab_visible(t, on);
-                    }
-                }
-            });
-            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::SortLists);
-            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::CalendarSettings);
-            self.command_menu_item(ui, ctx, micro_parquet::commands::CommandId::HouseColours);
-            ui.checkbox(&mut self.show_summary_row, "Summary row");
         })
         .response
     }
@@ -794,16 +766,16 @@ impl MicroParquetApp {
     fn command_box(&mut self, ui: &mut egui::Ui, width: f32) -> egui::Response {
         let tk = *theme::tokens(self.dark_mode);
         let resp = egui::Frame::none()
-            .fill(tk.bg)
-            .stroke(theme::line(tk.border))
+            .fill(tk.accent_soft)
+            .stroke(theme::line(tk.accent_soft_border))
             .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
             .inner_margin(theme::MARGIN_SEARCH_BOX)
             .show(ui, |ui| {
                 ui.set_width((width - theme::SEARCH_FRAME_PAD).max(0.0));
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(theme::ph::MAGNIFYING_GLASS).color(tk.muted));
-                    let hint = if width >= theme::SEARCH_LONG_HINT_W { "Search actions and columns" } else { "Search\u{2026}" };
-                    ui.add(egui::Label::new(egui::RichText::new(hint).color(tk.muted)).truncate());
+                    ui.label(egui::RichText::new(theme::ph::MAGNIFYING_GLASS).color(tk.accent));
+                    let hint = if width >= theme::SEARCH_LONG_HINT_W { "Search actions, columns, help\u{2026}" } else { "Search\u{2026}" };
+                    ui.add(egui::Label::new(egui::RichText::new(hint).color(tk.accent)).truncate());
                     // a very narrow box keeps the icon and "Search…"; the Ctrl K badge needs room
                     if width >= theme::SEARCH_BADGE_MIN_W {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -312,7 +312,7 @@ pub const BAR_SEPARATOR_H: f32 = 20.0;
 /// Added to a measured button width, so a rounding difference never makes two items touch.
 pub const BAR_WIDTH_SLACK: f32 = 2.0;
 /// The command search box: preferred, smallest, and the icon-only width.
-pub const SEARCH_MAX_W: f32 = 310.0;
+pub const SEARCH_MAX_W: f32 = 360.0;
 pub const SEARCH_MIN_W: f32 = 120.0;
 pub const SEARCH_ICON_W: f32 = 44.0;
 /// The box's own side padding (10 + 10); egui adds nothing for the border.
@@ -585,6 +585,13 @@ pub fn margin_tab(active: bool) -> egui::Margin {
 pub const MARGIN_SEGMENTED: egui::Margin = egui::Margin::same(3.0);
 pub const MARGIN_SEGMENTED_OUTER: egui::Margin = egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 };
 pub const SEGMENT_BTN_H: f32 = 30.0;
+/// The thin row above the side panel's tabs that holds the hide button.
+pub const PANEL_HEAD_H: f32 = 22.0;
+/// Two page heights this close are the same shape.
+pub const PAGE_SHAPE_EPS: f64 = 0.01;
+/// The arrow that brings a hidden side panel back, at the page's right edge.
+pub const SHOW_ARROW_W: f32 = 24.0;
+pub const SHOW_ARROW_H: f32 = 44.0;
 pub const PANEL_BTN_H: f32 = 32.0;
 pub const WIDE_BTN_H: f32 = 34.0;
 pub const MARGIN_PANEL_STEPS: egui::Margin = egui::Margin::symmetric(16.0, 8.0);
@@ -883,6 +890,12 @@ pub fn bottom_border(ui: &egui::Ui, color: Color32) {
 pub fn top_border(ui: &egui::Ui, color: Color32) {
     let r = ui.max_rect();
     ui.painter().hline(r.x_range(), r.top() + 0.5, Stroke::new(1.0_f32, color));
+}
+
+/// A 1 px line along the right edge of the panel being drawn.
+pub fn right_border(ui: &egui::Ui, color: Color32) {
+    let r = ui.max_rect();
+    ui.painter().vline(r.right() - 0.5, r.y_range(), Stroke::new(1.0_f32, color));
 }
 
 /// A 1 px line along the left edge of the panel being drawn.
@@ -1552,3 +1565,67 @@ mod tests {
         assert!(missing.is_empty(), "no glyph for: {:?}", missing);
     }
 }
+
+// ---- the dashboard view (Phase 10 D1)
+/// The width of the pages list.
+pub const DASH_LEFT_W: f32 = 200.0;
+/// The width of the page and item properties.
+pub const DASH_RIGHT_W: f32 = 216.0;
+/// What a text box in the properties keeps clear of the panel's edge.
+pub const DASH_PROPS_PAD: f32 = 24.0;
+pub const DASH_LABEL_EDIT_W: f32 = 110.0;
+pub const DASH_PER_ROW_W: f32 = 48.0;
+/// The side of a drag handle of an item on a Free page.
+pub const DASH_HANDLE: f32 = 10.0;
+/// How see-through the slots drawn over a design are.
+pub const DASH_SLOT_FILL: f32 = 0.15;
+/// The width of a slot's name box in the design editor (the row also holds its type and a remove button).
+pub const DASH_SLOT_NAME_W: f32 = 54.0;
+/// The smallest scale a page is drawn at.
+pub const DASH_MIN_SCALE: f32 = 0.1;
+
+// ---- KPI cards (Phase 10 D2)
+pub const TEXT_KPI: f32 = 28.0;
+pub const KPI_SPARK_W: f32 = 160.0;
+pub const KPI_SPARK_H: f32 = 28.0;
+pub const KPI_SPARK_DOT: f32 = 2.5;
+/// The width the KPI settings keep for their labels.
+pub const KPI_LABEL_W: f32 = 78.0;
+
+// ---- the workspace: rail, hints, model page, settings dialog (UI revamp)
+/// The rail on the left that switches between Report, Data and Model.
+pub const RAIL_W: f32 = 68.0;
+pub const RAIL_BTN_W: f32 = 56.0;
+pub const RAIL_BTN_H: f32 = 56.0;
+pub const TEXT_RAIL_ICON: f32 = 22.0;
+/// What an empty screen's text and cards may take.
+pub const HINT_MAX_W: f32 = 640.0;
+pub const HINT_CARD_W: f32 = 196.0;
+/// The share of the window's height above an empty screen's content.
+pub const HINT_TOP_SHARE: f32 = 0.2;
+pub const TEXT_HINT_TITLE: f32 = 20.0;
+/// The relationship diagram: a table's box, the gaps between boxes, and the room a link's status pill takes.
+pub const DIAGRAM_NODE_W: f32 = 180.0;
+pub const DIAGRAM_NODE_H: f32 = 44.0;
+pub const DIAGRAM_COL_GAP: f32 = 190.0;
+pub const DIAGRAM_ROW_GAP: f32 = 30.0;
+pub const DIAGRAM_PAD: f32 = 16.0;
+pub const DIAGRAM_EDGE_W: f32 = 1.5;
+/// The model's step flow: the strip of steps above a dialog's body.
+pub const STEPPER_GAP: f32 = 4.0;
+/// The Settings dialog: its width, the list on the left, and what the right side keeps for labels.
+pub const DIALOG_W_SETTINGS: f32 = 660.0;
+pub const SETTINGS_NAV_W: f32 = 176.0;
+pub const SETTINGS_LABEL_W: f32 = 150.0;
+pub const SETTINGS_BODY_MIN_H: f32 = 260.0;
+/// The floating panel next to a selected dashboard tile.
+pub const TILE_PANEL_W: f32 = 236.0;
+pub const TILE_PANEL_GAP: f32 = 8.0;
+pub const TILE_PANEL_MAX_H: f32 = 420.0;
+/// The tinted search box: its width, and the rows of the empty search.
+pub const SEARCH_BIG_MIN_W: f32 = 260.0;
+pub const MARGIN_RAIL: egui::Margin = egui::Margin { left: 6.0, right: 6.0, top: 10.0, bottom: 8.0 };
+/// The model's set-up window: the same width at every step.
+pub const DIALOG_W_MODEL_FLOW: f32 = DIALOG_W_PIVOT_BUILDER * MODEL_DIALOG_SHARE;
+/// The share of the Model view's height the diagram may take.
+pub const MODEL_DIAGRAM_SHARE: f32 = 0.55;

@@ -754,18 +754,12 @@ fn u2_view_sql_and_ctrl_k_sql_editor_open_the_panel_on_the_sql_tab() {
         rig.app.settings.side_panel_hidden = vec!["SQL".to_string()];
         rig.app.show_steps_sidebar = false;
         rig.draw(4);
-        // View menu: click "View", then "Side panel", then the SQL box
-        let p = rig.draw(2);
-        let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the View menu"));
-        rig.click(view.center());
-        let p = rig.draw(3);
-        assert!(p.boxes.iter().any(|(t, _)| t.contains("Custom sort lists")), "{what}: View lists Custom sort lists");
-        let side = p.boxes.iter().find(|(t, _)| t == "Side panel").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View lists Side panel"));
-        rig.click(side.center());
-        let p = rig.draw(3);
-        let item = p.boxes.iter().find(|(t, _)| t == "SQL").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Side panel lists SQL: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+        // Settings dialog, Toolbar & panels: the SQL box
+        rig.app.open_settings(Some(micro_parquet::workspace::SettingsSection::Toolbar));
+        rig.draw(4);
+        let item = rig.app.ws.settings_rects.iter().find(|(t, _)| t == "Tab SQL").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Settings lists the SQL tab"));
         rig.click(item.center());
-        assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: View > SQL opened the panel on the SQL tab");
+        assert!(rig.app.show_steps_sidebar && rig.app.right_tab == RightTab::Sql, "{what}: Settings > SQL opened the panel on the SQL tab");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
@@ -898,12 +892,12 @@ fn u6_the_default_zoom_runs_from_50_to_200_percent_in_5_percent_steps() {
     for (ppp, w, h) in SCREENS {
         let mut rig = term_rig("p6u6e", ppp, w, h);
         let what = rig.what.clone();
-        // View > Zoom > Default zoom > 60%
+        // Settings > Zoom > Default zoom > 60%
         let p = rig.draw(3);
-        let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).expect("View");
+        let view = p.boxes.iter().find(|(t, b)| t == "Settings" && b.top() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Settings");
         rig.click(view.center());
         let p = rig.draw(3);
-        let zoom = p.boxes.iter().find(|(t, _)| t.starts_with("Zoom  ")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View has Zoom"));
+        let zoom = p.boxes.iter().find(|(t, _)| t.starts_with("Zoom  ")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Settings has Zoom"));
         rig.click(zoom.center());
         let p = rig.draw(3);
         let default = p.boxes.iter().find(|(t, _)| t.starts_with("Default zoom:")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Zoom menu has Default zoom"));
@@ -2472,7 +2466,7 @@ fn e1_edit_parameters_saves_a_new_file_dated_today_and_never_overwrites() {
 // ------------------------------------------------------------------------------------------ F2
 
 fn tab_label_boxes(p: &Painted) -> Vec<(String, egui::Rect)> {
-    ["Column", "SQL", "Chart"].iter().filter_map(|n| p.boxes.iter().find(|(t, b)| t == n && b.height() < 24.0 && b.top() < 120.0).map(|(t, b)| (t.clone(), *b))).chain(p.boxes.iter().filter(|(t, b)| t.starts_with("Steps \u{b7} ") && b.top() < 120.0).map(|(t, b)| (t.clone(), *b))).collect()
+    ["Column", "SQL", "Chart"].iter().filter_map(|n| p.boxes.iter().find(|(t, b)| t == n && b.height() < 24.0 && b.top() < 150.0).map(|(t, b)| (t.clone(), *b))).chain(p.boxes.iter().filter(|(t, b)| t.starts_with("Steps \u{b7} ") && b.top() < 150.0).map(|(t, b)| (t.clone(), *b))).collect()
 }
 
 #[test]
@@ -2514,23 +2508,20 @@ fn f2_view_side_panel_switches_tabs_on_and_off_saves_them_and_hiding_all_hides_t
     for (ppp, w, h) in SCREENS {
         let mut rig = chart_rig("p6f2b", ppp, w, h);
         let what = rig.what.clone();
+        // (the View menu is gone: the side panel's tabs are switched in Settings, Toolbar & panels)
         let open_side_panel_menu = |rig: &mut Rig| -> Painted {
-            let p = rig.draw(3);
-            let view = p.boxes.iter().find(|(t, _)| t == "View").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View"));
-            pclick(rig, view);
-            let p = rig.draw(3);
-            let side = p.boxes.iter().find(|(t, _)| t == "Side panel").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: Side panel"));
-            pclick(rig, side);
-            rig.draw(3)
+            rig.app.open_settings(Some(micro_parquet::workspace::SettingsSection::Toolbar));
+            rig.draw(4)
         };
         // the submenu has the four boxes, all ticked
         let p = open_side_panel_menu(&mut rig);
         for n in ["Steps", "Column", "SQL", "Chart"] {
-            assert!(p.boxes.iter().any(|(t, _)| t == n), "{what}: the submenu lists {n}");
+            assert!(p.boxes.iter().any(|(t, _)| t == n), "{what}: the Settings section lists {n}");
         }
         // switch Column off: it leaves the panel and settings.json
-        let item = p.boxes.iter().filter(|(t, _)| t == "Column").map(|(_, b)| *b).last().expect("Column box");
+        let item = rig.app.ws.settings_rects.iter().find(|(n, _)| n == "Tab Column").map(|(_, b)| *b).expect("Column box");
         pclick(&mut rig, item);
+        rig.app.ws.settings_open = false;
         let p = rig.draw(4);
         assert_eq!(rig.app.settings.side_panel_hidden, vec!["Column".to_string()], "{what}");
         assert!(!tab_label_boxes(&p).iter().any(|(n, _)| n == "Column"), "{what}: the Column tab is gone");
@@ -2625,18 +2616,24 @@ fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_th
         let mut rig = term_rig("p6f3a", ppp, w, h);
         let what = rig.what.clone();
         let p = rig.draw(4);
-        // left to right: File, Edit, View, Banking, Charts, Export, Help, then the toolbar buttons
-        let xs: Vec<f32> = ["File", "Edit", "View", "Help"].iter().map(|n| bar_box(&p, n).unwrap_or_else(|| panic!("{what}: {n}")).left()).collect();
-        let banking = p.boxes.iter().find(|(t, b)| t.contains("Banking") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Banking");
-        let export = p.boxes.iter().find(|(t, b)| t.contains("Export") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Export");
-        let charts = p.boxes.iter().find(|(t, b)| t.contains("Charts") && b.top() < theme::TOP_BAR_H).map(|(_, b)| b.left()).expect("Charts");
-        assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < banking && banking < charts && charts < export && export < xs[3], "{what}: the order of the menus: {xs:?} {banking} {charts} {export}");
-        assert!(bar_box(&p, "More").is_none(), "{what}: no More menu any more");
-        // Edit: Undo, Redo, the transforms, Data checks
-        let p = click_menu(&mut rig, "Edit");
-        for want in ["Undo", "Redo", "Conditional column", "Counterparty name normaliser", "Clean line breaks", "Data checks"] {
-            assert!(p.boxes.iter().any(|(t, _)| t.contains(want)), "{what}: Edit lists '{want}': {:?}", p.boxes.iter().filter(|(_, b)| b.top() > 40.0 && b.top() < 400.0 && b.left() < 400.0).map(|(t, _)| t.clone()).collect::<Vec<_>>());
+        // left to right: Mark, File, Settings, Help, then the Data toolbar (buttons and the Prepare, Analyse and Share menus)
+        let at = |rig: &Rig, n: &str| rig.app.ws.bar_rects.iter().find(|(x, _)| x == n).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the bar has {n}: {:?}", rig.what, rig.app.ws.bar_rects.iter().map(|b| b.0.clone()).collect::<Vec<_>>()));
+        let xs: Vec<f32> = ["File", "Settings", "Help", "Prepare", "Analyse", "Share"].iter().map(|n| at(&rig, n).left()).collect();
+        assert!(xs.windows(2).all(|w| w[0] < w[1]), "{what}: the order of the menus: {xs:?}");
+        assert!(bar_box(&p, "More").is_none() && bar_box(&p, "Edit").is_none() && bar_box(&p, "View").is_none(), "{what}: no More, Edit or View menu any more");
+        // Prepare: Undo, Redo, the transforms
+        let click_bar = |rig: &mut Rig, n: &str| -> Painted {
+            let r = at(rig, n);
+            pclick(rig, r);
+            rig.draw(3)
+        };
+        let p = click_bar(&mut rig, "Prepare");
+        for want in ["Undo", "Redo", "Conditional column", "Counterparty name normaliser", "Clean line breaks"] {
+            assert!(p.boxes.iter().any(|(t, _)| t.contains(want)), "{what}: Prepare lists '{want}'");
         }
+        // Analyse: Data checks holds the auditor and the scorecard
+        let _ = click_bar(&mut rig, "Prepare");
+        let p = click_bar(&mut rig, "Analyse");
         assert!(!p.boxes.iter().any(|(t, _)| t.contains("hygiene") || t.contains("dirty-data")), "{what}: the auditor is under Data checks");
         let dc = p.boxes.iter().find(|(t, _)| t.trim() == "Data checks").map(|(_, b)| *b).expect("Data checks");
         pclick(&mut rig, dc);
@@ -2648,7 +2645,7 @@ fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_th
         assert_eq!(rig.app.active_tool, ActiveToolModal::BankingAudit, "{what}: Edit > Data checks > the auditor opens it");
         rig.app.active_tool = ActiveToolModal::None;
         // the scorecard through the same menu
-        let _ = click_menu(&mut rig, "Edit");
+        let _ = click_bar(&mut rig, "Analyse");
         let p = rig.draw(3);
         let dc = p.boxes.iter().find(|(t, _)| t.trim() == "Data checks").map(|(_, b)| *b).expect("Data checks");
         pclick(&mut rig, dc);
@@ -2658,9 +2655,7 @@ fn f3_the_menus_are_file_edit_view_banking_export_help_and_edit_has_undo_redo_th
         rig.draw(3);
         assert_eq!(rig.app.active_tool, ActiveToolModal::DqScorecard, "{what}: and the scorecard");
         rig.app.active_tool = ActiveToolModal::None;
-        // Banking no longer lists the auditor; Ctrl+K still finds both
-        let p = click_menu(&mut rig, "Banking");
-        assert!(!p.boxes.iter().any(|(t, _)| t.contains("dirty-data auditor")), "{what}: not in Banking");
+        // Ctrl+K finds both
         let entries: Vec<micro_parquet::commands::Entry> = micro_parquet::commands::COMMANDS.iter().map(|c| micro_parquet::commands::Entry { label: c.title, words: c.words, recent: None }).collect();
         for (q, id) in [("hygiene audit", CommandId::Audit), ("data checks", CommandId::DqScorecard), ("data quality", CommandId::DqScorecard)] {
             let top: Vec<CommandId> = micro_parquet::commands::rank(q, &entries).iter().take(3).map(|i| micro_parquet::commands::COMMANDS[*i].id).collect();
@@ -2681,26 +2676,23 @@ fn f3_view_toolbar_buttons_switch_each_button_off_and_on_and_are_saved() {
         for id in micro_parquet::commands::toolbar_buttons() {
             assert!(p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.contains(crate::ui::commands::toolbar_label(id)))), "{what}: {id:?} is on the bar");
         }
-        let _ = click_menu(&mut rig, "View");
-        let p = rig.draw(3);
-        let tb = p.boxes.iter().find(|(t, _)| t.trim() == "Toolbar buttons").map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: View lists Toolbar buttons"));
-        pclick(&mut rig, tb);
-        let p = rig.draw(3);
+        // (the View menu is gone: the buttons are switched in Settings, Toolbar & panels)
+        rig.app.open_settings(Some(micro_parquet::workspace::SettingsSection::Toolbar));
+        rig.draw(4);
         for id in micro_parquet::commands::toolbar_buttons() {
             let n = crate::ui::commands::toolbar_label(id);
-            assert!(p.boxes.iter().any(|(t, b)| t == n && b.top() > theme::TOP_BAR_H), "{what}: the submenu has a box for '{n}'");
+            assert!(rig.app.ws.settings_rects.iter().any(|(t, _)| *t == format!("Button {n}")), "{what}: Settings has a box for '{n}'");
         }
         // untick Pivot and Chart
         for n in ["Pivot", "Chart"] {
-            let b = rig.app_view_box(n);
+            let b = rig.app.ws.settings_rects.iter().find(|(t, _)| *t == format!("Button {n}")).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: {n}"));
             pclick(&mut rig, b);
             rig.draw(3);
         }
         assert_eq!(rig.app.settings.toolbar_hidden, vec!["Pivot".to_string(), "Chart".to_string()], "{what}");
         rig.app.active_tool = ActiveToolModal::None;
+        rig.app.ws.settings_open = false;
         rig.ctx.request_repaint();
-        // close the menu and look at the bar
-        rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
         let p = rig.draw(4);
         let has_icon = |id: CommandId| p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && (t.trim() == icon(id) || t.trim().ends_with(&format!("  {}", crate::ui::commands::toolbar_label(id))) || t.trim() == crate::ui::commands::toolbar_label(id)));
         assert!(!has_icon(CommandId::Pivot) && !has_icon(CommandId::ToggleChart), "{what}: Pivot and Chart are off the bar");
@@ -2732,13 +2724,14 @@ fn j1_buttons_keep_their_labels_at_both_scales_and_at_1000_px_the_rightmost_fold
         let shown: Vec<bool> = all.iter().map(|id| painted(&p, *id)).collect();
         let n_shown = shown.iter().filter(|s| **s).count();
         assert!(shown.iter().take(n_shown).all(|s| *s) && n_shown >= 3, "{what}: the buttons shown are the first ones, with their labels: {shown:?}");
-        for n in ["File", "Edit", "View", "Help"] {
+        for n in ["File", "Settings", "Help"] {
             assert!(bar_box(&p, n).is_some(), "{what}: menu {n}");
         }
         assert!(!p.boxes.iter().any(|(t, b)| b.top() < theme::TOP_BAR_H && all.iter().any(|id| t.trim() == crate::ui::commands::command_icon(*id))), "{what}: no icon-only button");
         let folded: Vec<CommandId> = all.iter().zip(&shown).filter(|(_, s)| !**s).map(|(id, _)| *id).collect();
         let over = bar_box(&p, "\u{bb}");
-        assert_eq!(over.is_some(), !folded.is_empty(), "{what}: » exactly when something is folded");
+        // (the menus and Send to report fold too, so » can be there with every button of the old list shown)
+        assert!(over.is_some() || folded.is_empty(), "{what}: » whenever a button is folded");
         if let Some(over) = over {
             // the overflow menu lists the folded buttons by their labels, and a click runs one
             pclick(&mut rig, over);
@@ -2747,7 +2740,7 @@ fn j1_buttons_keep_their_labels_at_both_scales_and_at_1000_px_the_rightmost_fold
                 assert!(p.boxes.iter().any(|(t, b)| b.top() > theme::TOP_BAR_H && t.ends_with(label_of(*id))), "{what}: the overflow menu has '{}'", label_of(*id));
             }
             let sql = p.boxes.iter().filter(|(t, b)| b.top() > theme::TOP_BAR_H && t.ends_with("SQL")).map(|(_, b)| *b).last();
-            if let Some(item) = sql {
+            if let (Some(item), true) = (sql, folded.contains(&CommandId::ToggleSql)) {
                 rig.app.show_steps_sidebar = false;
                 pclick(&mut rig, item);
                 rig.draw(3);

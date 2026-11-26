@@ -206,7 +206,8 @@ fn a_full_pivot_with_long_names_and_two_values_has_its_chips_toggles_and_preview
         assert!(matches!(rig.app.pivot_builder.preview, Some(Ok(_))), "{what}: {:?}", rig.app.pivot_builder.preview);
         // a very wide table scrolls sideways inside its card: nothing is drawn to the left of it
         let clip = b.preview_scroll;
-        assert!(p.boxes.iter().filter(|(_, bx)| overlap(*bx, b.preview)).all(|(_, bx)| bx.left() >= b.preview.left() - 0.5), "{what}: nothing left of the preview card");
+        // (text of a row that scrolled sideways is cut by the scroll area's own clip, which starts inside the card: that is not "left of" it)
+        assert!(p.boxes.iter().filter(|(_, bx)| overlap(*bx, b.preview)).all(|(_, bx)| bx.left() >= b.preview.left() - 0.5 || (b.preview_scroll.left() >= b.preview.left() - 0.5 && bx.right() > b.preview_scroll.left())), "{what}: nothing left of the preview card {:?}: {:?}", b.preview, p.boxes.iter().filter(|(_, bx)| overlap(*bx, b.preview) && bx.left() < b.preview.left() - 0.5).collect::<Vec<_>>());
         assert!(clip.width() <= b.preview.width() + 0.5, "{what}");
         // the same pivot with one row field fits the card: every heading is inside it
         rig.app.pivot_builder.spec.rows = vec!["Bucket".into()];
@@ -569,17 +570,7 @@ fn the_banking_menu_has_two_headings_and_lists_the_new_tool_under_loans_and_cred
     for (ppp, w, h) in SCREENS {
         let mut rig = migration_rig("p4v2c", ppp, w, h);
         let what = rig.what.clone();
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the Banking button"));
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let find = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{t}' is in the Banking menu"));
-        let (alm, loans, mig, rate) = (find("Treasury & ALM"), find("Loans & credit"), find("CL migration matrix"), find("Interest rate shock"));
-        assert!(alm.top() < rate.top() && rate.top() < loans.top() && loans.top() < mig.top(), "{what}: the headings come before their tools: {alm:?} {rate:?} {loans:?} {mig:?}");
-        let screen = rig.ctx.screen_rect();
-        for b in [alm, loans, mig] {
-            assert!(inside(b, screen), "{what}: {b:?} is inside the window");
-        }
+        assert_analyse_lists(&mut rig, "Loans & credit", "CL migration matrix");
         // the item is not greyed: two tabs are open
         assert!(rig.app.command_unavailable(CommandId::ClMigration).is_none(), "{what}");
     }
@@ -628,6 +619,19 @@ fn gap_rig(name: &str, ppp: f32, w: f32, h: f32, limits: Option<f64>) -> Rig {
     }
     let (ctx, input) = screen(ppp, w, h);
     Rig { app, ctx, input, what: format!("ppp {ppp} {w}x{h}") }
+}
+
+/// The Analyse menu lists `tool` under the heading `section`: opens the menu, opens the section, and finds the tool on screen.
+pub(crate) fn assert_analyse_lists(rig: &mut Rig, section: &str, tool: &str) {
+    let what = rig.what.clone();
+    rig.draw(4);
+    let bar = rig.app.ws.bar_rects.iter().find(|(n, _)| n == "Analyse").map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the Analyse menu is in the bar: {:?}", rig.app.ws.bar_rects.iter().map(|b| b.0.clone()).collect::<Vec<_>>()));
+    let p = crate::ui::render_tests_p8::click_rect(rig, bar);
+    let head = p.boxes.iter().rev().find(|(t, b)| t.contains(section) && b.top() > bar.bottom() - 1.0).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: the heading '{section}' in the Analyse menu"));
+    let p = crate::ui::render_tests_p8::click_rect(rig, head);
+    let item = p.boxes.iter().rev().find(|(t, _)| t.contains(tool)).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{tool}' under '{section}' in the Analyse menu"));
+    let screen = rig.ctx.screen_rect();
+    assert!(item.left() >= screen.left() && item.right() <= screen.right() && item.bottom() <= screen.bottom(), "{what}: '{tool}' {item:?} is on screen");
 }
 
 pub(crate) fn click_text(rig: &mut Rig, p: &Painted, text: &str, after: egui::Rect) -> Painted {
@@ -752,12 +756,7 @@ fn the_gap_ladder_is_listed_under_treasury_and_alm_and_found_by_the_search() {
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = gap_rig("p4v3c", ppp, w, h, None);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Treasury & ALM").top() < at("Liquidity gap ladder").top() && at("Liquidity gap ladder").top() < at("Loans & credit").top(), "{}", rig.what);
+        assert_analyse_lists(&mut rig, "Treasury & ALM", "Liquidity gap ladder");
     }
 }
 

@@ -494,16 +494,19 @@ fn c2_the_charts_menu_sits_between_banking_and_export_is_clickable_and_its_items
     for (ppp, w, h) in SIZES3 {
         let mut rig = chart_rig("p7c2menu", ppp, w, h);
         let what = rig.what.clone();
-        let p = rig.draw(6);
+        // (the Charts menu is the Visualise menu of the Report toolbar now)
+        rig.draw(4);
+        rig.app.switch_view(micro_parquet::workspace::View::Report);
+        rig.draw(6);
         let screen = rig.ctx.screen_rect();
-        let order = ["File", "Edit", "View", "Banking", "Charts", "Export", "Help"];
-        let boxes: Vec<egui::Rect> = order.iter().map(|n| bar_box(&p, n).unwrap_or_else(|| panic!("{what}: the menu '{n}' is in the bar"))).collect();
+        let bar = rig.app.ws.bar_rects.clone();
+        let boxes: Vec<egui::Rect> = ["File", "Settings", "Help", "Visualise"].iter().map(|n| bar.iter().find(|(x, _)| x == n).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: the menu '{n}' is in the bar: {:?}", bar.iter().map(|b| b.0.clone()).collect::<Vec<_>>()))).collect();
         for pair in boxes.windows(2) {
-            assert!(pair[0].right() <= pair[1].left() + 0.5, "{what}: the menus follow File, Edit, View, Banking, Charts, Export, Help without overlap: {boxes:?}");
+            assert!(pair[0].right() <= pair[1].left() + 0.5, "{what}: the menus follow File, Settings, Help, Visualise without overlap: {boxes:?}");
         }
         assert!(boxes.iter().all(|b| inside(*b, screen)), "{what}: no menu folds out of the window: {boxes:?}");
-        // click Charts by its real rect: its four items
-        pclick(&mut rig, boxes[4]);
+        // click Visualise by its real rect: its four items
+        pclick(&mut rig, boxes[3]);
         let p = rig.draw(3);
         let item = |p: &Painted, t: &str| p.boxes.iter().find(|(x, b)| x.contains(t) && b.top() > theme::TOP_BAR_H - 1.0).map(|(_, b)| *b);
         for t in ["New chart\u{2026}", "Chart this result", "Open saved chart\u{2026}", "Chart book (HTML)\u{2026}"] {
@@ -520,9 +523,8 @@ fn c2_the_charts_menu_sits_between_banking_and_export_is_clickable_and_its_items
         assert_eq!(rig.app.active_tool, ActiveToolModal::ChartGallery, "{what}: Charts > New chart opens the gallery");
         // Open saved chart… (second menu pass)
         rig.app.active_tool = ActiveToolModal::None;
-        let p = rig.draw(3);
-        let b = bar_box(&p, "Charts").expect("Charts");
-        pclick(&mut rig, b);
+        rig.draw(3);
+        pclick(&mut rig, boxes[3]);
         let p = rig.draw(3);
         let r = item(&p, "Open saved chart\u{2026}").expect("Open saved chart");
         pclick(&mut rig, r);

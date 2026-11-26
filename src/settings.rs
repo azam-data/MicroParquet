@@ -45,6 +45,9 @@ pub struct Settings {
     /// The pivot builder's own window (Phase 9 P1), as [x, y, width, height] in points: where it was and how big (none = never popped out).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pivot_popout_rect: Option<[f32; 4]>,
+    /// The view the window opened in last time: "Report", "Data" or "Model" (UI revamp). None = Data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_view: Option<String>,
 }
 
 pub fn settings_path(root: &Path) -> PathBuf {

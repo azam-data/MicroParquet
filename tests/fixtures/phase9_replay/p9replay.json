@@ -1,0 +1,75 @@
+{
+  "name": "p9replay",
+  "inputs": [
+    {
+      "slot": "Accounts",
+      "schema_template": null,
+      "schema": null,
+      "steps": [],
+      "required_columns": [
+        "Date",
+        "Wing",
+        "Product code",
+        "Balance"
+      ],
+      "captured_from": "",
+      "captured_path": "",
+      "captured_hash": ""
+    }
+  ],
+  "items": [
+    {
+      "title": "Balance by wing",
+      "sheet": "Wings",
+      "source": {
+        "kind": "pivot",
+        "slot": "Accounts",
+        "pivot": {
+          "PivotTable": {
+            "rows": [
+              "Wing"
+            ],
+            "columns": [],
+            "values": [
+              {
+                "field": "Balance",
+                "agg": "Sum",
+                "weight_col": null
+              }
+            ],
+            "filters": [],
+            "row_totals": true,
+            "column_totals": true,
+            "subtotals": false,
+            "show_as": "NoCalculation",
+            "scale": "Global",
+            "sort_by_value": null,
+            "field_orders": [],
+            "date_fields": []
+          }
+        }
+      },
+      "col_formats": {},
+      "chart": {
+        "kind": "saved",
+        "name": "Wing pivot chart"
+      }
+    },
+    {
+      "title": "Accounts",
+      "sheet": "Accounts",
+      "source": {
+        "kind": "steps",
+        "slot": "Accounts"
+      },
+      "col_formats": {},
+      "chart": null
+    }
+  ],
+  "output": {
+    "pdf": false,
+    "scale": "BdtCrore",
+    "decimals": 2,
+    "html_charts": false
+  }
+}

@@ -57,3 +57,13 @@ save → open → save (without `saved_at`, `app_version` and the files' modifie
 `<ROOT>`). `b0_the_phase8_samples_replay_to_the_hashes_the_phase8_code_gave` replays them on a copy. The `.mpproj` holds the
 absolute path of the machine that made it next to the path relative to its folder; the test reads the copies of the data
 files through relinks, so it does not depend on where the repository is. Do not edit these files by hand.
+
+## Phase 9 baseline (Phase 10 goal 3)
+
+`phase9_replay/` was made by the code of the Phase 9 merge commit `a3271e6` of `main` (version 1.9.0, no tag), with the dashboard
+files of Phase 10 stashed away, by the ignored test `d0_write_the_phase9_replay_fixture` of `tests/phase10/d0.rs`, which calls
+`generate` of `tests/phase10/p9_baseline.rs` (Phase 9 APIs only): a project of 9 tabs (the five tabs of the worked example, the Calendar,
+a model pivot with measures, a Nested pivot and a chart tab) with the model of the worked example, a saved chart, a pack with a pivot
+and a chart, and `phase9_replay.hashes.json`, the blake3 of what that code gave: the rows of every tab as the headless export writes
+them, the Nested view, the numbers and layout of the charts in both themes, the pack's sheets and the project's text after
+save → open → save. `d0_the_phase9_samples_replay_to_the_hashes_the_phase9_code_gave` replays them on a copy. Do not edit these files by hand.

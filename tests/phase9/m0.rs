@@ -310,7 +310,7 @@ fn m0_the_v1_8_0_app_refuses_a_version_2_project_with_its_newer_app_message() {
     // this app reads it
     assert!(check_version(&v, PROJECT_VERSION_MODEL).is_ok());
     // a project of a version this app does not know is still refused
-    let e = Project::from_json(r#"{"project_version": 3, "app_version": "9.9.0", "tabs": []}"#, "x.mpproj").err().expect("refused");
+    let e = Project::from_json(r#"{"project_version": 4, "app_version": "9.9.0", "tabs": []}"#, "x.mpproj").err().expect("refused");
     assert_eq!(format!("{e:#}"), "This project was saved by a newer MicroParquet v9.9.0. Update the app to open it.");
 }
 

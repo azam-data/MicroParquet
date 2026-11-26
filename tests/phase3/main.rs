@@ -184,3 +184,37 @@ mod p9_m4;
 mod p9_m5;
 #[path = "../phase9/m6.rs"]
 mod p9_m6;
+
+// Phase 10 tests (tests/phase10/) are compiled into this binary too.
+#[path = "../phase10/p9_baseline.rs"]
+mod p10_p9_baseline;
+#[path = "../phase10/d0.rs"]
+mod p10_d0;
+#[path = "../phase10/c0.rs"]
+mod p10_c0;
+#[path = "../phase10/d1.rs"]
+mod p10_d1;
+#[path = "../phase10/d2.rs"]
+mod p10_d2;
+#[path = "../phase10/d3.rs"]
+mod p10_d3;
+#[path = "../phase10/d4.rs"]
+mod p10_d4;
+#[path = "../phase10/d5.rs"]
+mod p10_d5;
+#[path = "../phase10/r1.rs"]
+mod p10_r1;
+#[path = "../phase10/r2.rs"]
+mod p10_r2;
+#[path = "../phase10/x1.rs"]
+mod p10_x1;
+#[path = "../phase10/x2.rs"]
+mod p10_x2;
+#[path = "../phase10/x3.rs"]
+mod p10_x3;
+#[path = "../phase10/d9.rs"]
+mod p10_d9;
+#[path = "../phase10/ui.rs"]
+mod p10_ui;
+#[path = "../phase10/fb.rs"]
+mod p10_fb;

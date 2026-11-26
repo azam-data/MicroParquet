@@ -53,6 +53,11 @@ pub enum JobOutput {
     ProjectSave(Box<ProjectBuilt>),
     /// A linked chart tab's new numbers and table (Phase 8 W5).
     ChartTab(Box<ChartTabCalc>),
+    /// A dashboard item's numbers (Phase 10 D1).
+    DashItem(Box<crate::dashboard::DashItemResult>),
+    DashHtml(Box<crate::dash_export::HtmlPrepared>),
+    /// The values of a dashboard page filter (Phase 10 D1).
+    DashValues(Box<crate::dashboard::DashValuesResult>),
     /// The tab behind a cell of a pivot (Phase 8 W6).
     ShowRows(Box<ShowRowsResult>),
     /// The values a chart's tick list lists (Phase 8 W10).
@@ -102,6 +107,23 @@ pub fn chart_tab_job(req: ChartTabRequest, ctx: &JobCtx) -> Result<JobOutput> {
     ctx.check()?;
     let (data, source) = crate::project::chart_tab_source(&req.base, &req.steps, &req.spec, &req.temp_dir)?;
     Ok(JobOutput::ChartTab(Box::new(ChartTabCalc { chart_tab: req.chart_tab, sig: req.sig, data, source })))
+}
+
+/// One dashboard item calculated again on the worker.
+pub fn dash_item_job(req: crate::dashboard::ItemRequest, sig: String, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Calculating the dashboard item\u{2026}", None);
+    ctx.check()?;
+    let item_id = req.item_id.clone();
+    let data = crate::dashboard::compute_item(&req)?;
+    Ok(JobOutput::DashItem(Box::new(crate::dashboard::DashItemResult { item_id, sig, data })))
+}
+
+/// The values of a page filter's field.
+pub fn dash_values_job(base: TabSource, steps: Vec<TransformStep>, filter: crate::dashboard::PageFilter, sig: String, temp_dir: PathBuf, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Reading the values of the filter\u{2026}", None);
+    ctx.check()?;
+    let (values, truncated) = crate::dashboard::field_values(&base, &steps, &filter, &temp_dir)?;
+    Ok(JobOutput::DashValues(Box::new(crate::dashboard::DashValuesResult { filter_id: filter.id, sig, values, truncated })))
 }
 
 /// What a chart tab compares to find out that its source changed: the source, the steps that run and, for a file,

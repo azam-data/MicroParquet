@@ -132,3 +132,5 @@ Test: `guide_pivot`
 - Scale sets the display format of the value columns when the tab is made; a column that appears later (a new bank) follows the format of the others after the next refresh, and is shown in the View scale until then.
 - At most 2,000 values are listed in a Filters checklist; type in the search box to find others.
 - **Show rows.** In a pivot tab, double-click a value cell (grand total and subtotals too), or right-click it and choose "Show rows": a new tab opens with the rows behind the cell (every row and column field of the cell, date parts included, and the pivot's own filters). It works when later steps keep the row fields (a sort, a filter, a new column); if one renames, drops or rewrites a row field, or groups or pivots again, the menu item is greyed with the reason. See [Drill-down](drill-down.md).
+
+Phase 10: a pivot tab can be put on a [dashboard](dashboards.md) page. There its money columns show in Crore unless you choose another unit in "Unit for money columns" (Crore, Lakh, Million, Thousand or Absolute); counts and shares keep their own form. The unit is a setting of the item, not of the pivot.

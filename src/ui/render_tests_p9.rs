@@ -1404,9 +1404,19 @@ fn section_button(rig: &Rig, link: usize, name: &str) -> egui::Rect {
 /// Picks `item` in the box `name` of the Add / Edit form, by real clicks.
 fn model_pick(rig: &mut Rig, name: &str, item: &str) {
     let c = model_combo(rig, name);
-    let p = click_rect(rig, c);
-    // (near the bottom of the window the list opens above the box)
-    let it = p.boxes.iter().rev().find(|(t, b)| t == item && !inside(*b, c.expand(2.0))).map(|(_, b)| *b).unwrap_or_else(|| panic!("{}: '{item}' in the list of '{name}'", rig.what));
+    let mut p = click_rect(rig, c);
+    // (near the bottom of the window the list opens above the box; a long list scrolls, so it is wheeled until the item shows)
+    let mut it = None;
+    for _ in 0..8 {
+        let win = theme::dialog_report(&rig.ctx, crate::ui::model_flow::MODEL_SETUP_TITLE).map(|r| r.window.expand(40.0)).unwrap_or(egui::Rect::EVERYTHING);
+        it = p.boxes.iter().rev().find(|(t, b)| t == item && !inside(*b, c.expand(2.0)) && inside(*b, win) && b.top() > c.top() - 120.0).map(|(_, b)| *b);
+        if it.is_some() {
+            break;
+        }
+        rig.input.time = Some(rig.input.time.unwrap_or(0.0) + 1.0);
+        p = rig.step(vec![egui::Event::PointerMoved(egui::pos2(c.center().x, c.bottom() + 20.0)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -80.0), modifiers: egui::Modifiers::NONE }]);
+    }
+    let it = it.unwrap_or_else(|| panic!("{}: '{item}' in the list of '{name}'", rig.what));
     click_rect(rig, it);
     rig.draw(3);
 }
@@ -1430,11 +1440,11 @@ fn reveal(rig: &mut Rig, title: &str, find: &dyn Fn(&Rig) -> egui::Rect) -> egui
 }
 
 fn links_title() -> String {
-    format!("{}  {}", theme::ph::LINK, LINKS_TITLE)
+    crate::ui::model_flow::MODEL_SETUP_TITLE.to_string()
 }
 
 fn check_title() -> String {
-    format!("{}  {}", theme::ph::LINK, KEY_CHECK_TITLE)
+    crate::ui::model_flow::MODEL_SETUP_TITLE.to_string()
 }
 
 fn model_status(rig: &Rig, i: usize) -> LinkStatus {
@@ -1453,11 +1463,8 @@ fn m0_the_model_menu_says_a_project_is_needed_with_none_and_opens_links_and_key_
             let mut rig = rig9("p9m0menu", ppp, w, h);
             rig.app.dark_mode = dark;
             let what = format!("{} {}", rig.what, if dark { "dark" } else { "light" });
-            // the menu is in the bar after View
-            let p = rig.draw(3);
-            let bar = |t: &str| p.boxes.iter().find(|(x, b)| x.trim() == t && b.top() < theme::TOP_BAR_H).map(|(_, b)| *b);
-            let (view, model, banking) = (bar("View").expect("View"), bar("Model").unwrap_or_else(|| panic!("{what}: Model is in the bar")), bar("Banking").expect("Banking"));
-            assert!(view.right() <= model.left() && model.right() <= banking.left(), "{what}: Model {model:?} is between View {view:?} and Banking {banking:?}");
+            // (the Model menu left the bar: its steps are one window now, opened by command; the bar has its own tests)
+            rig.draw(3);
             for item in ["Links", "Key check"] {
                 // with no project: the message, and a way to save one
                 menu_item(&mut rig, "Model", item);
@@ -1593,7 +1600,7 @@ fn m0_links_are_added_edited_and_removed_by_real_clicks_and_refusals_are_said_in
             let ok = model_button(&rig, "OK");
             click_rect(&mut rig, ok);
             let p = rig.draw(3);
-            assert!(painted_has(&p, "already linked"), "{what}: still the same pair of tabs");
+            assert!(painted_has(&p, "already linked"), "{what}: still the same pair of tabs: {:?} err {:?} tool {:?}", p.boxes.iter().map(|b| b.0.clone()).filter(|t| t.len() > 12).collect::<Vec<_>>(), rig.app.project.model_ui.draft.as_ref().map(|d| (d.data_tab.clone(), d.lookup_tab.clone(), d.error.clone())), rig.app.active_tool);
             let cancel = model_button(&rig, "Cancel");
             click_rect(&mut rig, cancel);
             rig.draw(3);
@@ -2735,11 +2742,11 @@ fn cal_rects(rig: &Rig) -> CalRects {
 }
 
 fn cal_title() -> String {
-    format!("{}  {}", theme::ph::CALENDAR, CALENDAR_DIALOG_TITLE)
+    crate::ui::model_flow::MODEL_SETUP_TITLE.to_string()
 }
 
 fn as_of_title() -> String {
-    format!("{}  {}", theme::ph::CALENDAR, AS_OF_DIALOG_TITLE)
+    crate::ui::model_flow::MODEL_SETUP_TITLE.to_string()
 }
 
 /// Picks `item` in the box `name` of the Calendar dialog, by real clicks (the dialog's middle is scrolled to the box first).
@@ -3093,7 +3100,7 @@ use micro_parquet::measures::ColumnTag;
 use micro_parquet::models::{TimeAgg, TimeValue};
 
 fn measures_title() -> String {
-    format!("{}  {}", theme::ph::CALENDAR, MEASURES_DIALOG_TITLE)
+    crate::ui::model_flow::MODEL_SETUP_TITLE.to_string()
 }
 
 fn m3_rig(name: &str, ppp: f32, w: f32, h: f32, dark: bool) -> (Rig, String) {

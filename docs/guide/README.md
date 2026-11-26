@@ -12,6 +12,8 @@ Project and calendar (Phase 8): the File menu also has New project, Open project
 
 The model (Phase 9): a project can link its tabs like tables of a database, share one calendar, and measure balances and flows over time. The notes of this phase have the same eight sections: [Links between tabs](model-links.md), [Key check](key-check.md), [Shared calendar](model-calendar.md), [Balances and flows](balances-and-flows.md), [Time intelligence](time-intelligence.md), [Measures and ratios](measures-and-ratios.md), [Pivot builder in its own window](pivot-popout.md), [Nested pivot layout](pivot-nested.md) and [A monthly model, start to finish](monthly-model.md).
 
+Dashboards and reports (Phase 10): a project can hold a dashboard of charts, pivots and KPI cards, and write it as an HTML file, a PowerPoint file or PDF pages. The notes have the same eight sections: [Dashboards](dashboards.md), [KPI cards](dashboard-kpi-cards.md), [Filters, clicks and drill](dashboard-filters-and-drill.md), [Layouts](dashboard-layouts.md), [Designs](dashboard-templates.md), [HTML report](export-html-report.md), [PowerPoint](export-pptx.md), [PDF pages](export-pdf-pages.md) and [A monthly dashboard routine](monthly-dashboard-routine.md).
+
 Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scale). Rates are in percent (9.5 means 9.5%). Shocks are in basis points. CBS dates are normally D/M/Y.
 
 ## Data preparation
@@ -55,6 +57,18 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Time intelligence](time-intelligence.md): MTD, QTD, YTD, prior period and same period last year, the same days or the full period.
 - [Measures and ratios](measures-and-ratios.md): named measures, CASA ratio, ADR, yield, cost of funds and NIM with a day count; rename a measure and everything follows.
 - [A monthly model, start to finish](monthly-model.md): one worked project and the monthly routine.
+
+## Dashboards and reports (Phase 10)
+
+- [Dashboards](dashboards.md): pages of charts, pivots and cards that read the project's tabs.
+- [KPI cards](dashboard-kpi-cards.md): one number for the as-of month, its change, limits and trend line.
+- [Filters, clicks and drill](dashboard-filters-and-drill.md): page filters, a click on a bar, drill down.
+- [Layouts](dashboard-layouts.md): grid or free placement.
+- [Designs](dashboard-templates.md): the bank's slide picture with slots.
+- [HTML report](export-html-report.md): one file for email, with the 5 MB check.
+- [PowerPoint](export-pptx.md): one slide for each item, with editable charts.
+- [PDF pages](export-pdf-pages.md): one A4 landscape page for each dashboard page.
+- [A monthly dashboard routine](monthly-dashboard-routine.md): relink, refresh, export, email.
 
 ## Treasury & ALM
 

@@ -1,0 +1,9 @@
+Wing,Code,Product name,Group,Class
+Conventional,CA01,Current account,CASA,Deposit
+Conventional,SB01,Savings account,CASA,Deposit
+Conventional,FD01,Fixed deposit,Term deposit,Deposit
+Conventional,LN01,Term loan,Term loan,Loan
+Conventional,LN02,Working capital,Working capital,Loan
+Islami,CA01,Al-Wadiah current,CASA,Deposit
+Islami,MD01,Mudaraba term deposit,Term deposit,Deposit
+Islami,IN01,Bai-Muajjal investment,Investment (Islami),Loan

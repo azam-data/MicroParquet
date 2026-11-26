@@ -55,6 +55,7 @@ impl MicroParquetApp {
             next_level: spec.drill.get(spec.depth() + 1).map(|l| l.name.clone()).unwrap_or_default(),
             rows_unavailable,
             blocked,
+            page: false,
         }
     }
 
@@ -88,6 +89,7 @@ impl MicroParquetApp {
     pub(crate) fn studio_chart_action(&mut self, action: ChartAction) {
         let mut spec = self.chart.spec.clone();
         match action {
+            ChartAction::CrossFilter(_) | ChartAction::OpenSource => {}
             ChartAction::Colour(m) => self.open_colour_picker_of_mark(crate::ui::colour_picker::PickTarget::Studio, &m),
             ChartAction::DrillDown(m) => {
                 if let Err(e) = ChartSpec::refuse_other(&m.category) {
@@ -149,7 +151,7 @@ impl MicroParquetApp {
                     self.show_rows_of_mark(source, &spec, &m);
                 }
             }
-            ChartAction::Colour(_) => {}
+            ChartAction::Colour(_) | ChartAction::CrossFilter(_) | ChartAction::OpenSource => {}
         }
     }
 
