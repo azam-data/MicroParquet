@@ -32,6 +32,16 @@ fn a1_b_questions_a_banker_would_ask_reach_their_note() {
         ("duplicate keys in a lookup table", "key-check.md"),
         ("what is DV01 and EVE", "duration-dv01-eve.md"),
         ("change the first day of the week and fiscal year", "calendar-settings.md"),
+        ("forecast deposits for the next six months", "forecasting.md"),
+        ("reverse the sign of advances that arrive negative", "schema-keep-reverse-sign.md"),
+        ("top movers each month", "top-movers.md"),
+        ("save the filters of a dashboard page as a view", "saved-views.md"),
+        ("what if deposits grow with a scenario", "what-if-scenarios.md"),
+        ("actual against budget achieved", "plan-vs-actual.md"),
+        ("rolling 12 month window", "rolling-measures.md"),
+        ("volume rate and mix bridge of interest", "variance-bridge.md"),
+        ("add a note to a chart category", "chart-notes.md"),
+        ("green amber red target on a kpi card", "target-bands.md"),
     ] {
         let got = files(q);
         assert!(got.contains(&file.to_string()), "{q:?} gave {got:?}, wanted {file}");
