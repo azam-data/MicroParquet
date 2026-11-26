@@ -597,14 +597,18 @@ impl MicroParquetApp {
         self.handle_drill_back_key(ctx);
         self.handle_tab_shortcuts(ctx);
         self.sync_view();
-        self.render_top_bar(ctx);
+        self.ws.bar_rects = self.render_top_bar(ctx);
         self.render_status_bar(ctx);
         self.render_rail(ctx);
         self.render_tab_strip_panel(ctx);
         // Modal dialogs may cover the right panel: their area is the window less the top bar, the
         // tab strip and the status bar. (The central panel takes the rest, so egui cannot be
         // asked for it later.) Only the non-modal panels keep clear of the right panel.
-        theme::set_dialog_area(ctx, ctx.available_rect());
+        // (a dialog may cover the rail, and in the Model view, which has no tab strip, it still stays clear of that strip's place)
+        let mut area = ctx.available_rect();
+        area.set_left(ctx.screen_rect().left());
+        area.set_top(area.top().max(theme::TOP_BAR_H + theme::TAB_STRIP_H));
+        theme::set_dialog_area(ctx, area);
         self.render_right_panel(ctx);
         theme::set_central_area(ctx, ctx.available_rect());
 

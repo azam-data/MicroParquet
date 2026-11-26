@@ -238,12 +238,7 @@ fn r1_the_ladder_is_listed_under_treasury_and_alm_and_found_by_the_search() {
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = cf_rig("p5r1c", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Treasury & ALM").top() < at("IRRBB cash-flow ladder").top() && at("IRRBB cash-flow ladder").top() < at("Loans & credit").top(), "{}", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Treasury & ALM", "IRRBB cash-flow ladder");
     }
 }
 
@@ -492,12 +487,7 @@ fn r2_the_behaviour_profile_is_listed_under_treasury_and_alm_and_found_by_the_se
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = bh_rig("p5r2d", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Treasury & ALM").top() < at("Behaviour profile").top() && at("Behaviour profile").top() < at("Loans & credit").top(), "{}", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Treasury & ALM", "Behaviour profile");
         micro_parquet::rules::set_data_dir_override(None);
     }
 }
@@ -656,12 +646,7 @@ fn r3_the_irrbb_tool_is_listed_under_treasury_and_alm_and_found_by_the_search() 
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = irrbb_rig("p5r3c", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Treasury & ALM").top() < at("IRRBB (six scenarios)").top() && at("IRRBB (six scenarios)").top() < at("Loans & credit").top(), "{}", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Treasury & ALM", "IRRBB (six scenarios)");
         irrbb_cleanup();
     }
 }
@@ -797,13 +782,7 @@ fn r4_the_tool_is_listed_under_loans_and_credit_and_found_by_the_search() {
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = ov_rig("p5r4c", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Loans & credit").top() < at("Classify by overdue").top(), "{}", rig.what);
-        assert!(at("Classify by overdue").right() <= rig.ctx.screen_rect().right(), "{}: the menu entry is on screen", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Loans & credit", "Classify by overdue");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
@@ -923,12 +902,7 @@ fn r5_the_tool_is_listed_under_loans_and_credit_and_its_export_under_export() {
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = cl1_rig("p5r5c", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Loans & credit").top() < at("CL-1 summary").top(), "{}", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Loans & credit", "CL-1 summary");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
@@ -1051,12 +1025,7 @@ fn r6_the_tool_is_listed_under_treasury_and_alm_and_found_by_the_search() {
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = liq_rig("p5r6c", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Treasury & ALM").top() < at("LCR / NSFR from GL balances").top() && at("LCR / NSFR from GL balances").top() < at("Loans & credit").top(), "{}", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Treasury & ALM", "LCR / NSFR from GL balances");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }
@@ -1071,19 +1040,15 @@ fn the_banking_menu_fits_the_window_with_every_entry_on_screen_at_both_scales() 
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = cl1_rig("p5menu", ppp, w, h);
-        let what = rig.what.clone();
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let screen = rig.ctx.screen_rect();
-        let alm = p.boxes.iter().find(|(x, _)| x.contains("Treasury & ALM")).map(|(_, b)| *b).expect("heading");
-        assert!(alm.top() >= theme::TOP_BAR_H - 1.0, "{what}: the first heading is under the top bar, not pushed above the window: {alm:?}");
+        // every Banking command is listed under its heading of the Analyse menu, on screen
         for c in in_group(CommandGroup::Banking) {
             let title = c.title.trim_end_matches('\u{2026}');
-            let b = p.boxes.iter().find(|(x, _)| x.contains(title)).map(|(_, b)| *b).unwrap_or_else(|| panic!("{what}: '{title}' is in the Banking menu"));
-            assert!(inside(b, screen), "{what}: '{title}' {b:?} is inside the window {screen:?}");
-            assert!(b.bottom() <= screen.bottom() - theme::STATUS_BAR_H + 1.0, "{what}: '{title}' {b:?} is above the status bar");
+            let section = banking_section(c.id).expect("heading");
+            crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, section, title);
+            rig.draw(2);
+            for _ in 0..2 {
+                rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: Some(egui::Key::Escape), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+            }
         }
     }
     micro_parquet::rules::set_data_dir_override(None);
@@ -1240,12 +1205,7 @@ fn r7_the_tool_is_listed_under_loans_and_credit_and_found_by_the_search() {
     }
     for (ppp, w, h) in SCREENS {
         let mut rig = ifrs_rig("p5r7d", ppp, w, h);
-        let p = rig.draw(4);
-        let banking = p.boxes.iter().find(|(t, bx)| t.contains("Banking") && bx.bottom() < theme::TOP_BAR_H).map(|(_, b)| *b).expect("Banking");
-        rig.click(banking.center());
-        let p = rig.draw(3);
-        let at = |t: &str| p.boxes.iter().find(|(x, _)| x.contains(t)).map(|(_, b)| *b).unwrap_or_else(|| panic!("'{t}' in the menu"));
-        assert!(at("Loans & credit").top() < at("IFRS 9 ECL").top(), "{}", rig.what);
+        crate::ui::render_tests_p4::assert_analyse_lists(&mut rig, "Loans & credit", "IFRS 9 ECL");
     }
     micro_parquet::rules::set_data_dir_override(None);
 }

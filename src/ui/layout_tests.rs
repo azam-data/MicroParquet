@@ -99,7 +99,7 @@ fn nothing_overlaps_at_1280_by_720_and_105_percent() {
 }
 
 /// The toolbar buttons by the names `bar_rects_at` gives their rectangles.
-const ITEM_NAMES: [&str; 14] = ["OpenFile", "Stack", "Batch", "Filter", "Sort", "Columns", "CalcColumn", "Pivot", "RateProfile", "Prepare", "Analyse", "ToggleSql", "SendToReport", "Share"];
+const ITEM_NAMES: [&str; 15] = ["OpenFile", "Stack", "Batch", "Prepare", "Analyse", "Share", "Filter", "Sort", "Columns", "CalcColumn", "Pivot", "RateProfile", "ToggleChart", "ToggleSql", "SendToReport"];
 
 #[test]
 fn nothing_overlaps_at_any_window_width_the_menus_and_search_never_go_and_buttons_fold_from_the_right() {

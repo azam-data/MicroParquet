@@ -158,5 +158,10 @@ The owner asked for the UI review's mockup to be built on the Phase 10 branch, w
 ### Empty screens (section 6)
 - UI-23 Data with nothing open: Open file, Stack files, Batch convert. Report with nothing: with no data it points to the Data view; with data it offers Pivot, Chart, Send a table. Model with nothing linked: Start set-up, Go to Data. The three start buttons of the Data screen keep the rectangle names the first screen had (open, stack, batch).
 
+### Found while adapting the tests
+- UI-24 On the Data toolbar the **Prepare, Analyse and Share menus come right after the file buttons**, before Filter, Sort and the rest. The bar folds from the right, so a narrow window (1,219 px) folds the buttons that also have a Ctrl+K entry first and keeps the three menus. The Chart button keeps its place before SQL.
+- UI-25 Settings, Toolbar & panels shows the side-panel tabs and the toolbar buttons **side by side**, so the section needs no scrolling at 800 px high.
+- UI-26 The old render tests that walked the Edit, View, Model, Banking and Charts menus now go through the new menus (Prepare, Analyse > section, Visualise, Settings) or run the command by its title (the dialog tests only need the dialog). The unchanged assertions are about the dialogs, not the menus. One test dropped a real click on a greyed Prepare item: the Data view never has a chart tab active, so that state cannot be reached there; the greying itself (the command's reason and the Ctrl+K row) is still asserted.
+
 ### What was not touched
 - No calculation, export format, project field (beyond the optional `report_tabs`) or step changed. The guide notes under `docs/guide` still name the old menus (View, Banking, Charts, Export) in places; they are the next thing to bring in line, together with the pictures.

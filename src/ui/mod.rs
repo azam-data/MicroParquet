@@ -99,6 +99,8 @@ mod render_tests_p10;
 #[cfg(test)]
 mod render_tests_r;
 #[cfg(test)]
+mod render_tests_ui;
+#[cfg(test)]
 mod tests;
 pub mod theme;
 

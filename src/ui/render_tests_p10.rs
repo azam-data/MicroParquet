@@ -60,6 +60,11 @@ fn rect_of(rig: &Rig, name: &str) -> egui::Rect {
 }
 
 fn click_named(rig: &mut Rig, name: &str) -> Painted {
+    // (UI revamp: the page's settings are always in the left column; the old "Page settings" button only let the item go)
+    if name == "Page settings" {
+        rig.app.dashboard_ui.selected = None;
+        return rig.draw(2);
+    }
     let r = rect_of(rig, name);
     rig.click_later(r.center())
 }
@@ -74,10 +79,10 @@ fn dashboard_with_two_items(rig: &mut Rig) {
     rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
     assert!(rig.app.dashboard_ui.open, "{}: the Dashboard command opens the view", rig.what);
     rig.draw(5);
-    for title in ["Chart: ", "Other by region"] {
-        click_named(rig, "Add item");
+    for (menu, title) in [("Add chart", "Chart: "), ("Add table", "Other by region")] {
+        click_named(rig, menu);
         let p = rig.draw(3);
-        let (_, b) = p.boxes.iter().rev().find(|(t, _)| t.ends_with(title) || t.contains(title)).cloned().unwrap_or_else(|| panic!("{}: '{title}' in the Add item menu: {:?}", rig.what, p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
+        let (_, b) = p.boxes.iter().rev().find(|(t, _)| t.ends_with(title) || t.contains(title)).cloned().unwrap_or_else(|| panic!("{}: '{title}' in the {menu} menu: {:?}", rig.what, p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()));
         rig.click_later(b.center());
         rig.draw(8);
     }
@@ -121,6 +126,9 @@ fn d1_items_are_added_by_clicks_draw_the_tabs_own_numbers_and_fit_at_three_sizes
         }
         assert!(!rect_of(&rig, "Item i1").intersects(rect_of(&rig, "Item i2")), "{what}: the two items do not overlap");
         let items_area = area;
+        // (the floating tile panel of the selected item sits over the page: let the item go before looking at the texts of the page)
+        rig.app.dashboard_ui.selected = None;
+        let p = rig.draw(4);
         let in_page: Vec<(String, egui::Rect)> = p.boxes.iter().filter(|(_, b)| items_area.contains_rect(*b)).cloned().collect();
         assert_no_overlap(&in_page.iter().filter(|(t, _)| t.starts_with("Chart: ") || t.starts_with("Other") || t == "Region" || t.contains("Sum of")).cloned().collect::<Vec<_>>(), &what);
         assert_not_clipped(&p, rig.ctx.screen_rect(), &what);
@@ -164,6 +172,8 @@ fn d1_a_filter_on_a_data_field_filters_the_linked_item_and_the_other_item_says_i
         assert!(p.boxes.iter().any(|(t, _)| t.contains("Filter 'Risk' doesn't apply to this item")), "{what}: the unlinked item says so: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
         assert_not_clipped(&p, rig.ctx.screen_rect(), &what);
         // Clear: all values again
+        click_named(&mut rig, "More");
+        rig.draw(3);
         click_named(&mut rig, "Clear");
         rig.draw(8);
         assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state.filter_picks[0], None, "{what}");
@@ -322,8 +332,6 @@ fn d2_a_kpi_card_is_made_by_clicks_shows_number_arrow_and_words_and_its_settings
         rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
         rig.draw(5);
         // Add item > KPI card
-        click_named(&mut rig, "Add item");
-        rig.draw(3);
         click_named(&mut rig, "Add KPI card");
         rig.draw(5);
         let id = rig.app.project.dashboard.as_ref().expect("d").pages[0].items[0].id.clone();
@@ -386,8 +394,6 @@ fn d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both
     rig.app.project.model.measures.push(micro_parquet::measures::NamedMeasure::Base { name: "Deposits".into(), tab: book_key, column: "Balance".into(), aggregation: TimeAgg::ClosingBalance, filters: vec![], sign: micro_parquet::measures::Sign::Plus, weight: None });
     rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
     rig.draw(4);
-    click_named(&mut rig, "Add item");
-    rig.draw(2);
     click_named(&mut rig, "Add KPI card");
     rig.draw(4);
     pick_in(&mut rig, "KPI measure", "Deposits");
@@ -411,8 +417,6 @@ fn d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both
         styled(&mut rig, dark);
         rig.app.run_command(&rig.ctx.clone(), CommandId::Dashboard);
         rig.draw(4);
-        click_named(&mut rig, "Add item");
-        rig.draw(2);
         click_named(&mut rig, "Add KPI card");
         rig.draw(4);
         pick_in(&mut rig, "KPI measure", "Deposits");
@@ -445,7 +449,7 @@ fn rig_cross(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
     rig.app.model_ensure_key(id);
     rig.draw(4);
     dashboard_with_two_items(&mut rig);
-    click_named(&mut rig, "Add item");
+    click_named(&mut rig, "Add table");
     let p = rig.draw(3);
     let (_, b) = p.boxes.iter().rev().find(|(t, _)| t.contains("Book by risk")).cloned().unwrap_or_else(|| panic!("{}: 'Book by risk' in the Add item menu", rig.what));
     rig.click_later(b.center());
@@ -534,6 +538,8 @@ fn d3_a_click_on_a_bar_filters_the_linked_pivot_and_says_so_on_the_other_data_ta
         click_named(&mut rig, "Row i3 Low");
         rig.draw(6);
         assert!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state.cross.is_some(), "{what}");
+        click_named(&mut rig, "More");
+        rig.draw(3);
         click_named(&mut rig, "Clear");
         rig.draw(6);
         assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].state, PageState::default(), "{what}");
@@ -684,8 +690,6 @@ fn d4_the_layout_switch_says_what_changes_and_a_free_page_moves_resizes_snaps_an
         assert_eq!(rig.app.project.dashboard.as_ref().expect("d").pages[0].layout, PageLayout::Free, "{what}");
         assert_eq!((rect_in_page(&rig, "i1"), rect_in_page(&rig, "i2")), (grid[0], grid[1]), "{what}: every item keeps its place");
         // the two items fill the page: a new one has no room, in words
-        click_named(&mut rig, "Add item");
-        rig.draw(3);
         click_named(&mut rig, "Add KPI card");
         let p = rig.draw(4);
         assert!(p.boxes.iter().any(|(t, _)| t == "The page 'Page 1' has no room for another item. Remove or shrink one, or turn on Allow overlap."), "{what}: {:?}", p.boxes.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>());
@@ -1031,7 +1035,9 @@ fn x3_the_export_dialog_asks_the_email_question_checks_the_size_and_writes_the_t
     // the dialog opens from the header
     click_named(&mut rig, "Export");
     rig.draw(3);
-    assert!(rig.app.dashboard_ui.export.is_some(), "{what}: the Export button opens the dialog");
+    click_named(&mut rig, "Export HTML");
+    rig.draw(3);
+    assert!(rig.app.dashboard_ui.export.is_some(), "{what}: Export HTML opens the dialog");
     // HTML: nothing can be checked before the email question is answered
     click_named(&mut rig, "Export check size");
     rig.draw(3);

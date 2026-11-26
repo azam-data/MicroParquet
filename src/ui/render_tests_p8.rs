@@ -82,7 +82,21 @@ pub(crate) fn click_rect(rig: &mut Rig, r: egui::Rect) -> Painted {
 /// Clicks the menu `menu` of the top bar, then its item whose text contains `item`.
 pub(crate) fn menu_item(rig: &mut Rig, menu: &str, item: &str) -> Painted {
     let p = rig.draw(3);
-    let b = bar_box(&p, menu).unwrap_or_else(|| panic!("{}: the menu '{menu}' is in the bar", rig.what));
+    let Some(b) = bar_box(&p, menu) else {
+        // UI revamp: the old Edit / View / Model menus are gone from the bar; their entries are commands (menus of the view's toolbar and
+        // Ctrl+K). The dialog tests only need the command, so it is run by its title; the bar and the palette have their own tests.
+        let want = item.to_lowercase();
+        let cmd = micro_parquet::commands::COMMANDS
+            .iter()
+            .find(|c| c.title.to_lowercase().contains(&want) && (menu != "Model" || c.group == micro_parquet::commands::CommandGroup::Model))
+            .unwrap_or_else(|| panic!("{}: no command '{item}' for the old menu '{menu}'", rig.what));
+        let ctx = rig.ctx.clone();
+        // (a model or Data command takes the window to its view; these tests look at the tab behind the dialog, so the view stays)
+        let view = rig.app.view();
+        rig.app.run_command(&ctx, cmd.id);
+        rig.app.switch_view(view);
+        return rig.draw(3);
+    };
     let p = click_rect(rig, b);
     // the menu is painted last: its item is the last text that says it
     let it = p.boxes.iter().rev().find(|(t, bx)| t.contains(item) && bx.top() > b.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: '{item}' is in the {menu} menu", rig.what));
@@ -1254,21 +1268,8 @@ fn w5_the_step_commands_are_greyed_on_a_chart_tab_in_the_edit_menu_and_ctrl_k_by
         }
 
         // the Edit menu: each item is greyed, a real click on it does nothing, and its tooltip is the note
-        let p = rig.draw(3);
-        let bar = bar_box(&p, "Edit").unwrap_or_else(|| panic!("{what}: the Edit menu"));
-        let mut p = click_rect(&mut rig, bar);
-        for (cid, title) in STEP_COMMANDS_P8 {
-            let it = p.boxes.iter().rev().find(|(t, b)| t.contains(title) && b.top() > bar.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: '{title}' is in the Edit menu"));
-            assert!(inside(it, rig.ctx.screen_rect()), "{what}: '{title}' {it:?} is inside the window");
-            click_rect(&mut rig, it);
-            assert_eq!(rig.app.active_tool, ActiveToolModal::None, "{what}: a click on the greyed '{title}' opens nothing");
-            p = hover_at(&mut rig, it.center());
-            assert_eq!(count_text(&p, &note), panel + 1, "{what}: the tooltip of '{title}' is the note: {:?}", p.boxes.iter().filter(|(_, b)| b.top() > bar.bottom()).map(|(t, _)| t.clone()).collect::<Vec<_>>());
-            assert!(p.boxes.iter().any(|(t, _)| t.contains(title)), "{what}: the menu is still open after the click on '{title}' ({cid:?})");
-        }
-        // the items that still work are not greyed: Copy the table opens no dialog but its click is taken (the menu closes)
-        let copy = p.boxes.iter().rev().find(|(t, b)| t.contains("Copy the table") && b.top() > bar.bottom() - 1.0).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: Copy the table"));
-        assert_eq!(count_text(&hover_at(&mut rig, copy.center()), &note), panel, "{what}: no tooltip on an item that works");
+        // (the Edit menu is the Prepare menu of the Data toolbar now, and the Data view lists no chart tab: it never has one active, so a
+        // click on a greyed item is not reachable by the menu. The greying is the command's own, asserted above, and Ctrl+K shows it below.)
         rig.step(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
         rig.draw(2);
         assert_eq!((rig.app.tabs.iter().map(|t| t.steps.len()).collect::<Vec<_>>(), rig.app.tabs.len()), (steps_before.clone(), tabs_before), "{what}: nothing was added");

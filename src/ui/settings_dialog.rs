@@ -224,30 +224,34 @@ impl MicroParquetApp {
 
     fn settings_toolbar(&mut self, ui: &mut egui::Ui, rects: &mut Vec<(String, egui::Rect)>) {
         let tk = *theme::tokens(self.dark_mode);
-        ui.label(theme::label_text("TOOLBAR BUTTONS (DATA VIEW)").color(tk.muted));
-        for id in micro_parquet::commands::toolbar_buttons() {
-            let name = crate::ui::commands::toolbar_label(id);
-            let mut on = !self.settings.toolbar_hidden.iter().any(|n| n == name);
-            let r = ui.checkbox(&mut on, name);
-            rects.push((format!("Button {name}"), r.rect));
-            if r.changed() {
-                self.settings.toolbar_hidden.retain(|n| n != name);
-                if !on {
-                    self.settings.toolbar_hidden.push(name.to_string());
+        // two columns, so the whole section is in view without scrolling: the side panel's tabs, then the Data view's buttons
+        ui.columns(2, |cols| {
+            let ui = &mut cols[0];
+            ui.label(theme::label_text("TABS OF THE SIDE PANEL").color(tk.muted));
+            for t in crate::ui::steps::RightTab::ALL {
+                let mut on = !self.settings.side_panel_hidden.iter().any(|n| n == t.name());
+                let r = ui.checkbox(&mut on, t.name());
+                rects.push((format!("Tab {}", t.name()), r.rect));
+                if r.changed() {
+                    self.set_side_tab_visible(t, on);
                 }
-                self.save_settings();
             }
-        }
-        ui.add_space(theme::SPACE_S);
-        ui.label(theme::label_text("TABS OF THE SIDE PANEL").color(tk.muted));
-        for t in crate::ui::steps::RightTab::ALL {
-            let mut on = !self.settings.side_panel_hidden.iter().any(|n| n == t.name());
-            let r = ui.checkbox(&mut on, t.name());
-            rects.push((format!("Tab {}", t.name()), r.rect));
-            if r.changed() {
-                self.set_side_tab_visible(t, on);
+            let ui = &mut cols[1];
+            ui.label(theme::label_text("TOOLBAR BUTTONS (DATA VIEW)").color(tk.muted));
+            for id in micro_parquet::commands::toolbar_buttons() {
+                let name = crate::ui::commands::toolbar_label(id);
+                let mut on = !self.settings.toolbar_hidden.iter().any(|n| n == name);
+                let r = ui.checkbox(&mut on, name);
+                rects.push((format!("Button {name}"), r.rect));
+                if r.changed() {
+                    self.settings.toolbar_hidden.retain(|n| n != name);
+                    if !on {
+                        self.settings.toolbar_hidden.push(name.to_string());
+                    }
+                    self.save_settings();
+                }
             }
-        }
+        });
     }
 }
 

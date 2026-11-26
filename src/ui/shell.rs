@@ -25,6 +25,8 @@ pub struct WorkspaceUi {
     /// The model's set-up: the step asked for, and where the strip and Back / Next were drawn.
     pub flow_goto: Option<micro_parquet::workspace::ModelStep>,
     pub flow_rects: Vec<(String, egui::Rect)>,
+    /// Every item the top bar drew last frame.
+    pub bar_rects: Vec<(String, egui::Rect)>,
     /// What the Model view drew (tests read it).
     pub model_rects: Vec<(String, egui::Rect)>,
 }

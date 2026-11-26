@@ -226,13 +226,15 @@ pub fn view_bar(view: View) -> Vec<BarEntry> {
     use CommandId as I;
     match view {
         View::Data => {
+            // the menus come right after the file buttons, so a narrow window folds the buttons that have a shortcut elsewhere first
             let mut v: Vec<BarEntry> = crate::commands::TOOLBAR_BUTTONS_FILE.iter().map(|id| (Cmd(*id), 0)).collect();
-            v.extend(crate::commands::TOOLBAR_BUTTONS_TRANSFORM.iter().map(|id| (Cmd(*id), 1)));
-            v.push((Menu(MenuKind::Prepare), 2));
-            v.push((Menu(MenuKind::Analyse), 2));
+            v.push((Menu(MenuKind::Prepare), 1));
+            v.push((Menu(MenuKind::Analyse), 1));
+            v.push((Menu(MenuKind::ShareData), 1));
+            v.extend(crate::commands::TOOLBAR_BUTTONS_TRANSFORM.iter().map(|id| (Cmd(*id), 2)));
+            v.push((Cmd(I::ToggleChart), 3));
             v.push((Cmd(I::ToggleSql), 3));
-            v.push((Cmd(I::SendToReport), 4));
-            v.push((Menu(MenuKind::ShareData), 4));
+            v.push((Cmd(I::SendToReport), 3));
             v
         }
         View::Report => vec![
