@@ -268,11 +268,13 @@ fn d1_renaming_a_source_tab_keeps_the_item_and_a_closed_one_says_source_tab_remo
     // the tab strip's Dashboard entry brings it back from a tab
     rig.app.dashboard_ui.open = false;
     rig.draw(3);
-    let r = rig.app.dashboard_ui.strip_rect.expect("the strip has a Dashboard entry once the project has a dashboard");
+    // (feedback round: the dashboard is a view of its own, reached from the left rail)
+    let r = crate::ui::render_tests_ui::rail_rect(&rig, micro_parquet::workspace::View::Dashboard);
     rig.click_later(r.center());
     rig.draw(3);
-    assert!(rig.app.dashboard_ui.open, "{what}: the Dashboard entry of the tab strip opens it");
-    click_named(&mut rig, "Close dashboard");
+    assert!(rig.app.dashboard_ui.open && rig.app.ws.view == micro_parquet::workspace::View::Dashboard, "{what}: the Dashboard entry of the rail opens it");
+    let r = crate::ui::render_tests_ui::rail_rect(&rig, micro_parquet::workspace::View::Report);
+    rig.click_later(r.center());
     rig.draw(3);
     assert!(!rig.app.dashboard_ui.open, "{what}");
 }
@@ -907,6 +909,9 @@ fn d5_a_design_is_imported_slots_are_drawn_named_saved_applied_and_filled_by_cli
         assert!(rig.app.dashboard_ui.rects.iter().any(|(n, _)| n == "Fill with KPI card") && !rig.app.dashboard_ui.rects.iter().any(|(n, _)| n.starts_with("Fill with Chart") || n == "Fill with Other by region"), "{what}: only what the slot takes");
         click_named(&mut rig, "Fill with KPI card");
         rig.draw(5);
+        // (the dashboard now has the whole width, so the new card's settings float over the slot beside it: a click on the page closes them)
+        rig.app.dashboard_ui.selected = None;
+        rig.draw(3);
         click_named(&mut rig, "Slot Deposits chart");
         rig.draw(3);
         let chart_choice = rig.app.dashboard_ui.rects.iter().find(|(n, _)| n.starts_with("Fill with Chart")).map(|(n, _)| n.clone()).unwrap_or_else(|| panic!("{what}: the chart slot offers the chart tab"));

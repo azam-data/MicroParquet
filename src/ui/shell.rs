@@ -29,6 +29,10 @@ pub struct WorkspaceUi {
     pub bar_rects: Vec<(String, egui::Rect)>,
     /// What the Model view drew (tests read it).
     pub model_rects: Vec<(String, egui::Rect)>,
+    /// The "+" of the Report view's tab strip.
+    pub plus_rect: Option<egui::Rect>,
+    /// The side panel's hide button (when the panel is shown) or its show arrow (when it is hidden).
+    pub panel_toggle_rect: Option<egui::Rect>,
 }
 
 impl MicroParquetApp {
@@ -61,12 +65,16 @@ impl MicroParquetApp {
         if view == self.ws.view {
             return;
         }
+        if view == View::Dashboard && !self.dashboard_command() {
+            return;
+        }
         if let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) {
             self.ws.last_in_view.insert(self.ws.view, id);
         }
         self.ws.view = view;
         self.settings.last_view = Some(view.label().to_string());
-        if view != View::Model && !self.active_tab_in_view() {
+        self.dashboard_ui.open = view == View::Dashboard;
+        if view != View::Model && view != View::Dashboard && !self.active_tab_in_view() {
             let remembered = self.ws.last_in_view.get(&view).and_then(|id| self.tabs.iter().position(|t| t.id == *id)).filter(|i| self.tab_visible_in(view, *i));
             if let Some(i) = remembered.or_else(|| self.visible_tab_indexes(view).last().copied()) {
                 self.active_tab = i;
@@ -82,7 +90,7 @@ impl MicroParquetApp {
         let active = self.tabs.get(self.active_tab).map(|t| t.id);
         if self.ws.last_active != active {
             self.ws.last_active = active;
-            if active.is_some() && self.ws.view != View::Model && !self.active_tab_in_view() {
+            if active.is_some() && self.ws.view != View::Model && self.ws.view != View::Dashboard && !self.active_tab_in_view() {
                 let home = [View::Data, View::Report].into_iter().find(|v| self.tab_visible_in(*v, self.active_tab));
                 if let Some(v) = home {
                     self.ws.view = v;
@@ -90,10 +98,19 @@ impl MicroParquetApp {
                 }
             }
         }
-        let dash = self.dashboard_ui.open && self.project.dashboard.is_some();
-        if dash && !self.ws.last_dash_open && self.ws.view != View::Report {
+        // `dashboard_ui.open` turned on or off from elsewhere moves the window to the Dashboard view or back to the Report view
+        let has = self.project.dashboard.is_some();
+        if self.dashboard_ui.open && !self.ws.last_dash_open && self.ws.view != View::Dashboard && has {
+            self.ws.view = View::Dashboard;
+        } else if !self.dashboard_ui.open && self.ws.last_dash_open && self.ws.view == View::Dashboard {
             self.ws.view = View::Report;
         }
+        // the Dashboard view needs the project's dashboard; a project that was closed or has none sends the window back to the Report view
+        if self.ws.view == View::Dashboard && !has && !self.dashboard_command() {
+            self.ws.view = View::Report;
+        }
+        let dash = self.ws.view == View::Dashboard && self.project.dashboard.is_some();
+        self.dashboard_ui.open = dash;
         self.ws.last_dash_open = dash;
     }
 
@@ -152,6 +169,7 @@ impl MicroParquetApp {
                 let ink = if on { tk.accent } else { tk.muted };
                 let icon = match v {
                     View::Report => theme::ph::SQUARES_FOUR,
+                    View::Dashboard => theme::ph::PRESENTATION_CHART,
                     View::Data => theme::ph::TABLE,
                     View::Model => theme::ph::TREE_STRUCTURE,
                 };
@@ -237,7 +255,7 @@ impl MicroParquetApp {
         match a {
             HintAction::Run(id) => self.run_command(ctx, id),
             HintAction::Go(v) => self.switch_view(v),
-            HintAction::NewDashboard => self.dashboard_command(),
+            HintAction::NewDashboard => self.switch_view(View::Dashboard),
         }
     }
 

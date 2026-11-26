@@ -30,7 +30,7 @@ fn sum_by(field: &str) -> TransformStep {
 }
 
 /// A project with the data tab "Book", a chart tab on it, a second data tab "Other" and a pivot tab "Other by region".
-fn rig_ui(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
+pub(crate) fn rig_ui(name: &str, ppp: f32, w: f32, h: f32) -> Rig {
     let mut app = test_app(name);
     micro_parquet::rules::set_data_dir_override(Some(app.paths.root_dir.clone()));
     let root = app.paths.root_dir.clone();
@@ -61,7 +61,7 @@ fn rect_in(list: &[(String, egui::Rect)], name: &str, what: &str) -> egui::Rect 
     list.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{what}: '{name}' in {:?}", list.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()))
 }
 
-fn rail_rect(rig: &Rig, v: View) -> egui::Rect {
+pub(crate) fn rail_rect(rig: &Rig, v: View) -> egui::Rect {
     rig.app.ws.rail_rects.iter().find(|(x, _)| *x == v).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: the rail has {v:?}", rig.what))
 }
 
@@ -94,7 +94,7 @@ fn ui1_the_rail_switches_views_and_each_view_lists_its_own_tabs_at_three_sizes()
         assert!(!has_text(&strip, "Book") && !has_text(&strip, "Other") || has_text(&strip, "Other by region"), "{what}: Report does not list the plain tables: {strip:?}");
         assert!(!strip.iter().any(|t| t.trim() == "Book"), "{what}: no 'Book' in Report: {strip:?}");
         // the rail: three buttons, the active one is Report, none outside the rail's column or overlapping
-        assert_eq!(rig.app.ws.rail_rects.len(), 3, "{what}");
+        assert_eq!(rig.app.ws.rail_rects.len(), 4, "{what}: Report, Dashboard, Data, Model");
         for (_, r) in &rig.app.ws.rail_rects {
             assert!(r.left() >= -0.5 && r.right() <= theme::RAIL_W + 0.5 && r.top() >= theme::TOP_BAR_H - 0.5, "{what}: a rail button {r:?} is inside the rail column");
         }
@@ -444,14 +444,14 @@ fn ui12_the_dashboard_has_a_toolbar_one_export_button_and_clear_under_a_menu_at_
         let what = rig.what.clone();
         rig.app.switch_view(View::Data);
         open_dashboard(&mut rig);
-        assert_eq!(rig.app.view(), View::Report, "{what}: the dashboard is a Report thing");
+        assert_eq!(rig.app.view(), View::Dashboard, "{what}: the dashboard is a view of its own");
         let list = dash_rects(&rig);
-        for n in ["Add chart", "Add table", "Add KPI card", "Add filter", "Export", "More", "Close dashboard"] {
+        for n in ["Add chart", "Add table", "Add KPI card", "Add text", "Add image", "Add filter", "Export", "More"] {
             assert!(list.iter().any(|(x, _)| x == n), "{what}: '{n}' in the toolbar: {:?}", list.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
         }
         assert!(!list.iter().any(|(n, _)| n == "Clear"), "{what}: Clear is inside a menu");
         // the toolbar is one row inside the window
-        let row = ["Add chart", "Add table", "Add KPI card", "Add filter", "Export", "Close dashboard"].map(|n| rect_in(&list, n, &what));
+        let row = ["Add chart", "Add table", "Add KPI card", "Add text", "Add image", "Add filter", "Export"].map(|n| rect_in(&list, n, &what));
         for r in row {
             assert!(r.right() <= rig.ctx.screen_rect().right() + 0.5 && r.left() >= theme::RAIL_W - 0.5, "{what}: {r:?}");
         }

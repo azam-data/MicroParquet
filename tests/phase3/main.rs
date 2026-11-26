@@ -216,3 +216,5 @@ mod p10_x3;
 mod p10_d9;
 #[path = "../phase10/ui.rs"]
 mod p10_ui;
+#[path = "../phase10/fb.rs"]
+mod p10_fb;

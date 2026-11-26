@@ -493,15 +493,6 @@ impl MicroParquetApp {
             return;
         }
         let tk = *theme::tokens(self.dark_mode);
-        if view == micro_parquet::workspace::View::Report && self.project.dashboard.is_some() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(ui.available_height() * theme::HINT_TOP_SHARE);
-                ui.label(egui::RichText::new("The dashboard is closed.").color(tk.muted));
-                if theme::primary_button(ui, "Open the dashboard").clicked() {
-                    self.dashboard_command();
-                }
-            });
-        }
     }
 
     /// Closes the tab at `idx`. Every stored tab index stays valid (see `tab_index_after_close`):
@@ -550,11 +541,10 @@ impl MicroParquetApp {
     /// that selects on click, closes on middle click, renames on double click; its cross sits on top
     /// of it (registered after it, so a click on the cross is the cross's, not the tab's).
     pub(crate) fn render_tab_strip_panel(&mut self, ctx: &egui::Context) {
-        // the tabs of the view (the Model view has none; a Report view with only a dashboard still has its entry)
+        // the tabs of the view (the Model and Dashboard views have none)
         let view = self.ws.view;
         let listed = self.visible_tab_indexes(view);
-        let dashboard_entry = view == micro_parquet::workspace::View::Report && self.project.dashboard.is_some();
-        if view == micro_parquet::workspace::View::Model || (listed.is_empty() && !dashboard_entry) {
+        if matches!(view, micro_parquet::workspace::View::Model | micro_parquet::workspace::View::Dashboard) || listed.is_empty() {
             return;
         }
         let tk = *theme::tokens(self.dark_mode);
@@ -597,7 +587,7 @@ impl MicroParquetApp {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
                             ui.spacing_mut().item_spacing.x = theme::BAR_ITEM_GAP;
                             for idx in listed.iter().copied() {
-                                let active = idx == self.active_tab && !self.dashboard_ui.open;
+                                let active = idx == self.active_tab;
                                 let (tab_id, title) = match self.tabs.get(idx) {
                                     Some(t) => (t.id, t.title.clone()),
                                     None => continue,
@@ -701,13 +691,15 @@ impl MicroParquetApp {
                                 });
                                 report.cells.push(TabCell { index: idx, tab: rect, label: label_rect, close: close_rect, shown, full: title });
                             }
-                            if dashboard_entry {
-                                let on = self.dashboard_ui.open;
-                                let b = ui.selectable_label(on, format!("{}  {}", theme::ph::CHART_BAR, crate::ui::dashboard::DASH_BUTTON));
-                                self.dashboard_ui.strip_rect = Some(b.rect);
-                                if b.clicked() {
-                                    self.dashboard_ui.open = true;
-                                }
+                            if view == micro_parquet::workspace::View::Report {
+                                let ctx = ui.ctx().clone();
+                                let plus = ui.menu_button(theme::ph::PLUS, |ui| {
+                                    for id in [micro_parquet::commands::CommandId::ChartNew, micro_parquet::commands::CommandId::Pivot, micro_parquet::commands::CommandId::SendToReport] {
+                                        self.command_menu_item(ui, &ctx, id);
+                                    }
+                                });
+                                self.ws.plus_rect = Some(plus.response.rect);
+                                plus.response.on_hover_text("Add a chart, a pivot or the table you are on to the report");
                             }
                             if view == micro_parquet::workspace::View::Data && theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
                                 new_tab = true;
@@ -731,7 +723,6 @@ impl MicroParquetApp {
             }
         }
         if let Some(idx) = select {
-            self.dashboard_ui.open = false;
             if idx != self.active_tab {
                 self.active_tab = idx;
                 self.selected_column = None;

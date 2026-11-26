@@ -13,15 +13,18 @@ A dashboard is one or more pages of charts, pivots and KPI cards that read the t
 ## 3. How to use it
 
 1. Save or open a project first. A dashboard belongs to a project; outside one the Dashboard view says "Dashboards belong to a project. Save or open a project first."
-2. Open **Charts ▸ Dashboard** (or Ctrl+K, "Dashboard"). The dashboard is the last entry of the tab strip.
-3. **Add item** puts a chart tab or a pivot tab on the page; **Add KPI card** adds a card ([KPI cards](dashboard-kpi-cards.md)). The first item lands in the first free place; the page's "Items per row" (1 to 4) sets the grid.
-4. Click an item to change its title or place; **Remove item** takes it off the page. The tab it reads is not touched.
+2. Click **Dashboard** on the left rail (or Ctrl+K, "Dashboard"). The dashboard is a view of its own, beside Report, Data and Model, and has no tab strip.
+3. **Add item** puts a chart tab or a pivot tab on the page; **KPI** adds a card ([KPI cards](dashboard-kpi-cards.md)); **Text** adds a text box (size, bold, left, centre or right) and **Image** a picture from a PNG or JPEG file (kept in the project, made smaller than 1600 px on its longest side). The first item lands in the first free place; the page's "Items per row" (1 to 4) sets the grid.
+3a. **4 × 3** (next to Shape in the page's settings) sets a 16:9 landscape page with four items across and three rows: twelve places on one view. **Rows** and **Shape** (16:10 or 16:9) set them by hand.
+4. Right-click an item and choose **Open in the main view** to go to the chart, pivot or table it reads. Click an item to change its title or place; **Remove item** takes it off the page. The tab it reads is not touched.
 5. **Add page** makes another page; **Page earlier / Page later** orders them, **Delete page** asks first.
 6. A pivot item has "Unit for money columns" (Crore, Lakh, Million, Thousand or Absolute). Crore is the default; counts and shares keep their own form.
 7. **Add filter** and clicks: [Filters, clicks and drill](dashboard-filters-and-drill.md). **Layout** and **Design**: [Layouts](dashboard-layouts.md), [Designs](dashboard-templates.md). **Export…**: [HTML](export-html-report.md), [PowerPoint](export-pptx.md), [PDF](export-pdf-pages.md).
 
 ![A dashboard page with two charts, a pivot and a card](img/dashboard-page.png)
 ![The same, dark](img/dashboard-page-dark.png)
+![The 4 × 3 page on 16:9](img/dashboard-wide-grid.png)
+![The same, dark](img/dashboard-wide-grid-dark.png)
 
 ## 4. Example
 

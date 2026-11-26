@@ -2466,7 +2466,7 @@ fn e1_edit_parameters_saves_a_new_file_dated_today_and_never_overwrites() {
 // ------------------------------------------------------------------------------------------ F2
 
 fn tab_label_boxes(p: &Painted) -> Vec<(String, egui::Rect)> {
-    ["Column", "SQL", "Chart"].iter().filter_map(|n| p.boxes.iter().find(|(t, b)| t == n && b.height() < 24.0 && b.top() < 120.0).map(|(t, b)| (t.clone(), *b))).chain(p.boxes.iter().filter(|(t, b)| t.starts_with("Steps \u{b7} ") && b.top() < 120.0).map(|(t, b)| (t.clone(), *b))).collect()
+    ["Column", "SQL", "Chart"].iter().filter_map(|n| p.boxes.iter().find(|(t, b)| t == n && b.height() < 24.0 && b.top() < 150.0).map(|(t, b)| (t.clone(), *b))).chain(p.boxes.iter().filter(|(t, b)| t.starts_with("Steps \u{b7} ") && b.top() < 150.0).map(|(t, b)| (t.clone(), *b))).collect()
 }
 
 #[test]

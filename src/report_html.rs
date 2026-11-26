@@ -117,7 +117,7 @@ pub fn numbers_of(d: &ItemData) -> usize {
             None => t.df.width().saturating_sub(t.label_columns) * t.df.height(),
         },
         ItemData::Kpi(k) => 1 + k.spark.len(),
-        ItemData::Problem(_) => 0,
+        ItemData::Text(_) | ItemData::Image(_) | ItemData::Problem(_) => 0,
     }
 }
 
@@ -158,6 +158,7 @@ pub fn additive(source: &ItemSource) -> std::result::Result<(), String> {
             Ok(())
         }
         ItemSource::Kpi { .. } => Err("a card is one number".to_string()),
+        ItemSource::Text(_) | ItemSource::Image(_) => Err("a text box or a picture shows no data".to_string()),
     }
 }
 
@@ -360,7 +361,7 @@ pub fn values_json(a: &Answer, scale: &(f64, usize, String)) -> String {
             format!("[{}]", rows.join(","))
         }
         ItemData::Kpi(k) => format!("[[{}]]", std::iter::once(k.current).chain(k.spark.iter().copied()).map(|v| number_json(v, 1.0, 4)).collect::<Vec<_>>().join(",")),
-        ItemData::Problem(_) => "[]".to_string(),
+        ItemData::Text(_) | ItemData::Image(_) | ItemData::Problem(_) => "[]".to_string(),
     }
 }
 
@@ -469,6 +470,21 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String), source: &ItemSource, kp
                 values_json(a, scale)
             )
         }
+        ItemData::Text(t) => {
+            let size = match t.size {
+                TextSize::Small => "s",
+                TextSize::Medium => "m",
+                TextSize::Large => "l",
+                TextSize::Title => "t",
+            };
+            let align = match t.align {
+                TextAlign::Left => "left",
+                TextAlign::Centre => "center",
+                TextAlign::Right => "right",
+            };
+            format!("{{\"p\":[{}],\"d\":[],\"tx\":{{\"t\":{},\"z\":\"{}\",\"b\":{},\"a\":\"{}\"}}}}", picks.join(","), serde_json::to_string(&t.text).unwrap_or_default(), size, t.bold, align)
+        }
+        ItemData::Image(i) => format!("{{\"p\":[{}],\"d\":[],\"im\":{{\"src\":\"data:image/png;base64,{}\",\"alt\":{}}}}}", picks.join(","), i.png_b64, serde_json::to_string(&i.name).unwrap_or_default()),
         ItemData::Problem(m) => format!("{{\"p\":[{}],\"d\":[],\"x\":{}}}", picks.join(","), serde_json::to_string(m).unwrap_or_default()),
     }
 }
@@ -513,6 +529,8 @@ pub fn answers_json_with(plan: &ReportPlan, answers: &[PageAnswers], kpi_unit: c
                 ItemSource::Chart { .. } => "chart",
                 ItemSource::Pivot { .. } => "pivot",
                 ItemSource::Kpi { .. } => "kpi",
+                ItemSource::Text(_) => "text",
+                ItemSource::Image(_) => "image",
             };
             let list: Vec<String> = ia.answers.iter().map(|a| answer_json(a, item, kpi_unit)).collect();
             let cross: Vec<String> = ia.cross.iter().map(|x| format!("{{\"k\":[{},{}],\"a\":{}}}", serde_json::to_string(&x.src).unwrap_or_default(), serde_json::to_string(&x.value).unwrap_or_default(), answer_json(&x.answer, item, kpi_unit))).collect();

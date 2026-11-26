@@ -61,6 +61,10 @@ pub(crate) enum Body {
     Table { head: Vec<String>, rows: Vec<Vec<String>>, indent: Vec<usize>, bold: Vec<bool>, note: Option<String> },
     Kpi { value: String, value_colour: Option<u32>, change: String, change_colour: Option<u32>, words: String, period: String, reason: Option<String>, spark: Option<ChartPart> },
     Note(String),
+    /// A text box of the dashboard: one slide with the words as typed.
+    Text { text: String, size_hundredths_pt: u32, bold: bool, algn: &'static str },
+    /// A picture of the dashboard: one slide with the picture, as wide as it can be.
+    Image { png: Vec<u8>, w: u32, h: u32, alt: String },
 }
 
 #[derive(Clone)]
@@ -309,6 +313,25 @@ pub(crate) fn body_for(data: &ItemData, scale: &(f64, usize, String), kpi: &Opti
             Some((spec, unit)) => kpi_body(k, spec, *unit),
             None => Body::Note("This card has no settings.".into()),
         },
+        ItemData::Text(t) => Body::Text {
+            text: t.text.clone(),
+            size_hundredths_pt: match t.size {
+                crate::dashboard::TextSize::Small => 1400,
+                crate::dashboard::TextSize::Medium => 2000,
+                crate::dashboard::TextSize::Large => 3200,
+                crate::dashboard::TextSize::Title => 4800,
+            },
+            bold: t.bold,
+            algn: match t.align {
+                crate::dashboard::TextAlign::Left => "l",
+                crate::dashboard::TextAlign::Centre => "ctr",
+                crate::dashboard::TextAlign::Right => "r",
+            },
+        },
+        ItemData::Image(i) => match i.png() {
+            Ok(png) => Body::Image { png, w: i.w, h: i.h, alt: i.name.clone() },
+            Err(e) => Body::Note(format!("{:#}", e)),
+        },
         ItemData::Problem(m) => Body::Note(m.clone()),
     }
 }
@@ -504,6 +527,8 @@ fn chart_frame(id: usize, alt: &str, rect: (i64, i64, i64, i64)) -> String {
 struct SlideOut {
     xml: String,
     chart: Option<ChartPart>,
+    /// The PNG of a picture slide.
+    image: Option<Vec<u8>>,
 }
 
 fn slide_xml(title: &str, foot: &str, body: &str, background: bool) -> String {
@@ -520,7 +545,7 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
     match body {
         Body::Chart(c) => {
             let alt = format!("{}: chart of {} categories", s.title, c.categories.len());
-            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &chart_frame(4, &alt, (MARGIN, MARGIN + TITLE_H, SLIDE_W - 2 * MARGIN, SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H)), background), chart: Some(c) }]
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &chart_frame(4, &alt, (MARGIN, MARGIN + TITLE_H, SLIDE_W - 2 * MARGIN, SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H)), background), chart: Some(c), image: None }]
         }
         Body::Table { head, rows, indent, bold, note } => {
             let pages = rows.len().div_ceil(TABLE_ROWS_PER_SLIDE).max(1);
@@ -534,7 +559,7 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
                         foot = format!("{} \u{b7} {}", foot, n);
                     }
                     let frame = table_frame(4, &head, &rows[lo..hi], &indent[lo..hi], &bold[lo..hi]);
-                    SlideOut { xml: slide_xml(&title, &foot, &frame, background), chart: None }
+                    SlideOut { xml: slide_xml(&title, &foot, &frame, background), chart: None, image: None }
                 })
                 .collect()
         }
@@ -569,11 +594,27 @@ fn slides_of(s: &PptxSlide, background: bool) -> Vec<SlideOut> {
                 }
                 None => (card, None),
             };
-            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &body, background), chart }]
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &body, background), chart, image: None }]
+        }
+        Body::Text { text, size_hundredths_pt, bold, algn } => {
+            let paras: String = text.split('\n').map(|line| para(line, size_hundredths_pt, bold, None, algn)).collect();
+            let b = text_box(4, "Text", MARGIN, MARGIN + TITLE_H, SLIDE_W - 2 * MARGIN, SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H, &paras);
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &b, background), chart: None, image: None }]
+        }
+        Body::Image { png, w, h, alt } => {
+            let (aw, ah) = ((SLIDE_W - 2 * MARGIN) as f64, (SLIDE_H - 2 * MARGIN - TITLE_H - FOOT_H) as f64);
+            let k = (aw / w.max(1) as f64).min(ah / h.max(1) as f64);
+            let (pw, ph) = ((w as f64 * k) as i64, (h as f64 * k) as i64);
+            let (x, y) = (MARGIN + ((aw as i64 - pw) / 2), MARGIN + TITLE_H + ((ah as i64 - ph) / 2));
+            let pic = format!(
+                "<p:pic><p:nvPicPr><p:cNvPr id=\"4\" name=\"Picture\" descr=\"{}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed=\"rId4\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>",
+                esc(&alt), x, y, pw, ph
+            );
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &pic, background), chart: None, image: Some(png) }]
         }
         Body::Note(m) => {
             let b = text_box(4, "Message", MARGIN, MARGIN + TITLE_H, SLIDE_W - 2 * MARGIN, 1_000_000, &para(&m, 2000, false, Some(0x52514E), "l"));
-            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &b, background), chart: None }]
+            vec![SlideOut { xml: slide_xml(&s.title, &s.footnote, &b, background), chart: None, image: None }]
         }
     }
 }
@@ -640,6 +681,10 @@ pub fn build_pptx_with(plan: &PptxPlan, stored: bool) -> Result<Vec<u8>> {
         }
         if has_bg {
             r.push(("rId3".into(), "image", "../media/image1.png".into()));
+        }
+        if let Some(png) = &s.image {
+            put(&format!("ppt/media/slide{}.png", i + 1), png.clone());
+            r.push(("rId4".into(), "image", format!("../media/slide{}.png", i + 1)));
         }
         let rr: Vec<(&str, &str, &str)> = r.iter().map(|(a, b, c)| (a.as_str(), *b, c.as_str())).collect();
         put(&format!("ppt/slides/_rels/slide{}.xml.rels", i + 1), rels(&rr).into_bytes());

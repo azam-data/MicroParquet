@@ -621,7 +621,7 @@ impl MicroParquetApp {
                     self.render_model_page(ui);
                     return;
                 }
-                if self.dashboard_ui.open && self.project.dashboard.is_some() && self.ws.view == micro_parquet::workspace::View::Report {
+                if self.dashboard_ui.open && self.project.dashboard.is_some() && self.ws.view == micro_parquet::workspace::View::Dashboard {
                     self.render_dashboard_main(ui);
                     return;
                 }

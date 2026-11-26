@@ -11,18 +11,20 @@ use crate::commands::{self as cmds, CommandGroup, CommandId};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum View {
     Report,
+    Dashboard,
     #[default]
     Data,
     Model,
 }
 
 impl View {
-    pub const ALL: [View; 3] = [View::Report, View::Data, View::Model];
+    pub const ALL: [View; 4] = [View::Report, View::Dashboard, View::Data, View::Model];
 
     /// The word on the rail and in `settings.json`.
     pub fn label(self) -> &'static str {
         match self {
             View::Report => "Report",
+            View::Dashboard => "Dashboard",
             View::Data => "Data",
             View::Model => "Model",
         }
@@ -31,7 +33,8 @@ impl View {
     /// What the view is for, in one line (the rail's hover text).
     pub fn purpose(self) -> &'static str {
         match self {
-            View::Report => "Pivots, charts, dashboards and saved views",
+            View::Report => "Pivots, charts and saved views",
+            View::Dashboard => "Pages of charts, tables, KPI cards, text and pictures, shown as one board and exported to HTML, PowerPoint and PDF",
             View::Data => "Source files, steps, SQL, column details and single-table banking tools",
             View::Model => "Relationships, key check, calendar, as-of date and measures",
         }
@@ -49,7 +52,7 @@ pub fn tab_in_view(view: View, chart_tab: bool, pivot_tab: bool, sent_to_report:
     match view {
         View::Data => !chart_tab,
         View::Report => chart_tab || pivot_tab || sent_to_report,
-        View::Model => false,
+        View::Model | View::Dashboard => false,
     }
 }
 
@@ -58,7 +61,7 @@ pub fn tab_in_view(view: View, chart_tab: bool, pivot_tab: bool, sent_to_report:
 pub fn home_view(id: CommandId) -> Option<View> {
     use CommandId as I;
     match id {
-        I::Dashboard => Some(View::Report),
+        I::Dashboard => Some(View::Dashboard),
         I::ModelSetup | I::ModelLinks | I::ModelKeyCheck | I::ModelCalendar | I::ModelAsOf | I::ModelMeasures => Some(View::Model),
         _ if cmds::adds_step_to_active_tab(id) && id != I::Pivot => Some(View::Data),
         I::OpenFile
@@ -106,7 +109,7 @@ pub fn workflow_of(id: CommandId) -> &'static str {
         I::SavedRuns | I::Pivot | I::Audit | I::DqScorecard => "Analyse",
         I::ToggleChart => "Visualise",
         I::Settings | I::TogglePanel => "Settings",
-        I::GoReport | I::GoData | I::GoModel | I::SendToReport | I::ToggleAnalytics => "Workspace",
+        I::GoReport | I::GoDashboard | I::GoData | I::GoModel | I::SendToReport | I::ToggleAnalytics => "Workspace",
         _ => match c.group {
             CommandGroup::File => "File",
             CommandGroup::Edit | CommandGroup::Transform => "Data",
@@ -206,7 +209,7 @@ pub fn menu_entries(kind: MenuKind) -> Vec<MenuEntry> {
             Cmd(I::ParquetSnappy),
         ],
         MenuKind::Visualise => vec![Cmd(I::ChartNew), Cmd(I::ChartThis), Cmd(I::ChartOpenSaved), Cmd(I::ChartBook)],
-        MenuKind::ShareReport => vec![Cmd(I::ExportChartHtml), Cmd(I::ExportChartXlsx), Cmd(I::ExportXlsx), Cmd(I::ExportPdf), Separator, Cmd(I::Dashboard)],
+        MenuKind::ShareReport => vec![Cmd(I::ExportChartHtml), Cmd(I::ExportChartXlsx), Cmd(I::ExportXlsx), Cmd(I::ExportPdf), Separator, Cmd(I::ExportTabPptx), Cmd(I::Dashboard)],
     }
 }
 
@@ -241,10 +244,10 @@ pub fn view_bar(view: View) -> Vec<BarEntry> {
             (Menu(MenuKind::Visualise), 0),
             (Cmd(I::ToggleChart), 0),
             (Cmd(I::Pivot), 1),
-            (Cmd(I::Dashboard), 1),
             (Menu(MenuKind::ShareReport), 2),
             (Cmd(I::ToggleAnalytics), 3),
         ],
+        View::Dashboard => vec![],
         View::Model => vec![(Cmd(I::ModelSetup), 0), (Cmd(I::ModelLinks), 1), (Cmd(I::ModelKeyCheck), 1), (Cmd(I::ModelCalendar), 1), (Cmd(I::ModelAsOf), 1), (Cmd(I::ModelMeasures), 1)],
     }
 }
@@ -279,7 +282,7 @@ pub fn reachable_commands() -> Vec<CommandId> {
     v.extend(cmds::in_group(CommandGroup::File).map(|c| c.id));
     v.extend_from_slice(SETTINGS_MENU);
     v.extend(cmds::in_group(CommandGroup::Help).map(|c| c.id));
-    v.extend_from_slice(&[CommandId::GoReport, CommandId::GoData, CommandId::GoModel]);
+    v.extend_from_slice(&[CommandId::GoReport, CommandId::GoDashboard, CommandId::GoData, CommandId::GoModel]);
     for view in View::ALL {
         for (item, _) in view_bar(view) {
             match item {
@@ -623,7 +626,7 @@ pub fn empty_hint(view: View, s: HintState) -> Option<Hint> {
                 card("Convert a folder", "Many CSV files to Parquet in one go", "Batch convert\u{2026}", HintAction::Run(CommandId::Batch)),
             ],
         }),
-        View::Report if s.report_tabs == 0 && !s.dashboard => Some(Hint {
+        View::Report if s.report_tabs == 0 => Some(Hint {
             title: "Nothing in the report yet",
             line: if s.data_tabs == 0 { "Open a file in the Data view first; then a pivot, a chart or a dashboard can be made from it." } else { "Make a pivot or a chart from your data, or send a table here as it is." },
             cards: if s.data_tabs == 0 {
@@ -749,7 +752,8 @@ mod tests {
     fn each_view_bar_has_groups_in_order_and_commands_that_exist() {
         for v in View::ALL {
             let bar = view_bar(v);
-            assert!(!bar.is_empty(), "{v:?}");
+            // (the Dashboard view draws its own toolbar)
+            assert!(!bar.is_empty() || v == View::Dashboard, "{v:?}");
             assert!(bar.windows(2).all(|w| w[0].1 <= w[1].1), "{v:?}: groups in order");
             for (item, _) in &bar {
                 if let BarItem::Cmd(id) = item {
@@ -769,7 +773,7 @@ mod tests {
     fn a_command_runs_in_its_view() {
         assert_eq!(home_view(CommandId::GapLadder), Some(View::Data));
         assert_eq!(home_view(CommandId::Filter), Some(View::Data));
-        assert_eq!(home_view(CommandId::Dashboard), Some(View::Report));
+        assert_eq!(home_view(CommandId::Dashboard), Some(View::Dashboard));
         assert_eq!(home_view(CommandId::ModelKeyCheck), Some(View::Model));
         assert_eq!(home_view(CommandId::Quit), None);
         assert_eq!(home_view(CommandId::Pivot), None, "a pivot is made from wherever you are");
@@ -861,7 +865,8 @@ mod tests {
         let rep = empty_hint(View::Report, HintState { data_tabs: 2, ..none }).expect("report with data");
         assert!(rep.cards.iter().any(|c| c.action == HintAction::Run(CommandId::SendToReport)));
         assert!(empty_hint(View::Report, HintState { report_tabs: 1, ..none }).is_none());
-        assert!(empty_hint(View::Report, HintState { dashboard: true, ..none }).is_none(), "a dashboard is something to show");
+        assert!(empty_hint(View::Report, HintState { dashboard: true, ..none }).is_some(), "the dashboard is its own view: an empty Report still says what to do");
+        assert!(empty_hint(View::Dashboard, none).is_none(), "the Dashboard view has its own empty-page cards");
         assert!(empty_hint(View::Model, none).is_some() && empty_hint(View::Model, HintState { links: 1, ..none }).is_none());
         for v in View::ALL {
             if let Some(h) = empty_hint(v, none) {

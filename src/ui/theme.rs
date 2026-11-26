@@ -585,6 +585,13 @@ pub fn margin_tab(active: bool) -> egui::Margin {
 pub const MARGIN_SEGMENTED: egui::Margin = egui::Margin::same(3.0);
 pub const MARGIN_SEGMENTED_OUTER: egui::Margin = egui::Margin { left: 14.0, right: 14.0, top: 12.0, bottom: 4.0 };
 pub const SEGMENT_BTN_H: f32 = 30.0;
+/// The thin row above the side panel's tabs that holds the hide button.
+pub const PANEL_HEAD_H: f32 = 22.0;
+/// Two page heights this close are the same shape.
+pub const PAGE_SHAPE_EPS: f64 = 0.01;
+/// The arrow that brings a hidden side panel back, at the page's right edge.
+pub const SHOW_ARROW_W: f32 = 24.0;
+pub const SHOW_ARROW_H: f32 = 44.0;
 pub const PANEL_BTN_H: f32 = 32.0;
 pub const WIDE_BTN_H: f32 = 34.0;
 pub const MARGIN_PANEL_STEPS: egui::Margin = egui::Margin::symmetric(16.0, 8.0);

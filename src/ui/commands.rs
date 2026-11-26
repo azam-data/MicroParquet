@@ -71,6 +71,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::Dashboard => ph::CHART_BAR,
         CommandId::ExportChartHtml => ph::FILE_HTML,
         CommandId::ExportChartXlsx => ph::FILE_XLS,
+        CommandId::ExportTabPptx => ph::FILE_PPT,
         CommandId::ToggleSummary => ph::SIGMA,
         CommandId::SortLists => ph::SORT_ASCENDING,
         CommandId::CalendarSettings => ph::CALENDAR,
@@ -88,6 +89,7 @@ pub fn command_icon(id: CommandId) -> &'static str {
         CommandId::About => ph::INFO,
         CommandId::Settings => ph::GEAR,
         CommandId::GoReport => ph::SQUARES_FOUR,
+        CommandId::GoDashboard => ph::CHART_PIE_SLICE,
         CommandId::GoData => ph::TABLE,
         CommandId::GoModel | CommandId::ModelSetup => ph::TREE_STRUCTURE,
         CommandId::SendToReport => ph::PAPER_PLANE_TILT,
@@ -174,6 +176,9 @@ impl MicroParquetApp {
             )
         {
             return Some("This tab could not be opened, so it has nothing to export. Its reason is in the main area.".to_string());
+        }
+        if id == CommandId::ExportTabPptx && !(self.active_is_chart_tab() || self.tab_is_pivot(self.active_tab)) {
+            return Some("Open a chart tab or a pivot tab first: the slide shows that one. A plain table goes to PowerPoint from the Dashboard view.".to_string());
         }
         cmds::command(id).and_then(|c| cmds::unavailable_reason(c, self.command_state())).map(|r| self.full_reason_of(r))
     }
@@ -336,9 +341,10 @@ impl MicroParquetApp {
             CommandId::ChartThis => self.chart_this_result(),
             CommandId::ChartOpenSaved => self.open_chart_open(),
             CommandId::ChartBook => self.open_chart_book(),
-            CommandId::Dashboard => self.dashboard_command(),
+            CommandId::Dashboard => self.switch_view(micro_parquet::workspace::View::Dashboard),
             CommandId::ExportChartHtml => self.chart_export_html(),
             CommandId::ExportChartXlsx => self.chart_export_xlsx(),
+            CommandId::ExportTabPptx => self.export_tab_pptx(),
             CommandId::SavedRuns => self.open_saved_runs(),
             CommandId::Packs => self.open_packs(),
             CommandId::Mudaraba => self.open_mudaraba(),
@@ -348,6 +354,7 @@ impl MicroParquetApp {
             CommandId::Settings => self.open_settings(None),
             CommandId::GoReport => self.switch_view(micro_parquet::workspace::View::Report),
             CommandId::GoData => self.switch_view(micro_parquet::workspace::View::Data),
+            CommandId::GoDashboard => self.switch_view(micro_parquet::workspace::View::Dashboard),
             CommandId::GoModel => self.switch_view(micro_parquet::workspace::View::Model),
             CommandId::SendToReport => self.send_to_report(),
             CommandId::ToggleAnalytics => self.toggle_analytics(),

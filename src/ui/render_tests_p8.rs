@@ -1417,7 +1417,8 @@ pub(crate) fn show_studio_chart(rig: &mut Rig) {
         let s = crate::ui::chart_render::last_shown(&rig.ctx, id).unwrap_or_else(|| panic!("{}: the studio's chart is drawn", rig.what));
         let screen = rig.ctx.screen_rect();
         let ys: Vec<f32> = s.layout.marks.iter().map(|m| m.rect.center().y).collect();
-        let (lo, hi) = (screen.top() + 140.0, screen.bottom() - 70.0);
+        // (the side panel has a thin row for its hide button, so its scrolling part starts lower)
+        let (lo, hi) = (screen.top() + 170.0, screen.bottom() - 70.0);
         let (min, max) = (ys.iter().cloned().fold(f32::MAX, f32::min), ys.iter().cloned().fold(f32::MIN, f32::max));
         if min >= lo && max <= hi {
             return;

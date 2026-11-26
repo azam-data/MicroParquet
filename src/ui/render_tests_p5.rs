@@ -1251,6 +1251,11 @@ fn select_step(rig: &mut Rig, i: usize) -> crate::ui::steps::StepsReport {
 fn press_step_button(rig: &mut Rig, name: &str) {
     let rep = crate::ui::steps::steps_report(&rig.ctx).expect("steps report");
     let b = rep.named_buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("{}: no '{name}' button", rig.what));
+    // the pointer arrives first (a list that is longer than the panel is scrolled up to the button) and the layout settles
+    rig.step(vec![egui::Event::PointerMoved(b.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -150.0), modifiers: egui::Modifiers::NONE }]);
+    rig.draw(4);
+    let rep = crate::ui::steps::steps_report(&rig.ctx).expect("steps report");
+    let b = rep.named_buttons.iter().find(|(n, _)| n == name).map(|(_, r)| *r).unwrap_or(b);
     rig.click(b.center());
 }
 

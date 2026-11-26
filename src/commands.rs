@@ -71,6 +71,7 @@ pub enum CommandId {
     // Export
     ExportChartHtml,
     ExportChartXlsx,
+    ExportTabPptx,
     ExportParquet,
     ExportCsv,
     ExportXlsx,
@@ -105,6 +106,7 @@ pub enum CommandId {
     // The workspace (UI revamp): the three views, the Settings dialog, the model's set-up
     Settings,
     GoReport,
+    GoDashboard,
     GoData,
     GoModel,
     SendToReport,
@@ -250,6 +252,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::ExportCsv, "Export this tab to CSV\u{2026}", G::Export, "save csv", N::Tab),
     c(I::ExportXlsx, "Export tabs to an Excel workbook\u{2026}", G::Export, "xlsx save spreadsheet totals", N::Tab),
     c(I::ExportChartHtml, "Chart to HTML\u{2026}", G::Export, "echarts html page interactive png svg sankey treemap offline web browser share", N::Tab),
+    c(I::ExportTabPptx, "Chart or pivot to PowerPoint\u{2026}", G::Export, "pptx powerpoint slide deck present chart pivot table share one slide", N::Tab),
     c(I::ExportChartXlsx, "Chart to Excel\u{2026}", G::Export, "xlsx native editable chart workbook spreadsheet columns bars line waterfall heatmap", N::Tab),
     c(I::ExportCl1, "Export the CL-1 summary to Excel\u{2026}", G::Export, "cl1 excel xlsx template return layout merged headers", N::Tab),
     c(I::ExportPdf, "Export tabs to a PDF report\u{2026}", G::Export, "save print", N::Tab),
@@ -280,6 +283,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Settings, "Settings\u{2026}", G::Workspace, "preferences options units numbers decimals crore display calendar fiscal colours sort lists toolbar panels", N::Nothing),
     c(I::GoReport, "Go to the Report view", G::Workspace, "pivots charts dashboards saved views switch", N::Nothing),
     c(I::GoData, "Go to the Data view", G::Workspace, "source files steps sql columns tables switch", N::Nothing),
+    c(I::GoDashboard, "Go to the Dashboard view", G::Workspace, "pages board kpi cards text picture present switch", N::Nothing),
     c(I::GoModel, "Go to the Model view", G::Workspace, "relationships links key check calendar as of measures switch", N::Nothing),
     c(I::SendToReport, "Send this table to the report", G::Workspace, "show publish report view add pivot result table", N::Tab),
     c(I::ToggleAnalytics, "Show or hide the Analytics pane", G::Workspace, "forecast plan actual movers placeholder dock", N::Nothing),

@@ -167,11 +167,17 @@ function drawKpi(pi,it,f,body){
   w.setAttribute('aria-label',k.alt||'');
   body.appendChild(w);
 }
+function drawStatic(it,f,body){
+  var a=f.a;
+  if(a.tx){var d=el('div','mp-text mp-text-'+a.tx.z,a.tx.t);d.style.textAlign=a.tx.a;if(a.tx.b)d.style.fontWeight='600';body.appendChild(d)}
+  else if(a.im){var g=el('img','mp-img');g.src=a.im.src;g.alt=a.im.alt;body.appendChild(g)}
+}
 function drawItem(pi,it,k,wrap){
   var ps=PS[pi],f=find(pi,it),box=el('div','mp-item'),r=L.pages[pi].rects[k],H=L.pages[pi].h;
   box.setAttribute('data-item',it.id);
   box.style.left=(r[0]/1000*100)+'%';box.style.top=(r[1]/H*100)+'%';box.style.width=(r[2]/1000*100)+'%';box.style.height=(r[3]/H*100)+'%';
-  box.appendChild(el('div','mp-ititle',it.title));
+  if(it.kind==='text'||it.kind==='image')box.className+=' mp-static';
+  else box.appendChild(el('div','mp-ititle',it.title));
   var sub=el('div','mp-sub');box.appendChild(sub);
   var body=el('div','mp-body');box.appendChild(body);wrap.appendChild(box);
   if(!f){body.appendChild(el('div','mp-err','This combination is not in the file.'));return}
@@ -186,6 +192,7 @@ function drawItem(pi,it,k,wrap){
   }
   else if(ps.cross&&ps.cross.src===it.id)sub.textContent='● Selected: '+ps.cross.value;
   else if(ps.cross&&!it.linked)sub.textContent='Not linked to clicks';
+  if(it.kind==='text'||it.kind==='image'){drawStatic(it,f,body);return}
   if(it.kind==='chart'){if(f.a.x){body.appendChild(el('div','mp-err',f.a.x))}else drawChart(pi,it,f,body)}
   else if(it.kind==='pivot')drawPivot(pi,it,f,body);
   else drawKpi(pi,it,f,body);
