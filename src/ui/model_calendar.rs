@@ -311,8 +311,9 @@ impl MicroParquetApp {
         let candidates = self.model_date_link_candidates();
         let links: Vec<DateLink> = self.project.model.calendar.as_ref().map(|c| c.date_links.clone()).unwrap_or_default();
         let error = self.project.model_ui.cal.error.clone();
-        theme::modal(&format!("{}  {}", theme::ph::CALENDAR, CALENDAR_DIALOG_TITLE)).default_width(theme::DIALOG_W_PIVOT_CONVERT).show(ctx, |d| {
+        theme::modal(crate::ui::model_flow::MODEL_SETUP_TITLE).default_width(theme::DIALOG_W_MODEL_FLOW).show(ctx, |d| {
             d.body(|ui| {
+                self.model_flow_header(ui, micro_parquet::workspace::ModelStep::Calendar);
                 let mut checked = on;
                 let r = ui.checkbox(&mut checked, "Use one calendar for the whole project");
                 rects.checkbox = Some(r.rect);
@@ -414,9 +415,12 @@ impl MicroParquetApp {
                 }
             });
             d.footer(|ui| {
-                let c = ui.button("Close");
-                rects.buttons.push(("Close".to_string(), c.rect));
-                close = c.clicked();
+                ui.horizontal_wrapped(|ui| {
+                    let c = ui.button("Close");
+                    rects.buttons.push(("Close".to_string(), c.rect));
+                    close = c.clicked();
+                    self.model_flow_footer(ui, micro_parquet::workspace::ModelStep::Calendar);
+                });
             });
         });
         self.project.model_ui.cal.rects = rects;
@@ -463,10 +467,11 @@ impl MicroParquetApp {
                 AsOf::Latest => None,
             },
         );
-        theme::modal(&format!("{}  {}", theme::ph::CALENDAR, AS_OF_DIALOG_TITLE)).default_width(theme::DIALOG_W_PIVOT_CONVERT).show(ctx, |d| {
+        theme::modal(crate::ui::model_flow::MODEL_SETUP_TITLE).default_width(theme::DIALOG_W_MODEL_FLOW).show(ctx, |d| {
             d.body(|ui| {
+                self.model_flow_header(ui, micro_parquet::workspace::ModelStep::AsOf);
                 if !has_calendar {
-                    ui.add(egui::Label::new(egui::RichText::new("The as-of date is read from the date-linked tabs. Turn on the model calendar and link a date column first (Model \u{25b8} Calendar\u{2026}).").color(tk.ink)).wrap());
+                    ui.add(egui::Label::new(egui::RichText::new("The as-of date is read from the date-linked tabs. Turn on the model calendar and link a date column first (the Calendar step).").color(tk.ink)).wrap());
                     return;
                 }
                 ui.add(egui::Label::new(egui::RichText::new("The date the model reports as of. Balances, windows and the status bar use it.").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
@@ -514,9 +519,12 @@ impl MicroParquetApp {
                 }
             });
             d.footer(|ui| {
-                let c = ui.button("Close");
-                rects.buttons.push(("Close".to_string(), c.rect));
-                close = c.clicked();
+                ui.horizontal_wrapped(|ui| {
+                    let c = ui.button("Close");
+                    rects.buttons.push(("Close".to_string(), c.rect));
+                    close = c.clicked();
+                    self.model_flow_footer(ui, micro_parquet::workspace::ModelStep::AsOf);
+                });
             });
         });
         self.project.model_ui.cal.rects = rects;

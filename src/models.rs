@@ -2490,6 +2490,11 @@ impl TransformStep {
 }
 
 impl TransformStep {
+    /// This step is a pivot table (the Report view lists a tab with one).
+    pub fn is_pivot(&self) -> bool {
+        matches!(self.inner(), TransformStep::PivotTable { .. })
+    }
+
     /// The pivot table settings of a `PivotTable` step.
     pub fn as_pivot_spec(&self) -> Option<PivotSpec> {
         match self.inner() {

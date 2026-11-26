@@ -135,9 +135,10 @@ fn t6_every_toolbar_action_is_in_the_command_list() {
     }
     // the app draws its toolbar from this list
     let main = std::fs::read_to_string("src/ui/top_bar.rs").unwrap(); // the single top bar draws it
-    // (the buttons are the top bar's BAR_ITEMS; a unit test checks they are toolbar_buttons())
-    assert!(main.contains("BAR_ITEMS") && main.contains("MENUS"));
-    assert!(main.contains("CommandGroup::Banking") && main.contains("CommandGroup::Export"));
+    // (the bar is drawn from the view's `view_bar`, whose Data bar a unit test checks against toolbar_buttons(); the menus are File, Settings, Help)
+    assert!(main.contains("view_bar") && main.contains("MENUS"));
+    let ws = std::fs::read_to_string("src/workspace.rs").unwrap();
+    assert!(ws.contains("CommandGroup::Banking") && ws.contains("MenuKind::ShareData"));
 }
 
 #[test]

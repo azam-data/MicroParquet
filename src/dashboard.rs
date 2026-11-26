@@ -17,6 +17,8 @@ use std::collections::BTreeMap;
 /// A page is 1000 × 625 units (16:10) unless its template says otherwise.
 pub const PAGE_W: f64 = 1000.0;
 pub const PAGE_H: f64 = 625.0;
+/// The height of a 16:9 page (the width is always `PAGE_W`).
+pub const PAGE_H_WIDE: f64 = 562.5;
 /// The gap between two items of a grid, in page units.
 pub const GRID_GAP: f64 = 10.0;
 /// Free layout snaps to this many page units.
@@ -135,6 +137,9 @@ pub struct DashPage {
     /// The items per row the page had before it was made Free, so switching back gives the same cells.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grid_per_row: Option<usize>,
+    /// Grid only: the page keeps at least this many rows of cells, so 4 per row and 3 rows fill a page with 12 places whatever the item count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_rows: Option<usize>,
     /// What the reader had picked: saved with the project so reopening shows the same page.
     pub state: PageState,
 }
@@ -146,6 +151,111 @@ pub enum DashItemKind {
     /// A pivot tab, by project key.
     Pivot(String),
     Kpi(KpiSpec),
+    /// A text box (UI revamp): a heading or a note, shown as it is typed. It reads no data.
+    Text(TextSpec),
+    /// A picture (a logo, a floor plan): kept inside the project, so it shows on another computer. It reads no data.
+    Image(ImageSpec),
+}
+
+/// How big the words of a text box are, in page units (a page is 1000 wide).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+    Title,
+}
+
+impl TextSize {
+    pub const ALL: [TextSize; 4] = [TextSize::Small, TextSize::Medium, TextSize::Large, TextSize::Title];
+    pub fn label(self) -> &'static str {
+        match self {
+            TextSize::Small => "Small",
+            TextSize::Medium => "Medium",
+            TextSize::Large => "Large",
+            TextSize::Title => "Title",
+        }
+    }
+    /// The height of a line, in page units.
+    pub fn units(self) -> f64 {
+        match self {
+            TextSize::Small => 14.0,
+            TextSize::Medium => 20.0,
+            TextSize::Large => 32.0,
+            TextSize::Title => 48.0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Centre,
+    Right,
+}
+
+impl TextAlign {
+    pub const ALL: [TextAlign; 3] = [TextAlign::Left, TextAlign::Centre, TextAlign::Right];
+    pub fn label(self) -> &'static str {
+        match self {
+            TextAlign::Left => "Left",
+            TextAlign::Centre => "Centre",
+            TextAlign::Right => "Right",
+        }
+    }
+}
+
+/// The settings of a text box.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct TextSpec {
+    pub text: String,
+    pub size: TextSize,
+    pub bold: bool,
+    pub align: TextAlign,
+}
+
+/// A picture of an image item: a PNG, as base64 text (the picture is made smaller than `MAX_IMAGE_SIDE` before it is kept).
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(default)]
+pub struct ImageSpec {
+    pub name: String,
+    pub png_b64: String,
+    pub w: u32,
+    pub h: u32,
+}
+
+// the picture's bytes are left out of the debug text (it is hashed and compared every frame): its name, shape and size stand for it
+impl std::fmt::Debug for ImageSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ImageSpec({}, {}x{}, {} bytes)", self.name, self.w, self.h, self.png_b64.len())
+    }
+}
+
+/// The longest side a kept picture has, in pixels: a logo needs no more, and the project stays small.
+pub const MAX_IMAGE_SIDE: u32 = 1600;
+/// The biggest picture file that is read, in bytes.
+pub const MAX_IMAGE_FILE_BYTES: u64 = 20_000_000;
+
+impl ImageSpec {
+    /// Reads a picture file (PNG or JPEG), makes it fit `MAX_IMAGE_SIDE` and keeps it as a PNG. A file that is not a picture says so.
+    pub fn from_bytes(name: &str, bytes: &[u8]) -> Result<ImageSpec> {
+        if bytes.len() as u64 > MAX_IMAGE_FILE_BYTES {
+            bail!("The picture '{}' is {:.0} MB; the biggest picture that is read is {:.0} MB. Pick a smaller one.", name, bytes.len() as f64 / 1e6, MAX_IMAGE_FILE_BYTES as f64 / 1e6);
+        }
+        let img = ::image::load_from_memory(bytes).with_context(|| format!("'{}' is not a PNG or JPEG picture, so it can't be put on the dashboard.", name))?;
+        let img = if img.width().max(img.height()) > MAX_IMAGE_SIDE { img.resize(MAX_IMAGE_SIDE, MAX_IMAGE_SIDE, ::image::imageops::FilterType::Lanczos3) } else { img };
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png).context("The picture could not be prepared. Pick another file.")?;
+        Ok(ImageSpec { name: name.to_string(), png_b64: crate::templates::base64_encode(&png), w: img.width(), h: img.height() })
+    }
+
+    /// The PNG bytes, or why they can't be read.
+    pub fn png(&self) -> Result<Vec<u8>> {
+        crate::templates::base64_decode(&self.png_b64).map_err(|_| anyhow::anyhow!("The picture '{}' in this project is damaged. Remove the item and add the picture again.", self.name))
+    }
 }
 
 impl Default for DashItemKind {
@@ -294,7 +404,7 @@ impl DashItem {
     pub fn source_key(&self) -> Option<&str> {
         match &self.kind {
             DashItemKind::Chart(k) | DashItemKind::Pivot(k) => Some(k),
-            DashItemKind::Kpi(_) => None,
+            DashItemKind::Kpi(_) | DashItemKind::Text(_) | DashItemKind::Image(_) => None,
         }
     }
 
@@ -459,13 +569,21 @@ impl Dashboard {
 /// The rects of `count` items in a grid of `per_row` equal-width cells on a `page_w` × `page_h` page: `GRID_GAP` between cells,
 /// no margin at the edge, and the rows share the page's height equally. 3 per row on 1000 units gives (1000 − 2 × 10) ÷ 3 = 326.67 wide.
 pub fn grid_rects(per_row: usize, count: usize, page_w: f64, page_h: f64) -> Result<Vec<DashRect>> {
+    grid_rects_min_rows(per_row, count, 0, page_w, page_h)
+}
+
+/// The most rows a page can be asked to keep.
+pub const MAX_GRID_ROWS: usize = 6;
+
+/// `grid_rects` with at least `min_rows` rows, so a page with few items still has cells of the size of a full page.
+pub fn grid_rects_min_rows(per_row: usize, count: usize, min_rows: usize, page_w: f64, page_h: f64) -> Result<Vec<DashRect>> {
     if !(1..=MAX_PER_ROW).contains(&per_row) {
         bail!("A grid has 1 to {} items per row, not {}.", MAX_PER_ROW, per_row);
     }
     if !(page_w > 0.0 && page_h > 0.0) {
         bail!("The page has no size.");
     }
-    let rows = count.div_ceil(per_row).max(1);
+    let rows = count.div_ceil(per_row).max(min_rows.min(MAX_GRID_ROWS)).max(1);
     let w = (page_w - GRID_GAP * (per_row - 1) as f64) / per_row as f64;
     let h = (page_h - GRID_GAP * (rows - 1) as f64) / rows as f64;
     Ok((0..count).map(|i| DashRect { x: (i % per_row) as f64 * (w + GRID_GAP), y: (i / per_row) as f64 * (h + GRID_GAP), w, h }).collect())
@@ -475,7 +593,7 @@ pub fn grid_rects(per_row: usize, count: usize, page_w: f64, page_h: f64) -> Res
 /// (an item with no rect on a Free page is an error to show, never a guessed place).
 pub fn item_rects(page: &DashPage) -> Result<Vec<DashRect>> {
     match page.layout {
-        PageLayout::Grid { per_row } => grid_rects(per_row, page.items.len(), PAGE_W, page.height()),
+        PageLayout::Grid { per_row } => grid_rects_min_rows(per_row, page.items.len(), page.grid_rows.unwrap_or(0), PAGE_W, page.height()),
         PageLayout::Free => page.items.iter().map(|i| i.rect.ok_or_else(|| anyhow::anyhow!("The item '{}' on the page '{}' has no place yet. Drag it onto the page.", i.id, page.title))).collect(),
     }
 }
@@ -654,7 +772,7 @@ impl DashPage {
     /// Grid to Free: every item keeps the place its cell gave it.
     pub fn to_free(&mut self) -> Result<()> {
         if let PageLayout::Grid { per_row } = self.layout {
-            let rects = grid_rects(per_row, self.items.len(), PAGE_W, self.height())?;
+            let rects = grid_rects_min_rows(per_row, self.items.len(), self.grid_rows.unwrap_or(0), PAGE_W, self.height())?;
             for (i, r) in self.items.iter_mut().zip(rects) {
                 i.rect = Some(r);
             }
@@ -662,6 +780,17 @@ impl DashPage {
             self.layout = PageLayout::Free;
         }
         Ok(())
+    }
+
+    /// The wide preset: 16:9, a grid of 4 per row and at least 3 rows, so twelve visuals show on one landscape page.
+    pub fn set_wide_grid(&mut self) {
+        self.set_height(PAGE_H_WIDE);
+        self.layout = PageLayout::Grid { per_row: 4 };
+        self.grid_per_row = None;
+        self.grid_rows = Some(3);
+        for i in &mut self.items {
+            i.rect = None;
+        }
     }
 
     /// Free to Grid: the items go to the cells of their order, with the items per row the page had before it was Free.
@@ -677,7 +806,7 @@ impl DashPage {
     /// The ids of the items of a Free page that do not sit on the cell their order gives them.
     pub fn off_grid_items(&self) -> Vec<String> {
         let per_row = self.grid_per_row.unwrap_or(2).clamp(1, MAX_PER_ROW);
-        let cells = grid_rects(per_row, self.items.len(), PAGE_W, self.height()).unwrap_or_default();
+        let cells = grid_rects_min_rows(per_row, self.items.len(), self.grid_rows.unwrap_or(0), PAGE_W, self.height()).unwrap_or_default();
         let near = |a: f64, b: f64| (a - b).abs() < 0.01;
         self.items.iter().enumerate().filter(|(i, it)| !it.rect.zip(cells.get(*i)).is_some_and(|(r, c)| near(r.x, c.x) && near(r.y, c.y) && near(r.w, c.w) && near(r.h, c.h))).map(|(_, it)| it.id.clone()).collect()
     }
@@ -709,6 +838,10 @@ pub enum ItemSource {
     Pivot { base: TabSource, steps: Vec<TransformStep>, spec: PivotSpec },
     /// A KPI card: its settings and the data tab it reads (Phase 10 D2).
     Kpi { spec: KpiSpec, tab_key: String, base: TabSource, steps: Vec<TransformStep> },
+    /// A text box: nothing to calculate.
+    Text(TextSpec),
+    /// A picture: nothing to calculate.
+    Image(ImageSpec),
 }
 
 #[derive(Clone, Debug)]
@@ -740,6 +873,8 @@ pub enum ItemData {
     Chart(Box<ChartData>),
     Table(Box<TableData>),
     Kpi(Box<crate::kpi::KpiValue>),
+    Text(Box<TextSpec>),
+    Image(Box<ImageSpec>),
     /// The item can't be drawn, and why (a plain message, never an empty chart).
     Problem(String),
 }
@@ -751,7 +886,7 @@ impl ItemData {
             ItemData::Chart(c) => &c.notes,
             ItemData::Table(t) => &t.notes,
             ItemData::Kpi(k) => &k.notes,
-            ItemData::Problem(_) => &[],
+            ItemData::Text(_) | ItemData::Image(_) | ItemData::Problem(_) => &[],
         }
     }
 }
@@ -826,6 +961,8 @@ pub fn compute_item(req: &ItemRequest) -> Result<ItemData> {
             let r = crate::kpi::KpiRequest { spec: spec.clone(), tab_key: tab_key.clone(), base: base.clone(), steps: steps.clone(), picks: req.picks.clone(), temp_dir: req.temp_dir.clone() };
             Ok(ItemData::Kpi(Box::new(crate::kpi::compute_kpi(&r)?)))
         }
+        ItemSource::Text(t) => Ok(ItemData::Text(Box::new(t.clone()))),
+        ItemSource::Image(i) => Ok(ItemData::Image(Box::new(i.clone()))),
         ItemSource::Pivot { base, steps, spec } => {
             let lf = crate::engine::compile_tab_lazy(base, steps, &req.temp_dir)?;
             let spec = pivot_spec_with(spec, &req.picks);

@@ -394,7 +394,12 @@ impl MicroParquetApp {
     /// to (from today's width up to half the window), and each tab scrolls when its content is
     /// taller than the panel (Phase 6 U2).
     pub(crate) fn render_right_panel(&mut self, ctx: &egui::Context) {
-        if self.tabs.is_empty() || !self.side_panel_shown() {
+        self.ws.panel_toggle_rect = None;
+        let view_has_panel = !self.tabs.is_empty() && !matches!(self.ws.view, micro_parquet::workspace::View::Model | micro_parquet::workspace::View::Dashboard) && self.active_tab_in_view();
+        if view_has_panel && !self.show_steps_sidebar && !self.visible_side_tabs().is_empty() {
+            self.render_panel_show_arrow(ctx);
+        }
+        if !view_has_panel || !self.side_panel_shown() {
             return;
         }
         // a tab switched off in View ▸ Side panel is not the one shown
@@ -409,12 +414,25 @@ impl MicroParquetApp {
         let width = self.right_panel_w.clamp(theme::RIGHT_PANEL_W, max_w);
         self.right_panel_w = width;
         let mut grab: Option<egui::Response> = None;
+        let mut hide_panel = false;
         let out = egui::SidePanel::right("right_panel")
             .exact_width(width)
             .resizable(false)
             .frame(egui::Frame::none().fill(tk.surface))
             .show(ctx, |ui| {
                 theme::left_border(ui, tk.border);
+                // a thin row with the button that hides the panel, so the tabs below keep their whole width
+                let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), theme::PANEL_HEAD_H), egui::Sense::hover());
+                let hide_rect = egui::Rect::from_min_size(egui::pos2(row.right() - theme::PANEL_HEAD_H - theme::SPACE_S, row.top()), egui::Vec2::splat(theme::PANEL_HEAD_H));
+                let hide = ui.interact(hide_rect, egui::Id::new("side_panel_hide"), egui::Sense::click()).on_hover_text("Hide the side panel. The page widens to the right edge.");
+                if hide.hovered() {
+                    ui.painter().rect_filled(hide_rect, theme::RADIUS_CONTROL, tk.grid);
+                }
+                ui.painter().text(hide_rect.center(), egui::Align2::CENTER_CENTER, theme::ph::CARET_DOUBLE_RIGHT, egui::FontId::proportional(theme::TEXT_BASE), tk.ink2);
+                self.ws.panel_toggle_rect = Some(hide_rect);
+                if hide.clicked() {
+                    hide_panel = true;
+                }
                 egui::Frame::none()
                     .fill(tk.grid)
                     .rounding(egui::Rounding::same(theme::RADIUS_PANEL))
@@ -454,6 +472,7 @@ impl MicroParquetApp {
                         RightTab::Column => self.render_column_tab(ui),
                         RightTab::Sql => self.render_sql_tab(ui, panel_h),
                         RightTab::Chart => self.render_chart_tab(ui),
+                        RightTab::Analytics => self.render_analytics_tab(ui),
                     });
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("right_panel_report"), RightPanelReport { scroll: area.inner_rect, content: area.content_size, offset: area.state.offset.y, tab }));
                 // the left edge: drag to resize, double-click for today's width (added last, so it is on top)
@@ -467,6 +486,10 @@ impl MicroParquetApp {
                 grab = Some(r);
             });
         let _ = out;
+        if hide_panel {
+            self.show_steps_sidebar = false;
+            ctx.request_repaint();
+        }
         if let Some(r) = grab {
             if r.double_clicked() {
                 self.set_right_panel_width(None);
@@ -492,9 +515,31 @@ impl MicroParquetApp {
         }
     }
 
+    /// While the side panel is hidden: a small arrow at the right edge of the page that brings it back at the width it had.
+    fn render_panel_show_arrow(&mut self, ctx: &egui::Context) {
+        let tk = *theme::tokens(self.dark_mode);
+        let area = ctx.available_rect();
+        let size = egui::vec2(theme::SHOW_ARROW_W, theme::SHOW_ARROW_H);
+        let pos = egui::pos2(area.right() - size.x, area.top() + theme::SPACE_L);
+        let mut show = false;
+        let mut rect = None;
+        egui::Area::new(egui::Id::new("panel_show_arrow")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+            let b = ui
+                .add_sized(size, egui::Button::new(egui::RichText::new(theme::ph::CARET_DOUBLE_LEFT).color(tk.ink2)).fill(tk.surface).stroke(egui::Stroke::new(1.0, tk.border)).rounding(egui::Rounding { nw: theme::RADIUS_CONTROL, sw: theme::RADIUS_CONTROL, ne: 0.0, se: 0.0 }))
+                .on_hover_text("Show the side panel");
+            rect = Some(b.rect);
+            show = b.clicked();
+        });
+        self.ws.panel_toggle_rect = rect;
+        if show {
+            self.show_steps_sidebar = true;
+            ctx.request_repaint();
+        }
+    }
+
     /// The side-panel tabs that are switched on, in order.
     pub(crate) fn visible_side_tabs(&self) -> Vec<RightTab> {
-        RightTab::ALL.iter().copied().filter(|t| !self.settings.side_panel_hidden.iter().any(|n| n == t.name())).collect()
+        RightTab::ALL.iter().copied().filter(|t| t.in_view(self.ws.view) && !self.settings.side_panel_hidden.iter().any(|n| n == t.name())).collect()
     }
 
     /// The panel is drawn when it is on and at least one of its tabs is switched on.
@@ -1248,10 +1293,22 @@ pub enum RightTab {
     Column,
     Sql,
     Chart,
+    /// The placeholder pane of the Report view.
+    Analytics,
 }
 
 impl RightTab {
-    pub const ALL: [RightTab; 4] = [RightTab::Steps, RightTab::Column, RightTab::Sql, RightTab::Chart];
+    pub const ALL: [RightTab; 5] = [RightTab::Steps, RightTab::Column, RightTab::Sql, RightTab::Chart, RightTab::Analytics];
+
+    /// The tabs a view lists (SQL belongs to the Data view, Analytics to the Report view).
+    pub fn in_view(self, view: micro_parquet::workspace::View) -> bool {
+        use micro_parquet::workspace::View;
+        match self {
+            RightTab::Sql => view != View::Report,
+            RightTab::Analytics => view == View::Report,
+            _ => true,
+        }
+    }
 
     /// The name the View menu and settings.json use.
     pub fn name(self) -> &'static str {
@@ -1260,6 +1317,7 @@ impl RightTab {
             RightTab::Column => "Column",
             RightTab::Sql => "SQL",
             RightTab::Chart => "Chart",
+            RightTab::Analytics => "Analytics",
         }
     }
 }

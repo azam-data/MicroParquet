@@ -220,7 +220,9 @@ pub fn export_dashboard_pdf(plan: &DashPdfPlan, out: &std::path::Path) -> Result
         }
         for it in &page.items {
             let (l, t, w, h) = (left0 + it.rect.x as f32 * s, top0 + it.rect.y as f32 * s, it.rect.w as f32 * s, it.rect.h as f32 * s);
-            surface(&layer, l, t, w, h);
+            if !matches!(it.data, ItemData::Text(_) | ItemData::Image(_)) {
+                surface(&layer, l, t, w, h);
+            }
             report.placed.push(Placed { page: pi, item_id: it.id.clone(), left_mm: l, top_mm: t, width_mm: w, height_mm: h });
             match &it.data {
                 ItemData::Chart(c) => {
@@ -235,6 +237,34 @@ pub fn export_dashboard_pdf(plan: &DashPdfPlan, out: &std::path::Path) -> Result
                     Body::Note(m) => {
                         text(&layer, &fonts.semibold, &it.title, 9.0, l + PAD_MM, t + PAD_MM, 0x0B0B0B);
                         text(&layer, &fonts.regular, &m, 8.0, l + PAD_MM, t + PAD_MM + 7.0, 0x52514E);
+                    }
+                    Body::Text { text: body, size_hundredths_pt, bold, algn } => {
+                        // the slide is 13.33 in wide for 1000 page units, so one slide point is this many PDF points
+                        let pt = (size_hundredths_pt as f32 / 100.0) * (s * PAGE_W as f32 / 338.67);
+                        let line_mm = pt * MM_PER_PT * 1.25;
+                        let font = if bold { &fonts.semibold } else { &fonts.regular };
+                        let mut y = t + PAD_MM;
+                        for line in body.lines() {
+                            if y + line_mm > t + h {
+                                report.cut.push("A text box is longer than its frame; the rest is in the HTML and PowerPoint files.".to_string());
+                                break;
+                            }
+                            let wd = measure.size(line, pt, bold).x * MM_PER_PT;
+                            let x = match algn {
+                                "ctr" => l + ((w - wd) / 2.0).max(PAD_MM),
+                                "r" => l + (w - wd - PAD_MM).max(PAD_MM),
+                                _ => l + PAD_MM,
+                            };
+                            text(&layer, font, line, pt, x, y, 0x0B0B0B);
+                            y += line_mm;
+                        }
+                    }
+                    Body::Image { png, w: iw, h: ih, .. } => {
+                        if iw > 0 && ih > 0 {
+                            let k = (w / iw as f32).min(h / ih as f32);
+                            let (fw, fh) = (iw as f32 * k, ih as f32 * k);
+                            draw_background(&layer, &png, l + (w - fw) / 2.0, t + (h - fh) / 2.0, fw, fh).context("A picture on the dashboard could not be drawn on the PDF page")?;
+                        }
                     }
                     Body::Chart(_) => {}
                 },

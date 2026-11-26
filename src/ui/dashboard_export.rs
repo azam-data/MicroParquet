@@ -51,6 +51,37 @@ impl MicroParquetApp {
     /// The pages of the dashboard as they are on the screen, ready for a worker: sources, filters in force, places, designs.
     pub(crate) fn dash_export_src(&self) -> Result<ExportSrc, String> {
         let dash = self.project.dashboard.clone().ok_or_else(|| NO_PROJECT.to_string())?;
+        self.dash_export_src_of(dash)
+    }
+
+    /// Share ▸ "Chart or pivot to PowerPoint…": the active chart or pivot tab as one slide of its own, with no dashboard needed.
+    pub(crate) fn export_tab_pptx(&mut self) {
+        let Some((id, title)) = self.tabs.get(self.active_tab).map(|t| (t.id, t.title.clone())) else { return };
+        let kind_of = |s: &Self, key: String| if s.chart_tabs.contains_key(&id) { DashItemKind::Chart(key) } else { DashItemKind::Pivot(key) };
+        let key = self.model_ensure_key(id);
+        let kind = kind_of(self, key);
+        let mut page = DashPage { id: "p1".into(), title: title.clone(), layout: PageLayout::Grid { per_row: 1 }, ..Default::default() };
+        page.items.push(DashItem { id: "i1".into(), kind, ..Default::default() });
+        let base = self.project.dashboard.clone().unwrap_or_default();
+        let dash = Dashboard { pages: vec![page], title: title.clone(), ..base };
+        let src = match self.dash_export_src_of(dash) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_message = e;
+                return;
+            }
+        };
+        let name = format!("{}.pptx", micro_parquet::charts::echarts::file_stem(&title));
+        let picked = self.dashboard_ui.export_tab_path.take().or_else(|| rfd::FileDialog::new().add_filter("PowerPoint", &["pptx"]).set_file_name(&name).set_title("Save the slide as a PowerPoint file").save_file());
+        let Some(path) = picked else { return };
+        self.jobs.submit(JobKey::unique(JobKind::Export), "Writing the PowerPoint file", true, move |ctx| {
+            ctx.check()?;
+            let message = export_pptx(&src, false, &path)?;
+            Ok(JobOutput::Exported(ExportOutcome { message, path_used: None, written: Some(path) }))
+        });
+    }
+
+    fn dash_export_src_of(&self, dash: Dashboard) -> Result<ExportSrc, String> {
         let mut pages = Vec::new();
         for page in &dash.pages {
             let rects = item_rects(page).map_err(|e| format!("{:#}", e))?;
@@ -62,6 +93,7 @@ impl MicroParquetApp {
                     DashItemKind::Chart(_) => (res.scale.clone().unwrap_or_else(|| unit_scale(ItemUnit::Crore)), None),
                     DashItemKind::Pivot(_) => (unit_scale(item.unit.unwrap_or_default()), None),
                     DashItemKind::Kpi(spec) => (unit_scale(ItemUnit::Crore), Some((spec.clone(), dash.default_kpi_unit))),
+                    DashItemKind::Text(_) | DashItemKind::Image(_) => (unit_scale(ItemUnit::Crore), None),
                 };
                 items.push(ExportItemSrc {
                     id: item.id.clone(),

@@ -72,6 +72,8 @@ pub enum ChartAction {
     Colour(MarkRef),
     /// A click on a dashboard item: the page is filtered by this mark (Phase 10 D3).
     CrossFilter(MarkRef),
+    /// A dashboard item: go to the chart's own tab in the main view.
+    OpenSource,
 }
 
 /// The layout of the chart last shown under `id` (tests, and the "Open as tab" / save paths).
@@ -239,6 +241,7 @@ pub fn show_chart_with(ui: &mut egui::Ui, id: egui::Id, data: &ChartData, opts: 
             if dc.page {
                 item(ui, "Filter the page by this", true, "", ChartAction::CrossFilter(mark.clone()));
                 item(ui, "Drill down", down_ok, &down_why, ChartAction::DrillDown(mark.clone()));
+                item(ui, "Open in the main view", true, "", ChartAction::OpenSource);
                 return;
             }
             item(ui, "Drill down", down_ok, &down_why, ChartAction::DrillDown(mark.clone()));

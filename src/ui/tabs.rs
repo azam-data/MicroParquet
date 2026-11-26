@@ -483,43 +483,16 @@ impl MicroParquetApp {
         self.tab_id_counter
     }
 
-    /// The start screen: three buttons, in the middle of the window (nothing else).
-    pub(crate) fn render_empty_state(&mut self, ui: &mut egui::Ui) {
-        // the height of the three buttons is measured the frame before (the first frame guesses)
-        let id = egui::Id::new("empty_state_h");
-        let guess = 3.0 * ui.spacing().interact_size.y + 2.0 * theme::SPACE_S; // not a size: three buttons, two gaps
-        let content_h = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(guess);
-        let top = ((ui.available_height() - content_h) / 2.0).max(0.0);
-        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
-        ui.vertical_centered(|ui| {
-            ui.add_space(top);
-            let r = theme::primary_button(ui, "\u{E256}  Open CSV or Parquet File...");
-            rects.push(("open".to_string(), r.rect));
-            if r.clicked() {
-                self.initiate_file_open(false);
-            }
-            ui.add_space(theme::SPACE_S);
-            let r = ui.button("\u{E466} Stack / Merge Multiple Files...");
-            rects.push(("stack".to_string(), r.rect));
-            if r.clicked() {
-                self.active_tool = ActiveToolModal::StackFiles;
-            }
-            ui.add_space(theme::SPACE_S);
-            let r = ui.button("\u{E094} Launch Recursive Folder Batch Converter...");
-            rects.push(("batch".to_string(), r.rect));
-            if r.clicked() {
-                self.batch_modal.open = true;
-            }
-        });
-        // (the buttons' own rectangles: the panel's rectangle is always the whole area)
-        let used = match (rects.first(), rects.last()) {
-            (Some((_, f)), Some((_, l))) => l.bottom() - f.top(),
-            _ => content_h,
-        };
-        ui.ctx().data_mut(|d| {
-            d.insert_temp(id, used.max(0.0));
-            d.insert_temp(egui::Id::new("empty_state_rects"), rects);
-        });
+    /// A view that lists tabs but has none active (the active tab belongs to another view): its last tab is shown, or what it needs is said.
+    pub(crate) fn render_view_without_active_tab(&mut self, ui: &mut egui::Ui) {
+        let view = self.ws.view;
+        if let Some(i) = self.visible_tab_indexes(view).last().copied() {
+            self.active_tab = i;
+            self.selected_column = None;
+            ui.ctx().request_repaint();
+            return;
+        }
+        let tk = *theme::tokens(self.dark_mode);
     }
 
     /// Closes the tab at `idx`. Every stored tab index stays valid (see `tab_index_after_close`):
@@ -533,6 +506,7 @@ impl MicroParquetApp {
         self.chart_tabs_source_closing(idx);
         if let Some(id) = closed_id {
             self.chart_tabs.remove(&id);
+            self.project.report_ids.remove(&id);
             self.nested_views.remove(&id);
             self.pivot_reports.remove(&id);
             self.tab_notes.remove(&id);
@@ -567,10 +541,15 @@ impl MicroParquetApp {
     /// that selects on click, closes on middle click, renames on double click; its cross sits on top
     /// of it (registered after it, so a click on the cross is the cross's, not the tab's).
     pub(crate) fn render_tab_strip_panel(&mut self, ctx: &egui::Context) {
-        if self.tabs.is_empty() {
+        // the tabs of the view (the Model and Dashboard views have none)
+        let view = self.ws.view;
+        let listed = self.visible_tab_indexes(view);
+        if matches!(view, micro_parquet::workspace::View::Model | micro_parquet::workspace::View::Dashboard) || listed.is_empty() {
             return;
         }
         let tk = *theme::tokens(self.dark_mode);
+        let mut remove_from_report: Option<usize> = None;
+        let mut send_to_report_tab: Option<usize> = None;
         let mut tab_to_close: Option<usize> = None;
         let mut duplicate_tab: Option<usize> = None;
         let mut rerun_tab: Option<usize> = None;
@@ -607,8 +586,8 @@ impl MicroParquetApp {
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
                             ui.spacing_mut().item_spacing.x = theme::BAR_ITEM_GAP;
-                            for idx in 0..self.tabs.len() {
-                                let active = idx == self.active_tab && !self.dashboard_ui.open;
+                            for idx in listed.iter().copied() {
+                                let active = idx == self.active_tab;
                                 let (tab_id, title) = match self.tabs.get(idx) {
                                     Some(t) => (t.id, t.title.clone()),
                                     None => continue,
@@ -683,6 +662,17 @@ impl MicroParquetApp {
                                         duplicate_tab = Some(idx);
                                         ui.close_menu();
                                     }
+                                    if self.project.report_ids.contains(&tab_id) {
+                                        if ui.button("Remove from report").on_hover_text("The table stays in the Data view").clicked() {
+                                            remove_from_report = Some(idx);
+                                            ui.close_menu();
+                                        }
+                                    } else if !self.chart_tabs.contains_key(&tab_id) && !self.tab_is_pivot(idx) {
+                                        if ui.button("Send to report").on_hover_text("Show this table in the Report view too").clicked() {
+                                            send_to_report_tab = Some(idx);
+                                            ui.close_menu();
+                                        }
+                                    }
                                     if self.tabs.get(idx).is_some_and(crate::ui::runs::tab_can_be_saved) {
                                         ui.separator();
                                         if ui.button("Re-run with changes").on_hover_text("Open the tool's dialog with the inputs of this result").clicked() {
@@ -701,15 +691,17 @@ impl MicroParquetApp {
                                 });
                                 report.cells.push(TabCell { index: idx, tab: rect, label: label_rect, close: close_rect, shown, full: title });
                             }
-                            if self.project.dashboard.is_some() {
-                                let on = self.dashboard_ui.open;
-                                let b = ui.selectable_label(on, format!("{}  {}", theme::ph::CHART_BAR, crate::ui::dashboard::DASH_BUTTON));
-                                self.dashboard_ui.strip_rect = Some(b.rect);
-                                if b.clicked() {
-                                    self.dashboard_ui.open = true;
-                                }
+                            if view == micro_parquet::workspace::View::Report {
+                                let ctx = ui.ctx().clone();
+                                let plus = ui.menu_button(theme::ph::PLUS, |ui| {
+                                    for id in [micro_parquet::commands::CommandId::ChartNew, micro_parquet::commands::CommandId::Pivot, micro_parquet::commands::CommandId::SendToReport] {
+                                        self.command_menu_item(ui, &ctx, id);
+                                    }
+                                });
+                                self.ws.plus_rect = Some(plus.response.rect);
+                                plus.response.on_hover_text("Add a chart, a pivot or the table you are on to the report");
                             }
-                            if theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
+                            if view == micro_parquet::workspace::View::Data && theme::icon_button(ui, theme::ph::PLUS, "Open a file in a new tab").clicked() {
                                 new_tab = true;
                             }
                         });
@@ -731,7 +723,6 @@ impl MicroParquetApp {
             }
         }
         if let Some(idx) = select {
-            self.dashboard_ui.open = false;
             if idx != self.active_tab {
                 self.active_tab = idx;
                 self.selected_column = None;
@@ -740,6 +731,15 @@ impl MicroParquetApp {
         }
         if new_tab {
             self.initiate_file_open(false);
+        }
+        if let Some(idx) = remove_from_report {
+            self.remove_from_report(idx);
+        }
+        if let Some(idx) = send_to_report_tab {
+            if idx != self.active_tab {
+                self.active_tab = idx;
+            }
+            self.send_to_report();
         }
         if let Some(idx) = rerun_tab {
             self.rerun_tab_with_changes(idx);
