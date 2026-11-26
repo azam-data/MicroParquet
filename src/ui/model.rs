@@ -33,6 +33,9 @@ pub struct LinkDraft {
     /// The key column pairs: (data column, lookup column), empty until picked.
     pub pairs: Vec<(String, String)>,
     pub error: String,
+    /// A budget or target table link (Phase 11): the lookup tab is the plan table and the month column is its date.
+    pub plan: bool,
+    pub month_column: String,
 }
 
 /// The lookup columns a data tab can use as fields, under one link (Phase 9 M1): "Branch master ›" and its columns.
@@ -67,6 +70,8 @@ pub struct ModelState {
     pub runtime: HashMap<(String, String), LinkRuntime>,
     pub draft: Option<LinkDraft>,
     pub selected: Option<usize>,
+    /// The selected budget or target table of the Links dialog (Phase 11).
+    pub plan_selected: Option<usize>,
     pub rects: ModelRects,
     /// The open line waiting for the key checks: "9 tabs opened."
     pub open_base: Option<String>,
@@ -216,7 +221,7 @@ impl MicroParquetApp {
     /// Makes the model of the open project the one this thread's jobs read: the links, the lookups read after their own steps, and
     /// the reason a link can't be used. Called every frame; it rebuilds only when something it is made from changed.
     pub(crate) fn model_scope_refresh(&mut self) {
-        if !self.project.active || self.project.model.all_links().is_empty() {
+        if !self.project.active || (self.project.model.all_links().is_empty() && self.project.model.plans.is_empty()) {
             self.project.model_ui.scope = None;
             self.project.model_ui.scope_fp = 0;
             model::set_scope(None);
@@ -240,13 +245,31 @@ impl MicroParquetApp {
         });
         let kinds = self.project.model.column_kinds.clone();
         let measures = self.project.model.measures.clone();
+        // the budget and target tables (Phase 11): each with the plan table as the worker reads it
+        let plan_parts: Vec<(model::PlanLink, Option<ModelTab>)> = self.project.model.plans.iter().map(|p| (p.clone(), self.model_worker_tab(&p.plan_tab))).collect();
         let fp = fingerprint(&(
+            plan_parts.iter().map(|(l, k)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)))).collect::<Vec<_>>(),
             parts.iter().map(|(l, k, r)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)), r.clone())).collect::<Vec<_>>(),
             self.paths.temp_dir.clone(),
             format!("{:?}", (&calendar, &kinds, &measures)),
         ));
         if self.project.model_ui.scope.is_none() || self.project.model_ui.scope_fp != fp {
+            let temp_dir = self.paths.temp_dir.clone();
+            let plans: Vec<model::ScopePlan> = plan_parts
+                .into_iter()
+                .map(|(link, table)| {
+                    let refusal = match &table {
+                        None => Some(format!("The plan table of '{}' is not open. Open it to use its budget or target.", link.data_tab)),
+                        Some(t) => match model::check_plan(&link, t, &temp_dir) {
+                            Ok(c) => c.refusal(&t.title),
+                            Err(e) => Some(e.to_string()),
+                        },
+                    };
+                    model::ScopePlan { link, table, refusal }
+                })
+                .collect();
             let ctx = model::ModelContext {
+                plans,
                 links: parts.into_iter().map(|(link, lookup, refusal)| model::ScopeLink { link, lookup, refusal }).collect(),
                 temp_dir: self.paths.temp_dir.clone(),
                 calendar,
@@ -422,6 +445,9 @@ impl MicroParquetApp {
 
     /// OK of the form: checks the link and, when it is fine, makes or replaces it.
     fn model_commit_draft(&mut self, mut d: LinkDraft) -> LinkDraft {
+        if d.plan {
+            return self.model_commit_plan(d);
+        }
         let Some((mut link, di, li)) = self.model_draft_link(&d) else {
             d.error = "Pick the data tab and the lookup tab.".to_string();
             return d;
@@ -447,6 +473,77 @@ impl MicroParquetApp {
         d.editing = None;
         d.data_tab = None;
         d
+    }
+
+    /// OK of the budget and target form: the plan table is read now, so a repeated month and key is refused here.
+    fn model_commit_plan(&mut self, mut d: LinkDraft) -> LinkDraft {
+        let (Some(di), Some(pi)) = (d.data_tab.and_then(|i| self.model_tab_info(i)), d.lookup_tab.and_then(|i| self.model_tab_info(i))) else {
+            d.error = "Pick the data tab and the plan table.".to_string();
+            return d;
+        };
+        if di.key == pi.key || d.data_tab == d.lookup_tab {
+            d.error = "The plan table must be a different tab from the data tab.".to_string();
+            return d;
+        }
+        if d.month_column.is_empty() {
+            d.error = "Pick the plan table's month column.".to_string();
+            return d;
+        }
+        if d.pairs.iter().any(|(a, b)| a.is_empty() || b.is_empty()) {
+            d.error = "Pick both columns of every key pair (for example Product on both tabs).".to_string();
+            return d;
+        }
+        let (data_key, plan_key) = (self.model_ensure_key(d.data_tab.unwrap_or_default()), self.model_ensure_key(d.lookup_tab.unwrap_or_default()));
+        let _ = (&di, &pi);
+        let link = model::PlanLink { data_tab: data_key, plan_tab: plan_key, month_column: d.month_column.clone(), keys: d.pairs.iter().map(|(a, b)| KeyPair { data: a.clone(), lookup: b.clone() }).collect() };
+        if self.project.model.plans.iter().enumerate().any(|(i, p)| Some(i) != d.editing && p.data_tab == link.data_tab && p.plan_tab == link.plan_tab) {
+            d.error = "This plan table is already linked to that data tab. Edit the existing link instead.".to_string();
+            return d;
+        }
+        let Some(table) = self.model_worker_tab(&link.plan_tab) else {
+            d.error = "The plan table is not open.".to_string();
+            return d;
+        };
+        match model::check_plan(&link, &table, &self.paths.temp_dir) {
+            Err(e) => {
+                d.error = format!("{:#}", e);
+                return d;
+            }
+            Ok(c) => {
+                if let Some(why) = c.refusal(&table.title) {
+                    d.error = why;
+                    return d;
+                }
+            }
+        }
+        match d.editing {
+            Some(i) if i < self.project.model.plans.len() => self.project.model.plans[i] = link,
+            _ => {
+                self.project.model.plans.push(link);
+                self.project.model_ui.plan_selected = Some(self.project.model.plans.len() - 1);
+            }
+        }
+        d.error.clear();
+        d.editing = None;
+        d.data_tab = None;
+        d
+    }
+
+    fn model_start_plan_draft(&mut self, editing: Option<usize>) {
+        let mut d = LinkDraft { plan: true, ..Default::default() };
+        if let Some(p) = editing.and_then(|i| self.project.model.plans.get(i)).cloned() {
+            d.editing = editing;
+            d.data_tab = self.model_tab_id(&p.data_tab);
+            d.lookup_tab = self.model_tab_id(&p.plan_tab);
+            d.month_column = p.month_column.clone();
+            d.pairs = p.keys.iter().map(|k| (k.data.clone(), k.lookup.clone())).collect();
+            if d.data_tab.is_none() || d.lookup_tab.is_none() {
+                d.error = "Both tabs of the plan link have to be open to edit it.".to_string();
+            }
+        } else {
+            d.pairs = vec![(String::new(), String::new())];
+        }
+        self.project.model_ui.draft = Some(d);
     }
 
     fn model_start_draft(&mut self, editing: Option<usize>) {
@@ -475,8 +572,12 @@ impl MicroParquetApp {
         let mut draft = self.project.model_ui.draft.take();
         let mut commit = false;
         let mut cancel_draft = false;
+        let mut plan_select: Option<usize> = None;
+        let mut start_plan: Option<Option<usize>> = None;
+        let mut remove_plan = false;
         let links = self.project.model.links.clone();
         let selected = self.project.model_ui.selected.filter(|i| *i < links.len());
+        let plan_sel = self.project.model_ui.plan_selected.filter(|i| *i < self.project.model.plans.len());
         let tabs: Vec<(u64, TabInfo)> = self.tabs.iter().filter_map(|t| self.model_tab_info(t.id).map(|i| (t.id, i))).collect();
         let title = format!("{}  {}", theme::ph::LINK, LINKS_TITLE);
         let _ = &title;
@@ -492,6 +593,7 @@ impl MicroParquetApp {
                 if links.is_empty() {
                     ui.label(egui::RichText::new("No links yet. Add one to use a lookup tab's columns in a pivot or chart.").color(tk.muted));
                 }
+                let plans = self.project.model.plans.clone();
                 if !links.is_empty() {
                     egui::ScrollArea::both().id_salt("model_links").max_height(theme::LIST_MAX_H_L).auto_shrink([false, true]).show(ui, |ui| {
                         egui::Grid::new("model_links_grid").striped(true).num_columns(5).spacing([theme::SPACE_M, theme::SPACE_XS]).show(ui, |ui| {
@@ -517,6 +619,42 @@ impl MicroParquetApp {
                         });
                     });
                 }
+                // Phase 11: the budget and target tables
+                ui.add_space(theme::SPACE_M);
+                ui.separator();
+                ui.label(egui::RichText::new("BUDGET AND TARGET TABLES").size(theme::TEXT_LABEL).color(tk.muted).strong());
+                ui.add(egui::Label::new(egui::RichText::new("A plan table has one row per month and key (for example Product), with an amount column such as Budget. Link it to a data tab, then add a budget / target measure in Model \u{25b8} Measures to compare actuals with it in pivots, charts and KPI cards.").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
+                if plans.is_empty() {
+                    ui.label(egui::RichText::new("No budget or target table yet.").color(tk.muted));
+                }
+                for (i, p) in plans.iter().enumerate() {
+                    let keys: Vec<String> = p.keys.iter().map(|k| if k.data == k.lookup { k.data.clone() } else { format!("{} = {}", k.data, k.lookup) }).collect();
+                    let text = format!("{} \u{2190} {}  (month {}; keys {})", self.model_tab_title(&p.data_tab), self.model_tab_title(&p.plan_tab), p.month_column, keys.join(", "));
+                    let r = ui.selectable_label(plan_sel == Some(i), text);
+                    rects.buttons.push((format!("Plan {}", i + 1), r.rect));
+                    if r.clicked() {
+                        plan_select = Some(i);
+                    }
+                    let why = self.project.model_ui.scope.as_ref().and_then(|c| c.plans.iter().find(|x| x.link == *p)).and_then(|x| x.refusal.clone());
+                    if let Some(w) = why {
+                        ui.add(egui::Label::new(egui::RichText::new(w).size(theme::TEXT_LABEL).color(tk.danger)).wrap());
+                    }
+                }
+                ui.horizontal_wrapped(|ui| {
+                let ap = ui.button("Add budget table");
+                rects.buttons.push(("Add budget table".to_string(), ap.rect));
+                if ap.clicked() {
+                    start_plan = Some(None);
+                }
+                let ep = ui.add_enabled(plan_sel.is_some(), egui::Button::new("Edit budget table"));
+                rects.buttons.push(("Edit budget table".to_string(), ep.rect));
+                if ep.clicked() {
+                    start_plan = Some(plan_sel);
+                }
+                let rp = ui.add_enabled(plan_sel.is_some(), egui::Button::new("Remove budget table"));
+                rects.buttons.push(("Remove budget table".to_string(), rp.rect));
+                remove_plan = rp.clicked();
+                });
             });
             d.footer(|ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -566,6 +704,25 @@ impl MicroParquetApp {
         if let Some(s) = start {
             self.model_start_draft(s);
         }
+        if let Some(i) = plan_select {
+            self.project.model_ui.plan_selected = Some(i);
+        }
+        if let Some(s) = start_plan {
+            self.model_start_plan_draft(s);
+        }
+        if remove_plan {
+            if let Some(i) = plan_sel {
+                let p = self.project.model.plans[i].clone();
+                // a measure that reads the plan can't work without it: say so instead of leaving it to fail in a pivot
+                let users: Vec<String> = self.project.model.measures.iter().filter(|m| matches!(m, micro_parquet::measures::NamedMeasure::Plan { tab, plan_tab, .. } if *tab == p.data_tab && *plan_tab == p.plan_tab)).map(|m| m.name().to_string()).collect();
+                if users.is_empty() {
+                    self.project.model.plans.remove(i);
+                    self.project.model_ui.plan_selected = None;
+                } else {
+                    self.status_message = format!("The budget table is used by {}. Remove those measures first.", users.join(", "));
+                }
+            }
+        }
         if remove {
             if let Some(i) = selected {
                 let l = self.project.model.links.remove(i);
@@ -582,7 +739,7 @@ impl MicroParquetApp {
 
     /// The Add / Edit form: the two tabs and 1 to 3 pairs of key columns.
     fn model_draft_form(&self, ui: &mut egui::Ui, dr: &mut LinkDraft, tabs: &[(u64, TabInfo)], rects: &mut ModelRects, tk: &theme::Tokens) {
-        ui.label(theme::bold(if dr.editing.is_some() { "Edit link" } else { "Add link" }).color(tk.ink));
+        ui.label(theme::bold(match (dr.plan, dr.editing.is_some()) { (true, true) => "Edit budget / target table", (true, false) => "Add budget / target table", (false, true) => "Edit link", (false, false) => "Add link" }).color(tk.ink));
         ui.add_space(theme::SPACE_S);
         let title_of = |id: Option<u64>| id.and_then(|i| tabs.iter().find(|t| t.0 == i)).map(|t| t.1.title.clone()).unwrap_or_else(|| "Pick a tab".to_string());
         let mut tab_combo = |ui: &mut egui::Ui, name: &str, current: &mut Option<u64>, other_is_data: bool| -> bool {
@@ -613,7 +770,7 @@ impl MicroParquetApp {
             if tab_combo(ui, "Data tab", &mut data_tab, true) {
                 dr.pairs.iter_mut().for_each(|p| p.0.clear());
             }
-            ui.label(egui::RichText::new("\u{2192} Lookup tab").color(tk.muted));
+            ui.label(egui::RichText::new(if dr.plan { "\u{2192} Plan table" } else { "\u{2192} Lookup tab" }).color(tk.muted));
             if tab_combo(ui, "Lookup tab", &mut lookup_tab, false) {
                 dr.pairs.iter_mut().for_each(|p| p.1.clear());
             }
@@ -622,8 +779,22 @@ impl MicroParquetApp {
         dr.lookup_tab = lookup_tab;
         let cols_of = |id: Option<u64>| -> Vec<String> { id.and_then(|i| tabs.iter().find(|t| t.0 == i)).map(|t| t.1.columns.iter().map(|c| c.0.clone()).collect()).unwrap_or_default() };
         let (dc, lc) = (cols_of(dr.data_tab), cols_of(dr.lookup_tab));
+        if dr.plan {
+            ui.add_space(theme::SPACE_S);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Month column of the plan table").color(tk.muted));
+                let combo = egui::ComboBox::from_id_salt("Plan month column").width(theme::MODEL_COMBO_W).selected_text(if dr.month_column.is_empty() { "Pick a column".to_string() } else { dr.month_column.clone() }).show_ui(ui, |ui| {
+                    for c in &lc {
+                        if ui.selectable_label(&dr.month_column == c, c).clicked() {
+                            dr.month_column = c.clone();
+                        }
+                    }
+                });
+                rects.combos.push(("Plan month column".to_string(), combo.response.rect));
+            });
+        }
         ui.add_space(theme::SPACE_S);
-        ui.label(egui::RichText::new("Key columns (the data column on the left, the lookup's on the right). Keys match as the Join tool matches them.").size(theme::TEXT_LABEL).color(tk.muted));
+        ui.label(egui::RichText::new(if dr.plan { "Key columns that name a line of the plan (the data column on the left, the plan table's on the right), for example Product. The plan can then be split by these only." } else { "Key columns (the data column on the left, the lookup's on the right). Keys match as the Join tool matches them." }).size(theme::TEXT_LABEL).color(tk.muted));
         let mut remove: Option<usize> = None;
         for i in 0..dr.pairs.len() {
             ui.horizontal(|ui| {

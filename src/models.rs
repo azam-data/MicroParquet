@@ -159,11 +159,11 @@ pub struct ColumnSchemaConfig {
     #[serde(default)]
     pub rename_to: Option<String>,
     /// Phase 11: the column is left out of the table (not kept). Old schemas keep every column.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub drop: bool,
     /// Phase 11: every value of this number column is multiplied by -1 after typing (advance
     /// balances that arrive negative).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub reverse_sign: bool,
 }
 

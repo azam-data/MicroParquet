@@ -1301,6 +1301,21 @@ pub fn pivot_value_format(v: &PivotValue, spec: &PivotSpec, decimals: usize) -> 
                     other => ColumnFormatSpec { fmt_type: other, decimals },
                 };
             }
+            Some(crate::measures::NamedMeasure::Plan { show, actual, column, .. }) => {
+                // a budget or target: % achieved in percent; the plan and the difference as the actual is shown (a percent ratio in percent)
+                if show == crate::measures::PlanShow::PercentAchieved {
+                    return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 };
+                }
+                match crate::measures::find_measure(&actual) {
+                    Some(crate::measures::NamedMeasure::Ratio { format: crate::measures::RatioFormat::Percent, .. }) => return ColumnFormatSpec { fmt_type: MetricFormatType::PercentAsIs, decimals: 2 },
+                    Some(crate::measures::NamedMeasure::Ratio { .. }) => return ColumnFormatSpec { fmt_type: MetricFormatType::StandardCommas, decimals: 2 },
+                    _ => {}
+                }
+                return match classify_column_auto_format(&column) {
+                    MetricFormatType::Auto => ColumnFormatSpec { fmt_type: spec.scale.format_type().unwrap_or(MetricFormatType::Auto), decimals },
+                    other => ColumnFormatSpec { fmt_type: other, decimals },
+                };
+            }
             None => {}
         }
     }

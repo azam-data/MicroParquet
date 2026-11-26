@@ -628,18 +628,71 @@ pub enum NamedMeasure {
         #[serde(default)]
         format: RatioFormat,
     },
+    /// A budget or target (Phase 11): the amount column of a plan table linked to the tab (Model \u{25b8} Links), by month and the link's keys,
+    /// shown as the plan itself, the actual less the plan, or the actual as a percent of the plan. The actual is a base measure or a ratio.
+    Plan {
+        name: String,
+        /// The data tab (key) the actual and the pivot belong to.
+        tab: String,
+        /// The plan table's tab (key).
+        plan_tab: String,
+        /// The plan table's amount column (Budget, Target ...).
+        column: String,
+        #[serde(default)]
+        agg: PlanAgg,
+        #[serde(default)]
+        show: PlanShow,
+        /// The measure the plan is set against; unused (blank) when only the plan is shown.
+        #[serde(default)]
+        actual: String,
+    },
+}
+
+/// How a plan's months add up over a period.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum PlanAgg {
+    /// The months of the period add up (income, cost, a flow budget). A month that has started counts in full.
+    #[default]
+    Sum,
+    /// The last month of the period (a closing balance target).
+    Closing,
+}
+
+/// What a plan measure shows.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum PlanShow {
+    /// The budget or target itself.
+    #[default]
+    Plan,
+    /// Actual less plan (in the actual's unit; a percent ratio's difference is in percentage points).
+    Variance,
+    /// Actual over plan, in percent.
+    PercentAchieved,
+}
+
+impl PlanShow {
+    pub fn label(self) -> &'static str {
+        match self {
+            PlanShow::Plan => "Plan",
+            PlanShow::Variance => "Actual less plan",
+            PlanShow::PercentAchieved => "% achieved",
+        }
+    }
 }
 
 impl NamedMeasure {
     pub fn name(&self) -> &str {
         match self {
-            NamedMeasure::Base { name, .. } | NamedMeasure::Ratio { name, .. } => name,
+            NamedMeasure::Base { name, .. } | NamedMeasure::Ratio { name, .. } | NamedMeasure::Plan { name, .. } => name,
         }
     }
     pub fn tab(&self) -> &str {
         match self {
-            NamedMeasure::Base { tab, .. } | NamedMeasure::Ratio { tab, .. } => tab,
+            NamedMeasure::Base { tab, .. } | NamedMeasure::Ratio { tab, .. } | NamedMeasure::Plan { tab, .. } => tab,
         }
+    }
+    pub fn is_plan(&self) -> bool {
+        matches!(self, NamedMeasure::Plan { .. })
     }
     pub fn is_ratio(&self) -> bool {
         matches!(self, NamedMeasure::Ratio { .. })
@@ -692,7 +745,7 @@ pub fn check_measure(all: &[NamedMeasure], m: &NamedMeasure) -> Option<String> {
             for t in numerator.iter().chain(denominator.iter()) {
                 match all.iter().find(|o| o.name() == t.measure) {
                     None => return Some(format!("'{}': the measure '{}' does not exist. Pick a base measure of this tab.", name, t.measure)),
-                    Some(o) if o.is_ratio() => return Some(format!("'{}': '{}' is a ratio. A ratio is made of base measures.", name, t.measure)),
+                    Some(o) if o.is_ratio() || o.is_plan() => return Some(format!("'{}': '{}' is a ratio or a plan measure. A ratio is made of base measures.", name, t.measure)),
                     Some(o) if o.tab() != tab => return Some(format!("'{}': '{}' belongs to another tab. A ratio uses the measures of one tab.", name, t.measure)),
                     _ => {}
                 }
@@ -704,6 +757,23 @@ pub fn check_measure(all: &[NamedMeasure], m: &NamedMeasure) -> Option<String> {
                             return Some(annualise_refusal(&t.measure));
                         }
                     }
+                }
+            }
+            None
+        }
+        NamedMeasure::Plan { tab, plan_tab, column, show, actual, .. } => {
+            if plan_tab.trim().is_empty() {
+                return Some(format!("'{}': pick the plan table (Model \u{25b8} Links \u{25b8} Budget and target tables first).", name));
+            }
+            if column.trim().is_empty() {
+                return Some(format!("'{}': pick the plan's amount column.", name));
+            }
+            if *show != PlanShow::Plan {
+                match all.iter().find(|o| o.name() == actual.as_str()) {
+                    None => return Some(format!("'{}': pick the measure the plan is set against (the actual).", name)),
+                    Some(o) if o.is_plan() => return Some(format!("'{}': '{}' is a plan measure. Pick a base measure or a ratio as the actual.", name, actual)),
+                    Some(o) if o.tab() != tab => return Some(format!("'{}': '{}' belongs to another tab. The actual must be a measure of the same tab.", name, actual)),
+                    _ => {}
                 }
             }
             None
@@ -723,6 +793,11 @@ pub fn rename_in_ratios(measures: &mut [NamedMeasure], old: &str, new: &str) {
                 t.measure = new.to_string();
             }
         }
+        if let NamedMeasure::Plan { actual, .. } = m {
+            if actual == old {
+                *actual = new.to_string();
+            }
+        }
     }
 }
 
@@ -732,9 +807,10 @@ pub fn removal_refusal(measures: &[NamedMeasure], name: &str, others: &[String])
         .iter()
         .filter(|m| match m {
             NamedMeasure::Ratio { numerator, denominator, .. } => numerator.iter().chain(denominator.iter()).any(|t| t.measure == name),
+            NamedMeasure::Plan { actual, show, .. } => *show != PlanShow::Plan && actual == name,
             _ => false,
         })
-        .map(|m| format!("ratio '{}'", m.name()))
+        .map(|m| format!("{} '{}'", if m.is_plan() { "plan measure" } else { "ratio" }, m.name()))
         .collect();
     users.extend(others.iter().cloned());
     if users.is_empty() {

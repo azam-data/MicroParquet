@@ -40,6 +40,7 @@ pub fn scope(dd: &std::path::Path, cal: CalendarSettings, as_of: &str, kinds: Ve
     let calendar = ModelTab { key: "t2".into(), title: "Calendar".into(), source: TabSource::Calendar { settings: cal, first_year: 2025, last_year: 2027 }, steps: vec![] };
     Some(Arc::new(ModelContext {
         links: vec![ScopeLink { link: date_link("t1", "Date", "t2"), lookup: Some(calendar), refusal: None }],
+        plans: vec![],
         temp_dir: dd.to_path_buf(),
         calendar: Some(CalendarScope {
             settings: cal,

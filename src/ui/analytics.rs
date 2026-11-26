@@ -8,7 +8,7 @@ use micro_parquet::forecast::MONTHS;
 use micro_parquet::forecast_chart::{parse_month, ForecastShow, ForecastSpec, ModelPick, OverlaySpec};
 
 /// BDT per Crore: adjustments are typed in Crore and kept in BDT, the unit of the numbers.
-const CRORE: f64 = 10_000_000.0;
+const CRORE: f64 = theme::FORECAST_CRORE;
 
 impl MicroParquetApp {
     pub(crate) fn render_forecast_card(&mut self, ui: &mut egui::Ui) {
@@ -67,7 +67,7 @@ impl MicroParquetApp {
             let names: Vec<String> = self.chart.data.as_ref().map(|d| d.kept_series.clone()).unwrap_or_default();
             for (i, o) in f.overlays.iter_mut().enumerate() {
                 ui.horizontal_wrapped(|ui| {
-                    egui::ComboBox::from_id_salt(("forecast_ov_m", i)).width(60.0).selected_text(MONTHS[(o.month.clamp(1, 12) - 1) as usize]).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("forecast_ov_m", i)).width(theme::FORECAST_MONTH_W).selected_text(MONTHS[(o.month.clamp(1, 12) - 1) as usize]).show_ui(ui, |ui| {
                         for (k, m) in MONTHS.iter().enumerate() {
                             ui.selectable_value(&mut o.month, k as u32 + 1, *m);
                         }

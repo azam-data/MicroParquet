@@ -4,7 +4,7 @@
 //! gets a suggestion, applied by a click and never by itself.
 
 use crate::ui::prelude::*;
-use micro_parquet::measures::{check_measure, removal_refusal, suggest, ColumnKind, ColumnTag, DayCount, NamedMeasure, RatioFormat, Sign, Term};
+use micro_parquet::measures::{check_measure, removal_refusal, suggest, ColumnKind, ColumnTag, DayCount, NamedMeasure, PlanAgg, PlanShow, RatioFormat, Sign, Term};
 use micro_parquet::models::{CondOp, FilterCondition, TimeAgg};
 
 pub const MEASURES_DIALOG_TITLE: &str = "Measures";
@@ -46,6 +46,12 @@ pub struct MeasureEdit {
     /// The place of the measure in the model when it is edited (its name may change; every reference follows).
     pub index: Option<usize>,
     pub ratio: bool,
+    /// A budget or target measure (Phase 11).
+    pub plan: bool,
+    pub plan_tab: String,
+    pub plan_agg: PlanAgg,
+    pub plan_show: PlanShow,
+    pub actual: String,
     pub name: String,
     pub tab_key: String,
     pub column: String,
@@ -62,7 +68,7 @@ pub struct MeasureEdit {
 
 impl MeasureEdit {
     fn new(ratio: bool, tab_key: &str) -> Self {
-        MeasureEdit { index: None, ratio, name: String::new(), tab_key: tab_key.to_string(), column: String::new(), agg: TimeAgg::ClosingBalance, weight: String::new(), sign: Sign::Plus, filters: Vec::new(), num: vec![Term::default()], den: vec![Term::default()], annualise: None, format: RatioFormat::Percent, error: String::new() }
+        MeasureEdit { index: None, ratio, plan: false, plan_tab: String::new(), plan_agg: PlanAgg::Sum, plan_show: PlanShow::PercentAchieved, actual: String::new(), name: String::new(), tab_key: tab_key.to_string(), column: String::new(), agg: TimeAgg::ClosingBalance, weight: String::new(), sign: Sign::Plus, filters: Vec::new(), num: vec![Term::default()], den: vec![Term::default()], annualise: None, format: RatioFormat::Percent, error: String::new() }
     }
 
     fn of(index: usize, m: &NamedMeasure) -> Self {
@@ -83,13 +89,23 @@ impl MeasureEdit {
                 e.annualise = *annualise;
                 e.format = *format;
             }
+            NamedMeasure::Plan { plan_tab, column, agg, show, actual, .. } => {
+                e.plan = true;
+                e.plan_tab = plan_tab.clone();
+                e.column = column.clone();
+                e.plan_agg = *agg;
+                e.plan_show = *show;
+                e.actual = actual.clone();
+            }
         }
         e
     }
 
     fn to_measure(&self) -> NamedMeasure {
         let name = self.name.trim().to_string();
-        if self.ratio {
+        if self.plan {
+            NamedMeasure::Plan { name, tab: self.tab_key.clone(), plan_tab: self.plan_tab.clone(), column: self.column.clone(), agg: self.plan_agg, show: self.plan_show, actual: if self.plan_show == PlanShow::Plan { String::new() } else { self.actual.clone() } }
+        } else if self.ratio {
             NamedMeasure::Ratio { name, tab: self.tab_key.clone(), numerator: self.num.clone(), denominator: self.den.clone(), annualise: self.annualise, format: self.format }
         } else {
             NamedMeasure::Base {
@@ -131,11 +147,14 @@ pub struct MeasureTabInfo {
     pub columns: Vec<String>,
     /// Lookup and Calendar fields: the field and its picker text ("GL map \u{203a} Head").
     pub lookups: Vec<(micro_parquet::model::ModelFieldRef, String)>,
+    /// The budget and target tables linked to the tab: (project key, title, numeric columns).
+    pub plans: Vec<(String, String, Vec<String>)>,
 }
 
 enum MeasureAct {
     AddBase,
     AddRatio,
+    AddPlan,
     Edit(usize),
     Remove(usize),
     Save,
@@ -155,6 +174,15 @@ fn measure_summary(m: &NamedMeasure) -> String {
                 t.push_str(" (sign \u{2212})");
             }
             t
+        }
+        NamedMeasure::Plan { plan_tab, column, agg, show, actual, .. } => {
+            let _ = plan_tab;
+            let how = if *agg == PlanAgg::Closing { "closing" } else { "sum" };
+            match show {
+                PlanShow::Plan => format!("Plan: {} ({} of months)", column, how),
+                PlanShow::Variance => format!("{} less plan {} ({} of months)", actual, column, how),
+                PlanShow::PercentAchieved => format!("{} as % of plan {} ({} of months)", actual, column, how),
+            }
         }
         NamedMeasure::Ratio { numerator, denominator, annualise, .. } => {
             let side = |terms: &[Term]| terms.iter().enumerate().map(|(i, t)| format!("{}{}", if t.sign == Sign::Minus { "\u{2212} " } else if i > 0 { "+ " } else { "" }, t.measure)).collect::<Vec<_>>().join(" ");
@@ -223,7 +251,7 @@ fn terms_editor(ui: &mut egui::Ui, side: &str, terms: &mut Vec<Term>, bases: &[S
 fn measure_editor(ui: &mut egui::Ui, e: &mut MeasureEdit, view_tabs: &[MeasureTabInfo], bases: &[String], rects: &mut MeasureRects, act: &mut Option<MeasureAct>, tk: &theme::Tokens) {
     ui.add_space(theme::SPACE_S);
     ui.separator();
-    ui.label(egui::RichText::new(if e.ratio { "RATIO" } else { "BASE MEASURE" }).size(theme::TEXT_LABEL).color(tk.muted).strong());
+    ui.label(egui::RichText::new(if e.plan { "BUDGET / TARGET MEASURE" } else if e.ratio { "RATIO" } else { "BASE MEASURE" }).size(theme::TEXT_LABEL).color(tk.muted).strong());
     egui::Grid::new("measure_editor").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
         ui.label("Name");
         let name = ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(theme::MEASURE_NAME_BOX_W).hint_text("for example NIM"));
@@ -243,7 +271,39 @@ fn measure_editor(ui: &mut egui::Ui, e: &mut MeasureEdit, view_tabs: &[MeasureTa
         }
         ui.end_row();
         let tab = view_tabs.iter().find(|t| t.key == e.tab_key);
-        if !e.ratio {
+        if e.plan {
+            let plans = tab.map(|t| t.plans.clone()).unwrap_or_default();
+            ui.label("Plan table");
+            let titles: Vec<String> = plans.iter().map(|p| p.1.clone()).collect();
+            let mut shown = plans.iter().find(|p| p.0 == e.plan_tab).map(|p| p.1.clone()).unwrap_or_default();
+            let before = shown.clone();
+            text_combo(ui, ("m_plan", 0), theme::MEASURE_BOX_W, &mut shown, &titles, rects, "Plan table");
+            if shown != before {
+                if let Some(p) = plans.iter().find(|p| p.1 == shown) {
+                    e.plan_tab = p.0.clone();
+                    e.column.clear();
+                }
+            }
+            ui.end_row();
+            ui.label("Amount column");
+            let numbers = plans.iter().find(|p| p.0 == e.plan_tab).map(|p| p.2.clone()).unwrap_or_default();
+            text_combo(ui, ("m_pcol", 0), theme::MEASURE_BOX_W, &mut e.column, &numbers, rects, "Amount column");
+            ui.end_row();
+            ui.label("Months add up as");
+            let aggs = [(PlanAgg::Sum, "Sum of the months (a flow budget)".to_string()), (PlanAgg::Closing, "Last month (a closing target)".to_string())];
+            let shown = aggs.iter().find(|(a, _)| *a == e.plan_agg).map(|(_, l)| l.clone()).unwrap_or_default();
+            combo_field(ui, ("m_pagg", "0"), theme::MEASURE_BOX_W, &shown, &mut e.plan_agg, &aggs, rects, "Months add up as");
+            ui.end_row();
+            ui.label("Shows");
+            let shows = [(PlanShow::Plan, PlanShow::Plan.label().to_string()), (PlanShow::Variance, PlanShow::Variance.label().to_string()), (PlanShow::PercentAchieved, PlanShow::PercentAchieved.label().to_string())];
+            combo_field(ui, ("m_pshow", "0"), theme::MEASURE_BOX_W, e.plan_show.label(), &mut e.plan_show, &shows, rects, "Shows");
+            ui.end_row();
+            if e.plan_show != PlanShow::Plan {
+                ui.label("Actual");
+                text_combo(ui, ("m_actual", 0), theme::MEASURE_BOX_W, &mut e.actual, bases, rects, "Actual");
+                ui.end_row();
+            }
+        } else if !e.ratio {
             ui.label("Aggregation");
             let aggs: Vec<(TimeAgg, String)> = TimeAgg::all().iter().map(|a| (*a, a.label().to_string())).collect();
             combo_field(ui, ("m_agg", "0"), theme::MEASURE_BOX_W, e.agg.label(), &mut e.agg, &aggs, rects, "Aggregation");
@@ -274,7 +334,9 @@ fn measure_editor(ui: &mut egui::Ui, e: &mut MeasureEdit, view_tabs: &[MeasureTa
             ui.end_row();
         }
     });
-    if e.ratio {
+    if e.plan {
+        ui.label(egui::RichText::new("The plan is read by month and the keys of its link. A month that has started counts in full; a month the plan has no row for makes the cell blank.").size(theme::TEXT_LABEL).color(tk.muted));
+    } else if e.ratio {
         terms_editor(ui, "Numerator", &mut e.num, bases, rects, tk);
         terms_editor(ui, "Denominator", &mut e.den, bases, rects, tk);
     } else {
@@ -383,7 +445,19 @@ impl MicroParquetApp {
                 let columns: Vec<String> = t.cached_slice.get_columns().iter().map(|c| c.name().to_string()).collect();
                 let numbers: Vec<String> = t.cached_slice.get_columns().iter().filter(|c| c.dtype().is_numeric()).map(|c| c.name().to_string()).collect();
                 let lookups = self.model_groups_for(t.id).into_iter().flat_map(|g| g.columns.into_iter().map(|(r, _)| { let l = r.picker(); (r, l) })).collect();
-                Some(MeasureTabInfo { key: key.clone(), title: t.title.clone(), numbers, columns, lookups })
+                let plans: Vec<(String, String, Vec<String>)> = self
+                    .project
+                    .model
+                    .plans
+                    .iter()
+                    .filter(|p| &p.data_tab == key)
+                    .filter_map(|p| {
+                        let pt = self.tabs.iter().find(|x| self.project.keys.get(&x.id) == Some(&p.plan_tab))?;
+                        let nums: Vec<String> = pt.cached_slice.get_columns().iter().filter(|c| c.dtype().is_numeric()).map(|c| c.name().to_string()).collect();
+                        Some((p.plan_tab.clone(), pt.title.clone(), nums))
+                    })
+                    .collect();
+                Some(MeasureTabInfo { key: key.clone(), title: t.title.clone(), numbers, columns, lookups, plans })
             })
             .collect()
     }
@@ -455,7 +529,7 @@ impl MicroParquetApp {
                     }
                     // the editor first, so the list never pushes it out of view
                     if let Some(e) = edit.as_mut() {
-                        let bases: Vec<String> = measures.iter().filter(|m| !m.is_ratio() && m.tab() == e.tab_key).map(|m| m.name().to_string()).collect();
+                        let bases: Vec<String> = measures.iter().filter(|m| m.tab() == e.tab_key && if e.plan { !m.is_plan() } else { !m.is_ratio() && !m.is_plan() }).map(|m| m.name().to_string()).collect();
                         measure_editor(ui, e, &infos, &bases, &mut rects, &mut act, &tk);
                         ui.add_space(theme::SPACE_S);
                         ui.separator();
@@ -466,7 +540,7 @@ impl MicroParquetApp {
                             ui.allocate_ui_with_layout(egui::vec2(theme::MEASURE_NAME_W, ui.spacing().interact_size.y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                 ui.set_min_width(theme::MEASURE_NAME_W);
                                 ui.set_max_width(theme::MEASURE_NAME_W);
-                                ui.add(egui::Label::new(egui::RichText::new(m.name()).strong().color(tk.ink)).truncate()).on_hover_text(format!("{} \u{b7} {}", if m.is_ratio() { "Ratio" } else { "Base measure" }, title));
+                                ui.add(egui::Label::new(egui::RichText::new(m.name()).strong().color(tk.ink)).truncate()).on_hover_text(format!("{} \u{b7} {}", if m.is_plan() { "Budget / target" } else if m.is_ratio() { "Ratio" } else { "Base measure" }, title));
                             });
                             let e = ui.button("Edit");
                             rects.buttons.push((format!("Edit {}", m.name()), e.rect));
@@ -496,6 +570,11 @@ impl MicroParquetApp {
                         rects.buttons.push(("Add ratio".to_string(), r.rect));
                         if r.clicked() {
                             act = Some(MeasureAct::AddRatio);
+                        }
+                        let pb = ui.button("Add budget / target");
+                        rects.buttons.push(("Add budget / target".to_string(), pb.rect));
+                        if pb.clicked() {
+                            act = Some(MeasureAct::AddPlan);
                         }
                     });
                     if !message.is_empty() {
@@ -613,6 +692,15 @@ impl MicroParquetApp {
         match act {
             MeasureAct::AddBase => ui.edit = Some(MeasureEdit::new(false, &first_tab)),
             MeasureAct::AddRatio => ui.edit = Some(MeasureEdit::new(true, &first_tab)),
+            MeasureAct::AddPlan => {
+                let mut ed = MeasureEdit::new(false, &first_tab);
+                ed.plan = true;
+                // the first plan table linked to the first tab, when there is one
+                if let Some(p) = infos.first().and_then(|t| t.plans.first()) {
+                    ed.plan_tab = p.0.clone();
+                }
+                ui.edit = Some(ed);
+            }
             MeasureAct::Cancel => ui.edit = None,
             MeasureAct::Edit(i) => {
                 if let Some(m) = self.project.model.measures.get(i) {
