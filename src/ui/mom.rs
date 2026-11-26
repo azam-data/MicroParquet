@@ -123,7 +123,10 @@ impl MicroParquetApp {
         }
         let spec = self.mom_spec()?;
         let make = |view| TabSource::MomVariance { prev_source: Box::new(p.source.clone()), prev_steps: p.steps.clone(), curr_source: Box::new(c.source.clone()), curr_steps: c.steps.clone(), spec: spec.clone(), view };
-        Ok(vec![("MoM commentary".to_string(), make(MomView::Commentary)), ("MoM variance".to_string(), make(MomView::Variance))])
+        let mut tabs = vec![("MoM commentary".to_string(), make(MomView::Commentary)), ("MoM variance".to_string(), make(MomView::Variance))];
+        // Phase 11: the bridge (volume, mix and rate; or the balance bridge without a rate column)
+        tabs.push(("MoM bridge".to_string(), make(MomView::Bridge)));
+        Ok(tabs)
     }
 
     pub(crate) fn render_mom_modal(&mut self, ctx: &egui::Context, _cols: Vec<String>) -> ModalOutcome {
@@ -200,7 +203,7 @@ impl MicroParquetApp {
                     theme::error_label(ui, p);
                 }
                 ui.add_space(theme::SPACE_S);
-                ui.add(egui::Label::new(egui::RichText::new("The tool makes two tabs: the variance table (balance, rate and annual interest of each month, the interest change split into volume, rate and mix effects) and the commentary (one sentence per material key, from fixed templates). The thresholds are saved with the tabs.").color(tk.muted).size(theme::TEXT_LABEL)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new("The tool makes three tabs: the variance table (balance, rate and annual interest of each month, the interest change split into volume, rate and mix effects) and the commentary (one sentence per material key, from fixed templates) and the bridge (the interest change as volume, mix and rate that add up exactly, or the change of balance by key; draw it with Chart this). The thresholds are saved with the tabs.").color(tk.muted).size(theme::TEXT_LABEL)).wrap());
             });
             d.footer(|ui| {
                 ui.horizontal_wrapped(|ui| {

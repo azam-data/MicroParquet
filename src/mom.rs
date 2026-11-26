@@ -389,3 +389,9 @@ pub fn mom_commentary(df: &DataFrame, spec: &MomSpec) -> Result<Vec<String>> {
 pub fn commentary_frame(lines: &[String]) -> Result<DataFrame> {
     Ok(DataFrame::new(vec![Series::new(COMMENTARY_COLUMN.into(), lines.to_vec())])?)
 }
+
+/// The bridge of a variance table (Phase 11): volume, mix and rate of the interest change, or the balance bridge without a rate column.
+pub fn bridge_of(df: &DataFrame, spec: &MomSpec) -> Result<DataFrame> {
+    let keys: Vec<String> = (0..df.height()).map(|i| key_label(df, spec, i)).collect();
+    crate::bridge::bridge_frame(df, &keys, 8)
+}

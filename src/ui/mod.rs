@@ -60,6 +60,7 @@ pub mod runs;
 pub mod reconcile;
 pub mod schema;
 pub mod shell;
+pub mod analytics;
 pub mod settings_dialog;
 pub mod model_page;
 pub mod model_flow;

@@ -1,6 +1,7 @@
 //! Library crate for MicroParquet: the calculation modules used by the UI binary and the tests.
 
 pub mod banking;
+pub mod bridge;
 pub mod behaviour;
 pub mod cashflow;
 pub mod chart;
@@ -18,6 +19,8 @@ pub mod dates;
 pub mod dq;
 pub mod ecl;
 pub mod engine;
+pub mod forecast;
+pub mod forecast_chart;
 pub mod irrbb;
 pub mod islamic;
 pub mod kpi;

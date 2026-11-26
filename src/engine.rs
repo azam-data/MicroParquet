@@ -2539,6 +2539,7 @@ pub fn compile_tab_lazy(
                     lines.extend(notes);
                     crate::mom::commentary_frame(&lines)?.lazy()
                 }
+                crate::models::MomView::Bridge => crate::mom::bridge_of(&df, spec)?.lazy(),
             }
         }
         TabSource::EclSummary { source, steps, spec } => {

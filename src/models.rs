@@ -2735,6 +2735,8 @@ pub enum MomView {
     Variance,
     /// "MoM commentary": one sentence per row.
     Commentary,
+    /// "MoM bridge" (Phase 11): prior interest, volume, mix, rate, current interest (or the balance bridge when there is no rate).
+    Bridge,
 }
 
 /// Which table of the LCR / NSFR run a tab shows.

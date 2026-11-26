@@ -222,3 +222,7 @@ mod p10_fb;
 // Phase 11 tests (tests/phase11/) are compiled into this binary too.
 #[path = "../phase11/s1.rs"]
 mod p11_s1;
+#[path = "../phase11/f1.rs"]
+mod p11_f1;
+#[path = "../phase11/b1.rs"]
+mod p11_b1;
