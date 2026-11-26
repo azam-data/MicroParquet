@@ -106,6 +106,8 @@ pub fn apply_template(detected: &IngestionConfig, template: &IngestionConfig) ->
                 has_dr_cr: d.has_dr_cr,
                 source_dtype: d.source_dtype.clone(),
                 rename_to: t.rename_to.clone(),
+                drop: t.drop,
+                reverse_sign: t.reverse_sign,
             },
             None => d.clone(),
         })

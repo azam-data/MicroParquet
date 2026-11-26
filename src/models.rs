@@ -158,6 +158,13 @@ pub struct ColumnSchemaConfig {
     /// file's name. Applied after typing, Dr/Cr and masking, before any step.
     #[serde(default)]
     pub rename_to: Option<String>,
+    /// Phase 11: the column is left out of the table (not kept). Old schemas keep every column.
+    #[serde(default)]
+    pub drop: bool,
+    /// Phase 11: every value of this number column is multiplied by -1 after typing (advance
+    /// balances that arrive negative).
+    #[serde(default)]
+    pub reverse_sign: bool,
 }
 
 impl ColumnSchemaConfig {
@@ -255,7 +262,17 @@ pub struct IngestionConfig {
 impl IngestionConfig {
     /// (the file's name, the new name) of every column the schema renames.
     pub fn rename_pairs(&self) -> Vec<(String, String)> {
-        self.columns.iter().filter_map(|c| (c.final_name() != c.name).then(|| (c.name.clone(), c.final_name()))).collect()
+        self.columns.iter().filter(|c| !c.drop).filter_map(|c| (c.final_name() != c.name).then(|| (c.name.clone(), c.final_name()))).collect()
+    }
+
+    /// The columns that stay in the table.
+    pub fn kept(&self) -> impl Iterator<Item = &ColumnSchemaConfig> {
+        self.columns.iter().filter(|c| !c.drop)
+    }
+
+    /// The names (as the file has them) of the columns left out.
+    pub fn dropped_names(&self) -> Vec<String> {
+        self.columns.iter().filter(|c| c.drop).map(|c| c.name.clone()).collect()
     }
 
     /// The column names after the renames, in column order.
@@ -268,14 +285,25 @@ impl IngestionConfig {
     pub fn rename_problems(&self) -> Vec<(usize, String)> {
         let finals = self.final_names();
         let mut out = Vec::new();
+        if !self.columns.is_empty() && self.columns.iter().all(|c| c.drop) {
+            out.push((0, "Every column is left out. Keep at least one column.".to_string()));
+        }
+        for (i, c) in self.columns.iter().enumerate() {
+            if c.reverse_sign && !c.drop && !matches!(c.dtype, ColDataType::Float64 | ColDataType::Int64) {
+                out.push((i, format!("\"{}\": Reverse sign works on number columns. Set the type to a number or untick it.", c.name)));
+            }
+        }
         for (i, f) in finals.iter().enumerate() {
+            if self.columns[i].drop {
+                continue;
+            }
             if f.trim().is_empty() {
                 out.push((i, "This column has no name. Type a name in \"Rename to\".".to_string()));
                 continue;
             }
             // names are the same when they differ only in capitals or spaces at the ends (Excel and SQL see them so)
             let same_name = |a: &str, b: &str| a.trim().to_lowercase() == b.trim().to_lowercase();
-            let same: Vec<usize> = finals.iter().enumerate().filter(|(_, g)| same_name(g, f)).map(|(j, _)| j).collect();
+            let same: Vec<usize> = finals.iter().enumerate().filter(|(j, g)| !self.columns[*j].drop && same_name(g, f)).map(|(j, _)| j).collect();
             if same.len() > 1 {
                 let others: Vec<String> = same.iter().filter(|j| **j != i).map(|j| format!("\"{}\"", self.columns[*j].name)).collect();
                 out.push((i, format!("\"{}\" is also the name of {}. Every column needs its own name: change one \"Rename to\".", f, others.join(", "))));

@@ -698,15 +698,17 @@ impl MicroParquetApp {
                     .striped(true)
                     .resizable(true)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::initial(theme::SCHEMA_COL_KEEP_W).at_least(theme::SCHEMA_COL_KEEP_W))
                     .column(Column::initial(theme::SCHEMA_COL_NAME_W).at_least(theme::SCHEMA_COL_MIN_W).clip(true))
                     .column(Column::initial(theme::SCHEMA_COL_RENAME_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_TYPE_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_PII_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_SIGN_W).at_least(theme::SCHEMA_COL_MIN_W))
+                    .column(Column::initial(theme::SCHEMA_COL_REVERSE_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::initial(theme::SCHEMA_COL_FAIL_W).at_least(theme::SCHEMA_COL_MIN_W))
                     .column(Column::remainder().at_least(theme::SCHEMA_COL_MIN_W).clip(true))
                     .header(theme::HEADER_ROW_H, |mut header| {
-                        for title in ["Column Name", "Rename to", "Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Parse Failures", "Sample Values"] {
+                        for title in ["Keep", "Column Name", "Rename to", "Target Data Type", "PII Anonymizer", "Dr/Cr Sign", "Reverse sign", "Parse Failures", "Sample Values"] {
                             header.col(|ui| theme::header_cell(ui, title, limit));
                         }
                     })
@@ -717,7 +719,19 @@ impl MicroParquetApp {
                                 return;
                             };
                             row.col(|ui| {
-                                if col_cfg.has_dr_cr && col_cfg.sign_convention == SignConvention::Unset {
+                                let mut keep = !col_cfg.drop;
+                                if ui
+                                    .checkbox(&mut keep, "")
+                                    .on_hover_text("Ticked: the column is in the table. Unticked: it is left out when the file opens (it is still in the file).")
+                                    .changed()
+                                {
+                                    col_cfg.drop = !keep;
+                                }
+                            });
+                            row.col(|ui| {
+                                if col_cfg.drop {
+                                    ui.add(egui::Label::new(egui::RichText::new(format!("{}  (left out)", col_cfg.name)).color(tk.muted).strikethrough()).truncate());
+                                } else if col_cfg.has_dr_cr && col_cfg.sign_convention == SignConvention::Unset {
                                     ui.colored_label(theme::warning(ui), format!("\u{E4E0} {} (has Dr/Cr)", col_cfg.name))
                                         .on_hover_text("Values carry Dr/Cr. Choose 'Dr is +' or 'Cr is +' or the load stops.");
                                 } else if is_parquet {
@@ -784,6 +798,14 @@ impl MicroParquetApp {
                                 } else {
                                     ui.label("\u{2014}");
                                 }
+                            });
+                            row.col(|ui| {
+                                let number = matches!(col_cfg.dtype, ColDataType::Float64 | ColDataType::Int64);
+                                ui.add_enabled_ui((number || col_cfg.reverse_sign) && !col_cfg.drop, |ui| {
+                                    ui.checkbox(&mut col_cfg.reverse_sign, "")
+                                        .on_hover_text("Multiplies every value of this column by -1 after it is read (for example advance balances that come in negative). Zero stays zero.")
+                                        .on_disabled_hover_text("Only a number column can have its sign reversed: set the type to Float64 or Int64 first.");
+                                });
                             });
                             row.col(|ui| {
                                 if let Some(f) = failures.iter().find(|f| f.column == col_cfg.final_name() || f.column == col_cfg.name) {
