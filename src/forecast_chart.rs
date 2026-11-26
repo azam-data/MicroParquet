@@ -18,16 +18,18 @@ pub enum ModelPick {
     TrendSeasonal,
     HoltWinters,
     Growth,
+    Arima,
 }
 
 impl ModelPick {
-    pub const ALL: [ModelPick; 4] = [ModelPick::Auto, ModelPick::TrendSeasonal, ModelPick::HoltWinters, ModelPick::Growth];
+    pub const ALL: [ModelPick; 5] = [ModelPick::Auto, ModelPick::TrendSeasonal, ModelPick::HoltWinters, ModelPick::Growth, ModelPick::Arima];
     pub fn label(self) -> &'static str {
         match self {
             ModelPick::Auto => "Auto (best back-test)",
             ModelPick::TrendSeasonal => ModelKind::Stl.label(),
             ModelPick::HoltWinters => ModelKind::HoltWinters.label(),
             ModelPick::Growth => ModelKind::Growth.label(),
+            ModelPick::Arima => ModelKind::Arima.label(),
         }
     }
     pub fn choice(self) -> Choice {
@@ -36,6 +38,7 @@ impl ModelPick {
             ModelPick::TrendSeasonal => Choice::Fixed(ModelKind::Stl),
             ModelPick::HoltWinters => Choice::Fixed(ModelKind::HoltWinters),
             ModelPick::Growth => Choice::Fixed(ModelKind::Growth),
+            ModelPick::Arima => Choice::Fixed(ModelKind::Arima),
         }
     }
 }

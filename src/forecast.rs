@@ -1,7 +1,7 @@
 //! Phase 11 F1: forecasting 3 to 12 months ahead, in plain Rust (no new crates).
 //!
 //! Everything works on a **monthly series** (month-end balances or average daily balances, rolled up from daily rows by
-//! `roll_up_daily`). Three models, all with 80% and 95% bands:
+//! `roll_up_daily`). Four models, all with 80% and 95% bands:
 //!
 //! - **Trend + seasonality** (the default for deposits): the seasonal pattern of each calendar month is taken from a classical
 //!   additive decomposition (centred 2x12 moving average, then the mean of each month's deviations, centred to sum to zero), the
@@ -10,6 +10,7 @@
 //! - **Holt-Winters** (additive trend and additive seasonality, additive errors; period 12): smoothing parameters are found by
 //!   minimising the squared one-step errors on a fixed grid and then a deterministic coordinate search. With fewer than 24 months
 //!   it drops the seasonality and is Holt's linear trend (it says so).
+//! - **ARIMA** (Phase 12, `crate::arima`): the order by corrected AIC, exact Gaussian likelihood, checked against statsmodels.
 //! - **Growth / run-off**: a steady monthly % growth (or run-off) fitted to the last 12 months (log-linear when every value is
 //!   positive, straight line otherwise).
 //!
@@ -73,17 +74,20 @@ pub enum ModelKind {
     Stl,
     HoltWinters,
     Growth,
+    /// ARIMA(p, d, q), the order chosen by corrected AIC (Phase 12).
+    Arima,
 }
 
 impl ModelKind {
-    pub fn all() -> [ModelKind; 3] {
-        [ModelKind::Stl, ModelKind::HoltWinters, ModelKind::Growth]
+    pub fn all() -> [ModelKind; 4] {
+        [ModelKind::Stl, ModelKind::HoltWinters, ModelKind::Growth, ModelKind::Arima]
     }
     pub fn label(self) -> &'static str {
         match self {
             ModelKind::Stl => "Trend + seasonality",
             ModelKind::HoltWinters => "Holt-Winters",
             ModelKind::Growth => "Growth / run-off",
+            ModelKind::Arima => "ARIMA",
         }
     }
 }
@@ -591,6 +595,7 @@ fn run_model(kind: ModelKind, y: &[f64], first_month: u32, h: usize) -> Result<R
         ModelKind::Stl => trend_seasonal(y, first_month, h),
         ModelKind::HoltWinters => holt_winters(y, h),
         ModelKind::Growth => growth(y, h, 12),
+        ModelKind::Arima => crate::arima::arima(y, first_month, h),
     }
 }
 

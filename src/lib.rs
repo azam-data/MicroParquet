@@ -1,5 +1,6 @@
 //! Library crate for MicroParquet: the calculation modules used by the UI binary and the tests.
 
+pub mod arima;
 pub mod banking;
 pub mod bridge;
 pub mod behaviour;

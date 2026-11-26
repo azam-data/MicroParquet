@@ -133,7 +133,7 @@ fn f1_i_auto_back_tests_every_model_and_says_when_none_is_good() {
     let h = Monthly::new(2022, 1, y.clone());
     let f = forecast_series("Deposits", &h, &Settings::default()).expect("forecast");
     assert_eq!(f.backtest_months, Some(12));
-    assert_eq!(f.scores.len(), 3);
+    assert_eq!(f.scores.len(), 4); // Phase 12 added ARIMA as the fourth
     let best = f.scores.iter().filter_map(|s| s.mape.clone().ok()).fold(f64::INFINITY, f64::min);
     assert!(best < 2.0, "a smooth seasonal series back-tests well: {best}");
     assert!(!f.not_good);
