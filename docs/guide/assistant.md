@@ -13,13 +13,13 @@ A panel at the right edge of every view (Report, Dashboard, Data, Model) that an
 ## 3. How to use it
 
 1. Click **Ask** at the foot of the rail, choose Help ▸ Assistant, or press F1. The same keys close it.
-2. Type a question in your own words ("how do I join two tabs by a key", "what does the CL-1 summary do") and press Enter.
+2. Type a question in your own words and press Enter.
 3. Read the answer. Click a line under "Sections used" to read that section in the panel; "Whole note" shows every section of the note.
 4. "Calculate the NIM for 4,500 Cr at 9.5%" is not answered with a number. Ask "how is the NIM calculated" for the method, and run the tool on your data for the figure.
 
 ## 4. Example
 
-Question: "How do I run a liquidity gap ladder?" The answer is the Step by step section of the gap ladder note, followed by "From: Liquidity gap ladder ▸ Step by step", with the other matching sections listed below it.
+You ask how to use a tool. The answer is that tool's Step by step section, followed by a "From:" line with the note and section, and the other matching sections listed below it.
 
 ## 5. What it refuses and why
 
