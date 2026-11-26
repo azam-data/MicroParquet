@@ -15,6 +15,33 @@ pub const MAX_TOP: usize = 100;
 /// The months shown when none is asked for (the latest ones).
 pub const DEFAULT_MONTHS: usize = 12;
 
+/// What each month is compared with.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Basis {
+    /// The year-end balance of the year before (the opening balance of the year); the first year with data uses its first month.
+    #[default]
+    StartOfYear,
+    PreviousMonth,
+    SameMonthLastYear,
+}
+
+impl Basis {
+    pub const ALL: [Basis; 3] = [Basis::StartOfYear, Basis::PreviousMonth, Basis::SameMonthLastYear];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Basis::StartOfYear => "Start of the year",
+            Basis::PreviousMonth => "Previous month",
+            Basis::SameMonthLastYear => "Same month last year",
+        }
+    }
+}
+
+/// A tab saved before the choice existed compared month with month, so a missing value reads as that.
+fn basis_saved_default() -> Basis {
+    Basis::PreviousMonth
+}
+
 /// What the tool is given.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -28,11 +55,14 @@ pub struct MoversSpec {
     pub top: usize,
     /// How many of the latest months are listed (0 = all).
     pub months: usize,
+    /// What each month is compared with (new tools start with the start of the year).
+    #[serde(default = "basis_saved_default")]
+    pub basis: Basis,
 }
 
 impl Default for MoversSpec {
     fn default() -> Self {
-        MoversSpec { date_col: String::new(), bal_col: String::new(), key_cols: Vec::new(), top: DEFAULT_TOP, months: DEFAULT_MONTHS }
+        MoversSpec { date_col: String::new(), bal_col: String::new(), key_cols: Vec::new(), top: DEFAULT_TOP, months: DEFAULT_MONTHS, basis: Basis::default() }
     }
 }
 
@@ -190,17 +220,48 @@ pub fn build_movers(lf: LazyFrame, spec: &MoversSpec) -> Result<(DataFrame, Vec<
         bail!("Top movers: the tab has data for {} month(s) in '{}'. Two months with data are needed to compare one with the other.", by_month.len(), spec.date_col);
     }
     let months: Vec<(NaiveDate, NaiveDate)> = by_month.into_iter().collect();
-    // the months listed: the latest `spec.months`, each against the month with data before it
-    let first_listed = if spec.months == 0 { 1 } else { months.len().saturating_sub(spec.months).max(1) };
-    let needed: Vec<NaiveDate> = months[first_listed - 1..].iter().map(|(_, snap)| *snap).collect();
-    let by_date = balances(lf, spec, &needed)?;
     let mut notes: Vec<String> = Vec::new();
-    notes.push(format!("Each month is compared on its last date with data; the {} biggest changes in '{}' of each month are listed, largest first.", spec.top, spec.bal_col));
+    // the months listed (the latest `spec.months`) and, for each, the month it is compared with
+    let first_listed = if spec.months == 0 { 0 } else { months.len().saturating_sub(spec.months) };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for i in first_listed..months.len() {
+        let m = months[i].0;
+        let ym = |d: NaiveDate| d.year() * 12 + d.month0() as i32;
+        let base = match spec.basis {
+            Basis::PreviousMonth => i.checked_sub(1),
+            Basis::SameMonthLastYear => months.iter().position(|(pm, _)| ym(*pm) == ym(m) - 12),
+            Basis::StartOfYear => {
+                let last_year_end = months.iter().rposition(|(pm, _)| pm.year() < m.year());
+                last_year_end.or_else(|| months.iter().position(|(pm, _)| pm.year() == m.year()).filter(|j| *j != i))
+            }
+        };
+        match base {
+            Some(j) => pairs.push((i, j)),
+            None if spec.basis == Basis::PreviousMonth => {}
+            None => skipped.push(m.format("%b %Y").to_string()),
+        }
+    }
+    if !skipped.is_empty() {
+        let why = match spec.basis {
+            Basis::SameMonthLastYear => "has no data for the same month a year before",
+            _ => "has nothing earlier in its year to compare with",
+        };
+        notes.push(format!("Not listed ({}): each {}.", skipped.join(", "), why));
+    }
+    let mut needed: Vec<NaiveDate> = pairs.iter().flat_map(|(i, j)| [months[*i].1, months[*j].1]).collect();
+    needed.sort();
+    needed.dedup();
+    let by_date = balances(lf, spec, &needed)?;
+    notes.push(format!("Each month is compared on its last date with data, with {}; the {} biggest changes in '{}' of each month are listed, largest first.", spec.basis.label().to_lowercase(), spec.top, spec.bal_col));
     let mut rows: Vec<MoverRow> = Vec::new();
-    for i in (first_listed..months.len()).rev() {
-        let ((m, snap), (pm, psnap)) = (months[i], months[i - 1]);
-        if (m.year() * 12 + m.month0() as i32) - (pm.year() * 12 + pm.month0() as i32) > 1 {
+    for (i, j) in pairs.into_iter().rev() {
+        let ((m, snap), (pm, psnap)) = (months[i], months[j]);
+        if spec.basis == Basis::PreviousMonth && (m.year() * 12 + m.month0() as i32) - (pm.year() * 12 + pm.month0() as i32) > 1 {
             notes.push(format!("{} is compared with {}: the months between have no data in '{}'.", m.format("%b %Y"), pm.format("%b %Y"), spec.date_col));
+        }
+        if spec.basis == Basis::StartOfYear && pm.year() == m.year() {
+            notes.push(format!("{} is compared with {}: the year before has no data in '{}'.", m.format("%b %Y"), pm.format("%b %Y"), spec.date_col));
         }
         let empty = BTreeMap::new();
         let (cur, prev) = (by_date.get(&snap).unwrap_or(&empty), by_date.get(&psnap).unwrap_or(&empty));

@@ -30,7 +30,7 @@ fn data() -> DataFrame {
 }
 
 fn spec(top: usize, months: usize) -> MoversSpec {
-    MoversSpec { date_col: "Date".into(), bal_col: "Balance".into(), key_cols: vec!["Account".into()], top, months }
+    MoversSpec { date_col: "Date".into(), bal_col: "Balance".into(), key_cols: vec!["Account".into()], top, months, basis: Basis::PreviousMonth }
 }
 
 fn run(name: &str, df: &DataFrame, s: &MoversSpec) -> Result<(DataFrame, Vec<String>), String> {
@@ -126,4 +126,47 @@ fn m1_f_the_setup_is_guessed_from_the_columns() {
     // nothing to guess from: left empty, never made up
     let g = guess(&[("Notes".to_string(), DataType::String)]);
     assert!(g.date_col.is_empty() && g.bal_col.is_empty());
+}
+
+fn two_years() -> DataFrame {
+    let rows: Vec<(&str, &str, f64)> = vec![
+        ("2025-02-28", "A", 80.0),
+        ("2025-02-28", "B", 60.0),
+        ("2025-12-31", "A", 100.0),
+        ("2025-12-31", "B", 50.0),
+        ("2026-01-31", "A", 110.0),
+        ("2026-01-31", "B", 50.0),
+        ("2026-02-28", "A", 130.0),
+        ("2026-02-28", "B", 20.0),
+        ("2026-02-28", "C", 5.0),
+    ];
+    DataFrame::new(vec![
+        dates("Date", &rows.iter().map(|r| r.0).collect::<Vec<_>>()).into(),
+        strs("Account", &rows.iter().map(|r| r.1).collect::<Vec<_>>()).into(),
+        nums("Balance", &rows.iter().map(|r| r.2).collect::<Vec<_>>()),
+    ])
+    .expect("data")
+}
+
+#[test]
+fn m1_g_start_of_year_is_the_default_and_compares_with_the_year_end_before() {
+    assert_eq!(MoversSpec::default().basis, Basis::StartOfYear);
+    let mut s = spec(10, 0);
+    s.basis = Basis::StartOfYear;
+    let (df, notes) = run("p13m1_g", &two_years(), &s).expect("movers");
+    // Feb 2026 and Jan 2026 against 31 Dec 2025; Dec 2025 has no earlier year, so it uses the first month of its own year (Feb 2025)
+    assert_eq!(col_str(&df, COL_MONTH), ["Feb 2026", "Feb 2026", "Feb 2026", "Jan 2026", "Dec 2025", "Dec 2025"]);
+    assert_eq!(col_str(&df, "Account"), ["A", "B", "C", "A", "A", "B"]);
+    assert_eq!(col_f(&df, COL_CHANGE), [30.0, -30.0, 5.0, 10.0, 20.0, -10.0].map(Some));
+    assert!(notes.iter().any(|n| n.contains("Feb 2025") && n.contains("Not listed")), "{notes:?}");
+}
+
+#[test]
+fn m1_h_same_month_last_year_skips_a_month_with_no_partner_and_says_so() {
+    let mut s = spec(10, 0);
+    s.basis = Basis::SameMonthLastYear;
+    let (df, notes) = run("p13m1_h", &two_years(), &s).expect("movers");
+    assert_eq!(col_str(&df, COL_MONTH), ["Feb 2026", "Feb 2026", "Feb 2026"]);
+    assert_eq!(col_f(&df, COL_CHANGE), [50.0, -40.0, 5.0].map(Some));
+    assert!(notes.iter().any(|n| n.contains("Not listed") && n.contains("Jan 2026") && n.contains("same month")), "{notes:?}");
 }

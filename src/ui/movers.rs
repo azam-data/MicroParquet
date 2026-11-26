@@ -1,5 +1,5 @@
 //! Top movers (Phase 13): Banking ▸ Reports ▸ "Top movers". One click on a tab with a date column and a balance gives, for each
-//! month, the lines whose balance moved most against the month before. The date, balance and line columns are guessed from the tab;
+//! month, the lines whose balance moved most against the start of the year, the previous month or the same month last year. The date, balance and line columns are guessed from the tab;
 //! the dialog only asks to confirm them.
 
 use crate::ui::prelude::*;
@@ -21,6 +21,7 @@ pub struct MoversState {
     pub key2: String,
     pub top_text: String,
     pub months_text: String,
+    pub basis: micro_parquet::movers::Basis,
     /// The tab the columns were guessed for.
     pub guessed_for: Option<u64>,
     pub rects: MoversRects,
@@ -28,7 +29,7 @@ pub struct MoversState {
 
 impl Default for MoversState {
     fn default() -> Self {
-        MoversState { date: String::new(), bal: String::new(), key1: String::new(), key2: String::new(), top_text: DEFAULT_TOP.to_string(), months_text: DEFAULT_MONTHS.to_string(), guessed_for: None, rects: MoversRects::default() }
+        MoversState { date: String::new(), bal: String::new(), key1: String::new(), key2: String::new(), top_text: DEFAULT_TOP.to_string(), months_text: DEFAULT_MONTHS.to_string(), basis: micro_parquet::movers::Basis::default(), guessed_for: None, rects: MoversRects::default() }
     }
 }
 
@@ -64,7 +65,7 @@ impl MicroParquetApp {
         if !m.key2.trim().is_empty() {
             keys.push(m.key2.clone());
         }
-        let spec = MoversSpec { date_col: m.date.clone(), bal_col: m.bal.clone(), key_cols: keys, top, months };
+        let spec = MoversSpec { date_col: m.date.clone(), bal_col: m.bal.clone(), key_cols: keys, top, months, basis: m.basis };
         spec.check().map_err(|e| format!("{:#}", e))?;
         Ok(spec)
     }
@@ -117,13 +118,21 @@ impl MicroParquetApp {
                     let r = ui.add(egui::TextEdit::singleline(&mut self.movers.months_text).desired_width(theme::CF_DEFAULT_W));
                     rects.fields.push(("Months".to_string(), r.rect));
                     ui.end_row();
+                    ui.label("Compare with:");
+                    let r = egui::ComboBox::from_id_salt("movers_basis").selected_text(self.movers.basis.label()).show_ui(ui, |ui| {
+                        for b in micro_parquet::movers::Basis::ALL {
+                            ui.selectable_value(&mut self.movers.basis, b, b.label());
+                        }
+                    });
+                    rects.combos.push(("Compare with:".to_string(), r.response.rect));
+                    ui.end_row();
                 });
                 if let Some(p) = &problem {
                     ui.add_space(theme::SPACE_S);
                     theme::error_label(ui, p);
                 }
                 ui.add_space(theme::SPACE_S);
-                ui.add(egui::Label::new(egui::RichText::new("For each month, the balance of every line on the month's last date with data is set against the month before, and the lines that moved most (up or down) are listed with their change. A line that was not there before is marked New, one that is gone Closed. The columns above were guessed from the tab; change them if they are wrong.").color(tk.muted).size(theme::TEXT_LABEL)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new("For each month, the balance of every line on the month's last date with data is set against the start of the year (the year-end balance of the year before), the previous month or the same month last year, as chosen, and the lines that moved most (up or down) are listed with their change. A line that was not there before is marked New, one that is gone Closed. The columns above were guessed from the tab; change them if they are wrong.").color(tk.muted).size(theme::TEXT_LABEL)).wrap());
             });
             d.footer(|ui| {
                 ui.horizontal_wrapped(|ui| {

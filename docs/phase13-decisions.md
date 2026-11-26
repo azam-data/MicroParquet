@@ -33,7 +33,7 @@ Built autonomously; each choice below was made without asking. Rates are in perc
 - A note whose category is not on the chart now (a drill level or a filter changed it) is not drawn and the footnote says "Note [2] ... is not shown: 'Jun 2026' is not on this chart now", so it is never lost without a word. Notes with no text are not written.
 - Notes are drawn on column, bar, line and area charts (the forms that have a category axis with a value axis); other forms keep the footnote line only.
 
-## Open questions for the owner
-1. Should a saved view be able to say "the latest quarter" or "the latest month" instead of a fixed one? It needs a rule for what "latest" means on the Calendar filter (the as-of date's quarter is the likely answer).
-2. Top movers compares month with month. Do you also want "against the same month last year" or "against the start of the year"?
-3. Should the PowerPoint chart carry the note markers as small shapes laid over the native chart? It would look better but the shapes would not move with the chart if it is resized in PowerPoint.
+## Owner answers (26 Nov 2026) and what was done
+1. **Latest period in a saved view: yes.** When saving a view, the box "Follow the latest period" marks every picked Year, Year-Quarter or Month-Year filter to follow the latest period. Applying the view picks the latest value that filter lists, found by time (so "Jan 2026" is after "Dec 2025"), not by text. Other filters keep their saved values. If the filter's values are not loaded yet, or a value is not a period, applying the view says so in words and changes nothing. "Latest" means the latest period in the data, not the as-of date's quarter.
+2. **Top movers compares with the start of the year by default.** The dialog has "Compare with": Start of the year (default), Previous month, Same month last year. Start of the year means the year-end balance of the year before; the first year with data uses its first month, and a month with nothing to compare with is left out, and the notes say which. A tab saved before this choice existed keeps comparing month with month.
+3. **PowerPoint: no note markers.** Kept as it is: the numbered notes are in the slide's footnote only.

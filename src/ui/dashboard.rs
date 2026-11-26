@@ -123,6 +123,7 @@ pub struct DashboardUi {
     pub notice: String,
     /// Phase 13: the name typed in the Views menu for the view to save.
     pub view_name: String,
+    pub view_latest: bool,
     pub next_id: u64,
     /// The controls drawn in the last frame, by name (the render tests click these rects).
     pub rects: Vec<(String, egui::Rect)>,
@@ -592,10 +593,12 @@ impl MicroParquetApp {
                     if dash.pages[pi].views.is_empty() {
                         ui.label(egui::RichText::new("No saved views yet. Pick the filters, then save them here.").color(tk.muted));
                     }
+                    let value_of = |id: &str| -> Vec<String> { self.dashboard_ui.values.get(id).map(|v| v.values.clone()).unwrap_or_default() };
                     for v in &dash.pages[pi].views {
-                        let on = dash.pages[pi].view_is_on(v);
+                        let on = dash.pages[pi].view_is_on(v, &value_of);
                         ui.horizontal(|ui| {
-                            let b = ui.selectable_label(on, &v.name).on_hover_text("Put the page's filters as this view had them");
+                            let label = if v.latest.is_empty() { v.name.clone() } else { format!("{}  (latest period)", v.name) };
+                            let b = ui.selectable_label(on, label).on_hover_text("Put the page's filters as this view had them");
                             rects.push((format!("View {}", v.name), b.rect));
                             if b.clicked() {
                                 apply = Some(v.name.clone());
@@ -617,8 +620,10 @@ impl MicroParquetApp {
                         rects.push(("Save view".into(), b.rect));
                         save = b.clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.dashboard_ui.view_name.trim().is_empty());
                     });
+                    let cb = ui.checkbox(&mut self.dashboard_ui.view_latest, "Follow the latest period (Year, Year-Quarter or Month-Year filters)");
+                    rects.push(("View latest".into(), cb.rect));
                     if save {
-                        match dash.pages[pi].save_view(&self.dashboard_ui.view_name.clone()) {
+                        match dash.pages[pi].save_view(&self.dashboard_ui.view_name.clone(), self.dashboard_ui.view_latest) {
                             Ok(()) => {
                                 self.dashboard_ui.notice.clear();
                                 self.dashboard_ui.view_name.clear();
@@ -628,7 +633,7 @@ impl MicroParquetApp {
                         ui.close_menu();
                     }
                     if let Some(name) = apply {
-                        match dash.pages[pi].apply_view(&name) {
+                        match dash.pages[pi].apply_view(&name, &value_of) {
                             Ok(notes) => self.dashboard_ui.notice = notes.join(" "),
                             Err(e) => self.dashboard_ui.notice = format!("{}", e),
                         }

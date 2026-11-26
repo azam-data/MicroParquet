@@ -9,7 +9,7 @@ use crate::kpi::{KpiSpec, KpiUnit};
 use crate::project::Project;
 use crate::chart::{ChartData, ChartSpec};
 use crate::models::*;
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -516,11 +516,40 @@ pub struct SavedView {
     /// (filter id, picked values); a filter that had nothing picked is not listed (it is "All").
     pub picks: Vec<(String, Vec<String>)>,
     pub cross: Option<CrossPick>,
+    /// The filters (by id) that follow the latest period: applying the view picks the latest value the filter lists, not the one saved.
+    pub latest: Vec<String>,
+}
+
+/// The latest period a Year, Year-Quarter or Month-Year filter lists: the value with the highest place in time (by the period, never
+/// by the text, so "Dec 2025" is before "Jan 2026"). Any other filter has no "latest", and a value that is not a period is refused.
+pub fn latest_period_value(f: &PageFilter, values: &[String]) -> Result<String> {
+    let part = f.field.rsplit(" \u{b7} ").next().and_then(crate::dates::DatePart::from_label);
+    let Some(part) = part.filter(|p| matches!(p, crate::dates::DatePart::Year | crate::dates::DatePart::YearQuarter | crate::dates::DatePart::MonthYear)) else {
+        bail!("'{}' has no \"latest\": only a Year, Year-Quarter or Month-Year filter can follow the latest period.", f.label);
+    };
+    if values.is_empty() {
+        bail!("The values of '{}' are not loaded yet, so its latest period is not known. Try again in a moment.", f.label);
+    }
+    let cal = crate::dates::CalendarSettings::default();
+    let mut best: Option<(i64, &String)> = None;
+    for v in values {
+        let k = part.parse_key(v, &cal).map_err(|e| anyhow!("'{}' lists '{}', which is not a {}: {}", f.label, v, part.label(), e))?;
+        if best.map_or(true, |(b, _)| k > b) {
+            best = Some((k, v));
+        }
+    }
+    Ok(best.map(|(_, v)| v.clone()).unwrap_or_default())
+}
+
+/// Whether a filter can follow the latest period.
+pub fn filter_can_follow_latest(f: &PageFilter) -> bool {
+    f.field.rsplit(" \u{b7} ").next().and_then(crate::dates::DatePart::from_label).is_some_and(|p| matches!(p, crate::dates::DatePart::Year | crate::dates::DatePart::YearQuarter | crate::dates::DatePart::MonthYear))
 }
 
 impl DashPage {
-    /// Saves the page's present filter state as the view `name`; a view of the same name (capitals ignored) is replaced.
-    pub fn save_view(&mut self, name: &str) -> Result<()> {
+    /// Saves the page's present filter state as the view `name`; a view of the same name (capitals ignored) is replaced. With
+    /// `follow_latest`, every picked Year, Year-Quarter or Month-Year filter follows the latest period instead of the value picked.
+    pub fn save_view(&mut self, name: &str, follow_latest: bool) -> Result<()> {
         let name = name.trim();
         if name.is_empty() {
             bail!("Type a name for the view (for example \"Conventional wing, Q4\").");
@@ -529,6 +558,7 @@ impl DashPage {
             name: name.to_string(),
             picks: self.active_picks().into_iter().map(|(_, f, v)| (f.id.clone(), v.clone())).collect(),
             cross: self.state.cross.clone(),
+            latest: if follow_latest { self.active_picks().into_iter().filter(|(_, f, _)| filter_can_follow_latest(f)).map(|(_, f, _)| f.id.clone()).collect() } else { Vec::new() },
         };
         match self.views.iter().position(|v| v.name.to_lowercase() == name.to_lowercase()) {
             Some(i) => self.views[i] = view,
@@ -544,15 +574,18 @@ impl DashPage {
 
     /// Puts the page's filters back as the view `name` had them. A filter the view names that is no longer on the page is said, not
     /// skipped silently. The items' drill levels start again from the top.
-    pub fn apply_view(&mut self, name: &str) -> Result<Vec<String>> {
+    pub fn apply_view(&mut self, name: &str, values: &dyn Fn(&str) -> Vec<String>) -> Result<Vec<String>> {
         let Some(view) = self.views.iter().find(|v| v.name == name).cloned() else {
             bail!("The view '{}' is not on this page.", name);
         };
         let mut notes = Vec::new();
         let mut state = PageState::default();
-        for (id, values) in &view.picks {
+        for (id, picked) in &view.picks {
             match self.filters.iter().position(|f| &f.id == id) {
-                Some(j) => state.filter_picks[j] = Some(values.clone()),
+                Some(j) => {
+                    let picked = if view.latest.contains(id) { vec![latest_period_value(&self.filters[j], &values(id))?] } else { picked.clone() };
+                    state.filter_picks[j] = Some(picked);
+                }
                 None => notes.push(format!("The view '{}' used a filter that is no longer on this page, so that part is not applied.", view.name)),
             }
         }
@@ -569,9 +602,17 @@ impl DashPage {
     }
 
     /// Whether the page is in the state the view saved (to mark the view that is on).
-    pub fn view_is_on(&self, view: &SavedView) -> bool {
+    pub fn view_is_on(&self, view: &SavedView, values: &dyn Fn(&str) -> Vec<String>) -> bool {
         let now: Vec<(String, Vec<String>)> = self.active_picks().into_iter().map(|(_, f, v)| (f.id.clone(), v.clone())).collect();
-        now == view.picks && self.state.cross == view.cross
+        let want: Vec<(String, Vec<String>)> = view
+            .picks
+            .iter()
+            .map(|(id, v)| match (view.latest.contains(id), self.filters.iter().find(|f| &f.id == id)) {
+                (true, Some(f)) => (id.clone(), latest_period_value(f, &values(id)).map(|l| vec![l]).unwrap_or_else(|_| v.clone())),
+                _ => (id.clone(), v.clone()),
+            })
+            .collect();
+        now == want && self.state.cross == view.cross
     }
 }
 
