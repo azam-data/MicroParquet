@@ -216,6 +216,13 @@ pub struct DqScorecardRun {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
+pub struct TopMoversRun {
+    pub source: String,
+    pub spec: crate::movers::MoversSpec,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
 pub struct Cl1SummaryRun {
     pub source: String,
     pub spec: Cl1Spec,
@@ -306,6 +313,7 @@ pub enum ToolRun {
     ClMigration(ClMigrationRun),
     MomVariance(MomVarianceRun),
     DqScorecard(DqScorecardRun),
+    TopMovers(TopMoversRun),
     Mudaraba(MudarabaRun),
     Cl1Summary(Cl1SummaryRun),
     Liquidity(LiquidityRun),
@@ -365,6 +373,7 @@ impl ToolRun {
             ToolRun::ClMigration(_) => "CL migration",
             ToolRun::MomVariance(_) => "MoM variance",
             ToolRun::DqScorecard(_) => "Data-quality scorecard",
+            ToolRun::TopMovers(_) => "Top movers",
             ToolRun::Mudaraba(_) => "Mudaraba profit distribution",
             ToolRun::Cl1Summary(_) => "CL-1 summary",
             ToolRun::Liquidity(_) => "LCR/NSFR",
@@ -432,6 +441,7 @@ impl ToolRun {
                 f(&mut r.curr);
             }
             ToolRun::DqScorecard(r) => f(&mut r.source),
+            ToolRun::TopMovers(r) => f(&mut r.source),
             ToolRun::Mudaraba(r) => f(&mut r.source),
             ToolRun::Cl1Summary(r) => f(&mut r.source),
             ToolRun::Liquidity(r) => f(&mut r.source),
@@ -536,6 +546,10 @@ impl ToolRun {
             TabSource::DqScorecard { source, steps, rules, view } => {
                 no_extra_steps(tab_steps)?;
                 Ok(ToolRun::DqScorecard(DqScorecardRun { source: name(source, steps)?, rules: (**rules).clone(), view: *view }))
+            }
+            TabSource::TopMovers { source, steps, spec } => {
+                no_extra_steps(tab_steps)?;
+                Ok(ToolRun::TopMovers(TopMoversRun { source: name(source, steps)?, spec: spec.clone() }))
             }
             TabSource::Cl1Summary { source, steps, spec, .. } => {
                 no_extra_steps(tab_steps)?;
@@ -687,6 +701,11 @@ impl ToolRun {
                     DqView::Failing(i) => format!("Failing rows of rule {}", i + 1),
                 };
                 Ok(vec![(title, TabSource::DqScorecard { source: Box::new(t.source), steps: t.steps, rules: Box::new(r.rules.clone()), view: r.view })])
+            }
+            ToolRun::TopMovers(r) => {
+                let t = tab(&r.source)?;
+                r.spec.check()?;
+                Ok(vec![("Top movers".to_string(), TabSource::TopMovers { source: Box::new(t.source), steps: t.steps, spec: r.spec.clone() })])
             }
             ToolRun::Cl1Summary(r) => {
                 let t = tab(&r.source)?;

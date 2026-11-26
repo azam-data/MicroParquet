@@ -376,6 +376,52 @@ pub fn compute_kpi(req: &KpiRequest) -> Result<KpiValue> {
     Ok(KpiValue { current, earlier, reason, spark, spark_labels: if req.spec.sparkline { labels } else { Vec::new() }, period: format!("{}{}", period, scenario), notes: build.warnings, is_ratio, target, target_reason })
 }
 
+/// The rows behind a card's number (Phase 13): the card is a one-cell pivot, so its rows are the pivot cell's rows. A measure card
+/// has rows when the measure is a base measure; a ratio or plan measure says why not.
+pub fn kpi_rows(req: &KpiRequest) -> Result<crate::pivot_table::CellRows> {
+    let Some(ctx) = crate::model::scope() else {
+        bail!("{}", crate::model::outside_project_message("a KPI card"));
+    };
+    let Some(cal) = ctx.calendar.clone() else {
+        bail!("A KPI card needs the model calendar. Turn it on and link the tab's date column in Model \u{25b8} Calendar\u{2026}.");
+    };
+    let Some(as_of) = cal.as_of else {
+        bail!("The as-of date is not known yet. Try again in a moment, or set the date in Model \u{25b8} As-of date\u{2026}.");
+    };
+    let Some(link) = cal.date_links.iter().find(|l| l.data_tab == req.tab_key) else {
+        bail!("The tab '{}' is not linked to the calendar. Link its date column in Model \u{25b8} Calendar\u{2026}.", cal.title_of(&req.tab_key));
+    };
+    let field = crate::model::ModelFieldRef::new(&crate::model_calendar::date_link(&req.tab_key, &link.column, &cal.tab), &format!("{} \u{2192} Calendar", cal.title_of(&req.tab_key)), "Calendar", "Month-Year");
+    let period = month_start(as_of).format("%b %Y").to_string();
+    if let KpiSource::Measure(name) = &req.spec.source {
+        if let Err(why) = crate::pivot_table::measure_rows_filters(name) {
+            bail!("{}", why);
+        }
+    }
+    let spec = PivotSpec {
+        rows: vec![field.name.clone()],
+        values: vec![value_of(&req.spec, &req.spec.source, TimeShift::None)],
+        filters: vec![PivotFilter { field: field.name.clone(), values: vec![Some(period.clone())] }],
+        model_fields: vec![field.clone()],
+        data_tab: req.tab_key.clone(),
+        ..Default::default()
+    };
+    let spec = pivot_spec_with(&spec, &req.picks);
+    let lf = crate::engine::compile_tab_lazy(&req.base, &req.steps, &req.temp_dir)?;
+    let build = crate::pivot_table::build_pivot(lf, &spec)?;
+    let names: Vec<String> = build.df.get_column_names().iter().map(|n| n.to_string()).collect();
+    let Some(col) = build.col_values.iter().position(|v| *v == 0).and_then(|k| names.get(build.label_columns + k).cloned()) else {
+        bail!("The card's number is not in the table. Open the card's settings and check its source.");
+    };
+    if let Some(reason) = build.notes.iter().find(|n| n.column == col).map(|n| n.text.clone()) {
+        bail!("{}", reason);
+    }
+    let mut rows = crate::pivot_table::cell_rows_at(&spec, &build, &[Some(period.clone())], &col)?;
+    let what = if req.spec.title.is_empty() { "KPI".to_string() } else { req.spec.title.clone() };
+    rows.title = format!("Rows behind {} \u{b7} {}", what, period);
+    Ok(rows)
+}
+
 // -------------------------------------------------------------------------------------- how it is shown
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

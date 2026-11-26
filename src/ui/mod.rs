@@ -38,6 +38,7 @@ pub mod model;
 pub mod model_calendar;
 pub mod model_measures;
 pub mod mom;
+pub mod movers;
 pub mod mudaraba;
 pub mod clean_breaks;
 pub mod classify_overdue;
@@ -177,6 +178,7 @@ impl MicroParquetApp {
             ActiveToolModal::Mudaraba => self.render_mudaraba_modal(ctx, cols),
             ActiveToolModal::DqScorecard => self.render_dq_modal(ctx, cols),
             ActiveToolModal::MomVariance => self.render_mom_modal(ctx, cols),
+            ActiveToolModal::TopMovers => self.render_movers_modal(ctx, cols),
             ActiveToolModal::Packs => self.render_packs_modal(ctx, cols),
             ActiveToolModal::SaveRun => self.render_save_run_modal(ctx, cols),
             ActiveToolModal::SavedRuns => self.render_saved_runs_modal(ctx, cols),

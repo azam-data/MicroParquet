@@ -60,6 +60,7 @@ pub enum CommandId {
     Audit,
     Packs,
     MomVariance,
+    TopMovers,
     Mudaraba,
     DqScorecard,
     // Charts
@@ -233,6 +234,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Ftp, "FTP yield curve mapper\u{2026}", G::Banking, "funds transfer pricing margin", N::Tab),
     c(I::YieldCurves, "Yield curves (dated FTP curves)\u{2026}", G::Banking, "curve ftp tenor store csv import dated origination", N::Nothing),
     c(I::MomVariance, "MoM variance and commentary\u{2026}", G::Banking, "month on month change prev curr volume rate mix effect interest materiality narrative alco paper", N::TwoTabs),
+    c(I::TopMovers, "Top movers (biggest monthly changes)\u{2026}", G::Banking, "top movers biggest change month on month gainers losers largest increase decrease account customer gl head balance variance ranking", N::Tab),
     c(I::Provision, "Classified-loan provision and BFP\u{2026}", G::Banking, "cl npl bangladesh bank base", N::Tab),
     c(I::ClassifyOverdue, "Classify by overdue\u{2026}", G::Banking, "cl classification overdue dpd days past due months std sma ss df bl brpd 15 2024 grade stage override", N::Tab),
     c(I::IfrsEcl, "IFRS 9 ECL\u{2026}", G::Banking, "ifrs9 ifrs 9 ecl expected credit loss stage 1 2 3 sicr pd lgd ead ccf scenario cure brpd 06 2026 provision shortfall", N::Tab),
@@ -299,7 +301,7 @@ pub const COMMANDS: &[Command] = &[
 /// order, so the commands of one heading are next to each other).
 pub fn banking_section(id: CommandId) -> Option<&'static str> {
     match id {
-        CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves | CommandId::MomVariance => Some("Treasury & ALM"),
+        CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves | CommandId::MomVariance | CommandId::TopMovers => Some("Treasury & ALM"),
         CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration => Some("Loans & credit"),
         CommandId::Mudaraba => Some("Islamic window"),
         CommandId::Packs => Some("Reports"),

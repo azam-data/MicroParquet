@@ -89,6 +89,7 @@ pub fn home_view(id: CommandId) -> Option<View> {
         | I::Audit
         | I::DqScorecard
         | I::MomVariance
+        | I::TopMovers
         | I::Mudaraba
         | I::Packs
         | I::SavedRuns

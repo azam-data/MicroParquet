@@ -34,6 +34,7 @@ pub mod model;
 pub mod model_calendar;
 pub mod models;
 pub mod mom;
+pub mod movers;
 pub mod overdue;
 pub mod packs;
 pub mod problems;

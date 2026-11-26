@@ -85,6 +85,7 @@ pub use crate::ui::packs::PacksState;
 pub use crate::ui::mudaraba::MudState;
 pub use crate::ui::dq::DqState;
 pub use crate::ui::mom::MomState;
+pub use crate::ui::movers::MoversState;
 pub use crate::ui::value_picker::PickerPanel;
 pub use crate::ui::stack::StackState;
 pub use crate::ui::steps::{MacroState, RightTab};

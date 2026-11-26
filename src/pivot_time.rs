@@ -887,7 +887,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                     }
                 }
                 if let Res::Single(ci) = res {
-                    if comps[*ci].plain {
+                    {
                         if let Some(r) = crate::measures::rows_of(comps[*ci].agg, &rows_days, &timeline, month_end) {
                             out.rows.insert((rk.clone(), ck.clone(), j), r);
                         }
