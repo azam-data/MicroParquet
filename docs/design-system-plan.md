@@ -64,7 +64,7 @@ Screens ask for a **role** ("card surface", "secondary text", "positive"), never
 
 Rules: one neutral family (cool slate) for app **and** charts; a chart has **no background of its own** (it inherits the tile surface, which removes the off-white box); dark mode is designed, not inverted (dark surfaces get lighter as they rise, shadows disappear and borders carry the depth); the brand colour is the same hue in light and dark (lighter step in dark), so amber is no longer a different identity; amber stays available as a bank theme.
 
-Starting palette (light), to be validated in DS1: canvas `#F4F6F9`, surface `#FFFFFF`, sunken `#EEF1F5`, border subtle `#E1E6ED`, border strong `#C5CDD8`, text `#14202E` / `#46546A` / `#66758A` (4.7:1 on white), brand `#1F5FAD` (6.1:1 on white). Dark: canvas `#0E1318`, surface `#161C23`, raised `#1D252E`, border `#2A3440`.
+Starting palette (light), to be validated in DS1: canvas `#F4F6F9`, surface `#FFFFFF`, sunken `#EEF1F5`, border subtle `#E1E6ED`, border strong `#C5CDD8`, text `#14202E` / `#46546A` / `#66758A` (4.7:1 on white), brand **royal blue**, about `#4169E1` (4.8:1 on white, so it passes for buttons and links; DS1 picks the exact hex and a deeper step for small text). The current `#1F5FAD` is retired. Dark (brand is a lighter royal blue): canvas `#0E1318`, surface `#161C23`, raised `#1D252E`, border `#2A3440`.
 
 ### 3.2 Type scale
 
@@ -112,7 +112,7 @@ Each phase lists: goal, tasks, acceptance criteria (each one is a test or a scre
 |---|---|
 | DS0.1 | **Screenshot harness.** The render tests already dump frames (`tools/egui_mesh_png.py`) and charts (`tools/chart_layout_png.py`). Add one test, `design_gallery`, that renders the 16 canonical screens (list in section 5) at 1320×740, light and dark, to `docs/design/shots/<phase>/`. A contact-sheet script puts them side by side with the previous phase. |
 | DS0.2 | **Audit.** `docs/design-audit.md`: every raw colour (`Color32::from_rgb`, `hex(`) and raw size outside the token files, counted per file; the list of duplicate palettes (UI, chart, `page.css`, `pptx.rs`, `dashboard_pdf.rs`); the list of components drawn by hand. |
-| DS0.3 | **Speed baseline.** A hidden test or `--bench-ui` flag that renders N frames of fixed scenarios (data table 100k rows; dashboard with 12 tiles idle, hovering, resizing; chart tab with 5,000 marks; pivot 200×40) and writes median and 95th-percentile frame time, number of `layout_chart` calls per frame, and shapes per frame to `docs/design/perf-baseline.json`. Plus cold start time and idle CPU measured by hand once. |
+| DS0.3 | **Speed baseline.** A hidden test or `--bench-ui` flag that renders N frames of fixed scenarios (data table 100k rows; dashboard with 12 tiles idle, hovering, resizing; chart tab with 5,000 marks; pivot 200×40) and writes median and 95th-percentile frame time, number of `layout_chart` calls per frame, and shapes per frame to `docs/design/perf-baseline.json`. Plus cold start time, idle CPU and peak memory, measured once by hand on the reference laptop (below). |
 | DS0.4 | **Specimen sheet.** One screen showing the type scale in Source Sans 3 (tabular figures check on a column of Crore values) and the current palette, for the owner to react to. |
 | DS0.5 | **Export capture.** Confirm what the cloud container can render: PDF to PNG, HTML to PNG (Playwright is installed; `tools/html_chart_png.js` exists), PPTX to PNG (LibreOffice if present). Record what can be checked automatically and what the owner must open in real PowerPoint and Excel. |
 
@@ -199,10 +199,11 @@ canvas ────────────────────────�
 
 **Acceptance (targets; DS0 baseline decides the exact figures).**
 - Idle dashboard with 12 tiles: **0** `layout_chart` calls per frame after warm-up (deterministic test); hover over a chart: at most 1 layout call.
-- Median frame time at least 3× lower than baseline on the 12-tile hover scenario, 95th percentile under 16.6 ms on the build machine; the owner confirms on his own PC.
+- Median frame time at least 3× lower than baseline on the 12-tile hover scenario, 95th percentile under 16.6 ms on the build machine, and the same figures re-measured on the reference laptop (below), which is the target that counts.
 - Idle CPU under 1% with a dashboard open (nothing repainting); with Reduce motion on, zero animation repaints.
 - Scrolling a 100k-row table: no frame over 33 ms.
 - Cold start to first frame not slower than baseline.
+- On the reference laptop, with the app and a 12-tile dashboard open on a 1-million-row file, memory stays under 2 GB, so Windows and Office keep room within 8 GB.
 - No visual change except motion (screenshot diff against DS2 is empty).
 
 **Risk.** Caches can show stale pictures. The key must include everything that changes a picture; a test changes each input (data, option, size, theme, unit) and checks the cache misses.
@@ -310,7 +311,7 @@ Metabase's X-ray builds a starter dashboard from any table. MicroParquet's versi
 
 | ID | Task |
 |---|---|
-| DS8.1 | **Theme picker** in Settings: preview card showing a mini dashboard live; presets named by colour (not by bank): *Ocean blue* (default), *Teal*, *Emerald* (Islamic banking green), *Crimson*, *Navy and gold*, *Graphite* (mono); **Custom**: pick one brand colour (and optionally an accent), the engine derives the rest, shows a contrast report, and fixes any failing role automatically. Optional logo (PNG or JPEG, resized, stored in `portable_data/themes/`), used on PDF, PPTX and HTML headers. Theme travels with a project file (so a colleague opens it with the same look) and has an "Apply to all new projects" choice. Light, Dark and **System** mode. |
+| DS8.1 | **Theme picker** in Settings: preview card showing a mini dashboard live; presets named by colour (not by bank): *Royal blue* (default), *Teal*, *Emerald* (Islamic banking green), *Crimson*, *Navy and gold*, *Graphite* (mono); **Custom**: pick one brand colour (and optionally an accent), the engine derives the rest, shows a contrast report, and fixes any failing role automatically. Optional logo (PNG or JPEG, resized, stored in `portable_data/themes/`), used on PDF, PPTX and HTML headers. Theme travels with a project file (so a colleague opens it with the same look) and has an "Apply to all new projects" choice. Light, Dark and **System** mode. |
 | DS8.2 | **Density and zoom**: Comfortable/Compact setting; UI zoom range kept (0.5 to 2.0); chart text scales with zoom; presentation scale ×1.25. |
 | DS8.3 | **Accessibility pass.** Contrast tests run for every preset in both modes (a preset that fails is not shipped); focus ring and keyboard order checked on every dialog; every chart and KPI exposes a text summary to screen readers through egui's accessibility tree (the painted charts currently have none; `data_table.rs` already produces the table text); **colour is never the only signal** (arrows and words on deltas, already the rule for KPI) extended to charts with a "pattern and shape" option (marker shapes for lines, hatching for bars) that also makes a greyscale print readable; minimum text size 12 on screen; motion reduce setting; HTML export ARIA. |
 | DS8.4 | **Colour-blind check** of every preset's series set with the existing palette validator; the report lists the worst pair distance for each. |
@@ -372,7 +373,7 @@ Stub proofs follow the lean-session rule: one or two key tests per task, named i
 ## 7. Decisions I made in this plan (veto any; defaults are chosen so building can start)
 
 1. One cool-slate neutral family for app and charts; charts have no background of their own.
-2. Brand blue in light **and** dark (the current amber dark accent becomes an optional theme).
+2. **Royal blue** brand (your choice) in light **and** dark (the current amber dark accent becomes an optional theme).
 3. Single-series charts use the brand colour; the 8-colour set is only for multi-series; "highlight one, grey the rest" for rankings.
 4. Dashboard: grey canvas, white tiles with 10 px radius and soft shadow; dark mode uses lighter tiles plus a hairline instead of shadows.
 5. Source Sans 3 for all text **including numbers** (tabular), mono only for code; Office files use Segoe UI.
@@ -383,7 +384,9 @@ Stub proofs follow the lean-session rule: one or two key tests per task, named i
 10. Print and PDF are always light.
 11. No new dependencies in any phase.
 
-**Questions that can wait (a default is chosen for each):** (a) your bank's brand colour or logo for the first custom theme; (b) the specification of the PC you use daily (for the speed targets; default: 4-core office PC, 8 GB, integrated graphics, 1080p); (c) whether PowerPoint at work has Segoe UI (default: yes, standard on Windows).
+**Answered (26 Nov):** brand colour is royal blue; the reference machine for speed targets is the office laptop (Intel Core Ultra 5, Windows 11, 8 GB RAM, integrated graphics); the desktop has 16 GB and is the easy case. Every speed and memory target is judged on the 8 GB laptop.
+
+**Questions that can wait (a default is chosen for each):** (a) your bank's logo for the first custom theme; (b) whether PowerPoint at work has Segoe UI (default: yes, standard on Windows).
 
 ---
 
