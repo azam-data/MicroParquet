@@ -240,3 +240,5 @@ mod p12_t1;
 mod p12_t2;
 #[path = "../phase12/t3.rs"]
 mod p12_t3;
+#[path = "../phase12/t4.rs"]
+mod p12_t4;
