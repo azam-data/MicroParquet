@@ -1373,6 +1373,17 @@ fn show_rows_inner(req: ShowRowsRequest, nested_row: Option<Vec<Option<String>>>
     Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps, note: cell.note })))
 }
 
+/// "Show rows" on a KPI card (Phase 13): the rows behind the card's number, as a tab of the card's own source and steps with a filter.
+pub fn kpi_rows_job(req: crate::kpi::KpiRequest, ctx: &JobCtx) -> Result<JobOutput> {
+    ctx.set_progress("Finding the rows behind the card\u{2026}", None);
+    ctx.check()?;
+    let cell = crate::kpi::kpi_rows(&req)?;
+    let mut steps = req.steps.clone();
+    steps.push(TransformStep::FilterGroup { conditions: cell.conditions, join: crate::models::GroupJoin::And, keep_matching: true });
+    steps.extend(cell.extra_steps);
+    Ok(JobOutput::ShowRows(Box::new(ShowRowsResult { title: cell.title, base: req.base, steps, note: cell.note })))
+}
+
 /// The Nested view of a pivot tab: the tab's steps up to the pivot, which must be the last one run (Phase 9 P2).
 pub struct NestedViewRequest {
     pub tab_id: u64,

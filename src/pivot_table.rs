@@ -772,6 +772,22 @@ pub fn is_measure_column(spec: &PivotSpec, col_name: &str) -> bool {
     spec.values.iter().filter(|v| is_measure(v)).any(|v| last == v.field || last.starts_with(&format!("{} \u{b7} ", v.field)) || last.starts_with(&format!("{} (pp)", v.field)))
 }
 
+/// Why Show rows is off on the column `col_name` when it holds a named measure (Phase 13: a base measure has rows, a ratio or a
+/// plan measure does not); `None` when the column is not a measure's or its rows can be listed.
+pub fn measure_rows_reason(spec: &PivotSpec, col_name: &str) -> Option<String> {
+    if !is_measure_column(spec, col_name) {
+        return None;
+    }
+    let is_measure = |v: &PivotValue| v.time.is_some_and(|t| t.agg == TimeAgg::Measure);
+    let value = if spec.values.len() == 1 {
+        spec.values.first()?
+    } else {
+        let last = col_name.rsplit(" | ").next().unwrap_or(col_name);
+        spec.values.iter().filter(|v| is_measure(v)).find(|v| last == v.field || last.starts_with(&format!("{} \u{b7} ", v.field)) || last.starts_with(&format!("{} (pp)", v.field)))?
+    };
+    measure_rows_filters(&value.field).err()
+}
+
 /// The rows behind one cell of a pivot (Phase 8 W6: "Show rows").
 #[derive(Clone, Debug)]
 pub struct CellRows {
@@ -868,13 +884,24 @@ pub fn cell_rows_at(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<Stri
 fn time_cell_rows(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String>], col_key: &[Option<String>], j: usize) -> Result<CellRows> {
     use crate::models::{CondOp, FilterCondition};
     let value = &spec.values[j];
-    if value.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
-        bail!("{}", MEASURE_NO_ROWS);
-    }
     let calendar: HashSet<String> = match crate::model::scope().and_then(|c| c.calendar.clone()) {
         Some(cal) => crate::pivot_time::calendar_fields(spec, &cal.tab),
         None => HashSet::new(),
     };
+    // Phase 13: a base measure (a column, an aggregation, filters) has rows: the measure's own filters join the cell's
+    let mut measure_filters: Vec<FilterCondition> = Vec::new();
+    let mut scenario_note: Option<String> = None;
+    if value.time.is_some_and(|t| t.agg == TimeAgg::Measure) {
+        match measure_rows_filters(&value.field) {
+            Ok(f) => measure_filters = f,
+            Err(why) => bail!("{}", why),
+        }
+        if let Some(w) = crate::model::scope().and_then(|c| c.what_if.clone()) {
+            if w.role_of(&value.field).is_some() {
+                scenario_note = Some(format!("Scenario {} changes '{}' from the as-of month on; these are the actual rows, not the scenario's figures.", w.name, value.field));
+            }
+        }
+    }
     let Some(tr) = build.time_rows.get(&(row_key.to_vec(), col_key.to_vec(), j)) else {
         bail!("Show rows: this cell is blank, so it has no rows. Point at it to see why.");
     };
@@ -905,6 +932,7 @@ fn time_cell_rows(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String
             }
         }
     }
+    conditions.extend(measure_filters);
     let column = build.date_column.clone();
     if build.date_is_datetime {
         bail!("Show rows: '{}' is a Date and time column, so the rows of a day can't be picked from it. Convert it to a Date (Convert column type) in the data tab first.", column);
@@ -931,7 +959,34 @@ fn time_cell_rows(spec: &PivotSpec, build: &PivotBuild, row_key: &[Option<String
     let what = spec.values[j].label();
     let _ = value;
     let title = if parts.is_empty() { format!("Rows: {}", what) } else { format!("Rows: {} \u{b7} {}", parts.join(", "), what) };
-    Ok(CellRows { conditions, title, extra_steps, note: tr.note.map(str::to_string) })
+    let note = match (tr.note, scenario_note) {
+        (Some(a), Some(b)) => Some(format!("{} {}", a, b)),
+        (Some(a), None) => Some(a.to_string()),
+        (None, b) => b,
+    };
+    Ok(CellRows { conditions, title, extra_steps, note })
+}
+
+/// The filters of the base measure `name` that its rows are read with (Phase 13), or why its number has no rows to list: a
+/// ratio or a plan measure combines several series, and a filter on a Calendar field picks days the rows cannot be cut by.
+pub fn measure_rows_filters(name: &str) -> std::result::Result<Vec<crate::models::FilterCondition>, String> {
+    use crate::measures::NamedMeasure;
+    let Some(m) = crate::measures::find_measure(name) else {
+        return Err(format!("The measure '{}' is not in the model, so it has no rows to show.", name));
+    };
+    match m {
+        NamedMeasure::Base { filters, .. } => {
+            let cal = crate::model::scope().and_then(|c| c.calendar.clone());
+            if let Some(cal) = cal {
+                if filters.iter().any(|f| f.lookup.as_ref().is_some_and(|l| l.lookup_tab == cal.tab)) {
+                    return Err(format!("'{}' is filtered on a Calendar field, so its rows can't be listed. Filter it on a column of the tab, or use Show rows on a column value.", name));
+                }
+            }
+            Ok(filters)
+        }
+        NamedMeasure::Ratio { .. } => Err(format!("'{}' is a ratio of several series, so it has no single set of rows. Use Show rows on its numerator or denominator measure.", name)),
+        NamedMeasure::Plan { .. } => Err(format!("'{}' is a plan measure: the plan table's rows are not rows of this tab. Open the plan table to see them.", name)),
+    }
 }
 
 /// Whether "Show rows" can read the cells of a tab (Phase 8 W6 follow-up): the tab's last pivot, and the steps that come

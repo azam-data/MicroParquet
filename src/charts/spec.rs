@@ -645,6 +645,22 @@ pub struct ChartSpec {
     /// A target line with red/amber/green bands on the value axis. `None` = none, as before Phase 12.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<ChartTarget>,
+
+    // ---- Phase 13 ----
+    /// Notes on the chart ("policy rate cut"): a numbered marker over a category, and the text in the footnote of every output.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<ChartNote>,
+}
+
+/// The most notes a chart carries: more than this is a page of text, not a note on a chart.
+pub const MAX_NOTES: usize = 9;
+
+/// A note on one category of a chart (Phase 13). The category is the label as the chart shows it ("Mar 2026").
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct ChartNote {
+    pub category: String,
+    pub text: String,
 }
 
 /// A chart's target (Phase 12): a line at the target and, when `show_bands`, the red, amber and green zones behind the marks.
@@ -741,6 +757,7 @@ impl Default for ChartSpec {
             data_table: DataTable::Off,
             forecast: None,
             target: None,
+            annotations: Vec::new(),
         }
     }
 }

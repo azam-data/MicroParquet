@@ -129,6 +129,19 @@ fn foot(p: &ExportPageSrc, as_of: &str) -> String {
     footnote(as_of, &p.filter_text, &[])
 }
 
+/// The slide's footnote with the notes of a chart (Phase 13): the as-of date, the filters, then "[1] Mar 2026: Policy rate cut".
+fn foot_with(p: &ExportPageSrc, as_of: &str, data: &ItemData) -> String {
+    slide_footnote(as_of, &p.filter_text, data)
+}
+
+/// The footnote of an item's slide: for a chart it carries the chart's notes, because its PowerPoint chart is a native one that has no marker.
+pub fn slide_footnote(as_of: &str, filters: &[String], data: &ItemData) -> String {
+    match data {
+        ItemData::Chart(c) => footnote(as_of, filters, &crate::charts::calc::annotation_lines(c)),
+        _ => footnote(as_of, filters, &[]),
+    }
+}
+
 /// One slide per item (a long pivot continues on more); every slide's footnote has the as-of date and the filters in force.
 pub fn export_pptx(src: &ExportSrc, use_design: bool, path: &Path) -> Result<String> {
     if src.pages.iter().all(|p| p.items.is_empty()) {
@@ -139,7 +152,8 @@ pub fn export_pptx(src: &ExportSrc, use_design: bool, path: &Path) -> Result<Str
     let mut slides = Vec::new();
     for (p, d) in src.pages.iter().zip(data) {
         for (i, data) in p.items.iter().zip(d) {
-            slides.push(PptxSlide { title: i.title.clone(), data, scale: i.scale.clone(), kpi: i.kpi.clone(), footnote: foot(p, &as_of) });
+            let footnote = foot_with(p, &as_of, &data);
+            slides.push(PptxSlide { title: i.title.clone(), data, scale: i.scale.clone(), kpi: i.kpi.clone(), footnote });
         }
     }
     let background = if use_design { src.pages.iter().find_map(|p| p.background.clone()) } else { None };

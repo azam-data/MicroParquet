@@ -174,6 +174,13 @@ impl MicroParquetApp {
             self.status_message = "The tab the chart was made from is not open, so there are no rows to show.".to_string();
             return;
         };
+        let exec = src.exec_steps.min(src.steps.len());
+        let (source, steps, formats) = (src.source.clone(), src.steps[..exec].to_vec(), src.col_formats.clone());
+        self.show_rows_of_mark_in(source, steps, formats, spec, mark);
+    }
+
+    /// `show_rows_of_mark` for a source given as it is (a dashboard chart carries its source and steps, not a tab).
+    pub(crate) fn show_rows_of_mark_in(&mut self, source: TabSource, mut steps: Vec<TransformStep>, formats: HashMap<String, ColumnFormatSpec>, spec: &ChartSpec, mark: &MarkRef) {
         let conditions = match spec.mark_conditions(&mark.category, mark.series.as_deref(), mark.facet.as_deref()) {
             Ok(c) => c,
             Err(e) => {
@@ -181,11 +188,8 @@ impl MicroParquetApp {
                 return;
             }
         };
-        let exec = src.exec_steps.min(src.steps.len());
-        let mut steps: Vec<TransformStep> = src.steps[..exec].to_vec();
         steps.push(TransformStep::FilterGroup { conditions, join: GroupJoin::And, keep_matching: true });
         let title = spec.mark_title(&mark.category, mark.series.as_deref(), mark.facet.as_deref());
-        let (source, formats) = (src.source.clone(), src.col_formats.clone());
         self.create_tab_from_source(title.clone(), source, steps, formats);
         self.status_message = format!("Opening '{}'.", title);
     }
@@ -255,8 +259,8 @@ impl PivotRowsUi {
         if self.later_made.iter().any(|c| c == name) {
             return Some(format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", name));
         }
-        if self.spec.as_ref().is_some_and(|s| micro_parquet::pivot_table::is_measure_column(s, name)) {
-            return Some(micro_parquet::pivot_table::MEASURE_NO_ROWS.to_string());
+        if let Some(why) = self.spec.as_ref().and_then(|s| micro_parquet::pivot_table::measure_rows_reason(s, name)) {
+            return Some(why);
         }
         None
     }
@@ -300,8 +304,8 @@ impl MicroParquetApp {
             self.status_message = format!("Show rows is off for '{}': a step after the pivot added, renamed or changed it. Use one of the pivot's own columns.", column);
             return;
         }
-        if micro_parquet::pivot_table::is_measure_column(&spec, column) {
-            self.status_message = micro_parquet::pivot_table::MEASURE_NO_ROWS.to_string();
+        if let Some(why) = micro_parquet::pivot_table::measure_rows_reason(&spec, column) {
+            self.status_message = why;
             return;
         }
         // P2: on a Nested pivot the clicked line is a line of its view: a parent line gives every source row of its group
@@ -343,5 +347,9 @@ impl MicroParquetApp {
             self.tab_notes.insert(id, n);
         }
         self.status_message = format!("Opening '{}'.", r.title);
+        // from the dashboard, the rows open in the Data view (the dashboard has no tab strip to show them in)
+        if self.ws.view == micro_parquet::workspace::View::Dashboard {
+            self.switch_view(micro_parquet::workspace::View::Data);
+        }
     }
 }

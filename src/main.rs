@@ -176,6 +176,8 @@ pub enum ActiveToolModal {
     DqScorecard,
     /// Month-on-month variance (Phase 6 P3).
     MomVariance,
+    /// Top movers (Phase 13).
+    TopMovers,
     /// Report packs (Phase 6 P2).
     Packs,
     /// "Save run" of a result tab (Phase 6 P1).
@@ -340,6 +342,7 @@ pub struct MicroParquetApp {
     pub project: crate::ui::project::ProjectState,
     pub packs: PacksState,
     pub mom: MomState,
+    pub movers: MoversState,
     pub dq: DqState,
     pub mud: MudState,
     /// The value picker of the filter or conditional-column dialog that is open, and the number
@@ -491,6 +494,7 @@ impl MicroParquetApp {
             project: Default::default(),
             packs: PacksState::default(),
             mom: MomState::default(),
+            movers: MoversState::default(),
             dq: DqState::default(),
             mud: MudState::default(),
             picker: PickerPanel::default(),

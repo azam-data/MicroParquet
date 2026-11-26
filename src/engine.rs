@@ -1715,7 +1715,7 @@ pub fn collect_masked_columns(source: &TabSource, out: &mut Vec<String>) {
         TabSource::GapLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().for_each(|i| collect_masked_columns(&i.source, out)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => collect_masked_columns(source, out),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } | TabSource::TopMovers { source, .. } => collect_masked_columns(source, out),
         TabSource::Unavailable { .. } | TabSource::Calendar { .. } => {}
     }
 }
@@ -1735,7 +1735,7 @@ pub fn source_masks_pii(source: &TabSource) -> bool {
         TabSource::GapLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::IrrbbLadder { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
         TabSource::Irrbb { inputs, .. } => inputs.iter().any(|i| source_masks_pii(&i.source)),
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => source_masks_pii(source),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } | TabSource::TopMovers { source, .. } => source_masks_pii(source),
         TabSource::Unavailable { .. } | TabSource::Calendar { .. } => false,
     }
 }
@@ -1885,7 +1885,7 @@ pub fn source_parse_failures(source: &TabSource, temp_dir: &Path) -> Result<Vec<
                 parts.extend(source_parse_failures(&i.source, temp_dir)?);
             }
         }
-        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
+        TabSource::RepricingGap { source, .. } | TabSource::Cl1Summary { source, .. } | TabSource::Liquidity { source, .. } | TabSource::EclSummary { source, .. } | TabSource::DqScorecard { source, .. } | TabSource::MudarabaPool { source, .. } | TabSource::TopMovers { source, .. } => parts.extend(source_parse_failures(source, temp_dir)?),
         TabSource::Calendar { .. } => {}
         TabSource::Unavailable { reason } => anyhow::bail!("{}", reason),
     }
@@ -2526,6 +2526,10 @@ pub fn compile_tab_lazy(
                 crate::models::DqView::Scorecard => crate::dq::scorecard_frame(&res)?.lazy(),
                 crate::models::DqView::Failing(i) => crate::dq::failing_frame(&df, &res, *i, None)?.lazy(),
             }
+        }
+        TabSource::TopMovers { source, steps, spec } => {
+            let lf = compile_tab_lazy(source, steps, temp_dir)?;
+            crate::movers::build_movers(lf, spec)?.0.lazy()
         }
         TabSource::MomVariance { prev_source, prev_steps, curr_source, curr_steps, spec, view } => {
             refuse_same_file("MoM variance", prev_source, prev_steps, curr_source, curr_steps)?;

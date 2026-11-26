@@ -993,6 +993,49 @@ impl MicroParquetApp {
             ui.label(egui::RichText::new("A limit, minimum or outlier line: solid, in its status colour, with the status written beside it.").size(theme::TEXT_LABEL).color(tk.muted));
         });
         rects.fields.push(("Reference lines".to_string(), h.header_response.rect));
+        // ---- notes on the chart (Phase 13)
+        let cats: Vec<String> = self.chart.data.as_ref().map(|d| d.categories.clone()).unwrap_or_default();
+        let h = egui::CollapsingHeader::new(format!("Notes ({})", spec.annotations.len())).id_salt("chart_notes").show(ui, |ui| {
+            let mut remove: Option<usize> = None;
+            for (i, n) in spec.annotations.iter_mut().enumerate() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("{}", i + 1));
+                    let shown = if n.category.is_empty() { "Choose\u{2026}".to_string() } else { n.category.clone() };
+                    let r = egui::ComboBox::from_id_salt(("chart_note_cat", i)).width(theme::CHART_COMBO_NARROW_W).selected_text(shown).show_ui(ui, |ui| {
+                        // a note whose category is not on the chart now stays listed, so it can be seen and removed
+                        if !n.category.is_empty() && !cats.contains(&n.category) {
+                            let (keep, text) = (n.category.clone(), format!("{} (not on the chart now)", n.category));
+                            ui.selectable_value(&mut n.category, keep, text);
+                        }
+                        for c in &cats {
+                            ui.selectable_value(&mut n.category, c.clone(), c);
+                        }
+                    });
+                    rects.fields.push((format!("Note {i} category"), r.response.rect));
+                    let r = ui.add(egui::TextEdit::singleline(&mut n.text).hint_text("e.g. Policy rate cut").desired_width(theme::CHART_REF_LABEL_W));
+                    rects.fields.push((format!("Note {i} text"), r.rect));
+                    let r = ui.button("Remove");
+                    rects.fields.push((format!("Note {i} remove"), r.rect));
+                    if r.clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                spec.annotations.remove(i);
+            }
+            let full = spec.annotations.len() >= micro_parquet::charts::spec::MAX_NOTES;
+            let b = ui.add_enabled(!full, egui::Button::new("Add note"));
+            rects.fields.push(("Add note".to_string(), b.rect));
+            if b.clicked() {
+                spec.annotations.push(micro_parquet::charts::spec::ChartNote { category: cats.first().cloned().unwrap_or_default(), text: String::new() });
+            }
+            if full {
+                ui.label(egui::RichText::new(format!("A chart carries at most {} notes.", micro_parquet::charts::spec::MAX_NOTES)).size(theme::TEXT_LABEL).color(tk.muted));
+            }
+            ui.label(egui::RichText::new("A numbered marker over the category, and the text under the chart. Notes go with the chart into PowerPoint, PDF, HTML and Excel (PowerPoint and Excel show the numbers in the footnote only).").size(theme::TEXT_LABEL).color(tk.muted));
+        });
+        rects.fields.push(("Notes".to_string(), h.header_response.rect));
         // ---- measures, panels and the facet
         let h = egui::CollapsingHeader::new(format!("Measures and panels ({})", spec.measure_list().len())).id_salt("chart_measures").show(ui, |ui| {
             egui::Grid::new("chart_measures_grid").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {

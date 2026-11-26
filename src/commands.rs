@@ -60,6 +60,7 @@ pub enum CommandId {
     Audit,
     Packs,
     MomVariance,
+    TopMovers,
     Mudaraba,
     DqScorecard,
     // Charts
@@ -243,6 +244,7 @@ pub const COMMANDS: &[Command] = &[
     c(I::Audit, "Core banking dirty-data auditor\u{2026}", G::Edit, "hygiene audit data checks ghost exceptions quality", N::Tab),
     c(I::Mudaraba, "Mudaraba profit distribution\u{2026}", G::Banking, "islamic window psr weightage profit sharing ratio mudarib depositors pool crr investable shariah", N::Tab),
     c(I::Packs, "Report packs: build and run\u{2026}", G::Banking, "monthly workbook cover slots items alco return pack headless", N::Nothing),
+    c(I::TopMovers, "Top movers (biggest monthly changes)\u{2026}", G::Banking, "top movers biggest change month on month gainers losers largest increase decrease account customer gl head balance variance ranking", N::Tab),
     c(I::ChartNew, "New chart\u{2026}", G::Charts, "graph plot gallery visualise visualize studio bar line area donut histogram box scatter bubble heatmap waterfall sankey treemap suggest", N::Tab),
     c(I::ChartThis, "Chart this result", G::Charts, "template graph result tab gap ladder bridge irrbb scenarios migration yield curves lcr nsfr ecl", N::ResultTab),
     c(I::ChartOpenSaved, "Open saved chart\u{2026}", G::Charts, "load charts folder json named", N::Tab),
@@ -302,7 +304,7 @@ pub fn banking_section(id: CommandId) -> Option<&'static str> {
         CommandId::Buckets | CommandId::GapLadder | CommandId::IrrbbLadder | CommandId::IrrbbSix | CommandId::Liquidity | CommandId::BehaviourProfile | CommandId::RateProfile | CommandId::RateShock | CommandId::Duration | CommandId::Ftp | CommandId::YieldCurves | CommandId::MomVariance => Some("Treasury & ALM"),
         CommandId::Provision | CommandId::ClassifyOverdue | CommandId::IfrsEcl | CommandId::Cl1Summary | CommandId::Limits | CommandId::Reconcile | CommandId::ClMigration => Some("Loans & credit"),
         CommandId::Mudaraba => Some("Islamic window"),
-        CommandId::Packs => Some("Reports"),
+        CommandId::Packs | CommandId::TopMovers => Some("Reports"),
         _ => None,
     }
 }

@@ -329,6 +329,17 @@ impl MicroParquetApp {
                 s.income = format!("{}", r.spec.income);
                 s.other = format!("{}", r.spec.other_investable);
             }
+            ToolRun::TopMovers(r) => {
+                self.active_tab = idx[0];
+                self.movers.guessed_for = None;
+                self.open_movers();
+                self.movers.date = r.spec.date_col.clone();
+                self.movers.bal = r.spec.bal_col.clone();
+                self.movers.key1 = r.spec.key_cols.first().cloned().unwrap_or_default();
+                self.movers.key2 = r.spec.key_cols.get(1).cloned().unwrap_or_default();
+                self.movers.top_text = r.spec.top.to_string();
+                self.movers.months_text = r.spec.months.to_string();
+            }
             ToolRun::DqScorecard(r) => {
                 self.active_tab = idx[0];
                 self.open_dq();

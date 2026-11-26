@@ -58,6 +58,13 @@ pub enum PageAct {
     OpenSlot(String),
     /// An item chosen on the empty page's cards.
     Add(DashItemKind),
+    /// Phase 13 drill-through: the rows behind a mark of a chart item.
+    ShowRowsMark(String, micro_parquet::charts::data::MarkRef),
+    /// Phase 13: the rows behind a KPI card's number.
+    ShowRowsKpi(String),
+    /// Phase 13: the rows behind a value cell of a pivot item (the row of its table, the column's heading, and the Rows values
+    /// of the line when the item is Nested).
+    ShowRowsCell(String, usize, String, Option<Vec<Option<String>>>),
 }
 
 /// One item's latest numbers.
@@ -114,6 +121,9 @@ pub struct DashboardUi {
     pub import_path: Option<std::path::PathBuf>,
     /// A refusal or a note in plain words, shown under the header.
     pub notice: String,
+    /// Phase 13: the name typed in the Views menu for the view to save.
+    pub view_name: String,
+    pub view_latest: bool,
     pub next_id: u64,
     /// The controls drawn in the last frame, by name (the render tests click these rects).
     pub rects: Vec<(String, egui::Rect)>,
@@ -154,6 +164,13 @@ impl DashboardUi {
     }
 }
 
+/// What a dashboard item is asked for the rows of (Phase 13).
+pub(crate) enum DashRows {
+    Mark(micro_parquet::charts::data::MarkRef),
+    Kpi,
+    Cell { row: usize, column: String, nested_key: Option<Vec<Option<String>>> },
+}
+
 /// What an item is built from, found in the open tabs.
 pub(crate) struct Resolved {
     pub(crate) source: ItemSource,
@@ -183,6 +200,53 @@ impl MicroParquetApp {
         let path = self.dashboard_ui.image_override.take().or_else(|| rfd::FileDialog::new().add_filter("Picture", &["png", "jpg", "jpeg"]).set_title("Pick a picture").pick_file());
         if let Some(p) = path {
             self.dashboard_ui.image_job = Some((replace, p));
+        }
+    }
+
+    /// Phase 13 drill-through: the rows behind a mark, a card or a cell of an item, opened as a tab. The item's own picks, the page's
+    /// filters and the click on another item apply, so the rows are those the number was made of.
+    pub(crate) fn dash_show_rows(&mut self, page: &DashPage, item_id: &str, what: DashRows) {
+        let Some(item) = page.items.iter().find(|i| i.id == item_id) else { return };
+        let res = match self.dash_resolve(item) {
+            Ok(r) => r,
+            Err(e) => {
+                self.dashboard_ui.notice = e;
+                return;
+            }
+        };
+        let (picks, _) = self.dash_picks_for(page, res.data_tab.as_deref(), item_id);
+        let formats = res.data_tab.as_deref().and_then(|k| self.model_tab_id(k)).and_then(|id| self.tabs.iter().find(|t| t.id == id)).map(|t| t.col_formats.clone()).unwrap_or_default();
+        let temp_dir = self.paths.temp_dir.clone();
+        let tab_scope = scope_of(item_id);
+        match (what, res.source) {
+            (DashRows::Mark(mark), ItemSource::Chart { base, steps, spec }) => {
+                let drill: Vec<String> = page.state.drill_of(item_id).to_vec();
+                let spec = chart_spec_with(&chart_spec_drilled(&spec, &drill), &picks);
+                self.show_rows_of_mark_in(base, steps, formats, &spec, &mark);
+            }
+            (DashRows::Kpi, ItemSource::Kpi { spec, tab_key, base, steps }) => {
+                let req = KpiRequest { spec, tab_key, base, steps, picks, temp_dir };
+                self.jobs.submit(JobKey::tab(JobKind::ShowRows, tab_scope), "Finding the rows behind the card", false, move |ctx| micro_parquet::tab_jobs::kpi_rows_job(req, ctx));
+            }
+            (DashRows::Cell { row, column, nested_key }, ItemSource::Pivot { base, steps, spec }) => {
+                let spec = pivot_spec_with(&spec, &picks);
+                let expected_rows = match self.dashboard_ui.items.get(item_id).and_then(|v| v.data.as_ref()) {
+                    Some(ItemData::Table(t)) => t.df.height(),
+                    _ => 0,
+                };
+                let pivot_at = steps.len();
+                let request = micro_parquet::tab_jobs::ShowRowsRequest { base, steps, pivot_at, spec, later_made: Vec::new(), row, column, expected_rows, temp_dir };
+                match nested_key {
+                    Some(row_key) => {
+                        let req = micro_parquet::tab_jobs::NestedShowRowsRequest { request, row_key };
+                        self.jobs.submit(JobKey::tab(JobKind::ShowRows, tab_scope), "Finding the rows of that cell", false, move |ctx| micro_parquet::tab_jobs::show_rows_nested_job(req, ctx));
+                    }
+                    None => {
+                        self.jobs.submit(JobKey::tab(JobKind::ShowRows, tab_scope), "Finding the rows of that cell", false, move |ctx| micro_parquet::tab_jobs::show_rows_job(request, ctx));
+                    }
+                }
+            }
+            _ => self.dashboard_ui.notice = "This item has no rows to show.".to_string(),
         }
     }
 
@@ -521,6 +585,65 @@ impl MicroParquetApp {
                     }
                 });
                 rects.push(("Export".into(), r.response.rect));
+                // Phase 13: saved views of the page's filters, one click each
+                let n_views = dash.pages[pi].views.len();
+                let r = ui.menu_button(format!("{}  Views{}", theme::ph::BOOKMARK_SIMPLE, if n_views > 0 { format!(" ({})", n_views) } else { String::new() }), |ui| {
+                    let mut apply: Option<String> = None;
+                    let mut delete: Option<String> = None;
+                    if dash.pages[pi].views.is_empty() {
+                        ui.label(egui::RichText::new("No saved views yet. Pick the filters, then save them here.").color(tk.muted));
+                    }
+                    let value_of = |id: &str| -> Vec<String> { self.dashboard_ui.values.get(id).map(|v| v.values.clone()).unwrap_or_default() };
+                    for v in &dash.pages[pi].views {
+                        let on = dash.pages[pi].view_is_on(v, &value_of);
+                        ui.horizontal(|ui| {
+                            let label = if v.latest.is_empty() { v.name.clone() } else { format!("{}  (latest period)", v.name) };
+                            let b = ui.selectable_label(on, label).on_hover_text("Put the page's filters as this view had them");
+                            rects.push((format!("View {}", v.name), b.rect));
+                            if b.clicked() {
+                                apply = Some(v.name.clone());
+                            }
+                            let x = ui.small_button(theme::ph::X).on_hover_text("Delete this view");
+                            rects.push((format!("Delete view {}", v.name), x.rect));
+                            if x.clicked() {
+                                delete = Some(v.name.clone());
+                            }
+                        });
+                    }
+                    ui.separator();
+                    ui.label("Save the page's filters as a view:");
+                    let mut save = false;
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut self.dashboard_ui.view_name).hint_text("Name, e.g. Conventional wing, Q4").desired_width(theme::DASH_LABEL_EDIT_W));
+                        rects.push(("View name".into(), r.rect));
+                        let b = ui.add_enabled(!self.dashboard_ui.view_name.trim().is_empty(), egui::Button::new("Save view"));
+                        rects.push(("Save view".into(), b.rect));
+                        save = b.clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.dashboard_ui.view_name.trim().is_empty());
+                    });
+                    let cb = ui.checkbox(&mut self.dashboard_ui.view_latest, "Follow the latest period (Year, Year-Quarter or Month-Year filters)");
+                    rects.push(("View latest".into(), cb.rect));
+                    if save {
+                        match dash.pages[pi].save_view(&self.dashboard_ui.view_name.clone(), self.dashboard_ui.view_latest) {
+                            Ok(()) => {
+                                self.dashboard_ui.notice.clear();
+                                self.dashboard_ui.view_name.clear();
+                            }
+                            Err(e) => self.dashboard_ui.notice = format!("{}", e),
+                        }
+                        ui.close_menu();
+                    }
+                    if let Some(name) = apply {
+                        match dash.pages[pi].apply_view(&name, &value_of) {
+                            Ok(notes) => self.dashboard_ui.notice = notes.join(" "),
+                            Err(e) => self.dashboard_ui.notice = format!("{}", e),
+                        }
+                        ui.close_menu();
+                    }
+                    if let Some(name) = delete {
+                        dash.pages[pi].delete_view(&name);
+                    }
+                });
+                rects.push(("Views".into(), r.response.rect));
                 // Clear is under a menu and asks first
                 let r = ui.menu_button(theme::ph::DOTS_THREE, |ui| {
                     let b = ui.button("Clear the filters and clicks on this page");
@@ -928,6 +1051,9 @@ impl MicroParquetApp {
                         i.rect = Some(r);
                     }
                 }
+                PageAct::ShowRowsMark(item, mark) => self.dash_show_rows(&dash.pages[pi], &item, DashRows::Mark(mark)),
+                PageAct::ShowRowsKpi(item) => self.dash_show_rows(&dash.pages[pi], &item, DashRows::Kpi),
+                PageAct::ShowRowsCell(item, row, column, key) => self.dash_show_rows(&dash.pages[pi], &item, DashRows::Cell { row, column, nested_key: key }),
             }
         }
         if let Some((op, ii)) = item_op {
@@ -1204,6 +1330,9 @@ impl MicroParquetApp {
             if click.clicked() {
                 self.dashboard_ui.selected = Some(item.id.clone());
             }
+            if click.double_clicked() && matches!(item.kind, DashItemKind::Kpi(_)) {
+                acts.push(PageAct::ShowRowsKpi(item.id.clone()));
+            }
             if is_static {
                 self.draw_static_item(ui, rect, item, scale);
                 continue;
@@ -1286,6 +1415,7 @@ impl MicroParquetApp {
                             Err(e) => acts.push(PageAct::Notice(format!("{:#}", e))),
                         },
                         Some(crate::ui::chart_render::ChartAction::OpenSource) => *open_tab = item.source_key().map(|k| k.to_string()),
+                        Some(crate::ui::chart_render::ChartAction::ShowRows(m)) => acts.push(PageAct::ShowRowsMark(item.id.clone(), m)),
                         Some(crate::ui::chart_render::ChartAction::DrillDown(m)) => match ChartSpec::refuse_other(&m.category) {
                             Ok(()) => acts.push(PageAct::DrillDown(item.id.clone(), m.category)),
                             Err(e) => acts.push(PageAct::Notice(format!("{:#}", e))),
@@ -1298,12 +1428,17 @@ impl MicroParquetApp {
                 (_, Some(ItemData::Kpi(k)), _) => {
                     let DashItemKind::Kpi(spec) = &item.kind else { continue };
                     Self::draw_kpi(&mut child, &tk, spec, k, default_unit, &item.id, rects);
+                    child.label(egui::RichText::new("Double-click the card to see the rows behind its number").size(theme::TEXT_LABEL).color(tk.muted));
                 }
                 (_, Some(ItemData::Table(t)), _) => {
                     if let Some(c) = page.state.cross.as_ref().filter(|c| c.item == item.id) {
                         child.label(egui::RichText::new(format!("\u{25cf} Selected: {}", c.chip())).size(theme::TEXT_LABEL).color(tk.accent));
                     }
-                    if let Some((level, value)) = Self::draw_dash_table(&mut child, &item.id, t, item.unit.unwrap_or_default(), rects) {
+                    let (picked, cell_hit) = Self::draw_dash_table(&mut child, &item.id, t, item.unit.unwrap_or_default(), rects);
+                    if let (Some((row, column, nested_key)), DashItemKind::Pivot(_)) = (cell_hit, &item.kind) {
+                        acts.push(PageAct::ShowRowsCell(item.id.clone(), row, column, nested_key));
+                    }
+                    if let Some((level, value)) = picked {
                         if let (Ok(res), DashItemKind::Pivot(_)) = (&resolved, &item.kind) {
                             if let ItemSource::Pivot { spec, .. } = &res.source {
                                 match CrossPick::from_pivot(spec, level, &value, &item.id, res.data_tab.as_deref()) {
@@ -1738,7 +1873,7 @@ impl MicroParquetApp {
 
     /// A pivot as a table (Nested, with its indents, when the pivot is Nested). A click on a row label comes back as
     /// (the Rows field it belongs to, its text); the labels are buttons without a frame, named "Row <item> <text>".
-    fn draw_dash_table(ui: &mut egui::Ui, id: &str, t: &TableData, unit: ItemUnit, rects: &mut Vec<(String, egui::Rect)>) -> Option<(usize, String)> {
+    fn draw_dash_table(ui: &mut egui::Ui, id: &str, t: &TableData, unit: ItemUnit, rects: &mut Vec<(String, egui::Rect)>) -> (Option<(usize, String)>, Option<(usize, String, Option<Vec<Option<String>>>)>) {
         use polars::prelude::AnyValue;
         // `k` is the value column (None for a label column): money is shown in the item's unit, counts whole, the rest as they are
         let text = |s: &polars::prelude::Series, i: usize, k: Option<usize>| -> String {
@@ -1753,6 +1888,9 @@ impl MicroParquetApp {
             }
         };
         let mut clicked: Option<(usize, String)> = None;
+        // Phase 13: a double-click on a value cell asks for the rows behind it
+        let mut cell_hit: Option<(usize, String, Option<Vec<Option<String>>>)> = None;
+        let mut cell_rects: Vec<(String, egui::Rect)> = Vec::new();
         let cols: Vec<_> = t.df.get_columns().iter().collect();
         let mut label = |ui: &mut egui::Ui, shown: String, plain: &str, level: usize, clicked: &mut Option<(usize, String)>| {
             if plain.is_empty() {
@@ -1777,8 +1915,13 @@ impl MicroParquetApp {
                         for (i, r) in n.rows.iter().enumerate().take(300) {
                             let plain = if r.is_subtotal() || r.label == micro_parquet::pivot_table::GRAND_TOTAL_LABEL { "" } else { r.label.as_str() };
                             label(ui, format!("{}{}", "\u{a0}\u{a0}".repeat(r.level), r.label), plain, r.level, &mut clicked);
+                            let line_blank = r.is_blank();
                             for (k, c) in n.values.get_columns().iter().enumerate() {
-                                ui.label(text(c, i, Some(k)));
+                                let cell = ui.add(egui::Label::new(text(c, i, Some(k))).sense(egui::Sense::click()));
+                                cell_rects.push((format!("Cell {} {} {}", id, i, c.name()), cell.rect));
+                                if cell.double_clicked() && !line_blank {
+                                    cell_hit = Some((i, c.name().to_string(), Some(r.keys.clone())));
+                                }
                             }
                             ui.end_row();
                         }
@@ -1799,7 +1942,11 @@ impl MicroParquetApp {
                                     let plain = if s == micro_parquet::pivot_table::GRAND_TOTAL_LABEL { "" } else { s.as_str() };
                                     label(ui, s.clone(), plain, ci, &mut clicked);
                                 } else {
-                                    ui.label(s);
+                                    let cell = ui.add(egui::Label::new(s).sense(egui::Sense::click())).on_hover_text("Double-click to see the rows behind this number");
+                                    cell_rects.push((format!("Cell {} {} {}", id, i, c.name()), cell.rect));
+                                    if cell.double_clicked() {
+                                        cell_hit = Some((i, c.name().to_string(), None));
+                                    }
                                 }
                             }
                             ui.end_row();
@@ -1808,7 +1955,8 @@ impl MicroParquetApp {
                 }
             });
         });
-        clicked
+        rects.extend(cell_rects);
+        (clicked, cell_hit)
     }
 }
 

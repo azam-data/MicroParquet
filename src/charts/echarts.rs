@@ -812,6 +812,38 @@ fn tick_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value>
     out
 }
 
+/// Phase 13: a numbered marker on each noted category of the first panel, at the height of the first series' mark there; its text is
+/// the chart's footnote.
+fn note_series(env: &Env, p: &Plan, grid: usize, horizontal: bool) -> Vec<Value> {
+    let spec = &env.data.spec;
+    if p.idx != 0 || spec.annotations.is_empty() {
+        return Vec::new();
+    }
+    let at = |cat: &str, v: f64| -> Value {
+        if horizontal {
+            json!([num(v), lit(cat)])
+        } else {
+            json!([lit(cat), num(v)])
+        }
+    };
+    let items: Vec<Value> = spec
+        .annotations
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.text.trim().is_empty())
+        .filter_map(|(n, a)| {
+            let ci = p.cats.iter().position(|c| *c == a.category)?;
+            let v = p.series.iter().filter_map(|s| s.vals.get(ci).copied().flatten()).fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))?;
+            Some(json!({"value": at(&a.category, scaled(v, p.vk, env.opts)), "label": {"show": true, "formatter": format!("{}", n + 1), "color": "#ffffff", "fontSize": 11, "fontWeight": "600"},
+                        "tip": lit_tip(&format!("Note {}: {}", n + 1, a.text.trim()))}))
+        })
+        .collect();
+    if items.is_empty() {
+        return Vec::new();
+    }
+    vec![json!({"name": "Notes", "type": "scatter", "xAxisIndex": grid, "yAxisIndex": grid, "data": items, "symbol": "circle", "symbolSize": 18, "itemStyle": {"color": hx(env.ink.ink)}, "tooltip": {"show": true}, "z": 8})]
+}
+
 /// The panels of a cartesian chart (bars, lines, areas, histogram): grids, axes and series.
 struct Grids {
     grid: Vec<Value>,
@@ -893,6 +925,7 @@ fn cartesian(env: &Env, plans: &[Plan], legend_h: f64, foot_h: f64) -> Grids {
         };
         g.series.extend(series);
         g.series.extend(tick_series(env, p, i, hz));
+        g.series.extend(note_series(env, p, i, hz));
     }
     g.height = top0 + rows as f64 * ph + (rows as f64 - 1.0) * gap + if n > 1 || multi { 22.0 * rows as f64 } else { 0.0 } + AXIS_H + foot_h + 6.0;
     g

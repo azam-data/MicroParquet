@@ -90,10 +90,38 @@ pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
         Some((w, role, name, as_of)) => crate::forecast_chart::apply_scenario(data, &w, role, &name, as_of)?,
         None => data,
     };
-    match spec.target.clone() {
-        Some(t) => apply_target(data, &t),
-        None => Ok(data),
+    let data = match spec.target.clone() {
+        Some(t) => apply_target(data, &t)?,
+        None => data,
+    };
+    Ok(apply_annotations(data))
+}
+
+/// Phase 13: the chart's notes, written once under the chart as "[1] Mar 2026: Policy rate cut". The footnote is what every output
+/// carries (screen, HTML, PDF, PowerPoint, Excel), so a note is never lost on the way out; the marker over the category is drawn by
+/// the layout and the HTML chart. A note whose category is not on the chart (a drill level, a filter) says so instead of vanishing.
+pub fn apply_annotations(mut data: ChartData) -> ChartData {
+    let lines = annotation_lines(&data);
+    data.notes.extend(lines);
+    data
+}
+
+/// The footnote lines of a chart's notes (see `apply_annotations`); a PowerPoint slide adds them to its own footnote, because its
+/// chart is a native one that has no marker.
+pub fn annotation_lines(data: &ChartData) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, n) in data.spec.annotations.iter().enumerate() {
+        let text = n.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if data.categories.iter().any(|c| *c == n.category) {
+            out.push(format!("[{}] {}: {}", i + 1, n.category, text));
+        } else {
+            out.push(format!("Note [{}] \"{}\" is not shown: '{}' is not on this chart now.", i + 1, text, n.category));
+        }
     }
+    out
 }
 
 /// Phase 12: a target line and its red, amber and green zones. They are added to the spec the data carries, so the screen, HTML, PDF,

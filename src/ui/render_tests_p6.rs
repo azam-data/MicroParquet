@@ -2589,7 +2589,7 @@ fn f2_the_chart_tab_has_a_pop_out_button_only_where_windows_work_and_the_window_
         let plot = rig.app.chart.rects.plot.unwrap_or_else(|| panic!("{what}: the chart in its window"));
         assert!(inside(plot, screen2), "{what}: the plot {plot:?} is inside the window {screen2:?}");
         // the Phase 6 controls are all in the window; the studio sections of Phase 7 (they scroll) are not required to be
-        let studio = ["Save chart", "Open saved chart", "Export to HTML", "Export to Excel", "Preview in browser", "Titles and look", "Colours", "Filters on this chart", "Reference lines", "Measures and panels", "Drill levels", "Drill levels hidden", "Add a level", "Date drill", "Advanced options header", "Advanced options", "Advanced reset"];
+        let studio = ["Save chart", "Open saved chart", "Export to HTML", "Export to Excel", "Preview in browser", "Titles and look", "Colours", "Filters on this chart", "Reference lines", "Notes", "Measures and panels", "Drill levels", "Drill levels hidden", "Add a level", "Date drill", "Advanced options header", "Advanced options", "Advanced reset"];
         for (n, f) in rig.app.chart.rects.fields.iter().filter(|(n, _)| !studio.contains(&n.as_str())) {
             assert!(inside(*f, screen2), "{what}: '{n}' {f:?} is in the window");
         }
