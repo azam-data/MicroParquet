@@ -162,3 +162,19 @@ fn ui14_e_the_panel_is_drawn_as_a_picture_in_both_themes() {
         shoot(&mut rig, "assistant-panel", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
     }
 }
+
+/// The picture of the Report view for the README (light, then dark): `docs/guide/img/report-view[-dark].png`.
+#[test]
+fn ui14_f_the_report_view_is_drawn_as_a_picture_in_both_themes() {
+    use crate::ui::render_tests_p8::{can_shoot, shoot, styled, SHOT_H, SHOT_PPP, SHOT_W};
+    if !can_shoot() {
+        return;
+    }
+    for dark in [false, true] {
+        let mut rig = rig_ui("p14_report_shot", SHOT_PPP, SHOT_W, SHOT_H);
+        styled(&mut rig, dark);
+        rig.app.switch_view(View::Report);
+        rig.draw(5);
+        shoot(&mut rig, "report-view", dark, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SHOT_W, SHOT_H)));
+    }
+}
