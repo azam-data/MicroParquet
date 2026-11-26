@@ -254,3 +254,29 @@ fn score_lines(f: &SeriesForecast) -> Vec<String> {
     lines.extend(f.notes.iter().filter(|n| n.starts_with("Unusual") || n.starts_with("No model")).cloned());
     lines
 }
+
+/// Phase 12: the active what-if scenario on a chart that has a forecast: the as-of month and every later month (the forecast and its
+/// bands) change; the months before stay the actual numbers. Says so in the chart's notes.
+pub fn apply_scenario(mut data: ChartData, w: &crate::whatif::WhatIfScope, role: crate::whatif::Role, measure: &str, as_of: chrono::NaiveDate) -> Result<ChartData> {
+    use chrono::Datelike;
+    let from = (as_of.year(), as_of.month());
+    let mut changed = false;
+    for (ci, c) in data.categories.clone().iter().enumerate() {
+        let Some(ym) = parse_month(c) else {
+            bail!("A scenario on a chart with a forecast needs Month-Year categories (like \"Nov 2026\"); '{}' is not one.", c);
+        };
+        if ym < from {
+            continue;
+        }
+        for row in data.values.iter_mut() {
+            if let Some(v) = row.get_mut(ci).and_then(|x| x.as_mut()) {
+                *v = w.apply(role, *v);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        data.notes.push(w.note(&[measure]));
+    }
+    Ok(data)
+}

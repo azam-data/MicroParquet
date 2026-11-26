@@ -424,6 +424,7 @@ fn d2_a_card_that_cannot_be_worked_out_says_why_and_a_picture_is_written_in_both
         pick_in(&mut rig, "KPI measure", "Deposits");
         pick_in(&mut rig, "KPI compare", "Prior period");
         click_named(&mut rig, "KPI add limit");
+        rig.draw(4);
         click_named(&mut rig, "KPI sparkline");
         let id = rig.app.project.dashboard.as_ref().expect("d").pages[0].items[0].id.clone();
         let mut spark: Vec<Option<f64>> = (0..12).map(|i| Some(40_000_000_000.0 + 1_000_000_000.0 * i as f64)).collect(); // money in BDT, not a size

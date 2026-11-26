@@ -105,6 +105,9 @@ pub struct Model {
     pub measures: Vec<NamedMeasure>,
     #[serde(default, skip_serializing_if = "is_latest")]
     pub as_of: AsOf,
+    /// What-if scenarios (Phase 12): rate and growth assumptions that change the measures marked for them.
+    #[serde(default, skip_serializing_if = "crate::whatif::WhatIf::is_empty")]
+    pub what_if: crate::whatif::WhatIf,
 }
 
 fn is_latest(a: &AsOf) -> bool {
@@ -760,6 +763,8 @@ pub struct ModelContext {
     pub kinds: Vec<ColumnKind>,
     /// The named measures (Phase 9 M5).
     pub measures: Vec<NamedMeasure>,
+    /// The active what-if scenario (Phase 12), when it changes anything.
+    pub what_if: Option<crate::whatif::WhatIfScope>,
 }
 
 /// The model calendar as a worker needs it.

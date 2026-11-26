@@ -368,7 +368,12 @@ pub fn compute_kpi(req: &KpiRequest) -> Result<KpiValue> {
         KpiSource::Measure(n) => crate::measures::find_measure(n).is_some_and(|m| m.is_ratio()),
         KpiSource::Value { .. } => false,
     };
-    Ok(KpiValue { current, earlier, reason, spark, spark_labels: if req.spec.sparkline { labels } else { Vec::new() }, period, notes: build.warnings, is_ratio, target, target_reason })
+    // Phase 12: a card whose measure is changed by the active scenario says so beside its period, in every output
+    let scenario = match (&ctx.what_if, &req.spec.source) {
+        (Some(w), KpiSource::Measure(n)) if current.is_some() && w.role_of(n).is_some() => format!(" \u{b7} Scenario {} ({})", w.name, crate::whatif::Scenario { name: String::new(), rate_shift_bp: w.rate_shift_bp, growth_pct: w.growth_pct }.words()),
+        _ => String::new(),
+    };
+    Ok(KpiValue { current, earlier, reason, spark, spark_labels: if req.spec.sparkline { labels } else { Vec::new() }, period: format!("{}{}", period, scenario), notes: build.warnings, is_ratio, target, target_reason })
 }
 
 // -------------------------------------------------------------------------------------- how it is shown

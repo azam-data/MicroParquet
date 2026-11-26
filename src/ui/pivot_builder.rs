@@ -1442,18 +1442,20 @@ impl MicroParquetApp {
                         r.clicked()
                     };
                     egui::Grid::new(("pivot_time_grid", i)).num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
-                        ui.label(egui::RichText::new("Window").color(tk.muted));
-                        ui.horizontal_wrapped(|ui| {
-                            for w in TimeWindow::all() {
-                                if pick(ui, "window", w.label(), t.window == *w, true, &mut choices) {
-                                    t.window = *w;
-                                    if *w != TimeWindow::Period {
-                                        t.smooth = Smooth::None;
+                        for (heading, rolling) in [("Window", false), ("Rolling", true)] {
+                            ui.label(egui::RichText::new(heading).color(tk.muted));
+                            ui.horizontal(|ui| {
+                                for w in TimeWindow::all().iter().filter(|w| w.rolling_months().is_some() == rolling) {
+                                    if pick(ui, "window", w.label(), t.window == *w, true, &mut choices) {
+                                        t.window = *w;
+                                        if *w != TimeWindow::Period {
+                                            t.smooth = Smooth::None;
+                                        }
                                     }
                                 }
-                            }
-                        });
-                        ui.end_row();
+                            });
+                            ui.end_row();
+                        }
                         ui.label(egui::RichText::new("Average").color(tk.muted));
                         ui.horizontal(|ui| {
                             for x in Smooth::all() {

@@ -939,7 +939,7 @@ fn headless_scope(project: &Project, opener: &mut Opener, paths: &PortablePaths)
             Err(e) => plans.push(ScopePlan { link: pl.clone(), table: None, refusal: Some(format!("{}", e)) }),
         }
     }
-    Ok(Some(std::sync::Arc::new(ModelContext { links: parts, plans, temp_dir: paths.temp_dir.clone(), calendar, kinds: project.model.column_kinds.clone(), measures: project.model.measures.clone() })))
+    Ok(Some(std::sync::Arc::new(ModelContext { links: parts, plans, temp_dir: paths.temp_dir.clone(), calendar, kinds: project.model.column_kinds.clone(), measures: project.model.measures.clone(), what_if: project.model.what_if.scope() })))
 }
 
 pub fn export_project_headless(project_path: &Path, export_dir: &Path, paths: &PortablePaths) -> Result<Vec<PathBuf>> {

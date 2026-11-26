@@ -136,7 +136,7 @@ impl MicroParquetApp {
                 ui.label("Target");
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut t.value).speed(1.0));
-                    egui::ComboBox::from_id_salt("target_unit").width(theme::CHART_COMBO_NARROW_W * 0.6).selected_text(t.unit.label()).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("target_unit").width(theme::ANALYTICS_UNIT_W).selected_text(t.unit.label()).show_ui(ui, |ui| {
                         for u in [KpiUnit::Crore, KpiUnit::Lakh, KpiUnit::Million, KpiUnit::Absolute, KpiUnit::Percent] {
                             ui.selectable_value(&mut t.unit, u, u.label());
                         }
@@ -150,13 +150,13 @@ impl MicroParquetApp {
                 });
                 ui.end_row();
                 ui.label("Green within");
-                ui.add(egui::DragValue::new(&mut t.bands.green_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                ui.add(egui::DragValue::new(&mut t.bands.green_within_pct).range(0.0..=theme::PCT_MAX).speed(0.5).suffix("%"));
                 ui.end_row();
                 ui.label("Amber within");
-                ui.add(egui::DragValue::new(&mut t.bands.amber_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                ui.add(egui::DragValue::new(&mut t.bands.amber_within_pct).range(0.0..=theme::PCT_MAX).speed(0.5).suffix("%"));
                 ui.end_row();
                 ui.label("Line label");
-                ui.add(egui::TextEdit::singleline(&mut t.label).hint_text("Target").desired_width(120.0));
+                ui.add(egui::TextEdit::singleline(&mut t.label).hint_text("Target").desired_width(theme::ANALYTICS_TEXT_W));
                 ui.end_row();
             });
             ui.checkbox(&mut t.show_bands, "Show the red, amber and green zones");
@@ -165,5 +165,119 @@ impl MicroParquetApp {
             }
             ui.add(egui::Label::new(egui::RichText::new("The zones are percentages of the target: green at or on the good side of it, amber up to the amber margin, red beyond. Each zone is named in words as well as colour.").size(theme::TEXT_LABEL).color(tk.muted)).wrap());
         });
+    }
+}
+
+impl MicroParquetApp {
+    /// Phase 12 W4: the What-if card. Scenarios (name, rate shift in bp, growth %), the active one, and which measures it moves.
+    pub(crate) fn render_whatif_card(&mut self, ui: &mut egui::Ui) {
+        use micro_parquet::whatif::{check_role, parallel_shock_bp, Role, Scenario, WhatIf};
+        let tk = *theme::tokens(self.dark_mode);
+        if self.tabs.is_empty() {
+            return;
+        }
+        let mut w = self.project.model.what_if.clone();
+        let as_of = self.model_as_of().map(|(d, _)| d);
+        let measures: Vec<(String, Result<(), String>, Result<(), String>)> = self.project.model.measures.iter().map(|m| (m.name().to_string(), check_role(m, Role::Volume), check_role(m, Role::Rate))).collect();
+        let mut note = String::new();
+        egui::Frame::none().fill(tk.surface).stroke(theme::line(tk.border)).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(egui::Margin::same(theme::SPACE_S)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(theme::semibold("What-if"));
+            ui.add(egui::Label::new(egui::RichText::new("A rate shift and a growth % change the measures you mark, from the as-of month on. Past months stay actual. Every changed number is labelled as a scenario.").color(tk.muted)).wrap());
+            if w.scenarios.is_empty() {
+                if ui.button("Start with Base, Optimistic and Stressed").clicked() {
+                    w.scenarios = WhatIf::starter();
+                    w.active = "Base".into();
+                }
+            } else {
+                let shown = if w.active.is_empty() { "None (actuals)".to_string() } else { w.active.clone() };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Scenario");
+                    egui::ComboBox::from_id_salt("whatif_active").selected_text(shown).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut w.active, String::new(), "None (actuals)");
+                        for s in w.scenarios.iter() {
+                            ui.selectable_value(&mut w.active, s.name.clone(), s.name.clone());
+                        }
+                    });
+                    if ui.small_button("Add").clicked() {
+                        let mut n = w.scenarios.len() + 1;
+                        while w.scenarios.iter().any(|s| s.name == format!("Scenario {n}")) {
+                            n += 1;
+                        }
+                        w.scenarios.push(Scenario { name: format!("Scenario {n}"), ..Default::default() });
+                        w.active = format!("Scenario {n}");
+                    }
+                    if ui.small_button("Delete").clicked() {
+                        let a = w.active.clone();
+                        w.scenarios.retain(|s| s.name != a);
+                        w.active.clear();
+                    }
+                });
+                let active = w.active.clone();
+                if let Some(i) = w.scenarios.iter().position(|s| s.name == active) {
+                    let old = w.scenarios[i].name.clone();
+                    let mut name = old.clone();
+                    egui::Grid::new("whatif_grid").num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
+                        ui.label("Name");
+                        ui.add(egui::TextEdit::singleline(&mut name).desired_width(theme::ANALYTICS_TEXT_W));
+                        ui.end_row();
+                        ui.label("Rate shift");
+                        ui.add(egui::Slider::new(&mut w.scenarios[i].rate_shift_bp, -theme::WHATIF_RATE_MAX_BP..=theme::WHATIF_RATE_MAX_BP).suffix(" bp"));
+                        ui.end_row();
+                        ui.label("Growth");
+                        ui.add(egui::Slider::new(&mut w.scenarios[i].growth_pct, -theme::WHATIF_GROWTH_MAX_PCT..=theme::WHATIF_GROWTH_MAX_PCT).suffix(" %"));
+                        ui.end_row();
+                    });
+                    if name != old && !name.trim().is_empty() {
+                        w.scenarios[i].name = name.clone();
+                        w.active = name;
+                    }
+                    if ui.button("Copy the IRRBB parallel shock").on_hover_text("Reads the size from the IRRBB shock rule file in force at the as-of date (BDT).").clicked() {
+                        match as_of {
+                            None => note = "Set the as-of date in Model first.".into(),
+                            Some(d) => match parallel_shock_bp(d, "BDT") {
+                                Ok(bp) => w.scenarios[i].rate_shift_bp = bp,
+                                Err(e) => note = e.to_string(),
+                            },
+                        }
+                    }
+                }
+            }
+            ui.label(theme::semibold("Measures it moves").color(tk.muted));
+            if measures.is_empty() {
+                ui.add(egui::Label::new(egui::RichText::new("Add measures in Model > Measures first.").color(tk.muted)).wrap());
+            }
+            for (name, vol, rate) in measures.iter() {
+                let cur = w.role_of(name);
+                let mut pick = cur;
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    egui::ComboBox::from_id_salt(("whatif_role", name)).selected_text(match pick { None => "Not changed", Some(Role::Volume) => "Volume", Some(Role::Rate) => "Rate" }).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut pick, None, "Not changed");
+                        if vol.is_ok() {
+                            ui.selectable_value(&mut pick, Some(Role::Volume), "Volume");
+                        }
+                        if rate.is_ok() {
+                            ui.selectable_value(&mut pick, Some(Role::Rate), "Rate");
+                        }
+                    });
+                });
+                if pick != cur {
+                    w.marked.retain(|m| &m.measure != name);
+                    if let Some(r) = pick {
+                        w.marked.push(micro_parquet::whatif::Marked { measure: name.clone(), role: r });
+                    }
+                }
+            }
+            if let Err(e) = w.check() {
+                ui.add(egui::Label::new(egui::RichText::new(e).color(theme::danger(ui))).wrap());
+            }
+            if !note.is_empty() {
+                ui.add(egui::Label::new(egui::RichText::new(&note).color(theme::danger(ui))).wrap());
+            }
+        });
+        if w != self.project.model.what_if && w.check().is_ok() {
+            self.project.model.what_if = w;
+        }
     }
 }

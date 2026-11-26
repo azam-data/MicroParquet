@@ -63,9 +63,31 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
-    let data = compute_base(lf, spec)?;
+    // Phase 12: a forecast is fitted to the actual numbers, never to a scenario. When the chart's measure is marked for the active
+    // what-if scenario, the base data is worked out with the scenario switched off, and the scenario is then applied to the as-of month
+    // and the forecast months together.
+    let scenario = crate::model::scope().and_then(|c| {
+        let w = c.what_if.clone()?;
+        let name = spec.measure_list().first().and_then(|m| m.column.clone().filter(|_| m.time.is_some_and(|t| t.agg == crate::models::TimeAgg::Measure)))?;
+        let role = w.role_of(&name)?;
+        let as_of = c.calendar.as_ref().and_then(|k| k.as_of)?;
+        Some((c.clone(), w, role, name, as_of))
+    });
+    let (data, scenario) = match (&spec.forecast, scenario) {
+        (Some(_), Some((ctx, w, role, name, as_of))) => {
+            let mut plain = (*ctx).clone();
+            plain.what_if = None;
+            let data = crate::model::with_scope(Some(std::sync::Arc::new(plain)), || compute_base(lf, spec))?;
+            (data, Some((w, role, name, as_of)))
+        }
+        _ => (compute_base(lf, spec)?, None),
+    };
     let data = match &spec.forecast {
         Some(f) => crate::forecast_chart::apply_forecast(data, f)?,
+        None => data,
+    };
+    let data = match scenario {
+        Some((w, role, name, as_of)) => crate::forecast_chart::apply_scenario(data, &w, role, &name, as_of)?,
         None => data,
     };
     match spec.target.clone() {

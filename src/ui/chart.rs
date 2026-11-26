@@ -219,7 +219,7 @@ impl MicroParquetApp {
             return;
         };
         let exec = tab.exec_steps.min(tab.steps.len());
-        let key = format!("{}|{}|{}", tab.id, self.chart.spec.calc_key(), micro_parquet::steps_edit::pipeline_hash(&tab.source, &tab.steps[..exec]));
+        let key = format!("{}|{}|{}|{:?}", tab.id, self.chart.spec.calc_key(), micro_parquet::steps_edit::pipeline_hash(&tab.source, &tab.steps[..exec]), self.project.model.what_if.scope());
         if self.chart.submitted.as_deref() == Some(key.as_str()) {
             return;
         }

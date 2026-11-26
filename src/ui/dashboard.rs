@@ -285,7 +285,7 @@ impl MicroParquetApp {
             ItemSource::Text(t) => format!("{:?}", t),
             ItemSource::Image(i) => format!("{:?}", i),
             // a card also depends on the as-of date and the measures (the model)
-            ItemSource::Kpi { spec, base, steps, .. } => format!("{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}", source_signature(base, steps), spec.source, spec.compare, spec.sparkline, picks, self.project.model.measures, self.project.model.as_of),
+            ItemSource::Kpi { spec, base, steps, .. } => format!("{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}", source_signature(base, steps), spec.source, spec.compare, spec.sparkline, picks, self.project.model.measures, self.project.model.as_of, (&spec.window, &spec.smooth, &spec.target), self.project.model.what_if.scope(), ()),
         }
     }
 
@@ -1486,6 +1486,44 @@ impl MicroParquetApp {
             ui.selectable_value(&mut k.good_direction, GoodDirection::Down, "Down is good");
             ui.selectable_value(&mut k.good_direction, GoodDirection::Neutral, "No judgement");
         });
+        let r = ui.checkbox(&mut k.sparkline, "Sparkline (12 months)");
+        rects.push(("KPI sparkline".into(), r.rect));
+        ui.label("Limits");
+        let mut drop: Option<usize> = None;
+        for (i, t) in k.thresholds.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let op = if t.op == ThresholdOp::Below { "below" } else { "above" };
+                if ui.small_button(op).clicked() {
+                    t.op = if t.op == ThresholdOp::Below { ThresholdOp::Above } else { ThresholdOp::Below };
+                }
+                let r = ui.add(egui::DragValue::new(&mut t.limit).speed(0.5));
+                rects.push((format!("KPI limit {}", i + 1), r.rect));
+                let c = match t.colour {
+                    ThresholdColour::Amber => "amber",
+                    ThresholdColour::Red => "red",
+                    ThresholdColour::Green => "green",
+                };
+                if ui.small_button(c).clicked() {
+                    t.colour = match t.colour {
+                        ThresholdColour::Amber => ThresholdColour::Red,
+                        ThresholdColour::Red => ThresholdColour::Green,
+                        ThresholdColour::Green => ThresholdColour::Amber,
+                    };
+                }
+                if ui.small_button(theme::ph::X).clicked() {
+                    drop = Some(i);
+                }
+            });
+        }
+        if let Some(i) = drop {
+            k.thresholds.remove(i);
+        }
+        if k.thresholds.len() < MAX_THRESHOLDS {
+            let b = ui.button("Add limit");
+            rects.push(("KPI add limit".into(), b.rect));
+            if b.clicked() {
+                k.thresholds.push(Threshold::default());
+            }
         // Phase 12: the window and moving average of a measure card
         if matches!(k.source, KpiSource::Measure(_)) {
             combo(ui, "Window", "KPI window", k.window.label().to_string(), rects, &mut |ui| {
@@ -1545,10 +1583,10 @@ impl MicroParquetApp {
                 }
                 ui.horizontal(|ui| {
                     ui.label("Green within");
-                    let r = ui.add(egui::DragValue::new(&mut t.bands.green_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                    let r = ui.add(egui::DragValue::new(&mut t.bands.green_within_pct).range(0.0..=theme::PCT_MAX).speed(0.5).suffix("%"));
                     rects.push(("KPI green margin".into(), r.rect));
                     ui.label("amber within");
-                    let r = ui.add(egui::DragValue::new(&mut t.bands.amber_within_pct).range(0.0..=100.0).speed(0.5).suffix("%"));
+                    let r = ui.add(egui::DragValue::new(&mut t.bands.amber_within_pct).range(0.0..=theme::PCT_MAX).speed(0.5).suffix("%"));
                     rects.push(("KPI amber margin".into(), r.rect));
                 });
                 combo(ui, "Draw as", "KPI visual", k.visual.label().to_string(), rects, &mut |ui| {
@@ -1561,45 +1599,7 @@ impl MicroParquetApp {
                 }
             }
         }
-        ui.label("Limits");
-        let mut drop: Option<usize> = None;
-        for (i, t) in k.thresholds.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                let op = if t.op == ThresholdOp::Below { "below" } else { "above" };
-                if ui.small_button(op).clicked() {
-                    t.op = if t.op == ThresholdOp::Below { ThresholdOp::Above } else { ThresholdOp::Below };
-                }
-                let r = ui.add(egui::DragValue::new(&mut t.limit).speed(0.5));
-                rects.push((format!("KPI limit {}", i + 1), r.rect));
-                let c = match t.colour {
-                    ThresholdColour::Amber => "amber",
-                    ThresholdColour::Red => "red",
-                    ThresholdColour::Green => "green",
-                };
-                if ui.small_button(c).clicked() {
-                    t.colour = match t.colour {
-                        ThresholdColour::Amber => ThresholdColour::Red,
-                        ThresholdColour::Red => ThresholdColour::Green,
-                        ThresholdColour::Green => ThresholdColour::Amber,
-                    };
-                }
-                if ui.small_button(theme::ph::X).clicked() {
-                    drop = Some(i);
-                }
-            });
         }
-        if let Some(i) = drop {
-            k.thresholds.remove(i);
-        }
-        if k.thresholds.len() < MAX_THRESHOLDS {
-            let b = ui.button("Add limit");
-            rects.push(("KPI add limit".into(), b.rect));
-            if b.clicked() {
-                k.thresholds.push(Threshold::default());
-            }
-        }
-        let r = ui.checkbox(&mut k.sparkline, "Sparkline (12 months)");
-        rects.push(("KPI sparkline".into(), r.rect));
     }
 
     /// A KPI card: the number, the change with its arrow and words, and the sparkline. A tooltip carries the same words.
@@ -1685,15 +1685,15 @@ impl MicroParquetApp {
                 Rag::Amber => tk.warning,
                 Rag::Red => tk.danger,
             };
-            egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), theme::KPI_BAND_ALPHA)
+            theme::band_tint(c)
         };
         match g.kind {
             KpiVisual::Gauge => {
                 let w = ui.available_width().min(theme::KPI_GAUGE_W);
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, w / 2.0 + 6.0), egui::Sense::hover());
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, w / 2.0 + theme::KPI_GAUGE_PAD), egui::Sense::hover());
                 rects.push((format!("KPI gauge {}", id), rect));
-                let (cx, cy) = (rect.center().x as f64, (rect.bottom() - 4.0) as f64);
-                let (ro, ri) = ((w / 2.0 - 3.0) as f64, (w / 2.0 - 3.0) as f64 * 0.62);
+                let (cx, cy) = (rect.center().x as f64, (rect.bottom() - theme::KPI_GAUGE_HUB) as f64);
+                let (ro, ri) = ((w / 2.0 - theme::KPI_GAUGE_MARGIN) as f64, (w / 2.0 - theme::KPI_GAUGE_MARGIN) as f64 * theme::KPI_GAUGE_INNER);
                 let steps = 24;
                 for (from, to, rag) in &g.bands {
                     let pts = micro_parquet::kpi::ring_segment(cx, cy, ro, ri, g.frac(*from), g.frac(*to), steps);
@@ -1714,10 +1714,10 @@ impl MicroParquetApp {
                     egui::pos2((cx + r * a.cos()) as f32, (cy - r * a.sin()) as f32)
                 };
                 let t = g.frac(g.target);
-                ui.painter().line_segment([at(t, ri * 0.92), at(t, ro * 1.04)], egui::Stroke::new(2.0, tk.ink));
+                ui.painter().line_segment([at(t, ri * theme::KPI_GAUGE_TICK_IN), at(t, ro * theme::KPI_GAUGE_TICK_OUT)], egui::Stroke::new(2.0, tk.ink));
                 let v = g.frac(g.value);
-                ui.painter().line_segment([egui::pos2(cx as f32, cy as f32), at(v, ro * 0.96)], egui::Stroke::new(2.5, tk.ink));
-                ui.painter().circle_filled(egui::pos2(cx as f32, cy as f32), 3.5, tk.ink);
+                ui.painter().line_segment([egui::pos2(cx as f32, cy as f32), at(v, ro * theme::KPI_GAUGE_NEEDLE_LEN)], egui::Stroke::new(theme::KPI_GAUGE_NEEDLE_W, tk.ink));
+                ui.painter().circle_filled(egui::pos2(cx as f32, cy as f32), theme::KPI_GAUGE_HUB_R, tk.ink);
                 resp.on_hover_text(format!("{}: target {} (scale {} to {})", g.value_text, g.target_text, g.lo_text, g.hi_text));
             }
             _ => {
@@ -1728,7 +1728,7 @@ impl MicroParquetApp {
                 for (from, to, rag) in &g.bands {
                     ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x(g.frac(*from)), rect.top()), egui::pos2(x(g.frac(*to)), rect.bottom())), 0.0, band(*rag));
                 }
-                let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.center().y - rect.height() * 0.2), egui::pos2(x(g.frac(g.value)), rect.center().y + rect.height() * 0.2));
+                let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.center().y - rect.height() * theme::KPI_BULLET_BAR), egui::pos2(x(g.frac(g.value)), rect.center().y + rect.height() * theme::KPI_BULLET_BAR));
                 ui.painter().rect_filled(bar, 0.0, tk.ink);
                 ui.painter().line_segment([egui::pos2(x(g.frac(g.target)), rect.top() + 1.0), egui::pos2(x(g.frac(g.target)), rect.bottom() - 1.0)], egui::Stroke::new(2.0, tk.ink));
                 resp.on_hover_text(format!("{}: target {} (scale {} to {})", g.value_text, g.target_text, g.lo_text, g.hi_text));

@@ -51,6 +51,7 @@ pub fn scope(dd: &std::path::Path, cal: CalendarSettings, as_of: &str, kinds: Ve
         }),
         kinds,
         measures: vec![],
+        ..Default::default()
     }))
 }
 

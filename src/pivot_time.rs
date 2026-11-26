@@ -592,6 +592,22 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         }
     }
 
+    // Phase 12: a scenario's marks must fit the measures they name (a Volume is an amount, a Rate a ratio in percent)
+    if let Some(w) = &ctx.what_if {
+        for &j in &time_js {
+            let v = &spec.values[j];
+            if v.time.unwrap_or_default().agg != TimeAgg::Measure {
+                continue;
+            }
+            if let (Some(role), Some(m)) = (w.role_of(&v.field), ctx.measures.iter().find(|m| m.name() == v.field)) {
+                if let Err(e) = crate::whatif::check_role(m, role) {
+                    bail!("Pivot: scenario '{}': {}", w.name, e);
+                }
+            }
+        }
+    }
+    let mut scenario_measures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
     struct PeriodInfo {
         days: Vec<NaiveDate>,
         text: String,
@@ -682,6 +698,18 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         for &j in &time_js {
             let tv = spec.values[j].time.unwrap_or_default();
             let res = &resolved[&j];
+            let apply_scenario = |m: Measured, seen: &mut std::collections::BTreeSet<String>| -> Measured {
+                match (&ctx.what_if, tv.agg == TimeAgg::Measure) {
+                    (Some(w), true) => match (w.role_of(&spec.values[j].field), m) {
+                        (Some(role), Measured::Value(v)) if entry.base.is_none_or(|b| b.end >= crate::dates::month_start(as_of)) => {
+                            seen.insert(spec.values[j].field.clone());
+                            Measured::Value(w.apply(role, v))
+                        }
+                        (_, other) => other,
+                    },
+                    _ => m,
+                }
+            };
             let dates_of = |ci: usize| -> BTreeMap<NaiveDate, DayStats> {
                 let c = &comps[ci];
                 match series[c.group][which].get(&nc_key) {
@@ -811,6 +839,7 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                         }
                         _ => blank(format!("{} has no days up to the as-of date.", text)),
                     };
+                    let m = apply_scenario(m, &mut scenario_measures);
                     let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
                     if slot.len() < spec.values.len() {
                         slot.resize(spec.values.len(), None);
@@ -865,6 +894,8 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                     }
                 }
             }
+            // Phase 12: the active scenario changes the marked measures from the as-of month on; closed history stays actual
+            let m = apply_scenario(m, &mut scenario_measures);
             let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
             if slot.len() < spec.values.len() {
                 slot.resize(spec.values.len(), None);
@@ -879,6 +910,10 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         }
     }
     out.extra.extend(tail_notes);
+    if let (Some(w), false) = (&ctx.what_if, scenario_measures.is_empty()) {
+        let names: Vec<&str> = scenario_measures.iter().map(String::as_str).collect();
+        out.extra.push(w.note(&names));
+    }
     if month_end {
         for (j, r) in &resolved {
             if let Res::Ratio { name, num, den, .. } = r {

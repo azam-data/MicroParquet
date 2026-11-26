@@ -245,13 +245,14 @@ impl MicroParquetApp {
         });
         let kinds = self.project.model.column_kinds.clone();
         let measures = self.project.model.measures.clone();
+        let what_if = self.project.model.what_if.scope();
         // the budget and target tables (Phase 11): each with the plan table as the worker reads it
         let plan_parts: Vec<(model::PlanLink, Option<ModelTab>)> = self.project.model.plans.iter().map(|p| (p.clone(), self.model_worker_tab(&p.plan_tab))).collect();
         let fp = fingerprint(&(
             plan_parts.iter().map(|(l, k)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)))).collect::<Vec<_>>(),
             parts.iter().map(|(l, k, r)| (format!("{:?}", l), k.as_ref().map(|k| micro_parquet::steps_edit::pipeline_hash(&k.source, &k.steps)), r.clone())).collect::<Vec<_>>(),
             self.paths.temp_dir.clone(),
-            format!("{:?}", (&calendar, &kinds, &measures)),
+            format!("{:?}", (&calendar, &kinds, &measures, &what_if)),
         ));
         if self.project.model_ui.scope.is_none() || self.project.model_ui.scope_fp != fp {
             let temp_dir = self.paths.temp_dir.clone();
@@ -275,6 +276,7 @@ impl MicroParquetApp {
                 calendar,
                 kinds,
                 measures,
+                what_if,
             };
             self.project.model_ui.scope = Some(std::sync::Arc::new(ctx));
             self.project.model_ui.scope_fp = fp;

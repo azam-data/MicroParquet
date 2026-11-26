@@ -37,6 +37,7 @@ pub fn scope5(dd: &std::path::Path, as_of: &str, lookup: Option<(&str, &str, Dat
         }),
         kinds: vec![],
         measures,
+        ..Default::default()
     }))
 }
 

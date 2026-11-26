@@ -266,10 +266,6 @@ impl MicroParquetApp {
         let tk = *theme::tokens(self.dark_mode);
         ui.add_space(theme::SPACE_S);
         ui.label(theme::semibold("Analytics").size(theme::TEXT_HEADING));
-        self.render_forecast_card(ui);
-        ui.add_space(theme::SPACE_S);
-        self.render_target_card(ui);
-        ui.add_space(theme::SPACE_S);
         for (name, what) in ANALYTICS_PLACEHOLDERS {
             egui::Frame::none().fill(tk.surface).stroke(theme::line(tk.border)).rounding(egui::Rounding::same(theme::RADIUS_PANEL)).inner_margin(egui::Margin::same(theme::SPACE_S)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -278,6 +274,12 @@ impl MicroParquetApp {
             });
             ui.add_space(theme::SPACE_XS);
         }
+        self.render_forecast_card(ui);
+        ui.add_space(theme::SPACE_S);
+        self.render_target_card(ui);
+        ui.add_space(theme::SPACE_S);
+        self.render_whatif_card(ui);
+        ui.add_space(theme::SPACE_S);
     }
 }
 
@@ -285,5 +287,4 @@ impl MicroParquetApp {
 pub const ANALYTICS_PLACEHOLDERS: &[(&str, &str)] = &[
     ("Plan vs actual", "Link a budget table in Model, then add a vs-budget measure (Model > Measures); it works in pivots, charts and KPI cards."),
     ("Top movers", "Later: the items that moved most between two dates."),
-    ("What-if sliders", "Later: change a rate or a balance and see the chart move."),
 ];
