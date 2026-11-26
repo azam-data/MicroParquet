@@ -45,6 +45,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Report packs](report-packs.md): a monthly workbook (Cover plus one sheet per item) made from this month's files.
 - [Saved tool runs](saved-tool-runs.md): keep the inputs of a result tab in a file and re-run the tool with other inputs.
 - [Projects (.mpproj)](projects.md): File ▸ Save project: the tabs, steps, pivots and charts of a session, reopened on this month's files through the Sources dialog.
+- [Assistant (offline help)](assistant.md): a side panel in every view that answers from this guide book, names its sections and never calculates; an optional local model.
 
 ## The model (Phase 9)
 
@@ -108,3 +109,17 @@ Every "save as" box offers only the file type it writes (CSV, Parquet, Excel wor
 PDF: "Export Selected Tabs to a .pdf…" first asks for a Title (blank = no heading line; whatever you type is printed at the top of every page, wrapped if it is longer than the page), the Orientation (Portrait or Landscape) and the Page size (A4 or Legal), then opens the save box, which suggests the title as the file name (or the tab's title when there is none). The last choices are remembered in settings.json. Columns that do not fit the page width continue on the following pages with the row labels repeated; a narrow page (Portrait) therefore needs more pages than a wide one.
 
 Parquet, CSV, Excel, PDF and the split export all write through a temporary name and rename it when finished, so a failed export leaves no half file. The file signatures are PAR1 (Parquet), PK (Excel, a zip file) and %PDF (PDF); a CSV is plain text. If a file you exported opens as unreadable characters, look at its first characters in Notepad: PAR1 means it is a Parquet file, PK an Excel workbook, %PDF a PDF; then it was saved with the wrong export command or a wrong extension.
+
+## Phases 11 to 13: planning, forecasting and reading the numbers
+
+- [Keep or drop columns, and reverse a sign](schema-keep-reverse-sign.md): the file-open dialog's Keep box and Reverse sign for advances that arrive negative.
+- [Variance bridge](variance-bridge.md): the MoM bridge tab: the change in interest as volume, mix and rate that add up exactly.
+- [Forecasting a monthly line](forecasting.md) and [ARIMA forecast](arima-forecast.md): four models, Auto back-test, 80% and 95% bands, adjustments.
+- [Budget and target tables](plan-vs-actual.md): plan, actual less plan and % achieved as measures.
+- [Target bands: bullet and gauge](target-bands.md): red, amber and green zones on charts and KPI cards.
+- [Rolling and moving measures](rolling-measures.md): Rolling 3M and 12M, moving averages.
+- [What-if scenarios](what-if-scenarios.md): rate shift and growth from the as-of month, always labelled.
+- [Drill-through](drill-through.md): the rows behind a card, a pivot cell or a dashboard item.
+- [Top movers](top-movers.md): the lines that moved most each month.
+- [Saved views](saved-views.md): a dashboard page's filters under a name.
+- [Chart notes](chart-notes.md): numbered notes on a chart's categories.

@@ -1,0 +1,1 @@
+Phase 14 progress: A1 search, A2 never-calculate, M1 model client, UI panel: done. Tests tests/phase14 (a1,a2,m1) in tests/phase3/main.rs; UI render tests src/ui/render_tests_p14.rs. Stub proof: a2_a fails if the calculate rule is bypassed.

@@ -298,9 +298,9 @@ fn w0_the_version_is_1_8_0_and_a_tag_must_match_it() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let toml = std::fs::read(root.join("Cargo.toml")).expect("Cargo.toml");
     let text = String::from_utf8_lossy(&toml);
-    assert!(text.contains("version = \"1.9.0\"\r\n"), "Cargo.toml is at 1.9.0 with its CRLF line ends");
+    assert!(text.contains("version = \"1.14.0\"\r\n"), "Cargo.toml is at 1.14.0 with its CRLF line ends");
     assert!(!text.replace("\r\n", "").contains('\n'), "every line of Cargo.toml ends in CRLF");
-    assert_eq!(env!("CARGO_PKG_VERSION"), "1.9.0");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "1.14.0");
     let wf = std::fs::read_to_string(root.join(".github/workflows/main.yml")).expect("workflow");
     let test_job = wf.split("\n  test:").nth(1).and_then(|s| s.split("\n  build:").next()).expect("the test job");
     let check = test_job.find("Check the tag matches Cargo.toml").expect("the check step");

@@ -1665,3 +1665,7 @@ pub const ANALYTICS_UNIT_W: f32 = 72.0;
 pub const ANALYTICS_TEXT_W: f32 = 120.0;
 pub const WHATIF_RATE_MAX_BP: f64 = 500.0;
 pub const WHATIF_GROWTH_MAX_PCT: f64 = 50.0;
+
+/// Phase 14: the assistant panel opens this much wider than the Steps panel, and keeps this much for its Ask button.
+pub const ASSISTANT_EXTRA_W: f32 = 24.0;
+pub const ASSISTANT_ASK_W: f32 = 64.0;

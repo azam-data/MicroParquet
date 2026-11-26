@@ -1,5 +1,6 @@
 //! One module per screen (Phase 3 R1). `theme` holds every colour and size token.
 
+pub mod assistant;
 pub mod audit;
 pub mod auto_order;
 pub mod batch;
@@ -104,6 +105,8 @@ mod render_tests_r;
 mod render_tests_ui;
 #[cfg(test)]
 mod render_tests_fb;
+#[cfg(test)]
+mod render_tests_p14;
 #[cfg(test)]
 mod tests;
 pub mod theme;

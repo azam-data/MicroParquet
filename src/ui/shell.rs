@@ -182,6 +182,7 @@ impl MicroParquetApp {
                     go = Some(v);
                 }
             }
+            self.render_rail_assistant_button(ui);
         });
         self.ws.rail_rects = rects;
         if let Some(v) = go {

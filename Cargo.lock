@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "micro_parquet"
-version = "1.9.0"
+version = "1.14.0"
 dependencies = [
  "anyhow",
  "blake3",

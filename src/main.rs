@@ -266,6 +266,8 @@ pub struct MicroParquetApp {
     /// A step reopened in its modal (edit in place).
     pub editing: Option<ui::step_edit::EditingStep>,
     show_about: bool,
+    /// Phase 14: the help assistant panel.
+    pub assistant: ui::assistant::AssistantUi,
     /// The shell: the view, the rail, the Settings dialog (UI revamp).
     pub ws: ui::shell::WorkspaceUi,
     /// The row-count "Details" dialog is open.
@@ -440,6 +442,7 @@ impl MicroParquetApp {
             insert_after: None,
             editing: None,
             show_about: false,
+            assistant: ui::assistant::AssistantUi { open: settings.assistant_open, ..Default::default() },
             ws: ui::shell::WorkspaceUi { view: settings.last_view.as_deref().and_then(micro_parquet::workspace::View::from_name).unwrap_or_default(), ..Default::default() },
             row_details_open: false,
             status_log: Vec::new(),
@@ -594,6 +597,7 @@ impl MicroParquetApp {
             }
         }
         self.handle_palette_shortcut(ctx);
+        self.handle_assistant_shortcut(ctx);
         self.handle_copy_shortcut(ctx);
         self.handle_zoom_keys(ctx);
         self.update_window_title(ctx);
@@ -613,6 +617,7 @@ impl MicroParquetApp {
         area.set_left(ctx.screen_rect().left());
         area.set_top(area.top().max(theme::TOP_BAR_H + theme::TAB_STRIP_H));
         theme::set_dialog_area(ctx, area);
+        self.render_assistant_panel(ctx);
         self.render_right_panel(ctx);
         theme::set_central_area(ctx, ctx.available_rect());
 

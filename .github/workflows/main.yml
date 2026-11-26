@@ -158,6 +158,14 @@ jobs:
           codesign --force --deep --sign - "${APP_DIR}"
           ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${{ matrix.archive_name }}"
 
+      - name: 5c. Find the release notes of this tag
+        id: notes
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          f="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; else echo "path=" >> "$GITHUB_OUTPUT"; fi
+
       - name: 6. Upload Build Artifact (Downloadable from Actions Tab)
         uses: actions/upload-artifact@v4
         with:
@@ -169,4 +177,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.archive_name }}
+          # the notes written for this version (docs/release-notes/<tag>.md), then GitHub's list of changes
+          body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true

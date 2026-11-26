@@ -153,7 +153,7 @@ fn m1_g_start_of_year_is_the_default_and_compares_with_the_year_end_before() {
     assert_eq!(MoversSpec::default().basis, Basis::StartOfYear);
     let mut s = spec(10, 0);
     s.basis = Basis::StartOfYear;
-    let (df, notes) = run("p13m1_g", &two_years(), &s).expect("movers");
+    let (df, notes) = run("p13m1_g2", &two_years(), &s).expect("movers");
     // Feb 2026 and Jan 2026 against 31 Dec 2025; Dec 2025 has no earlier year, so it uses the first month of its own year (Feb 2025)
     assert_eq!(col_str(&df, COL_MONTH), ["Feb 2026", "Feb 2026", "Feb 2026", "Jan 2026", "Dec 2025", "Dec 2025"]);
     assert_eq!(col_str(&df, "Account"), ["A", "B", "C", "A", "A", "B"]);
@@ -165,7 +165,7 @@ fn m1_g_start_of_year_is_the_default_and_compares_with_the_year_end_before() {
 fn m1_h_same_month_last_year_skips_a_month_with_no_partner_and_says_so() {
     let mut s = spec(10, 0);
     s.basis = Basis::SameMonthLastYear;
-    let (df, notes) = run("p13m1_h", &two_years(), &s).expect("movers");
+    let (df, notes) = run("p13m1_h2", &two_years(), &s).expect("movers");
     assert_eq!(col_str(&df, COL_MONTH), ["Feb 2026", "Feb 2026", "Feb 2026"]);
     assert_eq!(col_f(&df, COL_CHANGE), [50.0, -40.0, 5.0].map(Some));
     assert!(notes.iter().any(|n| n.contains("Not listed") && n.contains("Jan 2026") && n.contains("same month")), "{notes:?}");

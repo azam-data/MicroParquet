@@ -4,7 +4,19 @@ A small, fast, portable desktop workstation for CSV and Parquet files, built for
 
 MicroParquet opens core-banking extracts of millions of rows on an ordinary laptop. You clean and shape them with recorded steps, then run the calculations behind ALCO packs and Bangladesh Bank returns: liquidity gaps, IRRBB, LCR/NSFR, loan classification and provisioning, IFRS 9 ECL, FTP and month-on-month variance. It is a single executable. It needs no installation, no database and no internet connection, and nothing leaves the machine.
 
-> **Status:** v1.6.0, the six development phases are complete. Outputs feed regulatory work, so the rule is to **fail loudly**. A blank, unreadable or unmapped value stops a tool with a message. The app never quietly treats it as zero.
+> **Status:** v1.14.0, fourteen development phases complete (data tools, ALM and risk, charts, a linked model, dashboards and reports, planning and forecasting, and an offline assistant). Outputs feed regulatory work, so the rule is to **fail loudly**. A blank, unreadable or unmapped value stops a tool with a message. The app never quietly treats it as zero.
+
+---
+
+## Screenshots
+
+All pictures are drawn by the program's own automated tests on small **demo data** (not real bank data), in the light theme; every one also has a dark version in [`docs/guide/img/`](docs/guide/img/).
+
+| | |
+| --- | --- |
+| ![Report view](docs/guide/img/report-view.png) **Report view:** pivots and charts, with the side panel for chart, steps and analytics. | ![Dashboard](docs/guide/img/dashboard-page.png) **Dashboard:** pages of charts, tables, KPI cards, text and images, exported to HTML, PowerPoint and PDF. |
+| ![Liquidity gap ladder](docs/guide/img/charts/gap-ladder.png) **Banking chart templates:** the liquidity gap ladder, with the finding written as the title. | ![Nested pivot](docs/guide/img/pivot-nested-tab.png) **Pivot builder:** side-by-side or Excel-style nested layout. |
+| ![Model view](docs/guide/img/model-calendar-tab.png) **Model view:** links between tabs, one shared calendar, the as-of date and measures. | ![Assistant](docs/guide/img/assistant-panel.png) **Assistant:** answers from the guide book, names its section, never calculates; works offline. |
 
 ---
 
@@ -51,6 +63,14 @@ On first start the app creates a `portable_data` folder next to itself. It holds
 ### Islamic window
 - Mudaraba profit distribution by the weightage / PSR method. The app only calculates: every parameter comes from a dated file that must hold the Shariah Supervisory Committee's approved values.
 
+### Model, dashboards and planning (Phases 9 to 14)
+- **One window, four views.** Report (pivots and charts), Dashboard, Data (files, steps, single-table tools) and Model. A collapsible side panel and a Ctrl+K search reach every tool.
+- **A linked model.** Link tabs like tables of a database (branch, product and GL masters; keys of two columns; duplicate keys listed so they can be fixed at source), share one calendar, and measure balances and flows properly: closing, opening and average daily balance, MTD / QTD / YTD, prior period and same period last year, rolling 3 and 12 months, moving averages. Ratios (yield, cost of funds, NIM) take Act/365, Act/360 or Act/Act.
+- **Charts and dashboards.** A chart studio with many forms and banking templates; drill-down and "Show rows" behind any number; dashboards with KPI cards, page filters, cross-filtering, saved views, a grid or free layout and imported page designs; HTML reports with drill-down (a small-file option for email), PowerPoint with real editable charts, and PDF pages.
+- **Plan against actual.** Budget and target tables linked to the data, with actual less plan and % achieved; target bands with red, amber and green zones, bullet and gauge visuals; variance bridge (volume, mix and rate that add up exactly); top movers; chart notes.
+- **Forecasting.** Trend + seasonality, Holt-Winters, growth / run-off and ARIMA with an automatic back-test, 80% and 95% bands, outlier handling and manual adjustments, plus what-if scenarios (rate shift and growth) that are always labelled as not actual.
+- **Offline assistant.** A panel in every view that answers from the built-in guide book and shows the section it used. It never calculates a number. An optional small local model (a 1 to 3 GB GGUF file copied in once) can phrase the answers; it runs on the PC only. See the [Assistant note](docs/guide/assistant.md).
+
 ### Reporting & automation
 - Saved tool runs, which re-run any result tab with new inputs.
 - **Report packs**: pick this month's files and the cutoff, and get one Excel workbook. Its Cover sheet records every input file's fingerprint and every rule and parameter file used.
@@ -60,8 +80,8 @@ On first start the app creates a `portable_data` folder next to itself. It holds
 
 ## Documentation
 
-- **User guide:** [`docs/guide/`](docs/guide/README.md). One note per tool, each with ten fixed sections: what it does, when to use it, before you start, the columns you need, step by step, what you get, how to check it, a worked example, messages and fixes, and limits. Every worked example is produced by an automated test, so the numbers in the guide are the numbers the program gives.
-- **Design and specifications:** `docs/phase1-spec.md` … `docs/phase6-spec.md`, with progress notes and accepted deviations; UI design references are in `docs/design/`.
+- **User guide:** [`docs/guide/`](docs/guide/README.md). One note per tool, each with fixed sections (ten for the older tools, eight for the newer ones): what it does, when to use it, before you start, the columns you need, step by step, what you get, how to check it, a worked example, messages and fixes, and limits. Every worked example is produced by an automated test, so the numbers in the guide are the numbers the program gives.
+- **Design and specifications:** `docs/phase1-spec.md` … `docs/phase14-decisions.md`, with progress notes and accepted deviations; UI design references are in `docs/design/`.
 
 ---
 
@@ -100,7 +120,7 @@ Requires the Rust stable toolchain.
 
 ```bash
 cargo build --release      # first build compiles Polars: 10–20 minutes
-cargo test                 # 700+ tests, including headless UI render and click tests
+cargo test                 # 1,400+ tests, including headless UI render and click tests
 ```
 
 Never run `cargo clean` unless you need to; the Polars build takes a while. `CLAUDE.md` describes the layout, the rules (no `unwrap` on user data, `#[serde(default)]` on every new field, fail loudly) and the domain conventions.
@@ -120,7 +140,7 @@ Built with Rust 2021, [Polars](https://pola.rs) 0.43, [egui/eframe](https://gith
 
 ## Privacy and data
 
-- Everything runs locally. The program has no network code, and it sends no telemetry.
+- Everything runs locally and nothing is sent anywhere: no telemetry, no update check. The only network use is the optional assistant model, which MicroParquet starts on this PC and talks to over the loopback address (127.0.0.1) only.
 - The repository holds **synthetic test data only**. Never commit real customer data or anything from `portable_data`.
 - PII masking uses an HMAC key created per installation. Export a backup of the key; without it, masked tokens cannot be reproduced on another machine.
 
