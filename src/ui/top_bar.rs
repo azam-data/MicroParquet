@@ -225,6 +225,10 @@ impl MicroParquetApp {
         rects.push(("Settings".to_string(), r.rect));
         let r = ui
             .menu_button("Help", |ui| {
+                if ui.button("Assistant (F1)").clicked() {
+                    ui.close_menu();
+                    self.toggle_assistant();
+                }
                 if ui.button("About MicroParquet").clicked() {
                     ui.close_menu();
                     self.show_about = true;

@@ -45,6 +45,7 @@ Amounts are in BDT (shown in Crore, 1 Cr = 10,000,000, when you choose that scal
 - [Report packs](report-packs.md): a monthly workbook (Cover plus one sheet per item) made from this month's files.
 - [Saved tool runs](saved-tool-runs.md): keep the inputs of a result tab in a file and re-run the tool with other inputs.
 - [Projects (.mpproj)](projects.md): File ▸ Save project: the tabs, steps, pivots and charts of a session, reopened on this month's files through the Sources dialog.
+- [Assistant (offline help)](assistant.md): a side panel in every view that answers from this guide book, names its sections and never calculates; an optional local model.
 
 ## The model (Phase 9)
 

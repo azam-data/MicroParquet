@@ -48,6 +48,12 @@ pub struct Settings {
     /// The view the window opened in last time: "Report", "Data" or "Model" (UI revamp). None = Data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_view: Option<String>,
+    /// The assistant panel was open when the window closed (Phase 14).
+    #[serde(default)]
+    pub assistant_open: bool,
+    /// The local model was started and not stopped: it is started again when the panel opens (Phase 14).
+    #[serde(default)]
+    pub assistant_autostart: bool,
 }
 
 pub fn settings_path(root: &Path) -> PathBuf {

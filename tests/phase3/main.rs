@@ -254,3 +254,11 @@ mod p13_m1;
 mod p13_v1;
 #[path = "../phase13/n1.rs"]
 mod p13_n1;
+
+// Phase 14 tests (tests/phase14/) are compiled into this binary too.
+#[path = "../phase14/a1.rs"]
+mod p14_a1;
+#[path = "../phase14/a2.rs"]
+mod p14_a2;
+#[path = "../phase14/m1.rs"]
+mod p14_m1;

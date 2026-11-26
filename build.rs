@@ -16,6 +16,32 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Phase 14: the guide notes (`docs/guide/*.md`) are compiled into the program, so the assistant can search
+/// them on a PC that has no docs folder. Writes `$OUT_DIR/guide_embedded.rs`, a list of (file name, text).
+fn embed_guide() {
+    println!("cargo:rerun-if-changed=docs/guide");
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let dir = std::path::Path::new(&manifest).join("docs").join("guide");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.ends_with(".md"))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let mut out = String::from("pub const GUIDE_FILES: &[(&str, &str)] = &[\n");
+    for n in &names {
+        println!("cargo:rerun-if-changed=docs/guide/{}", n);
+        let abs = dir.join(n).to_string_lossy().replace('\\', "/");
+        out.push_str(&format!("    ({:?}, include_str!({:?})),\n", n, abs));
+    }
+    out.push_str("];\n");
+    let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
+    std::fs::write(std::path::Path::new(&out_dir).join("guide_embedded.rs"), out).expect("the guide list could not be written");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
@@ -26,6 +52,7 @@ fn main() {
         .unwrap_or(0);
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     println!("cargo:rustc-env=MP_BUILD_DATE={:04}-{:02}-{:02}", y, m, d);
+    embed_guide();
 
     // The .exe's own icon (Explorer, a pinned taskbar shortcut); the window icon is set at run time.
     #[cfg(windows)]
