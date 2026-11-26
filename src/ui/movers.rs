@@ -1,4 +1,4 @@
-//! Top movers (Phase 13): Banking ▸ Treasury & ALM ▸ "Top movers". One click on a tab with a date column and a balance gives, for each
+//! Top movers (Phase 13): Banking ▸ Reports ▸ "Top movers". One click on a tab with a date column and a balance gives, for each
 //! month, the lines whose balance moved most against the month before. The date, balance and line columns are guessed from the tab;
 //! the dialog only asks to confirm them.
 

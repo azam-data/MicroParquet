@@ -4028,8 +4028,8 @@ fn m5_a_number_of_a_named_measure_has_a_greyed_show_rows_with_its_reason_at_thre
         let at = m5_measure_pivot(&mut rig, &["NIM", "Interest income"]);
         let n = rig.app.tabs.len();
         let p = rig.draw(3);
-        let reason = "This number combines several filtered series. Use Show rows on a column value instead.";
-        // the first value cell is NIM's, the second Interest income's: both are measures
+        let reason = "'NIM' is a ratio of several series, so it has no single set of rows. Use Show rows on its numerator or denominator measure.";
+        // the first value cell is NIM's (a ratio, so greyed); Interest income is a base measure and has rows since Phase 13
         let cell = value_cell_of_row(&p, "Jan 2026", &what);
         assert!(rig.app.tabs[at].cached_slice.column("NIM").is_ok_and(|c| !c.is_null().all()), "{what}: NIM has a number");
         let p = right_click(&mut rig, cell.center());
