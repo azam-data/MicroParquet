@@ -1231,7 +1231,11 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
         for band_spec in spec.ref_bands.iter().filter(|r| r.panel == if multi_index(data) { 0 } else { panel_idx }) {
             let (a, c) = (v_of(scaled(band_spec.from, vk, opts)), v_of(scaled(band_spec.to, vk, opts)));
             let r = if horizontal { Rect::from_x_y_ranges(a.min(c)..=a.max(c), plot.y_range()) } else { Rect::from_x_y_ranges(plot.x_range(), a.min(c)..=a.max(c)) };
-            b.rect(r.intersect(plot), alpha(rgb(ink.deemph), 0.45), [0.0; 4]);
+            match band_spec.status {
+                // a red, amber or green zone of a target: a light tint, so the marks stay readable (the label says the colour too)
+                Some(st) => b.rect(r.intersect(plot), alpha(rgb(st.hex()), 0.16), [0.0; 4]),
+                None => b.rect(r.intersect(plot), alpha(rgb(ink.deemph), 0.45), [0.0; 4]),
+            }
             if !band_spec.label.is_empty() {
                 b.try_put(Role::Reference, &band_spec.label, Anchor::TopLeft, pos2(plot.left() + 4.0, r.intersect(plot).top() + 2.0), t::label_pt(), Face::Regular, ink2_c);
             }
@@ -1251,7 +1255,7 @@ fn panel(b: &mut Builder, data: &ChartData, p: &Plan, axis: &Axis, outer: Rect, 
         for rl in &lines {
             let c = v_of(scaled(rl.value, vk, opts));
             let col = rgb(rl.status.hex());
-            let text = if rl.label.is_empty() { format!("{}: {}", rl.status.label(), fmt(rl.value, false)) } else { format!("{} ({})", rl.label, rl.status.label()) };
+            let text = if rl.status == super::spec::Status::Neutral { format!("{}: {}", rl.label, fmt(rl.value, false)) } else if rl.label.is_empty() { format!("{}: {}", rl.status.label(), fmt(rl.value, false)) } else { format!("{} ({})", rl.label, rl.status.label()) };
             // the label goes beside the line where there is room: along the line, above or below it. Of several
             // vertical lines, the highest stands to the right of its line and the others to the left of theirs, so
             // neighbouring labels never meet and none is crossed by another line.

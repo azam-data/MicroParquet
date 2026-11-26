@@ -1512,13 +1512,26 @@ pub enum TimeWindow {
     Mtd,
     /// The fiscal quarter of the anchor, up to the anchor.
     Qtd,
-    /// The fiscal year of the anchor, up to the anchor.
+    /// The fiscal year of the anchor, up to the anchor. For a flow this is the **running total that resets each fiscal year**: on a
+    /// Month-Year row each month shows the total from the start of its fiscal year to its own end.
     Ytd,
+    /// The 3 calendar months ending with the anchor's month (Phase 12).
+    Rolling3,
+    /// The 12 calendar months ending with the anchor's month (Phase 12).
+    Rolling12,
 }
 
 impl TimeWindow {
     pub fn all() -> &'static [TimeWindow] {
-        &[TimeWindow::Period, TimeWindow::Mtd, TimeWindow::Qtd, TimeWindow::Ytd]
+        &[TimeWindow::Period, TimeWindow::Mtd, TimeWindow::Qtd, TimeWindow::Ytd, TimeWindow::Rolling3, TimeWindow::Rolling12]
+    }
+    /// The months a rolling window reads (`None` for the others).
+    pub fn rolling_months(self) -> Option<i32> {
+        match self {
+            TimeWindow::Rolling3 => Some(3),
+            TimeWindow::Rolling12 => Some(12),
+            _ => None,
+        }
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -1526,6 +1539,50 @@ impl TimeWindow {
             TimeWindow::Mtd => "MTD",
             TimeWindow::Qtd => "QTD",
             TimeWindow::Ytd => "YTD",
+            TimeWindow::Rolling3 => "Rolling 3M",
+            TimeWindow::Rolling12 => "Rolling 12M",
+        }
+    }
+}
+
+/// A moving average of a value over the last few periods of its own Calendar field (Phase 12): the mean of this period's number and
+/// the numbers of the periods before it. It is blank, with the reason, when any of those periods has no number.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Smooth {
+    #[default]
+    None,
+    Moving3,
+    Moving6,
+    Moving12,
+}
+
+impl Smooth {
+    pub fn all() -> &'static [Smooth] {
+        &[Smooth::None, Smooth::Moving3, Smooth::Moving6, Smooth::Moving12]
+    }
+    pub fn periods(self) -> usize {
+        match self {
+            Smooth::None => 1,
+            Smooth::Moving3 => 3,
+            Smooth::Moving6 => 6,
+            Smooth::Moving12 => 12,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Smooth::None => "None",
+            Smooth::Moving3 => "Moving average of 3 periods",
+            Smooth::Moving6 => "Moving average of 6 periods",
+            Smooth::Moving12 => "Moving average of 12 periods",
+        }
+    }
+    /// How a heading names it.
+    pub fn short(self) -> &'static str {
+        match self {
+            Smooth::None => "",
+            Smooth::Moving3 => "3-period moving average",
+            Smooth::Moving6 => "6-period moving average",
+            Smooth::Moving12 => "12-period moving average",
         }
     }
 }
@@ -1627,6 +1684,9 @@ pub struct TimeValue {
     pub show: TimeShow,
     #[serde(default, skip_serializing_if = "is_default_choice")]
     pub partial: TimePartial,
+    /// A moving average over the last periods (Phase 12); needs the cell's own period (window Period) and no shift.
+    #[serde(default, skip_serializing_if = "is_default_choice")]
+    pub smooth: Smooth,
 }
 
 impl TimeValue {
@@ -1637,7 +1697,7 @@ impl TimeValue {
 
     /// True when the value uses a window, shift or show of M4 (the M3 numbers are those of the other values).
     pub fn is_m4(&self) -> bool {
-        self.window != TimeWindow::Period || self.shift != TimeShift::None || self.show != TimeShow::Value
+        self.window != TimeWindow::Period || self.shift != TimeShift::None || self.show != TimeShow::Value || self.smooth != Smooth::None
     }
 
     /// The heading: "Closing balance of Balance", "Average balance of Balance \u{b7} YTD \u{b7} vs SPLY %". `month_end` is true on a
@@ -1646,6 +1706,9 @@ impl TimeValue {
         let mut h = self.agg.heading(field, weight, month_end);
         if self.window != TimeWindow::Period {
             h.push_str(&format!(" \u{b7} {}", self.window.label()));
+        }
+        if self.smooth != Smooth::None {
+            h.push_str(&format!(" \u{b7} {}", self.smooth.short()));
         }
         if self.shift != TimeShift::None {
             match self.show {

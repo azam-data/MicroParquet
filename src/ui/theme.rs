@@ -1594,6 +1594,11 @@ pub const TEXT_KPI: f32 = 28.0;
 pub const KPI_SPARK_W: f32 = 160.0;
 pub const KPI_SPARK_H: f32 = 28.0;
 pub const KPI_SPARK_DOT: f32 = 2.5;
+/// Phase 12: the bullet bar and the gauge of a card with a target.
+pub const KPI_BULLET_W: f32 = 200.0;
+pub const KPI_BULLET_H: f32 = 18.0;
+pub const KPI_GAUGE_W: f32 = 150.0;
+pub const KPI_BAND_ALPHA: u8 = 70;
 /// The width the KPI settings keep for their labels.
 pub const KPI_LABEL_W: f32 = 78.0;
 
@@ -1634,3 +1639,29 @@ pub const MARGIN_RAIL: egui::Margin = egui::Margin { left: 6.0, right: 6.0, top:
 pub const DIALOG_W_MODEL_FLOW: f32 = DIALOG_W_PIVOT_BUILDER * MODEL_DIALOG_SHARE;
 /// The share of the Model view's height the diagram may take.
 pub const MODEL_DIAGRAM_SHARE: f32 = 0.55;
+
+/// Phase 12: the top of a percentage input.
+pub const PCT_MAX: f64 = 100.0;
+/// Phase 12: room under a gauge's half ring for the needle hub and the figure.
+pub const KPI_GAUGE_PAD: f32 = 6.0;
+/// Phase 12: a status colour as the tint behind a bullet or gauge band.
+pub fn band_tint(c: egui::Color32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), KPI_BAND_ALPHA)
+}
+/// Phase 12: gauge geometry: the hub sits this far above the bottom, the ring is this far inside the width, and its inner radius is this share of the outer.
+pub const KPI_GAUGE_HUB: f32 = 4.0;
+pub const KPI_GAUGE_MARGIN: f32 = 3.0;
+pub const KPI_GAUGE_INNER: f64 = 0.62;
+/// Phase 12: the gauge's tick and needle: tick runs from this share of the inner radius to this share of the outer; the needle's length and weight.
+pub const KPI_GAUGE_TICK_IN: f64 = 0.92;
+pub const KPI_GAUGE_TICK_OUT: f64 = 1.04;
+pub const KPI_GAUGE_NEEDLE_LEN: f64 = 0.96;
+pub const KPI_GAUGE_NEEDLE_W: f32 = 2.5;
+pub const KPI_GAUGE_HUB_R: f32 = 3.5;
+/// Phase 12: the bullet's value bar is this share of the strip's height, either side of the centre line.
+pub const KPI_BULLET_BAR: f32 = 0.2;
+/// Phase 12: Analytics card inputs: the unit box, a short text box, and the what-if slider ranges.
+pub const ANALYTICS_UNIT_W: f32 = 72.0;
+pub const ANALYTICS_TEXT_W: f32 = 120.0;
+pub const WHATIF_RATE_MAX_BP: f64 = 500.0;
+pub const WHATIF_GROWTH_MAX_PCT: f64 = 50.0;

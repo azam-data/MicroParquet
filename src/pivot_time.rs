@@ -579,6 +579,9 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         if t.show != TimeShow::Value && t.shift == TimeShift::None {
             bail!("Pivot: '{}' shows a difference or a % change, which needs a shift. Choose Prior period or Same period last year, or show the Value.", v.label());
         }
+        if t.smooth != Smooth::None && (t.window != TimeWindow::Period || t.shift != TimeShift::None) {
+            bail!("Pivot: '{}': a moving average works on the cell's own period. Set the window to Period and the shift to None, or use a rolling window.", v.label());
+        }
         if t.is_m4() {
             if let Some(m) = &mixing {
                 bail!("Pivot: '{}' mixes years. Use Month-Year (or Year, Year-Quarter, Week starting, Date, Fiscal year) for the period of '{}'.", m, v.label());
@@ -588,6 +591,22 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
             }
         }
     }
+
+    // Phase 12: a scenario's marks must fit the measures they name (a Volume is an amount, a Rate a ratio in percent)
+    if let Some(w) = &ctx.what_if {
+        for &j in &time_js {
+            let v = &spec.values[j];
+            if v.time.unwrap_or_default().agg != TimeAgg::Measure {
+                continue;
+            }
+            if let (Some(role), Some(m)) = (w.role_of(&v.field), ctx.measures.iter().find(|m| m.name() == v.field)) {
+                if let Err(e) = crate::whatif::check_role(m, role) {
+                    bail!("Pivot: scenario '{}': {}", w.name, e);
+                }
+            }
+        }
+    }
+    let mut scenario_measures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     struct PeriodInfo {
         days: Vec<NaiveDate>,
@@ -679,6 +698,18 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         for &j in &time_js {
             let tv = spec.values[j].time.unwrap_or_default();
             let res = &resolved[&j];
+            let apply_scenario = |m: Measured, seen: &mut std::collections::BTreeSet<String>| -> Measured {
+                match (&ctx.what_if, tv.agg == TimeAgg::Measure) {
+                    (Some(w), true) => match (w.role_of(&spec.values[j].field), m) {
+                        (Some(role), Measured::Value(v)) if entry.base.is_none_or(|b| b.end >= crate::dates::month_start(as_of)) => {
+                            seen.insert(spec.values[j].field.clone());
+                            Measured::Value(w.apply(role, v))
+                        }
+                        (_, other) => other,
+                    },
+                    _ => m,
+                }
+            };
             let dates_of = |ci: usize| -> BTreeMap<NaiveDate, DayStats> {
                 let c = &comps[ci];
                 match series[c.group][which].get(&nc_key) {
@@ -746,6 +777,83 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                     Ok(p) => p,
                     Err(e) => bail!("Pivot: '{}': {}", spec.values[j].label(), e),
                 };
+                // Phase 12: a rolling window or a moving average that reaches back before the first data is blank, never a shorter sum
+                let first_month = first_snap.map(crate::dates::month_start);
+                let too_early = |start: NaiveDate| first_month.is_some_and(|f| start < f);
+                let blank = |why: String| -> (Measured, Vec<NaiveDate>) { (Measured::Blank(why), Vec::new()) };
+                if let (Some(n), Some((a, b))) = (tv.window.rolling_months(), plan.current) {
+                    if too_early(a) {
+                        let first = first_month.unwrap_or(a);
+                        let why = format!("Rolling {} months to {} start in {}, before the first data ({}), so the window would be short.", n, long_date(b), a.format("%b %Y"), first.format("%b %Y"));
+                        let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
+                        if slot.len() < spec.values.len() {
+                            slot.resize(spec.values.len(), None);
+                        }
+                        slot[j] = None;
+                        out.notes.insert((rk.clone(), ck.clone(), j), why);
+                        continue;
+                    }
+                }
+                if tv.smooth != Smooth::None {
+                    let n = tv.smooth.periods();
+                    let (m, rows) = match (entry.base, plan.current) {
+                        (Some(b), Some((cs, ce))) => {
+                            let point_in_time = res_cis(res).iter().all(|ci| matches!(comps[*ci].agg, TimeAgg::ClosingBalance | TimeAgg::OpeningBalance | TimeAgg::CountAtClosing | TimeAgg::DistinctCountAtClosing | TimeAgg::WAvgAtClosing));
+                            if ce < b.end && !point_in_time {
+                                blank(format!("{} is not finished (data to {}), so a moving average that includes it would mix a part period with whole periods.", text, long_date(ce)))
+                            } else {
+                                let mut sum = 0.0;
+                                let mut failed: Option<String> = None;
+                                for k in 0..n as i32 {
+                                    let (s0, e0) = if k == 0 {
+                                        (cs, ce)
+                                    } else {
+                                        use crate::dates::{add_months, add_months_end, PeriodUnit};
+                                        match b.unit {
+                                            PeriodUnit::Month => (add_months(b.start, -k), add_months_end(b.end, -k)),
+                                            PeriodUnit::Quarter => (add_months(b.start, -3 * k), add_months_end(b.end, -3 * k)),
+                                            PeriodUnit::Year => (add_months(b.start, -12 * k), add_months_end(b.end, -12 * k)),
+                                            PeriodUnit::Week => (b.start - chrono::Duration::days(7 * k as i64), b.end - chrono::Duration::days(7 * k as i64)),
+                                            PeriodUnit::Day => (b.start - chrono::Duration::days(k as i64), b.end - chrono::Duration::days(k as i64)),
+                                        }
+                                    };
+                                    if too_early(s0) {
+                                        failed = Some(format!("The {}-period moving average of {} reaches back to {}, before the first data ({}).", n, text, long_date(s0), first_month.map(|f| f.format("%b %Y").to_string()).unwrap_or_default()));
+                                        break;
+                                    }
+                                    let days = crate::measures::days_between(s0, e0.min(as_of));
+                                    let t0 = format!("{} to {}", long_date(s0), long_date(e0.min(as_of)));
+                                    match value_in(&days, &t0) {
+                                        Measured::Value(v) => sum += v,
+                                        Measured::Blank(why) => {
+                                            failed = Some(format!("The {}-period moving average of {} has no number for {}: {}", n, text, t0, why));
+                                            break;
+                                        }
+                                    }
+                                }
+                                match failed {
+                                    Some(w) => blank(w),
+                                    None => (Measured::Value(sum / n as f64), period.clone()),
+                                }
+                            }
+                        }
+                        _ => blank(format!("{} has no days up to the as-of date.", text)),
+                    };
+                    let m = apply_scenario(m, &mut scenario_measures);
+                    let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
+                    if slot.len() < spec.values.len() {
+                        slot.resize(spec.values.len(), None);
+                    }
+                    match m {
+                        Measured::Value(v) => slot[j] = Some(v),
+                        Measured::Blank(why) => {
+                            slot[j] = None;
+                            out.notes.insert((rk.clone(), ck.clone(), j), why);
+                        }
+                    }
+                    let _ = rows;
+                    continue;
+                }
                 let (cur_days, cur_text): (Vec<NaiveDate>, String) = match plan.current {
                     None => (Vec::new(), text.clone()),
                     Some((a, b)) if tv.window == TimeWindow::Period => {
@@ -786,6 +894,8 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
                     }
                 }
             }
+            // Phase 12: the active scenario changes the marked measures from the as-of month on; closed history stays actual
+            let m = apply_scenario(m, &mut scenario_measures);
             let slot = cells.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![None; spec.values.len()]);
             if slot.len() < spec.values.len() {
                 slot.resize(spec.values.len(), None);
@@ -800,6 +910,10 @@ pub fn fill_time_cells(lf: LazyFrame, spec: &PivotSpec, schema: &Schema, levels:
         }
     }
     out.extra.extend(tail_notes);
+    if let (Some(w), false) = (&ctx.what_if, scenario_measures.is_empty()) {
+        let names: Vec<&str> = scenario_measures.iter().map(String::as_str).collect();
+        out.extra.push(w.note(&names));
+    }
     if month_end {
         for (j, r) in &resolved {
             if let Res::Ratio { name, num, den, .. } = r {

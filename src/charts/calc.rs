@@ -63,11 +63,71 @@ fn finite_or_stop(values: &[Vec<Option<f64>>], categories: &[String], series: &[
 
 /// Calculates the whole chart over all rows of `lf`: every measure, the size and the facets.
 pub fn compute(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {
-    let data = compute_base(lf, spec)?;
-    match &spec.forecast {
-        Some(f) => crate::forecast_chart::apply_forecast(data, f),
+    // Phase 12: a forecast is fitted to the actual numbers, never to a scenario. When the chart's measure is marked for the active
+    // what-if scenario, the base data is worked out with the scenario switched off, and the scenario is then applied to the as-of month
+    // and the forecast months together.
+    let scenario = crate::model::scope().and_then(|c| {
+        let w = c.what_if.clone()?;
+        let name = spec.measure_list().first().and_then(|m| m.column.clone().filter(|_| m.time.is_some_and(|t| t.agg == crate::models::TimeAgg::Measure)))?;
+        let role = w.role_of(&name)?;
+        let as_of = c.calendar.as_ref().and_then(|k| k.as_of)?;
+        Some((c.clone(), w, role, name, as_of))
+    });
+    let (data, scenario) = match (&spec.forecast, scenario) {
+        (Some(_), Some((ctx, w, role, name, as_of))) => {
+            let mut plain = (*ctx).clone();
+            plain.what_if = None;
+            let data = crate::model::with_scope(Some(std::sync::Arc::new(plain)), || compute_base(lf, spec))?;
+            (data, Some((w, role, name, as_of)))
+        }
+        _ => (compute_base(lf, spec)?, None),
+    };
+    let data = match &spec.forecast {
+        Some(f) => crate::forecast_chart::apply_forecast(data, f)?,
+        None => data,
+    };
+    let data = match scenario {
+        Some((w, role, name, as_of)) => crate::forecast_chart::apply_scenario(data, &w, role, &name, as_of)?,
+        None => data,
+    };
+    match spec.target.clone() {
+        Some(t) => apply_target(data, &t),
         None => Ok(data),
     }
+}
+
+/// Phase 12: a target line and its red, amber and green zones. They are added to the spec the data carries, so the screen, HTML, PDF,
+/// the Python export and Excel (which draws the line) all show them; the user's own reference lines are left as they are.
+pub fn apply_target(mut data: ChartData, t: &crate::charts::spec::ChartTarget) -> Result<ChartData> {
+    use crate::charts::spec::{ChartKind, RefBand, RefLine, Status};
+    use crate::target::{bands_over, Direction, Rag};
+    if !matches!(data.spec.kind, ChartKind::Bar | ChartKind::Line | ChartKind::Area) {
+        bail!("A target line needs a column, bar, line or area chart. Change the chart's form, or take the target off.");
+    }
+    if !t.value.is_finite() {
+        bail!("The target is not a number.");
+    }
+    t.bands.check().map_err(|e| anyhow::anyhow!(e))?;
+    let target = t.raw();
+    let label = if t.label.trim().is_empty() { "Target".to_string() } else { t.label.trim().to_string() };
+    data.spec.ref_lines.push(RefLine { value: target, label, status: Status::Neutral, panel: 0 });
+    if t.show_bands {
+        let all: Vec<f64> = data.values.iter().flatten().flatten().copied().filter(|v| v.is_finite()).collect();
+        let (dmin, dmax) = all.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
+        let size = if target != 0.0 { target.abs() } else if dmax.is_finite() && dmax != 0.0 { dmax.abs() } else { 1.0 };
+        let lo = (0.0f64).min(if dmin.is_finite() { dmin } else { 0.0 }).min(target - size);
+        let hi = (if dmax.is_finite() { dmax * 1.05 } else { target }).max(target + size * (0.3f64).max(t.bands.amber_within_pct / 100.0 + 0.15)).max(lo + size);
+        let dir: Direction = t.direction;
+        for (from, to, rag) in bands_over(lo, hi, target, dir, &t.bands) {
+            let (status, label) = match (rag, dir) {
+                (Rag::Green, _) => (Status::Good, format!("Green: on target or within {}%", t.bands.green_within_pct)),
+                (Rag::Amber, _) => (Status::Warning, format!("Amber: within {}% of target", t.bands.amber_within_pct)),
+                (Rag::Red, _) => (Status::Critical, format!("Red: more than {}% off target", t.bands.amber_within_pct)),
+            };
+            data.spec.ref_bands.push(RefBand { from, to, label, panel: 0, status: Some(status) });
+        }
+    }
+    Ok(data)
 }
 
 fn compute_base(lf: LazyFrame, spec: &ChartSpec) -> Result<ChartData> {

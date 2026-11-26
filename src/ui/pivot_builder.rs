@@ -1434,7 +1434,7 @@ impl MicroParquetApp {
                 }
                 let mut choices: Vec<(String, egui::Rect)> = Vec::new();
                 egui::popup::popup_below_widget(ui, pid, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                    use micro_parquet::models::{TimePartial, TimeShift, TimeShow, TimeWindow};
+                    use micro_parquet::models::{Smooth, TimePartial, TimeShift, TimeShow, TimeWindow};
                     ui.set_min_width(theme::PIVOT_TIME_POPUP_W);
                     let mut pick = |ui: &mut egui::Ui, group: &str, label: &str, on: bool, enabled: bool, choices: &mut Vec<(String, egui::Rect)>| -> bool {
                         let r = ui.add_enabled(enabled, egui::SelectableLabel::new(on, label));
@@ -1442,11 +1442,25 @@ impl MicroParquetApp {
                         r.clicked()
                     };
                     egui::Grid::new(("pivot_time_grid", i)).num_columns(2).spacing(egui::vec2(theme::SPACE_M, theme::SPACE_XS)).show(ui, |ui| {
-                        ui.label(egui::RichText::new("Window").color(tk.muted));
+                        for (heading, rolling) in [("Window", false), ("Rolling", true)] {
+                            ui.label(egui::RichText::new(heading).color(tk.muted));
+                            ui.horizontal(|ui| {
+                                for w in TimeWindow::all().iter().filter(|w| w.rolling_months().is_some() == rolling) {
+                                    if pick(ui, "window", w.label(), t.window == *w, true, &mut choices) {
+                                        t.window = *w;
+                                        if *w != TimeWindow::Period {
+                                            t.smooth = Smooth::None;
+                                        }
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        }
+                        ui.label(egui::RichText::new("Average").color(tk.muted));
                         ui.horizontal(|ui| {
-                            for w in TimeWindow::all() {
-                                if pick(ui, "window", w.label(), t.window == *w, true, &mut choices) {
-                                    t.window = *w;
+                            for x in Smooth::all() {
+                                if pick(ui, "average", if *x == Smooth::None { "None" } else { x.label().trim_start_matches("Moving average of ") }, t.smooth == *x, *x == Smooth::None || (t.window == TimeWindow::Period && t.shift == TimeShift::None), &mut choices) {
+                                    t.smooth = *x;
                                 }
                             }
                         });
@@ -1458,6 +1472,8 @@ impl MicroParquetApp {
                                     t.shift = *x;
                                     if *x == TimeShift::None {
                                         t.show = TimeShow::Value;
+                                    } else {
+                                        t.smooth = Smooth::None;
                                     }
                                 }
                             }
@@ -1482,6 +1498,7 @@ impl MicroParquetApp {
                         });
                         ui.end_row();
                     });
+                    ui.label(egui::RichText::new("YTD is the running total that starts again each fiscal year; Rolling 3M and 12M read the calendar months ending with the row; Average 3, 6 or 12 is a moving average of the periods.").size(theme::TEXT_LABEL).color(tk.muted));
                     ui.label(egui::RichText::new(if t.shift == TimeShift::None { "A difference or % change needs a shift." } else { "Same days: the shifted window has the same day numbers; Full period: all of it." }).size(theme::TEXT_LABEL).color(tk.muted));
                 });
                 let open = ui.memory(|m| m.is_popup_open(pid));

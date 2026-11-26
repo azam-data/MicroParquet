@@ -6,6 +6,7 @@
 
 use crate::dashboard::{pivot_spec_with, PageFilter};
 use crate::models::*;
+use crate::target::{self, Bands, Direction, Rag};
 use anyhow::{bail, Context, Result};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -130,12 +131,80 @@ pub struct KpiSpec {
     /// At most `MAX_THRESHOLDS`; the first that matches colours the number.
     pub thresholds: Vec<Threshold>,
     pub sparkline: bool,
+    /// Phase 12: the window of a measure card (Period, MTD, QTD, YTD, rolling 3 or 12 months). A card on a time value of a column
+    /// has its window in the value itself.
+    pub window: TimeWindow,
+    /// Phase 12: a moving average of the measure over the last periods (needs no comparison).
+    pub smooth: Smooth,
+    /// Phase 12: a target with red/amber/green bands; the bands decide the colour of the number (they replace the limits).
+    pub target: Option<KpiTarget>,
+    /// Phase 12: how the card draws the number: as text, as a bullet bar or as a gauge.
+    pub visual: KpiVisual,
 }
 
 impl Default for KpiSpec {
     fn default() -> Self {
-        KpiSpec { title: String::new(), source: KpiSource::default(), unit: KpiUnit::Auto, decimals: 2, compare: KpiCompare::None, good_direction: GoodDirection::Up, thresholds: Vec::new(), sparkline: false }
+        KpiSpec {
+            title: String::new(),
+            source: KpiSource::default(),
+            unit: KpiUnit::Auto,
+            decimals: 2,
+            compare: KpiCompare::None,
+            good_direction: GoodDirection::Up,
+            thresholds: Vec::new(),
+            sparkline: false,
+            window: TimeWindow::Period,
+            smooth: Smooth::None,
+            target: None,
+            visual: KpiVisual::Number,
+        }
     }
+}
+
+/// How a card draws its number.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum KpiVisual {
+    /// The number, its change and its sparkline.
+    #[default]
+    Number,
+    /// A horizontal bar for the number on a track of red, amber and green bands, with a mark at the target.
+    Bullet,
+    /// A half-circle dial of the three bands with a needle at the number and a mark at the target.
+    Gauge,
+}
+
+impl KpiVisual {
+    pub const ALL: [KpiVisual; 3] = [KpiVisual::Number, KpiVisual::Bullet, KpiVisual::Gauge];
+    pub fn label(self) -> &'static str {
+        match self {
+            KpiVisual::Number => "Number",
+            KpiVisual::Bullet => "Bullet bar",
+            KpiVisual::Gauge => "Gauge",
+        }
+    }
+}
+
+/// Where a card's target comes from.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum TargetSource {
+    /// A number typed in the card's unit (5,000 with Crore = 5,000 Cr).
+    Fixed(f64),
+    /// A measure of the same tab (a Phase 11 plan measure such as the budget), worked out for the card's period and window.
+    Measure(String),
+}
+
+impl Default for TargetSource {
+    fn default() -> Self {
+        TargetSource::Fixed(0.0)
+    }
+}
+
+/// A card's target and how far from it is still green, then amber.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct KpiTarget {
+    pub source: TargetSource,
+    pub bands: Bands,
 }
 
 pub const MAX_THRESHOLDS: usize = 2;
@@ -159,6 +228,10 @@ pub struct KpiValue {
     /// The pivot's notes (the month-end note among them).
     pub notes: Vec<String>,
     pub is_ratio: bool,
+    /// The target worked out from a measure (stored units); a typed target is not here (it is in the card's own unit).
+    pub target: Option<f64>,
+    /// Why the target measure has no number for the period.
+    pub target_reason: Option<String>,
 }
 
 pub struct KpiRequest {
@@ -188,13 +261,14 @@ fn months_back(first: NaiveDate, n: i32) -> NaiveDate {
     NaiveDate::from_ymd_opt(total.div_euclid(12), total.rem_euclid(12) as u32 + 1, 1).unwrap_or(first)
 }
 
-fn value_of(source: &KpiSource, shift: TimeShift) -> PivotValue {
+fn value_of(spec: &KpiSpec, source: &KpiSource, shift: TimeShift) -> PivotValue {
     match source {
-        KpiSource::Measure(name) => PivotValue { field: name.clone(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg: TimeAgg::Measure, shift, show: TimeShow::Value, ..Default::default() }) },
+        KpiSource::Measure(name) => PivotValue { field: name.clone(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg: TimeAgg::Measure, shift, show: TimeShow::Value, window: spec.window, smooth: spec.smooth, ..Default::default() }) },
         KpiSource::Value { value, .. } => {
             let mut v = value.clone();
             let t = v.time.unwrap_or_default();
-            v.time = Some(TimeValue { shift, show: TimeShow::Value, window: TimeWindow::Period, ..t });
+            // a card on a column keeps the window and the moving average chosen in the value itself
+            v.time = Some(TimeValue { shift, show: TimeShow::Value, ..t });
             v
         }
     }
@@ -224,10 +298,31 @@ pub fn compute_kpi(req: &KpiRequest) -> Result<KpiValue> {
         KpiCompare::PriorPeriod => Some(TimeShift::PriorPeriod),
         KpiCompare::Sply => Some(TimeShift::Sply),
     };
-    let mut values = vec![value_of(&req.spec.source, TimeShift::None)];
-    if let Some(s) = shift {
-        values.push(value_of(&req.spec.source, s));
+    let smoothed = match &req.spec.source {
+        KpiSource::Measure(_) => req.spec.smooth != Smooth::None,
+        KpiSource::Value { value, .. } => value.time.is_some_and(|t| t.smooth != Smooth::None),
+    };
+    if smoothed && shift.is_some() {
+        bail!("A moving average can't be compared with an earlier period. Set \"Compare with\" to Nothing, or take the moving average off.");
     }
+    let mut values = vec![value_of(&req.spec, &req.spec.source, TimeShift::None)];
+    if let Some(s) = shift {
+        values.push(value_of(&req.spec, &req.spec.source, s));
+    }
+    // Phase 12: a target taken from a measure (a budget or target of the plan tables) for the same period and window
+    let target_j = match req.spec.target.as_ref().map(|t| &t.source) {
+        Some(TargetSource::Measure(name)) => {
+            let Some(m) = crate::measures::find_measure(name) else {
+                bail!("The target measure '{}' is not in the model. Pick another in the card's settings.", name);
+            };
+            if m.tab() != req.tab_key {
+                bail!("The target measure '{}' belongs to another tab than the card's measure. Pick a measure of the same tab (a plan measure of it, for example).", name);
+            }
+            values.push(value_of(&req.spec, &KpiSource::Measure(name.clone()), TimeShift::None));
+            Some(values.len() - 1)
+        }
+        _ => None,
+    };
     let spec = PivotSpec {
         rows: vec![field.name.clone()],
         values,
@@ -264,12 +359,21 @@ pub fn compute_kpi(req: &KpiRequest) -> Result<KpiValue> {
         reason = Some(format!("No {} in {} for '{}'{}", if balance { "balance" } else { "data" }, period, cal.title_of(&req.tab_key), last.map(|d| format!(" (last date {})", crate::model_calendar::long_date(d))).unwrap_or_default()));
     }
     let earlier = if shift.is_some() { cell(&period, 1).0 } else { None };
+    let (target, target_reason) = match target_j {
+        Some(j) => cell(&period, j),
+        None => (None, None),
+    };
     let spark: Vec<Option<f64>> = if req.spec.sparkline { labels.iter().map(|l| cell(l, 0).0).collect() } else { Vec::new() };
     let is_ratio = match &req.spec.source {
         KpiSource::Measure(n) => crate::measures::find_measure(n).is_some_and(|m| m.is_ratio()),
         KpiSource::Value { .. } => false,
     };
-    Ok(KpiValue { current, earlier, reason, spark, spark_labels: if req.spec.sparkline { labels } else { Vec::new() }, period, notes: build.warnings, is_ratio })
+    // Phase 12: a card whose measure is changed by the active scenario says so beside its period, in every output
+    let scenario = match (&ctx.what_if, &req.spec.source) {
+        (Some(w), KpiSource::Measure(n)) if current.is_some() && w.role_of(n).is_some() => format!(" \u{b7} Scenario {} ({})", w.name, crate::whatif::Scenario { name: String::new(), rate_shift_bp: w.rate_shift_bp, growth_pct: w.growth_pct }.words()),
+        _ => String::new(),
+    };
+    Ok(KpiValue { current, earlier, reason, spark, spark_labels: if req.spec.sparkline { labels } else { Vec::new() }, period: format!("{}{}", period, scenario), notes: build.warnings, is_ratio, target, target_reason })
 }
 
 // -------------------------------------------------------------------------------------- how it is shown
@@ -300,6 +404,63 @@ pub struct KpiView {
     pub spark: Vec<Option<f64>>,
     /// The words for a tooltip and the alt text of the HTML and the PPTX.
     pub alt: String,
+    /// Phase 12: "Target 5,000.00 Cr \u{b7} 97.2% of target \u{b7} amber", or why there is no target number; empty without a target.
+    pub target_text: String,
+    /// Phase 12: the bullet bar or gauge, when the card has a target and draws one.
+    pub graphic: Option<Graphic>,
+}
+
+/// What a bullet bar or a gauge draws, in the card's unit. Every renderer (screen, HTML, PDF, PPTX) draws from this one description.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Graphic {
+    pub kind: KpiVisual,
+    pub lo: f64,
+    pub hi: f64,
+    pub value: f64,
+    pub target: f64,
+    /// (from, to, colour) over `lo..hi`.
+    pub bands: Vec<(f64, f64, Rag)>,
+    pub lo_text: String,
+    pub hi_text: String,
+    pub value_text: String,
+    pub target_text: String,
+}
+
+impl Graphic {
+    /// Where `x` stands on the axis, 0 at `lo` and 1 at `hi`.
+    pub fn frac(&self, x: f64) -> f64 {
+        if self.hi > self.lo {
+            ((x - self.lo) / (self.hi - self.lo)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// The outline of a ring segment of a gauge from `f0` to `f1` (0 = the left end of the half circle, 1 = the right end), as points
+/// of a polygon: the outer arc one way and the inner arc back. Centre (cx, cy), radii `r_out` and `r_in`; y grows downwards.
+pub fn ring_segment(cx: f64, cy: f64, r_out: f64, r_in: f64, f0: f64, f1: f64, steps: usize) -> Vec<(f64, f64)> {
+    let at = |f: f64, r: f64| {
+        let a = std::f64::consts::PI * (1.0 - f);
+        (cx + r * a.cos(), cy - r * a.sin())
+    };
+    let n = steps.max(2);
+    let mut pts = Vec::with_capacity(2 * n + 2);
+    for i in 0..=n {
+        pts.push(at(f0 + (f1 - f0) * i as f64 / n as f64, r_out));
+    }
+    for i in (0..=n).rev() {
+        pts.push(at(f0 + (f1 - f0) * i as f64 / n as f64, r_in));
+    }
+    pts
+}
+
+pub fn rag_colour(r: Rag) -> ThresholdColour {
+    match r {
+        Rag::Green => ThresholdColour::Green,
+        Rag::Amber => ThresholdColour::Amber,
+        Rag::Red => ThresholdColour::Red,
+    }
 }
 
 /// The unit a card shows in: its own, else Crore for money (or the dashboard's default) and Percent for a ratio.
@@ -362,6 +523,37 @@ pub fn view(spec: &KpiSpec, v: &KpiValue, money_default: KpiUnit) -> KpiView {
         })
     });
     let threshold = threshold.map(|t| t.colour);
+    // Phase 12: a target replaces the limits: its bands decide the colour, and the card can draw them
+    let (threshold, target_text, graphic) = match &spec.target {
+        None => (threshold, String::new(), None),
+        Some(t) => {
+            let stored = match &t.source {
+                TargetSource::Fixed(x) => Some(*x * div),
+                TargetSource::Measure(_) => v.target,
+            };
+            let dir = match spec.good_direction {
+                GoodDirection::Up => Some(Direction::Up),
+                GoodDirection::Down => Some(Direction::Down),
+                GoodDirection::Neutral => None,
+            };
+            match (stored, v.current, dir) {
+                (_, _, None) => (threshold, "Target bands need \"Up is good\" or \"Down is good\"; \"No judgement\" has no good side.".to_string(), None),
+                (_, _, Some(_)) if t.bands.check().is_err() => (threshold, t.bands.check().err().unwrap_or_default(), None),
+                (None, _, _) => (threshold, format!("No target: {}", v.target_reason.clone().unwrap_or_else(|| "pick a target number or measure".to_string())), None),
+                (Some(tg), None, Some(_)) => (threshold, format!("Target {}", show(tg)), None),
+                (Some(tg), Some(cur), Some(dir)) => {
+                    let rag = target::status(cur, tg, dir, &t.bands);
+                    let pct = target::percent_of_target(cur, tg).map(|p| format!(" \u{b7} {}% of target", format_with_commas(p, 1))).unwrap_or_default();
+                    let text = format!("Target {}{} \u{b7} {}", show(tg), pct, rag.word());
+                    let graphic = match spec.visual {
+                        KpiVisual::Number => None,
+                        kind => Some(graphic_of(kind, cur, tg, dir, &t.bands, div, dec, unit)),
+                    };
+                    (Some(rag_colour(rag)), text, graphic)
+                }
+            }
+        }
+    };
     let alt = {
         let mut a = format!("{}: {}", if spec.title.is_empty() { "KPI" } else { &spec.title }, value_text);
         if !words.is_empty() {
@@ -370,10 +562,26 @@ pub fn view(spec: &KpiSpec, v: &KpiValue, money_default: KpiUnit) -> KpiView {
         if let Some(t) = threshold {
             a.push_str(&format!(", {} by your limit", match t { ThresholdColour::Amber => "amber", ThresholdColour::Red => "red", ThresholdColour::Green => "green" }));
         }
+        if !target_text.is_empty() {
+            a.push_str(&format!(", {}", target_text.to_lowercase()));
+        }
         if let Some(r) = &v.reason {
             a.push_str(&format!(" ({})", r));
         }
         a
     };
-    KpiView { value_text, change_text, arrow, words, tone, threshold, reason: if v.current.is_none() { v.reason.clone() } else { None }, spark: v.spark.iter().map(|x| x.map(|y| y / div)).collect(), alt }
+    KpiView { value_text, change_text, arrow, words, tone, threshold, reason: if v.current.is_none() { v.reason.clone() } else { None }, spark: v.spark.iter().map(|x| x.map(|y| y / div)).collect(), alt, target_text, graphic }
+}
+
+/// The axis, bands and marks of a bullet bar or gauge, in the card's unit.
+#[allow(clippy::too_many_arguments)]
+fn graphic_of(kind: KpiVisual, cur: f64, tg: f64, dir: Direction, b: &Bands, div: f64, dec: usize, unit: KpiUnit) -> Graphic {
+    let (value, target) = (cur / div, tg / div);
+    let size = if target != 0.0 { target.abs() } else if value != 0.0 { value.abs() } else { 1.0 };
+    let lo = (0.0f64).min(value).min(target - size);
+    let hi = (value + 0.05 * size).max(target + size * (0.3f64).max(b.amber_within_pct / 100.0 + 0.15)).max(lo + size);
+    // the bands are of the target in the card's unit, so they scale with it
+    let bands = target::bands_over(lo, hi, target, dir, b);
+    let text = |x: f64| format!("{}{}", format_with_commas(x, dec), unit.suffix());
+    Graphic { kind, lo, hi, value, target, bands, lo_text: text(lo), hi_text: text(hi), value_text: text(value), target_text: text(target) }
 }

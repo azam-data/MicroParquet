@@ -668,6 +668,7 @@ impl MicroParquetApp {
     /// the values of chart tabs and of the open chart studio follow, and the pivots and charts that used it are calculated again with the model that has the new name.
     fn rename_measure_everywhere(&mut self, old: &str, new: &str) {
         micro_parquet::measures::rename_in_ratios(&mut self.project.model.measures, old, new);
+        self.project.model.what_if.rename_measure(old, new);
         // (the pivots are worked out again by `model_scope_refresh`, once the model the workers read has the new name)
         for t in self.tabs.iter_mut() {
             for s in t.steps.iter_mut() {
@@ -714,6 +715,7 @@ impl MicroParquetApp {
                     Some(why) => self.project.model_ui.measures.message = why,
                     None => {
                         self.project.model.measures.remove(i);
+                        self.project.model.what_if.forget_measure(&name);
                         self.project.model_ui.measures.edit = None;
                     }
                 }

@@ -3460,7 +3460,8 @@ fn m4_the_time_button_opens_the_window_shift_show_and_partial_choices_and_each_c
         assert_eq!(
             ids,
             [
-                "window:Period", "window:MTD", "window:QTD", "window:YTD",
+                "window:Period", "window:MTD", "window:QTD", "window:YTD", "window:Rolling 3M", "window:Rolling 12M",
+                "average:None", "average:3 periods", "average:6 periods", "average:12 periods",
                 "shift:None", "shift:Prior period", "shift:Same period last year",
                 "show:Value", "show:Difference", "show:% change",
                 "partial:Same days", "partial:Full period"

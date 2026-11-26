@@ -1376,7 +1376,7 @@ fn behaviour(df: &DataFrame) -> Result<Prepared> {
     let mut spec = base_spec("Month", ChartKind::Line);
     spec.order = order_of(&labels);
     spec.value = Some("Balance".into());
-    spec.ref_bands = vec![super::spec::RefBand { from: 0.0, to: latest * core_pct / 100.0, label: "Core balance".into(), panel: 0 }];
+    spec.ref_bands = vec![super::spec::RefBand { from: 0.0, to: latest * core_pct / 100.0, label: "Core balance".into(), panel: 0, status: None }];
     spec.subtitle = "Balance history and core level (volatility method)".to_string();
     let finding = format!("Core balance {}% of the latest", format_with_commas(core_pct, 0));
     spec.title = finding.clone();

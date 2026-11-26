@@ -10,7 +10,7 @@ use micro_parquet::pivot_table::PivotBuild;
 use polars::prelude::*;
 
 pub fn tv(field: &str, agg: TimeAgg, window: TimeWindow, shift: TimeShift, show: TimeShow, partial: TimePartial) -> PivotValue {
-    PivotValue { field: field.into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg, window, shift, show, partial }) }
+    PivotValue { field: field.into(), agg: PivotAgg::Sum, weight_col: None, time: Some(TimeValue { agg, window, shift, show, partial, ..Default::default() }) }
 }
 
 fn day(text: &str) -> NaiveDate {
@@ -214,7 +214,7 @@ fn m4_the_new_choices_are_written_only_when_used_and_an_m3_file_loads_unchanged(
     assert_eq!(serde_json::to_string(&m3).expect("json"), r#"{"agg":"AverageBalance"}"#, "an M3 value keeps its bytes");
     let back: TimeValue = serde_json::from_str(r#"{"agg":"AverageBalance"}"#).expect("an M3 file");
     assert_eq!(back, m3);
-    let full = TimeValue { agg: TimeAgg::ClosingBalance, window: TimeWindow::Ytd, shift: TimeShift::Sply, show: TimeShow::PercentChange, partial: TimePartial::FullPeriod };
+    let full = TimeValue { agg: TimeAgg::ClosingBalance, window: TimeWindow::Ytd, shift: TimeShift::Sply, show: TimeShow::PercentChange, partial: TimePartial::FullPeriod, ..Default::default() };
     let text = serde_json::to_string(&full).expect("json");
     assert_eq!(serde_json::from_str::<TimeValue>(&text).expect("round trip"), full, "{text}");
     assert_eq!(full.heading("Balance", None, false), "Closing balance of Balance \u{b7} YTD \u{b7} vs SPLY % \u{b7} full period");
@@ -242,7 +242,7 @@ fn m4_a_chart_of_closing_average_and_closing_vs_sply_percent_by_month_year_equal
         (TimeValue::of(TimeAgg::ClosingBalance), "Closing balance of Balance"),
         (TimeValue::of(TimeAgg::AverageBalance), "Average balance of Balance"),
         (TimeValue { agg: TimeAgg::ClosingBalance, shift: TimeShift::Sply, show: TimeShow::PercentChange, ..Default::default() }, "Closing balance of Balance \u{b7} vs SPLY %"),
-        (TimeValue { agg: TimeAgg::AverageBalance, window: TimeWindow::Ytd, shift: TimeShift::PriorPeriod, show: TimeShow::Difference, partial: TimePartial::FullPeriod }, "Average balance of Balance \u{b7} YTD \u{b7} vs Prior period \u{b7} full period"),
+        (TimeValue { agg: TimeAgg::AverageBalance, window: TimeWindow::Ytd, shift: TimeShift::PriorPeriod, show: TimeShow::Difference, partial: TimePartial::FullPeriod, ..Default::default() }, "Average balance of Balance \u{b7} YTD \u{b7} vs Prior period \u{b7} full period"),
     ] {
         let s = spec(&[&month_year()], &[], vec![PivotValue { field: "Balance".into(), agg: PivotAgg::Sum, weight_col: None, time: Some(time) }], &["Month-Year"]);
         let b = run(&dd, &df, sc.clone(), &s);

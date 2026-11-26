@@ -454,8 +454,20 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String), source: &ItemSource, kp
                 None => "",
             };
             let spark: Vec<String> = v.spark.iter().map(|x| number_json(*x, 1.0, 4)).collect();
+            // Phase 12: the target words and the bullet bar or gauge, from the same description the other outputs draw
+            let tgt = serde_json::to_string(&v.target_text).unwrap_or_default();
+            let gr = match &v.graphic {
+                Some(g) => serde_json::json!({
+                    "kind": if g.kind == crate::kpi::KpiVisual::Gauge { "gauge" } else { "bullet" },
+                    "lo": g.lo, "hi": g.hi, "v": g.value, "t": g.target,
+                    "bands": g.bands.iter().map(|(a, b, r)| serde_json::json!([a, b, r.word()])).collect::<Vec<_>>(),
+                    "d": format!("{} against a target of {} (scale {} to {})", g.value_text, g.target_text, g.lo_text, g.hi_text)
+                })
+                .to_string(),
+                None => "null".to_string(),
+            };
             format!(
-                "{{\"p\":[{}],\"d\":[],\"k\":{{\"val\":{},\"chg\":{},\"arrow\":\"{}\",\"words\":\"{}\",\"tone\":\"{}\",\"thr\":\"{}\",\"why\":{},\"alt\":{},\"per\":{},\"spark\":[{}]}},\"v\":{}}}",
+                "{{\"p\":[{}],\"d\":[],\"k\":{{\"val\":{},\"chg\":{},\"arrow\":\"{}\",\"words\":\"{}\",\"tone\":\"{}\",\"thr\":\"{}\",\"why\":{},\"alt\":{},\"per\":{},\"tgt\":{},\"gr\":{},\"spark\":[{}]}},\"v\":{}}}",
                 picks.join(","),
                 serde_json::to_string(&v.value_text).unwrap_or_default(),
                 serde_json::to_string(&v.change_text).unwrap_or_default(),
@@ -466,6 +478,8 @@ fn answer_core(a: &Answer, scale: &(f64, usize, String), source: &ItemSource, kp
                 serde_json::to_string(&v.reason).unwrap_or_default(),
                 serde_json::to_string(&v.alt).unwrap_or_default(),
                 serde_json::to_string(&k.period).unwrap_or_default(),
+                tgt,
+                gr,
                 spark.join(","),
                 values_json(a, scale)
             )

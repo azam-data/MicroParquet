@@ -145,7 +145,7 @@ fn draw_table(layer: &PdfLayerReference, fonts: &ChartPdfFonts, m: &PdfMeasure, 
 #[allow(clippy::too_many_arguments)]
 fn draw_card(layer: &PdfLayerReference, fonts: &ChartPdfFonts, title: &str, body: &Body, left: f32, top: f32, w: f32, h: f32) {
     text(layer, &fonts.semibold, title, 9.0, left + PAD_MM, top + PAD_MM, 0x0B0B0B);
-    let Body::Kpi { value, value_colour, change, change_colour, words, period, reason, spark } = body else { return };
+    let Body::Kpi { value, value_colour, change, change_colour, words, period, reason, spark, target, graphic } = body else { return };
     let size = (h * 0.30 / MM_PER_PT).clamp(14.0, 34.0);
     let mut y = top + PAD_MM + 7.0;
     text(layer, &fonts.semibold, value, size, left + PAD_MM, y, value_colour.unwrap_or(0x0B0B0B));
@@ -162,8 +162,16 @@ fn draw_card(layer: &PdfLayerReference, fonts: &ChartPdfFonts, title: &str, body
         text(layer, &fonts.regular, r, 8.0, left + PAD_MM, y, 0x52514E);
         y += 4.0;
     }
+    if !target.is_empty() {
+        text(layer, &fonts.regular, target, 8.0, left + PAD_MM, y, 0x52514E);
+        y += 4.0;
+    }
     if !period.is_empty() {
         text(layer, &fonts.regular, period, 8.0, left + PAD_MM, y, 0x898781);
+    }
+    if let Some(g) = graphic {
+        let gw = (w * 0.45).min(55.0);
+        draw_graphic(layer, g, left + w - gw - PAD_MM * 2.0, top + PAD_MM + 8.0, gw);
     }
     // the sparkline: a line over the periods, broken where a period has no value
     if let Some(c) = spark {
@@ -191,6 +199,68 @@ fn draw_card(layer: &PdfLayerReference, fonts: &ChartPdfFonts, title: &str, body
             if run.len() > 1 {
                 layer.add_line(Line { points: run, is_closed: false });
             }
+        }
+    }
+}
+
+/// A light tint of a colour on white (a PDF fill has no alpha here).
+fn tint(c: u32, k: f32) -> u32 {
+    let ch = |shift: u32| -> u32 {
+        let v = ((c >> shift) & 0xFF) as f32;
+        ((v * k + 255.0 * (1.0 - k)).round() as u32).min(255)
+    };
+    (ch(16) << 16) | (ch(8) << 8) | ch(0)
+}
+
+fn rag_colour(r: crate::target::Rag) -> u32 {
+    match r {
+        crate::target::Rag::Green => crate::charts::tokens::STATUS_GOOD,
+        crate::target::Rag::Amber => crate::charts::tokens::STATUS_WARNING,
+        crate::target::Rag::Red => crate::charts::tokens::STATUS_CRITICAL,
+    }
+}
+
+fn fill_polygon(layer: &PdfLayerReference, pts: &[(f64, f64)], colour: u32) {
+    layer.set_fill_color(col(colour));
+    let ring: Vec<(Point, bool)> = pts.iter().map(|p| (Point::new(Mm(p.0 as f32), Mm(from_top(p.1 as f32))), false)).collect();
+    layer.add_polygon(Polygon { rings: vec![ring], mode: path::PaintMode::Fill, winding_order: path::WindingOrder::NonZero });
+}
+
+/// The bullet bar or gauge of a card with a target, from the same description the screen and the PowerPoint use.
+fn draw_graphic(layer: &PdfLayerReference, g: &crate::kpi::Graphic, left: f32, top: f32, w: f32) {
+    use crate::kpi::{ring_segment, KpiVisual};
+    let ink = 0x0B0B0B;
+    match g.kind {
+        KpiVisual::Gauge => {
+            let (cx, cy) = ((left + w / 2.0) as f64, (top + w / 2.0) as f64);
+            let (ro, ri) = (w as f64 / 2.0, w as f64 / 2.0 * 0.62);
+            for (from, to, rag) in &g.bands {
+                fill_polygon(layer, &ring_segment(cx, cy, ro, ri, g.frac(*from), g.frac(*to), 24), tint(rag_colour(*rag), 0.35));
+            }
+            let at = |f: f64, r: f64| {
+                let a = std::f64::consts::PI * (1.0 - f);
+                Point::new(Mm((cx + r * a.cos()) as f32), Mm(from_top((cy - r * a.sin()) as f32)))
+            };
+            layer.set_outline_color(col(ink));
+            layer.set_outline_thickness(1.0);
+            layer.add_line(Line { points: vec![(at(g.frac(g.target), ri * 0.92), false), (at(g.frac(g.target), ro * 1.04), false)], is_closed: false });
+            layer.set_outline_thickness(1.4);
+            layer.add_line(Line { points: vec![(Point::new(Mm(cx as f32), Mm(from_top(cy as f32))), false), (at(g.frac(g.value), ro * 0.96), false)], is_closed: false });
+        }
+        _ => {
+            let h = 5.0f64;
+            let x = |f: f64| left as f64 + w as f64 * f;
+            let y = top as f64;
+            for (from, to, rag) in &g.bands {
+                let (a, b) = (x(g.frac(*from)), x(g.frac(*to)));
+                fill_polygon(layer, &[(a, y), (b, y), (b, y + h), (a, y + h)], tint(rag_colour(*rag), 0.35));
+            }
+            let (a, b) = (left as f64, x(g.frac(g.value)));
+            fill_polygon(layer, &[(a, y + h * 0.3), (b, y + h * 0.3), (b, y + h * 0.7), (a, y + h * 0.7)], ink);
+            layer.set_outline_color(col(ink));
+            layer.set_outline_thickness(1.0);
+            let t = x(g.frac(g.target)) as f32;
+            layer.add_line(Line { points: vec![(Point::new(Mm(t), Mm(from_top(top))), false), (Point::new(Mm(t), Mm(from_top(top + h as f32))), false)], is_closed: false });
         }
     }
 }

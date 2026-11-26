@@ -228,3 +228,19 @@ mod p11_f1;
 mod p11_b1;
 #[path = "../phase11/p1.rs"]
 mod p11_p1;
+
+// Phase 12 tests (tests/phase12/) are compiled into this binary too.
+#[path = "../phase12/a1.rs"]
+mod p12_a1;
+#[path = "../phase12/w2.rs"]
+mod p12_w2;
+#[path = "../phase12/t1.rs"]
+mod p12_t1;
+#[path = "../phase12/t2.rs"]
+mod p12_t2;
+#[path = "../phase12/t3.rs"]
+mod p12_t3;
+#[path = "../phase12/t4.rs"]
+mod p12_t4;
+#[path = "../phase12/w4.rs"]
+mod p12_w4;
