@@ -17,7 +17,7 @@ Goal: every screen and every export looks like one polished corporate product (t
 
 **What the plan does:** (a) one token source that the app, charts, HTML, PDF, PPTX and Excel all read; (b) a small component kit so no screen draws its own chrome; (c) a "dashboard look" pass (the visible win); (d) speed and motion; (e) auto-explore (Metabase X-ray style) that builds a starter dashboard from any table; (f) export fidelity; (g) bank colour themes, accessibility, density. Each phase ends with before/after screenshots and automated checks.
 
-**Size:** 10 phases, about 24 build sessions (one or two per day, so roughly 4 to 5 weeks at the Phase 10 pace). Each session is one or two task IDs, as in `CLAUDE.md`.
+**Size:** 10 phases, about 26 build sessions (one or two per day, so roughly 4 to 5 weeks at the Phase 10 pace). Each session is one or two task IDs, as in `CLAUDE.md`.
 
 | Phase | Name | Sessions | What you will see afterwards |
 |---|---|---|---|
@@ -98,6 +98,47 @@ Short and purposeful, all through egui's `animate_*` helpers (no new crate). Hov
 
 Two densities: **Comfortable** (table row 32, control height 32) and **Compact** (row 26, control 28), chosen in Settings. Three width classes: compact (< 1000 px), regular (1000 to 1500), wide (> 1500, also 4K at scale). Compact windows fold side panels into the rail; dialogs cap at 90% of the window; a dashboard page whose scale falls below 0.7 reflows to 2 columns, then 1 (on screen only; exports keep the designed layout).
 
+### 3.6 Spaciousness: why the screen feels cluttered, and the fix
+
+Your observation (Power BI shows more tools yet feels airy; ours shows fewer yet feels cramped) has concrete causes in the code. Numbers below are estimates for the default 1320×740 window at the default zoom of 1.05; DS0.6 measures them properly.
+
+**What causes it**
+
+| # | Cause | Evidence in the code |
+|---|---|---|
+| 1 | **The canvas gets only about half the window.** Fixed bars take 116 pt of height (top bar 44, tab strip 40, status bar 32) before the view's own rows (filter row 30, header 38, summary band 38). The rail (68) plus the right panel (316 minimum) take about 31% of the width. On the Dashboard, the left pages panel (200) and right properties panel (216) are fixed and cannot be resized or collapsed, so panels take about 38%. | `theme.rs` `TOP_BAR_H`, `TAB_STRIP_H`, `STATUS_BAR_H`, `RAIL_W`, `RIGHT_PANEL_W`, `DASH_LEFT_W`, `DASH_RIGHT_W`; `dashboard.rs` `exact_width(...).resizable(false)` |
+| 2 | **Outlines everywhere.** Every idle button, combo box and checkbox gets a 1 px border and a fill (`widgets.inactive.bg_stroke`), cards add another border, panels add separator lines, tables are striped. Many boxes of equal weight, so the eye sees boxes instead of content. (The top bar already switches borders off, which is why it looks calmer.) | `apply_ui_theme`, `card()`, `striped = true`, border helpers |
+| 3 | **One tight rhythm.** Items are 8 pt apart horizontally and 6 vertically, buttons 30 pt tall; the gap between groups is nearly the same as inside a group, so nothing reads as a group and there is no pause for the eye. | `item_spacing`, `interact_size`, `button_padding` |
+| 4 | **No figure and ground.** The top bar, status bar, right panel and content are all the same white slab separated by thin lines, so the content does not stand out from the chrome. Power BI puts a white page on a grey backdrop; the page pops, the chrome recedes. | `Tokens`: `surface` used for every region |
+| 5 | **Tiles are crowded inside.** A KPI card stacks up to six small lines (value, change, reason, target, notes, period) plus a graphic. Tile text uses fixed point sizes while the page scale follows the window, so in a small window the same text sits in much smaller tiles (to be confirmed by DS0 screenshots). | `draw_kpi`, `render_dash_page` (`scale`), tile titles |
+| 6 | **Everything is always visible.** Panels hide only in some places; toolbars show full-text buttons; tile settings appear as a floating popup over the tile being edited. | `dash_tile_panel`, `dash_pages`, `dash_design_props` |
+| 7 | **Small start.** The window opens at 1320×740, and a 1080p Windows laptop at 150% display scaling gives only about 1280×720 usable points (to be confirmed on the office laptop). That is the size the app must feel good at. | `WINDOW_SIZE` |
+
+**What Power BI does that we don't (plain words)**
+
+1. It keeps the **work area** huge and everything else quiet: a grey backdrop, a white page, and panels that fold away with one click.
+2. Buttons have **no outlines until you point at them**; space and a faint tone change group things, not boxes.
+3. It leaves **bigger gaps between groups than inside them**, so you see five tidy groups, not thirty loose items.
+4. Tools sit in **labelled groups** that you can collapse, and the properties of the selected visual open in a **side pane** instead of a popup on top of it.
+5. A card shows **one number and one label**; detail waits until you hover.
+
+**The fix: ten rules, each testable**
+
+| ID | Rule | Acceptance |
+|---|---|---|
+| SP1 | **Canvas budget.** The work area is at least 60% of the window area with the right panel open and 75% with side panels collapsed, at 1280×720 and 1920×1080. | Layout test measures the central rectangle on screens S02, S05, S07, S09 |
+| SP2 | **Chrome diet.** Fixed bars total at most 84 pt in Compact (top bar 40, tab strip 32, status bar 24) and 92 in Comfortable. One toolbar row per workspace; the rest goes into grouped menus or the inspector. | Test sums the fixed panel heights |
+| SP3 | **Flat until hover.** Idle buttons and toggles have no border; only text inputs and combo boxes keep one; the primary action is filled. No striped rows by default. No box inside a box: a card never contains another bordered card. | Outline count per screen (stroked rectangles in the frame) falls at least 40% against the DS0 baseline on S02, S05, S07, S11 |
+| SP4 | **Three-tier rhythm.** Inside a group 8, between groups 16, between sections 24; panel padding 16; section headings are semibold with space above them, not a ruled box. New tokens `gap_group`, `gap_section`. | Kit spec table; lint finds no literal gaps in kit-built panels |
+| SP5 | **Figure and ground.** The backdrop is `canvas`; pages, tables and charts are `surface` with elevation 1; chrome sits on the backdrop tone and uses one hairline only where two regions meet. No double borders. | Screenshot check S02, S07; lint on panel frames |
+| SP6 | **Collapse everything.** The rail (icon-only 48), right panel, Dashboard pages panel and properties panel each collapse and resize, remember their state per view, and fold automatically below 1100 points. Focus mode (Ctrl+Backslash) shows only the canvas. | Test: collapsed state persists and restores; `#[serde(default)]` |
+| SP7 | **Disclose progressively.** A toolbar shows at most 7 items plus "More". Inspector sections are accordions with the first open. A KPI card shows value, change and label by default; reason, target text and notes move to the footer on hover or the inspector. | Test counts text lines in the default KPI card (at most 3) |
+| SP8 | **Tile text follows the tile.** Tile titles, subtitles and legends scale with the page within clamps; below the clamp the subtitle and legend drop away instead of overlapping. | Layout test at three page scales (extends the DS2 test) |
+| SP9 | **Charts breathe.** The plot area is at least 70% of the tile body height; no legend when direct labels fit; tile padding 16. | Layout test on the 12-tile sample |
+| SP10 | **Start big.** First run opens maximised (or 90% of the screen) and remembers size and position; reference test sizes are 1280×720 and 1920×1080. | Settings test; DS0 captures both sizes |
+
+SP1 to SP10 make the screen feel airy without removing a single feature: every tool stays one click, a menu or the command palette away.
+
 ---
 
 ## 4. The phases
@@ -115,6 +156,7 @@ Each phase lists: goal, tasks, acceptance criteria (each one is a test or a scre
 | DS0.3 | **Speed baseline.** A hidden test or `--bench-ui` flag that renders N frames of fixed scenarios (data table 100k rows; dashboard with 12 tiles idle, hovering, resizing; chart tab with 5,000 marks; pivot 200×40) and writes median and 95th-percentile frame time, number of `layout_chart` calls per frame, and shapes per frame to `docs/design/perf-baseline.json`. Plus cold start time, idle CPU and peak memory, measured once by hand on the reference laptop (below). |
 | DS0.4 | **Specimen sheet.** One screen showing the type scale in Source Sans 3 (tabular figures check on a column of Crore values) and the current palette, for the owner to react to. |
 | DS0.5 | **Export capture.** Confirm what the cloud container can render: PDF to PNG, HTML to PNG (Playwright is installed; `tools/html_chart_png.js` exists), PPTX to PNG (LibreOffice if present). Record what can be checked automatically and what the owner must open in real PowerPoint and Excel. |
+| DS0.6 | **Spaciousness measures.** For screens S02, S05, S07 and S09 at 1280×720 and 1920×1080, panels open and collapsed: canvas share of the window, fixed chrome height, count of outlines (stroked rectangles), text lines in a KPI card, plot-area share of a chart tile. Written to `docs/design/space-baseline.json`; the targets are SP1 to SP10 in section 3.6. |
 
 **Acceptance.** 16 baseline screens exist in both themes; `design-audit.md` lists counts; `perf-baseline.json` has numbers for 5 scenarios; the report says which exports can be pictured automatically. No source behaviour changes (full `cargo test` unchanged).
 **Risk.** Frame timing in a headless rig is not the same as on the owner's PC. Mitigation: the *counters* (layout calls, shapes) are the hard gates; timings are advisory and compared only against the same machine's baseline.
@@ -161,8 +203,8 @@ canvas ────────────────────────�
 | ID | Task | Session |
 |---|---|---|
 | DS2.1 | **Chart style v2 in the layout engine** (`charts/layout.rs`, one engine for screen and PDF): no in-chart title (the tile supplies it); horizontal gridlines only, 1 px at 60% alpha; no axis lines except the zero baseline; ticks 12 pt `text_tertiary`; values in compact Crore format ("1,250 Cr"; lakh/crore grouping kept, never "k" or "M"); legend moved to top-right, small, clickable to hide a series, and **dropped when direct labels fit** (line end labels, bar value labels); bars 3 px top radius, gap 40%; lines 2 px with a dot and value label on the last point; single-series area gets a soft vertical gradient (mesh with alpha vertices, no new crate); donut instead of pie (max 6 slices plus "Other", total in the centre); hover shows a crosshair and a popover-style tooltip; first-appearance draw-in animation. | 1 |
-| DS2.2 | **Tile frame and page.** `tile()` as drawn above; page canvas uses `canvas`, tiles use `surface`; grid gap 12 units; titles one line with tooltip on truncation; consistent unit subtitle; the "bar above the title" drag handle in Free layout becomes an invisible top-edge grab that shows a move cursor and an outline on hover; selection shows a 2 px brand outline plus corner handles. | 1 |
-| DS2.3 | **KPI card v2.** Label (13 secondary) on top; hero number (`display` 32, tabular) with unit as suffix in `caption`; **delta pill** ("▲ 4.2% vs Oct 2026", soft green/red background, arrow and words so colour is never the only signal); full-width sparkline with soft area fill under the number (replaces the fixed 160×28); target shown as a thin progress bar with the tick, bullets and gauges resize with the tile; threshold colour tints the pill and bar, not the whole number; empty and error states ("No data for 2026-11") in the same card. A KPI strip (4 across, shared height) is the default first row. | 1 |
+| DS2.2 | **Tile frame and page.** `tile()` as drawn above; page canvas uses `canvas`, tiles use `surface`; grid gap 12 units; titles one line with tooltip on truncation; consistent unit subtitle; the "bar above the title" drag handle in Free layout becomes an invisible top-edge grab that shows a move cursor and an outline on hover; selection shows a 2 px brand outline plus corner handles. | 1 **Tile settings move out of the floating popup (`dash_tile_panel`) into the right-hand inspector** (selected object, accordion sections, so nothing covers the tile being edited). The tile footer shows one **provenance line** (source tab, active filters, as-of date, unit) built by one library function that the status bar and every export reuse. |
+| DS2.3 | **KPI card v2.** Label (13 secondary) on top; hero number (`display` 32, tabular) with unit as suffix in `caption`; **delta pill** ("▲ 4.2% vs Oct 2026", soft green/red background, arrow and words so colour is never the only signal); full-width sparkline with soft area fill under the number (replaces the fixed 160×28); target shown as a thin progress bar with the tick, bullets and gauges resize with the tile; threshold colour tints the pill and bar, not the whole number; empty and error states ("No data for 2026-11") in the same card. A KPI strip (4 across, shared height) is the default first row. | 1 **A number is never truncated:** the hero number shrinks to fit, and any shortened value in a card or table cell has a tooltip with the full figure. Default card text is at most 3 lines (SP7). |
 | DS2.4 | **Table v2 and page header.** Table: no zebra by default, 1 px row separators, header `caption` semibold secondary on `surface_sunken`, numbers right-aligned tabular, negatives per the existing number-format setting, totals row semibold with a top rule, sticky header, optional in-cell data bars and heat tint (same sequential ramp as charts), row hover. Page header: dashboard title, **as-of chip**, filter pills (a chip per filter, click to open the value list, "×" clears) instead of combo boxes, "Presentation" button (full screen, type scale ×1.25, no editing chrome). | 1 |
 
 **Acceptance (all four).**
@@ -217,10 +259,10 @@ canvas ────────────────────────�
 | DS4.1 | Button, icon button, toggle button, segmented control, checkbox, radio, switch | primary / secondary / ghost / danger; sizes S (28) and M (32); default, hover, pressed, focus ring, disabled, loading |
 | DS4.2 | Text input, number input, combo box, search field, date picker field | default, focus, error with message below, disabled, with unit suffix (for Crore, %, bps) |
 | DS4.3 | Chip, pill filter, badge, delta pill, tag | selectable, removable, status colours with icon |
-| DS4.4 | Tab strip, rail, top bar, breadcrumb (drill path), toolbar | selected, hover, overflow menu, closable tab, drag to reorder |
+| DS4.4 | Tab strip, rail, top bar, breadcrumb (drill path), toolbar | selected, hover, overflow menu, closable tab, drag to reorder One toolbar row per workspace, at most 7 items plus "More" (SP2, SP7); the rail collapses to icon-only 48. |
 | DS4.5 | Menu, popover, tooltip (rich: title + body + shortcut), command palette | elevation 2, 150 ms enter, keyboard navigation |
 | DS4.6 | Dialog frame (S 420 / M 640 / L 960), notice (info / success / warn / error, inline and toast), empty state (icon, one sentence, one action), progress and skeleton | dialog: title, body, footer with right-aligned actions, primary last, Esc closes, Enter confirms, scrim |
-| DS4.7 | **Kit gallery** (`Help > Design kit`, also the screenshot target): every component in every state, light and dark | |
+| DS4.7 | **Kit gallery** (`Help > Design kit`, also the screenshot target): every component in every state, light and dark | Also the **space kit** (section 3.6): flat-until-hover buttons, `gap_group` and `gap_section` tokens, a collapsible resizable panel that remembers its state, accordion inspector sections, a panel frame with no double borders (SP3 to SP7). |
 
 **Acceptance.**
 - Each component has a spec table in `docs/design/kit.md` (anatomy, sizes, tokens used, states) and a row in the kit gallery screenshot.
@@ -233,12 +275,12 @@ canvas ────────────────────────�
 
 | ID | View | What changes |
 |---|---|---|
-| DS5.1 | **Data view** | Grid per DS2.4 table rules; column header shows a small type icon (date, number, text) and a sort arrow; null cells show a muted "—" (never blank, never zero); selected column and row use `brand_soft`; filter pills row above the grid; summary band restyled as a quiet footer; density switch; right panel (column inspector) in the standard panel frame; schema dialog rebuilt on the kit table so its twelve fixed column widths become one column spec. |
+| DS5.1 | **Data view** | Grid per DS2.4 table rules; column header shows a small type icon (date, number, text) and a sort arrow; null cells show a muted "—" (never blank, never zero); selected column and row use `brand_soft`; filter pills row above the grid; summary band restyled as a quiet footer; density switch; right panel (column inspector) in the standard panel frame; schema dialog rebuilt on the kit table so its twelve fixed column widths become one column spec. Null, zero, blank and parse-failure cells look different from each other. |
 | DS5.2 | **Report view and chart tabs** | Chart tabs use the tile frame (so a chart looks the same in a tab, a dashboard, a PDF); chart studio left panel in kit controls; pivot builder pop-out cleaned (nested vs side-by-side layout toggle stays); breadcrumbs for drill path. |
 | DS5.3 | **Model view** | Tables as small cards with header band, key icon, field list; relationship lines 1.5 px with cardinality markers (1 and ∞), orthogonal routing, selected relationship highlighted; measure list in the kit table. |
-| DS5.4 | **Assistant panel** | Panel header with model status dot (offline / loading / ready); user message as `brand_soft` bubble on the right, answer as a plain surface block on the left; source sections as chips ("Guide: Liquidity gap ladder") that open the note; the "Not from the guide book" label as a warn badge; input row with send button and shortcut hint; shimmer while answering; width 360 and collapsible. |
+| DS5.4 | **Assistant panel** | Panel header with model status dot (offline / loading / ready); user message as `brand_soft` bubble on the right, answer as a plain surface block on the left; source sections as chips ("Guide: Liquidity gap ladder") that open the note; the "Not from the guide book" label as a warn badge; input row with send button and shortcut hint; shimmer while answering; width 360 and collapsible. A mode label ("Guide book" or "Local model phrasing") and honest states: Searching guide, Preparing answer, No matching section. |
 | DS5.5 | **Start screen and empty states** | First run and "no tab open": drop zone, recent files with size and date, "Open sample data", and the three main jobs (view and convert, analyse, build a dashboard) as cards. Every empty tab/view gets a purposeful empty state. |
-| DS5.6 | **Status bar, notices, errors** | One notice style; errors say what to do ("Column 'Balance' is text. Convert it in the schema, then retry") with a button; long-running jobs show a progress pill with cancel. |
+| DS5.6 | **Status bar, notices, errors** | One notice style; errors say what to do ("Column 'Balance' is text. Convert it in the schema, then retry") with a button; long-running jobs show a progress pill with cancel. Status-bar items are clickable and open the relevant detail (parse failures, control total, filters). |
 
 **Acceptance.** Screens S01 to S16 (section 5) all show the same header height, panel padding, title style and button style; no screen is on the lint allow-list at the end of DS5 except Settings and Export (done in DS8 and DS7); each view has a before/after pair in the report; screens fit at 800×560.
 
@@ -395,5 +437,7 @@ Stub proofs follow the lean-session rule: one or two key tests per task, named i
 DS0 and DS1 first (everything depends on them). Then DS2, the visible win, **before** the kit, because the tile and KPI are the smallest kit pieces that matter most. DS3 immediately after, so all later work is built on a fast base. DS4 and DS5 next, DS6 once tiles are stable, DS7 after DS2, DS4 and DS6 (so exports pick up final styling once), DS8 and DS9 last.
 
 Roughly: week 1 DS0, DS1, DS2.1; week 2 DS2.2 to DS2.4, DS3; week 3 DS4, DS5.1 and DS5.2; week 4 DS5.3 to DS5.6, DS6; week 5 DS7, DS8, DS9. Each week ends with a before/after report. A phase can be merged separately; each leaves the app consistent, never half-styled (the lint allow-list is what lets old screens keep working while they wait for their phase).
+
+*Later, as a product feature (Phase 15 candidate), not design work:* a Model validation view with error, warning and information levels, and align/distribute and multi-select on the Free dashboard layout.
 
 *Not in scope:* new calculations, new banking functions, cloud or web features, a web-based UI, an AI-generated dashboard (Explore is rule-based on purpose, so the same data always gives the same result and every number can be traced).
