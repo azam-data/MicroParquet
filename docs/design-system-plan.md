@@ -112,7 +112,7 @@ Your observation (Power BI shows more tools yet feels airy; ours shows fewer yet
 | 4 | **No figure and ground.** The top bar, status bar, right panel and content are all the same white slab separated by thin lines, so the content does not stand out from the chrome. Power BI puts a white page on a grey backdrop; the page pops, the chrome recedes. | `Tokens`: `surface` used for every region |
 | 5 | **Tiles are crowded inside.** A KPI card stacks up to six small lines (value, change, reason, target, notes, period) plus a graphic. Tile text uses fixed point sizes while the page scale follows the window, so in a small window the same text sits in much smaller tiles (to be confirmed by DS0 screenshots). | `draw_kpi`, `render_dash_page` (`scale`), tile titles |
 | 6 | **Everything is always visible.** Panels hide only in some places; toolbars show full-text buttons; tile settings appear as a floating popup over the tile being edited. | `dash_tile_panel`, `dash_pages`, `dash_design_props` |
-| 7 | **Small start.** The window opens at 1320×740, and a 1080p Windows laptop at 150% display scaling gives only about 1280×720 usable points (to be confirmed on the office laptop). That is the size the app must feel good at. | `WINDOW_SIZE` |
+| 7 | **Small start.** The window opens at 1320×740. Your office laptop (1080p at 125% display scaling, confirmed) gives 1536×864 usable points, and the app's own default zoom of 1.05 shrinks that to about 1463×823 of drawing space. That is the real size the app must feel good at; 1280×720 is kept as a stress size. | `WINDOW_SIZE`, `UI_ZOOM_DEFAULT` |
 
 **What Power BI does that we don't (plain words)**
 
@@ -126,7 +126,7 @@ Your observation (Power BI shows more tools yet feels airy; ours shows fewer yet
 
 | ID | Rule | Acceptance |
 |---|---|---|
-| SP1 | **Canvas budget.** The work area is at least 60% of the window area with the right panel open and 75% with side panels collapsed, at 1280×720 and 1920×1080. | Layout test measures the central rectangle on screens S02, S05, S07, S09 |
+| SP1 | **Canvas budget.** The work area is at least 60% of the window area with the right panel open and 75% with side panels collapsed, at 1536×864 (the office laptop), 1920×1080 and the 1280×720 stress size. | Layout test measures the central rectangle on screens S02, S05, S07, S09 |
 | SP2 | **Chrome diet.** Fixed bars total at most 84 pt in Compact (top bar 40, tab strip 32, status bar 24) and 92 in Comfortable. One toolbar row per workspace; the rest goes into grouped menus or the inspector. | Test sums the fixed panel heights |
 | SP3 | **Flat until hover.** Idle buttons and toggles have no border; only text inputs and combo boxes keep one; the primary action is filled. No striped rows by default. No box inside a box: a card never contains another bordered card. | Outline count per screen (stroked rectangles in the frame) falls at least 40% against the DS0 baseline on S02, S05, S07, S11 |
 | SP4 | **Three-tier rhythm.** Inside a group 8, between groups 16, between sections 24; panel padding 16; section headings are semibold with space above them, not a ruled box. New tokens `gap_group`, `gap_section`. | Kit spec table; lint finds no literal gaps in kit-built panels |
@@ -135,7 +135,7 @@ Your observation (Power BI shows more tools yet feels airy; ours shows fewer yet
 | SP7 | **Disclose progressively.** A toolbar shows at most 7 items plus "More". Inspector sections are accordions with the first open. A KPI card shows value, change and label by default; reason, target text and notes move to the footer on hover or the inspector. | Test counts text lines in the default KPI card (at most 3) |
 | SP8 | **Tile text follows the tile.** Tile titles, subtitles and legends scale with the page within clamps; below the clamp the subtitle and legend drop away instead of overlapping. | Layout test at three page scales (extends the DS2 test) |
 | SP9 | **Charts breathe.** The plot area is at least 70% of the tile body height; no legend when direct labels fit; tile padding 16. | Layout test on the 12-tile sample |
-| SP10 | **Start big.** First run opens maximised (or 90% of the screen) and remembers size and position; reference test sizes are 1280×720 and 1920×1080. | Settings test; DS0 captures both sizes |
+| SP10 | **Start big.** First run opens maximised (or 90% of the screen) and remembers size and position; reference test sizes are 1536×864 (the office laptop at 125%), 1920×1080 and the 1280×720 stress size. | Settings test; DS0 captures both sizes |
 
 SP1 to SP10 make the screen feel airy without removing a single feature: every tool stays one click, a menu or the command palette away.
 
@@ -156,7 +156,7 @@ Each phase lists: goal, tasks, acceptance criteria (each one is a test or a scre
 | DS0.3 | **Speed baseline.** A hidden test or `--bench-ui` flag that renders N frames of fixed scenarios (data table 100k rows; dashboard with 12 tiles idle, hovering, resizing; chart tab with 5,000 marks; pivot 200×40) and writes median and 95th-percentile frame time, number of `layout_chart` calls per frame, and shapes per frame to `docs/design/perf-baseline.json`. Plus cold start time, idle CPU and peak memory, measured once by hand on the reference laptop (below). |
 | DS0.4 | **Specimen sheet.** One screen showing the type scale in Source Sans 3 (tabular figures check on a column of Crore values) and the current palette, for the owner to react to. |
 | DS0.5 | **Export capture.** Confirm what the cloud container can render: PDF to PNG, HTML to PNG (Playwright is installed; `tools/html_chart_png.js` exists), PPTX to PNG (LibreOffice if present). Record what can be checked automatically and what the owner must open in real PowerPoint and Excel. |
-| DS0.6 | **Spaciousness measures.** For screens S02, S05, S07 and S09 at 1280×720 and 1920×1080, panels open and collapsed: canvas share of the window, fixed chrome height, count of outlines (stroked rectangles), text lines in a KPI card, plot-area share of a chart tile. Written to `docs/design/space-baseline.json`; the targets are SP1 to SP10 in section 3.6. |
+| DS0.6 | **Spaciousness measures.** For screens S02, S05, S07 and S09 at 1536×864, 1920×1080 and 1280×720, panels open and collapsed: canvas share of the window, fixed chrome height, count of outlines (stroked rectangles), text lines in a KPI card, plot-area share of a chart tile. Written to `docs/design/space-baseline.json`; the targets are SP1 to SP10 in section 3.6. |
 
 **Acceptance.** 16 baseline screens exist in both themes; `design-audit.md` lists counts; `perf-baseline.json` has numbers for 5 scenarios; the report says which exports can be pictured automatically. No source behaviour changes (full `cargo test` unchanged).
 **Risk.** Frame timing in a headless rig is not the same as on the owner's PC. Mitigation: the *counters* (layout calls, shapes) are the hard gates; timings are advisory and compared only against the same machine's baseline.
